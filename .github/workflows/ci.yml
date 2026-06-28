@@ -12,7 +12,6 @@ concurrency:
 
 env:
   NODE_VERSION: '22'
-  PNPM_VERSION: '9'
   PYTHON_VERSION: '3.13'
 
 jobs:
@@ -22,8 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -38,8 +35,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -53,8 +48,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -70,6 +63,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+      - run: uv sync --all-groups
       - run: uv run ruff check .
       - run: uv run ruff format --check .
 
@@ -81,6 +75,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+      - run: uv sync --all-groups
       - run: uv run pyright
 
   test-python:
@@ -91,7 +86,9 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv run pytest --cov --cov-report=xml
+      - run: uv sync --all-groups
+      # Exit code 5 = no tests collected — valid for the template repo before tests are added
+      - run: uv run pytest --cov --cov-report=xml || [ $? -eq 5 ]
       - uses: codecov/codecov-action@v5
         if: always()
         with:
@@ -116,6 +113,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+      - run: uv sync --all-groups
       - run: uv run bandit -r services/ -ll -x services/_template/ --format json -o bandit-report.json
       - uses: actions/upload-artifact@v4
         if: always()
@@ -129,8 +127,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -146,6 +142,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+      - run: uv sync --all-groups
       - run: uv run pip-audit
 
   infra-validate:

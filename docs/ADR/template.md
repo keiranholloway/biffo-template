@@ -18,18 +18,20 @@
 ## Options Considered
 
 ### Option A — Name
+
 **Pros:**
-- 
+-
 
 **Cons:**
-- 
+-
 
 ### Option B — Name
+
 **Pros:**
-- 
+-
 
 **Cons:**
-- 
+-
 
 ## Rationale
 
@@ -38,13 +40,16 @@
 ## Consequences
 
 ### Positive
-- 
+
+-
 
 ### Negative / Trade-offs
-- 
+
+-
 
 ### Neutral
-- 
+
+-
 
 ## Compliance
 

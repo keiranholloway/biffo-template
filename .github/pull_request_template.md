@@ -33,5 +33,6 @@
 ## ADR impact
 
 <!-- Does this change an architectural decision? If so, a new ADR is required before merge. -->
+
 - [ ] No architectural decisions affected
 - [ ] New ADR raised: docs/ADR/XXXX-...

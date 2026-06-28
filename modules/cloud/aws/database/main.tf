@@ -99,7 +99,7 @@ resource "aws_db_instance" "main" {
   storage_encrypted    = true
 
   db_name  = local.db_name
-  username = jsondecode(aws_secretsmanager_secret_version.db_credentials.secret_string)["username"]
+  username = local.db_user
   password = random_password.db_password.result
 
   db_subnet_group_name   = aws_db_subnet_group.main.name

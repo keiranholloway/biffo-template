@@ -18,16 +18,16 @@ The CLI will prompt for your project name, domain, AWS account, and GitHub org, 
 
 ## What you get
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | Next.js 15 (React 19, TypeScript, Tailwind) |
-| API | FastAPI on AWS Lambda (Python 3.13) |
-| Database | PostgreSQL 16 on RDS via RDS Proxy |
-| Auth | AWS Cognito (hosted UI + JWTs) |
-| Events | AWS EventBridge (custom bus) |
-| Storage | S3 + CloudFront CDN |
-| IaC | Terraform (modular, pluggable) |
-| CI/CD | GitHub Actions (OIDC — no long-lived credentials) |
+| Layer    | Technology                                        |
+| -------- | ------------------------------------------------- |
+| Frontend | Next.js 15 (React 19, TypeScript, Tailwind)       |
+| API      | FastAPI on AWS Lambda (Python 3.13)               |
+| Database | PostgreSQL 16 on RDS via RDS Proxy                |
+| Auth     | AWS Cognito (hosted UI + JWTs)                    |
+| Events   | AWS EventBridge (custom bus)                      |
+| Storage  | S3 + CloudFront CDN                               |
+| IaC      | Terraform (modular, pluggable)                    |
+| CI/CD    | GitHub Actions (OIDC — no long-lived credentials) |
 
 ## Architecture principles
 

@@ -35,4 +35,4 @@ handler = Mangum(app, lifespan="off")
 @logger.inject_lambda_context
 @tracer.capture_lambda_handler
 def lambda_handler(event: dict, context: LambdaContext) -> dict:
-    return handler(event, context)
+    return handler(event, context)  # type: ignore[reportArgumentType]

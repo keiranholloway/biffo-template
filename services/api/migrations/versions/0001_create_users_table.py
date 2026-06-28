@@ -5,6 +5,7 @@ Revises:
 Create Date: 2026-06-28
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -38,7 +39,9 @@ def upgrade() -> None:
         sa.Column("cognito_sub", sa.String(36), nullable=False),
         sa.Column("email", sa.String(255), nullable=False),
         sa.Column("username", sa.String(64), nullable=False),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column(
+            "is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")
+        ),
         sa.Column("last_login_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )

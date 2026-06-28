@@ -34,7 +34,9 @@ let octokitMock: ReturnType<typeof makeOctokitMock>
 beforeEach(() => {
   vi.clearAllMocks()
   octokitMock = makeOctokitMock()
-  vi.mocked(Octokit).mockImplementation(() => octokitMock as unknown as Octokit)
+  vi.mocked(Octokit).mockImplementation(function () {
+    return octokitMock as unknown as Octokit
+  })
 })
 
 function adapter() {

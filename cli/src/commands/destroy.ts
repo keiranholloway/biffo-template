@@ -21,7 +21,12 @@ export const destroyCommand = new Command('destroy')
       }
     } else {
       const { confirmed } = await inquirer.prompt([
-        { type: 'confirm', name: 'confirmed', message: `Destroy ${environment} environment?`, default: false },
+        {
+          type: 'confirm',
+          name: 'confirmed',
+          message: `Destroy ${environment} environment?`,
+          default: false,
+        },
       ])
       if (!confirmed) {
         log.warn('Destruction cancelled')

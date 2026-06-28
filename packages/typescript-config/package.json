@@ -3,7 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "license": "MIT",
-  "files": ["*.json"],
+  "files": [
+    "*.json"
+  ],
   "exports": {
     "./base": "./tsconfig.base.json",
     "./nextjs": "./tsconfig.nextjs.json",

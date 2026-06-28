@@ -19,5 +19,6 @@ labels: enhancement
 ## ADR required?
 
 <!-- If this is an architectural decision, a new ADR should accompany the implementation. -->
+
 - [ ] Yes — new ADR needed
 - [ ] No — this is an implementation detail

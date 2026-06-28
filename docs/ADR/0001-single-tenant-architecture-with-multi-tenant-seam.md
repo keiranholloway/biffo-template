@@ -44,37 +44,46 @@ The seam rules are:
 ## Options Considered
 
 ### Option A — Full Single-Tenant (no seam)
+
 Build the simplest possible system with no multi-tenancy concepts whatsoever. `tenant_id` does not exist. Auth is a single user pool with no tenant concept.
 
 **Pros:**
+
 - Maximum simplicity — no unused abstractions
 - Fastest to build
 
 **Cons:**
+
 - Adding multi-tenancy later requires schema migrations on live data, API contract changes, and auth restructuring
 - Forecloses the SaaS option entirely without a near-full rewrite
 
-### Option B — Single-Tenant with Multi-Tenant Seam *(chosen)*
+### Option B — Single-Tenant with Multi-Tenant Seam _(chosen)_
+
 Build single-tenant but thread `tenant_id` through as a dormant first-class concept.
 
 **Pros:**
+
 - Ships with single-tenant simplicity
 - Keeps the SaaS upgrade path open at minimal upfront cost
 - `tenant_id` is a small, well-understood addition that doesn't complicate daily development
 - Open-source users can ignore it entirely
 
 **Cons:**
+
 - Slightly more boilerplate in the data model and API layer
 - Developers must understand why `tenant_id` exists even when it's always `"default"`
 
 ### Option C — Full Multi-Tenant from Day One
+
 Build a proper multi-tenant system with tenant provisioning, pool isolation, cross-tenant security controls.
 
 **Pros:**
+
 - No future migration cost if SaaS is pursued
 - Correct architecture for a hosted product
 
 **Cons:**
+
 - 3–5× more complex to build correctly
 - Cognito pool-per-tenant vs shared pool is a hard, load-bearing choice up front
 - Row-level security bugs can cause cross-tenant data leakage — a severe trust/compliance failure
@@ -98,6 +107,7 @@ The cost of not including `tenant_id` from the start is a schema migration and A
 ## Consequences
 
 ### Positive
+
 - Single-tenant deployments are simple to reason about, operate, and debug.
 - Each deployment is fully isolated by default — no risk of cross-customer data leakage in the common case.
 - Compliance (GDPR, SOC2, HIPAA) is each deployer's own concern, not the platform's.
@@ -105,11 +115,13 @@ The cost of not including `tenant_id` from the start is a schema migration and A
 - Open-source users get a clean, self-contained deployment model.
 
 ### Negative / Trade-offs
+
 - Every table and every API endpoint carries a `tenant_id` that is always `"default"` in single-tenant use — this is intentional but may need explanation in onboarding docs.
 - Infrastructure costs are not amortised across users in the open-source model — each deployment pays for its own RDS, Cognito pool, etc.
 - If SaaS is pursued, a significant (though well-scoped) migration effort is still required for the isolation model choice.
 
 ### Neutral
+
 - The Biffo SaaS platform, if built, would itself be a Biffo deployment — the system is self-hosting by design.
 
 ---

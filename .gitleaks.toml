@@ -22,8 +22,7 @@ paths = [
 [[rules]]
 id = "biffo-placeholder-config"
 description = "Placeholder values in biffo.config.json must not be replaced with real secrets"
-regex = '''(aws_account_id|oidc_role_arn|admin_email)["'\s:]+'''
-paths = ["biffo.config.json"]
+regex = '''"(aws_account_id|oidc_role_arn|admin_email)":\s*"[^{]'''
 
 [allowlist]
 paths = [

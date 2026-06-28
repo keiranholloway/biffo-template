@@ -51,7 +51,9 @@ class EventPublisher:
         try:
             response = self._client.put_events(Entries=[entry])
             if response.get("FailedEntryCount", 0) > 0:
-                logger.error("EventBridge publish failed", extra={"entries": response["Entries"]})
+                logger.error(
+                    "EventBridge publish failed", extra={"entries": response["Entries"]}
+                )
         except Exception as exc:
             logger.warning(
                 "EventBridge publish skipped",

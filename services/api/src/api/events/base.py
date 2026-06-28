@@ -41,11 +41,19 @@ class BiffoEvent(BaseModel):
 
 class EventPublisher:
     def __init__(self) -> None:
-        self._client = boto3.client("events", region_name=settings.aws_region)
+        self._client = boto3.client("events")
 
     def publish(self, event: BiffoEvent) -> None:
+        """Publish an event to EventBridge. Best-effort: logs a warning on failure
+        rather than raising so that API requests succeed even when EventBridge is
+        unreachable (e.g. dev environments without NAT or a VPC endpoint)."""
         entry = event.to_eventbridge_entry(settings.event_bus_name)
-        response = self._client.put_events(Entries=[entry])
-        if response.get("FailedEntryCount", 0) > 0:
-            logger.error("EventBridge publish failed", extra={"entries": response["Entries"]})
-            raise RuntimeError("Failed to publish event to EventBridge")
+        try:
+            response = self._client.put_events(Entries=[entry])
+            if response.get("FailedEntryCount", 0) > 0:
+                logger.error("EventBridge publish failed", extra={"entries": response["Entries"]})
+        except Exception as exc:
+            logger.warning(
+                "EventBridge publish skipped",
+                extra={"error": str(exc), "detail_type": event.detail_type},
+            )

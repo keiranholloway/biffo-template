@@ -2,7 +2,8 @@ terraform {
   required_version = ">= 1.9"
 
   required_providers {
-    aws = { source = "hashicorp/aws", version = "~> 5.0" }
+    aws  = { source = "hashicorp/aws", version = "~> 5.0" }
+    http = { source = "hashicorp/http", version = "~> 3.0" }
   }
 
   backend "s3" {
@@ -36,7 +37,8 @@ module "networking" {
 
   project_name       = var.project_name
   environment        = local.environment
-  single_nat_gateway = true # cost saving for dev
+  enable_nat_gateway = false # no NAT Gateway — saves ~$33/month; see JWKS/DB approach below
+  single_nat_gateway = true  # irrelevant when enable_nat_gateway = false, kept for explicitness
   tags               = local.tags
 }
 
@@ -70,12 +72,35 @@ module "auth" {
   tags           = local.tags
 }
 
+# Fetch the Cognito JWKS at Terraform apply time (this runner has internet access).
+# The JSON is baked into the Lambda as BIFFO_COGNITO_JWKS_JSON so the function
+# can verify JWTs without any outbound call — no Cognito VPC endpoint or NAT needed.
+# If Cognito rotates signing keys, run `terraform apply` to refresh this value.
+data "http" "cognito_jwks" {
+  url = "https://cognito-idp.${var.aws_region}.amazonaws.com/${module.auth.user_pool_id}/.well-known/jwks.json"
+}
+
 module "events" {
   source = "../../../modules/cloud/aws/events"
 
   project_name = var.project_name
   environment  = local.environment
   tags         = local.tags
+}
+
+module "database" {
+  source = "../../../modules/cloud/aws/database"
+
+  project_name              = var.project_name
+  environment               = local.environment
+  vpc_id                    = module.networking.vpc_id
+  private_subnet_ids        = module.networking.private_subnet_ids
+  compute_security_group_id = module.core_api.security_group_id
+  instance_class            = "db.t3.micro"
+  multi_az                  = false
+  deletion_protection       = false
+  enable_rds_proxy          = false # saves ~$22/month; Lambda connects to RDS directly
+  tags                      = local.tags
 }
 
 module "core_api" {
@@ -90,30 +115,17 @@ module "core_api" {
   db_credentials_secret_arn = module.database.credentials_secret_arn
   event_bus_name            = module.events.event_bus_name
   environment_variables = {
-    BIFFO_ENVIRONMENT          = local.environment
-    BIFFO_DB_SECRET_ARN        = module.database.credentials_secret_arn
-    BIFFO_DB_HOST              = module.database.db_endpoint
-    BIFFO_EVENT_BUS_NAME       = module.events.event_bus_name
+    BIFFO_ENVIRONMENT = local.environment
+    # Full DB URL baked in — Lambda has no outbound internet so it can't call
+    # Secrets Manager. db_url is sensitive and stored in Terraform state.
+    BIFFO_DATABASE_URL         = module.database.db_url
+    BIFFO_COGNITO_JWKS_JSON    = data.http.cognito_jwks.response_body
     BIFFO_COGNITO_USER_POOL_ID = module.auth.user_pool_id
     BIFFO_COGNITO_CLIENT_ID    = module.auth.client_id
     BIFFO_COGNITO_REGION       = var.aws_region
+    BIFFO_EVENT_BUS_NAME       = module.events.event_bus_name
   }
   tags = local.tags
-}
-
-module "database" {
-  source = "../../../modules/cloud/aws/database"
-
-  project_name              = var.project_name
-  environment               = local.environment
-  vpc_id                    = module.networking.vpc_id
-  private_subnet_ids        = module.networking.private_subnet_ids
-  compute_security_group_id = module.core_api.security_group_id
-  instance_class            = "db.t3.micro"
-  multi_az                  = false
-  deletion_protection       = false
-  enable_rds_proxy          = false # disabled by default — saves ~$22/month in dev
-  tags                      = local.tags
 }
 
 module "api_gateway" {

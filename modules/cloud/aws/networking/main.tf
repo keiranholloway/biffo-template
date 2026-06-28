@@ -8,11 +8,19 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
+data "aws_region" "current" {}
+
 locals {
-  azs             = length(var.availability_zones) > 0 ? var.availability_zones : slice(data.aws_availability_zones.available.names, 0, 3)
-  public_cidrs    = [for i, _ in local.azs : cidrsubnet(var.vpc_cidr, 8, i)]
-  private_cidrs   = [for i, _ in local.azs : cidrsubnet(var.vpc_cidr, 8, i + 10)]
-  name_prefix     = "${var.project_name}-${var.environment}"
+  azs           = length(var.availability_zones) > 0 ? var.availability_zones : slice(data.aws_availability_zones.available.names, 0, 3)
+  public_cidrs  = [for i, _ in local.azs : cidrsubnet(var.vpc_cidr, 8, i)]
+  private_cidrs = [for i, _ in local.azs : cidrsubnet(var.vpc_cidr, 8, i + 10)]
+  name_prefix   = "${var.project_name}-${var.environment}"
+
+  # How many private route tables to create:
+  # NAT disabled  → 1 (no internet route, shared by all private subnets)
+  # NAT + single  → 1 (shared NAT route)
+  # NAT + per-AZ  → one per AZ
+  private_rt_count = var.enable_nat_gateway ? (var.single_nat_gateway ? 1 : length(local.azs)) : 1
 }
 
 resource "aws_vpc" "main" {
@@ -55,17 +63,17 @@ resource "aws_subnet" "private" {
 }
 
 resource "aws_eip" "nat" {
-  count  = var.single_nat_gateway ? 1 : length(local.azs)
+  count  = var.enable_nat_gateway ? (var.single_nat_gateway ? 1 : length(local.azs)) : 0
   domain = "vpc"
   tags   = merge(var.tags, { Name = "${local.name_prefix}-nat-eip-${count.index}" })
 }
 
 resource "aws_nat_gateway" "main" {
-  count         = var.single_nat_gateway ? 1 : length(local.azs)
+  count         = var.enable_nat_gateway ? (var.single_nat_gateway ? 1 : length(local.azs)) : 0
   allocation_id = aws_eip.nat[count.index].id
   subnet_id     = aws_subnet.public[count.index].id
 
-  tags = merge(var.tags, { Name = "${local.name_prefix}-nat-${count.index}" })
+  tags       = merge(var.tags, { Name = "${local.name_prefix}-nat-${count.index}" })
   depends_on = [aws_internet_gateway.main]
 }
 
@@ -87,21 +95,37 @@ resource "aws_route_table_association" "public" {
 }
 
 resource "aws_route_table" "private" {
-  count  = var.single_nat_gateway ? 1 : length(local.azs)
+  count  = local.private_rt_count
   vpc_id = aws_vpc.main.id
 
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main[count.index].id
+  dynamic "route" {
+    for_each = var.enable_nat_gateway ? [true] : []
+    content {
+      cidr_block     = "0.0.0.0/0"
+      nat_gateway_id = aws_nat_gateway.main[count.index].id
+    }
   }
 
   tags = merge(var.tags, { Name = "${local.name_prefix}-private-rt-${count.index}" })
 }
 
 resource "aws_route_table_association" "private" {
-  count          = length(local.azs)
-  subnet_id      = aws_subnet.private[count.index].id
-  route_table_id = aws_route_table.private[var.single_nat_gateway ? 0 : count.index].id
+  count     = length(local.azs)
+  subnet_id = aws_subnet.private[count.index].id
+  route_table_id = var.enable_nat_gateway ? (
+    aws_route_table.private[var.single_nat_gateway ? 0 : count.index].id
+  ) : aws_route_table.private[0].id
+}
+
+# S3 gateway endpoint — free; added automatically when NAT is disabled so
+# Lambda can still reach S3 for object operations without outbound internet.
+resource "aws_vpc_endpoint" "s3" {
+  count        = var.enable_nat_gateway ? 0 : 1
+  vpc_id       = aws_vpc.main.id
+  service_name = "com.amazonaws.${data.aws_region.current.name}.s3"
+
+  route_table_ids = [for rt in aws_route_table.private : rt.id]
+  tags            = merge(var.tags, { Name = "${local.name_prefix}-s3-endpoint" })
 }
 
 # VPC Flow Logs

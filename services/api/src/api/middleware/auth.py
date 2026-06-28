@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -25,7 +26,15 @@ class AuthenticatedUser:
 
 @lru_cache(maxsize=1)
 def _get_jwks(user_pool_id: str, region: str) -> dict:
-    """Fetch and cache JWKS from Cognito. Cached per Lambda instance lifetime."""
+    """Fetch and cache JWKS. Cached per Lambda instance lifetime.
+
+    When BIFFO_COGNITO_JWKS_JSON is set (no-NAT dev environments), the JWKS is
+    read from the env var instead of making an outbound call to Cognito. Terraform
+    bakes it in at apply time. Key rotation in that environment requires a
+    terraform apply to refresh the env var.
+    """
+    if settings.cognito_jwks_json:
+        return json.loads(settings.cognito_jwks_json)  # type: ignore[no-any-return]
     url = f"https://cognito-idp.{region}.amazonaws.com/{user_pool_id}/.well-known/jwks.json"
     response = httpx.get(url, timeout=10)
     response.raise_for_status()
@@ -46,8 +55,8 @@ def _verify_token(token: str) -> dict:
     jwks = _get_jwks(settings.cognito_user_pool_id, settings.cognito_region)
     signing_key = next((k for k in jwks["keys"] if k["kid"] == kid), None)
 
-    if signing_key is None:
-        # Unknown kid — JWKS may have rotated; bust the cache and retry once
+    if signing_key is None and not settings.cognito_jwks_json:
+        # Unknown kid and we can fetch remotely — JWKS may have rotated; bust the cache and retry once.
         _get_jwks.cache_clear()
         jwks = _get_jwks(settings.cognito_user_pool_id, settings.cognito_region)
         signing_key = next((k for k in jwks["keys"] if k["kid"] == kid), None)

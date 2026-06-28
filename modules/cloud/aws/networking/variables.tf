@@ -17,8 +17,14 @@ variable "availability_zones" {
   default     = []
 }
 
+variable "enable_nat_gateway" {
+  description = "Create NAT Gateway(s) for private subnet internet egress. Set false in dev to eliminate the ~$33/month base cost — Lambda runs without outbound internet; DB credentials and Cognito JWKS are injected as env vars by Terraform instead."
+  type        = bool
+  default     = true
+}
+
 variable "single_nat_gateway" {
-  description = "Use a single NAT Gateway (cost saving for dev). False = one per AZ."
+  description = "Use a single NAT Gateway shared across all AZs (cost saving for dev/staging). False = one per AZ for HA. Ignored when enable_nat_gateway = false."
   type        = bool
   default     = true
 }

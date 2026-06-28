@@ -15,3 +15,9 @@ output "credentials_secret_arn" {
 output "security_group_id" {
   value = aws_security_group.db.id
 }
+
+output "db_url" {
+  description = "Full asyncpg URL — inject as BIFFO_DATABASE_URL in dev so Lambda needs no Secrets Manager call (and therefore no NAT or VPC endpoint). Sensitive: stored in Terraform state."
+  sensitive   = true
+  value       = "postgresql+asyncpg://${local.db_user}:${random_password.db_password.result}@${var.enable_rds_proxy ? aws_db_proxy.main[0].endpoint : aws_db_instance.main.address}:5432/${local.db_name}"
+}

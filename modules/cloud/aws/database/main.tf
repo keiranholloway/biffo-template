@@ -8,6 +8,7 @@ terraform {
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
   db_name     = replace(var.project_name, "-", "_")
+  db_user     = "biffo_${replace(var.environment, "-", "_")}"
 }
 
 resource "random_password" "db_password" {
@@ -26,7 +27,7 @@ resource "aws_secretsmanager_secret" "db_credentials" {
 resource "aws_secretsmanager_secret_version" "db_credentials" {
   secret_id = aws_secretsmanager_secret.db_credentials.id
   secret_string = jsonencode({
-    username = "biffo_${replace(var.environment, "-", "_")}"
+    username = local.db_user
     password = random_password.db_password.result
     dbname   = local.db_name
     engine   = "postgres"

@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://biffo.dev/schemas/biffo-config.schema.json",
+  "title": "BiffoConfig",
+  "description": "Configuration schema for a Biffo project",
+  "type": "object",
+  "required": ["project", "source_control", "cloud", "admin"],
+  "properties": {
+    "project": {
+      "type": "object",
+      "required": ["name", "domain"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "description": { "type": "string" },
+        "domain": { "type": "string" }
+      }
+    },
+    "source_control": {
+      "type": "object",
+      "required": ["provider", "config"],
+      "properties": {
+        "provider": { "type": "string", "enum": ["github"] },
+        "config": {
+          "type": "object",
+          "required": ["org", "repo"],
+          "properties": {
+            "org": { "type": "string" },
+            "repo": { "type": "string" }
+          }
+        }
+      }
+    },
+    "cloud": {
+      "type": "object",
+      "required": ["provider", "config"],
+      "properties": {
+        "provider": { "type": "string", "enum": ["aws"] },
+        "config": {
+          "type": "object",
+          "required": ["account_id", "region"],
+          "properties": {
+            "account_id": { "type": "string", "pattern": "^\\d{12}$" },
+            "region": { "type": "string" },
+            "oidc_role_arn": { "type": "string" }
+          }
+        }
+      }
+    },
+    "environments": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["dev", "staging", "prod"] },
+      "minItems": 1
+    },
+    "admin": {
+      "type": "object",
+      "required": ["email", "username"],
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "username": { "type": "string" }
+      }
+    },
+    "database": {
+      "type": "object",
+      "properties": {
+        "schema_path": { "type": ["string", "null"] },
+        "migrations_path": { "type": "string" }
+      }
+    },
+    "modules": {
+      "type": "object",
+      "properties": {
+        "auth": { "type": "string", "enum": ["cognito"] },
+        "events": { "type": "string", "enum": ["eventbridge"] },
+        "storage": { "type": "string", "enum": ["s3"] },
+        "database": { "type": "string", "enum": ["postgresql"] },
+        "compute": { "type": "string", "enum": ["lambda"] },
+        "cdn": { "type": "string", "enum": ["cloudfront"] }
+      }
+    }
+  }
+}

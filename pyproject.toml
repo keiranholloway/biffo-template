@@ -1,0 +1,40 @@
+[tool.uv.workspace]
+members = ["services/*"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+exclude = ["services/_template", "migrations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "B", "S", "UP", "ANN"]
+ignore = [
+  "S101",   # allow assert in tests
+  "ANN101", # missing type for self
+  "ANN102", # missing type for cls
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "ANN"]
+"migrations/**/*.py" = ["ANN"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pyright]
+pythonVersion = "3.13"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["services"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["services"]
+omit = ["*/tests/*", "*/migrations/*", "services/_template/*"]

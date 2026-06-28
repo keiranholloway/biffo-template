@@ -1,0 +1,70 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build outputs
+.next
+dist
+.turbo
+out
+
+# Python
+__pycache__
+*.py[cod]
+*.pyo
+.venv
+.uv
+*.egg-info
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.pyright
+
+# Terraform
+.terraform
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+tfplan
+
+# Environment & secrets — never commit these
+.env
+.env.*
+!.env.example
+!.env.test
+*.pem
+*.key
+*.crt
+*.p12
+secrets/
+
+# Editor
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Test coverage
+coverage
+htmlcov
+.coverage
+
+# AWS
+.aws-sam
+samconfig.toml

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "security:openssf-scorecard"],
+  "schedule": ["before 6am on Monday"],
+  "timezone": "UTC",
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "automerge": false,
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["patch"],
+      "matchDepTypes": ["devDependencies"],
+      "automerge": true
+    },
+    {
+      "matchManagers": ["terraform"],
+      "groupName": "terraform providers",
+      "schedule": ["before 6am on the first day of the month"]
+    },
+    {
+      "matchManagers": ["pip_requirements", "pyproject"],
+      "groupName": "python dependencies"
+    },
+    {
+      "matchPackageNames": ["next", "react", "react-dom"],
+      "groupName": "Next.js / React"
+    },
+    {
+      "matchDepTypes": ["action"],
+      "pinDigests": true
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "labels": ["security"],
+    "automerge": true
+  }
+}

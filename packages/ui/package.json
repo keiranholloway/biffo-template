@@ -1,0 +1,18 @@
+{
+  "name": "@biffo/ui",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "devDependencies": {
+    "@biffo/typescript-config": "workspace:*",
+    "@types/react": "^19.0.7",
+    "typescript": "^5.7.3"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  }
+}

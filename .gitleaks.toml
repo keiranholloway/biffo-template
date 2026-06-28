@@ -1,0 +1,37 @@
+title = "Biffo Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "biffo-aws-account-id"
+description = "AWS Account ID — should only appear in .tfvars.example or biffo.config.json placeholders"
+regex = '''\b\d{12}\b'''
+entropy = 0
+[rules.allowlist]
+regexes = [
+  "\\{\\{AWS_ACCOUNT_ID\\}\\}",  # placeholder in template files
+  "123456789012",                  # canonical example account ID
+]
+paths = [
+  "docs/",
+  "README.md",
+  "\\.example$",
+]
+
+[[rules]]
+id = "biffo-placeholder-config"
+description = "Placeholder values in biffo.config.json must not be replaced with real secrets"
+regex = '''(aws_account_id|oidc_role_arn|admin_email)["'\s:]+(?!"\{\{)[^{]'''
+paths = ["biffo.config.json"]
+
+[allowlist]
+paths = [
+  "docs/",
+  ".github/",
+  "scripts/setup-oidc.sh",
+]
+regexes = [
+  "EXAMPLE",
+  "\\{\\{.*\\}\\}",
+]

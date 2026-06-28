@@ -1,0 +1,17 @@
+# Global fallback — all files require review from the platform team
+* @{{GITHUB_ORG}}/platform
+
+# Infrastructure changes require additional review
+/infra/ @{{GITHUB_ORG}}/platform @{{GITHUB_ORG}}/infra
+/modules/ @{{GITHUB_ORG}}/platform @{{GITHUB_ORG}}/infra
+
+# Security-sensitive paths
+/.github/workflows/ @{{GITHUB_ORG}}/platform
+/.gitleaks.toml @{{GITHUB_ORG}}/platform
+/.pre-commit-config.yaml @{{GITHUB_ORG}}/platform
+
+# ADRs are immutable once merged — new ADR required to change direction
+/docs/ADR/ @{{GITHUB_ORG}}/platform
+
+# Core API owns the data contract
+/services/api/ @{{GITHUB_ORG}}/platform

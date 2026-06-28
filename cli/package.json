@@ -1,0 +1,43 @@
+{
+  "name": "@biffo/cli",
+  "version": "0.0.0",
+  "description": "Biffo project scaffolding CLI",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "biffo": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "files": ["dist", "schemas"],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "dev": "tsx watch src/index.ts",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cloudformation": "^3.726.1",
+    "@aws-sdk/client-iam": "^3.726.1",
+    "@aws-sdk/client-s3": "^3.726.1",
+    "@aws-sdk/client-sts": "^3.726.1",
+    "@octokit/rest": "^21.0.2",
+    "chalk": "^5.4.1",
+    "commander": "^12.1.0",
+    "execa": "^9.5.2",
+    "inquirer": "^12.3.0",
+    "ora": "^8.1.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@biffo/eslint-config": "workspace:*",
+    "@biffo/typescript-config": "workspace:*",
+    "@types/node": "^22.10.5",
+    "eslint": "^9.18.0",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

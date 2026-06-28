@@ -1,0 +1,40 @@
+{
+  "$schema": "./cli/schemas/biffo-config.schema.json",
+  "project": {
+    "name": "{{PROJECT_NAME}}",
+    "description": "{{PROJECT_DESCRIPTION}}",
+    "domain": "{{DOMAIN}}"
+  },
+  "source_control": {
+    "provider": "github",
+    "config": {
+      "org": "{{GITHUB_ORG}}",
+      "repo": "{{GITHUB_REPO}}"
+    }
+  },
+  "cloud": {
+    "provider": "aws",
+    "config": {
+      "account_id": "{{AWS_ACCOUNT_ID}}",
+      "region": "{{AWS_REGION}}",
+      "oidc_role_arn": "{{OIDC_ROLE_ARN}}"
+    }
+  },
+  "environments": ["dev", "staging", "prod"],
+  "admin": {
+    "email": "{{ADMIN_EMAIL}}",
+    "username": "{{ADMIN_USERNAME}}"
+  },
+  "database": {
+    "schema_path": null,
+    "migrations_path": "services/api/migrations"
+  },
+  "modules": {
+    "auth": "cognito",
+    "events": "eventbridge",
+    "storage": "s3",
+    "database": "postgresql",
+    "compute": "lambda",
+    "cdn": "cloudfront"
+  }
+}

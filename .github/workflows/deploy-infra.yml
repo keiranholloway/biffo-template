@@ -1,0 +1,100 @@
+name: Deploy Infrastructure
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - "modules/**"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+      action:
+        description: Terraform action
+        required: true
+        type: choice
+        options: [plan, apply]
+        default: plan
+
+env:
+  TERRAFORM_VERSION: "~> 1.9"
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  plan-dev:
+    name: Plan (dev)
+    runs-on: ubuntu-latest
+    environment: dev
+    if: github.event_name == 'push' || (github.event.inputs.environment == 'dev')
+    defaults:
+      run:
+        working-directory: infra/environments/dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - run: terraform init
+      - run: terraform plan -out=tfplan -no-color 2>&1 | tee plan.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-dev
+          path: infra/environments/dev/tfplan
+
+  apply-dev:
+    name: Apply (dev)
+    runs-on: ubuntu-latest
+    environment: dev
+    needs: plan-dev
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event.inputs.action == 'apply')
+    defaults:
+      run:
+        working-directory: infra/environments/dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - run: terraform init
+      - uses: actions/download-artifact@v4
+        with:
+          name: tfplan-dev
+          path: infra/environments/dev/
+      - run: terraform apply -auto-approve tfplan
+
+  plan-staging:
+    name: Plan (staging)
+    runs-on: ubuntu-latest
+    environment: staging
+    needs: apply-dev
+    if: github.event.inputs.environment == 'staging' || github.event_name == 'push'
+    defaults:
+      run:
+        working-directory: infra/environments/staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - run: terraform init
+      - run: terraform plan -no-color

@@ -1,0 +1,11 @@
+.next
+dist
+.turbo
+node_modules
+*.lock
+*.tfstate
+*.tfstate.*
+.terraform
+pnpm-lock.yaml
+uv.lock
+migrations/versions/*.py

@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars and fill in values.
+# terraform.tfvars is gitignored — never commit real values.
+
+project_name   = "my-project"
+aws_region     = "us-east-1"
+admin_email    = "admin@example.com"
+admin_username = "admin"

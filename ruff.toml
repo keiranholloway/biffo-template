@@ -1,0 +1,2 @@
+# Ruff config is in pyproject.toml — this file exists to satisfy pre-commit
+# which looks for ruff.toml or pyproject.toml in the repo root.

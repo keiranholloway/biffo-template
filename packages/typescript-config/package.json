@@ -1,0 +1,12 @@
+{
+  "name": "@biffo/typescript-config",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "files": ["*.json"],
+  "exports": {
+    "./base": "./tsconfig.base.json",
+    "./nextjs": "./tsconfig.nextjs.json",
+    "./node": "./tsconfig.node.json"
+  }
+}

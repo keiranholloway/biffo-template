@@ -37,21 +37,29 @@ const ModulesSchema = z.object({
 export const BiffoConfigSchema = z.object({
   $schema: z.string().optional(),
   project: z.object({
-    name: z.string().min(1).regex(/^[a-z0-9-]+$/, 'Must be lowercase kebab-case'),
+    name: z
+      .string()
+      .min(1)
+      .regex(/^[a-z0-9-]+$/, 'Must be lowercase kebab-case'),
     description: z.string().default(''),
     domain: z.string().min(1).describe('Primary domain, e.g. myapp.com'),
   }),
   source_control: SourceControlConfigSchema,
   cloud: CloudConfigSchema,
-  environments: z.array(z.enum(['dev', 'staging', 'prod'])).min(1).default(['dev']),
+  environments: z
+    .array(z.enum(['dev', 'staging', 'prod']))
+    .min(1)
+    .default(['dev']),
   admin: z.object({
     email: z.string().email(),
     username: z.string().min(1),
   }),
-  database: z.object({
-    schema_path: z.string().nullable().default(null),
-    migrations_path: z.string().default('services/api/migrations'),
-  }),
+  database: z
+    .object({
+      schema_path: z.string().nullable().default(null),
+      migrations_path: z.string().default('services/api/migrations'),
+    })
+    .default({}),
   modules: ModulesSchema.default({}),
 })
 

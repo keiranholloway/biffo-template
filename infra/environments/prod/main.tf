@@ -130,8 +130,17 @@ output "cognito_user_pool_id" { value = module.auth.user_pool_id }
 output "cognito_client_id" { value = module.auth.client_id }
 
 variable "project_name" { type = string }
-variable "aws_region" { type = string, default = "us-east-1" }
+variable "aws_region" {
+  type    = string
+  default = "us-east-1"
+}
 variable "admin_email" { type = string }
 variable "admin_username" { type = string }
-variable "custom_domain" { type = string, default = "" }
-variable "acm_certificate_arn" { type = string, default = "" }
+variable "custom_domain" {
+  type    = string
+  default = ""
+}
+variable "acm_certificate_arn" {
+  type    = string
+  default = ""
+}

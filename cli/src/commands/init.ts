@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts'
@@ -8,12 +9,20 @@ import { BiffoConfigSchema, type BiffoConfig } from '../config/schema.js'
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
 import { log } from '../lib/logger.js'
+import {
+  deleteSession,
+  findLatestSession,
+  markStepComplete,
+  saveSession,
+  type InitSession,
+} from '../lib/session.js'
 
 export const initCommand = new Command('init')
   .description('Scaffold a new project from the Biffo template')
   .option('-c, --config <path>', 'Path to a pre-filled biffo.config.json')
   .option('--dry-run', 'Validate config without making any changes')
-  .action(async (options: { config?: string; dryRun?: boolean }) => {
+  .option('--fresh', 'Ignore any saved session and start from scratch')
+  .action(async (options: { config?: string; dryRun?: boolean; fresh?: boolean }) => {
     console.log(chalk.bold('\n  Biffo — Project Initialiser\n'))
 
     // Resolve credentials up-front — before asking any project questions —
@@ -21,24 +30,60 @@ export const initCommand = new Command('init')
     const githubToken = await resolveGithubToken()
     const { accountId, region } = await resolveAwsCredentials()
 
-    let rawConfig: unknown
+    let session: InitSession | null = null
+    let config: BiffoConfig
 
     if (options.config) {
-      rawConfig = JSON.parse(readFileSync(resolve(options.config), 'utf8'))
-    } else {
-      rawConfig = await promptForConfig(accountId, region)
+      const rawConfig = JSON.parse(readFileSync(resolve(options.config), 'utf8'))
+      config = parseConfig(rawConfig)
+      session = {
+        version: 1,
+        config,
+        awsAccountId: accountId,
+        awsRegion: region,
+        completedSteps: [],
+        outputs: {},
+      }
+    } else if (!options.fresh) {
+      // Offer to resume a saved session
+      const saved = findLatestSession()
+      if (saved) {
+        const { resume } = await inquirer.prompt<{ resume: boolean }>([
+          {
+            type: 'confirm',
+            name: 'resume',
+            message:
+              `Resume previous init for ${chalk.bold(saved.config.project?.name ?? '?')}` +
+              ` (completed: ${saved.completedSteps.join(', ') || 'none'})?`,
+            default: true,
+          },
+        ])
+        if (resume) {
+          session = saved
+          session.awsAccountId = accountId
+          session.awsRegion = region
+          config = parseConfig(session.config)
+          console.log()
+        }
+      }
     }
 
-    const result = BiffoConfigSchema.safeParse(rawConfig)
-    if (!result.success) {
-      log.error('Invalid configuration:')
-      result.error.issues.forEach((issue) => {
-        log.error(`  ${issue.path.join('.')} — ${issue.message}`)
-      })
-      process.exit(1)
+    if (!session) {
+      const rawConfig = await promptForConfig(accountId, region)
+      config = parseConfig(rawConfig)
+      session = {
+        version: 1,
+        config,
+        awsAccountId: accountId,
+        awsRegion: region,
+        completedSteps: [],
+        outputs: {},
+      }
+      saveSession(session)
     }
 
-    const config = result.data
+    config = config!
+
     log.success('Configuration valid')
 
     if (options.dryRun) {
@@ -51,48 +96,126 @@ export const initCommand = new Command('init')
     const aws = new AwsAdapter(config)
 
     // Step 1: Verify AWS credentials
-    log.step(1, totalSteps, 'Verifying AWS credentials...')
-    await aws.verifyCredentials()
+    if (!session.completedSteps.includes('verify_credentials')) {
+      log.step(1, totalSteps, 'Verifying AWS credentials...')
+      await aws.verifyCredentials()
+      markStepComplete(session, 'verify_credentials')
+    } else {
+      log.step(1, totalSteps, 'AWS credentials already verified — skipping')
+    }
 
     // Step 2: Create GitHub repo from template
-    log.step(2, totalSteps, 'Creating GitHub repository...')
-    await github.createRepoFromTemplate(config)
+    if (!session.completedSteps.includes('create_repo')) {
+      log.step(2, totalSteps, 'Creating GitHub repository...')
+      const cloneUrl = await github.createRepoFromTemplate(config)
+      session.outputs.cloneUrl = cloneUrl
+      markStepComplete(session, 'create_repo')
+    } else {
+      log.step(2, totalSteps, 'GitHub repository already created — skipping')
+    }
 
     // Step 3: Set up OIDC trust between GitHub Actions and AWS
-    log.step(3, totalSteps, 'Configuring OIDC trust...')
-    const roleArn = await aws.setupOidcTrust(config)
-    config.cloud.config = {
-      ...config.cloud.config,
-      oidc_role_arn: roleArn,
-    } as typeof config.cloud.config
+    if (!session.completedSteps.includes('oidc_trust')) {
+      log.step(3, totalSteps, 'Configuring OIDC trust...')
+      const roleArn = await aws.setupOidcTrust(config)
+      session.outputs.oidcRoleArn = roleArn
+      config.cloud.config = {
+        ...config.cloud.config,
+        oidc_role_arn: roleArn,
+      } as typeof config.cloud.config
+      markStepComplete(session, 'oidc_trust')
+    } else {
+      log.step(3, totalSteps, 'OIDC trust already configured — skipping')
+      if (session.outputs.oidcRoleArn) {
+        config.cloud.config = {
+          ...config.cloud.config,
+          oidc_role_arn: session.outputs.oidcRoleArn,
+        } as typeof config.cloud.config
+      }
+    }
 
     // Step 4: Bootstrap Terraform backend
-    log.step(4, totalSteps, 'Bootstrapping Terraform state backend...')
-    await aws.bootstrapTerraformBackend(config.project.name)
+    if (!session.completedSteps.includes('terraform_backend')) {
+      log.step(4, totalSteps, 'Bootstrapping Terraform state backend...')
+      await aws.bootstrapTerraformBackend(config.project.name)
+      markStepComplete(session, 'terraform_backend')
+    } else {
+      log.step(4, totalSteps, 'Terraform backend already bootstrapped — skipping')
+    }
 
     // Step 5: Configure GitHub (branch protection, environments, secrets)
-    log.step(5, totalSteps, 'Configuring GitHub repository...')
-    await github.configureBranchProtection(config)
-    await github.createEnvironments(config)
+    if (!session.completedSteps.includes('github_config')) {
+      log.step(5, totalSteps, 'Configuring GitHub repository...')
+      await github.configureBranchProtection(config)
+      await github.createEnvironments(config)
+      const { org, repo } = (
+        config.source_control as { provider: 'github'; config: { org: string; repo: string } }
+      ).config
+      if (session.outputs.oidcRoleArn) {
+        await github.setRepoSecret(org, repo, 'BIFFO_OIDC_ROLE_ARN', session.outputs.oidcRoleArn)
+      }
+      markStepComplete(session, 'github_config')
+    } else {
+      log.step(5, totalSteps, 'GitHub already configured — skipping')
+    }
 
     const { org, repo } = (
       config.source_control as { provider: 'github'; config: { org: string; repo: string } }
     ).config
-    await github.setRepoSecret(org, repo, 'BIFFO_OIDC_ROLE_ARN', roleArn)
+
+    deleteSession(config.project.name)
 
     log.success('\nProject initialised successfully!')
     console.log(`\n  Repository: https://github.com/${org}/${repo}`)
     console.log('  Next: clone your repo and run the first deploy\n')
   })
 
-async function resolveGithubToken(): Promise<string> {
-  const fromEnv = process.env['GITHUB_TOKEN']
-  if (fromEnv) return fromEnv
+function parseConfig(raw: unknown): BiffoConfig {
+  const result = BiffoConfigSchema.safeParse(raw)
+  if (!result.success) {
+    log.error('Invalid configuration:')
+    result.error.issues.forEach((issue) => {
+      log.error(`  ${issue.path.join('.')} — ${issue.message}`)
+    })
+    process.exit(1)
+  }
+  return result.data
+}
 
+async function resolveGithubToken(): Promise<string> {
+  // 1. Explicit env var
+  if (process.env['GITHUB_TOKEN']) return process.env['GITHUB_TOKEN']
+
+  // 2. gh CLI (installed and authenticated)
+  const ghCreds = tryGhCliToken()
+  if (ghCreds) {
+    console.log(
+      chalk.green('  ✔') + ` GitHub account ${chalk.bold(ghCreds.login)} detected (via gh CLI)\n`,
+    )
+
+    const { confirmed } = await inquirer.prompt<{ confirmed: boolean }>([
+      {
+        type: 'confirm',
+        name: 'confirmed',
+        message: 'Use these GitHub credentials?',
+        default: true,
+      },
+    ])
+
+    if (confirmed) {
+      console.log()
+      process.env['GITHUB_TOKEN'] = ghCreds.token
+      return ghCreds.token
+    }
+    console.log()
+  }
+
+  // 3. Manual entry
   console.log(
-    chalk.yellow('  ℹ  GITHUB_TOKEN is not set.\n') +
-      '     Create a classic PAT at https://github.com/settings/tokens\n' +
-      '     with scopes: repo, workflow, admin:org (if using an org)\n',
+    chalk.yellow('  ℹ  No GitHub credentials found.\n') +
+      '     Option A: run `gh auth login` to authenticate via the gh CLI\n' +
+      '     Option B: create a classic PAT at https://github.com/settings/tokens\n' +
+      '               with scopes: repo, workflow, admin:org (if using an org)\n',
   )
 
   const { token } = await inquirer.prompt<{ token: string }>([
@@ -106,6 +229,21 @@ async function resolveGithubToken(): Promise<string> {
 
   process.env['GITHUB_TOKEN'] = token
   return token
+}
+
+function tryGhCliToken(): { token: string; login: string } | null {
+  try {
+    const token = execSync('gh auth token', { stdio: ['pipe', 'pipe', 'pipe'] })
+      .toString()
+      .trim()
+    if (!token) return null
+    const login = execSync('gh api user --jq .login', { stdio: ['pipe', 'pipe', 'pipe'] })
+      .toString()
+      .trim()
+    return login ? { token, login } : null
+  } catch {
+    return null
+  }
 }
 
 async function resolveAwsCredentials(): Promise<{ accountId: string; region: string }> {

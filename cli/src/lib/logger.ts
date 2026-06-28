@@ -5,6 +5,5 @@ export const log = {
   success: (msg: string) => console.log(chalk.green('✔'), msg),
   warn: (msg: string) => console.warn(chalk.yellow('⚠'), msg),
   error: (msg: string) => console.error(chalk.red('✘'), msg),
-  step: (n: number, total: number, msg: string) =>
-    console.log(chalk.dim(`[${n}/${total}]`), msg),
+  step: (n: number, total: number, msg: string) => console.log(chalk.dim(`[${n}/${total}]`), msg),
 }

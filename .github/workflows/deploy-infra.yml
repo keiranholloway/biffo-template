@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "infra/**"
-      - "modules/**"
+      - 'infra/**'
+      - 'modules/**'
   workflow_dispatch:
     inputs:
       environment:
@@ -21,13 +21,16 @@ on:
         default: plan
 
 env:
-  TERRAFORM_VERSION: "~> 1.9"
+  TERRAFORM_VERSION: '~> 1.9'
 
 permissions:
   id-token: write
   contents: read
   pull-requests: write
   actions: write
+
+# Deploy jobs only run in repos where BIFFO_DEPLOY_ENABLED=true has been set.
+# The template repo itself has this unset, so all jobs are skipped there.
 
 # ─── DEV ─────────────────────────────────────────────────────────────────────
 # Runs automatically on push to main, or manually via workflow_dispatch.
@@ -37,7 +40,7 @@ jobs:
     name: Plan (dev)
     runs-on: ubuntu-latest
     environment: dev
-    if: github.event_name == 'push' || github.event.inputs.environment == 'dev'
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.event_name == 'push' || github.event.inputs.environment == 'dev')
     defaults:
       run:
         working-directory: infra/environments/dev
@@ -62,7 +65,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev
     needs: plan-dev
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event.inputs.action == 'apply')
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event.inputs.action == 'apply')
     defaults:
       run:
         working-directory: infra/environments/dev
@@ -99,15 +102,15 @@ jobs:
             --body "${{ vars.PROJECT_NAME }}-dev-core-api" \
             --env dev
 
-# ─── STAGING ─────────────────────────────────────────────────────────────────
-# Manual only — run workflow_dispatch with environment=staging.
-# Requires staging environment approval in GitHub Settings → Environments.
+  # ─── STAGING ─────────────────────────────────────────────────────────────────
+  # Manual only — run workflow_dispatch with environment=staging.
+  # Requires staging environment approval in GitHub Settings → Environments.
 
   plan-staging:
     name: Plan (staging)
     runs-on: ubuntu-latest
     environment: staging
-    if: github.event.inputs.environment == 'staging'
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event.inputs.environment == 'staging'
     defaults:
       run:
         working-directory: infra/environments/staging
@@ -132,7 +135,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     needs: plan-staging
-    if: github.event.inputs.environment == 'staging' && github.event.inputs.action == 'apply'
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event.inputs.environment == 'staging' && github.event.inputs.action == 'apply'
     defaults:
       run:
         working-directory: infra/environments/staging
@@ -169,15 +172,15 @@ jobs:
             --body "${{ vars.PROJECT_NAME }}-staging-core-api" \
             --env staging
 
-# ─── PROD ────────────────────────────────────────────────────────────────────
-# Manual only — run workflow_dispatch with environment=prod.
-# Requires prod environment approval in GitHub Settings → Environments.
+  # ─── PROD ────────────────────────────────────────────────────────────────────
+  # Manual only — run workflow_dispatch with environment=prod.
+  # Requires prod environment approval in GitHub Settings → Environments.
 
   plan-prod:
     name: Plan (prod)
     runs-on: ubuntu-latest
     environment: prod
-    if: github.event.inputs.environment == 'prod'
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event.inputs.environment == 'prod'
     defaults:
       run:
         working-directory: infra/environments/prod
@@ -202,7 +205,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: prod
     needs: plan-prod
-    if: github.event.inputs.environment == 'prod' && github.event.inputs.action == 'apply'
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event.inputs.environment == 'prod' && github.event.inputs.action == 'apply'
     defaults:
       run:
         working-directory: infra/environments/prod

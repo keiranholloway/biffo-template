@@ -1,13 +1,6 @@
 'use client'
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useState,
-  type ReactNode,
-} from 'react'
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import type { CognitoUserSession } from 'amazon-cognito-identity-js'
 import { getCurrentSession, signIn as cognitoSignIn, signOut as cognitoSignOut } from '@/lib/auth'
 
@@ -26,9 +19,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    getCurrentSession()
+    void getCurrentSession()
       .then(setSession)
-      .finally(() => setLoading(false))
+      .finally(() => {
+        setLoading(false)
+      })
   }, [])
 
   const login = useCallback(async (username: string, password: string) => {
@@ -41,10 +36,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSession(null)
   }, [])
 
-  const getIdToken = useCallback(
-    () => session?.getIdToken().getJwtToken() ?? null,
-    [session],
-  )
+  const getIdToken = useCallback(() => session?.getIdToken().getJwtToken() ?? null, [session])
 
   return (
     <AuthContext.Provider value={{ session, loading, login, logout, getIdToken }}>

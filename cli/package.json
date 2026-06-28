@@ -8,7 +8,10 @@
     "biffo": "./dist/index.js"
   },
   "main": "./dist/index.js",
-  "files": ["dist", "schemas"],
+  "files": [
+    "dist",
+    "schemas"
+  ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "dev": "tsx watch src/index.ts",
@@ -34,10 +37,12 @@
     "@biffo/eslint-config": "workspace:*",
     "@biffo/typescript-config": "workspace:*",
     "@types/node": "^22.10.5",
+    "aws-sdk-client-mock": "^4.1.0",
+    "aws-sdk-client-mock-vitest": "^7.1.0",
     "eslint": "^9.18.0",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
-    "vitest": "^2.1.8"
+    "vitest": "^3.2.0"
   }
 }

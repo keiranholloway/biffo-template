@@ -14,7 +14,7 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault()
     setError(null)
     setLoading(true)
@@ -34,7 +34,12 @@ export default function LoginPage() {
     <div className="w-full max-w-sm rounded-xl border bg-white p-8 shadow-sm">
       <h1 className="mb-6 text-2xl font-bold text-gray-900">Sign in</h1>
 
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      <form
+        onSubmit={(e) => {
+          void handleSubmit(e)
+        }}
+        className="flex flex-col gap-4"
+      >
         <div>
           <label htmlFor="username" className="mb-1 block text-sm font-medium text-gray-700">
             Username or email
@@ -43,7 +48,9 @@ export default function LoginPage() {
             id="username"
             type="text"
             value={username}
-            onChange={(e) => setUsername(e.target.value)}
+            onChange={(e) => {
+              setUsername(e.target.value)
+            }}
             className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             required
             autoComplete="username"
@@ -58,7 +65,9 @@ export default function LoginPage() {
             id="password"
             type="password"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(e) => {
+              setPassword(e.target.value)
+            }}
             className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             required
             autoComplete="current-password"

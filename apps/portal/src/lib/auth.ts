@@ -19,9 +19,15 @@ export function signIn(username: string, password: string): Promise<CognitoUserS
     const authDetails = new AuthenticationDetails({ Username: username, Password: password })
 
     user.authenticateUser(authDetails, {
-      onSuccess: (session) => resolve(session),
-      onFailure: (err: Error) => reject(err),
-      newPasswordRequired: () => reject(new Error('NEW_PASSWORD_REQUIRED')),
+      onSuccess: (session) => {
+        resolve(session)
+      },
+      onFailure: (err: Error) => {
+        reject(err)
+      },
+      newPasswordRequired: () => {
+        reject(new Error('NEW_PASSWORD_REQUIRED'))
+      },
     })
   })
 }

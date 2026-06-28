@@ -15,8 +15,8 @@ export class GitHubAdapter {
     log.info(`Creating repository ${org}/${repo} from Biffo template...`)
 
     const { data } = await this.octokit.repos.createUsingTemplate({
-      template_owner: 'biffo-platform',
-      template_repo: 'biffo',
+      template_owner: 'keiranholloway',
+      template_repo: 'biffo-template',
       owner: org,
       name: repo,
       private: true,

@@ -27,6 +27,7 @@ permissions:
   id-token: write
   contents: read
   pull-requests: write
+  actions: write
 
 jobs:
   plan-dev:
@@ -77,6 +78,23 @@ jobs:
           name: tfplan-dev
           path: infra/environments/dev/
       - run: terraform apply -auto-approve tfplan
+      - name: Export outputs to GitHub Actions variables
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh variable set API_GATEWAY_URL \
+            --body "$(terraform output -raw api_gateway_url)" \
+            --env dev
+          gh variable set COGNITO_USER_POOL_ID \
+            --body "$(terraform output -raw cognito_user_pool_id)" \
+            --env dev
+          gh variable set COGNITO_CLIENT_ID \
+            --body "$(terraform output -raw cognito_client_id)" \
+            --env dev
+          gh variable set CORE_API_LAMBDA_NAME \
+            --body "${{ vars.PROJECT_NAME }}-dev-core-api" \
+            --env dev
 
   plan-staging:
     name: Plan (staging)

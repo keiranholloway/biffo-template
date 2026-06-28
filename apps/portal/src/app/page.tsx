@@ -1,8 +1,22 @@
+'use client'
+
+import { useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { useAuth } from '@/context/auth-context'
+
 export default function HomePage() {
+  const { session, loading } = useAuth()
+  const router = useRouter()
+
+  useEffect(() => {
+    if (!loading) {
+      router.replace(session != null ? '/dashboard' : '/login')
+    }
+  }, [session, loading, router])
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-24">
-      <h1 className="text-4xl font-bold">Biffo Portal</h1>
-      <p className="mt-4 text-gray-600">Your platform is running.</p>
+    <main className="flex min-h-screen items-center justify-center">
+      <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600" />
     </main>
   )
 }

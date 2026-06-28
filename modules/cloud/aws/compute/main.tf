@@ -1,6 +1,19 @@
 terraform {
   required_providers {
-    aws = { source = "hashicorp/aws", version = "~> 5.0" }
+    aws     = { source = "hashicorp/aws", version = "~> 5.0" }
+    archive = { source = "hashicorp/archive", version = "~> 2.0" }
+  }
+}
+
+# Minimal placeholder zip — Terraform creates this automatically during plan.
+# The CI/CD pipeline overwrites the function code on every deploy;
+# this only exists so the Lambda resource can be created on first apply.
+data "archive_file" "placeholder" {
+  type        = "zip"
+  output_path = "${path.module}/placeholder.zip"
+  source {
+    content  = "def handler(event, context):\n    pass\n"
+    filename = "handler.py"
   }
 }
 
@@ -114,8 +127,8 @@ resource "aws_lambda_function" "main" {
   memory_size   = var.memory_size
   timeout       = var.timeout
 
-  # Placeholder — code is deployed separately by the app deploy workflow
-  filename = "${path.module}/placeholder.zip"
+  filename         = data.archive_file.placeholder.output_path
+  source_code_hash = data.archive_file.placeholder.output_base64sha256
 
   dead_letter_config {
     target_arn = aws_sqs_queue.dlq.arn

@@ -1,6 +1,7 @@
-from fastapi import Header, HTTPException, status
+from fastapi import Depends, HTTPException, status
 
 from .events.base import EventPublisher
+from .middleware.auth import AuthenticatedUser, require_auth
 
 _event_publisher: EventPublisher | None = None
 
@@ -12,18 +13,16 @@ def get_event_publisher() -> EventPublisher:
     return _event_publisher
 
 
-def require_tenant_context(x_tenant_id: str = Header(default="default")) -> str:
+def require_tenant_context(caller: AuthenticatedUser = Depends(require_auth)) -> str:
     """
-    FastAPI dependency injected on every route (ADR-0001 compliance check).
+    FastAPI dependency that returns the tenant_id from the verified JWT (ADR-0001).
 
-    In single-tenant deployments this always returns 'default'.
-    In multi-tenant deployments the tenant_id comes from the JWT claim.
-    Raises 500 if called in a context where tenant_id cannot be determined —
-    this catches regressions in the auth middleware before they reach the DB.
+    Raises 500 if tenant_id cannot be determined — catches regressions in auth
+    middleware before they reach the database layer.
     """
-    if not x_tenant_id:
+    if not caller.tenant_id:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="tenant_id missing from request context",
+            detail="tenant_id missing from auth context",
         )
-    return x_tenant_id
+    return caller.tenant_id

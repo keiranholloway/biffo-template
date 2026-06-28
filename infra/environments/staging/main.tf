@@ -91,6 +91,24 @@ module "database" {
   tags                      = local.tags
 }
 
+module "api_gateway" {
+  source               = "../../../modules/cloud/aws/api-gateway"
+  project_name         = var.project_name
+  environment          = local.environment
+  lambda_function_arn  = module.core_api.function_arn
+  lambda_function_name = module.core_api.function_name
+  cognito_user_pool_id = module.auth.user_pool_id
+  cognito_client_id    = module.auth.client_id
+  aws_region           = var.aws_region
+  cors_origins         = ["https://${module.cdn.distribution_domain}"]
+  tags                 = local.tags
+}
+
+output "api_gateway_url" { value = module.api_gateway.api_endpoint }
+output "portal_url" { value = "https://${module.cdn.distribution_domain}" }
+output "cognito_user_pool_id" { value = module.auth.user_pool_id }
+output "cognito_client_id" { value = module.auth.client_id }
+
 variable "project_name" { type = string }
 variable "aws_region" { type = string, default = "us-east-1" }
 variable "admin_email" { type = string }

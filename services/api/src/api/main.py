@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 
 from .config import settings
-from .routers import health
+from .routers import auth, health, users
 
 logger = Logger()
 tracer = Tracer()
@@ -26,6 +26,8 @@ app.add_middleware(
 )
 
 app.include_router(health.router, prefix="/api/v1")
+app.include_router(auth.router, prefix="/api/v1")
+app.include_router(users.router, prefix="/api/v1")
 
 handler = Mangum(app, lifespan="off")
 

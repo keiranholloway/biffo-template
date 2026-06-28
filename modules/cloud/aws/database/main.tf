@@ -118,9 +118,11 @@ resource "aws_db_instance" "main" {
   tags = merge(var.tags, { Name = "${local.name_prefix}-postgres" })
 }
 
-# RDS Proxy — handles Lambda connection pooling (cold starts open/close connections rapidly)
+# RDS Proxy — optional; recommended for prod to handle Lambda connection churn.
+# Enable with: enable_rds_proxy = true
 resource "aws_iam_role" "rds_proxy" {
-  name = "${local.name_prefix}-rds-proxy"
+  count = var.enable_rds_proxy ? 1 : 0
+  name  = "${local.name_prefix}-rds-proxy"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -135,8 +137,9 @@ resource "aws_iam_role" "rds_proxy" {
 }
 
 resource "aws_iam_role_policy" "rds_proxy_secrets" {
-  name = "read-db-secret"
-  role = aws_iam_role.rds_proxy.id
+  count = var.enable_rds_proxy ? 1 : 0
+  name  = "read-db-secret"
+  role  = aws_iam_role.rds_proxy[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -149,12 +152,13 @@ resource "aws_iam_role_policy" "rds_proxy_secrets" {
 }
 
 resource "aws_db_proxy" "main" {
+  count                  = var.enable_rds_proxy ? 1 : 0
   name                   = "${local.name_prefix}-proxy"
   debug_logging          = var.environment == "dev"
   engine_family          = "POSTGRESQL"
   idle_client_timeout    = 1800
   require_tls            = true
-  role_arn               = aws_iam_role.rds_proxy.arn
+  role_arn               = aws_iam_role.rds_proxy[0].arn
   vpc_security_group_ids = [aws_security_group.db.id]
   vpc_subnet_ids         = var.private_subnet_ids
 
@@ -168,7 +172,8 @@ resource "aws_db_proxy" "main" {
 }
 
 resource "aws_db_proxy_default_target_group" "main" {
-  db_proxy_name = aws_db_proxy.main.name
+  count         = var.enable_rds_proxy ? 1 : 0
+  db_proxy_name = aws_db_proxy.main[0].name
 
   connection_pool_config {
     max_connections_percent = 90
@@ -176,7 +181,8 @@ resource "aws_db_proxy_default_target_group" "main" {
 }
 
 resource "aws_db_proxy_target" "main" {
+  count                  = var.enable_rds_proxy ? 1 : 0
   db_instance_identifier = aws_db_instance.main.identifier
-  db_proxy_name          = aws_db_proxy.main.name
-  target_group_name      = aws_db_proxy_default_target_group.main.name
+  db_proxy_name          = aws_db_proxy.main[0].name
+  target_group_name      = aws_db_proxy_default_target_group.main[0].name
 }

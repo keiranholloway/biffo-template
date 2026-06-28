@@ -2,9 +2,9 @@ output "db_instance_id" {
   value = aws_db_instance.main.id
 }
 
-output "proxy_endpoint" {
-  description = "RDS Proxy endpoint — use this in application config, not the direct DB endpoint"
-  value       = aws_db_proxy.main.endpoint
+output "db_endpoint" {
+  description = "Endpoint for the Lambda to connect to — proxy endpoint when enabled, direct RDS address otherwise"
+  value       = var.enable_rds_proxy ? aws_db_proxy.main[0].endpoint : aws_db_instance.main.address
 }
 
 output "credentials_secret_arn" {

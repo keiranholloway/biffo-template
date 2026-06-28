@@ -75,7 +75,16 @@ module "core_api" {
   private_subnet_ids        = module.networking.private_subnet_ids
   db_credentials_secret_arn = module.database.credentials_secret_arn
   event_bus_name            = module.events.event_bus_name
-  tags                      = local.tags
+  environment_variables = {
+    BIFFO_ENVIRONMENT          = local.environment
+    BIFFO_DB_SECRET_ARN        = module.database.credentials_secret_arn
+    BIFFO_DB_HOST              = module.database.db_endpoint
+    BIFFO_EVENT_BUS_NAME       = module.events.event_bus_name
+    BIFFO_COGNITO_USER_POOL_ID = module.auth.user_pool_id
+    BIFFO_COGNITO_CLIENT_ID    = module.auth.client_id
+    BIFFO_COGNITO_REGION       = var.aws_region
+  }
+  tags = local.tags
 }
 
 module "database" {
@@ -88,6 +97,7 @@ module "database" {
   instance_class            = "db.t3.small"
   multi_az                  = true
   deletion_protection       = false
+  enable_rds_proxy          = true
   tags                      = local.tags
 }
 

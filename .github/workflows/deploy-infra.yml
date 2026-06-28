@@ -29,12 +29,15 @@ permissions:
   pull-requests: write
   actions: write
 
+# ─── DEV ─────────────────────────────────────────────────────────────────────
+# Runs automatically on push to main, or manually via workflow_dispatch.
+
 jobs:
   plan-dev:
     name: Plan (dev)
     runs-on: ubuntu-latest
     environment: dev
-    if: github.event_name == 'push' || (github.event.inputs.environment == 'dev')
+    if: github.event_name == 'push' || github.event.inputs.environment == 'dev'
     defaults:
       run:
         working-directory: infra/environments/dev
@@ -96,12 +99,15 @@ jobs:
             --body "${{ vars.PROJECT_NAME }}-dev-core-api" \
             --env dev
 
+# ─── STAGING ─────────────────────────────────────────────────────────────────
+# Manual only — run workflow_dispatch with environment=staging.
+# Requires staging environment approval in GitHub Settings → Environments.
+
   plan-staging:
     name: Plan (staging)
     runs-on: ubuntu-latest
     environment: staging
-    needs: apply-dev
-    if: github.event.inputs.environment == 'staging' || github.event_name == 'push'
+    if: github.event.inputs.environment == 'staging'
     defaults:
       run:
         working-directory: infra/environments/staging
@@ -115,4 +121,120 @@ jobs:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
       - run: terraform init
-      - run: terraform plan -no-color
+      - run: terraform plan -out=tfplan -no-color 2>&1 | tee plan.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-staging
+          path: infra/environments/staging/tfplan
+
+  apply-staging:
+    name: Apply (staging)
+    runs-on: ubuntu-latest
+    environment: staging
+    needs: plan-staging
+    if: github.event.inputs.environment == 'staging' && github.event.inputs.action == 'apply'
+    defaults:
+      run:
+        working-directory: infra/environments/staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - run: terraform init
+      - uses: actions/download-artifact@v4
+        with:
+          name: tfplan-staging
+          path: infra/environments/staging/
+      - run: terraform apply -auto-approve tfplan
+      - name: Export outputs to GitHub Actions variables
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh variable set API_GATEWAY_URL \
+            --body "$(terraform output -raw api_gateway_url)" \
+            --env staging
+          gh variable set COGNITO_USER_POOL_ID \
+            --body "$(terraform output -raw cognito_user_pool_id)" \
+            --env staging
+          gh variable set COGNITO_CLIENT_ID \
+            --body "$(terraform output -raw cognito_client_id)" \
+            --env staging
+          gh variable set CORE_API_LAMBDA_NAME \
+            --body "${{ vars.PROJECT_NAME }}-staging-core-api" \
+            --env staging
+
+# ─── PROD ────────────────────────────────────────────────────────────────────
+# Manual only — run workflow_dispatch with environment=prod.
+# Requires prod environment approval in GitHub Settings → Environments.
+
+  plan-prod:
+    name: Plan (prod)
+    runs-on: ubuntu-latest
+    environment: prod
+    if: github.event.inputs.environment == 'prod'
+    defaults:
+      run:
+        working-directory: infra/environments/prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - run: terraform init
+      - run: terraform plan -out=tfplan -no-color 2>&1 | tee plan.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-prod
+          path: infra/environments/prod/tfplan
+
+  apply-prod:
+    name: Apply (prod)
+    runs-on: ubuntu-latest
+    environment: prod
+    needs: plan-prod
+    if: github.event.inputs.environment == 'prod' && github.event.inputs.action == 'apply'
+    defaults:
+      run:
+        working-directory: infra/environments/prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - run: terraform init
+      - uses: actions/download-artifact@v4
+        with:
+          name: tfplan-prod
+          path: infra/environments/prod/
+      - run: terraform apply -auto-approve tfplan
+      - name: Export outputs to GitHub Actions variables
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh variable set API_GATEWAY_URL \
+            --body "$(terraform output -raw api_gateway_url)" \
+            --env prod
+          gh variable set COGNITO_USER_POOL_ID \
+            --body "$(terraform output -raw cognito_user_pool_id)" \
+            --env prod
+          gh variable set COGNITO_CLIENT_ID \
+            --body "$(terraform output -raw cognito_client_id)" \
+            --env prod
+          gh variable set CORE_API_LAMBDA_NAME \
+            --body "${{ vars.PROJECT_NAME }}-prod-core-api" \
+            --env prod

@@ -23,10 +23,14 @@ env:
   NODE_VERSION: "22"
   PNPM_VERSION: "9"
 
+# ─── DEV ─────────────────────────────────────────────────────────────────────
+
 jobs:
-  build:
-    name: Build
+  build-dev:
+    name: Build (dev)
     runs-on: ubuntu-latest
+    environment: dev
+    if: github.event_name == 'push' || github.event.inputs.environment == 'dev'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -40,7 +44,7 @@ jobs:
         with:
           enable-cache: true
       - run: pnpm install --frozen-lockfile
-      - name: Build
+      - name: Build portal
         env:
           NEXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ vars.COGNITO_USER_POOL_ID }}
           NEXT_PUBLIC_COGNITO_CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
@@ -49,17 +53,17 @@ jobs:
         run: pnpm run build
       - uses: actions/upload-artifact@v4
         with:
-          name: portal-build
+          name: portal-build-dev
           path: apps/portal/out/
       - uses: actions/upload-artifact@v4
         with:
-          name: api-service
+          name: api-service-dev
           path: services/api/
 
   deploy-dev:
     name: Deploy to dev
     runs-on: ubuntu-latest
-    needs: build
+    needs: build-dev
     environment: dev
     if: github.ref == 'refs/heads/main'
     steps:
@@ -70,7 +74,7 @@ jobs:
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
       - uses: actions/download-artifact@v4
         with:
-          name: portal-build
+          name: portal-build-dev
           path: portal-dist/
       - name: Sync portal to S3
         run: |
@@ -89,7 +93,176 @@ jobs:
             --paths "/*"
       - uses: actions/download-artifact@v4
         with:
-          name: api-service
+          name: api-service-dev
+          path: api-service/
+      - uses: astral-sh/setup-uv@v5
+      - name: Package and deploy Lambda
+        working-directory: api-service
+        run: |
+          uv export --no-dev --output-file requirements.txt
+          pip install -r requirements.txt -t package/
+          cp -r src/ package/
+          cd package && zip -r ../lambda.zip .
+          aws lambda update-function-code \
+            --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
+            --zip-file fileb://../lambda.zip
+
+# ─── STAGING ─────────────────────────────────────────────────────────────────
+# Manual only — run workflow_dispatch with environment=staging.
+
+  build-staging:
+    name: Build (staging)
+    runs-on: ubuntu-latest
+    environment: staging
+    if: github.event.inputs.environment == 'staging'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: pnpm install --frozen-lockfile
+      - name: Build portal
+        env:
+          NEXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ vars.COGNITO_USER_POOL_ID }}
+          NEXT_PUBLIC_COGNITO_CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
+          NEXT_PUBLIC_COGNITO_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+          NEXT_PUBLIC_API_URL: ${{ vars.API_GATEWAY_URL }}
+        run: pnpm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portal-build-staging
+          path: apps/portal/out/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: api-service-staging
+          path: services/api/
+
+  deploy-staging:
+    name: Deploy to staging
+    runs-on: ubuntu-latest
+    needs: build-staging
+    environment: staging
+    if: github.event.inputs.environment == 'staging'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: portal-build-staging
+          path: portal-dist/
+      - name: Sync portal to S3
+        run: |
+          aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
+            --delete \
+            --cache-control "public, max-age=31536000, immutable" \
+            --exclude "*.html"
+          aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
+            --delete \
+            --cache-control "no-cache" \
+            --include "*.html"
+      - name: Invalidate CloudFront
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
+      - uses: actions/download-artifact@v4
+        with:
+          name: api-service-staging
+          path: api-service/
+      - uses: astral-sh/setup-uv@v5
+      - name: Package and deploy Lambda
+        working-directory: api-service
+        run: |
+          uv export --no-dev --output-file requirements.txt
+          pip install -r requirements.txt -t package/
+          cp -r src/ package/
+          cd package && zip -r ../lambda.zip .
+          aws lambda update-function-code \
+            --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
+            --zip-file fileb://../lambda.zip
+
+# ─── PROD ────────────────────────────────────────────────────────────────────
+# Manual only — run workflow_dispatch with environment=prod.
+# Requires prod environment approval in GitHub Settings → Environments.
+
+  build-prod:
+    name: Build (prod)
+    runs-on: ubuntu-latest
+    environment: prod
+    if: github.event.inputs.environment == 'prod'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: pnpm install --frozen-lockfile
+      - name: Build portal
+        env:
+          NEXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ vars.COGNITO_USER_POOL_ID }}
+          NEXT_PUBLIC_COGNITO_CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
+          NEXT_PUBLIC_COGNITO_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+          NEXT_PUBLIC_API_URL: ${{ vars.API_GATEWAY_URL }}
+        run: pnpm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portal-build-prod
+          path: apps/portal/out/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: api-service-prod
+          path: services/api/
+
+  deploy-prod:
+    name: Deploy to prod
+    runs-on: ubuntu-latest
+    needs: build-prod
+    environment: prod
+    if: github.event.inputs.environment == 'prod'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: portal-build-prod
+          path: portal-dist/
+      - name: Sync portal to S3
+        run: |
+          aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
+            --delete \
+            --cache-control "public, max-age=31536000, immutable" \
+            --exclude "*.html"
+          aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
+            --delete \
+            --cache-control "no-cache" \
+            --include "*.html"
+      - name: Invalidate CloudFront
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
+      - uses: actions/download-artifact@v4
+        with:
+          name: api-service-prod
           path: api-service/
       - uses: astral-sh/setup-uv@v5
       - name: Package and deploy Lambda

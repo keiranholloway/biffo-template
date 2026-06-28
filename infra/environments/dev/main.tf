@@ -81,17 +81,19 @@ module "events" {
 module "core_api" {
   source = "../../../modules/cloud/aws/compute"
 
-  project_name               = var.project_name
-  environment                = local.environment
-  function_name              = "core-api"
-  handler                    = "src.api.main.lambda_handler"
-  vpc_id                     = module.networking.vpc_id
-  private_subnet_ids         = module.networking.private_subnet_ids
-  db_credentials_secret_arn  = module.database.credentials_secret_arn
-  event_bus_name             = module.events.event_bus_name
+  project_name              = var.project_name
+  environment               = local.environment
+  function_name             = "core-api"
+  handler                   = "src.api.main.lambda_handler"
+  vpc_id                    = module.networking.vpc_id
+  private_subnet_ids        = module.networking.private_subnet_ids
+  db_credentials_secret_arn = module.database.credentials_secret_arn
+  event_bus_name            = module.events.event_bus_name
   environment_variables = {
-    BIFFO_ENVIRONMENT         = local.environment
-    BIFFO_EVENT_BUS_NAME      = module.events.event_bus_name
+    BIFFO_ENVIRONMENT          = local.environment
+    BIFFO_DB_SECRET_ARN        = module.database.credentials_secret_arn
+    BIFFO_DB_HOST              = module.database.db_endpoint
+    BIFFO_EVENT_BUS_NAME       = module.events.event_bus_name
     BIFFO_COGNITO_USER_POOL_ID = module.auth.user_pool_id
     BIFFO_COGNITO_CLIENT_ID    = module.auth.client_id
     BIFFO_COGNITO_REGION       = var.aws_region
@@ -110,6 +112,7 @@ module "database" {
   instance_class            = "db.t3.micro"
   multi_az                  = false
   deletion_protection       = false
+  enable_rds_proxy          = false # disabled by default — saves ~$22/month in dev
   tags                      = local.tags
 }
 

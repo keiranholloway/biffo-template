@@ -37,6 +37,12 @@ variable "backup_retention_days" {
   default = 7
 }
 
+variable "enable_rds_proxy" {
+  description = "Create an RDS Proxy in front of the database. Recommended for production (handles Lambda connection churn). Costs ~$22/month extra — disable for dev cost savings."
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

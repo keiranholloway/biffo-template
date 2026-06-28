@@ -4,8 +4,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="BIFFO_", case_sensitive=False)
 
-    # Database — sourced from Secrets Manager at runtime, never from env directly in prod
+    # Database — local dev: set database_url directly.
+    # AWS: set db_secret_arn (Secrets Manager) + db_host (proxy or RDS endpoint).
     database_url: str = "postgresql+asyncpg://localhost/biffo_dev"
+    db_secret_arn: str = ""
+    db_host: str = ""
 
     # Cognito
     cognito_user_pool_id: str = ""
@@ -14,7 +17,6 @@ class Settings(BaseSettings):
 
     # EventBridge
     event_bus_name: str = "biffo-events"
-    aws_region: str = "us-east-1"
 
     # Application
     environment: str = "dev"

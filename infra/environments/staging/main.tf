@@ -116,6 +116,8 @@ module "api_gateway" {
 
 output "api_gateway_url" { value = module.api_gateway.api_endpoint }
 output "portal_url" { value = "https://${module.cdn.distribution_domain}" }
+output "portal_bucket_name" { value = module.storage.portal_bucket_name }
+output "cloudfront_distribution_id" { value = module.cdn.distribution_id }
 output "cognito_user_pool_id" { value = module.auth.user_pool_id }
 output "cognito_client_id" { value = module.auth.client_id }
 

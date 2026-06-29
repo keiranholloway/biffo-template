@@ -12,6 +12,7 @@ import {
   CreateBucketCommand,
   DeleteBucketCommand,
   DeleteObjectsCommand,
+  GetObjectCommand,
   HeadBucketCommand,
   ListObjectVersionsCommand,
   PutBucketVersioningCommand,
@@ -189,5 +190,24 @@ export class AwsAdapter {
     const roleArn = Role!.Arn!
     log.success(`OIDC role created: ${roleArn}`)
     return roleArn
+  }
+
+  async readTerraformOutputs(
+    bucketName: string,
+    stateKey: string,
+  ): Promise<Record<string, string>> {
+    const s3 = new S3Client({ region: this.region })
+    const response = await s3.send(new GetObjectCommand({ Bucket: bucketName, Key: stateKey }))
+    const body = await response.Body?.transformToString()
+    if (!body) throw new Error(`Empty Terraform state at s3://${bucketName}/${stateKey}`)
+
+    const state = JSON.parse(body) as {
+      outputs?: Record<string, { value: unknown }>
+    }
+    return Object.fromEntries(
+      Object.entries(state.outputs ?? {})
+        .filter(([, v]) => typeof v.value === 'string')
+        .map(([k, v]) => [k, v.value as string]),
+    )
   }
 }

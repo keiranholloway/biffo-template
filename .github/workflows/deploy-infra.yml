@@ -53,8 +53,20 @@ jobs:
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-      - run: terraform init
+      - name: Generate backend config
+        run: |
+          cat > backend.hcl << 'EOF'
+          bucket = "${{ vars.TF_STATE_BUCKET }}"
+          key    = "dev/terraform.tfstate"
+          region = "${{ vars.AWS_REGION || 'us-east-1' }}"
+          EOF
+      - run: terraform init -backend-config=backend.hcl
       - run: terraform plan -out=tfplan -no-color 2>&1 | tee plan.txt
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
+          TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
       - uses: actions/upload-artifact@v4
         with:
           name: tfplan-dev
@@ -78,7 +90,14 @@ jobs:
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-      - run: terraform init
+      - name: Generate backend config
+        run: |
+          cat > backend.hcl << 'EOF'
+          bucket = "${{ vars.TF_STATE_BUCKET }}"
+          key    = "dev/terraform.tfstate"
+          region = "${{ vars.AWS_REGION || 'us-east-1' }}"
+          EOF
+      - run: terraform init -backend-config=backend.hcl
       - uses: actions/download-artifact@v4
         with:
           name: tfplan-dev
@@ -100,6 +119,15 @@ jobs:
             --env dev
           gh variable set CORE_API_LAMBDA_NAME \
             --body "${{ vars.PROJECT_NAME }}-dev-core-api" \
+            --env dev
+          gh variable set PORTAL_BUCKET_NAME \
+            --body "$(terraform output -raw portal_bucket_name)" \
+            --env dev
+          gh variable set CLOUDFRONT_DISTRIBUTION_ID \
+            --body "$(terraform output -raw cloudfront_distribution_id)" \
+            --env dev
+          gh variable set PORTAL_URL \
+            --body "$(terraform output -raw portal_url)" \
             --env dev
 
   # ─── STAGING ─────────────────────────────────────────────────────────────────
@@ -123,8 +151,20 @@ jobs:
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-      - run: terraform init
+      - name: Generate backend config
+        run: |
+          cat > backend.hcl << 'EOF'
+          bucket = "${{ vars.TF_STATE_BUCKET }}"
+          key    = "staging/terraform.tfstate"
+          region = "${{ vars.AWS_REGION || 'us-east-1' }}"
+          EOF
+      - run: terraform init -backend-config=backend.hcl
       - run: terraform plan -out=tfplan -no-color 2>&1 | tee plan.txt
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
+          TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
       - uses: actions/upload-artifact@v4
         with:
           name: tfplan-staging
@@ -148,7 +188,14 @@ jobs:
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-      - run: terraform init
+      - name: Generate backend config
+        run: |
+          cat > backend.hcl << 'EOF'
+          bucket = "${{ vars.TF_STATE_BUCKET }}"
+          key    = "staging/terraform.tfstate"
+          region = "${{ vars.AWS_REGION || 'us-east-1' }}"
+          EOF
+      - run: terraform init -backend-config=backend.hcl
       - uses: actions/download-artifact@v4
         with:
           name: tfplan-staging
@@ -170,6 +217,15 @@ jobs:
             --env staging
           gh variable set CORE_API_LAMBDA_NAME \
             --body "${{ vars.PROJECT_NAME }}-staging-core-api" \
+            --env staging
+          gh variable set PORTAL_BUCKET_NAME \
+            --body "$(terraform output -raw portal_bucket_name)" \
+            --env staging
+          gh variable set CLOUDFRONT_DISTRIBUTION_ID \
+            --body "$(terraform output -raw cloudfront_distribution_id)" \
+            --env staging
+          gh variable set PORTAL_URL \
+            --body "$(terraform output -raw portal_url)" \
             --env staging
 
   # ─── PROD ────────────────────────────────────────────────────────────────────
@@ -193,8 +249,20 @@ jobs:
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-      - run: terraform init
+      - name: Generate backend config
+        run: |
+          cat > backend.hcl << 'EOF'
+          bucket = "${{ vars.TF_STATE_BUCKET }}"
+          key    = "prod/terraform.tfstate"
+          region = "${{ vars.AWS_REGION || 'us-east-1' }}"
+          EOF
+      - run: terraform init -backend-config=backend.hcl
       - run: terraform plan -out=tfplan -no-color 2>&1 | tee plan.txt
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
+          TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
       - uses: actions/upload-artifact@v4
         with:
           name: tfplan-prod
@@ -218,7 +286,14 @@ jobs:
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-      - run: terraform init
+      - name: Generate backend config
+        run: |
+          cat > backend.hcl << 'EOF'
+          bucket = "${{ vars.TF_STATE_BUCKET }}"
+          key    = "prod/terraform.tfstate"
+          region = "${{ vars.AWS_REGION || 'us-east-1' }}"
+          EOF
+      - run: terraform init -backend-config=backend.hcl
       - uses: actions/download-artifact@v4
         with:
           name: tfplan-prod
@@ -240,4 +315,13 @@ jobs:
             --env prod
           gh variable set CORE_API_LAMBDA_NAME \
             --body "${{ vars.PROJECT_NAME }}-prod-core-api" \
+            --env prod
+          gh variable set PORTAL_BUCKET_NAME \
+            --body "$(terraform output -raw portal_bucket_name)" \
+            --env prod
+          gh variable set CLOUDFRONT_DISTRIBUTION_ID \
+            --body "$(terraform output -raw cloudfront_distribution_id)" \
+            --env prod
+          gh variable set PORTAL_URL \
+            --body "$(terraform output -raw portal_url)" \
             --env prod

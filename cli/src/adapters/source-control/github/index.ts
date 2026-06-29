@@ -212,4 +212,83 @@ export class GitHubAdapter {
       stdio: ['pipe', 'pipe', 'pipe'],
     })
   }
+
+  async setRepoVariable(org: string, repo: string, name: string, value: string): Promise<void> {
+    log.info(`Setting variable: ${name}`)
+    try {
+      await this.octokit.request('PATCH /repos/{owner}/{repo}/actions/variables/{variable_name}', {
+        owner: org,
+        repo,
+        variable_name: name,
+        name,
+        value,
+      })
+    } catch (err: unknown) {
+      if ((err as { status?: number }).status === 404) {
+        await this.octokit.request('POST /repos/{owner}/{repo}/actions/variables', {
+          owner: org,
+          repo,
+          name,
+          value,
+        })
+      } else {
+        throw err
+      }
+    }
+  }
+
+  async triggerWorkflow(
+    org: string,
+    repo: string,
+    workflowId: string,
+    inputs: Record<string, string> = {},
+  ): Promise<void> {
+    await this.octokit.actions.createWorkflowDispatch({
+      owner: org,
+      repo,
+      workflow_id: workflowId,
+      ref: 'main',
+      inputs,
+    })
+  }
+
+  async waitForWorkflowRun(
+    org: string,
+    repo: string,
+    workflowId: string,
+    triggeredAt: Date,
+    timeoutMs = 3_600_000,
+    intervalMs = 30_000,
+  ): Promise<{ id: number; conclusion: string | null }> {
+    const deadline = Date.now() + timeoutMs
+    const triggeredAtMs = triggeredAt.getTime()
+
+    while (Date.now() < deadline) {
+      const { data } = await this.octokit.actions.listWorkflowRuns({
+        owner: org,
+        repo,
+        workflow_id: workflowId,
+        event: 'workflow_dispatch',
+        branch: 'main',
+        per_page: 10,
+      })
+
+      const run = data.workflow_runs.find((r) => new Date(r.created_at).getTime() >= triggeredAtMs)
+
+      if (run) {
+        if (run.status === 'completed') {
+          return { id: run.id, conclusion: run.conclusion ?? null }
+        }
+        log.info(`  Run #${run.id}: ${run.status}...`)
+      } else {
+        log.info('  Waiting for run to be queued...')
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, intervalMs))
+    }
+
+    throw new Error(
+      `Workflow ${workflowId} did not complete within ${timeoutMs / 1000 / 60} minutes`,
+    )
+  }
 }

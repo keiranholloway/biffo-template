@@ -109,11 +109,36 @@ export class GitHubAdapter {
     log.success(`Repository deleted: ${org}/${repo}`)
   }
 
+  private async waitForBranch(
+    org: string,
+    repo: string,
+    branch: string,
+    timeoutMs = 120_000,
+    intervalMs = 3_000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      try {
+        await this.octokit.repos.getBranch({ owner: org, repo, branch })
+        return
+      } catch (err: unknown) {
+        if ((err as { status?: number }).status !== 404) throw err
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs))
+    }
+    throw new Error(
+      `Branch "${branch}" not found in ${org}/${repo} after ${timeoutMs / 1000}s — ` +
+        `GitHub template generation may have stalled. Check the repository and re-run biffo init.`,
+    )
+  }
+
   async configureBranchProtection(config: BiffoConfig): Promise<void> {
     const { org, repo } = (
       config.source_control as { provider: 'github'; config: { org: string; repo: string } }
     ).config
 
+    log.info('Waiting for main branch to be ready...')
+    await this.waitForBranch(org, repo, 'main')
     log.info('Configuring branch protection on main...')
 
     await this.octokit.repos.updateBranchProtection({

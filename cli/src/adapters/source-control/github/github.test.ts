@@ -23,6 +23,7 @@ function makeOctokitMock() {
       update: vi.fn(),
       createUsingTemplate: vi.fn(),
       delete: vi.fn(),
+      getBranch: vi.fn(),
       updateBranchProtection: vi.fn(),
       createOrUpdateEnvironment: vi.fn(),
     },
@@ -177,7 +178,8 @@ describe('deleteRepo', () => {
 // ─── configureBranchProtection ────────────────────────────────────────────────
 
 describe('configureBranchProtection', () => {
-  it('calls updateBranchProtection with the correct params', async () => {
+  it('calls updateBranchProtection with the correct params when branch is immediately ready', async () => {
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValueOnce({ data: {} })
     octokitMock.repos.updateBranchProtection = vi.fn().mockResolvedValueOnce({})
 
     await adapter().configureBranchProtection(CONFIG)
@@ -193,7 +195,34 @@ describe('configureBranchProtection', () => {
     )
   })
 
+  it('retries until main branch exists before setting protection', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { status: 404 })
+    octokitMock.repos.getBranch = vi
+      .fn()
+      .mockRejectedValueOnce(notFound)
+      .mockRejectedValueOnce(notFound)
+      .mockResolvedValueOnce({ data: {} })
+    octokitMock.repos.updateBranchProtection = vi.fn().mockResolvedValueOnce({})
+
+    // Call waitForBranch directly with a 10ms interval to avoid real delays
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (adapter() as any).waitForBranch('acme', 'my-app', 'main', 10_000, 10)
+
+    expect(octokitMock.repos.getBranch).toHaveBeenCalledTimes(3)
+  })
+
+  it('throws with a helpful message if main never appears within the timeout', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { status: 404 })
+    octokitMock.repos.getBranch = vi.fn().mockRejectedValue(notFound)
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await expect(
+      (adapter() as any).waitForBranch('acme', 'my-app', 'main', 50, 10),
+    ).rejects.toThrow('Branch "main" not found')
+  })
+
   it('sends the full branch protection settings (snapshot)', async () => {
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValueOnce({ data: {} })
     octokitMock.repos.updateBranchProtection = vi.fn().mockResolvedValueOnce({})
 
     await adapter().configureBranchProtection(CONFIG)

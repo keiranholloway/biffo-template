@@ -181,43 +181,39 @@ export class AwsAdapter {
       log.success('GitHub OIDC provider registered')
     }
 
-    // If the role already exists (e.g. previous partial init), return its ARN
+    // Create the role if it doesn't already exist
+    let roleArn: string
     try {
       const { Role } = await iam.send(new GetRoleCommand({ RoleName: roleName }))
-      log.info(`OIDC role already exists — skipping creation`)
-      return Role!.Arn!
+      log.info(`OIDC role already exists`)
+      roleArn = Role!.Arn!
     } catch (err: unknown) {
       if ((err as { name?: string }).name !== 'NoSuchEntityException') throw err
+
+      log.info(`Creating OIDC trust role: ${roleName}`)
+      const trustPolicy = JSON.stringify({
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Effect: 'Allow',
+            Principal: { Federated: oidcProviderArn },
+            Action: 'sts:AssumeRoleWithWebIdentity',
+            Condition: {
+              StringEquals: { 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com' },
+              StringLike: { 'token.actions.githubusercontent.com:sub': `repo:${org}/${repo}:*` },
+            },
+          },
+        ],
+      })
+      const { Role } = await iam.send(
+        new CreateRoleCommand({ RoleName: roleName, AssumeRolePolicyDocument: trustPolicy }),
+      )
+      roleArn = Role!.Arn!
     }
 
-    log.info(`Creating OIDC trust role: ${roleName}`)
-
-    const trustPolicy = JSON.stringify({
-      Version: '2012-10-17',
-      Statement: [
-        {
-          Effect: 'Allow',
-          Principal: {
-            Federated: oidcProviderArn,
-          },
-          Action: 'sts:AssumeRoleWithWebIdentity',
-          Condition: {
-            StringEquals: { 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com' },
-            StringLike: { 'token.actions.githubusercontent.com:sub': `repo:${org}/${repo}:*` },
-          },
-        },
-      ],
-    })
-
-    const { Role } = await iam.send(
-      new CreateRoleCommand({ RoleName: roleName, AssumeRolePolicyDocument: trustPolicy }),
-    )
-
-    const roleArn = Role!.Arn!
-
-    // Attach AdministratorAccess so Terraform can provision the full stack.
-    // This is intentionally broad for dev — Terraform needs to create IAM roles,
-    // VPCs, RDS, Lambda, Cognito, CloudFront, etc. Scope down for prod separately.
+    // Always ensure AdministratorAccess is attached — AttachRolePolicy is idempotent
+    // (no-op if already attached). Terraform needs broad permissions to provision the
+    // full stack: IAM, VPC, RDS, Lambda, Cognito, CloudFront, etc.
     await iam.send(
       new AttachRolePolicyCommand({
         RoleName: roleName,
@@ -225,7 +221,7 @@ export class AwsAdapter {
       }),
     )
 
-    log.success(`OIDC role created: ${roleArn}`)
+    log.success(`OIDC role ready: ${roleArn}`)
     return roleArn
   }
 

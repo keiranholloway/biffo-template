@@ -158,10 +158,21 @@ export async function runInit(
   // Step 4: Bootstrap Terraform backend
   if (!session.completedSteps.includes('terraform_backend')) {
     log.step(4, totalSteps, 'Bootstrapping Terraform state backend...')
-    await aws.bootstrapTerraformBackend(config.project.name)
+    const tfStateBucket = await aws.bootstrapTerraformBackend(config.project.name)
+    session.outputs.tfStateBucket = tfStateBucket
+    config.cloud.config = {
+      ...config.cloud.config,
+      tf_state_bucket: tfStateBucket,
+    } as typeof config.cloud.config
     markStepComplete(session, 'terraform_backend')
   } else {
     log.step(4, totalSteps, 'Terraform backend already bootstrapped — skipping')
+    if (session.outputs.tfStateBucket) {
+      config.cloud.config = {
+        ...config.cloud.config,
+        tf_state_bucket: session.outputs.tfStateBucket,
+      } as typeof config.cloud.config
+    }
   }
 
   // Step 5: Configure GitHub (branch protection, environments, secrets)

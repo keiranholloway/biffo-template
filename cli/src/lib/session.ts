@@ -15,6 +15,7 @@ export interface InitSession {
   outputs: {
     cloneUrl?: string
     oidcRoleArn?: string
+    tfStateBucket?: string
   }
 }
 

@@ -147,6 +147,7 @@ describe('runInit (integration — real adapters + HTTP mocks)', () => {
     expect(session.outputs.oidcRoleArn).toBe(
       'arn:aws:iam::123456789012:role/biffo-github-actions-my-app',
     )
+    expect(session.outputs.tfStateBucket).toBe('my-app-terraform-state-123456789012')
   })
 
   it('resumes from step 3 — skips STS and GitHub template creation', async () => {

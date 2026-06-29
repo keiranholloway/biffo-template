@@ -122,7 +122,11 @@ export async function runDeploy(
     config.cloud as { provider: 'aws'; config: { account_id: string; region: string } }
   ).config
 
-  const stateBucket = `${config.project.name}-terraform-state-${awsConfig.account_id}`
+  // Prefer the bucket name stored during biffo init — it may differ from the derived name
+  // if the primary name was held by S3 after a teardown and a variant was used instead.
+  const stateBucket =
+    (awsConfig as { tf_state_bucket?: string }).tf_state_bucket ??
+    `${config.project.name}-terraform-state-${awsConfig.account_id}`
   const stateKey = `${environment}/terraform.tfstate`
 
   const skipInfra = options.appOnly === true

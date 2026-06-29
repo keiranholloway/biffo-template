@@ -10,6 +10,7 @@ const AwsConfigSchema = z.object({
     .string()
     .regex(/^arn:aws:iam::\d{12}:role\/.+/, 'Must be a valid IAM role ARN')
     .optional(),
+  tf_state_bucket: z.string().optional(),
 })
 
 const GitHubConfigSchema = z.object({

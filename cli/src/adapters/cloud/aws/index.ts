@@ -48,56 +48,86 @@ export class AwsAdapter {
     log.success(`AWS credentials verified for account ${this.accountId}`)
   }
 
-  async bootstrapTerraformBackend(projectName: string): Promise<void> {
+  async bootstrapTerraformBackend(projectName: string): Promise<string> {
     const s3 = new S3Client({ region: this.region })
-    const bucketName = `${projectName}-terraform-state-${this.accountId}`
+    const primaryName = `${projectName}-terraform-state-${this.accountId}`
 
-    try {
-      await s3.send(new HeadBucketCommand({ Bucket: bucketName }))
-      log.info(`Terraform state bucket already exists — skipping`)
-      return
-    } catch {
-      /* doesn't exist yet */
+    // Try up to 5 name variants so teardown→reinit cycles don't block on the same
+    // name being held in S3's global namespace after deletion.
+    const variants = Array.from({ length: 5 }, (_, i) =>
+      i === 0 ? primaryName : `${primaryName}-v${i + 1}`,
+    )
+
+    // Check if any variant already exists (idempotent re-runs)
+    for (const name of variants) {
+      try {
+        await s3.send(new HeadBucketCommand({ Bucket: name }))
+        log.info(`Terraform state bucket already exists — skipping (${name})`)
+        return name
+      } catch {
+        /* not found or no access — try next */
+      }
     }
 
-    log.info(`Creating Terraform state bucket: ${bucketName}`)
+    // Try to create each variant in order; skip to next on OperationAborted
+    for (const name of variants) {
+      log.info(`Creating Terraform state bucket: ${name}`)
+      const createParams =
+        this.region === 'us-east-1'
+          ? { Bucket: name }
+          : {
+              Bucket: name,
+              CreateBucketConfiguration: { LocationConstraint: this.region as never },
+            }
 
-    // S3 requires LocationConstraint for all regions except us-east-1.
-    // Also retries on OperationAborted (409) which occurs when a same-named bucket
-    // was deleted moments earlier and the deletion hasn't propagated globally yet.
-    const createParams =
-      this.region === 'us-east-1'
-        ? { Bucket: bucketName }
-        : {
-            Bucket: bucketName,
-            CreateBucketConfiguration: { LocationConstraint: this.region as never },
-          }
+      const created = await this.tryCreateBucket(s3, name, createParams)
+      if (!created) {
+        log.info(`  Bucket name "${name}" still reserved by AWS — trying next variant...`)
+        continue
+      }
 
-    const maxAttempts = 60 // 5 minutes at 5s intervals — S3 propagation can take several minutes
+      await s3.send(
+        new PutBucketVersioningCommand({
+          Bucket: name,
+          VersioningConfiguration: { Status: 'Enabled' },
+        }),
+      )
+      log.success(`Terraform backend bootstrapped (${name})`)
+      return name
+    }
+
+    throw new Error(
+      `Could not create Terraform state bucket after trying ${variants.length} name variants.\n` +
+        `  S3 is holding all names from recent deletions. Wait a few minutes and re-run \`biffo init\`.`,
+    )
+  }
+
+  private async tryCreateBucket(
+    s3: S3Client,
+    bucketName: string,
+    createParams: { Bucket: string; CreateBucketConfiguration?: { LocationConstraint: never } },
+  ): Promise<boolean> {
+    // Retry for 2 minutes on OperationAborted (S3 deletion propagation), then give up
+    // so the caller can try the next name variant.
+    const maxAttempts = 24
     const retryDelayMs = 5_000
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         await s3.send(new CreateBucketCommand(createParams))
-        break
+        return true
       } catch (err: unknown) {
-        if ((err as { Code?: string }).Code === 'OperationAborted' && attempt < maxAttempts) {
-          log.info(
-            `  S3 deletion still propagating, retrying in ${retryDelayMs / 1000}s... (${attempt}/${maxAttempts})`,
-          )
+        const code = (err as { Code?: string }).Code
+        if (code === 'OperationAborted' && attempt < maxAttempts) {
+          log.info(`  Waiting for S3 to release "${bucketName}"... (${attempt}/${maxAttempts})`)
           await new Promise((resolve) => setTimeout(resolve, retryDelayMs))
+        } else if (code === 'OperationAborted') {
+          return false
         } else {
           throw err
         }
       }
     }
-
-    await s3.send(
-      new PutBucketVersioningCommand({
-        Bucket: bucketName,
-        VersioningConfiguration: { Status: 'Enabled' },
-      }),
-    )
-    log.success('Terraform backend bootstrapped')
+    return false
   }
 
   async teardownOidcRole(projectName: string): Promise<void> {

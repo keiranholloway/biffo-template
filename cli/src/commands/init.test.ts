@@ -57,7 +57,7 @@ function makeAwsMock() {
     setupOidcTrust: vi
       .fn()
       .mockResolvedValue('arn:aws:iam::123456789012:role/biffo-github-actions-my-app'),
-    bootstrapTerraformBackend: vi.fn().mockResolvedValue(undefined),
+    bootstrapTerraformBackend: vi.fn().mockResolvedValue('my-app-terraform-state-123456789012'),
   }
 }
 

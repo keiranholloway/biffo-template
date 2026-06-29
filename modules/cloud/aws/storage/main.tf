@@ -7,7 +7,7 @@ terraform {
 data "aws_caller_identity" "current" {}
 
 locals {
-  name_prefix  = "${var.project_name}-${var.environment}"
+  name_prefix   = "${var.project_name}-${var.environment}"
   portal_bucket = "${local.name_prefix}-portal-${data.aws_caller_identity.current.account_id}"
   logs_bucket   = "${local.name_prefix}-logs-${data.aws_caller_identity.current.account_id}"
 }

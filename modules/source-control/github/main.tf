@@ -12,12 +12,12 @@ resource "github_repository" "main" {
   description = var.description
   visibility  = "private"
 
-  is_template          = false
-  auto_init            = false
-  delete_branch_on_merge = true
-  allow_merge_commit   = false
-  allow_squash_merge   = true
-  allow_rebase_merge   = false
+  is_template                 = false
+  auto_init                   = false
+  delete_branch_on_merge      = true
+  allow_merge_commit          = false
+  allow_squash_merge          = true
+  allow_rebase_merge          = false
   squash_merge_commit_title   = "PR_TITLE"
   squash_merge_commit_message = "PR_BODY"
 }

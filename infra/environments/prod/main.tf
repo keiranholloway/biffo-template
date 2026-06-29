@@ -50,14 +50,14 @@ module "cdn" {
 }
 
 module "auth" {
-  source             = "../../../modules/cloud/aws/auth"
-  project_name       = var.project_name
-  environment        = local.environment
-  domain_prefix      = var.project_name
-  admin_email        = var.admin_email
-  admin_username     = var.admin_username
-  mfa_configuration  = "ON"
-  tags               = local.tags
+  source            = "../../../modules/cloud/aws/auth"
+  project_name      = var.project_name
+  environment       = local.environment
+  domain_prefix     = var.project_name
+  admin_email       = var.admin_email
+  admin_username    = var.admin_username
+  mfa_configuration = "ON"
+  tags              = local.tags
 }
 
 module "events" {

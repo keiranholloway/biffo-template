@@ -38,10 +38,10 @@ resource "aws_cognito_user_pool" "main" {
 
   # Multi-tenant seam: tenant_id as a custom attribute (ADR-0001)
   schema {
-    name                     = "tenant_id"
-    attribute_data_type      = "String"
-    mutable                  = true
-    required                 = false
+    name                = "tenant_id"
+    attribute_data_type = "String"
+    mutable             = true
+    required            = false
     string_attribute_constraints {
       min_length = 1
       max_length = 64
@@ -102,8 +102,8 @@ resource "aws_cognito_user" "admin" {
   username     = var.admin_username
 
   attributes = {
-    email          = var.admin_email
-    email_verified = true
+    email              = var.admin_email
+    email_verified     = true
     "custom:tenant_id" = "default"
   }
 

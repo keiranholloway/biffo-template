@@ -86,18 +86,18 @@ data "aws_iam_policy_document" "lambda_permissions" {
   }
 
   statement {
-    sid    = "DLQAccess"
-    effect = "Allow"
-    actions = ["sqs:SendMessage"]
+    sid       = "DLQAccess"
+    effect    = "Allow"
+    actions   = ["sqs:SendMessage"]
     resources = [aws_sqs_queue.dlq.arn]
   }
 
   dynamic "statement" {
     for_each = var.db_credentials_secret_arn != "" ? [1] : []
     content {
-      sid    = "DBSecretsAccess"
-      effect = "Allow"
-      actions = ["secretsmanager:GetSecretValue"]
+      sid       = "DBSecretsAccess"
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
       resources = [var.db_credentials_secret_arn]
     }
   }
@@ -105,9 +105,9 @@ data "aws_iam_policy_document" "lambda_permissions" {
   dynamic "statement" {
     for_each = var.event_bus_name != "" ? [1] : []
     content {
-      sid    = "EventBridgePublish"
-      effect = "Allow"
-      actions = ["events:PutEvents"]
+      sid       = "EventBridgePublish"
+      effect    = "Allow"
+      actions   = ["events:PutEvents"]
       resources = ["arn:aws:events:*:*:event-bus/${var.event_bus_name}"]
     }
   }

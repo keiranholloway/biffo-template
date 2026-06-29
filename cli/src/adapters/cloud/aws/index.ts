@@ -73,7 +73,7 @@ export class AwsAdapter {
             CreateBucketConfiguration: { LocationConstraint: this.region as never },
           }
 
-    const maxAttempts = 8
+    const maxAttempts = 60 // 5 minutes at 5s intervals — S3 propagation can take several minutes
     const retryDelayMs = 5_000
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {

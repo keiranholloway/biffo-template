@@ -143,7 +143,7 @@ export async function runDeploy(
   // Step 2: Trigger and wait for infrastructure deploy (skip when --app-only)
   if (!skipInfra) {
     log.step(2, totalSteps, `Triggering infrastructure deploy to ${environment}...`)
-    const infraTriggeredAt = new Date()
+    const infraBaselineId = await github.getLatestWorkflowRunId(org, repo, 'deploy-infra.yml')
     await github.triggerWorkflow(org, repo, 'deploy-infra.yml', {
       environment,
       action: 'apply',
@@ -153,7 +153,7 @@ export async function runDeploy(
       org,
       repo,
       'deploy-infra.yml',
-      infraTriggeredAt,
+      infraBaselineId,
     )
     if (infraResult.conclusion !== 'success') {
       log.error(
@@ -170,10 +170,10 @@ export async function runDeploy(
   if (!skipApp) {
     const step = skipInfra ? 1 : 3
     log.step(step, totalSteps, `Triggering application deploy to ${environment}...`)
-    const appTriggeredAt = new Date()
+    const appBaselineId = await github.getLatestWorkflowRunId(org, repo, 'deploy-app.yml')
     await github.triggerWorkflow(org, repo, 'deploy-app.yml', { environment })
     log.info('  Waiting for application deploy...')
-    const appResult = await github.waitForWorkflowRun(org, repo, 'deploy-app.yml', appTriggeredAt)
+    const appResult = await github.waitForWorkflowRun(org, repo, 'deploy-app.yml', appBaselineId)
     if (appResult.conclusion !== 'success') {
       log.error(
         `Application deploy ended with: ${appResult.conclusion ?? 'unknown'}. ` +

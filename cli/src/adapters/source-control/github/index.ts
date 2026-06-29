@@ -14,7 +14,13 @@ export class GitHubAdapter {
   private templateRepo: string
 
   constructor(token: string, opts: GitHubAdapterOptions = {}) {
-    this.octokit = new Octokit({ auth: token })
+    this.octokit = new Octokit({
+      auth: token,
+      // Suppress request-level info logs — they produce noisy 404 output when
+      // we intentionally catch and handle expected HTTP errors (e.g. "does this
+      // branch / variable exist yet?"). Warn/error still surface real problems.
+      log: { debug: () => {}, info: () => {}, warn: console.warn, error: console.error },
+    })
     this.templateOwner = opts.templateOwner ?? 'keiranholloway'
     this.templateRepo = opts.templateRepo ?? 'biffo-template'
   }
@@ -215,26 +221,24 @@ export class GitHubAdapter {
 
   async setRepoVariable(org: string, repo: string, name: string, value: string): Promise<void> {
     log.info(`Setting variable: ${name}`)
-    try {
-      await this.octokit.request('PATCH /repos/{owner}/{repo}/actions/variables/{variable_name}', {
-        owner: org,
-        repo,
-        variable_name: name,
-        name,
-        value,
-      })
-    } catch (err: unknown) {
-      if ((err as { status?: number }).status === 404) {
-        await this.octokit.request('POST /repos/{owner}/{repo}/actions/variables', {
-          owner: org,
-          repo,
-          name,
-          value,
-        })
-      } else {
-        throw err
-      }
-    }
+    // PUT is a create-or-update upsert — avoids PATCH 404 noise on first run
+    await this.octokit.request('PUT /repos/{owner}/{repo}/actions/variables/{variable_name}', {
+      owner: org,
+      repo,
+      variable_name: name,
+      name,
+      value,
+    })
+  }
+
+  async getLatestWorkflowRunId(org: string, repo: string, workflowId: string): Promise<number> {
+    const { data } = await this.octokit.actions.listWorkflowRuns({
+      owner: org,
+      repo,
+      workflow_id: workflowId,
+      per_page: 1,
+    })
+    return data.workflow_runs[0]?.id ?? 0
   }
 
   async triggerWorkflow(
@@ -256,12 +260,11 @@ export class GitHubAdapter {
     org: string,
     repo: string,
     workflowId: string,
-    triggeredAt: Date,
+    baselineRunId: number,
     timeoutMs = 3_600_000,
     intervalMs = 30_000,
   ): Promise<{ id: number; conclusion: string | null }> {
     const deadline = Date.now() + timeoutMs
-    const triggeredAtMs = triggeredAt.getTime()
 
     while (Date.now() < deadline) {
       const { data } = await this.octokit.actions.listWorkflowRuns({
@@ -273,7 +276,8 @@ export class GitHubAdapter {
         per_page: 10,
       })
 
-      const run = data.workflow_runs.find((r) => new Date(r.created_at).getTime() >= triggeredAtMs)
+      // Find the first run with an ID higher than the baseline we captured before dispatch
+      const run = data.workflow_runs.find((r) => r.id > baselineRunId)
 
       if (run) {
         if (run.status === 'completed') {

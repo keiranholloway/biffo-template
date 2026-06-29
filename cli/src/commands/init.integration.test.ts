@@ -6,7 +6,14 @@
  * AWS SDK calls by aws-sdk-client-mock. This catches wiring bugs between
  * runInit() and its adapters that adapter-level mocks can't detect.
  */
-import { CreateRoleCommand, GetRoleCommand, IAMClient } from '@aws-sdk/client-iam'
+import {
+  AttachRolePolicyCommand,
+  CreateOpenIDConnectProviderCommand,
+  CreateRoleCommand,
+  GetOpenIDConnectProviderCommand,
+  GetRoleCommand,
+  IAMClient,
+} from '@aws-sdk/client-iam'
 import {
   CreateBucketCommand,
   HeadBucketCommand,
@@ -104,11 +111,16 @@ function setupGithubHandlers() {
 function setupAwsMocks() {
   stsMock.on(GetCallerIdentityCommand).resolves({ Account: '123456789012' })
   iamMock
+    .on(GetOpenIDConnectProviderCommand)
+    .rejects(Object.assign(new Error('NoSuchEntity'), { name: 'NoSuchEntityException' }))
+  iamMock.on(CreateOpenIDConnectProviderCommand).resolves({})
+  iamMock
     .on(GetRoleCommand)
     .rejects(Object.assign(new Error('NoSuchEntity'), { name: 'NoSuchEntityException' }))
   iamMock.on(CreateRoleCommand).resolves({
     Role: { Arn: 'arn:aws:iam::123456789012:role/biffo-github-actions-my-app' } as never,
   })
+  iamMock.on(AttachRolePolicyCommand).resolves({})
   s3Mock.on(HeadBucketCommand).rejects({ name: 'NotFound' })
   s3Mock.on(CreateBucketCommand).resolves({})
   s3Mock.on(PutBucketVersioningCommand).resolves({})
@@ -148,11 +160,16 @@ describe('runInit (integration — real adapters + HTTP mocks)', () => {
     )
 
     iamMock
+      .on(GetOpenIDConnectProviderCommand)
+      .rejects(Object.assign(new Error('NoSuchEntity'), { name: 'NoSuchEntityException' }))
+    iamMock.on(CreateOpenIDConnectProviderCommand).resolves({})
+    iamMock
       .on(GetRoleCommand)
       .rejects(Object.assign(new Error('NoSuchEntity'), { name: 'NoSuchEntityException' }))
     iamMock.on(CreateRoleCommand).resolves({
       Role: { Arn: 'arn:aws:iam::123456789012:role/biffo-github-actions-my-app' } as never,
     })
+    iamMock.on(AttachRolePolicyCommand).resolves({})
     s3Mock.on(HeadBucketCommand).rejects({ name: 'NotFound' })
     s3Mock.on(CreateBucketCommand).resolves({})
     s3Mock.on(PutBucketVersioningCommand).resolves({})

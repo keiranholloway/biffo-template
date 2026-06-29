@@ -1,8 +1,11 @@
 import {
+  AttachRolePolicyCommand,
+  CreateOpenIDConnectProviderCommand,
   CreateRoleCommand,
   DeleteRoleCommand,
   DeleteRolePolicyCommand,
   DetachRolePolicyCommand,
+  GetOpenIDConnectProviderCommand,
   GetRoleCommand,
   IAMClient,
   ListAttachedRolePoliciesCommand,
@@ -154,6 +157,29 @@ export class AwsAdapter {
     ).config
     const iam = new IAMClient({ region: this.region })
     const roleName = `biffo-github-actions-${config.project.name}`
+    const oidcProviderArn = `arn:aws:iam::${this.accountId}:oidc-provider/token.actions.githubusercontent.com`
+
+    // Ensure the GitHub OIDC identity provider exists in this account.
+    // This is an account-level resource — only one is needed regardless of how many roles use it.
+    try {
+      await iam.send(
+        new GetOpenIDConnectProviderCommand({ OpenIDConnectProviderArn: oidcProviderArn }),
+      )
+      log.info('GitHub OIDC provider already exists in account')
+    } catch (err: unknown) {
+      if ((err as { name?: string }).name !== 'NoSuchEntityException') throw err
+      log.info('Creating GitHub OIDC identity provider in AWS account...')
+      await iam.send(
+        new CreateOpenIDConnectProviderCommand({
+          Url: 'https://token.actions.githubusercontent.com',
+          ClientIDList: ['sts.amazonaws.com'],
+          // Thumbprint is required syntactically but AWS no longer validates it
+          // (AWS fetches the provider certificate directly since June 2023)
+          ThumbprintList: ['6938fd4d98bab03faadb97b34396831e3780aea1'],
+        }),
+      )
+      log.success('GitHub OIDC provider registered')
+    }
 
     // If the role already exists (e.g. previous partial init), return its ARN
     try {
@@ -172,7 +198,7 @@ export class AwsAdapter {
         {
           Effect: 'Allow',
           Principal: {
-            Federated: `arn:aws:iam::${this.accountId}:oidc-provider/token.actions.githubusercontent.com`,
+            Federated: oidcProviderArn,
           },
           Action: 'sts:AssumeRoleWithWebIdentity',
           Condition: {
@@ -188,6 +214,17 @@ export class AwsAdapter {
     )
 
     const roleArn = Role!.Arn!
+
+    // Attach AdministratorAccess so Terraform can provision the full stack.
+    // This is intentionally broad for dev — Terraform needs to create IAM roles,
+    // VPCs, RDS, Lambda, Cognito, CloudFront, etc. Scope down for prod separately.
+    await iam.send(
+      new AttachRolePolicyCommand({
+        RoleName: roleName,
+        PolicyArn: 'arn:aws:iam::aws:policy/AdministratorAccess',
+      }),
+    )
+
     log.success(`OIDC role created: ${roleArn}`)
     return roleArn
   }

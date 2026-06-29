@@ -9,6 +9,7 @@ vi.mock('../lib/session.js', () => ({
   markStepComplete: vi.fn(),
   deleteSession: vi.fn(),
   saveSession: vi.fn(),
+  saveProjectConfig: vi.fn(),
   findLatestSession: vi.fn(),
   loadSession: vi.fn(),
 }))

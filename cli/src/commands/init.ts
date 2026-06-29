@@ -13,6 +13,7 @@ import {
   deleteSession,
   findLatestSession,
   markStepComplete,
+  saveProjectConfig,
   saveSession,
   type InitSession,
 } from '../lib/session.js'
@@ -180,6 +181,7 @@ export async function runInit(
   }
 
   deleteSession(config.project.name)
+  saveProjectConfig(config)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

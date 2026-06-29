@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { BiffoConfig } from '../config/schema.js'
+import { BiffoConfigSchema, type BiffoConfig } from '../config/schema.js'
 
 export type CompletedStep =
   'verify_credentials' | 'create_repo' | 'oidc_trust' | 'terraform_backend' | 'github_config'
@@ -69,4 +69,44 @@ export function markStepComplete(session: InitSession, step: CompletedStep): voi
 export function deleteSession(projectName: string): void {
   const path = sessionPath(projectName)
   if (existsSync(path)) rmSync(path)
+}
+
+// ─── Project config store ─────────────────────────────────────────────────────
+// Persists the resolved BiffoConfig after a successful biffo init so that
+// biffo deploy can find it without requiring a local biffo.config.json.
+
+function projectsDir(): string {
+  return process.env['BIFFO_PROJECTS_DIR'] ?? join(process.cwd(), '.biffo', 'projects')
+}
+
+export function saveProjectConfig(config: BiffoConfig): void {
+  const dir = projectsDir()
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, `${config.project.name}.json`), JSON.stringify(config, null, 2))
+}
+
+export function loadProjectConfig(name: string): BiffoConfig | null {
+  const path = join(projectsDir(), `${name}.json`)
+  if (!existsSync(path)) return null
+  try {
+    const result = BiffoConfigSchema.safeParse(JSON.parse(readFileSync(path, 'utf8')))
+    return result.success ? result.data : null
+  } catch {
+    return null
+  }
+}
+
+export function listProjectConfigs(): BiffoConfig[] {
+  const dir = projectsDir()
+  if (!existsSync(dir)) return []
+  return readdirSync(dir)
+    .filter((f) => f.endsWith('.json'))
+    .flatMap((f) => {
+      try {
+        const result = BiffoConfigSchema.safeParse(JSON.parse(readFileSync(join(dir, f), 'utf8')))
+        return result.success ? [result.data] : []
+      } catch {
+        return []
+      }
+    })
 }

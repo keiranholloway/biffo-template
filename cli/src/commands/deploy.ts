@@ -3,21 +3,24 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
+import inquirer from 'inquirer'
 import { BiffoConfigSchema, type BiffoConfig } from '../config/schema.js'
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
 import { log } from '../lib/logger.js'
+import { listProjectConfigs, loadProjectConfig } from '../lib/session.js'
 
 export const deployCommand = new Command('deploy')
   .description('Deploy infrastructure and application to an environment')
   .argument('<environment>', 'Target environment: dev | staging | prod')
   .option('--infra-only', 'Deploy infrastructure only, skip application build')
   .option('--app-only', 'Deploy application only, skip Terraform')
-  .option('-c, --config <path>', 'Path to biffo.config.json (default: ./biffo.config.json)')
+  .option('-p, --project <name>', 'Project name (overrides biffo.config.json in current directory)')
+  .option('-c, --config <path>', 'Path to biffo.config.json')
   .action(
     async (
       environment: string,
-      options: { infraOnly?: boolean; appOnly?: boolean; config?: string },
+      options: { infraOnly?: boolean; appOnly?: boolean; project?: string; config?: string },
     ) => {
       const validEnvs = ['dev', 'staging', 'prod']
       if (!validEnvs.includes(environment)) {
@@ -25,25 +28,7 @@ export const deployCommand = new Command('deploy')
         process.exit(1)
       }
 
-      const configPath = options.config ?? resolve(process.cwd(), 'biffo.config.json')
-      let rawConfig: unknown
-      try {
-        rawConfig = JSON.parse(readFileSync(configPath, 'utf8'))
-      } catch {
-        log.error(`Could not read biffo.config.json at ${configPath}`)
-        log.error('Run biffo init first, or pass --config <path> to specify a different file.')
-        process.exit(1)
-      }
-
-      const result = BiffoConfigSchema.safeParse(rawConfig)
-      if (!result.success) {
-        log.error('Invalid biffo.config.json:')
-        result.error.issues.forEach((issue) => {
-          log.error(`  ${issue.path.join('.')} — ${issue.message}`)
-        })
-        process.exit(1)
-      }
-      const config = result.data
+      const config = await resolveConfig(options)
 
       console.log(chalk.bold(`\n  Biffo — Deploy to ${environment}\n`))
 
@@ -54,6 +39,72 @@ export const deployCommand = new Command('deploy')
       await runDeploy(github, aws, config, environment, options)
     },
   )
+
+async function resolveConfig(options: { project?: string; config?: string }): Promise<BiffoConfig> {
+  // Explicit --config flag: parse and validate, no fallback
+  if (options.config) {
+    const raw = JSON.parse(readFileSync(resolve(options.config), 'utf8'))
+    const result = BiffoConfigSchema.safeParse(raw)
+    if (!result.success) {
+      log.error(`Invalid config at ${options.config}:`)
+      result.error.issues.forEach((i) => log.error(`  ${i.path.join('.')} — ${i.message}`))
+      process.exit(1)
+    }
+    return result.data
+  }
+
+  // Explicit --project flag: read from ~/.biffo/projects/<name>.json
+  if (options.project) {
+    const cfg = loadProjectConfig(options.project)
+    if (!cfg) {
+      log.error(
+        `Project "${options.project}" not found in ~/.biffo/projects/. ` +
+          `Run biffo init first or pass --config <path>.`,
+      )
+      process.exit(1)
+    }
+    return cfg
+  }
+
+  // Try ./biffo.config.json — but only if it parses successfully (not a template placeholder)
+  try {
+    const raw = JSON.parse(readFileSync(resolve(process.cwd(), 'biffo.config.json'), 'utf8'))
+    const result = BiffoConfigSchema.safeParse(raw)
+    if (result.success) return result.data
+  } catch {
+    /* not found or not parseable — fall through to project store */
+  }
+
+  // Fall back to ~/.biffo/projects/
+  const projects = listProjectConfigs()
+  if (projects.length === 0) {
+    log.error(
+      'No biffo.config.json found in the current directory and no projects in ~/.biffo/projects/.',
+    )
+    log.error('Run biffo init first, or pass --project <name> or --config <path>.')
+    process.exit(1)
+  }
+
+  if (projects.length === 1) {
+    log.info(`Using project: ${projects[0]!.project.name}`)
+    return projects[0]!
+  }
+
+  // Multiple projects — ask which one
+  const { chosen } = await inquirer.prompt<{ chosen: string }>([
+    {
+      type: 'list',
+      name: 'chosen',
+      message: 'Which project do you want to deploy?',
+      choices: projects.map((p) => ({
+        name: `${p.project.name} (${(p.source_control as { config: { org: string; repo: string } }).config.org}/${(p.source_control as { config: { org: string; repo: string } }).config.repo})`,
+        value: p.project.name,
+      })),
+    },
+  ])
+
+  return projects.find((p) => p.project.name === chosen)!
+}
 
 // ─── Exported for testing ────────────────────────────────────────────────────
 
@@ -91,8 +142,7 @@ export async function runDeploy(
 
   // Step 2: Trigger and wait for infrastructure deploy (skip when --app-only)
   if (!skipInfra) {
-    const step = 2
-    log.step(step, totalSteps, `Triggering infrastructure deploy to ${environment}...`)
+    log.step(2, totalSteps, `Triggering infrastructure deploy to ${environment}...`)
     const infraTriggeredAt = new Date()
     await github.triggerWorkflow(org, repo, 'deploy-infra.yml', {
       environment,

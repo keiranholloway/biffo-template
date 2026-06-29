@@ -36,6 +36,9 @@ override.tf.json
 terraform.rc
 tfplan
 
+# Biffo local project store — persisted by biffo init, read by biffo deploy
+.biffo/
+
 # Environment & secrets — never commit these
 .env
 .env.*

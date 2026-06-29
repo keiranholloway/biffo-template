@@ -7,7 +7,14 @@ import { BiffoConfigSchema } from '../config/schema.js'
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
 import { log } from '../lib/logger.js'
-import { deleteSession, findLatestSession, loadSession } from '../lib/session.js'
+import {
+  deleteProjectConfig,
+  deleteSession,
+  findLatestSession,
+  listProjectConfigs,
+  loadProjectConfig,
+  loadSession,
+} from '../lib/session.js'
 
 export const teardownCommand = new Command('teardown')
   .description('Remove everything created by biffo init (repo, IAM role, Terraform state bucket)')
@@ -26,7 +33,13 @@ export const teardownCommand = new Command('teardown')
     let repo: string
     let region: string
 
+    // Resolution order: init session → saved project config → interactive prompt
     const session = options.project ? loadSession(options.project) : findLatestSession()
+    const savedConfig = session
+      ? null
+      : options.project
+        ? loadProjectConfig(options.project)
+        : (listProjectConfigs()[0] ?? null)
 
     if (session?.config.project?.name) {
       const sc = session.config.source_control as
@@ -35,9 +48,24 @@ export const teardownCommand = new Command('teardown')
       org = sc?.config.org ?? ''
       repo = sc?.config.repo ?? ''
       region = session.awsRegion
-
       console.log(chalk.yellow('  Loaded session for: ') + chalk.bold(projectName))
       if (org && repo) console.log(`  Repository: ${org}/${repo}`)
+      console.log()
+    } else if (savedConfig) {
+      const sc = savedConfig.source_control as {
+        provider: 'github'
+        config: { org: string; repo: string }
+      }
+      const cloud = savedConfig.cloud as {
+        provider: 'aws'
+        config: { account_id: string; region: string }
+      }
+      projectName = savedConfig.project.name
+      org = sc.config.org
+      repo = sc.config.repo
+      region = cloud.config.region
+      console.log(chalk.yellow('  Loaded config for: ') + chalk.bold(projectName))
+      console.log(`  Repository: ${org}/${repo}`)
       console.log()
     } else {
       const answers = await inquirer.prompt([
@@ -125,6 +153,7 @@ export const teardownCommand = new Command('teardown')
     })
 
     deleteSession(projectName)
+    deleteProjectConfig(projectName)
 
     log.success('\nTeardown complete.')
     console.log('  All biffo init resources have been removed.\n')

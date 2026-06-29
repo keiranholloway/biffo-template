@@ -96,6 +96,11 @@ export function loadProjectConfig(name: string): BiffoConfig | null {
   }
 }
 
+export function deleteProjectConfig(name: string): void {
+  const path = join(projectsDir(), `${name}.json`)
+  if (existsSync(path)) rmSync(path)
+}
+
 export function listProjectConfigs(): BiffoConfig[] {
   const dir = projectsDir()
   if (!existsSync(dir)) return []

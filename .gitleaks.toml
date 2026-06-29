@@ -11,7 +11,8 @@ entropy = 0
 [rules.allowlist]
 regexes = [
   "\\{\\{AWS_ACCOUNT_ID\\}\\}",  # placeholder in template files
-  "123456789012",                  # canonical example account ID
+  "123456789012",                  # canonical example account ID used in tests
+  "999999999999",                  # canonical wrong-account ID used in error-path tests
 ]
 paths = [
   "docs/",

@@ -133,15 +133,26 @@ export async function runDeploy(
   const skipApp = options.infraOnly === true
   const totalSteps = skipInfra || skipApp ? 2 : 4
 
+  const actionsUrl = `https://github.com/${org}/${repo}/actions`
+
   // Step 1: Set GitHub repository variables (skip when --app-only)
   if (!skipInfra) {
     log.step(1, totalSteps, 'Setting GitHub repository variables...')
-    await github.setRepoVariable(org, repo, 'BIFFO_DEPLOY_ENABLED', 'true')
-    await github.setRepoVariable(org, repo, 'AWS_REGION', awsConfig.region)
-    await github.setRepoVariable(org, repo, 'PROJECT_NAME', config.project.name)
-    await github.setRepoVariable(org, repo, 'TF_STATE_BUCKET', stateBucket)
-    await github.setRepoVariable(org, repo, 'BIFFO_ADMIN_EMAIL', config.admin.email)
-    await github.setRepoVariable(org, repo, 'BIFFO_ADMIN_USERNAME', config.admin.username)
+    try {
+      await github.setRepoVariable(org, repo, 'BIFFO_DEPLOY_ENABLED', 'true')
+      await github.setRepoVariable(org, repo, 'AWS_REGION', awsConfig.region)
+      await github.setRepoVariable(org, repo, 'PROJECT_NAME', config.project.name)
+      await github.setRepoVariable(org, repo, 'TF_STATE_BUCKET', stateBucket)
+      await github.setRepoVariable(org, repo, 'BIFFO_ADMIN_EMAIL', config.admin.email)
+      await github.setRepoVariable(org, repo, 'BIFFO_ADMIN_USERNAME', config.admin.username)
+    } catch (err: unknown) {
+      log.error(`Failed to set GitHub repository variables: ${(err as Error).message}`)
+      log.error(
+        `  Make sure your GitHub token has the "repo" scope: https://github.com/settings/tokens`,
+      )
+      process.exit(1)
+    }
+    log.success('Repository variables set')
   }
 
   // Step 2: Trigger and wait for infrastructure deploy (skip when --app-only)
@@ -152,7 +163,8 @@ export async function runDeploy(
       environment,
       action: 'apply',
     })
-    log.info('  Waiting for infrastructure deploy (20–40 minutes is normal for a first run)...')
+    log.info('  First run takes 20–40 minutes (VPC, RDS, Cognito, CloudFront all provisioning)...')
+    log.info(`  Watch live: ${actionsUrl}`)
     const infraResult = await github.waitForWorkflowRun(
       org,
       repo,
@@ -160,11 +172,9 @@ export async function runDeploy(
       infraBaselineId,
     )
     if (infraResult.conclusion !== 'success') {
-      log.error(
-        `Infrastructure deploy ended with: ${infraResult.conclusion ?? 'unknown'}. ` +
-          `Run ID: ${infraResult.id}`,
-      )
-      log.error(`  https://github.com/${org}/${repo}/actions/runs/${infraResult.id}`)
+      log.error(`Infrastructure deploy ${infraResult.conclusion ?? 'failed'}.`)
+      log.error(`  Run details: ${actionsUrl}/runs/${infraResult.id}`)
+      log.error(`  Fix the issue and re-run: biffo deploy ${environment} --infra-only`)
       process.exit(1)
     }
     log.success(`Infrastructure deployed (run #${infraResult.id})`)
@@ -179,11 +189,9 @@ export async function runDeploy(
     log.info('  Waiting for application deploy...')
     const appResult = await github.waitForWorkflowRun(org, repo, 'deploy-app.yml', appBaselineId)
     if (appResult.conclusion !== 'success') {
-      log.error(
-        `Application deploy ended with: ${appResult.conclusion ?? 'unknown'}. ` +
-          `Run ID: ${appResult.id}`,
-      )
-      log.error(`  https://github.com/${org}/${repo}/actions/runs/${appResult.id}`)
+      log.error(`Application deploy ${appResult.conclusion ?? 'failed'}.`)
+      log.error(`  Run details: ${actionsUrl}/runs/${appResult.id}`)
+      log.error(`  Fix the issue and re-run: biffo deploy ${environment} --app-only`)
       process.exit(1)
     }
     log.success(`Application deployed (run #${appResult.id})`)
@@ -195,13 +203,25 @@ export async function runDeploy(
   try {
     const outputs = await aws.readTerraformOutputs(stateBucket, stateKey)
     console.log(chalk.bold('\n  Deploy complete!\n'))
-    if (outputs.portal_url) console.log(`  Portal:  ${chalk.cyan(outputs.portal_url)}`)
-    if (outputs.api_gateway_url) console.log(`  API:     ${chalk.cyan(outputs.api_gateway_url)}`)
-    console.log(`  Repo:    https://github.com/${org}/${repo}\n`)
+    if (outputs.portal_url) console.log(`  Portal:      ${chalk.cyan(outputs.portal_url)}`)
+    if (outputs.api_gateway_url)
+      console.log(`  API:         ${chalk.cyan(outputs.api_gateway_url)}`)
+    console.log(`  Actions:     ${actionsUrl}`)
+    console.log()
+    console.log(chalk.dim('  Next steps:'))
+    console.log(
+      chalk.dim(
+        `    git clone ${config.source_control.provider === 'github' ? `https://github.com/${org}/${repo}.git` : ''}`,
+      ),
+    )
+    console.log(
+      chalk.dim(`    biffo deploy ${environment} --app-only   # to redeploy after code changes`),
+    )
+    console.log()
   } catch {
     // State may not be readable if --app-only was used (infra wasn't applied this run)
     console.log(chalk.bold('\n  Deploy complete!'))
-    console.log(`  View your repo at: https://github.com/${org}/${repo}/actions\n`)
+    console.log(`  Actions: ${actionsUrl}\n`)
   }
 }
 

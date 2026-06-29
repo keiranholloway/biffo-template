@@ -221,14 +221,35 @@ export class GitHubAdapter {
 
   async setRepoVariable(org: string, repo: string, name: string, value: string): Promise<void> {
     log.info(`Setting variable: ${name}`)
-    // PUT is a create-or-update upsert — avoids PATCH 404 noise on first run
-    await this.octokit.request('PUT /repos/{owner}/{repo}/actions/variables/{variable_name}', {
-      owner: org,
-      repo,
-      variable_name: name,
-      name,
-      value,
-    })
+    // GitHub variables API has no upsert endpoint — PATCH updates, POST creates.
+    // Try PATCH first; 404 means variable doesn't exist yet so fall through to POST.
+    // The Octokit log is silenced at info level so the 404 doesn't surface to the user.
+    try {
+      await this.octokit.request('PATCH /repos/{owner}/{repo}/actions/variables/{variable_name}', {
+        owner: org,
+        repo,
+        variable_name: name,
+        name,
+        value,
+      })
+    } catch (err: unknown) {
+      const status = (err as { status?: number }).status
+      if (status === 404) {
+        await this.octokit.request('POST /repos/{owner}/{repo}/actions/variables', {
+          owner: org,
+          repo,
+          name,
+          value,
+        })
+      } else if (status === 403) {
+        throw new Error(
+          `GitHub token lacks permission to set repository variables on ${org}/${repo}.\n` +
+            `  Ensure your token has the "repo" scope at: https://github.com/settings/tokens`,
+        )
+      } else {
+        throw err
+      }
+    }
   }
 
   async getLatestWorkflowRunId(org: string, repo: string, workflowId: string): Promise<number> {

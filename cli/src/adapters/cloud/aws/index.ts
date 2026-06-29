@@ -61,7 +61,36 @@ export class AwsAdapter {
     }
 
     log.info(`Creating Terraform state bucket: ${bucketName}`)
-    await s3.send(new CreateBucketCommand({ Bucket: bucketName }))
+
+    // S3 requires LocationConstraint for all regions except us-east-1.
+    // Also retries on OperationAborted (409) which occurs when a same-named bucket
+    // was deleted moments earlier and the deletion hasn't propagated globally yet.
+    const createParams =
+      this.region === 'us-east-1'
+        ? { Bucket: bucketName }
+        : {
+            Bucket: bucketName,
+            CreateBucketConfiguration: { LocationConstraint: this.region as never },
+          }
+
+    const maxAttempts = 8
+    const retryDelayMs = 5_000
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await s3.send(new CreateBucketCommand(createParams))
+        break
+      } catch (err: unknown) {
+        if ((err as { Code?: string }).Code === 'OperationAborted' && attempt < maxAttempts) {
+          log.info(
+            `  S3 deletion still propagating, retrying in ${retryDelayMs / 1000}s... (${attempt}/${maxAttempts})`,
+          )
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs))
+        } else {
+          throw err
+        }
+      }
+    }
+
     await s3.send(
       new PutBucketVersioningCommand({
         Bucket: bucketName,

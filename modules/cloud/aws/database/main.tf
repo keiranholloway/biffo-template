@@ -39,7 +39,7 @@ resource "aws_secretsmanager_secret_version" "db_credentials" {
 # Security group — only the compute SG (Core API Lambda) can connect (ADR-0002)
 resource "aws_security_group" "db" {
   name        = "${local.name_prefix}-db-sg"
-  description = "RDS PostgreSQL — inbound restricted to Core API Lambda only"
+  description = "RDS PostgreSQL - inbound restricted to Core API Lambda only"
   vpc_id      = var.vpc_id
 
   ingress {

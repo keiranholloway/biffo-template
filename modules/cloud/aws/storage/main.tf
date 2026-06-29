@@ -71,7 +71,6 @@ resource "aws_s3_bucket_logging" "portal" {
 
 # Bucket policy: only CloudFront OAC can read — no direct public access
 resource "aws_s3_bucket_policy" "portal" {
-  count  = var.cloudfront_oac_id != "" ? 1 : 0
   bucket = aws_s3_bucket.portal.id
 
   policy = jsonencode({

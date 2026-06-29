@@ -61,16 +61,12 @@ jobs:
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
       - run: terraform init -backend-config=backend.hcl
-      - run: terraform plan -out=tfplan -no-color 2>&1 | tee plan.txt
+      - run: terraform plan -no-color 2>&1 | tee plan.txt
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
           TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
           TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tfplan-dev
-          path: infra/environments/dev/tfplan
 
   apply-dev:
     name: Apply (dev)
@@ -98,14 +94,15 @@ jobs:
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
       - run: terraform init -backend-config=backend.hcl
-      - uses: actions/download-artifact@v4
-        with:
-          name: tfplan-dev
-          path: infra/environments/dev/
-      - run: terraform apply -auto-approve tfplan
+      - run: terraform apply -auto-approve
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
+          TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
       - name: Export outputs to GitHub Actions variables
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           gh variable set API_GATEWAY_URL \
@@ -159,16 +156,12 @@ jobs:
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
       - run: terraform init -backend-config=backend.hcl
-      - run: terraform plan -out=tfplan -no-color 2>&1 | tee plan.txt
+      - run: terraform plan -no-color 2>&1 | tee plan.txt
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
           TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
           TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tfplan-staging
-          path: infra/environments/staging/tfplan
 
   apply-staging:
     name: Apply (staging)
@@ -196,14 +189,15 @@ jobs:
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
       - run: terraform init -backend-config=backend.hcl
-      - uses: actions/download-artifact@v4
-        with:
-          name: tfplan-staging
-          path: infra/environments/staging/
-      - run: terraform apply -auto-approve tfplan
+      - run: terraform apply -auto-approve
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
+          TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
       - name: Export outputs to GitHub Actions variables
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           gh variable set API_GATEWAY_URL \
@@ -257,16 +251,12 @@ jobs:
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
       - run: terraform init -backend-config=backend.hcl
-      - run: terraform plan -out=tfplan -no-color 2>&1 | tee plan.txt
+      - run: terraform plan -no-color 2>&1 | tee plan.txt
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
           TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
           TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tfplan-prod
-          path: infra/environments/prod/tfplan
 
   apply-prod:
     name: Apply (prod)
@@ -294,14 +284,15 @@ jobs:
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
       - run: terraform init -backend-config=backend.hcl
-      - uses: actions/download-artifact@v4
-        with:
-          name: tfplan-prod
-          path: infra/environments/prod/
-      - run: terraform apply -auto-approve tfplan
+      - run: terraform apply -auto-approve
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
+          TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
       - name: Export outputs to GitHub Actions variables
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           gh variable set API_GATEWAY_URL \

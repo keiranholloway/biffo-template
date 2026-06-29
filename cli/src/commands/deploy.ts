@@ -36,7 +36,7 @@ export const deployCommand = new Command('deploy')
       const github = new GitHubAdapter(token)
       const aws = new AwsAdapter(config)
 
-      await runDeploy(github, aws, config, environment, options)
+      await runDeploy(github, aws, config, environment, { ...options, token })
     },
   )
 
@@ -113,7 +113,7 @@ export async function runDeploy(
   aws: AwsAdapter,
   config: BiffoConfig,
   environment: string,
-  options: { infraOnly?: boolean; appOnly?: boolean } = {},
+  options: { infraOnly?: boolean; appOnly?: boolean; token?: string } = {},
 ): Promise<void> {
   const { org, repo } = (
     config.source_control as { provider: 'github'; config: { org: string; repo: string } }
@@ -135,7 +135,7 @@ export async function runDeploy(
 
   const actionsUrl = `https://github.com/${org}/${repo}/actions`
 
-  // Step 1: Set GitHub repository variables (skip when --app-only)
+  // Step 1: Set GitHub repository variables and store token as secret (skip when --app-only)
   if (!skipInfra) {
     log.step(1, totalSteps, 'Setting GitHub repository variables...')
     try {
@@ -145,6 +145,11 @@ export async function runDeploy(
       await github.setRepoVariable(org, repo, 'TF_STATE_BUCKET', stateBucket)
       await github.setRepoVariable(org, repo, 'BIFFO_ADMIN_EMAIL', config.admin.email)
       await github.setRepoVariable(org, repo, 'BIFFO_ADMIN_USERNAME', config.admin.username)
+      // Store the caller's token so the workflow can write environment-scoped variables
+      // after Terraform apply — GITHUB_TOKEN cannot write environment variables.
+      if (options.token) {
+        await github.setRepoSecret(org, repo, 'BIFFO_GITHUB_TOKEN', options.token)
+      }
     } catch (err: unknown) {
       log.error(`Failed to set GitHub repository variables: ${(err as Error).message}`)
       log.error(

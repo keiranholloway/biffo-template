@@ -1,0 +1,24 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`setupOidcTrust > creates the OIDC trust policy with the correct structure 1`] = `
+{
+  "Statement": [
+    {
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+        },
+        "StringLike": {
+          "token.actions.githubusercontent.com:sub": "repo:acme/my-app:*",
+        },
+      },
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com",
+      },
+    },
+  ],
+  "Version": "2012-10-17",
+}
+`;

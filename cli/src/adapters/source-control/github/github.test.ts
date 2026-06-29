@@ -205,7 +205,7 @@ describe('configureBranchProtection', () => {
     octokitMock.repos.updateBranchProtection = vi.fn().mockResolvedValueOnce({})
 
     // Call waitForBranch directly with a 10ms interval to avoid real delays
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- private method access for test
     await (adapter() as any).waitForBranch('acme', 'my-app', 'main', 10_000, 10)
 
     expect(octokitMock.repos.getBranch).toHaveBeenCalledTimes(3)
@@ -215,10 +215,24 @@ describe('configureBranchProtection', () => {
     const notFound = Object.assign(new Error('Not Found'), { status: 404 })
     octokitMock.repos.getBranch = vi.fn().mockRejectedValue(notFound)
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await expect(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (adapter() as any).waitForBranch('acme', 'my-app', 'main', 50, 10),
     ).rejects.toThrow('Branch "main" not found')
+  })
+
+  it('retries updateBranchProtection when it returns 404 after branch ref exists', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { status: 404 })
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValueOnce({ data: {} })
+    octokitMock.repos.updateBranchProtection = vi
+      .fn()
+      .mockRejectedValueOnce(notFound)
+      .mockRejectedValueOnce(notFound)
+      .mockResolvedValueOnce({})
+
+    await adapter().configureBranchProtection(CONFIG, 10)
+
+    expect(octokitMock.repos.updateBranchProtection).toHaveBeenCalledTimes(3)
   })
 
   it('sends the full branch protection settings (snapshot)', async () => {

@@ -100,6 +100,24 @@ describe('configureBranchProtection (HTTP level)', () => {
     await makeAdapter().configureBranchProtection(CONFIG)
     expect(capturedBody).toMatchSnapshot()
   })
+
+  it('retries updateBranchProtection when protection API returns 404 after branch ref exists', async () => {
+    let protectionCallCount = 0
+    server.use(
+      http.get(`${GH}/repos/acme/my-app/branches/main`, () =>
+        HttpResponse.json({ name: 'main', commit: { sha: 'abc' } }),
+      ),
+      http.put(`${GH}/repos/acme/my-app/branches/main/protection`, () => {
+        protectionCallCount++
+        if (protectionCallCount < 3)
+          return HttpResponse.json({ message: 'Branch not found' }, { status: 404 })
+        return HttpResponse.json({})
+      }),
+    )
+
+    await makeAdapter().configureBranchProtection(CONFIG, 10)
+    expect(protectionCallCount).toBe(3)
+  })
 })
 
 // ─── createRepoFromTemplate ───────────────────────────────────────────────────

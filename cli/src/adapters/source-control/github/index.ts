@@ -132,7 +132,10 @@ export class GitHubAdapter {
     )
   }
 
-  async configureBranchProtection(config: BiffoConfig): Promise<void> {
+  async configureBranchProtection(
+    config: BiffoConfig,
+    protectionIntervalMs = 3_000,
+  ): Promise<void> {
     const { org, repo } = (
       config.source_control as { provider: 'github'; config: { org: string; repo: string } }
     ).config
@@ -141,7 +144,7 @@ export class GitHubAdapter {
     await this.waitForBranch(org, repo, 'main')
     log.info('Configuring branch protection on main...')
 
-    await this.octokit.repos.updateBranchProtection({
+    const params = {
       owner: org,
       repo,
       branch: 'main',
@@ -163,7 +166,21 @@ export class GitHubAdapter {
       required_linear_history: true,
       allow_force_pushes: false,
       allow_deletions: false,
-    })
+    }
+
+    // GitHub's protection API can return 404 "Branch not found" for a few seconds
+    // after getBranch returns 200 — the ref exists before the protection API is ready.
+    const deadline = Date.now() + 30_000
+    while (true) {
+      try {
+        await this.octokit.repos.updateBranchProtection(params)
+        break
+      } catch (err: unknown) {
+        if ((err as { status?: number }).status !== 404 || Date.now() >= deadline) throw err
+        log.info('Branch protection endpoint not yet ready, retrying...')
+        await new Promise((resolve) => setTimeout(resolve, protectionIntervalMs))
+      }
+    }
 
     log.success('Branch protection configured')
   }

@@ -104,6 +104,15 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Second pass: scan every file in the working tree (no-git mode).
+      # This mirrors what generated repos see on their first CI run — the initial
+      # commit includes every template file, so secrets in unchanged files would
+      # pass the diff scan above but fail there. Running both here closes the gap.
+      - name: gitleaks filesystem scan
+        run: |
+          GITLEAKS=$(find /tmp -maxdepth 4 -name gitleaks -type f 2>/dev/null | head -1)
+          [ -n "$GITLEAKS" ] || { echo "::error::gitleaks binary not found"; exit 1; }
+          "$GITLEAKS" detect --no-git --redact -v --exit-code=2
 
   security-sast-python:
     name: SAST (Python / Bandit)

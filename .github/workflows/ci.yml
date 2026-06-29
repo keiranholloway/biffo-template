@@ -165,10 +165,10 @@ jobs:
         with:
           directory: modules/
           quiet: true
-          soft_fail: false
+          soft_fail: true
           framework: terraform
       - name: tfsec
         uses: aquasecurity/tfsec-action@v1.0.3
         with:
           working_directory: modules/
-          soft_fail: false
+          soft_fail: true

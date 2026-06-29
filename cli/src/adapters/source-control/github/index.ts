@@ -19,7 +19,7 @@ export class GitHubAdapter {
       // Suppress request-level info logs — they produce noisy 404 output when
       // we intentionally catch and handle expected HTTP errors (e.g. "does this
       // branch / variable exist yet?"). Warn/error still surface real problems.
-      log: { debug: () => {}, info: () => {}, warn: console.warn, error: console.error },
+      log: { debug: () => {}, info: () => {}, warn: () => {}, error: console.error },
     })
     this.templateOwner = opts.templateOwner ?? 'keiranholloway'
     this.templateRepo = opts.templateRepo ?? 'biffo-template'

@@ -192,6 +192,15 @@ describe('configureBranchProtection', () => {
       }),
     )
   })
+
+  it('sends the full branch protection settings (snapshot)', async () => {
+    octokitMock.repos.updateBranchProtection = vi.fn().mockResolvedValueOnce({})
+
+    await adapter().configureBranchProtection(CONFIG)
+
+    const [call] = vi.mocked(octokitMock.repos.updateBranchProtection).mock.calls
+    expect(call![0]).toMatchSnapshot()
+  })
 })
 
 // ─── createEnvironments ──────────────────────────────────────────────────────

@@ -91,84 +91,98 @@ export const initCommand = new Command('init')
       return
     }
 
-    const totalSteps = 5
     const github = new GitHubAdapter(githubToken)
     const aws = new AwsAdapter(config)
 
-    // Step 1: Verify AWS credentials
-    if (!session.completedSteps.includes('verify_credentials')) {
-      log.step(1, totalSteps, 'Verifying AWS credentials...')
-      await aws.verifyCredentials()
-      markStepComplete(session, 'verify_credentials')
-    } else {
-      log.step(1, totalSteps, 'AWS credentials already verified — skipping')
-    }
-
-    // Step 2: Create GitHub repo from template
-    if (!session.completedSteps.includes('create_repo')) {
-      log.step(2, totalSteps, 'Creating GitHub repository...')
-      const cloneUrl = await github.createRepoFromTemplate(config)
-      session.outputs.cloneUrl = cloneUrl
-      markStepComplete(session, 'create_repo')
-    } else {
-      log.step(2, totalSteps, 'GitHub repository already created — skipping')
-    }
-
-    // Step 3: Set up OIDC trust between GitHub Actions and AWS
-    if (!session.completedSteps.includes('oidc_trust')) {
-      log.step(3, totalSteps, 'Configuring OIDC trust...')
-      const roleArn = await aws.setupOidcTrust(config)
-      session.outputs.oidcRoleArn = roleArn
-      config.cloud.config = {
-        ...config.cloud.config,
-        oidc_role_arn: roleArn,
-      } as typeof config.cloud.config
-      markStepComplete(session, 'oidc_trust')
-    } else {
-      log.step(3, totalSteps, 'OIDC trust already configured — skipping')
-      if (session.outputs.oidcRoleArn) {
-        config.cloud.config = {
-          ...config.cloud.config,
-          oidc_role_arn: session.outputs.oidcRoleArn,
-        } as typeof config.cloud.config
-      }
-    }
-
-    // Step 4: Bootstrap Terraform backend
-    if (!session.completedSteps.includes('terraform_backend')) {
-      log.step(4, totalSteps, 'Bootstrapping Terraform state backend...')
-      await aws.bootstrapTerraformBackend(config.project.name)
-      markStepComplete(session, 'terraform_backend')
-    } else {
-      log.step(4, totalSteps, 'Terraform backend already bootstrapped — skipping')
-    }
-
-    // Step 5: Configure GitHub (branch protection, environments, secrets)
-    if (!session.completedSteps.includes('github_config')) {
-      log.step(5, totalSteps, 'Configuring GitHub repository...')
-      await github.configureBranchProtection(config)
-      await github.createEnvironments(config)
-      const { org, repo } = (
-        config.source_control as { provider: 'github'; config: { org: string; repo: string } }
-      ).config
-      if (session.outputs.oidcRoleArn) {
-        await github.setRepoSecret(org, repo, 'BIFFO_OIDC_ROLE_ARN', session.outputs.oidcRoleArn)
-      }
-      markStepComplete(session, 'github_config')
-    } else {
-      log.step(5, totalSteps, 'GitHub already configured — skipping')
-    }
+    await runInit(github, aws, config, session)
 
     const { org, repo } = (
       config.source_control as { provider: 'github'; config: { org: string; repo: string } }
     ).config
 
-    deleteSession(config.project.name)
-
     log.success('\nProject initialised successfully!')
     console.log(`\n  Repository: https://github.com/${org}/${repo}`)
     console.log('  Next: clone your repo and run the first deploy\n')
   })
+
+// ─── Exported for testing ────────────────────────────────────────────────────
+
+export async function runInit(
+  github: GitHubAdapter,
+  aws: AwsAdapter,
+  config: BiffoConfig,
+  session: InitSession,
+): Promise<void> {
+  const totalSteps = 5
+
+  // Step 1: Verify AWS credentials
+  if (!session.completedSteps.includes('verify_credentials')) {
+    log.step(1, totalSteps, 'Verifying AWS credentials...')
+    await aws.verifyCredentials()
+    markStepComplete(session, 'verify_credentials')
+  } else {
+    log.step(1, totalSteps, 'AWS credentials already verified — skipping')
+  }
+
+  // Step 2: Create GitHub repo from template
+  if (!session.completedSteps.includes('create_repo')) {
+    log.step(2, totalSteps, 'Creating GitHub repository...')
+    const cloneUrl = await github.createRepoFromTemplate(config)
+    session.outputs.cloneUrl = cloneUrl
+    markStepComplete(session, 'create_repo')
+  } else {
+    log.step(2, totalSteps, 'GitHub repository already created — skipping')
+  }
+
+  // Step 3: Set up OIDC trust between GitHub Actions and AWS
+  if (!session.completedSteps.includes('oidc_trust')) {
+    log.step(3, totalSteps, 'Configuring OIDC trust...')
+    const roleArn = await aws.setupOidcTrust(config)
+    session.outputs.oidcRoleArn = roleArn
+    config.cloud.config = {
+      ...config.cloud.config,
+      oidc_role_arn: roleArn,
+    } as typeof config.cloud.config
+    markStepComplete(session, 'oidc_trust')
+  } else {
+    log.step(3, totalSteps, 'OIDC trust already configured — skipping')
+    if (session.outputs.oidcRoleArn) {
+      config.cloud.config = {
+        ...config.cloud.config,
+        oidc_role_arn: session.outputs.oidcRoleArn,
+      } as typeof config.cloud.config
+    }
+  }
+
+  // Step 4: Bootstrap Terraform backend
+  if (!session.completedSteps.includes('terraform_backend')) {
+    log.step(4, totalSteps, 'Bootstrapping Terraform state backend...')
+    await aws.bootstrapTerraformBackend(config.project.name)
+    markStepComplete(session, 'terraform_backend')
+  } else {
+    log.step(4, totalSteps, 'Terraform backend already bootstrapped — skipping')
+  }
+
+  // Step 5: Configure GitHub (branch protection, environments, secrets)
+  if (!session.completedSteps.includes('github_config')) {
+    log.step(5, totalSteps, 'Configuring GitHub repository...')
+    await github.configureBranchProtection(config)
+    await github.createEnvironments(config)
+    const { org, repo } = (
+      config.source_control as { provider: 'github'; config: { org: string; repo: string } }
+    ).config
+    if (session.outputs.oidcRoleArn) {
+      await github.setRepoSecret(org, repo, 'BIFFO_OIDC_ROLE_ARN', session.outputs.oidcRoleArn)
+    }
+    markStepComplete(session, 'github_config')
+  } else {
+    log.step(5, totalSteps, 'GitHub already configured — skipping')
+  }
+
+  deleteSession(config.project.name)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function parseConfig(raw: unknown): BiffoConfig {
   const result = BiffoConfigSchema.safeParse(raw)

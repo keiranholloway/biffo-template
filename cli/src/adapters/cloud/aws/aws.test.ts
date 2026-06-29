@@ -101,6 +101,20 @@ describe('setupOidcTrust', () => {
     })
   })
 
+  it('creates the OIDC trust policy with the correct structure', async () => {
+    iamMock
+      .on(GetRoleCommand)
+      .rejects(Object.assign(new Error('NoSuchEntity'), { name: 'NoSuchEntityException' }))
+    iamMock.on(CreateRoleCommand).resolves({
+      Role: { Arn: 'arn:aws:iam::123456789012:role/biffo-github-actions-my-app' } as never,
+    })
+
+    await new AwsAdapter(CONFIG).setupOidcTrust(CONFIG)
+
+    const [call] = iamMock.commandCalls(CreateRoleCommand)
+    expect(JSON.parse(call!.args[0].input.AssumeRolePolicyDocument!)).toMatchSnapshot()
+  })
+
   it('returns existing ARN without creating when role already exists', async () => {
     iamMock.on(GetRoleCommand).resolves({
       Role: { Arn: 'arn:aws:iam::123456789012:role/biffo-github-actions-my-app' } as never,

@@ -164,13 +164,29 @@ export class AwsAdapter {
     log.success(`IAM role deleted: ${roleName}`)
   }
 
-  async teardownTerraformBackend(projectName: string): Promise<void> {
+  async teardownTerraformBackend(projectName: string, knownBucket?: string): Promise<void> {
     const s3 = new S3Client({ region: this.region })
-    const bucketName = `${projectName}-terraform-state-${this.accountId}`
+    const primaryName = `${projectName}-terraform-state-${this.accountId}`
 
-    try {
-      await s3.send(new HeadBucketCommand({ Bucket: bucketName }))
-    } catch {
+    // Find whichever variant actually exists (check known name first, then primary + variants)
+    const candidates = [
+      ...(knownBucket ? [knownBucket] : []),
+      primaryName,
+      ...Array.from({ length: 4 }, (_, i) => `${primaryName}-v${i + 2}`),
+    ]
+
+    let bucketName: string | undefined
+    for (const name of candidates) {
+      try {
+        await s3.send(new HeadBucketCommand({ Bucket: name }))
+        bucketName = name
+        break
+      } catch {
+        /* not found — try next */
+      }
+    }
+
+    if (!bucketName) {
       log.info(`Terraform state bucket does not exist — skipping`)
       return
     }

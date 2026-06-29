@@ -148,7 +148,10 @@ export const teardownCommand = new Command('teardown')
       log.warn(`Could not delete IAM role (skipping): ${(err as Error).message}`)
     })
 
-    await aws.teardownTerraformBackend(projectName).catch((err) => {
+    const knownBucket = savedConfig
+      ? (savedConfig.cloud as { config: { tf_state_bucket?: string } }).config.tf_state_bucket
+      : undefined
+    await aws.teardownTerraformBackend(projectName, knownBucket).catch((err) => {
       log.warn(`Could not delete Terraform state bucket (skipping): ${(err as Error).message}`)
     })
 

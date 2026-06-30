@@ -49,23 +49,6 @@ resource "aws_cognito_user_pool" "main" {
     }
   }
 
-  # Invitation template for admin-created users — names the project/environment
-  # so recipients know which app the password is for.
-  invitation_template {
-    email_message = <<-EOT
-      Welcome to ${var.project_name}.
-
-      An admin account has been created for you in the ${var.environment} environment.
-
-      Username: {username}
-      Temporary password: {####}
-
-      Sign in with your temporary password and you will be prompted to set a new one.
-    EOT
-    email_subject = "Your temporary password for ${var.project_name} (${var.environment})"
-    sms_message   = "Your username is {username} and temporary password is {####} for ${var.environment}."
-  }
-
   # Multi-tenant seam: tenant_id as a custom attribute (ADR-0001)
   schema {
     name                = "tenant_id"
@@ -87,6 +70,21 @@ resource "aws_cognito_user_pool" "main" {
 
   admin_create_user_config {
     allow_admin_create_user_only = false
+
+    # Plain-text invitation sent when the seed admin user ({username}) is created.
+    # The Cognito template tokens {username} and {####} are replaced at send time.
+    email_message = <<-EOT
+      Welcome to ${var.project_name}.
+
+      An admin account has been created for you in the ${var.environment} environment.
+
+      Username: {username}
+      Temporary password: {####}
+
+      Sign in with your temporary password and you will be prompted to set a new one.
+    EOT
+    email_subject = "Your temporary password for ${var.project_name} (${var.environment})"
+    sms_message   = "Your username is {username} and temporary password is {####} for ${var.environment}."
   }
 
   user_pool_add_ons {

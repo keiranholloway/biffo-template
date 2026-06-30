@@ -199,13 +199,9 @@ export class GitHubAdapter {
     // dev: default branch; all feature work lands here via PR
     // staging: promoted from dev; mirrors prod config
     // main: production; requires prod-environment approval
-    const branches: Array<{ branch: string; reviews: number }> = [
-      { branch: 'dev', reviews: 1 },
-      { branch: 'staging', reviews: 1 },
-      { branch: 'main', reviews: 1 },
-    ]
+    const branches = ['dev', 'staging', 'main']
 
-    for (const { branch, reviews } of branches) {
+    for (const branch of branches) {
       log.info(`Waiting for ${branch} branch to be ready...`)
       await this.waitForBranch(org, repo, branch)
       log.info(`Configuring branch protection on ${branch}...`)
@@ -215,10 +211,10 @@ export class GitHubAdapter {
         repo,
         branch,
         required_status_checks: { strict: true, contexts: statusChecks },
-        enforce_admins: true,
+        enforce_admins: false,
         required_pull_request_reviews: {
-          required_approving_review_count: reviews,
-          dismiss_stale_reviews: true,
+          required_approving_review_count: 0,
+          dismiss_stale_reviews: false,
         },
         restrictions: null,
         required_linear_history: true,

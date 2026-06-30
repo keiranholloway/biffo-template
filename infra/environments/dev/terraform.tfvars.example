@@ -5,3 +5,8 @@ project_name   = "my-project"
 aws_region     = "us-east-1"
 admin_email    = "admin@example.com"
 admin_username = "admin"
+
+# Optional: send Cognito admin-password emails from a verified SES identity
+# instead of the default Cognito no-reply sender. Leave blank to keep defaults.
+# mail_from_address = "admin-env@mail.example.com"
+# mail_source_arn   = "arn:aws:ses:us-east-1:111111111111:identity/mail.example.com"

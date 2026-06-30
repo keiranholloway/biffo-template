@@ -5,7 +5,8 @@ terraform {
 }
 
 locals {
-  name_prefix = "${var.project_name}-${var.environment}"
+  name_prefix       = "${var.project_name}-${var.environment}"
+  custom_sender_set = var.mail_from_address != "" && var.mail_source_arn != ""
 }
 
 resource "aws_cognito_user_pool" "main" {
@@ -34,6 +35,18 @@ resource "aws_cognito_user_pool" "main" {
     default_email_option = "CONFIRM_WITH_CODE"
     email_subject        = "Your ${var.project_name} verification code"
     email_message        = "Your verification code is {####}"
+  }
+
+  # Customize the sender identity when a SES identity
+  # is provided via vars. Without these vars the pool keeps Cognito's default
+  # no-reply@verificationemail.com sender.
+  dynamic "email_configuration" {
+    for_each = local.custom_sender_set ? [1] : []
+    content {
+      email_sending_account = "DEVELOPER"
+      source_arn            = var.mail_source_arn
+      from_email_address    = var.mail_from_address
+    }
   }
 
   # Multi-tenant seam: tenant_id as a custom attribute (ADR-0001)

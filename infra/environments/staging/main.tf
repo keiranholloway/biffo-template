@@ -64,13 +64,15 @@ module "cdn" {
 }
 
 module "auth" {
-  source         = "../../../modules/cloud/aws/auth"
-  project_name   = var.project_name
-  environment    = local.environment
-  domain_prefix  = "${var.project_name}-staging"
-  admin_email    = var.admin_email
-  admin_username = var.admin_username
-  tags           = local.tags
+  source            = "../../../modules/cloud/aws/auth"
+  project_name      = var.project_name
+  environment       = local.environment
+  domain_prefix     = "${var.project_name}-staging"
+  admin_email       = var.admin_email
+  admin_username    = var.admin_username
+  mail_from_address = var.mail_from_address
+  mail_source_arn   = var.mail_source_arn
+  tags              = local.tags
 }
 
 module "events" {
@@ -159,4 +161,16 @@ variable "custom_domain" {
 variable "acm_certificate_arn" {
   type    = string
   default = ""
+}
+
+variable "mail_from_address" {
+  description = "Optional verified SES email address used as the From sender for Cognito admin-password emails. Leave blank to use Cognito's default sender."
+  type        = string
+  default     = ""
+}
+
+variable "mail_source_arn" {
+  description = "ARN of the SES identity for mail_from_address. Required when mail_from_address is set."
+  type        = string
+  default     = ""
 }

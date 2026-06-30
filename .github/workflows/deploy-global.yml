@@ -45,19 +45,6 @@ jobs:
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
       - run: terraform init -backend-config=backend.hcl
-      - name: Import existing Route 53 zone if present
-        env:
-          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
-          TF_VAR_domain: ${{ vars.DOMAIN }}
-        run: |
-          ZONE_ID=$(aws route53 list-hosted-zones-by-name \
-            --dns-name "${{ vars.DOMAIN }}." \
-            --query "HostedZones[?Name=='${{ vars.DOMAIN }}.'].Id" \
-            --output text 2>/dev/null | head -1 | cut -d/ -f3)
-          if [ -n "$ZONE_ID" ]; then
-            echo "Importing existing Route 53 zone: $ZONE_ID"
-            terraform import aws_route53_zone.main "$ZONE_ID" || true
-          fi
       - run: terraform apply -auto-approve
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}

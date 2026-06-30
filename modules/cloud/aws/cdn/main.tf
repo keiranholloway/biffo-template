@@ -104,7 +104,7 @@ resource "aws_cloudfront_distribution" "portal" {
 
 # DNS ALIAS record — only created when a custom domain and hosted zone are provided
 resource "aws_route53_record" "portal" {
-  count   = var.custom_domain != "" && var.hosted_zone_id != "" ? 1 : 0
+  count   = var.custom_domain != "" && var.hosted_zone_id != "" && var.acm_certificate_arn != "" ? 1 : 0
   zone_id = var.hosted_zone_id
   name    = var.custom_domain
   type    = "A"

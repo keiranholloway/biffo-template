@@ -103,6 +103,17 @@ jobs:
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
       - run: terraform init -backend-config=backend.hcl
+      - name: Delete stale CloudWatch log groups
+        run: |
+          REGION="${{ vars.AWS_REGION || 'us-east-1' }}"
+          PREFIX="${{ vars.PROJECT_NAME }}-dev"
+          for LG in \
+            "/biffo/${PREFIX}/vpc-flow-logs" \
+            "/biffo/${PREFIX}/api-gateway" \
+            "/biffo/${PREFIX}/events" \
+            "/aws/lambda/${PREFIX}-core-api"; do
+            aws logs delete-log-group --log-group-name "$LG" --region "$REGION" 2>/dev/null || true
+          done
       - run: terraform apply -auto-approve
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
@@ -205,6 +216,17 @@ jobs:
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
       - run: terraform init -backend-config=backend.hcl
+      - name: Delete stale CloudWatch log groups
+        run: |
+          REGION="${{ vars.AWS_REGION || 'us-east-1' }}"
+          PREFIX="${{ vars.PROJECT_NAME }}-staging"
+          for LG in \
+            "/biffo/${PREFIX}/vpc-flow-logs" \
+            "/biffo/${PREFIX}/api-gateway" \
+            "/biffo/${PREFIX}/events" \
+            "/aws/lambda/${PREFIX}-core-api"; do
+            aws logs delete-log-group --log-group-name "$LG" --region "$REGION" 2>/dev/null || true
+          done
       - run: terraform apply -auto-approve
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
@@ -308,6 +330,17 @@ jobs:
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
       - run: terraform init -backend-config=backend.hcl
+      - name: Delete stale CloudWatch log groups
+        run: |
+          REGION="${{ vars.AWS_REGION || 'us-east-1' }}"
+          PREFIX="${{ vars.PROJECT_NAME }}-prod"
+          for LG in \
+            "/biffo/${PREFIX}/vpc-flow-logs" \
+            "/biffo/${PREFIX}/api-gateway" \
+            "/biffo/${PREFIX}/events" \
+            "/aws/lambda/${PREFIX}-core-api"; do
+            aws logs delete-log-group --log-group-name "$LG" --region "$REGION" 2>/dev/null || true
+          done
       - run: terraform apply -auto-approve
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}

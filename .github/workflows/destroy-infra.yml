@@ -91,6 +91,17 @@ jobs:
             echo "Waiting for RDS deletion (up to 15 min)..."
             aws rds wait db-instance-deleted --db-instance-identifier "$DB" 2>/dev/null || true
           fi
+      - name: Delete CloudWatch log groups
+        run: |
+          REGION="${{ vars.AWS_REGION || 'us-east-1' }}"
+          PREFIX="${{ vars.PROJECT_NAME }}-dev"
+          for LG in \
+            "/biffo/${PREFIX}/vpc-flow-logs" \
+            "/biffo/${PREFIX}/api-gateway" \
+            "/biffo/${PREFIX}/events" \
+            "/aws/lambda/${PREFIX}-core-api"; do
+            aws logs delete-log-group --log-group-name "$LG" --region "$REGION" 2>/dev/null || true
+          done
       - run: terraform destroy -auto-approve
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
@@ -171,6 +182,17 @@ jobs:
             echo "Waiting for RDS deletion (up to 15 min)..."
             aws rds wait db-instance-deleted --db-instance-identifier "$DB" 2>/dev/null || true
           fi
+      - name: Delete CloudWatch log groups
+        run: |
+          REGION="${{ vars.AWS_REGION || 'us-east-1' }}"
+          PREFIX="${{ vars.PROJECT_NAME }}-staging"
+          for LG in \
+            "/biffo/${PREFIX}/vpc-flow-logs" \
+            "/biffo/${PREFIX}/api-gateway" \
+            "/biffo/${PREFIX}/events" \
+            "/aws/lambda/${PREFIX}-core-api"; do
+            aws logs delete-log-group --log-group-name "$LG" --region "$REGION" 2>/dev/null || true
+          done
       - run: terraform destroy -auto-approve
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
@@ -252,6 +274,17 @@ jobs:
             echo "Waiting for RDS deletion (up to 15 min)..."
             aws rds wait db-instance-deleted --db-instance-identifier "$DB" 2>/dev/null || true
           fi
+      - name: Delete CloudWatch log groups
+        run: |
+          REGION="${{ vars.AWS_REGION || 'us-east-1' }}"
+          PREFIX="${{ vars.PROJECT_NAME }}-prod"
+          for LG in \
+            "/biffo/${PREFIX}/vpc-flow-logs" \
+            "/biffo/${PREFIX}/api-gateway" \
+            "/biffo/${PREFIX}/events" \
+            "/aws/lambda/${PREFIX}-core-api"; do
+            aws logs delete-log-group --log-group-name "$LG" --region "$REGION" 2>/dev/null || true
+          done
       - run: terraform destroy -auto-approve
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}

@@ -73,8 +73,7 @@ resource "aws_cognito_user_pool" "main" {
 
     # Plain-text invitation sent when the seed admin user ({username}) is created.
     # The Cognito template tokens {username} and {####} are replaced at send time.
-    invitation_message {
-      email_subject = "Your temporary password for ${var.project_name} (${var.environment})"
+    invitation_template {
       email_message = <<-EOT
         Welcome to ${var.project_name}.
 
@@ -85,6 +84,7 @@ resource "aws_cognito_user_pool" "main" {
 
         Sign in with your temporary password and you will be prompted to set a new one.
       EOT
+      email_subject = "Your temporary password for ${var.project_name} (${var.environment})"
       sms_message   = "Your username is {username} and temporary password is {####} for ${var.environment}."
     }
   }

@@ -9,11 +9,6 @@ from mangum import Mangum
 from .config import settings
 from .routers import auth, health, users
 
-# Python 3.12+ no longer implicitly creates an event loop in Lambda's synchronous
-# execution context. Mangum uses asyncio.get_event_loop() internally, so we
-# initialise one at module load time (cold start) to prevent RuntimeError.
-asyncio.set_event_loop(asyncio.new_event_loop())
-
 logger = Logger()
 tracer = Tracer()
 
@@ -44,6 +39,10 @@ handler = Mangum(app, lifespan="off")
 def lambda_handler(event: dict, context: LambdaContext) -> dict:
     if event.get("source") == "biffo:db-init":
         return _run_db_init()
+    # asyncio.run() used internally by alembic/asyncpg sets the current event loop
+    # to None when it exits, causing asyncio.get_event_loop() (used by Mangum) to
+    # raise RuntimeError in Python 3.12+. Recreate the loop before each HTTP call.
+    asyncio.set_event_loop(asyncio.new_event_loop())
     return handler(event, context)  # type: ignore[reportArgumentType]
 
 

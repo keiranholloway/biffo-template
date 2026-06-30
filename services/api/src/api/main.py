@@ -1,3 +1,5 @@
+import asyncio
+
 from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from fastapi import FastAPI
@@ -6,6 +8,11 @@ from mangum import Mangum
 
 from .config import settings
 from .routers import auth, health, users
+
+# Python 3.12+ no longer implicitly creates an event loop in Lambda's synchronous
+# execution context. Mangum uses asyncio.get_event_loop() internally, so we
+# initialise one at module load time (cold start) to prevent RuntimeError.
+asyncio.set_event_loop(asyncio.new_event_loop())
 
 logger = Logger()
 tracer = Tracer()

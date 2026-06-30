@@ -14,8 +14,9 @@ locals {
 
 # Access logs bucket
 resource "aws_s3_bucket" "logs" {
-  bucket = local.logs_bucket
-  tags   = var.tags
+  bucket        = local.logs_bucket
+  force_destroy = true
+  tags          = var.tags
 }
 
 resource "aws_s3_bucket_public_access_block" "logs" {
@@ -37,8 +38,9 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "logs" {
 
 # Portal static assets bucket
 resource "aws_s3_bucket" "portal" {
-  bucket = local.portal_bucket
-  tags   = var.tags
+  bucket        = local.portal_bucket
+  force_destroy = true
+  tags          = var.tags
 }
 
 resource "aws_s3_bucket_public_access_block" "portal" {

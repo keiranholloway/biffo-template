@@ -88,4 +88,13 @@ describe('session persistence', () => {
     const found = findLatestSession()
     expect(found?.config.project?.name).toBe('my-app')
   })
+
+  it('findLatestSession returns the most recently saved session', async () => {
+    saveSession(makeSession('old-app'))
+    // Ensure the second session lands on a later mtime than the first.
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    saveSession(makeSession('new-app'))
+    const found = findLatestSession()
+    expect(found?.config.project?.name).toBe('new-app')
+  })
 })

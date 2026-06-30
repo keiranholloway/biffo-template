@@ -210,6 +210,33 @@ export const teardownCommand = new Command('teardown')
       }
     }
 
+    // Destroy global infrastructure (Route 53 zone + ACM cert) if a domain was configured
+    if (!options.skipDestroy && domain && domain !== 'example.com') {
+      log.info('\nDestroying global infrastructure (Route 53 + ACM)...')
+      try {
+        const baselineGlobal = await github.getLatestWorkflowRunId(org, repo, 'destroy-global.yml')
+        await github.triggerWorkflow(org, repo, 'destroy-global.yml', {}, 'main')
+        const globalResult = await github.waitForWorkflowRun(
+          org,
+          repo,
+          'destroy-global.yml',
+          baselineGlobal,
+          600_000,
+          20_000,
+          'main',
+        )
+        if (globalResult.conclusion !== 'success') {
+          log.warn(
+            `Global infrastructure destroy ${globalResult.conclusion ?? 'failed'} — continuing teardown anyway`,
+          )
+        } else {
+          log.success('Global infrastructure destroyed')
+        }
+      } catch {
+        log.warn('destroy-global.yml not found — skipping global infrastructure teardown')
+      }
+    }
+
     // All infrastructure gone — now safe to delete the repo and supporting resources
     await github.deleteRepo(org, repo).catch((err) => {
       log.warn(`Could not delete repo (skipping): ${(err as Error).message}`)

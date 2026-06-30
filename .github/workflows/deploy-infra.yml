@@ -75,6 +75,7 @@ jobs:
           TF_VAR_domain: ${{ vars.DOMAIN }}
           TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
+          TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
 
   apply-dev:
     name: Apply (dev)
@@ -111,6 +112,7 @@ jobs:
           TF_VAR_domain: ${{ vars.DOMAIN }}
           TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
+          TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
       - name: Export outputs to GitHub Actions variables
         env:
           GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
@@ -175,6 +177,7 @@ jobs:
           TF_VAR_domain: ${{ vars.DOMAIN }}
           TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
+          TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
 
   apply-staging:
     name: Apply (staging)
@@ -211,6 +214,7 @@ jobs:
           TF_VAR_domain: ${{ vars.DOMAIN }}
           TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
+          TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
       - name: Export outputs to GitHub Actions variables
         env:
           GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
@@ -276,6 +280,7 @@ jobs:
           TF_VAR_domain: ${{ vars.DOMAIN }}
           TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
+          TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
 
   apply-prod:
     name: Apply (prod)
@@ -312,6 +317,7 @@ jobs:
           TF_VAR_domain: ${{ vars.DOMAIN }}
           TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
+          TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
       - name: Export outputs to GitHub Actions variables
         env:
           GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}

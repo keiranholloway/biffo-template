@@ -44,14 +44,6 @@ moved {
   to   = module.cdn.aws_s3_bucket_policy.portal
 }
 
-# Look up the Route 53 hosted zone by domain name — only when a custom domain is set.
-# The zone must exist (created by infra/global) before environment Terraform runs.
-data "aws_route53_zone" "main" {
-  count        = var.custom_domain != "" ? 1 : 0
-  name         = var.domain
-  private_zone = false
-}
-
 module "storage" {
   source = "../../../modules/cloud/aws/storage"
 
@@ -71,7 +63,7 @@ module "cdn" {
   portal_bucket_arn             = module.storage.portal_bucket_arn
   custom_domain                 = var.custom_domain
   acm_certificate_arn           = var.acm_certificate_arn
-  hosted_zone_id                = var.custom_domain != "" ? data.aws_route53_zone.main[0].zone_id : ""
+  hosted_zone_id                = var.hosted_zone_id
   tags                          = local.tags
 }
 

@@ -35,6 +35,12 @@ variable "acm_certificate_arn" {
   default     = ""
 }
 
+variable "hosted_zone_id" {
+  description = "Route 53 hosted zone ID for the domain. Output from infra/global."
+  type        = string
+  default     = ""
+}
+
 variable "mail_from_address" {
   description = "Optional verified SES email address used as the From sender for Cognito admin-password emails. Leave blank to use Cognito's default sender."
   type        = string

@@ -1,0 +1,68 @@
+name: Destroy Global Infrastructure
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TERRAFORM_VERSION: '~> 1.9'
+
+# Destroys shared global infrastructure: Route 53 hosted zone and ACM certificate.
+# Run this AFTER all environment infrastructure has been destroyed via destroy-infra.yml.
+# biffo teardown triggers this automatically — do not run manually unless you know why.
+
+jobs:
+  destroy-global:
+    name: Destroy global (Route 53 + ACM)
+    runs-on: ubuntu-latest
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && vars.DOMAIN != ''
+    defaults:
+      run:
+        working-directory: infra/global
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Generate backend config
+        run: |
+          cat > backend.hcl << 'EOF'
+          bucket = "${{ vars.TF_STATE_BUCKET }}"
+          key    = "global/terraform.tfstate"
+          region = "${{ vars.AWS_REGION || 'us-east-1' }}"
+          EOF
+      - run: terraform init -backend-config=backend.hcl
+      - name: Delete ACM validation records and empty zone before destroy
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}
+        run: |
+          ZONE_ID=$(aws route53 list-hosted-zones-by-name \
+            --dns-name "${{ vars.DOMAIN }}." \
+            --query "HostedZones[?Name=='${{ vars.DOMAIN }}.'].Id" \
+            --output text 2>/dev/null | head -1 | cut -d/ -f3)
+          if [ -n "$ZONE_ID" ]; then
+            echo "Deleting non-NS/SOA records from zone $ZONE_ID"
+            RECORDS=$(aws route53 list-resource-record-sets \
+              --hosted-zone-id "$ZONE_ID" \
+              --query 'ResourceRecordSets[?Type!=`NS` && Type!=`SOA`]' \
+              --output json)
+            COUNT=$(echo "$RECORDS" | jq 'length')
+            if [ "$COUNT" -gt 0 ]; then
+              CHANGES=$(echo "$RECORDS" | jq '[.[] | {Action:"DELETE", ResourceRecordSet:.}]')
+              aws route53 change-resource-record-sets \
+                --hosted-zone-id "$ZONE_ID" \
+                --change-batch "{\"Changes\": $CHANGES}" || true
+            fi
+          fi
+      - run: terraform destroy -auto-approve
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}

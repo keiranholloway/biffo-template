@@ -35,12 +35,6 @@ moved {
   to   = module.cdn.aws_s3_bucket_policy.portal
 }
 
-data "aws_route53_zone" "main" {
-  count        = var.custom_domain != "" ? 1 : 0
-  name         = var.domain
-  private_zone = false
-}
-
 module "storage" {
   source       = "../../../modules/cloud/aws/storage"
   project_name = var.project_name
@@ -58,7 +52,7 @@ module "cdn" {
   portal_bucket_arn             = module.storage.portal_bucket_arn
   custom_domain                 = var.custom_domain
   acm_certificate_arn           = var.acm_certificate_arn
-  hosted_zone_id                = var.custom_domain != "" ? data.aws_route53_zone.main[0].zone_id : ""
+  hosted_zone_id                = var.hosted_zone_id
   tags                          = local.tags
 }
 
@@ -162,6 +156,11 @@ variable "custom_domain" {
   default = ""
 }
 variable "acm_certificate_arn" {
+  type    = string
+  default = ""
+}
+
+variable "hosted_zone_id" {
   type    = string
   default = ""
 }

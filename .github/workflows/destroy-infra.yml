@@ -47,6 +47,27 @@ jobs:
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
       - run: terraform init -backend-config=backend.hcl
+      - name: Empty S3 buckets before destroy
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          for BUCKET in \
+            "${{ vars.PROJECT_NAME }}-dev-portal-${ACCOUNT_ID}" \
+            "${{ vars.PROJECT_NAME }}-dev-logs-${ACCOUNT_ID}"; do
+            if aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
+              echo "Emptying $BUCKET ..."
+              aws s3 rm "s3://$BUCKET" --recursive --quiet 2>/dev/null || true
+              for QUERY in \
+                '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' \
+                '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}'; do
+                BATCH=$(aws s3api list-object-versions --bucket "$BUCKET" \
+                  --query "$QUERY" --output json 2>/dev/null || echo '{"Objects": null}')
+                COUNT=$(echo "$BATCH" | jq '.Objects | length // 0')
+                if [ "$COUNT" -gt 0 ]; then
+                  aws s3api delete-objects --bucket "$BUCKET" --delete "$BATCH"
+                fi
+              done
+            fi
+          done
       - run: terraform destroy -auto-approve
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
@@ -84,6 +105,27 @@ jobs:
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
       - run: terraform init -backend-config=backend.hcl
+      - name: Empty S3 buckets before destroy
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          for BUCKET in \
+            "${{ vars.PROJECT_NAME }}-staging-portal-${ACCOUNT_ID}" \
+            "${{ vars.PROJECT_NAME }}-staging-logs-${ACCOUNT_ID}"; do
+            if aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
+              echo "Emptying $BUCKET ..."
+              aws s3 rm "s3://$BUCKET" --recursive --quiet 2>/dev/null || true
+              for QUERY in \
+                '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' \
+                '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}'; do
+                BATCH=$(aws s3api list-object-versions --bucket "$BUCKET" \
+                  --query "$QUERY" --output json 2>/dev/null || echo '{"Objects": null}')
+                COUNT=$(echo "$BATCH" | jq '.Objects | length // 0')
+                if [ "$COUNT" -gt 0 ]; then
+                  aws s3api delete-objects --bucket "$BUCKET" --delete "$BATCH"
+                fi
+              done
+            fi
+          done
       - run: terraform destroy -auto-approve
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
@@ -122,6 +164,27 @@ jobs:
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
       - run: terraform init -backend-config=backend.hcl
+      - name: Empty S3 buckets before destroy
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          for BUCKET in \
+            "${{ vars.PROJECT_NAME }}-prod-portal-${ACCOUNT_ID}" \
+            "${{ vars.PROJECT_NAME }}-prod-logs-${ACCOUNT_ID}"; do
+            if aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
+              echo "Emptying $BUCKET ..."
+              aws s3 rm "s3://$BUCKET" --recursive --quiet 2>/dev/null || true
+              for QUERY in \
+                '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' \
+                '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}'; do
+                BATCH=$(aws s3api list-object-versions --bucket "$BUCKET" \
+                  --query "$QUERY" --output json 2>/dev/null || echo '{"Objects": null}')
+                COUNT=$(echo "$BATCH" | jq '.Objects | length // 0')
+                if [ "$COUNT" -gt 0 ]; then
+                  aws s3api delete-objects --bucket "$BUCKET" --delete "$BATCH"
+                fi
+              done
+            fi
+          done
       - run: terraform destroy -auto-approve
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}

@@ -161,7 +161,7 @@ resource "aws_lambda_function" "main" {
 
   lifecycle {
     # Code is managed by the CI/CD pipeline — Terraform only manages config
-    ignore_changes = [filename, source_code_hash, last_modified]
+    ignore_changes = [filename, source_code_hash]
   }
 
   tags = var.tags

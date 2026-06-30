@@ -17,8 +17,8 @@ env:
 # Provisions shared infrastructure that all environments depend on:
 #   - Route 53 hosted zone for the project domain
 #   - Wildcard ACM certificate (*.domain + domain) in us-east-1 for CloudFront
-# Run this once before deploying any environment. After it completes, update
-# your domain registrar with the name servers shown in the job summary.
+# Assumes the domain is registered in Route 53 in the same AWS account.
+# NS records are updated automatically after the hosted zone is created.
 
 jobs:
   deploy-global:
@@ -36,7 +36,7 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          aws-region: us-east-1
       - name: Generate backend config
         run: |
           cat > backend.hcl << 'EOF'
@@ -45,11 +45,34 @@ jobs:
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
       - run: terraform init -backend-config=backend.hcl
+      - name: Delete any existing hosted zones for the domain
+        run: |
+          DOMAIN="${{ vars.DOMAIN }}"
+          ZONE_IDS=$(aws route53 list-hosted-zones-by-name \
+            --dns-name "${DOMAIN}." \
+            --query "HostedZones[?Name=='${DOMAIN}.'].Id" \
+            --output text | tr '\t' '\n' | cut -d/ -f3)
+          for ZONE_ID in $ZONE_IDS; do
+            echo "Deleting existing hosted zone: $ZONE_ID"
+            RECORDS=$(aws route53 list-resource-record-sets \
+              --hosted-zone-id "$ZONE_ID" \
+              --query 'ResourceRecordSets[?Type!=`NS` && Type!=`SOA`]' \
+              --output json)
+            COUNT=$(echo "$RECORDS" | jq 'length')
+            if [ "$COUNT" -gt 0 ]; then
+              CHANGES=$(echo "$RECORDS" | jq '[.[] | {Action:"DELETE", ResourceRecordSet:.}]')
+              aws route53 change-resource-record-sets \
+                --hosted-zone-id "$ZONE_ID" \
+                --change-batch "{\"Changes\": $CHANGES}" > /dev/null
+            fi
+            aws route53 delete-hosted-zone --id "$ZONE_ID" > /dev/null
+            echo "  Deleted $ZONE_ID"
+          done
       - run: terraform apply -auto-approve
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_domain: ${{ vars.DOMAIN }}
-      - name: Export outputs and show name servers
+      - name: Update domain nameservers and export outputs
         env:
           GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -60,12 +83,22 @@ jobs:
           gh variable set ACM_CERTIFICATE_ARN --body "$ACM_ARN"
           gh variable set HOSTED_ZONE_ID --body "$ZONE_ID"
 
-          echo "## DNS configuration required" >> $GITHUB_STEP_SUMMARY
+          # Update the Route 53 registered domain's NS records to match the new hosted zone.
+          # Requires the domain to be registered in Route 53 in this same AWS account.
+          NS_LIST=$(aws route53 list-resource-record-sets \
+            --hosted-zone-id "$ZONE_ID" \
+            --query 'ResourceRecordSets[?Type==`NS`].ResourceRecords[].Value' \
+            --output text | tr '\t' '\n' | sed 's/\.$//')
+
+          NS_ARGS=$(echo "$NS_LIST" | awk '{print "Name="$1}' | tr '\n' ' ')
+          aws route53domains update-domain-nameservers \
+            --region us-east-1 \
+            --domain-name "${{ vars.DOMAIN }}" \
+            --nameservers $NS_ARGS
+
+          echo "## Global infrastructure deployed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Update your domain registrar for **${{ vars.DOMAIN }}** with these name servers:" >> $GITHUB_STEP_SUMMARY
+          echo "Domain nameservers updated automatically (domain is registered in Route 53)." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          terraform output -json name_servers | jq -r '.[]' | while read ns; do
-            echo "- \`$ns\`" >> $GITHUB_STEP_SUMMARY
-          done
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "ACM Certificate ARN (saved to \`ACM_CERTIFICATE_ARN\` variable): \`$ACM_ARN\`" >> $GITHUB_STEP_SUMMARY
+          echo "ACM Certificate ARN: \`$ACM_ARN\`" >> $GITHUB_STEP_SUMMARY
+          echo "Hosted Zone ID: \`$ZONE_ID\`" >> $GITHUB_STEP_SUMMARY

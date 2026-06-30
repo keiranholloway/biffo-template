@@ -42,6 +42,11 @@ module "networking" {
   tags               = local.tags
 }
 
+moved {
+  from = module.storage.aws_s3_bucket_policy.portal
+  to   = module.cdn.aws_s3_bucket_policy.portal
+}
+
 module "storage" {
   source = "../../../modules/cloud/aws/storage"
 

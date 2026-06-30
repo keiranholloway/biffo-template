@@ -19,7 +19,8 @@ import {
 export const teardownCommand = new Command('teardown')
   .description('Remove everything created by biffo init (repo, IAM role, Terraform state bucket)')
   .option('--project <name>', 'Project name to tear down (reads session if omitted)')
-  .action(async (options: { project?: string }) => {
+  .option('--force', 'Skip deployed-infrastructure check (use after running biffo destroy)')
+  .action(async (options: { project?: string; force?: boolean }) => {
     console.log(chalk.bold('\n  Biffo — Teardown\n'))
 
     // Resolve credentials
@@ -91,38 +92,6 @@ export const teardownCommand = new Command('teardown')
       region = answers.region as string
     }
 
-    // Show exactly what will be deleted
-    console.log(chalk.red.bold('  This will permanently delete:\n'))
-    console.log(`    ${chalk.red('✗')} GitHub repository  ${chalk.bold(`${org}/${repo}`)}`)
-    console.log(
-      `    ${chalk.red('✗')} IAM role           ${chalk.bold(`biffo-github-actions-${projectName}`)}`,
-    )
-    console.log(
-      `    ${chalk.red('✗')} S3 bucket          ${chalk.bold(`${projectName}-terraform-state-${accountId}`)} (all versions)`,
-    )
-    console.log(`    ${chalk.red('✗')} Local session file`)
-    console.log()
-    console.log(
-      chalk.yellow('  Not touched: Terraform-managed infra (VPC, Lambda, RDS, Cognito, etc.)'),
-    )
-    console.log(
-      chalk.yellow(`  Run \`terraform destroy\` in infra/environments/* first if deployed.\n`),
-    )
-
-    // Require typing the project name to confirm — extra guard against mis-fires
-    const { confirm } = await inquirer.prompt<{ confirm: string }>([
-      {
-        type: 'input',
-        name: 'confirm',
-        message: `Type ${chalk.bold(projectName)} to confirm:`,
-      },
-    ])
-
-    if (confirm !== projectName) {
-      log.warn('Teardown cancelled — project name did not match')
-      return
-    }
-
     const config = BiffoConfigSchema.safeParse({
       project: { name: projectName, description: '', domain: 'example.com' },
       source_control: { provider: 'github', config: { org, repo } },
@@ -138,6 +107,56 @@ export const teardownCommand = new Command('teardown')
 
     const github = new GitHubAdapter(githubToken)
     const aws = new AwsAdapter(config.data)
+
+    // Refuse to continue if Terraform state files exist — deleting the bucket
+    // while infrastructure is still deployed orphans VPCs, Lambda, RDS, etc.
+    // The user must run `biffo destroy <env>` for each environment first.
+    if (!options.force) {
+      const knownBucket = savedConfig
+        ? (savedConfig.cloud as { config: { tf_state_bucket?: string } }).config.tf_state_bucket
+        : undefined
+      const primaryBucket = `${projectName}-terraform-state-${accountId}`
+      const bucketToCheck = knownBucket ?? primaryBucket
+
+      const deployed = await aws.listDeployedEnvironments(bucketToCheck).catch(() => [])
+      if (deployed.length > 0) {
+        log.error(`Deployed infrastructure detected in environments: ${deployed.join(', ')}`)
+        log.error('  Deleting the state bucket now would orphan VPCs, RDS, Lambda, and more.')
+        log.error('  Run these first to destroy the infrastructure:')
+        for (const env of deployed) {
+          log.error(`    biffo destroy ${env}`)
+        }
+        log.error('')
+        log.error('  Or re-run with --force to skip this check (resources will be orphaned).')
+        process.exit(1)
+      }
+    }
+
+    // Show exactly what will be deleted
+    console.log(chalk.red.bold('  This will permanently delete:\n'))
+    console.log(`    ${chalk.red('✗')} GitHub repository  ${chalk.bold(`${org}/${repo}`)}`)
+    console.log(
+      `    ${chalk.red('✗')} IAM role           ${chalk.bold(`biffo-github-actions-${projectName}`)}`,
+    )
+    console.log(
+      `    ${chalk.red('✗')} S3 bucket          ${chalk.bold(`${projectName}-terraform-state-${accountId}`)} (all versions)`,
+    )
+    console.log(`    ${chalk.red('✗')} Local session file`)
+    console.log()
+
+    // Require typing the project name to confirm — extra guard against mis-fires
+    const { confirm } = await inquirer.prompt<{ confirm: string }>([
+      {
+        type: 'input',
+        name: 'confirm',
+        message: `Type ${chalk.bold(projectName)} to confirm:`,
+      },
+    ])
+
+    if (confirm !== projectName) {
+      log.warn('Teardown cancelled — project name did not match')
+      return
+    }
 
     // Delete in reverse init order
     await github.deleteRepo(org, repo).catch((err) => {

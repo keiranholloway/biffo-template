@@ -32,7 +32,7 @@ jobs:
     name: Build (dev)
     runs-on: ubuntu-latest
     environment: dev
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/dev' || github.event.inputs.environment == 'dev')
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/dev') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev'))
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: pnpm/action-setup@v4
@@ -102,10 +102,24 @@ jobs:
           uv export --no-dev --output-file requirements.txt
           pip install -r requirements.txt -t package/
           cp -r src/ package/
+          cp -r migrations/ package/
+          cp alembic.ini package/
           cd package && zip -r ../lambda.zip .
           aws lambda update-function-code \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
             --zip-file fileb://../lambda.zip
+      - name: Initialise database schema
+        run: |
+          aws lambda wait function-updated \
+            --function-name ${{ vars.CORE_API_LAMBDA_NAME }}
+          RESULT=$(aws lambda invoke \
+            --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
+            --payload '{"source":"biffo:db-init"}' \
+            --cli-binary-format raw-in-base64-out \
+            db-init-response.json)
+          if echo "$RESULT" | grep -q FunctionError; then
+            echo "Schema init failed:" && cat db-init-response.json && exit 1
+          fi
 
   # ─── STAGING ─────────────────────────────────────────────────────────────────
   # Manual only — run workflow_dispatch with environment=staging.
@@ -114,7 +128,7 @@ jobs:
     name: Build (staging)
     runs-on: ubuntu-latest
     environment: staging
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/staging' || github.event.inputs.environment == 'staging')
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/staging') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging'))
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: pnpm/action-setup@v4
@@ -184,10 +198,24 @@ jobs:
           uv export --no-dev --output-file requirements.txt
           pip install -r requirements.txt -t package/
           cp -r src/ package/
+          cp -r migrations/ package/
+          cp alembic.ini package/
           cd package && zip -r ../lambda.zip .
           aws lambda update-function-code \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
             --zip-file fileb://../lambda.zip
+      - name: Initialise database schema
+        run: |
+          aws lambda wait function-updated \
+            --function-name ${{ vars.CORE_API_LAMBDA_NAME }}
+          RESULT=$(aws lambda invoke \
+            --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
+            --payload '{"source":"biffo:db-init"}' \
+            --cli-binary-format raw-in-base64-out \
+            db-init-response.json)
+          if echo "$RESULT" | grep -q FunctionError; then
+            echo "Schema init failed:" && cat db-init-response.json && exit 1
+          fi
 
   # ─── PROD ────────────────────────────────────────────────────────────────────
   # Manual only — run workflow_dispatch with environment=prod.
@@ -197,7 +225,7 @@ jobs:
     name: Build (prod)
     runs-on: ubuntu-latest
     environment: prod
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/main' || github.event.inputs.environment == 'prod')
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'))
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: pnpm/action-setup@v4
@@ -267,7 +295,21 @@ jobs:
           uv export --no-dev --output-file requirements.txt
           pip install -r requirements.txt -t package/
           cp -r src/ package/
+          cp -r migrations/ package/
+          cp alembic.ini package/
           cd package && zip -r ../lambda.zip .
           aws lambda update-function-code \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
             --zip-file fileb://../lambda.zip
+      - name: Initialise database schema
+        run: |
+          aws lambda wait function-updated \
+            --function-name ${{ vars.CORE_API_LAMBDA_NAME }}
+          RESULT=$(aws lambda invoke \
+            --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
+            --payload '{"source":"biffo:db-init"}' \
+            --cli-binary-format raw-in-base64-out \
+            db-init-response.json)
+          if echo "$RESULT" | grep -q FunctionError; then
+            echo "Schema init failed:" && cat db-init-response.json && exit 1
+          fi

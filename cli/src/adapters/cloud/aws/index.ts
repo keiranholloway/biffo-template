@@ -164,6 +164,27 @@ export class AwsAdapter {
     log.success(`IAM role deleted: ${roleName}`)
   }
 
+  async listDeployedEnvironments(bucketName: string): Promise<string[]> {
+    const s3 = new S3Client({ region: this.region })
+    const deployed: string[] = []
+    for (const env of ['dev', 'staging', 'prod', 'global']) {
+      try {
+        const { Versions } = await s3.send(
+          new ListObjectVersionsCommand({
+            Bucket: bucketName,
+            Prefix: `${env}/terraform.tfstate`,
+          }),
+        )
+        // A non-trivial state file (>200 bytes) means resources were deployed
+        const hasResources = (Versions ?? []).some((v) => (v.Size ?? 0) > 200)
+        if (hasResources) deployed.push(env)
+      } catch {
+        // bucket may not exist yet — fine
+      }
+    }
+    return deployed
+  }
+
   async teardownTerraformBackend(projectName: string, knownBucket?: string): Promise<void> {
     const s3 = new S3Client({ region: this.region })
     const primaryName = `${projectName}-terraform-state-${this.accountId}`

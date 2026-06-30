@@ -45,7 +45,7 @@ jobs:
     name: Plan (dev)
     runs-on: ubuntu-latest
     environment: dev
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/dev' || github.event.inputs.environment == 'dev')
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/dev') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev'))
     defaults:
       run:
         working-directory: infra/environments/dev
@@ -81,7 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev
     needs: plan-dev
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/dev' || (github.event.inputs.environment == 'dev' && github.event.inputs.action == 'apply'))
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/dev') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev' && github.event.inputs.action == 'apply'))
     defaults:
       run:
         working-directory: infra/environments/dev
@@ -145,7 +145,7 @@ jobs:
     name: Plan (staging)
     runs-on: ubuntu-latest
     environment: staging
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/staging' || github.event.inputs.environment == 'staging')
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/staging') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging'))
     defaults:
       run:
         working-directory: infra/environments/staging
@@ -181,7 +181,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     needs: plan-staging
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/staging' || (github.event.inputs.environment == 'staging' && github.event.inputs.action == 'apply'))
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/staging') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && github.event.inputs.action == 'apply'))
     defaults:
       run:
         working-directory: infra/environments/staging
@@ -246,7 +246,7 @@ jobs:
     name: Plan (prod)
     runs-on: ubuntu-latest
     environment: prod
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/main' || github.event.inputs.environment == 'prod')
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'))
     defaults:
       run:
         working-directory: infra/environments/prod
@@ -282,7 +282,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: prod
     needs: plan-prod
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/main' || (github.event.inputs.environment == 'prod' && github.event.inputs.action == 'apply'))
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod' && github.event.inputs.action == 'apply'))
     defaults:
       run:
         working-directory: infra/environments/prod

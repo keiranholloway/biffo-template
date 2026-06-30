@@ -16,10 +16,12 @@ export class GitHubAdapter {
   constructor(token: string, opts: GitHubAdapterOptions = {}) {
     this.octokit = new Octokit({
       auth: token,
-      // Suppress request-level info logs — they produce noisy 404 output when
-      // we intentionally catch and handle expected HTTP errors (e.g. "does this
-      // branch / variable exist yet?"). Warn/error still surface real problems.
-      log: { debug: () => {}, info: () => {}, warn: () => {}, error: console.error },
+      // Suppress all Octokit request-level logs. In @octokit/request v9+, expected
+      // 4xx responses (e.g. "does this variable/branch exist?") are logged at
+      // error level before the error is thrown and caught by our own try/catch.
+      // All real errors surface through those catch blocks — no need for the
+      // Octokit log to duplicate them.
+      log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
     })
     this.templateOwner = opts.templateOwner ?? 'keiranholloway'
     this.templateRepo = opts.templateRepo ?? 'biffo-template'
@@ -138,7 +140,14 @@ export class GitHubAdapter {
     )
   }
 
-  async createBranch(org: string, repo: string, branch: string, from = 'main'): Promise<void> {
+  async createBranch(
+    org: string,
+    repo: string,
+    branch: string,
+    from = 'main',
+    waitTimeoutMs = 120_000,
+    waitIntervalMs = 3_000,
+  ): Promise<void> {
     try {
       await this.octokit.repos.getBranch({ owner: org, repo, branch })
       log.info(`Branch ${branch} already exists — skipping`)
@@ -146,6 +155,9 @@ export class GitHubAdapter {
     } catch (err: unknown) {
       if ((err as { status?: number }).status !== 404) throw err
     }
+    // Template generation is async — GitHub returns 409 "Git Repository is empty"
+    // on getRef until the template files have been committed to main.
+    await this.waitForBranch(org, repo, from, waitTimeoutMs, waitIntervalMs)
     const { data: ref } = await this.octokit.git.getRef({ owner: org, repo, ref: `heads/${from}` })
     await this.octokit.git.createRef({
       owner: org,

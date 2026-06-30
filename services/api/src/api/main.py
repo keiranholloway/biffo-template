@@ -35,4 +35,16 @@ handler = Mangum(app, lifespan="off")
 @logger.inject_lambda_context
 @tracer.capture_lambda_handler
 def lambda_handler(event: dict, context: LambdaContext) -> dict:
+    if event.get("source") == "biffo:db-init":
+        return _run_db_init()
     return handler(event, context)  # type: ignore[reportArgumentType]
+
+
+def _run_db_init() -> dict:
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config("alembic.ini")
+    command.upgrade(cfg, "head")
+    logger.info("Database schema at head")
+    return {"ok": True}

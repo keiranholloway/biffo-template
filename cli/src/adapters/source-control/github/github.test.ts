@@ -27,6 +27,10 @@ function makeOctokitMock() {
       updateBranchProtection: vi.fn(),
       createOrUpdateEnvironment: vi.fn(),
     },
+    git: {
+      getRef: vi.fn(),
+      createRef: vi.fn(),
+    },
   }
 }
 
@@ -172,6 +176,61 @@ describe('deleteRepo', () => {
     )
 
     await expect(adapter().deleteRepo('acme', 'my-app')).rejects.toThrow('Server Error')
+  })
+})
+
+// ─── createBranch ─────────────────────────────────────────────────────────────
+
+describe('createBranch', () => {
+  it('skips creation when the branch already exists', async () => {
+    octokitMock.repos.getBranch.mockResolvedValueOnce({ data: {} })
+
+    await adapter().createBranch('acme', 'my-app', 'dev', 'main')
+
+    expect(octokitMock.git.createRef).not.toHaveBeenCalled()
+  })
+
+  it('creates the branch from the source SHA when source branch is immediately ready', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { status: 404 })
+    octokitMock.repos.getBranch
+      .mockRejectedValueOnce(notFound) // dev doesn't exist
+      .mockResolvedValueOnce({ data: {} }) // waitForBranch: main is ready
+    octokitMock.git.getRef.mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } })
+    octokitMock.git.createRef.mockResolvedValueOnce({})
+
+    await adapter().createBranch('acme', 'my-app', 'dev', 'main')
+
+    expect(octokitMock.git.createRef).toHaveBeenCalledWith({
+      owner: 'acme',
+      repo: 'my-app',
+      ref: 'refs/heads/dev',
+      sha: 'abc123',
+    })
+  })
+
+  it('waits for the source branch before calling getRef (GitHub template race condition)', async () => {
+    // Simulates: new repo from template — main not yet populated when createBranch is first called.
+    // repos.getBranch returns 404 twice for main (template not ready), then 200 (ready).
+    const notFound = Object.assign(new Error('Not Found'), { status: 404 })
+    octokitMock.repos.getBranch
+      .mockRejectedValueOnce(notFound) // dev doesn't exist
+      .mockRejectedValueOnce(notFound) // waitForBranch attempt 1: main not ready yet
+      .mockRejectedValueOnce(notFound) // waitForBranch attempt 2: still not ready
+      .mockResolvedValueOnce({ data: {} }) // waitForBranch attempt 3: main is ready
+    octokitMock.git.getRef.mockResolvedValueOnce({ data: { object: { sha: 'deadbeef' } } })
+    octokitMock.git.createRef.mockResolvedValueOnce({})
+
+    await adapter().createBranch('acme', 'my-app', 'dev', 'main', 10_000, 10)
+
+    expect(octokitMock.repos.getBranch).toHaveBeenCalledTimes(4)
+    expect(octokitMock.git.getRef).toHaveBeenCalledWith({
+      owner: 'acme',
+      repo: 'my-app',
+      ref: 'heads/main',
+    })
+    expect(octokitMock.git.createRef).toHaveBeenCalledWith(
+      expect.objectContaining({ sha: 'deadbeef' }),
+    )
   })
 })
 

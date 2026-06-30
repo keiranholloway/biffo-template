@@ -21,6 +21,11 @@ provider "aws" {
 locals {
   environment = "staging"
   tags        = { Project = var.project_name, Environment = local.environment }
+  portal_url = var.custom_domain != "" ? "https://${var.custom_domain}" : "https://${module.cdn.distribution_domain}"
+  cors_origins = jsonencode(concat(
+    var.custom_domain != "" ? ["https://${var.custom_domain}"] : [],
+    ["https://${module.cdn.distribution_domain}", "http://localhost:3000"],
+  ))
 }
 
 module "networking" {
@@ -94,11 +99,7 @@ module "core_api" {
     BIFFO_COGNITO_USER_POOL_ID = module.auth.user_pool_id
     BIFFO_COGNITO_CLIENT_ID    = module.auth.client_id
     BIFFO_COGNITO_REGION       = var.aws_region
-    BIFFO_CORS_ORIGINS = jsonencode(compact([
-      var.custom_domain != "" ? "https://${var.custom_domain}" : "",
-      "https://${module.cdn.distribution_domain}",
-      "http://localhost:3000",
-    ]))
+    BIFFO_CORS_ORIGINS = local.cors_origins
   }
   tags = local.tags
 }
@@ -131,7 +132,7 @@ module "api_gateway" {
 
 output "api_gateway_url" { value = module.api_gateway.api_endpoint }
 output "portal_url" {
-  value = var.custom_domain != "" ? "https://${var.custom_domain}" : "https://${module.cdn.distribution_domain}"
+  value = local.portal_url
 }
 output "portal_bucket_name" { value = module.storage.portal_bucket_name }
 output "cloudfront_distribution_id" { value = module.cdn.distribution_id }

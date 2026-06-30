@@ -175,8 +175,9 @@ export class AwsAdapter {
             Prefix: `${env}/terraform.tfstate`,
           }),
         )
-        // A non-trivial state file (>200 bytes) means resources were deployed
-        const hasResources = (Versions ?? []).some((v) => (v.Size ?? 0) > 200)
+        // A non-trivial current state file (>200 bytes) means resources were deployed
+        const current = (Versions ?? []).find((v) => v.IsLatest)
+        const hasResources = (current?.Size ?? 0) > 200
         if (hasResources) deployed.push(env)
       } catch {
         // bucket may not exist yet — fine

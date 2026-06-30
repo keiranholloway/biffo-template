@@ -24,7 +24,7 @@ jobs:
   deploy-global:
     name: Deploy global (Route 53 + ACM)
     runs-on: ubuntu-latest
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true'
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && vars.DOMAIN != ''
     defaults:
       run:
         working-directory: infra/global

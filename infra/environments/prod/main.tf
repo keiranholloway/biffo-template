@@ -151,6 +151,15 @@ variable "aws_region" {
 }
 variable "admin_email" { type = string }
 variable "admin_username" { type = string }
-variable "domain" { type = string; default = "" }
-variable "custom_domain" { type = string; default = "" }
-variable "acm_certificate_arn" { type = string; default = "" }
+variable "domain" {
+  type    = string
+  default = ""
+}
+variable "custom_domain" {
+  type    = string
+  default = ""
+}
+variable "acm_certificate_arn" {
+  type    = string
+  default = ""
+}

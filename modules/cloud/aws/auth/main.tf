@@ -37,9 +37,9 @@ resource "aws_cognito_user_pool" "main" {
     email_message        = "Your verification code is {####}"
   }
 
-  # Customize the sender identity and admin invitation body when a SES identity
+  # Customize the sender identity when a SES identity
   # is provided via vars. Without these vars the pool keeps Cognito's default
-  # no-reply@verificationemail.com sender and stock invitation template.
+  # no-reply@verificationemail.com sender.
   dynamic "email_configuration" {
     for_each = local.custom_sender_set ? [1] : []
     content {
@@ -70,21 +70,6 @@ resource "aws_cognito_user_pool" "main" {
 
   admin_create_user_config {
     allow_admin_create_user_only = false
-
-    # Plain-text invitation sent when the seed admin user ({username}) is created.
-    # The Cognito template tokens {username} and {####} are replaced at send time.
-    email_message = <<-EOT
-      Welcome to ${var.project_name}.
-
-      An admin account has been created for you in the ${var.environment} environment.
-
-      Username: {username}
-      Temporary password: {####}
-
-      Sign in with your temporary password and you will be prompted to set a new one.
-    EOT
-    email_subject = "Your temporary password for ${var.project_name} (${var.environment})"
-    sms_message   = "Your username is {username} and temporary password is {####} for ${var.environment}."
   }
 
   user_pool_add_ons {

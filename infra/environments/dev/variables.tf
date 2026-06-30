@@ -34,3 +34,15 @@ variable "acm_certificate_arn" {
   type        = string
   default     = ""
 }
+
+variable "mail_from_address" {
+  description = "Optional verified SES email address used as the From sender for Cognito admin-password emails. Leave blank to use Cognito's default sender."
+  type        = string
+  default     = ""
+}
+
+variable "mail_source_arn" {
+  description = "ARN of the SES identity for mail_from_address. Required when mail_from_address is set."
+  type        = string
+  default     = ""
+}

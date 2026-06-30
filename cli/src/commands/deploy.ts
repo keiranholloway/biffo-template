@@ -135,7 +135,8 @@ export async function runDeploy(
 
   const skipInfra = options.appOnly === true
   const skipApp = options.infraOnly === true
-  const totalSteps = skipInfra || skipApp ? 2 : 4
+  const hasDomain = Boolean(config.project.domain)
+  const totalSteps = skipInfra || skipApp ? 2 : hasDomain ? 5 : 4
 
   const actionsUrl = `https://github.com/${org}/${repo}/actions`
 
@@ -149,6 +150,9 @@ export async function runDeploy(
       await github.setRepoVariable(org, repo, 'TF_STATE_BUCKET', stateBucket)
       await github.setRepoVariable(org, repo, 'BIFFO_ADMIN_EMAIL', config.admin.email)
       await github.setRepoVariable(org, repo, 'BIFFO_ADMIN_USERNAME', config.admin.username)
+      if (config.project.domain) {
+        await github.setRepoVariable(org, repo, 'DOMAIN', config.project.domain)
+      }
       // Store the caller's token so the workflow can write environment-scoped variables
       // after Terraform apply — GITHUB_TOKEN cannot write environment variables.
       if (options.token) {
@@ -164,9 +168,34 @@ export async function runDeploy(
     log.success('Repository variables set')
   }
 
-  // Step 2: Trigger and wait for infrastructure deploy (skip when --app-only)
+  // Step 2: Deploy global infrastructure (Route 53 + ACM cert) — only when domain configured
+  if (!skipInfra && hasDomain) {
+    log.step(2, totalSteps, 'Deploying global infrastructure (DNS + SSL certificate)...')
+    const globalBaselineId = await github.getLatestWorkflowRunId(org, repo, 'deploy-global.yml')
+    await github.triggerWorkflow(org, repo, 'deploy-global.yml', {}, 'main')
+    log.info('  Provisioning Route 53 hosted zone and ACM wildcard certificate...')
+    log.info(`  Watch live: ${actionsUrl}`)
+    const globalResult = await github.waitForWorkflowRun(
+      org,
+      repo,
+      'deploy-global.yml',
+      globalBaselineId,
+      3_600_000,
+      30_000,
+      'main',
+    )
+    if (globalResult.conclusion !== 'success') {
+      log.error(`Global infrastructure deploy ${globalResult.conclusion ?? 'failed'}.`)
+      log.error(`  Run details: ${actionsUrl}/runs/${globalResult.id}`)
+      process.exit(1)
+    }
+    log.success(`Global infrastructure deployed (run #${globalResult.id})`)
+  }
+
+  // Step 3 (or 2 without domain): Trigger and wait for infrastructure deploy (skip when --app-only)
   if (!skipInfra) {
-    log.step(2, totalSteps, `Triggering infrastructure deploy to ${environment}...`)
+    const infraStep = hasDomain ? 3 : 2
+    log.step(infraStep, totalSteps, `Triggering infrastructure deploy to ${environment}...`)
     const infraBaselineId = await github.getLatestWorkflowRunId(org, repo, 'deploy-infra.yml')
     await github.triggerWorkflow(
       org,
@@ -195,9 +224,9 @@ export async function runDeploy(
     log.success(`Infrastructure deployed (run #${infraResult.id})`)
   }
 
-  // Step 3: Trigger and wait for application deploy (skip when --infra-only)
+  // Step 4 (or 3/1): Trigger and wait for application deploy (skip when --infra-only)
   if (!skipApp) {
-    const step = skipInfra ? 1 : 3
+    const step = skipInfra ? 1 : hasDomain ? 4 : 3
     log.step(step, totalSteps, `Triggering application deploy to ${environment}...`)
     const appBaselineId = await github.getLatestWorkflowRunId(org, repo, 'deploy-app.yml')
     await github.triggerWorkflow(org, repo, 'deploy-app.yml', { environment }, branch)
@@ -220,7 +249,7 @@ export async function runDeploy(
     log.success(`Application deployed (run #${appResult.id})`)
   }
 
-  // Step 4: Report outputs
+  // Final step: Report outputs
   const reportStep = totalSteps
   log.step(reportStep, totalSteps, 'Reading deployment outputs...')
   try {

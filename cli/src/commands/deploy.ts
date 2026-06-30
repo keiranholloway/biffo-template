@@ -129,6 +129,10 @@ export async function runDeploy(
     `${config.project.name}-terraform-state-${awsConfig.account_id}`
   const stateKey = `${environment}/terraform.tfstate`
 
+  // dev → dev branch, staging → staging branch, prod → main branch
+  const envBranch: Record<string, string> = { dev: 'dev', staging: 'staging', prod: 'main' }
+  const branch = envBranch[environment] ?? 'main'
+
   const skipInfra = options.appOnly === true
   const skipApp = options.infraOnly === true
   const totalSteps = skipInfra || skipApp ? 2 : 4
@@ -164,10 +168,13 @@ export async function runDeploy(
   if (!skipInfra) {
     log.step(2, totalSteps, `Triggering infrastructure deploy to ${environment}...`)
     const infraBaselineId = await github.getLatestWorkflowRunId(org, repo, 'deploy-infra.yml')
-    await github.triggerWorkflow(org, repo, 'deploy-infra.yml', {
-      environment,
-      action: 'apply',
-    })
+    await github.triggerWorkflow(
+      org,
+      repo,
+      'deploy-infra.yml',
+      { environment, action: 'apply' },
+      branch,
+    )
     log.info('  First run takes 20–40 minutes (VPC, RDS, Cognito, CloudFront all provisioning)...')
     log.info(`  Watch live: ${actionsUrl}`)
     const infraResult = await github.waitForWorkflowRun(
@@ -175,6 +182,9 @@ export async function runDeploy(
       repo,
       'deploy-infra.yml',
       infraBaselineId,
+      3_600_000,
+      30_000,
+      branch,
     )
     if (infraResult.conclusion !== 'success') {
       log.error(`Infrastructure deploy ${infraResult.conclusion ?? 'failed'}.`)
@@ -190,9 +200,17 @@ export async function runDeploy(
     const step = skipInfra ? 1 : 3
     log.step(step, totalSteps, `Triggering application deploy to ${environment}...`)
     const appBaselineId = await github.getLatestWorkflowRunId(org, repo, 'deploy-app.yml')
-    await github.triggerWorkflow(org, repo, 'deploy-app.yml', { environment })
+    await github.triggerWorkflow(org, repo, 'deploy-app.yml', { environment }, branch)
     log.info('  Waiting for application deploy...')
-    const appResult = await github.waitForWorkflowRun(org, repo, 'deploy-app.yml', appBaselineId)
+    const appResult = await github.waitForWorkflowRun(
+      org,
+      repo,
+      'deploy-app.yml',
+      appBaselineId,
+      3_600_000,
+      30_000,
+      branch,
+    )
     if (appResult.conclusion !== 'success') {
       log.error(`Application deploy ${appResult.conclusion ?? 'failed'}.`)
       log.error(`  Run details: ${actionsUrl}/runs/${appResult.id}`)

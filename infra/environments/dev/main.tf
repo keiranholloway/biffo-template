@@ -6,10 +6,7 @@ terraform {
     http = { source = "hashicorp/http", version = "~> 3.0" }
   }
 
-  backend "s3" {
-    # Populated at init time: terraform init -backend-config=backend.hcl
-    # See scripts/bootstrap.sh for setup
-  }
+  backend "s3" {}
 }
 
 provider "aws" {
@@ -47,6 +44,14 @@ moved {
   to   = module.cdn.aws_s3_bucket_policy.portal
 }
 
+# Look up the Route 53 hosted zone by domain name — only when a custom domain is set.
+# The zone must exist (created by infra/global) before environment Terraform runs.
+data "aws_route53_zone" "main" {
+  count        = var.custom_domain != "" ? 1 : 0
+  name         = var.domain
+  private_zone = false
+}
+
 module "storage" {
   source = "../../../modules/cloud/aws/storage"
 
@@ -64,6 +69,9 @@ module "cdn" {
   portal_bucket_name            = module.storage.portal_bucket_name
   portal_bucket_id              = module.storage.portal_bucket_name
   portal_bucket_arn             = module.storage.portal_bucket_arn
+  custom_domain                 = var.custom_domain
+  acm_certificate_arn           = var.acm_certificate_arn
+  hosted_zone_id                = var.custom_domain != "" ? data.aws_route53_zone.main[0].zone_id : ""
   tags                          = local.tags
 }
 
@@ -144,8 +152,11 @@ module "api_gateway" {
   cognito_user_pool_id = module.auth.user_pool_id
   cognito_client_id    = module.auth.client_id
   aws_region           = var.aws_region
-  cors_origins         = ["https://${module.cdn.distribution_domain}"]
-  tags                 = local.tags
+  cors_origins = compact([
+    var.custom_domain != "" ? "https://${var.custom_domain}" : "",
+    "https://${module.cdn.distribution_domain}",
+  ])
+  tags = local.tags
 }
 
 output "api_gateway_url" {
@@ -154,7 +165,7 @@ output "api_gateway_url" {
 }
 
 output "portal_url" {
-  value = "https://${module.cdn.distribution_domain}"
+  value = var.custom_domain != "" ? "https://${var.custom_domain}" : "https://${module.cdn.distribution_domain}"
 }
 
 output "portal_bucket_name" {

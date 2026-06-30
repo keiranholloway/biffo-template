@@ -175,14 +175,40 @@ export async function runInit(
     }
   }
 
-  // Step 5: Configure GitHub (branch protection, environments, secrets)
+  // Step 5: Configure GitHub (branches, branch protection, environments, secrets, variables)
   if (!session.completedSteps.includes('github_config')) {
     log.step(5, totalSteps, 'Configuring GitHub repository...')
-    await github.configureBranchProtection(config)
-    await github.createEnvironments(config)
     const { org, repo } = (
       config.source_control as { provider: 'github'; config: { org: string; repo: string } }
     ).config
+    const domain = config.project.domain
+
+    // Create dev and staging branches from main, then set dev as the default
+    await github.createBranch(org, repo, 'dev', 'main')
+    await github.createBranch(org, repo, 'staging', 'main')
+    await github.setDefaultBranch(org, repo, 'dev')
+
+    // Branch protection must come after all three branches exist
+    await github.configureBranchProtection(config)
+    await github.createEnvironments(config)
+
+    // Repo-level domain variable (used by deploy-global + infra workflows)
+    await github.setRepoVariable(org, repo, 'DOMAIN', domain)
+
+    // Per-environment CUSTOM_DOMAIN so each env's infra job gets the right subdomain
+    // dev → dev.domain.com, staging → staging.domain.com, prod → domain.com
+    const envDomains: Record<string, string> = {
+      dev: `dev.${domain}`,
+      staging: `staging.${domain}`,
+      prod: domain,
+    }
+    for (const env of config.environments) {
+      const customDomain = envDomains[env] ?? ''
+      if (customDomain) {
+        await github.setEnvVariable(org, repo, env, 'CUSTOM_DOMAIN', customDomain)
+      }
+    }
+
     if (session.outputs.oidcRoleArn) {
       await github.setRepoSecret(org, repo, 'BIFFO_OIDC_ROLE_ARN', session.outputs.oidcRoleArn)
     }

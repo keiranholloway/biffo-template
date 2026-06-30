@@ -77,6 +77,20 @@ resource "aws_cloudfront_distribution" "portal" {
   tags = var.tags
 }
 
+# DNS ALIAS record — only created when a custom domain and hosted zone are provided
+resource "aws_route53_record" "portal" {
+  count   = var.custom_domain != "" && var.hosted_zone_id != "" ? 1 : 0
+  zone_id = var.hosted_zone_id
+  name    = var.custom_domain
+  type    = "A"
+
+  alias {
+    name                   = aws_cloudfront_distribution.portal.domain_name
+    zone_id                = aws_cloudfront_distribution.portal.hosted_zone_id
+    evaluate_target_health = false
+  }
+}
+
 # Bucket policy lives here (not in the storage module) so we can reference the
 # specific distribution ARN — StringEquals requires an exact match, not a wildcard.
 resource "aws_s3_bucket_policy" "portal" {

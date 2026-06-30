@@ -138,6 +138,29 @@ export class GitHubAdapter {
     )
   }
 
+  async createBranch(org: string, repo: string, branch: string, from = 'main'): Promise<void> {
+    try {
+      await this.octokit.repos.getBranch({ owner: org, repo, branch })
+      log.info(`Branch ${branch} already exists — skipping`)
+      return
+    } catch (err: unknown) {
+      if ((err as { status?: number }).status !== 404) throw err
+    }
+    const { data: ref } = await this.octokit.git.getRef({ owner: org, repo, ref: `heads/${from}` })
+    await this.octokit.git.createRef({
+      owner: org,
+      repo,
+      ref: `refs/heads/${branch}`,
+      sha: ref.object.sha,
+    })
+    log.info(`Created branch ${branch} from ${from}`)
+  }
+
+  async setDefaultBranch(org: string, repo: string, branch: string): Promise<void> {
+    await this.octokit.repos.update({ owner: org, repo, default_branch: branch })
+    log.info(`Default branch set to ${branch}`)
+  }
+
   async configureBranchProtection(
     config: BiffoConfig,
     protectionIntervalMs = 3_000,
@@ -146,49 +169,65 @@ export class GitHubAdapter {
       config.source_control as { provider: 'github'; config: { org: string; repo: string } }
     ).config
 
-    log.info('Waiting for main branch to be ready...')
-    await this.waitForBranch(org, repo, 'main')
-    log.info('Configuring branch protection on main...')
+    const statusChecks = [
+      'Lint (JS/TS)',
+      'Lint (Python)',
+      'Test (JS/TS)',
+      'Test (Python)',
+      'Type Check (TS)',
+      'Type Check (Python)',
+      'Dependency Audit (JS)',
+      'Dependency Audit (Python)',
+      'Secret Scan',
+      'SAST (Python / Bandit)',
+      'Terraform Validate & Security',
+    ]
 
-    const params = {
-      owner: org,
-      repo,
-      branch: 'main',
-      required_status_checks: {
-        strict: true,
-        contexts: [
-          'ci / lint-js',
-          'ci / typecheck',
-          'ci / security-secrets',
-          'ci / infra-validate',
-        ],
-      },
-      enforce_admins: true,
-      required_pull_request_reviews: {
-        required_approving_review_count: 1,
-        dismiss_stale_reviews: true,
-      },
-      restrictions: null,
-      required_linear_history: true,
-      allow_force_pushes: false,
-      allow_deletions: false,
-    }
+    // Protect all three branches: dev → staging → main (prod)
+    // dev: default branch; all feature work lands here via PR
+    // staging: promoted from dev; mirrors prod config
+    // main: production; requires prod-environment approval
+    const branches: Array<{ branch: string; reviews: number }> = [
+      { branch: 'dev', reviews: 1 },
+      { branch: 'staging', reviews: 1 },
+      { branch: 'main', reviews: 1 },
+    ]
 
-    // GitHub's protection API can return 404 "Branch not found" for a few seconds
-    // after getBranch returns 200 — the ref exists before the protection API is ready.
-    const deadline = Date.now() + 30_000
-    while (true) {
-      try {
-        await this.octokit.repos.updateBranchProtection(params)
-        break
-      } catch (err: unknown) {
-        if ((err as { status?: number }).status !== 404 || Date.now() >= deadline) throw err
-        log.info('Branch protection endpoint not yet ready, retrying...')
-        await new Promise((resolve) => setTimeout(resolve, protectionIntervalMs))
+    for (const { branch, reviews } of branches) {
+      log.info(`Waiting for ${branch} branch to be ready...`)
+      await this.waitForBranch(org, repo, branch)
+      log.info(`Configuring branch protection on ${branch}...`)
+
+      const params = {
+        owner: org,
+        repo,
+        branch,
+        required_status_checks: { strict: true, contexts: statusChecks },
+        enforce_admins: true,
+        required_pull_request_reviews: {
+          required_approving_review_count: reviews,
+          dismiss_stale_reviews: true,
+        },
+        restrictions: null,
+        required_linear_history: true,
+        allow_force_pushes: false,
+        allow_deletions: false,
+      }
+
+      const deadline = Date.now() + 30_000
+      while (true) {
+        try {
+          await this.octokit.repos.updateBranchProtection(params)
+          break
+        } catch (err: unknown) {
+          if ((err as { status?: number }).status !== 404 || Date.now() >= deadline) throw err
+          log.info('Branch protection endpoint not yet ready, retrying...')
+          await new Promise((resolve) => setTimeout(resolve, protectionIntervalMs))
+        }
       }
     }
 
-    log.success('Branch protection configured')
+    log.success('Branch protection configured on dev, staging, and main')
   }
 
   async createEnvironments(config: BiffoConfig): Promise<void> {
@@ -217,6 +256,31 @@ export class GitHubAdapter {
       input: value,
       stdio: ['pipe', 'pipe', 'pipe'],
     })
+  }
+
+  async setEnvVariable(
+    org: string,
+    repo: string,
+    env: string,
+    name: string,
+    value: string,
+  ): Promise<void> {
+    log.info(`Setting variable: ${name} (${env})`)
+    try {
+      await this.octokit.request(
+        'PATCH /repos/{owner}/{repo}/environments/{environment_name}/variables/{variable_name}',
+        { owner: org, repo, environment_name: env, variable_name: name, name, value },
+      )
+    } catch (err: unknown) {
+      if ((err as { status?: number }).status === 404) {
+        await this.octokit.request(
+          'POST /repos/{owner}/{repo}/environments/{environment_name}/variables',
+          { owner: org, repo, environment_name: env, name, value },
+        )
+      } else {
+        throw err
+      }
+    }
   }
 
   async setRepoVariable(org: string, repo: string, name: string, value: string): Promise<void> {
@@ -267,12 +331,13 @@ export class GitHubAdapter {
     repo: string,
     workflowId: string,
     inputs: Record<string, string> = {},
+    ref = 'main',
   ): Promise<void> {
     await this.octokit.actions.createWorkflowDispatch({
       owner: org,
       repo,
       workflow_id: workflowId,
-      ref: 'main',
+      ref,
       inputs,
     })
   }
@@ -284,6 +349,7 @@ export class GitHubAdapter {
     baselineRunId: number,
     timeoutMs = 3_600_000,
     intervalMs = 30_000,
+    branch = 'main',
   ): Promise<{ id: number; conclusion: string | null }> {
     const deadline = Date.now() + timeoutMs
 
@@ -293,7 +359,7 @@ export class GitHubAdapter {
         repo,
         workflow_id: workflowId,
         event: 'workflow_dispatch',
-        branch: 'main',
+        branch,
         per_page: 10,
       })
 

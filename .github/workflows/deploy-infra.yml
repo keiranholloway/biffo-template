@@ -2,7 +2,7 @@ name: Deploy Infrastructure
 
 on:
   push:
-    branches: [main]
+    branches: [dev, staging, main]
     paths:
       - 'infra/**'
       - 'modules/**'
@@ -31,16 +31,21 @@ permissions:
 
 # Deploy jobs only run in repos where BIFFO_DEPLOY_ENABLED=true has been set.
 # The template repo itself has this unset, so all jobs are skipped there.
+#
+# Branch → environment mapping:
+#   dev     → dev environment     (dev.domain.com)
+#   staging → staging environment (staging.domain.com)
+#   main    → prod environment    (domain.com)
 
 # ─── DEV ─────────────────────────────────────────────────────────────────────
-# Runs automatically on push to main, or manually via workflow_dispatch.
+# Auto-deploys on push to dev branch; manual via workflow_dispatch.
 
 jobs:
   plan-dev:
     name: Plan (dev)
     runs-on: ubuntu-latest
     environment: dev
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.event_name == 'push' || github.event.inputs.environment == 'dev')
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/dev' || github.event.inputs.environment == 'dev')
     defaults:
       run:
         working-directory: infra/environments/dev
@@ -67,13 +72,16 @@ jobs:
           TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
           TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
           TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}
+          TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
+          TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
 
   apply-dev:
     name: Apply (dev)
     runs-on: ubuntu-latest
     environment: dev
     needs: plan-dev
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event.inputs.action == 'apply')
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/dev' || (github.event.inputs.environment == 'dev' && github.event.inputs.action == 'apply'))
     defaults:
       run:
         working-directory: infra/environments/dev
@@ -100,6 +108,9 @@ jobs:
           TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
           TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
           TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}
+          TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
+          TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
       - name: Export outputs to GitHub Actions variables
         env:
           GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
@@ -128,14 +139,13 @@ jobs:
             --env dev
 
   # ─── STAGING ─────────────────────────────────────────────────────────────────
-  # Manual only — run workflow_dispatch with environment=staging.
-  # Requires staging environment approval in GitHub Settings → Environments.
+  # Auto-deploys on push to staging branch; manual via workflow_dispatch.
 
   plan-staging:
     name: Plan (staging)
     runs-on: ubuntu-latest
     environment: staging
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event.inputs.environment == 'staging'
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/staging' || github.event.inputs.environment == 'staging')
     defaults:
       run:
         working-directory: infra/environments/staging
@@ -162,13 +172,16 @@ jobs:
           TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
           TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
           TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}
+          TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
+          TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
 
   apply-staging:
     name: Apply (staging)
     runs-on: ubuntu-latest
     environment: staging
     needs: plan-staging
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event.inputs.environment == 'staging' && github.event.inputs.action == 'apply'
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/staging' || (github.event.inputs.environment == 'staging' && github.event.inputs.action == 'apply'))
     defaults:
       run:
         working-directory: infra/environments/staging
@@ -195,6 +208,9 @@ jobs:
           TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
           TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
           TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}
+          TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
+          TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
       - name: Export outputs to GitHub Actions variables
         env:
           GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
@@ -223,14 +239,14 @@ jobs:
             --env staging
 
   # ─── PROD ────────────────────────────────────────────────────────────────────
-  # Manual only — run workflow_dispatch with environment=prod.
+  # Auto-deploys on push to main branch; manual via workflow_dispatch.
   # Requires prod environment approval in GitHub Settings → Environments.
 
   plan-prod:
     name: Plan (prod)
     runs-on: ubuntu-latest
     environment: prod
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event.inputs.environment == 'prod'
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/main' || github.event.inputs.environment == 'prod')
     defaults:
       run:
         working-directory: infra/environments/prod
@@ -257,13 +273,16 @@ jobs:
           TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
           TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
           TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}
+          TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
+          TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
 
   apply-prod:
     name: Apply (prod)
     runs-on: ubuntu-latest
     environment: prod
     needs: plan-prod
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event.inputs.environment == 'prod' && github.event.inputs.action == 'apply'
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/main' || (github.event.inputs.environment == 'prod' && github.event.inputs.action == 'apply'))
     defaults:
       run:
         working-directory: infra/environments/prod
@@ -290,6 +309,9 @@ jobs:
           TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
           TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
           TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}
+          TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
+          TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
       - name: Export outputs to GitHub Actions variables
         env:
           GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}

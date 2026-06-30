@@ -1,0 +1,71 @@
+name: Deploy Global Infrastructure
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/global/**'
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TERRAFORM_VERSION: '~> 1.9'
+
+# Provisions shared infrastructure that all environments depend on:
+#   - Route 53 hosted zone for the project domain
+#   - Wildcard ACM certificate (*.domain + domain) in us-east-1 for CloudFront
+# Run this once before deploying any environment. After it completes, update
+# your domain registrar with the name servers shown in the job summary.
+
+jobs:
+  deploy-global:
+    name: Deploy global (Route 53 + ACM)
+    runs-on: ubuntu-latest
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true'
+    defaults:
+      run:
+        working-directory: infra/global
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Generate backend config
+        run: |
+          cat > backend.hcl << 'EOF'
+          bucket = "${{ vars.TF_STATE_BUCKET }}"
+          key    = "global/terraform.tfstate"
+          region = "${{ vars.AWS_REGION || 'us-east-1' }}"
+          EOF
+      - run: terraform init -backend-config=backend.hcl
+      - run: terraform apply -auto-approve
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}
+      - name: Export outputs and show name servers
+        env:
+          GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ACM_ARN=$(terraform output -raw acm_certificate_arn)
+          ZONE_ID=$(terraform output -raw hosted_zone_id)
+
+          gh variable set ACM_CERTIFICATE_ARN --body "$ACM_ARN"
+          gh variable set HOSTED_ZONE_ID --body "$ZONE_ID"
+
+          echo "## DNS configuration required" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Update your domain registrar for **${{ vars.DOMAIN }}** with these name servers:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          terraform output -json name_servers | jq -r '.[]' | while read ns; do
+            echo "- \`$ns\`" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ACM Certificate ARN (saved to \`ACM_CERTIFICATE_ARN\` variable): \`$ACM_ARN\`" >> $GITHUB_STEP_SUMMARY

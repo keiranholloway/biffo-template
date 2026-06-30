@@ -16,3 +16,21 @@ variable "admin_email" {
 variable "admin_username" {
   type = string
 }
+
+variable "domain" {
+  description = "Root domain, e.g. biffo.io — used to look up the Route 53 hosted zone"
+  type        = string
+  default     = ""
+}
+
+variable "custom_domain" {
+  description = "Full subdomain for this environment, e.g. dev.biffo.io"
+  type        = string
+  default     = ""
+}
+
+variable "acm_certificate_arn" {
+  description = "Validated wildcard ACM cert ARN (us-east-1). Output from infra/global."
+  type        = string
+  default     = ""
+}

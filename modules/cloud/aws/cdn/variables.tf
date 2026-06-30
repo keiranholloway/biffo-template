@@ -33,6 +33,12 @@ variable "acm_certificate_arn" {
   default     = ""
 }
 
+variable "hosted_zone_id" {
+  description = "Route 53 hosted zone ID for creating the DNS ALIAS record. Required if custom_domain is set."
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

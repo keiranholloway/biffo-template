@@ -36,6 +36,12 @@ moved {
   to   = module.cdn.aws_s3_bucket_policy.portal
 }
 
+data "aws_route53_zone" "main" {
+  count        = var.custom_domain != "" ? 1 : 0
+  name         = var.domain
+  private_zone = false
+}
+
 module "storage" {
   source       = "../../../modules/cloud/aws/storage"
   project_name = var.project_name
@@ -51,6 +57,9 @@ module "cdn" {
   portal_bucket_name            = module.storage.portal_bucket_name
   portal_bucket_id              = module.storage.portal_bucket_name
   portal_bucket_arn             = module.storage.portal_bucket_arn
+  custom_domain                 = var.custom_domain
+  acm_certificate_arn           = var.acm_certificate_arn
+  hosted_zone_id                = var.custom_domain != "" ? data.aws_route53_zone.main[0].zone_id : ""
   tags                          = local.tags
 }
 
@@ -116,21 +125,26 @@ module "api_gateway" {
   cognito_user_pool_id = module.auth.user_pool_id
   cognito_client_id    = module.auth.client_id
   aws_region           = var.aws_region
-  cors_origins         = ["https://${module.cdn.distribution_domain}"]
-  tags                 = local.tags
+  cors_origins = compact([
+    var.custom_domain != "" ? "https://${var.custom_domain}" : "",
+    "https://${module.cdn.distribution_domain}",
+  ])
+  tags = local.tags
 }
 
 output "api_gateway_url" { value = module.api_gateway.api_endpoint }
-output "portal_url" { value = "https://${module.cdn.distribution_domain}" }
+output "portal_url" {
+  value = var.custom_domain != "" ? "https://${var.custom_domain}" : "https://${module.cdn.distribution_domain}"
+}
 output "portal_bucket_name" { value = module.storage.portal_bucket_name }
 output "cloudfront_distribution_id" { value = module.cdn.distribution_id }
 output "cognito_user_pool_id" { value = module.auth.user_pool_id }
 output "cognito_client_id" { value = module.auth.client_id }
 
 variable "project_name" { type = string }
-variable "aws_region" {
-  type    = string
-  default = "us-east-1"
-}
+variable "aws_region" { type = string; default = "us-east-1" }
 variable "admin_email" { type = string }
 variable "admin_username" { type = string }
+variable "domain" { type = string; default = "" }
+variable "custom_domain" { type = string; default = "" }
+variable "acm_certificate_arn" { type = string; default = "" }

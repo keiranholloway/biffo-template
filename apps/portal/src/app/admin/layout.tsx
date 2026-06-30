@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { Nav } from '@/components/nav'
 import { AuthGuard } from '@/components/auth-guard'
 
-export default function DashboardLayout({ children }: { children: ReactNode }) {
+export default function AdminLayout({ children }: { children: ReactNode }) {
   return (
     <AuthGuard>
       <div className="min-h-screen bg-gray-50">

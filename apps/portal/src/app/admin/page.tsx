@@ -12,7 +12,7 @@ interface UserProfile {
   last_login_at: string | null
 }
 
-export default function DashboardPage() {
+export default function AdminPage() {
   const { getIdToken } = useAuth()
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -29,7 +29,7 @@ export default function DashboardPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+      <h1 className="text-2xl font-bold text-gray-900">Admin</h1>
 
       {error != null && (
         <div className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>

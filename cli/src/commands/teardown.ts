@@ -1,4 +1,6 @@
-import { execSync } from 'node:child_process'
+import { execSync, spawnSync } from 'node:child_process'
+import { existsSync, unlinkSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts'
 import chalk from 'chalk'
 import { Command } from 'commander'
@@ -17,10 +19,12 @@ import {
 } from '../lib/session.js'
 
 export const teardownCommand = new Command('teardown')
-  .description('Remove everything created by biffo init (repo, IAM role, Terraform state bucket)')
+  .description(
+    'Destroy all infrastructure and remove everything created by biffo init — single command',
+  )
   .option('--project <name>', 'Project name to tear down (reads session if omitted)')
-  .option('--force', 'Skip deployed-infrastructure check (use after running biffo destroy)')
-  .action(async (options: { project?: string; force?: boolean }) => {
+  .option('--skip-destroy', 'Skip terraform destroy (only use if infrastructure is already gone)')
+  .action(async (options: { project?: string; skipDestroy?: boolean }) => {
     console.log(chalk.bold('\n  Biffo — Teardown\n'))
 
     // Resolve credentials
@@ -33,8 +37,10 @@ export const teardownCommand = new Command('teardown')
     let org: string
     let repo: string
     let region: string
+    let adminEmail: string
+    let adminUsername: string
+    let domain: string
 
-    // Resolution order: init session → saved project config → interactive prompt
     const session = options.project ? loadSession(options.project) : findLatestSession()
     const savedConfig = session
       ? null
@@ -49,6 +55,10 @@ export const teardownCommand = new Command('teardown')
       org = sc?.config.org ?? ''
       repo = sc?.config.repo ?? ''
       region = session.awsRegion
+      adminEmail =
+        (session.config.admin as { email: string } | undefined)?.email ?? 'noop@example.com'
+      adminUsername = (session.config.admin as { username: string } | undefined)?.username ?? 'noop'
+      domain = (session.config.project as { domain?: string }).domain ?? ''
       console.log(chalk.yellow('  Loaded session for: ') + chalk.bold(projectName))
       if (org && repo) console.log(`  Repository: ${org}/${repo}`)
       console.log()
@@ -65,6 +75,9 @@ export const teardownCommand = new Command('teardown')
       org = sc.config.org
       repo = sc.config.repo
       region = cloud.config.region
+      adminEmail = savedConfig.admin.email
+      adminUsername = savedConfig.admin.username
+      domain = savedConfig.project.domain
       console.log(chalk.yellow('  Loaded config for: ') + chalk.bold(projectName))
       console.log(`  Repository: ${org}/${repo}`)
       console.log()
@@ -85,19 +98,24 @@ export const teardownCommand = new Command('teardown')
           message: 'AWS region:',
           default: process.env['AWS_DEFAULT_REGION'] ?? process.env['AWS_REGION'] ?? 'us-east-1',
         },
+        { type: 'input', name: 'admin_email', message: 'Admin email (for TF vars):' },
+        { type: 'input', name: 'admin_username', message: 'Admin username (for TF vars):' },
       ])
       projectName = answers.project_name as string
       org = answers.org as string
       repo = answers.repo as string
       region = answers.region as string
+      adminEmail = answers.admin_email as string
+      adminUsername = answers.admin_username as string
+      domain = ''
     }
 
     const config = BiffoConfigSchema.safeParse({
-      project: { name: projectName, description: '', domain: 'example.com' },
+      project: { name: projectName, description: '', domain: domain || 'example.com' },
       source_control: { provider: 'github', config: { org, repo } },
       cloud: { provider: 'aws', config: { account_id: accountId!, region } },
       environments: ['dev'],
-      admin: { email: 'noop@example.com', username: 'noop' },
+      admin: { email: adminEmail, username: adminUsername },
     })
 
     if (!config.success) {
@@ -108,43 +126,37 @@ export const teardownCommand = new Command('teardown')
     const github = new GitHubAdapter(githubToken)
     const aws = new AwsAdapter(config.data)
 
-    // Refuse to continue if Terraform state files exist — deleting the bucket
-    // while infrastructure is still deployed orphans VPCs, Lambda, RDS, etc.
-    // The user must run `biffo destroy <env>` for each environment first.
-    if (!options.force) {
-      const knownBucket = savedConfig
-        ? (savedConfig.cloud as { config: { tf_state_bucket?: string } }).config.tf_state_bucket
-        : undefined
-      const primaryBucket = `${projectName}-terraform-state-${accountId}`
-      const bucketToCheck = knownBucket ?? primaryBucket
+    const knownBucket = savedConfig
+      ? (savedConfig.cloud as { config: { tf_state_bucket?: string } }).config.tf_state_bucket
+      : undefined
+    const stateBucket = knownBucket ?? `${projectName}-terraform-state-${accountId}`
 
-      const deployed = await aws.listDeployedEnvironments(bucketToCheck).catch(() => [])
-      if (deployed.length > 0) {
-        log.error(`Deployed infrastructure detected in environments: ${deployed.join(', ')}`)
-        log.error('  Deleting the state bucket now would orphan VPCs, RDS, Lambda, and more.')
-        log.error('  Run these first to destroy the infrastructure:')
-        for (const env of deployed) {
-          log.error(`    biffo destroy ${env}`)
-        }
-        log.error('')
-        log.error('  Or re-run with --force to skip this check (resources will be orphaned).')
-        process.exit(1)
-      }
-    }
+    const deployed = options.skipDestroy
+      ? []
+      : await aws.listDeployedEnvironments(stateBucket).catch(() => [])
 
-    // Show exactly what will be deleted
+    // Show everything that will be deleted in one place
     console.log(chalk.red.bold('  This will permanently delete:\n'))
+    if (deployed.length > 0) {
+      console.log(chalk.red('  Infrastructure (terraform destroy):'))
+      for (const env of deployed) {
+        console.log(
+          `    ${chalk.red('✗')} ${env} — VPC, RDS, Lambda, Cognito, CloudFront, EventBridge`,
+        )
+      }
+      console.log()
+    }
+    console.log(chalk.red('  Biffo resources:'))
     console.log(`    ${chalk.red('✗')} GitHub repository  ${chalk.bold(`${org}/${repo}`)}`)
     console.log(
       `    ${chalk.red('✗')} IAM role           ${chalk.bold(`biffo-github-actions-${projectName}`)}`,
     )
     console.log(
-      `    ${chalk.red('✗')} S3 bucket          ${chalk.bold(`${projectName}-terraform-state-${accountId}`)} (all versions)`,
+      `    ${chalk.red('✗')} S3 bucket          ${chalk.bold(stateBucket)} (all versions)`,
     )
     console.log(`    ${chalk.red('✗')} Local session file`)
     console.log()
 
-    // Require typing the project name to confirm — extra guard against mis-fires
     const { confirm } = await inquirer.prompt<{ confirm: string }>([
       {
         type: 'input',
@@ -158,7 +170,71 @@ export const teardownCommand = new Command('teardown')
       return
     }
 
-    // Delete in reverse init order
+    // Destroy infrastructure first (repo must still exist for any in-flight workflows)
+    if (deployed.length > 0) {
+      const tfCheck = spawnSync('terraform', ['version'], { stdio: 'pipe' })
+      if (tfCheck.status !== 0) {
+        log.error('terraform is not installed or not in PATH.')
+        log.error('  Install from: https://developer.hashicorp.com/terraform/downloads')
+        log.error('  Or re-run with --skip-destroy if infrastructure is already gone.')
+        process.exit(1)
+      }
+
+      for (const env of deployed) {
+        const infraDir = join(process.cwd(), 'infra', 'environments', env)
+        if (!existsSync(infraDir)) {
+          log.error(`Infra directory not found: ${infraDir}`)
+          log.error('  Run biffo teardown from the project root directory,')
+          log.error('  or use --skip-destroy if infrastructure is already gone.')
+          process.exit(1)
+        }
+
+        log.info(`\nDestroying ${env} infrastructure (this takes ~20 min for first run)...`)
+
+        const backendFile = join(infraDir, '.teardown-backend.hcl')
+        writeFileSync(
+          backendFile,
+          `bucket = "${stateBucket}"\nkey    = "${env}/terraform.tfstate"\nregion = "${region}"\n`,
+        )
+
+        try {
+          const tfEnv = {
+            ...process.env,
+            TF_VAR_project_name: projectName,
+            TF_VAR_aws_region: region,
+            TF_VAR_admin_email: adminEmail,
+            TF_VAR_admin_username: adminUsername,
+            TF_VAR_domain: domain,
+          }
+
+          const init = spawnSync(
+            'terraform',
+            ['init', '-backend-config=.teardown-backend.hcl', '-reconfigure'],
+            { cwd: infraDir, stdio: 'inherit', env: tfEnv },
+          )
+          if (init.status !== 0) {
+            log.error(`terraform init failed for ${env}`)
+            process.exit(1)
+          }
+
+          const destroy = spawnSync('terraform', ['destroy', '-auto-approve'], {
+            cwd: infraDir,
+            stdio: 'inherit',
+            env: tfEnv,
+          })
+          if (destroy.status !== 0) {
+            log.error(`terraform destroy failed for ${env}`)
+            process.exit(1)
+          }
+        } finally {
+          unlinkSync(backendFile)
+        }
+
+        log.success(`${env} infrastructure destroyed`)
+      }
+    }
+
+    // Delete biffo init resources
     await github.deleteRepo(org, repo).catch((err) => {
       log.warn(`Could not delete repo (skipping): ${(err as Error).message}`)
     })
@@ -167,9 +243,6 @@ export const teardownCommand = new Command('teardown')
       log.warn(`Could not delete IAM role (skipping): ${(err as Error).message}`)
     })
 
-    const knownBucket = savedConfig
-      ? (savedConfig.cloud as { config: { tf_state_bucket?: string } }).config.tf_state_bucket
-      : undefined
     await aws.teardownTerraformBackend(projectName, knownBucket).catch((err) => {
       log.warn(`Could not delete Terraform state bucket (skipping): ${(err as Error).message}`)
     })
@@ -178,7 +251,7 @@ export const teardownCommand = new Command('teardown')
     deleteProjectConfig(projectName)
 
     log.success('\nTeardown complete.')
-    console.log('  All biffo init resources have been removed.\n')
+    console.log('  All biffo resources have been removed.\n')
   })
 
 function resolveGithubToken(): string {

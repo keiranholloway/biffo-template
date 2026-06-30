@@ -8,6 +8,24 @@ locals {
   name_prefix = "${var.project_name}-${var.environment}"
 }
 
+# Rewrites clean URLs to their index.html equivalents so Next.js static export
+# routes work on direct access and page refresh. Without this, S3 returns 403
+# for /admin and CloudFront falls back to /index.html (the wrong page).
+resource "aws_cloudfront_function" "rewrite" {
+  name    = "${local.name_prefix}-rewrite"
+  runtime = "cloudfront-js-2.0"
+  publish = true
+  code    = <<-EOF
+    function handler(event) {
+      var uri = event.request.uri;
+      if (!uri.includes('.')) {
+        event.request.uri = uri.replace(/\/?$/, '/index.html');
+      }
+      return event.request;
+    }
+  EOF
+}
+
 resource "aws_cloudfront_origin_access_control" "portal" {
   name                              = "${local.name_prefix}-portal-oac"
   description                       = "OAC for ${local.name_prefix} portal S3 bucket"
@@ -48,6 +66,11 @@ resource "aws_cloudfront_distribution" "portal" {
     min_ttl     = 0
     default_ttl = 3600
     max_ttl     = 86400
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.rewrite.arn
+    }
   }
 
   # SPA routing: serve index.html for 403/404

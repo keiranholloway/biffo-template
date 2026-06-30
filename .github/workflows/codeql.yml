@@ -1,0 +1,54 @@
+name: 'CodeQL'
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly catch-up scan (Tuesday 05:17 UTC) for issues that land outside
+    # PR review (e.g. direct merges onto main).
+    - cron: '17 5 * * 2'
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Required for CodeQL to upload SARIF results.
+      security-events: write
+      contents: read
+      actions: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-extended
+
+      # autobuild intentionally omitted (build-mode 'none'):
+      # - JavaScript/TS in this repo is a pnpm workspace compiled per-package;
+      #   CodeQL analyses sources directly and needs no build.
+      # - Python (services/api/FastAPI) has no build step CodeQL requires.
+      # Autobuild would add nothing useful and risks spurious "failed to build"
+      # noise that blocks the SARIF upload.
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: '/language:${{ matrix.language }}'

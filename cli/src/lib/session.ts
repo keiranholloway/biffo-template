@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { BiffoConfigSchema, type BiffoConfig } from '../config/schema.js'
@@ -42,9 +50,13 @@ export function findLatestSession(): InitSession | null {
   if (!existsSync(dir)) return null
   const files = readdirSync(dir).filter((f) => f.endsWith('.json'))
   if (files.length === 0) return null
-  // Return the most recently modified session
+  // Return the most recently modified session.
   const sorted = files
-    .map((f) => ({ f, mtime: existsSync(join(dir, f)) ? readFileSync(join(dir, f)).length : 0 }))
+    .map((f) => {
+      const fullPath = join(dir, f)
+      const mtime = existsSync(fullPath) ? statSync(fullPath).mtimeMs : -1
+      return { f, mtime }
+    })
     .sort((a, b) => b.mtime - a.mtime)
   try {
     return JSON.parse(readFileSync(join(dir, sorted[0]!.f), 'utf8')) as InitSession

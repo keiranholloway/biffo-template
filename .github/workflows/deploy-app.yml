@@ -34,7 +34,7 @@ jobs:
     environment: dev
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/dev' || github.event.inputs.environment == 'dev')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -67,8 +67,8 @@ jobs:
     environment: dev
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/dev'
     steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -116,7 +116,7 @@ jobs:
     environment: staging
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/staging' || github.event.inputs.environment == 'staging')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -149,8 +149,8 @@ jobs:
     environment: staging
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/staging'
     steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -199,7 +199,7 @@ jobs:
     environment: prod
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && (github.ref == 'refs/heads/main' || github.event.inputs.environment == 'prod')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -232,8 +232,8 @@ jobs:
     environment: prod
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main'
     steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}

@@ -1,6 +1,4 @@
-import { execSync, spawnSync } from 'node:child_process'
-import { existsSync, unlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { execSync } from 'node:child_process'
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts'
 import chalk from 'chalk'
 import { Command } from 'commander'
@@ -20,19 +18,17 @@ import {
 
 export const teardownCommand = new Command('teardown')
   .description(
-    'Destroy all infrastructure and remove everything created by biffo init — single command',
+    'Destroy all infrastructure then remove the repo, IAM role, and state bucket — single command',
   )
   .option('--project <name>', 'Project name to tear down (reads session if omitted)')
   .option('--skip-destroy', 'Skip terraform destroy (only use if infrastructure is already gone)')
   .action(async (options: { project?: string; skipDestroy?: boolean }) => {
     console.log(chalk.bold('\n  Biffo — Teardown\n'))
 
-    // Resolve credentials
     const githubToken = resolveGithubToken()
     const sts = new STSClient({})
     const { Account: accountId } = await sts.send(new GetCallerIdentityCommand({}))
 
-    // Load config from session or prompt
     let projectName: string
     let org: string
     let repo: string
@@ -135,10 +131,10 @@ export const teardownCommand = new Command('teardown')
       ? []
       : await aws.listDeployedEnvironments(stateBucket).catch(() => [])
 
-    // Show everything that will be deleted in one place
+    // Show everything that will be deleted in one confirmation
     console.log(chalk.red.bold('  This will permanently delete:\n'))
     if (deployed.length > 0) {
-      console.log(chalk.red('  Infrastructure (terraform destroy):'))
+      console.log(chalk.red('  Infrastructure (via GitHub Actions terraform destroy):'))
       for (const env of deployed) {
         console.log(
           `    ${chalk.red('✗')} ${env} — VPC, RDS, Lambda, Cognito, CloudFront, EventBridge`,
@@ -170,71 +166,51 @@ export const teardownCommand = new Command('teardown')
       return
     }
 
-    // Destroy infrastructure first (repo must still exist for any in-flight workflows)
+    // Trigger destroy workflows before deleting the repo — the repo must still exist
+    // to run the workflow. Each env is destroyed sequentially so we can detect failures.
     if (deployed.length > 0) {
-      const tfCheck = spawnSync('terraform', ['version'], { stdio: 'pipe' })
-      if (tfCheck.status !== 0) {
-        log.error('terraform is not installed or not in PATH.')
-        log.error('  Install from: https://developer.hashicorp.com/terraform/downloads')
-        log.error('  Or re-run with --skip-destroy if infrastructure is already gone.')
-        process.exit(1)
-      }
-
+      const actionsUrl = `https://github.com/${org}/${repo}/actions`
       for (const env of deployed) {
-        const infraDir = join(process.cwd(), 'infra', 'environments', env)
-        if (!existsSync(infraDir)) {
-          log.error(`Infra directory not found: ${infraDir}`)
-          log.error('  Run biffo teardown from the project root directory,')
-          log.error('  or use --skip-destroy if infrastructure is already gone.')
+        const envBranch: Record<string, string> = { dev: 'dev', staging: 'staging', prod: 'main' }
+        const branch = envBranch[env] ?? 'dev'
+
+        log.info(`\nDestroying ${env} infrastructure (20–30 min for first run)...`)
+        log.info(`  Watch live: ${actionsUrl}`)
+
+        let baselineId: number | undefined
+        try {
+          baselineId = await github.getLatestWorkflowRunId(org, repo, 'destroy-infra.yml')
+        } catch {
+          log.error(`destroy-infra.yml workflow not found in ${org}/${repo}.`)
+          log.error('  Merge the PR at https://github.com/keiranholloway/biffo-core/pull/1 first,')
+          log.error('  or re-run with --skip-destroy if infrastructure is already gone.')
           process.exit(1)
         }
 
-        log.info(`\nDestroying ${env} infrastructure (this takes ~20 min for first run)...`)
+        await github.triggerWorkflow(org, repo, 'destroy-infra.yml', { environment: env }, branch)
 
-        const backendFile = join(infraDir, '.teardown-backend.hcl')
-        writeFileSync(
-          backendFile,
-          `bucket = "${stateBucket}"\nkey    = "${env}/terraform.tfstate"\nregion = "${region}"\n`,
+        const result = await github.waitForWorkflowRun(
+          org,
+          repo,
+          'destroy-infra.yml',
+          baselineId,
+          3_600_000,
+          30_000,
+          branch,
         )
 
-        try {
-          const tfEnv = {
-            ...process.env,
-            TF_VAR_project_name: projectName,
-            TF_VAR_aws_region: region,
-            TF_VAR_admin_email: adminEmail,
-            TF_VAR_admin_username: adminUsername,
-            TF_VAR_domain: domain,
-          }
-
-          const init = spawnSync(
-            'terraform',
-            ['init', '-backend-config=.teardown-backend.hcl', '-reconfigure'],
-            { cwd: infraDir, stdio: 'inherit', env: tfEnv },
-          )
-          if (init.status !== 0) {
-            log.error(`terraform init failed for ${env}`)
-            process.exit(1)
-          }
-
-          const destroy = spawnSync('terraform', ['destroy', '-auto-approve'], {
-            cwd: infraDir,
-            stdio: 'inherit',
-            env: tfEnv,
-          })
-          if (destroy.status !== 0) {
-            log.error(`terraform destroy failed for ${env}`)
-            process.exit(1)
-          }
-        } finally {
-          unlinkSync(backendFile)
+        if (result.conclusion !== 'success') {
+          log.error(`Destroy workflow ${result.conclusion ?? 'failed'} for ${env}.`)
+          log.error(`  Run details: ${actionsUrl}/runs/${result.id}`)
+          log.error('  Fix the issue and re-run biffo teardown, or use --skip-destroy.')
+          process.exit(1)
         }
 
         log.success(`${env} infrastructure destroyed`)
       }
     }
 
-    // Delete biffo init resources
+    // All infrastructure gone — now safe to delete the repo and supporting resources
     await github.deleteRepo(org, repo).catch((err) => {
       log.warn(`Could not delete repo (skipping): ${(err as Error).message}`)
     })

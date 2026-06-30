@@ -45,8 +45,12 @@ function makeSession(overrides: Partial<InitSession> = {}): InitSession {
 function makeGithubMock() {
   return {
     createRepoFromTemplate: vi.fn().mockResolvedValue('https://github.com/acme/my-app.git'),
+    createBranch: vi.fn().mockResolvedValue(undefined),
+    setDefaultBranch: vi.fn().mockResolvedValue(undefined),
     configureBranchProtection: vi.fn().mockResolvedValue(undefined),
     createEnvironments: vi.fn().mockResolvedValue(undefined),
+    setRepoVariable: vi.fn().mockResolvedValue(undefined),
+    setEnvVariable: vi.fn().mockResolvedValue(undefined),
     setRepoSecret: vi.fn().mockResolvedValue(undefined),
   }
 }

@@ -88,6 +88,42 @@ function makeSession(overrides: Partial<InitSession> = {}): InitSession {
 // The default template owner/repo baked into GitHubAdapter
 const TMPL = 'keiranholloway/biffo-template'
 
+// Handlers for step 5 (github_config): branch creation, protection, variables, environments.
+// Branches dev and staging are returned as already-existing so createBranch skips creation;
+// this keeps the test focused on flow wiring rather than createBranch internals.
+function setupStep5GithubHandlers() {
+  server.use(
+    // createBranch: branches already exist → skip
+    http.get(`${GH}/repos/acme/my-app/branches/dev`, () =>
+      HttpResponse.json({ name: 'dev', commit: { sha: 'abc' } }),
+    ),
+    http.get(`${GH}/repos/acme/my-app/branches/staging`, () =>
+      HttpResponse.json({ name: 'staging', commit: { sha: 'abc' } }),
+    ),
+    // setDefaultBranch
+    http.patch(`${GH}/repos/acme/my-app`, () => HttpResponse.json({})),
+    // configureBranchProtection: all 3 branches
+    http.put(`${GH}/repos/acme/my-app/branches/dev/protection`, () => HttpResponse.json({})),
+    http.put(`${GH}/repos/acme/my-app/branches/staging/protection`, () => HttpResponse.json({})),
+    http.get(`${GH}/repos/acme/my-app/branches/main`, () =>
+      HttpResponse.json({ name: 'main', commit: { sha: 'abc' } }),
+    ),
+    http.put(`${GH}/repos/acme/my-app/branches/main/protection`, () => HttpResponse.json({})),
+    // createEnvironments
+    http.put(`${GH}/repos/acme/my-app/environments/:env`, () => HttpResponse.json({})),
+    // setRepoVariable DOMAIN: PATCH returns 404 (doesn't exist yet) → POST creates it
+    http.patch(`${GH}/repos/acme/my-app/actions/variables/DOMAIN`, () =>
+      HttpResponse.json({ message: 'Not Found' }, { status: 404 }),
+    ),
+    http.post(`${GH}/repos/acme/my-app/actions/variables`, () => HttpResponse.json({})),
+    // setEnvVariable CUSTOM_DOMAIN for dev: PATCH returns 404 → POST creates it
+    http.patch(`${GH}/repos/acme/my-app/environments/dev/variables/CUSTOM_DOMAIN`, () =>
+      HttpResponse.json({ message: 'Not Found' }, { status: 404 }),
+    ),
+    http.post(`${GH}/repos/acme/my-app/environments/dev/variables`, () => HttpResponse.json({})),
+  )
+}
+
 function setupGithubHandlers() {
   server.use(
     http.get(`${GH}/repos/${TMPL}`, () => HttpResponse.json({ is_template: true })),
@@ -100,12 +136,8 @@ function setupGithubHandlers() {
         html_url: 'https://github.com/acme/my-app',
       }),
     ),
-    http.get(`${GH}/repos/acme/my-app/branches/main`, () =>
-      HttpResponse.json({ name: 'main', commit: { sha: 'abc' } }),
-    ),
-    http.put(`${GH}/repos/acme/my-app/branches/main/protection`, () => HttpResponse.json({})),
-    http.put(`${GH}/repos/acme/my-app/environments/:env`, () => HttpResponse.json({})),
   )
+  setupStep5GithubHandlers()
 }
 
 function setupAwsMocks() {
@@ -152,13 +184,7 @@ describe('runInit (integration — real adapters + HTTP mocks)', () => {
 
   it('resumes from step 3 — skips STS and GitHub template creation', async () => {
     // Steps 1 + 2 already done; only OIDC, S3, and GitHub config should run
-    server.use(
-      http.get(`${GH}/repos/acme/my-app/branches/main`, () =>
-        HttpResponse.json({ name: 'main', commit: { sha: 'abc' } }),
-      ),
-      http.put(`${GH}/repos/acme/my-app/branches/main/protection`, () => HttpResponse.json({})),
-      http.put(`${GH}/repos/acme/my-app/environments/:env`, () => HttpResponse.json({})),
-    )
+    setupStep5GithubHandlers()
 
     iamMock
       .on(GetOpenIDConnectProviderCommand)

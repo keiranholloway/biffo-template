@@ -179,8 +179,8 @@ describe('deleteRepo', () => {
 
 describe('configureBranchProtection', () => {
   it('calls updateBranchProtection with the correct params when branch is immediately ready', async () => {
-    octokitMock.repos.getBranch = vi.fn().mockResolvedValueOnce({ data: {} })
-    octokitMock.repos.updateBranchProtection = vi.fn().mockResolvedValueOnce({})
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValue({ data: {} })
+    octokitMock.repos.updateBranchProtection = vi.fn().mockResolvedValue({})
 
     await adapter().configureBranchProtection(CONFIG)
 
@@ -223,21 +223,22 @@ describe('configureBranchProtection', () => {
 
   it('retries updateBranchProtection when it returns 404 after branch ref exists', async () => {
     const notFound = Object.assign(new Error('Not Found'), { status: 404 })
-    octokitMock.repos.getBranch = vi.fn().mockResolvedValueOnce({ data: {} })
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValue({ data: {} })
     octokitMock.repos.updateBranchProtection = vi
       .fn()
       .mockRejectedValueOnce(notFound)
       .mockRejectedValueOnce(notFound)
-      .mockResolvedValueOnce({})
+      .mockResolvedValue({}) // dev succeeds on 3rd; staging and main succeed immediately
 
     await adapter().configureBranchProtection(CONFIG, 10)
 
-    expect(octokitMock.repos.updateBranchProtection).toHaveBeenCalledTimes(3)
+    // 2 retries + 1 success for dev, then 1 each for staging and main = 5 total
+    expect(octokitMock.repos.updateBranchProtection).toHaveBeenCalledTimes(5)
   })
 
   it('sends the full branch protection settings (snapshot)', async () => {
-    octokitMock.repos.getBranch = vi.fn().mockResolvedValueOnce({ data: {} })
-    octokitMock.repos.updateBranchProtection = vi.fn().mockResolvedValueOnce({})
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValue({ data: {} })
+    octokitMock.repos.updateBranchProtection = vi.fn().mockResolvedValue({})
 
     await adapter().configureBranchProtection(CONFIG)
 

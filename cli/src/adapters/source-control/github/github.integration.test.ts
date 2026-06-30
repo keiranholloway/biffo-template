@@ -88,13 +88,25 @@ describe('configureBranchProtection (HTTP level)', () => {
   it('sends the correct branch protection payload to the GitHub API', async () => {
     let capturedBody: unknown
     server.use(
-      http.get(`${GH}/repos/acme/my-app/branches/main`, () =>
-        HttpResponse.json({ name: 'main', commit: { sha: 'abc' } }),
+      http.get(`${GH}/repos/acme/my-app/branches/dev`, () =>
+        HttpResponse.json({ name: 'dev', commit: { sha: 'abc' } }),
       ),
-      http.put(`${GH}/repos/acme/my-app/branches/main/protection`, async ({ request }) => {
+      http.put(`${GH}/repos/acme/my-app/branches/dev/protection`, async ({ request }) => {
         capturedBody = await request.json()
         return HttpResponse.json({})
       }),
+      http.get(`${GH}/repos/acme/my-app/branches/staging`, () =>
+        HttpResponse.json({ name: 'staging', commit: { sha: 'abc' } }),
+      ),
+      http.put(`${GH}/repos/acme/my-app/branches/staging/protection`, async () =>
+        HttpResponse.json({}),
+      ),
+      http.get(`${GH}/repos/acme/my-app/branches/main`, () =>
+        HttpResponse.json({ name: 'main', commit: { sha: 'abc' } }),
+      ),
+      http.put(`${GH}/repos/acme/my-app/branches/main/protection`, async () =>
+        HttpResponse.json({}),
+      ),
     )
 
     await makeAdapter().configureBranchProtection(CONFIG)
@@ -102,21 +114,30 @@ describe('configureBranchProtection (HTTP level)', () => {
   })
 
   it('retries updateBranchProtection when protection API returns 404 after branch ref exists', async () => {
-    let protectionCallCount = 0
+    let devProtectionCallCount = 0
     server.use(
-      http.get(`${GH}/repos/acme/my-app/branches/main`, () =>
-        HttpResponse.json({ name: 'main', commit: { sha: 'abc' } }),
+      http.get(`${GH}/repos/acme/my-app/branches/dev`, () =>
+        HttpResponse.json({ name: 'dev', commit: { sha: 'abc' } }),
       ),
-      http.put(`${GH}/repos/acme/my-app/branches/main/protection`, () => {
-        protectionCallCount++
-        if (protectionCallCount < 3)
+      http.put(`${GH}/repos/acme/my-app/branches/dev/protection`, () => {
+        devProtectionCallCount++
+        if (devProtectionCallCount < 3)
           return HttpResponse.json({ message: 'Branch not found' }, { status: 404 })
         return HttpResponse.json({})
       }),
+      http.get(`${GH}/repos/acme/my-app/branches/staging`, () =>
+        HttpResponse.json({ name: 'staging', commit: { sha: 'abc' } }),
+      ),
+      http.put(`${GH}/repos/acme/my-app/branches/staging/protection`, () => HttpResponse.json({})),
+      http.get(`${GH}/repos/acme/my-app/branches/main`, () =>
+        HttpResponse.json({ name: 'main', commit: { sha: 'abc' } }),
+      ),
+      http.put(`${GH}/repos/acme/my-app/branches/main/protection`, () => HttpResponse.json({})),
     )
 
     await makeAdapter().configureBranchProtection(CONFIG, 10)
-    expect(protectionCallCount).toBe(3)
+    // Retry logic fires only for dev (2 failures + 1 success); staging and main succeed immediately
+    expect(devProtectionCallCount).toBe(3)
   })
 })
 

@@ -28,12 +28,6 @@ variable "aws_region" {
   type = string
 }
 
-variable "cors_origins" {
-  description = "List of allowed CORS origins"
-  type        = list(string)
-  default     = ["*"]
-}
-
 variable "tags" {
   type    = map(string)
   default = {}

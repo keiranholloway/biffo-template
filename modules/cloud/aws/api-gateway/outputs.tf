@@ -4,7 +4,7 @@ output "api_id" {
 
 output "api_endpoint" {
   description = "Base URL of the HTTP API — set as NEXT_PUBLIC_API_URL in the portal build"
-  value       = aws_apigatewayv2_stage.main.invoke_url
+  value       = trimsuffix(aws_apigatewayv2_stage.main.invoke_url, "/")
 }
 
 output "execution_arn" {

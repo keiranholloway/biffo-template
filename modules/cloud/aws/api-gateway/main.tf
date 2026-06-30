@@ -12,16 +12,7 @@ resource "aws_apigatewayv2_api" "main" {
   name          = "${local.name_prefix}-api"
   protocol_type = "HTTP"
   description   = "Biffo Core API - ${local.name_prefix}"
-
-  cors_configuration {
-    allow_credentials = true
-    allow_headers     = ["content-type", "authorization", "x-amz-date", "x-api-key"]
-    allow_methods     = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-    allow_origins     = var.cors_origins
-    max_age           = 300
-  }
-
-  tags = var.tags
+  tags          = var.tags
 }
 
 # JWT authorizer backed by Cognito — validates Bearer tokens on all protected routes
@@ -49,6 +40,15 @@ resource "aws_apigatewayv2_integration" "lambda" {
 resource "aws_apigatewayv2_route" "health" {
   api_id    = aws_apigatewayv2_api.main.id
   route_key = "GET /api/v1/health"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+# OPTIONS preflight — no auth so CORS preflight is never blocked by the JWT authorizer.
+# FastAPI CORSMiddleware handles the response headers; API Gateway v2 does not intercept
+# OPTIONS before auth when a $default JWT route is present.
+resource "aws_apigatewayv2_route" "options" {
+  api_id    = aws_apigatewayv2_api.main.id
+  route_key = "OPTIONS /{proxy+}"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 

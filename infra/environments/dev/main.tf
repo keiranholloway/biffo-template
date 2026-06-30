@@ -132,6 +132,11 @@ module "core_api" {
     BIFFO_COGNITO_CLIENT_ID    = module.auth.client_id
     BIFFO_COGNITO_REGION       = var.aws_region
     BIFFO_EVENT_BUS_NAME       = module.events.event_bus_name
+    BIFFO_CORS_ORIGINS = jsonencode(compact([
+      var.custom_domain != "" ? "https://${var.custom_domain}" : "",
+      "https://${module.cdn.distribution_domain}",
+      "http://localhost:3000",
+    ]))
   }
   tags = local.tags
 }
@@ -146,10 +151,6 @@ module "api_gateway" {
   cognito_user_pool_id = module.auth.user_pool_id
   cognito_client_id    = module.auth.client_id
   aws_region           = var.aws_region
-  cors_origins = compact([
-    var.custom_domain != "" ? "https://${var.custom_domain}" : "",
-    "https://${module.cdn.distribution_domain}",
-  ])
   tags = local.tags
 }
 

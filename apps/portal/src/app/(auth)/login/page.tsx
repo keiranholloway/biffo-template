@@ -53,7 +53,8 @@ export default function LoginPage() {
 
     setLoading(true)
     try {
-      await completeNewPassword(pendingUser!, newPassword, pendingAttributes)
+      if (!pendingUser) return
+      await completeNewPassword(pendingUser, newPassword, pendingAttributes)
       router.push('/dashboard')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to set password')

@@ -23,7 +23,9 @@ export function signIn(username: string, password: string): Promise<SignInResult
     const authDetails = new AuthenticationDetails({ Username: username, Password: password })
 
     user.authenticateUser(authDetails, {
-      onSuccess: (session) => resolve({ kind: 'success', session }),
+      onSuccess: (session) => {
+        resolve({ kind: 'success', session })
+      },
       onFailure: reject,
       newPasswordRequired: (userAttributes: Record<string, string>) => {
         // Cognito includes read-only attributes that must not be sent back

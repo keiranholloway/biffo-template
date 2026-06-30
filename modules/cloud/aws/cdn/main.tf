@@ -23,7 +23,9 @@ resource "aws_cloudfront_distribution" "portal" {
   price_class         = "PriceClass_100"
   comment             = "${local.name_prefix} portal"
 
-  aliases = var.custom_domain != "" ? [var.custom_domain] : []
+  # Alias requires a matching ACM cert — omit both if cert is absent so CloudFront
+  # falls back to its default certificate and the distribution can still be created.
+  aliases = var.custom_domain != "" && var.acm_certificate_arn != "" ? [var.custom_domain] : []
 
   origin {
     domain_name              = var.portal_bucket_regional_domain

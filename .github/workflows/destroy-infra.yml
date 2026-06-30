@@ -1,0 +1,133 @@
+name: Destroy Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to destroy
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+
+env:
+  TERRAFORM_VERSION: '~> 1.9'
+
+permissions:
+  id-token: write
+  contents: read
+
+# Destroys all Terraform-managed infrastructure for the selected environment.
+# Run this before biffo teardown to avoid orphaning VPCs, RDS, Lambda, etc.
+
+# ─── DEV ─────────────────────────────────────────────────────────────────────
+
+jobs:
+  destroy-dev:
+    name: Destroy (dev)
+    runs-on: ubuntu-latest
+    environment: dev
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event.inputs.environment == 'dev'
+    defaults:
+      run:
+        working-directory: infra/environments/dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Generate backend config
+        run: |
+          cat > backend.hcl << 'EOF'
+          bucket = "${{ vars.TF_STATE_BUCKET }}"
+          key    = "dev/terraform.tfstate"
+          region = "${{ vars.AWS_REGION || 'us-east-1' }}"
+          EOF
+      - run: terraform init -backend-config=backend.hcl
+      - run: terraform destroy -auto-approve
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
+          TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}
+          TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
+          TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
+
+  # ─── STAGING ─────────────────────────────────────────────────────────────────
+
+  destroy-staging:
+    name: Destroy (staging)
+    runs-on: ubuntu-latest
+    environment: staging
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event.inputs.environment == 'staging'
+    defaults:
+      run:
+        working-directory: infra/environments/staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Generate backend config
+        run: |
+          cat > backend.hcl << 'EOF'
+          bucket = "${{ vars.TF_STATE_BUCKET }}"
+          key    = "staging/terraform.tfstate"
+          region = "${{ vars.AWS_REGION || 'us-east-1' }}"
+          EOF
+      - run: terraform init -backend-config=backend.hcl
+      - run: terraform destroy -auto-approve
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
+          TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}
+          TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
+          TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
+
+  # ─── PROD ────────────────────────────────────────────────────────────────────
+  # Requires prod environment approval in GitHub Settings → Environments.
+
+  destroy-prod:
+    name: Destroy (prod)
+    runs-on: ubuntu-latest
+    environment: prod
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event.inputs.environment == 'prod'
+    defaults:
+      run:
+        working-directory: infra/environments/prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Generate backend config
+        run: |
+          cat > backend.hcl << 'EOF'
+          bucket = "${{ vars.TF_STATE_BUCKET }}"
+          key    = "prod/terraform.tfstate"
+          region = "${{ vars.AWS_REGION || 'us-east-1' }}"
+          EOF
+      - run: terraform init -backend-config=backend.hcl
+      - run: terraform destroy -auto-approve
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          TF_VAR_admin_email: ${{ vars.BIFFO_ADMIN_EMAIL }}
+          TF_VAR_admin_username: ${{ vars.BIFFO_ADMIN_USERNAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}
+          TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
+          TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}

@@ -96,7 +96,8 @@ resource "aws_cognito_user_pool_domain" "main" {
   user_pool_id = aws_cognito_user_pool.main.id
 }
 
-# Seed the initial admin user
+# Seed the initial admin user — Cognito emails a temporary password to admin_email.
+# The admin signs in with that temp password and is immediately prompted to set a new one.
 resource "aws_cognito_user" "admin" {
   user_pool_id = aws_cognito_user_pool.main.id
   username     = var.admin_username
@@ -107,7 +108,5 @@ resource "aws_cognito_user" "admin" {
     "custom:tenant_id" = "default"
   }
 
-  temporary_password   = null
-  message_action       = "SUPPRESS"
   force_alias_creation = false
 }

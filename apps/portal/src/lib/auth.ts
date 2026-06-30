@@ -13,21 +13,38 @@ const poolData: ICognitoUserPoolData = {
 
 export const userPool = new CognitoUserPool(poolData)
 
-export function signIn(username: string, password: string): Promise<CognitoUserSession> {
+export type SignInResult =
+  | { kind: 'success'; session: CognitoUserSession }
+  | { kind: 'new_password_required'; user: CognitoUser; userAttributes: Record<string, string> }
+
+export function signIn(username: string, password: string): Promise<SignInResult> {
   return new Promise((resolve, reject) => {
     const user = new CognitoUser({ Username: username, Pool: userPool })
     const authDetails = new AuthenticationDetails({ Username: username, Password: password })
 
     user.authenticateUser(authDetails, {
-      onSuccess: (session) => {
-        resolve(session)
+      onSuccess: (session) => resolve({ kind: 'success', session }),
+      onFailure: reject,
+      newPasswordRequired: (userAttributes: Record<string, string>) => {
+        // Cognito includes read-only attributes that must not be sent back
+        const { email_verified, email, ...writableAttributes } = userAttributes
+        void email_verified
+        void email
+        resolve({ kind: 'new_password_required', user, userAttributes: writableAttributes })
       },
-      onFailure: (err: Error) => {
-        reject(err)
-      },
-      newPasswordRequired: () => {
-        reject(new Error('NEW_PASSWORD_REQUIRED'))
-      },
+    })
+  })
+}
+
+export function completeNewPassword(
+  user: CognitoUser,
+  newPassword: string,
+  userAttributes: Record<string, string>,
+): Promise<CognitoUserSession> {
+  return new Promise((resolve, reject) => {
+    user.completeNewPasswordChallenge(newPassword, userAttributes, {
+      onSuccess: resolve,
+      onFailure: reject,
     })
   })
 }

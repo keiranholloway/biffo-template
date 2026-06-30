@@ -2,12 +2,17 @@
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import type { CognitoUserSession } from 'amazon-cognito-identity-js'
-import { getCurrentSession, signIn as cognitoSignIn, signOut as cognitoSignOut } from '@/lib/auth'
+import {
+  getCurrentSession,
+  signIn as cognitoSignIn,
+  signOut as cognitoSignOut,
+  type SignInResult,
+} from '@/lib/auth'
 
 interface AuthContextValue {
   session: CognitoUserSession | null
   loading: boolean
-  login: (username: string, password: string) => Promise<void>
+  login: (username: string, password: string) => Promise<SignInResult>
   logout: () => void
   getIdToken: () => string | null
 }
@@ -27,8 +32,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const login = useCallback(async (username: string, password: string) => {
-    const s = await cognitoSignIn(username, password)
-    setSession(s)
+    const result = await cognitoSignIn(username, password)
+    if (result.kind === 'success') setSession(result.session)
+    return result
   }, [])
 
   const logout = useCallback(() => {

@@ -50,11 +50,11 @@ jobs:
       run:
         working-directory: infra/environments/dev
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -86,11 +86,11 @@ jobs:
       run:
         working-directory: infra/environments/dev
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -150,11 +150,11 @@ jobs:
       run:
         working-directory: infra/environments/staging
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -186,11 +186,11 @@ jobs:
       run:
         working-directory: infra/environments/staging
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -251,11 +251,11 @@ jobs:
       run:
         working-directory: infra/environments/prod
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -287,11 +287,11 @@ jobs:
       run:
         working-directory: infra/environments/prod
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}

@@ -19,7 +19,7 @@ jobs:
     name: Lint (JS/TS)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -33,7 +33,7 @@ jobs:
     name: Type Check (TS)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -46,7 +46,7 @@ jobs:
     name: Test (JS/TS)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -59,7 +59,7 @@ jobs:
     name: Lint (Python)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -71,7 +71,7 @@ jobs:
     name: Type Check (Python)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -82,7 +82,7 @@ jobs:
     name: Test (Python)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -101,7 +101,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v2
@@ -121,7 +121,7 @@ jobs:
     name: SAST (Python / Bandit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -137,7 +137,7 @@ jobs:
     name: Dependency Audit (JS)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -150,7 +150,7 @@ jobs:
     name: Dependency Audit (Python)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -161,8 +161,8 @@ jobs:
     name: Terraform Validate & Security
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: '~> 1.9'
       - name: Terraform fmt check

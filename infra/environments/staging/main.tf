@@ -32,11 +32,10 @@ module "networking" {
 }
 
 module "storage" {
-  source            = "../../../modules/cloud/aws/storage"
-  project_name      = var.project_name
-  environment       = local.environment
-  cloudfront_oac_id = module.cdn.oac_id
-  tags              = local.tags
+  source       = "../../../modules/cloud/aws/storage"
+  project_name = var.project_name
+  environment  = local.environment
+  tags         = local.tags
 }
 
 module "cdn" {
@@ -45,6 +44,8 @@ module "cdn" {
   environment                   = local.environment
   portal_bucket_regional_domain = module.storage.portal_bucket_regional_domain
   portal_bucket_name            = module.storage.portal_bucket_name
+  portal_bucket_id              = module.storage.portal_bucket_name
+  portal_bucket_arn             = module.storage.portal_bucket_arn
   tags                          = local.tags
 }
 

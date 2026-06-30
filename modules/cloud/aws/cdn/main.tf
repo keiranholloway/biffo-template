@@ -76,3 +76,25 @@ resource "aws_cloudfront_distribution" "portal" {
 
   tags = var.tags
 }
+
+# Bucket policy lives here (not in the storage module) so we can reference the
+# specific distribution ARN — StringEquals requires an exact match, not a wildcard.
+resource "aws_s3_bucket_policy" "portal" {
+  bucket = var.portal_bucket_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "AllowCloudFrontOAC"
+      Effect    = "Allow"
+      Principal = { Service = "cloudfront.amazonaws.com" }
+      Action    = "s3:GetObject"
+      Resource  = "${var.portal_bucket_arn}/*"
+      Condition = {
+        StringEquals = {
+          "AWS:SourceArn" = aws_cloudfront_distribution.portal.arn
+        }
+      }
+    }]
+  })
+}

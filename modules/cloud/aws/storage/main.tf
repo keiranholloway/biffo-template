@@ -69,23 +69,3 @@ resource "aws_s3_bucket_logging" "portal" {
   target_prefix = "portal-access-logs/"
 }
 
-# Bucket policy: only CloudFront OAC can read — no direct public access
-resource "aws_s3_bucket_policy" "portal" {
-  bucket = aws_s3_bucket.portal.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Sid       = "AllowCloudFrontOAC"
-      Effect    = "Allow"
-      Principal = { Service = "cloudfront.amazonaws.com" }
-      Action    = "s3:GetObject"
-      Resource  = "${aws_s3_bucket.portal.arn}/*"
-      Condition = {
-        StringEquals = {
-          "AWS:SourceArn" = "arn:aws:cloudfront::${data.aws_caller_identity.current.account_id}:distribution/*"
-        }
-      }
-    }]
-  })
-}

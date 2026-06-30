@@ -14,6 +14,14 @@ variable "portal_bucket_name" {
   type = string
 }
 
+variable "portal_bucket_id" {
+  type = string
+}
+
+variable "portal_bucket_arn" {
+  type = string
+}
+
 variable "custom_domain" {
   type    = string
   default = ""

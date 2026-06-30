@@ -127,18 +127,23 @@ export const teardownCommand = new Command('teardown')
       : undefined
     const stateBucket = knownBucket ?? `${projectName}-terraform-state-${accountId}`
 
-    const deployed = options.skipDestroy
+    const allDeployed = options.skipDestroy
       ? []
       : await aws.listDeployedEnvironments(stateBucket).catch(() => [])
+    const deployedEnvs = allDeployed.filter((e) => e !== 'global')
+    const hasGlobal = allDeployed.includes('global')
 
     // Show everything that will be deleted in one confirmation
     console.log(chalk.red.bold('  This will permanently delete:\n'))
-    if (deployed.length > 0) {
+    if (deployedEnvs.length > 0 || hasGlobal) {
       console.log(chalk.red('  Infrastructure (via GitHub Actions terraform destroy):'))
-      for (const env of deployed) {
+      for (const env of deployedEnvs) {
         console.log(
           `    ${chalk.red('✗')} ${env} — VPC, RDS, Lambda, Cognito, CloudFront, EventBridge`,
         )
+      }
+      if (hasGlobal) {
+        console.log(`    ${chalk.red('✗')} global — Route 53 hosted zone, ACM certificate`)
       }
       console.log()
     }
@@ -168,9 +173,9 @@ export const teardownCommand = new Command('teardown')
 
     // Trigger destroy workflows before deleting the repo — the repo must still exist
     // to run the workflow. Each env is destroyed sequentially so we can detect failures.
-    if (deployed.length > 0) {
+    if (deployedEnvs.length > 0) {
       const actionsUrl = `https://github.com/${org}/${repo}/actions`
-      for (const env of deployed) {
+      for (const env of deployedEnvs) {
         const envBranch: Record<string, string> = { dev: 'dev', staging: 'staging', prod: 'main' }
         const branch = envBranch[env] ?? 'dev'
 
@@ -210,8 +215,8 @@ export const teardownCommand = new Command('teardown')
       }
     }
 
-    // Destroy global infrastructure (Route 53 zone + ACM cert) if a domain was configured
-    if (!options.skipDestroy && domain && domain !== 'example.com') {
+    // Destroy global infrastructure (Route 53 zone + ACM cert) if deployed and domain is set
+    if (!options.skipDestroy && hasGlobal && domain && domain !== 'example.com') {
       log.info('\nDestroying global infrastructure (Route 53 + ACM)...')
       try {
         const baselineGlobal = await github.getLatestWorkflowRunId(org, repo, 'destroy-global.yml')

@@ -78,12 +78,14 @@ module "cdn" {
 module "auth" {
   source = "../../../modules/cloud/aws/auth"
 
-  project_name   = var.project_name
-  environment    = local.environment
-  domain_prefix  = "${var.project_name}-dev"
-  admin_email    = var.admin_email
-  admin_username = var.admin_username
-  tags           = local.tags
+  project_name      = var.project_name
+  environment       = local.environment
+  domain_prefix     = "${var.project_name}-dev"
+  admin_email       = var.admin_email
+  admin_username    = var.admin_username
+  mail_from_address = var.mail_from_address
+  mail_source_arn   = var.mail_source_arn
+  tags              = local.tags
 }
 
 # Fetch the Cognito JWKS at Terraform apply time (this runner has internet access).

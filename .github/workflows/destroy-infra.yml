@@ -68,6 +68,29 @@ jobs:
               done
             fi
           done
+      - name: Delete RDS proxy and instance before destroy
+        run: |
+          PREFIX="${{ vars.PROJECT_NAME }}-dev"
+          PROXY="${PREFIX}-proxy"
+          DB="${PREFIX}-postgres"
+          # Delete proxy first (removes ENI so SG can be cleaned up by terraform)
+          if aws rds describe-db-proxies --db-proxy-name "$PROXY" --query 'DBProxies[0].Status' --output text 2>/dev/null | grep -qv None; then
+            echo "Deleting RDS proxy: $PROXY"
+            aws rds delete-db-proxy --db-proxy-name "$PROXY" 2>/dev/null || true
+            for i in $(seq 1 30); do
+              STATUS=$(aws rds describe-db-proxies --db-proxy-name "$PROXY" --query 'DBProxies[0].Status' --output text 2>/dev/null || echo "deleted")
+              [ "$STATUS" = "deleted" ] || [ -z "$STATUS" ] || [ "$STATUS" = "None" ] && break
+              echo "  Proxy status: $STATUS"; sleep 20
+            done
+          fi
+          # Delete RDS instance (skip final snapshot for teardown)
+          if aws rds describe-db-instances --db-instance-identifier "$DB" --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null | grep -qv None; then
+            echo "Deleting RDS instance: $DB"
+            aws rds delete-db-instance --db-instance-identifier "$DB" \
+              --skip-final-snapshot --delete-automated-backups 2>/dev/null || true
+            echo "Waiting for RDS deletion (up to 15 min)..."
+            aws rds wait db-instance-deleted --db-instance-identifier "$DB" 2>/dev/null || true
+          fi
       - run: terraform destroy -auto-approve
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
@@ -126,6 +149,27 @@ jobs:
               done
             fi
           done
+      - name: Delete RDS proxy and instance before destroy
+        run: |
+          PREFIX="${{ vars.PROJECT_NAME }}-staging"
+          PROXY="${PREFIX}-proxy"
+          DB="${PREFIX}-postgres"
+          if aws rds describe-db-proxies --db-proxy-name "$PROXY" --query 'DBProxies[0].Status' --output text 2>/dev/null | grep -qv None; then
+            echo "Deleting RDS proxy: $PROXY"
+            aws rds delete-db-proxy --db-proxy-name "$PROXY" 2>/dev/null || true
+            for i in $(seq 1 30); do
+              STATUS=$(aws rds describe-db-proxies --db-proxy-name "$PROXY" --query 'DBProxies[0].Status' --output text 2>/dev/null || echo "deleted")
+              [ "$STATUS" = "deleted" ] || [ -z "$STATUS" ] || [ "$STATUS" = "None" ] && break
+              echo "  Proxy status: $STATUS"; sleep 20
+            done
+          fi
+          if aws rds describe-db-instances --db-instance-identifier "$DB" --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null | grep -qv None; then
+            echo "Deleting RDS instance: $DB"
+            aws rds delete-db-instance --db-instance-identifier "$DB" \
+              --skip-final-snapshot --delete-automated-backups 2>/dev/null || true
+            echo "Waiting for RDS deletion (up to 15 min)..."
+            aws rds wait db-instance-deleted --db-instance-identifier "$DB" 2>/dev/null || true
+          fi
       - run: terraform destroy -auto-approve
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
@@ -185,6 +229,27 @@ jobs:
               done
             fi
           done
+      - name: Delete RDS proxy and instance before destroy
+        run: |
+          PREFIX="${{ vars.PROJECT_NAME }}-prod"
+          PROXY="${PREFIX}-proxy"
+          DB="${PREFIX}-postgres"
+          if aws rds describe-db-proxies --db-proxy-name "$PROXY" --query 'DBProxies[0].Status' --output text 2>/dev/null | grep -qv None; then
+            echo "Deleting RDS proxy: $PROXY"
+            aws rds delete-db-proxy --db-proxy-name "$PROXY" 2>/dev/null || true
+            for i in $(seq 1 30); do
+              STATUS=$(aws rds describe-db-proxies --db-proxy-name "$PROXY" --query 'DBProxies[0].Status' --output text 2>/dev/null || echo "deleted")
+              [ "$STATUS" = "deleted" ] || [ -z "$STATUS" ] || [ "$STATUS" = "None" ] && break
+              echo "  Proxy status: $STATUS"; sleep 20
+            done
+          fi
+          if aws rds describe-db-instances --db-instance-identifier "$DB" --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null | grep -qv None; then
+            echo "Deleting RDS instance: $DB"
+            aws rds delete-db-instance --db-instance-identifier "$DB" \
+              --skip-final-snapshot --delete-automated-backups 2>/dev/null || true
+            echo "Waiting for RDS deletion (up to 15 min)..."
+            aws rds wait db-instance-deleted --db-instance-identifier "$DB" 2>/dev/null || true
+          fi
       - run: terraform destroy -auto-approve
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}

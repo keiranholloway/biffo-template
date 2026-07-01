@@ -232,6 +232,28 @@ describe('createBranch', () => {
       expect.objectContaining({ sha: 'deadbeef' }),
     )
   })
+
+  it('retries getRef when it 404s after repos.getBranch already reports the source branch ready', async () => {
+    // Reproduces a real GitHub race: repos.getBranch (Repos API) and git.getRef
+    // (Git Data API) are independently eventually-consistent — getBranch can
+    // report the branch ready before getRef can resolve the same ref.
+    const notFound = Object.assign(new Error('Not Found'), { status: 404 })
+    octokitMock.repos.getBranch
+      .mockRejectedValueOnce(notFound) // dev doesn't exist
+      .mockResolvedValueOnce({ data: {} }) // waitForBranch: main already ready
+    octokitMock.git.getRef
+      .mockRejectedValueOnce(notFound) // getRef attempt 1: not consistent yet
+      .mockRejectedValueOnce(notFound) // getRef attempt 2: still not consistent
+      .mockResolvedValueOnce({ data: { object: { sha: 'cafef00d' } } })
+    octokitMock.git.createRef.mockResolvedValueOnce({})
+
+    await adapter().createBranch('acme', 'my-app', 'dev', 'main', 10_000, 10)
+
+    expect(octokitMock.git.getRef).toHaveBeenCalledTimes(3)
+    expect(octokitMock.git.createRef).toHaveBeenCalledWith(
+      expect.objectContaining({ sha: 'cafef00d' }),
+    )
+  })
 })
 
 // ─── configureBranchProtection ────────────────────────────────────────────────

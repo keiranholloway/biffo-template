@@ -40,6 +40,13 @@ async def get_current_user(
             last_login_at=datetime.now(tz=timezone.utc),
         )
         db.add(user)
+        # id/is_active are populated by ORM-level defaults and created_at/updated_at
+        # by server_default — none of them exist on the Python object until the
+        # insert is actually flushed. Without this, response_model=UserResponse
+        # fails validation on first login (id=None, created_at=None, ...) because
+        # get_db only commits after the response has already been serialized.
+        await db.flush()
+        await db.refresh(user)
     else:
         user.last_login_at = datetime.now(tz=timezone.utc)
 

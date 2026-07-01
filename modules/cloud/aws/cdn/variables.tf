@@ -45,9 +45,8 @@ variable "tags" {
 }
 
 variable "access_logging_bucket" {
-  description = "S3 bucket for CloudFront access logs. If empty, logging is disabled."
+  description = "S3 bucket for CloudFront access logs. Required to satisfy CKV_AWS_86."
   type        = string
-  default     = ""
 }
 
 variable "access_logging_prefix" {

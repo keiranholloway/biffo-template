@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-import ast
 import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from api.models.plugin_table import ColumnDefinition, PluginTableDefinition
+from api.models.plugin_table import (
+    ColumnDefinition,
+    PluginTableDefinition,
+    resolve_type_call,
+)
 
 
 def generate_migration_name(table_name: str) -> str:
@@ -51,52 +54,20 @@ def _column_to_alembic_def(col: "ColumnDefinition") -> str:
     """Convert a ColumnDefinition to an Alembic sa.Column() string.
 
     Handles parameterized types like String(36) correctly by producing
-    sa.String('36') rather than the broken sa.String(36)().
+    sa.String('36') rather than the broken sa.String(36)(), and renders
+    every value via repr() so names/params containing quotes can't break
+    out of the generated string (see resolve_type_call for the safe parse).
     """
-    parts = [f"'{col.name}'"]
+    parts = [repr(col.name)]
 
-    # Convert type string to proper Alembic expression
-    # "String(36)" -> sa.String('36')
-    # "DateTime(timezone=True)" -> sa.DateTime(timezone=True)
-    # "Integer" -> sa.Integer()
-    if "(" in col.type:
-        base_type, params = col.type.split("(", 1)
-        params = params.rstrip(")")
-        # Quote bare values like "36" so they become valid Python strings
-        # "36" -> '36', "timezone=True" stays as-is
-        try:
-            ast.literal_eval(f"({params})")
-            # Looks like a literal - wrap bare values in quotes
-            formatted_params = _format_alembic_params(params)
-            parts.append(f"sa.{base_type}({formatted_params})")
-        except (ValueError, SyntaxError):
-            # Already valid Python expression
-            parts.append(f"sa.{base_type}({params})")
-    else:
-        parts.append(f"sa.{col.type}()")
+    base_type, args, kwargs = resolve_type_call(col.type)
+    arg_parts = [repr(a) for a in args] + [f"{k}={v!r}" for k, v in kwargs.items()]
+    parts.append(f"sa.{base_type}({', '.join(arg_parts)})")
 
     if col.primary_key:
         parts.append("primary_key=True")
     if not col.nullable:
         parts.append("nullable=False")
-    return ", ".join(parts)
-
-
-def _format_alembic_params(params: str) -> str:
-    """Format parameters for Alembic SQL expressions.
-
-    Converts bare values like '36' to quoted strings '36',
-    while leaving keyword args like 'timezone=True' intact.
-    """
-    parts = []
-    for part in params.split(","):
-        part = part.strip()
-        if "=" in part:
-            # Keyword argument - leave as-is
-            parts.append(part)
-        else:
-            # Positional argument - quote it
-            parts.append(f"'{part}'")
     return ", ".join(parts)
 
 
@@ -118,46 +89,46 @@ def _build_create_table_statement(table: PluginTableDefinition) -> str:
         )
 
     stmt = f"""op.create_table(
-        '{table.name}',
+        {table.name!r},
         {cols_str}{pk_constraint},
     )"""
     return stmt
 
 
-def _build_index_statements(table: PluginTableDefinition) -> list[str]:
-    """Build Alembic create_index statements for indexed columns and IndexDefinitions."""
-    statements = []
+def _build_index_statements(table: PluginTableDefinition) -> list[tuple[str, str]]:
+    """Build (create, drop) Alembic index statement pairs for indexed columns
+    and IndexDefinitions.
+
+    Returning both statements together (built from the same structured
+    idx_name/table_name values) avoids re-parsing generated source text to
+    recover the drop statement, which is fragile to any change in the
+    create-statement's format or an index/table name containing a quote.
+    """
+    statements: list[tuple[str, str]] = []
 
     # Auto-index columns marked with index=True
     for col in table.columns:
         if col.index:
             idx_name = f"ix_{table.name}_{col.name}"
-            statements.append(
-                f"op.create_index('{idx_name}', '{table.name}', ['{col.name}'], unique=False)"
+            create = (
+                f"op.create_index({idx_name!r}, {table.name!r}, "
+                f"[{col.name!r}], unique=False)"
             )
+            drop = f"op.drop_index({idx_name!r}, {table.name!r})"
+            statements.append((create, drop))
 
     # Explicit IndexDefinitions
     for idx in table.indexes:
         unique_flag = "True" if idx.unique else "False"
         col_list = ", ".join(repr(c) for c in idx.columns)
-        statements.append(
-            f"op.create_index('{idx.name}', '{table.name}', [{col_list}], unique={unique_flag})"
+        create = (
+            f"op.create_index({idx.name!r}, {table.name!r}, "
+            f"[{col_list}], unique={unique_flag})"
         )
+        drop = f"op.drop_index({idx.name!r}, {table.name!r})"
+        statements.append((create, drop))
 
     return statements
-
-
-def _build_drop_index_statements(index_statements: list[str]) -> list[str]:
-    """Build Alembic drop_index statements from create_index statements."""
-    drops = []
-    for stmt in index_statements:
-        # Parse: op.create_index('name', 'table', [...], unique=...)
-        parts = stmt.split("'")
-        if len(parts) >= 4:
-            idx_name = parts[1]
-            tbl_name = parts[3]
-            drops.append(f"op.drop_index('{idx_name}', '{tbl_name}')")
-    return drops
 
 
 def generate_migration_for_plugin(
@@ -194,23 +165,21 @@ def generate_migration_for_plugin(
     # Build CREATE TABLE statements for upgrade
     create_statements = []
     drop_statements = []
-    index_statements = []
+    index_statements: list[tuple[str, str]] = []
     for table in tables:
         create_stmt = _build_create_table_statement(table)
-        drop_stmt = f"op.drop_table('{table.name}')"
+        drop_stmt = f"op.drop_table({table.name!r})"
         create_statements.append(create_stmt)
         drop_statements.append(drop_stmt)
-        # Collect index creation statements
+        # Collect (create, drop) index statement pairs
         index_statements.extend(_build_index_statements(table))
 
     create_block = "\n    ".join(create_statements)
     drop_block = "\n    ".join(drop_statements)
 
     # Index DDL goes after CREATE TABLE in upgrade, before DROP TABLE in downgrade
-    index_up_lines = [f"    {stmt}" for stmt in index_statements]
-    index_down_lines = [
-        f"    {stmt}" for stmt in _build_drop_index_statements(index_statements)
-    ]
+    index_up_lines = [f"    {create}" for create, _ in index_statements]
+    index_down_lines = [f"    {drop}" for _, drop in index_statements]
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 

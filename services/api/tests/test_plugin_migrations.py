@@ -6,10 +6,38 @@ from pathlib import Path
 
 
 from api.migrations.plugin_migrations import (
+    _column_to_alembic_def,
     generate_migration_for_plugin,
     generate_migration_name,
     parse_plugin_tables_from_manifest,
 )
+from api.models.plugin_table import ColumnDefinition
+
+
+class TestColumnToAlembicDef:
+    """Test Alembic sa.Column() string generation (issue #28 regressions)."""
+
+    def test_multi_arg_numeric_stays_typed(self):
+        # Regression: Numeric(10, 2) used to render as sa.Numeric('10', '2'),
+        # which SQLAlchemy rejects (precision/scale must be int, not str).
+        col = ColumnDefinition(name="price", type="Numeric(10, 2)")
+        result = _column_to_alembic_def(col)
+        assert result == "'price', sa.Numeric(10, 2), nullable=False"
+
+    def test_keyword_arg_type_renders_correctly(self):
+        col = ColumnDefinition(name="seen_at", type="DateTime(timezone=True)")
+        result = _column_to_alembic_def(col)
+        assert result == "'seen_at', sa.DateTime(timezone=True), nullable=False"
+
+    def test_quote_in_column_name_produces_valid_python(self):
+        # Regression: names were interpolated via raw f"'{name}'" instead of
+        # repr(), so a quote in a manifest-supplied name broke out of the
+        # generated string literal (a code-injection path).
+        col = ColumnDefinition(name="o'brien", type="String(10)")
+        result = _column_to_alembic_def(col)
+        assert result == '"o\'brien", sa.String(10), nullable=False'
+        # Rendered exactly as it's embedded in real output: sa.Column(<result>)
+        compile(f"sa.Column({result})", "<test>", "eval")  # must not raise SyntaxError
 
 
 class TestGenerateMigrationName:
@@ -140,6 +168,41 @@ class TestGenerateMigrationForPlugin:
         manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
         migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
         # Should compile without syntax errors
+        content = migration_file.read_text()
+        compile(content, str(migration_file), "exec")
+
+    def test_column_with_index_produces_valid_python(self):
+        manifest = {
+            "name": "rbac",
+            "version": "1.0.0",
+            "tables": [
+                {
+                    "name": "roles",
+                    "columns": [{"name": "slug", "type": "String(100)", "index": True}],
+                }
+            ],
+        }
+        migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
+        content = migration_file.read_text()
+        assert "create_index" in content
+        assert "drop_index" in content
+        compile(content, str(migration_file), "exec")
+
+    def test_quote_in_table_name_produces_valid_python(self):
+        # Regression: table/index names were interpolated via raw f"'{name}'"
+        # instead of repr(), so a quote in a manifest-supplied name could
+        # break out of the generated string literal (a code-injection path).
+        manifest = {
+            "name": "rbac",
+            "version": "1.0.0",
+            "tables": [
+                {
+                    "name": "o'brien_roles",
+                    "columns": [{"name": "slug", "type": "String(100)", "index": True}],
+                }
+            ],
+        }
+        migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
         content = migration_file.read_text()
         compile(content, str(migration_file), "exec")
 

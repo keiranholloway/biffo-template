@@ -7,7 +7,43 @@ from api.models.plugin_table import (
     ColumnDefinition,
     IndexDefinition,
     PluginTableDefinition,
+    resolve_type_call,
 )
+
+
+class TestResolveTypeCall:
+    """Test the shared, safe type-string parser (issue #28)."""
+
+    def test_bare_type_has_no_args(self):
+        assert resolve_type_call("Integer") == ("Integer", [], {})
+
+    def test_single_positional_arg(self):
+        assert resolve_type_call("String(36)") == ("String", [36], {})
+
+    def test_multiple_positional_args_stay_typed(self):
+        # Regression: precision/scale must stay ints, not become '10'/'2'.
+        assert resolve_type_call("Numeric(10, 2)") == ("Numeric", [10, 2], {})
+
+    def test_keyword_arg(self):
+        # Regression: timezone=True was previously dropped silently.
+        assert resolve_type_call("DateTime(timezone=True)") == (
+            "DateTime",
+            [],
+            {"timezone": True},
+        )
+
+    def test_mixed_positional_and_keyword_args(self):
+        assert resolve_type_call("Numeric(10, 2, asdecimal=False)") == (
+            "Numeric",
+            [10, 2],
+            {"asdecimal": False},
+        )
+
+    def test_non_literal_expression_is_rejected(self):
+        # Regression: this used to be spliced verbatim into generated
+        # migration source and executed by Alembic.
+        with pytest.raises(ValueError):
+            resolve_type_call("String(__import__('os').system('id'))")
 
 
 class TestColumnDefinition:
@@ -81,26 +117,37 @@ class TestPluginTableDefinition:
 
     def test_table_with_columns(self):
         cols = [
-            ColumnDefinition(name="id", type="String(36)", primary_key=True),
             ColumnDefinition(name="name", type="String(100)"),
         ]
         table = PluginTableDefinition(name="roles", columns=cols)
-        # User provides 'id', so auto 'id' is deduplicated: 2 user + 3 auto = 5
+        # 1 user column + 4 auto columns (id, tenant_id, created_at, updated_at)
         assert len(table.columns) == 5
-        assert table.columns[0].name == "id"
-        assert table.columns[1].name == "name"
+        assert table.columns[0].name == "name"
+        assert any(c.name == "id" for c in table.columns)
 
     def test_table_with_indexes(self):
         cols = [
-            ColumnDefinition(name="id", type="String(36)", primary_key=True),
             ColumnDefinition(name="slug", type="String(100)"),
         ]
         idxs = [IndexDefinition(name="idx_roles_slug", columns=["slug"])]
         table = PluginTableDefinition(name="roles", columns=cols, indexes=idxs)
-        # User provides 'id', so auto 'id' is deduplicated: 2 user + 3 auto = 5
+        # 1 user column + 4 auto columns
         assert len(table.columns) == 5
         assert len(table.indexes) == 1
         assert table.indexes[0].name == "idx_roles_slug"
+
+    def test_manifest_cannot_redeclare_reserved_auto_column(self):
+        """A manifest declaring its own tenant_id must be rejected outright —
+        silently accepting it (e.g. as nullable/unindexed) would let a plugin
+        weaken the tenant-isolation guarantee ADR-0001 requires (issue #28)."""
+        cols = [ColumnDefinition(name="tenant_id", type="String(64)", nullable=True)]
+        with pytest.raises(ValidationError):
+            PluginTableDefinition(name="bad_table", columns=cols)
+
+    def test_manifest_cannot_redeclare_id_column(self):
+        cols = [ColumnDefinition(name="id", type="String(36)", primary_key=True)]
+        with pytest.raises(ValidationError):
+            PluginTableDefinition(name="bad_table", columns=cols)
 
     def test_auto_generates_primary_key(self):
         table = PluginTableDefinition(name="permissions")
@@ -141,7 +188,6 @@ class TestPluginTableDefinition:
 
     def test_index_references_valid_columns(self):
         cols = [
-            ColumnDefinition(name="id", type="String(36)", primary_key=True),
             ColumnDefinition(name="email", type="String(255)"),
         ]
         idxs = [IndexDefinition(name="idx_bad", columns=["nonexistent"])]
@@ -150,7 +196,6 @@ class TestPluginTableDefinition:
 
     def test_to_sqlalchemy_model(self):
         cols = [
-            ColumnDefinition(name="id", type="String(36)", primary_key=True),
             ColumnDefinition(name="name", type="String(100)"),
         ]
         table = PluginTableDefinition(name="my_table", columns=cols)
@@ -162,6 +207,37 @@ class TestPluginTableDefinition:
         assert hasattr(model_class, "created_at")
         assert hasattr(model_class, "updated_at")
         assert hasattr(model_class, "name")
+
+    def test_to_sqlalchemy_model_preserves_tenant_scoped_defaults(self):
+        """Regression test for issue #28: auto columns must be inherited from
+        TenantScopedModel as-is, not rebuilt as plain Column(...), or their
+        Python-side defaults (uuid4 id, "default" tenant_id) are lost and
+        inserting a row without explicitly setting them raises IntegrityError.
+        """
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import Session
+        from api.models.base import Base
+
+        cols = [ColumnDefinition(name="label", type="String(100)")]
+        table = PluginTableDefinition(name="widgets", columns=cols)
+        model_class = table.to_sqlalchemy_model()
+
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine, tables=[model_class.__table__])
+        with Session(engine) as session:
+            row = model_class(label="a widget")
+            session.add(row)
+            session.commit()
+            assert row.id is not None
+            assert row.tenant_id == "default"
+
+    def test_to_sqlalchemy_model_resolves_timezone_aware_datetime(self):
+        """Regression test for issue #28: DateTime(timezone=True) params were
+        silently dropped, producing naive datetimes despite the DB column
+        being TIMESTAMP WITH TIME ZONE."""
+        table = PluginTableDefinition(name="gizmos")
+        model_class = table.to_sqlalchemy_model()
+        assert model_class.__table__.columns["created_at"].type.timezone is True
 
     def test_to_sqlalchemy_model_inherits_base(self):
         from api.models.base import Base

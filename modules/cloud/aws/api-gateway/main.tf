@@ -13,6 +13,17 @@ resource "aws_apigatewayv2_api" "main" {
   protocol_type = "HTTP"
   description   = "Biffo Core API - ${local.name_prefix}"
   tags          = var.tags
+
+  # Applied by API Gateway itself, independent of the Lambda integration — this is
+  # what puts CORS headers on responses the JWT authorizer rejects before invoking
+  # Lambda (see the $default route below). FastAPI's CORSMiddleware only covers
+  # requests that actually reach the Lambda.
+  cors_configuration {
+    allow_origins     = var.cors_origins
+    allow_methods     = ["*"]
+    allow_headers     = ["*"]
+    allow_credentials = true
+  }
 }
 
 # JWT authorizer backed by Cognito — validates Bearer tokens on all protected routes
@@ -45,8 +56,10 @@ resource "aws_apigatewayv2_route" "health" {
 }
 
 # OPTIONS preflight — no auth so CORS preflight is never blocked by the JWT authorizer.
-# FastAPI CORSMiddleware handles the response headers; API Gateway v2 does not intercept
-# OPTIONS before auth when a $default JWT route is present.
+# An explicit route takes precedence over the API's native cors_configuration for
+# the same path, so this keeps forwarding preflight to Lambda/FastAPI's
+# CORSMiddleware as before; cors_configuration on the API additionally covers
+# non-OPTIONS requests the JWT authorizer rejects before they reach Lambda.
 resource "aws_apigatewayv2_route" "options" {
   api_id    = aws_apigatewayv2_api.main.id
   route_key = "OPTIONS /{proxy+}"

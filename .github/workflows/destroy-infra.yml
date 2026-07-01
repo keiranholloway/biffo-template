@@ -47,6 +47,8 @@ jobs:
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
       - run: terraform init -backend-config=backend.hcl
+      - name: Lock Terraform providers
+        run: terraform providers lock -platform=linux_amd64 -platform=darwin_amd64
       - name: Delete RDS proxy and instance before destroy
         run: |
           PREFIX="${{ vars.PROJECT_NAME }}-dev"
@@ -134,6 +136,8 @@ jobs:
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
       - run: terraform init -backend-config=backend.hcl
+      - name: Lock Terraform providers
+        run: terraform providers lock -platform=linux_amd64 -platform=darwin_amd64
       - name: Delete RDS proxy and instance before destroy
         run: |
           PREFIX="${{ vars.PROJECT_NAME }}-staging"

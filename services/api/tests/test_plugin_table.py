@@ -165,6 +165,7 @@ class TestPluginTableDefinition:
 
     def test_to_sqlalchemy_model_inherits_base(self):
         from api.models.base import Base
+
         table = PluginTableDefinition(name="test_tbl")
         model_class = table.to_sqlalchemy_model()
         assert issubclass(model_class, Base)

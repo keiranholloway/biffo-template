@@ -113,7 +113,9 @@ def _build_create_table_statement(table: PluginTableDefinition) -> str:
     pk_cols = [c.name for c in table.columns if c.primary_key]
     pk_constraint = ""
     if pk_cols:
-        pk_constraint = f",\n        sa.PrimaryKeyConstraint({', '.join(repr(c) for c in pk_cols)})"
+        pk_constraint = (
+            f",\n        sa.PrimaryKeyConstraint({', '.join(repr(c) for c in pk_cols)})"
+        )
 
     stmt = f"""op.create_table(
         '{table.name}',
@@ -130,13 +132,17 @@ def _build_index_statements(table: PluginTableDefinition) -> list[str]:
     for col in table.columns:
         if col.index:
             idx_name = f"ix_{table.name}_{col.name}"
-            statements.append(f"op.create_index('{idx_name}', '{table.name}', ['{col.name}'], unique=False)")
+            statements.append(
+                f"op.create_index('{idx_name}', '{table.name}', ['{col.name}'], unique=False)"
+            )
 
     # Explicit IndexDefinitions
     for idx in table.indexes:
         unique_flag = "True" if idx.unique else "False"
         col_list = ", ".join(repr(c) for c in idx.columns)
-        statements.append(f"op.create_index('{idx.name}', '{table.name}', [{col_list}], unique={unique_flag})")
+        statements.append(
+            f"op.create_index('{idx.name}', '{table.name}', [{col_list}], unique={unique_flag})"
+        )
 
     return statements
 
@@ -202,7 +208,9 @@ def generate_migration_for_plugin(
 
     # Index DDL goes after CREATE TABLE in upgrade, before DROP TABLE in downgrade
     index_up_lines = [f"    {stmt}" for stmt in index_statements]
-    index_down_lines = [f"    {stmt}" for stmt in _build_drop_index_statements(index_statements)]
+    index_down_lines = [
+        f"    {stmt}" for stmt in _build_drop_index_statements(index_statements)
+    ]
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
@@ -225,7 +233,7 @@ def generate_migration_for_plugin(
     upgrade_body = "\n".join(upgrade_body_lines)
     downgrade_body = "\n".join(downgrade_body_lines)
 
-    migration_content = f'''\"\"\"{migration_name}
+    migration_content = f"""\"\"\"{migration_name}
 
 Revision ID: {revision}
 Revises:
@@ -251,7 +259,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
 {downgrade_body}
-'''
+"""
 
     # Write migration file
     filename = f"{revision}_{migration_name}.py"

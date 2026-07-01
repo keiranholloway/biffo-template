@@ -17,20 +17,36 @@ class ColumnDefinition(BaseModel):
     """
 
     name: str = Field(description="Column name.")
-    type: str = Field(description="SQLAlchemy column type string, e.g. 'String(255)' or 'Integer'.")
-    primary_key: bool = Field(default=False, description="Whether this is the primary key.")
-    nullable: bool = Field(default=False, description="Whether NULL values are allowed.")
-    index: bool = Field(default=False, description="Create a database index on this column.")
-    default: str | None = Field(default=None, description="SQL default value expression.")
-    description: str = Field(default="", description="Human-readable column description.")
+    type: str = Field(
+        description="SQLAlchemy column type string, e.g. 'String(255)' or 'Integer'."
+    )
+    primary_key: bool = Field(
+        default=False, description="Whether this is the primary key."
+    )
+    nullable: bool = Field(
+        default=False, description="Whether NULL values are allowed."
+    )
+    index: bool = Field(
+        default=False, description="Create a database index on this column."
+    )
+    default: str | None = Field(
+        default=None, description="SQL default value expression."
+    )
+    description: str = Field(
+        default="", description="Human-readable column description."
+    )
 
 
 class IndexDefinition(BaseModel):
     """Defines a database index on a plugin-created table."""
 
     name: str = Field(description="Index name in the database.")
-    columns: list[str] = Field(min_length=1, description="Column names included in the index.")
-    unique: bool = Field(default=False, description="Whether the index enforces uniqueness.")
+    columns: list[str] = Field(
+        min_length=1, description="Column names included in the index."
+    )
+    unique: bool = Field(
+        default=False, description="Whether the index enforces uniqueness."
+    )
 
 
 # Shared auto-column definitions — kept in sync with TenantScopedModel in base.py.
@@ -68,7 +84,9 @@ class PluginTableDefinition(BaseModel):
         """Ensure auto-columns are always present without mutating caller input."""
         if isinstance(data, dict):
             existing_cols = list(data.get("columns", []))
-            existing_names = {c["name"] if isinstance(c, dict) else c.name for c in existing_cols}
+            existing_names = {
+                c["name"] if isinstance(c, dict) else c.name for c in existing_cols
+            }
             for auto_col in _AUTO_COLUMNS:
                 if auto_col.name not in existing_names:
                     existing_cols.append(auto_col)

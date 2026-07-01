@@ -35,13 +35,7 @@ class TestParsePluginTablesFromManifest:
     """Test parsing table definitions from a plugin manifest."""
 
     def test_parse_minimal_manifest(self):
-        manifest = {
-            "name": "rbac",
-            "version": "1.0.0",
-            "tables": [
-                {"name": "roles"}
-            ]
-        }
+        manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
         tables = parse_plugin_tables_from_manifest(manifest)
         assert len(tables) == 1
         assert tables[0].name == "roles"
@@ -57,7 +51,7 @@ class TestParsePluginTablesFromManifest:
                         {"name": "slug", "type": "String(100)"},
                     ],
                 }
-            ]
+            ],
         }
         tables = parse_plugin_tables_from_manifest(manifest)
         assert len(tables) == 1
@@ -78,7 +72,7 @@ class TestParsePluginTablesFromManifest:
                         {"name": "idx_roles_slug", "columns": ["slug"]},
                     ],
                 }
-            ]
+            ],
         }
         tables = parse_plugin_tables_from_manifest(manifest)
         assert len(tables) == 1
@@ -97,7 +91,7 @@ class TestParsePluginTablesFromManifest:
             "tables": [
                 {"name": "roles"},
                 {"name": "permissions"},
-            ]
+            ],
         }
         tables = parse_plugin_tables_from_manifest(manifest)
         assert len(tables) == 2
@@ -117,64 +111,34 @@ class TestGenerateMigrationForPlugin:
         shutil.rmtree(self.tmpdir)
 
     def test_generates_up_and_down_functions(self):
-        manifest = {
-            "name": "rbac",
-            "version": "1.0.0",
-            "tables": [{"name": "roles"}]
-        }
-        migration_file = generate_migration_for_plugin(
-            manifest, self.versions_dir
-        )
+        manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
+        migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
         content = migration_file.read_text()
         assert "def upgrade()" in content
         assert "def downgrade()" in content
 
     def test_up_creates_tables(self):
-        manifest = {
-            "name": "rbac",
-            "version": "1.0.0",
-            "tables": [{"name": "roles"}]
-        }
-        migration_file = generate_migration_for_plugin(
-            manifest, self.versions_dir
-        )
+        manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
+        migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
         content = migration_file.read_text()
         assert "create_table" in content.lower() or "create_table" in content
 
     def test_down_drops_tables(self):
-        manifest = {
-            "name": "rbac",
-            "version": "1.0.0",
-            "tables": [{"name": "roles"}]
-        }
-        migration_file = generate_migration_for_plugin(
-            manifest, self.versions_dir
-        )
+        manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
+        migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
         content = migration_file.read_text()
         assert "drop_table" in content.lower() or "drop_table" in content
 
     def test_file_has_revision_id(self):
-        manifest = {
-            "name": "rbac",
-            "version": "1.0.0",
-            "tables": [{"name": "roles"}]
-        }
-        migration_file = generate_migration_for_plugin(
-            manifest, self.versions_dir
-        )
+        manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
+        migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
         content = migration_file.read_text()
         assert "revision =" in content
         assert "down_revision =" in content
 
     def test_file_is_valid_python(self):
-        manifest = {
-            "name": "rbac",
-            "version": "1.0.0",
-            "tables": [{"name": "roles"}]
-        }
-        migration_file = generate_migration_for_plugin(
-            manifest, self.versions_dir
-        )
+        manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
+        migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
         # Should compile without syntax errors
         content = migration_file.read_text()
         compile(content, str(migration_file), "exec")
@@ -186,23 +150,15 @@ class TestGenerateMigrationForPlugin:
             "tables": [
                 {"name": "roles"},
                 {"name": "permissions"},
-            ]
+            ],
         }
-        migration_file = generate_migration_for_plugin(
-            manifest, self.versions_dir
-        )
+        migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
         content = migration_file.read_text()
         assert "roles" in content
         assert "permissions" in content
 
     def test_migration_name_in_filename(self):
-        manifest = {
-            "name": "rbac",
-            "version": "1.0.0",
-            "tables": [{"name": "roles"}]
-        }
-        migration_file = generate_migration_for_plugin(
-            manifest, self.versions_dir
-        )
+        manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
+        migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
         assert "roles" in migration_file.name
         assert migration_file.suffix == ".py"

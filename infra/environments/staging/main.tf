@@ -21,7 +21,7 @@ provider "aws" {
 locals {
   environment = "staging"
   tags        = { Project = var.project_name, Environment = local.environment }
-  portal_url = var.custom_domain != "" ? "https://${var.custom_domain}" : "https://${module.cdn.distribution_domain}"
+  portal_url  = var.custom_domain != "" ? "https://${var.custom_domain}" : "https://${module.cdn.distribution_domain}"
   cors_origins = jsonencode(concat(
     var.custom_domain != "" ? ["https://${var.custom_domain}"] : [],
     ["https://${module.cdn.distribution_domain}", "http://localhost:3000"],
@@ -99,7 +99,7 @@ module "core_api" {
     BIFFO_COGNITO_USER_POOL_ID = module.auth.user_pool_id
     BIFFO_COGNITO_CLIENT_ID    = module.auth.client_id
     BIFFO_COGNITO_REGION       = var.aws_region
-    BIFFO_CORS_ORIGINS = local.cors_origins
+    BIFFO_CORS_ORIGINS         = local.cors_origins
   }
   tags = local.tags
 }
@@ -127,7 +127,7 @@ module "api_gateway" {
   cognito_user_pool_id = module.auth.user_pool_id
   cognito_client_id    = module.auth.client_id
   aws_region           = var.aws_region
-  tags = local.tags
+  tags                 = local.tags
 }
 
 output "api_gateway_url" { value = module.api_gateway.api_endpoint }

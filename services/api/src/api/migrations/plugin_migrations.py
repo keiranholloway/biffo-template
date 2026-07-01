@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,17 +56,17 @@ def _column_to_alembic_def(col: "ColumnDefinition") -> str:
     parts = [f"'{col.name}'"]
 
     # Convert type string to proper Alembic expression
-    # "String(36)" → sa.String('36')
-    # "DateTime(timezone=True)" → sa.DateTime(timezone=True)
-    # "Integer" → sa.Integer()
+    # "String(36)" -> sa.String('36')
+    # "DateTime(timezone=True)" -> sa.DateTime(timezone=True)
+    # "Integer" -> sa.Integer()
     if "(" in col.type:
         base_type, params = col.type.split("(", 1)
         params = params.rstrip(")")
         # Quote bare values like "36" so they become valid Python strings
-        # "36" → '36', "timezone=True" stays as-is
+        # "36" -> '36', "timezone=True" stays as-is
         try:
             ast.literal_eval(f"({params})")
-            # Looks like a literal — wrap bare values in quotes
+            # Looks like a literal - wrap bare values in quotes
             formatted_params = _format_alembic_params(params)
             parts.append(f"sa.{base_type}({formatted_params})")
         except (ValueError, SyntaxError):
@@ -91,10 +92,10 @@ def _format_alembic_params(params: str) -> str:
     for part in params.split(","):
         part = part.strip()
         if "=" in part:
-            # Keyword argument — leave as-is
+            # Keyword argument - leave as-is
             parts.append(part)
         else:
-            # Positional argument — quote it
+            # Positional argument - quote it
             parts.append(f"'{part}'")
     return ", ".join(parts)
 
@@ -140,7 +141,7 @@ def _build_index_statements(table: PluginTableDefinition) -> list[str]:
     return statements
 
 
-def _build_drop_index_statements(index_statements: list[str]) -> str:
+def _build_drop_index_statements(index_statements: list[str]) -> list[str]:
     """Build Alembic drop_index statements from create_index statements."""
     drops = []
     for stmt in index_statements:
@@ -150,7 +151,7 @@ def _build_drop_index_statements(index_statements: list[str]) -> str:
             idx_name = parts[1]
             tbl_name = parts[3]
             drops.append(f"op.drop_index('{idx_name}', '{tbl_name}')")
-    return "\n    ".join(drops)
+    return drops
 
 
 def generate_migration_for_plugin(
@@ -200,10 +201,29 @@ def generate_migration_for_plugin(
     drop_block = "\n    ".join(drop_statements)
 
     # Index DDL goes after CREATE TABLE in upgrade, before DROP TABLE in downgrade
-    index_up_block = "\n    ".join(index_statements) if index_statements else ""
-    index_down_block = _build_drop_index_statements(index_statements)
+    index_up_lines = [f"    {stmt}" for stmt in index_statements]
+    index_down_lines = [f"    {stmt}" for stmt in _build_drop_index_statements(index_statements)]
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+    # Build upgrade body
+    upgrade_body_lines = [
+        '    """Upgrade: create plugin tables."""',
+    ]
+    for line in create_block.split("\n"):
+        upgrade_body_lines.append(f"    {line}")
+    upgrade_body_lines.extend(index_up_lines)
+
+    # Build downgrade body
+    downgrade_body_lines = [
+        '    """Downgrade: drop plugin tables."""',
+    ]
+    downgrade_body_lines.extend(index_down_lines)
+    for line in drop_block.split("\n"):
+        downgrade_body_lines.append(f"    {line}")
+
+    upgrade_body = "\n".join(upgrade_body_lines)
+    downgrade_body = "\n".join(downgrade_body_lines)
 
     migration_content = f'''\"\"\"{migration_name}
 
@@ -219,22 +239,18 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '{revision}'
-down_revision: Union[str, None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision = '{revision}'
+down_revision = None
+branch_labels = None
+depends_on = None
 
 
 def upgrade() -> None:
-    """Upgrade: create plugin tables."""
-{create_block}
-{f"    {index_up_block}" if index_up_block else ""}
+{upgrade_body}
 
 
 def downgrade() -> None:
-    """Downgrade: drop plugin tables."""
-{index_down_block}
-{drop_block}
+{downgrade_body}
 '''
 
     # Write migration file

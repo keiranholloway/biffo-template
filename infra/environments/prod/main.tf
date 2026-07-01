@@ -21,10 +21,11 @@ locals {
   environment = "prod"
   tags        = { Project = var.project_name, Environment = local.environment }
   portal_url  = var.custom_domain != "" ? "https://${var.custom_domain}" : "https://${module.cdn.distribution_domain}"
-  cors_origins = jsonencode(concat(
+  cors_origins_list = concat(
     var.custom_domain != "" ? ["https://${var.custom_domain}"] : [],
     ["https://${module.cdn.distribution_domain}"],
-  ))
+  )
+  cors_origins = jsonencode(local.cors_origins_list)
 }
 
 module "networking" {
@@ -130,6 +131,7 @@ module "api_gateway" {
   cognito_user_pool_id = module.auth.user_pool_id
   cognito_client_id    = module.auth.client_id
   aws_region           = var.aws_region
+  cors_origins         = local.cors_origins_list
   tags                 = local.tags
 }
 

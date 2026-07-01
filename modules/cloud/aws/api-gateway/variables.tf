@@ -28,6 +28,11 @@ variable "aws_region" {
   type = string
 }
 
+variable "cors_origins" {
+  description = "Origins allowed to call this API. Must be applied at the API Gateway level (not just FastAPI's CORSMiddleware) because the JWT authorizer rejects unauthenticated requests before they ever reach the Lambda, so no CORS headers would otherwise be present on 401s."
+  type        = list(string)
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

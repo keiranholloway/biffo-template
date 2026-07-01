@@ -140,6 +140,29 @@ export class GitHubAdapter {
     )
   }
 
+  private async waitForRef(
+    org: string,
+    repo: string,
+    ref: string,
+    timeoutMs: number,
+    intervalMs: number,
+  ): Promise<{ object: { sha: string } }> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      try {
+        const { data } = await this.octokit.git.getRef({ owner: org, repo, ref })
+        return data
+      } catch (err: unknown) {
+        if ((err as { status?: number }).status !== 404) throw err
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs))
+    }
+    throw new Error(
+      `Ref "${ref}" not found in ${org}/${repo} after ${timeoutMs / 1000}s — ` +
+        `GitHub template generation may have stalled. Check the repository and re-run biffo init.`,
+    )
+  }
+
   async createBranch(
     org: string,
     repo: string,
@@ -158,7 +181,12 @@ export class GitHubAdapter {
     // Template generation is async — GitHub returns 409 "Git Repository is empty"
     // on getRef until the template files have been committed to main.
     await this.waitForBranch(org, repo, from, waitTimeoutMs, waitIntervalMs)
-    const { data: ref } = await this.octokit.git.getRef({ owner: org, repo, ref: `heads/${from}` })
+    // repos.getBranch (Repos API, above) and git.getRef (Git Data API, below) are
+    // different GitHub backends with independent eventual consistency — the source
+    // branch being visible via one does not guarantee the ref is visible via the
+    // other yet, so retry the ref lookup on its own 404s too instead of assuming
+    // it's immediately available.
+    const ref = await this.waitForRef(org, repo, `heads/${from}`, waitTimeoutMs, waitIntervalMs)
     await this.octokit.git.createRef({
       owner: org,
       repo,

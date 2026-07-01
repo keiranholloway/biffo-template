@@ -106,8 +106,11 @@ resource "aws_cloudfront_distribution" "portal" {
 
   restrictions {
     geo_restriction {
-      restriction_type = "blacklist"
-      locations        = [] # No countries blacklisted — configure as needed
+      # CloudFront rejects restriction_type "blacklist"/"whitelist" with an empty
+      # locations list ("InvalidGeoRestrictionParameter") — "none" is the only
+      # valid type when there are no countries to restrict.
+      restriction_type = "none"
+      locations        = []
     }
   }
 

@@ -21,10 +21,11 @@ resource "aws_cloudwatch_event_archive" "main" {
   retention_days   = var.environment == "prod" ? 90 : 14
 }
 
-# Dead letter queue for events that fail all delivery attempts
+# Dead letter queue for events that fail all delivery attempts — encrypted at rest with KMS
 resource "aws_sqs_queue" "dlq" {
   name                      = "${local.bus_name}-dlq"
   message_retention_seconds = 1209600 # 14 days
+  kms_master_key_id         = var.sqs_kms_key_id
   tags                      = var.tags
 }
 
@@ -48,7 +49,8 @@ resource "aws_sqs_queue_policy" "dlq" {
 # CloudWatch log group for all events — useful in dev/staging for visibility
 resource "aws_cloudwatch_log_group" "events" {
   name              = "/biffo/${local.name_prefix}/events"
-  retention_in_days = var.environment == "prod" ? 30 : 7
+  retention_in_days = 365 # 1 year — satisfies CKV_AWS_338
+  kms_key_id        = var.cloudwatch_kms_key_id
   tags              = var.tags
 }
 

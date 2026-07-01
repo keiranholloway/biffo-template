@@ -1,11 +1,9 @@
 """Tests for the plugin migration generator."""
 
-import json
 import shutil
 import tempfile
 from pathlib import Path
 
-import pytest
 
 from api.migrations.plugin_migrations import (
     generate_migration_for_plugin,

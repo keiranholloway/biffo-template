@@ -110,14 +110,12 @@ class PluginTableDefinition(BaseModel):
         Returns:
             A new SQLAlchemy model class inheriting from TenantScopedModel.
         """
-        from sqlalchemy import Column, DateTime, String, func
+        from sqlalchemy import Column, func
         from api.models.base import TenantScopedModel
 
         # Unique module name prevents SQLAlchemy registry collision
         with PluginTableDefinition._counter_lock:
             PluginTableDefinition._model_counter += 1
-            counter = PluginTableDefinition._model_counter
-        unique_module = f"api.models.plugin_table.dynamic_{counter}"
 
         kwargs: dict[str, Any] = {"__tablename__": self.name}
 
@@ -135,14 +133,14 @@ class PluginTableDefinition(BaseModel):
                 col_kwargs["server_default"] = func.now()
                 col_kwargs["onupdate"] = func.now()
 
-            sa_type_cls = self._resolve_sa_type_class(col.type)
-            kwargs[col.name] = Column(sa_type_cls(), **col_kwargs)
+            sa_type = self._resolve_sa_type(col.type)
+            kwargs[col.name] = Column(sa_type, **col_kwargs)
 
         return type(self.name.capitalize(), (TenantScopedModel,), kwargs)
 
     @staticmethod
-    def _resolve_sa_type_class(type_str: str) -> type:
-        """Resolve a type string like 'String(36)' or 'DateTime(timezone=True)' to a SQLAlchemy type class."""
+    def _resolve_sa_type(type_str: str) -> Any:
+        """Resolve a type string like 'String(36)' or 'DateTime(timezone=True)' to a SQLAlchemy type instance."""
         # Module-level constant avoids reallocating on every call
         type_map: dict[str, type] = {
             "String": String,
@@ -168,4 +166,4 @@ class PluginTableDefinition(BaseModel):
                 return cls(params)
         else:
             cls = type_map.get(type_str) or String
-            return cls
+            return cls()

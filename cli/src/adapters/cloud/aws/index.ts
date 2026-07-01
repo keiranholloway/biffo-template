@@ -10,6 +10,7 @@ import {
   IAMClient,
   ListAttachedRolePoliciesCommand,
   ListRolePoliciesCommand,
+  UpdateRoleCommand,
 } from '@aws-sdk/client-iam'
 import {
   CreateBucketCommand,
@@ -278,12 +279,22 @@ export class AwsAdapter {
       log.success('GitHub OIDC provider registered')
     }
 
+    // deploy-global.yml requests a 7200s session to cover its inline wait for DNS
+    // delegation to propagate before requesting the ACM certificate — the role's
+    // MaxSessionDuration must allow at least that (AWS default is 3600s).
+    const maxSessionDuration = 7200
+
     // Create the role if it doesn't already exist
     let roleArn: string
     try {
       const { Role } = await iam.send(new GetRoleCommand({ RoleName: roleName }))
       log.info(`OIDC role already exists`)
       roleArn = Role!.Arn!
+      if (Role!.MaxSessionDuration !== maxSessionDuration) {
+        await iam.send(
+          new UpdateRoleCommand({ RoleName: roleName, MaxSessionDuration: maxSessionDuration }),
+        )
+      }
     } catch (err: unknown) {
       if ((err as { name?: string }).name !== 'NoSuchEntityException') throw err
 
@@ -303,7 +314,11 @@ export class AwsAdapter {
         ],
       })
       const { Role } = await iam.send(
-        new CreateRoleCommand({ RoleName: roleName, AssumeRolePolicyDocument: trustPolicy }),
+        new CreateRoleCommand({
+          RoleName: roleName,
+          AssumeRolePolicyDocument: trustPolicy,
+          MaxSessionDuration: maxSessionDuration,
+        }),
       )
       roleArn = Role!.Arn!
     }

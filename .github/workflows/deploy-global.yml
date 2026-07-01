@@ -43,10 +43,11 @@ jobs:
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: us-east-1
-          # DNS delegation can take several minutes to propagate and this job
-          # waits it out inline, so the default 1h STS session isn't enough
-          # headroom on top of the terraform applies. Requires the OIDC role's
-          # max_session_duration to allow it (see modules/cloud/aws/oidc).
+          # aws_acm_certificate_validation (in the "Apply certificate" step) waits
+          # out however long DNS delegation takes to propagate, which can be tens
+          # of minutes — the default 1h STS session isn't reliable headroom on top
+          # of the terraform applies. Requires the OIDC role's max_session_duration
+          # to allow it (see cli/src/adapters/cloud/aws/index.ts setupOidcTrust).
           role-duration-seconds: 7200
       - name: Generate backend config
         run: |
@@ -101,27 +102,33 @@ jobs:
 
           if [ "$CURRENT_NS" = "$TARGET_NS" ]; then
             echo "Registered domain already delegated to this zone — skipping update."
-          else
-            echo "Delegating $DOMAIN to zone $ZONE_ID: $NS_LIST"
-            aws route53domains update-domain-nameservers \
-              --region us-east-1 \
-              --domain-name "$DOMAIN" \
-              --nameservers $NS_ARGS
+            exit 0
           fi
 
-          echo "Waiting for public DNS to reflect the new delegation..."
-          for i in $(seq 1 40); do
-            RESOLVED_NS=$(dig +short NS "$DOMAIN" @8.8.8.8 | sed 's/\.$//' | sort | tr '\n' ' ' | sed 's/ $//')
-            if [ "$RESOLVED_NS" = "$TARGET_NS" ]; then
-              echo "NS delegation confirmed after $((i * 15))s."
-              exit 0
-            fi
-            sleep 15
+          echo "Delegating $DOMAIN to zone $ZONE_ID: $NS_LIST"
+          OPERATION_ID=$(aws route53domains update-domain-nameservers \
+            --region us-east-1 \
+            --domain-name "$DOMAIN" \
+            --nameservers $NS_ARGS \
+            --query 'OperationId' --output text)
+
+          # This confirms the registrar-side update request itself succeeded (wrong
+          # permissions, domain not registered via Route 53, etc. surface here in
+          # seconds) — it does not wait for public DNS propagation. That's the same
+          # DNS lag aws_acm_certificate_validation already tolerates via its own
+          # retry/timeout in the next step, so there's no need to duplicate that
+          # wait here against an arbitrary timeout.
+          for i in $(seq 1 12); do
+            STATUS=$(aws route53domains get-operation-detail \
+              --region us-east-1 --operation-id "$OPERATION_ID" --query 'Status' --output text)
+            case "$STATUS" in
+              SUCCESSFUL) echo "Nameserver update accepted."; exit 0 ;;
+              FAILED|ERROR) echo "::error::Nameserver update $STATUS for $DOMAIN (operation $OPERATION_ID)."; exit 1 ;;
+            esac
+            sleep 5
           done
 
-          echo "::error::NS delegation for $DOMAIN did not propagate to public DNS within 10 minutes."
-          echo "Expected: $TARGET_NS"
-          echo "Got:      $RESOLVED_NS"
+          echo "::error::Nameserver update for $DOMAIN (operation $OPERATION_ID) did not reach a terminal status within 60s."
           exit 1
       - name: Apply certificate
         run: terraform apply -auto-approve

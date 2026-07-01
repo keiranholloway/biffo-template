@@ -91,21 +91,14 @@ jobs:
           TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
           TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
-      - name: Verify no orphaned Cognito pool or VPC remain
-        run: |
-          PREFIX="${{ vars.PROJECT_NAME }}-dev"
-          POOLS=$(aws cognito-idp list-user-pools --max-results 60 \
-            --query "UserPools[?Name=='${PREFIX}'].Id" --output text)
-          VPCS=$(aws ec2 describe-vpcs \
-            --filters "Name=tag:Name,Values=${PREFIX}-vpc" \
-            --query "Vpcs[].VpcId" --output text)
-          if [ -n "$POOLS" ] || [ -n "$VPCS" ]; then
-            echo "::error::Orphaned resources remain after destroy — Cognito pool names and VPC name tags have no AWS-side uniqueness constraint, so terraform will silently create duplicates on the next apply instead of erroring."
-            [ -n "$POOLS" ] && echo "::error::Orphaned Cognito pool(s): $POOLS"
-            [ -n "$VPCS" ] && echo "::error::Orphaned VPC(s): $VPCS"
-            exit 1
-          fi
-          echo "No orphaned Cognito pools or VPCs found."
+      - name: Verify no orphaned resources remain
+        uses: ./.github/actions/verify-no-orphans
+        with:
+          environment: dev
+          prefix: "${{ vars.PROJECT_NAME }}-dev"
+          region: "${{ vars.AWS_REGION || 'us-east-1' }}"
+          check_cognito: "true"
+          check_vpc: "true"
 
   # ─── STAGING ─────────────────────────────────────────────────────────────────
 
@@ -176,21 +169,14 @@ jobs:
           TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
           TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
-      - name: Verify no orphaned Cognito pool or VPC remain
-        run: |
-          PREFIX="${{ vars.PROJECT_NAME }}-staging"
-          POOLS=$(aws cognito-idp list-user-pools --max-results 60 \
-            --query "UserPools[?Name=='${PREFIX}'].Id" --output text)
-          VPCS=$(aws ec2 describe-vpcs \
-            --filters "Name=tag:Name,Values=${PREFIX}-vpc" \
-            --query "Vpcs[].VpcId" --output text)
-          if [ -n "$POOLS" ] || [ -n "$VPCS" ]; then
-            echo "::error::Orphaned resources remain after destroy — Cognito pool names and VPC name tags have no AWS-side uniqueness constraint, so terraform will silently create duplicates on the next apply instead of erroring."
-            [ -n "$POOLS" ] && echo "::error::Orphaned Cognito pool(s): $POOLS"
-            [ -n "$VPCS" ] && echo "::error::Orphaned VPC(s): $VPCS"
-            exit 1
-          fi
-          echo "No orphaned Cognito pools or VPCs found."
+      - name: Verify no orphaned resources remain
+        uses: ./.github/actions/verify-no-orphans
+        with:
+          environment: staging
+          prefix: "${{ vars.PROJECT_NAME }}-staging"
+          region: "${{ vars.AWS_REGION || 'us-east-1' }}"
+          check_cognito: "true"
+          check_vpc: "true"
 
   # ─── PROD ────────────────────────────────────────────────────────────────────
   # Requires prod environment approval in GitHub Settings → Environments.
@@ -262,18 +248,11 @@ jobs:
           TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
           TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
-      - name: Verify no orphaned Cognito pool or VPC remain
-        run: |
-          PREFIX="${{ vars.PROJECT_NAME }}-prod"
-          POOLS=$(aws cognito-idp list-user-pools --max-results 60 \
-            --query "UserPools[?Name=='${PREFIX}'].Id" --output text)
-          VPCS=$(aws ec2 describe-vpcs \
-            --filters "Name=tag:Name,Values=${PREFIX}-vpc" \
-            --query "Vpcs[].VpcId" --output text)
-          if [ -n "$POOLS" ] || [ -n "$VPCS" ]; then
-            echo "::error::Orphaned resources remain after destroy — Cognito pool names and VPC name tags have no AWS-side uniqueness constraint, so terraform will silently create duplicates on the next apply instead of erroring."
-            [ -n "$POOLS" ] && echo "::error::Orphaned Cognito pool(s): $POOLS"
-            [ -n "$VPCS" ] && echo "::error::Orphaned VPC(s): $VPCS"
-            exit 1
-          fi
-          echo "No orphaned Cognito pools or VPCs found."
+      - name: Verify no orphaned resources remain
+        uses: ./.github/actions/verify-no-orphans
+        with:
+          environment: prod
+          prefix: "${{ vars.PROJECT_NAME }}-prod"
+          region: "${{ vars.AWS_REGION || 'us-east-1' }}"
+          check_cognito: "true"
+          check_vpc: "true"

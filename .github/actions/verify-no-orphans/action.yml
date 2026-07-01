@@ -1,0 +1,55 @@
+name: Verify No Orphans
+description: Check for orphaned AWS resources after destroy
+
+inputs:
+  environment:
+    description: "Environment name (dev/staging/prod)"
+    required: true
+  prefix:
+    description: "Project prefix for resource naming"
+    required: true
+  region:
+    description: "AWS region"
+    required: true
+  check_cognito:
+    description: "Whether to check for orphaned Cognito pools"
+    required: false
+    default: "false"
+  check_vpc:
+    description: "Whether to check for orphaned VPCs"
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check for orphaned Cognito pools
+      if: inputs.check_cognito == 'true'
+      shell: bash
+      run: |
+        PREFIX="${{ inputs.prefix }}"
+        REGION="${{ inputs.region }}"
+        POOLS=$(aws cognito-idp list-user-pools \
+          --query "UserPools[?Name=='${PREFIX}'].Id" \
+          --output text 2>/dev/null)
+        if [ -n "$POOLS" ] && [ "$POOLS" != "None" ]; then
+          echo "::error::Orphaned Cognito pool(s) found: $POOLS"
+          exit 1
+        fi
+        echo "No orphaned Cognito pools found."
+
+    - name: Check for orphaned VPCs
+      if: inputs.check_vpc == 'true'
+      shell: bash
+      run: |
+        PREFIX="${{ inputs.prefix }}"
+        REGION="${{ inputs.region }}"
+        VPCS=$(aws ec2 describe-vpcs \
+          --filters "Name=tag:Name,Values=${PREFIX}-vpc" \
+          --query "Vpcs[].VpcId" \
+          --output text 2>/dev/null)
+        if [ -n "$VPCS" ] && [ "$VPCS" != "None" ]; then
+          echo "::error::Orphaned VPC(s) found: $VPCS"
+          exit 1
+        fi
+        echo "No orphaned VPCs found."

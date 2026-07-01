@@ -30,3 +30,10 @@ repos:
       - id: prettier
         types_or: [ts, tsx, javascript, jsx, json, yaml, markdown, css]
         exclude: 'pnpm-lock.yaml'
+
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.107.0
+    hooks:
+      - id: terraform-fmt
+        args:
+          - --args=-recursive

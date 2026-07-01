@@ -18,7 +18,13 @@ env:
 #   - Route 53 hosted zone for the project domain
 #   - Wildcard ACM certificate (*.domain + domain) in us-east-1 for CloudFront
 # Assumes the domain is registered in Route 53 in the same AWS account.
-# NS records are updated automatically after the hosted zone is created.
+#
+# The hosted zone is applied and its NS records delegated to the registered
+# domain BEFORE the ACM certificate is requested. DNS validation for the
+# certificate depends on those NS records resolving publicly — requesting
+# the cert first (delegating after) leaves aws_acm_certificate_validation
+# waiting on DNS that can never resolve, and the job hangs until the
+# workflow timeout.
 
 jobs:
   deploy-global:
@@ -37,6 +43,11 @@ jobs:
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: us-east-1
+          # DNS delegation can take several minutes to propagate and this job
+          # waits it out inline, so the default 1h STS session isn't enough
+          # headroom on top of the terraform applies. Requires the OIDC role's
+          # max_session_duration to allow it (see modules/cloud/aws/oidc).
+          role-duration-seconds: 7200
       - name: Generate backend config
         run: |
           cat > backend.hcl << 'EOF'
@@ -63,11 +74,61 @@ jobs:
           else
             echo "No existing zone found for $DOMAIN — creating fresh."
           fi
-      - run: terraform apply -auto-approve
+      - name: Apply hosted zone
+        run: terraform apply -auto-approve -target=aws_route53_zone.main
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_domain: ${{ vars.DOMAIN }}
-      - name: Update domain nameservers and export outputs
+      - name: Delegate domain to hosted zone
+        run: |
+          DOMAIN="${{ vars.DOMAIN }}"
+          ZONE_ID=$(terraform output -raw hosted_zone_id)
+
+          # Update the Route 53 registered domain's NS records to match the hosted
+          # zone BEFORE requesting the ACM certificate. Requires the domain to be
+          # registered in Route 53 in this same AWS account.
+          NS_LIST=$(aws route53 list-resource-record-sets \
+            --hosted-zone-id "$ZONE_ID" \
+            --query 'ResourceRecordSets[?Type==`NS`].ResourceRecords[].Value' \
+            --output text | tr '\t' '\n' | sed 's/\.$//')
+          NS_ARGS=$(echo "$NS_LIST" | awk '{print "Name="$1}' | tr '\n' ' ')
+
+          CURRENT_NS=$(aws route53domains get-domain-detail \
+            --region us-east-1 \
+            --domain-name "$DOMAIN" \
+            --query 'Nameservers[].Name' --output text | tr '\t' '\n' | sort | tr '\n' ' ' | sed 's/ $//')
+          TARGET_NS=$(echo "$NS_LIST" | sort | tr '\n' ' ' | sed 's/ $//')
+
+          if [ "$CURRENT_NS" = "$TARGET_NS" ]; then
+            echo "Registered domain already delegated to this zone — skipping update."
+          else
+            echo "Delegating $DOMAIN to zone $ZONE_ID: $NS_LIST"
+            aws route53domains update-domain-nameservers \
+              --region us-east-1 \
+              --domain-name "$DOMAIN" \
+              --nameservers $NS_ARGS
+          fi
+
+          echo "Waiting for public DNS to reflect the new delegation..."
+          for i in $(seq 1 40); do
+            RESOLVED_NS=$(dig +short NS "$DOMAIN" @8.8.8.8 | sed 's/\.$//' | sort | tr '\n' ' ' | sed 's/ $//')
+            if [ "$RESOLVED_NS" = "$TARGET_NS" ]; then
+              echo "NS delegation confirmed after $((i * 15))s."
+              exit 0
+            fi
+            sleep 15
+          done
+
+          echo "::error::NS delegation for $DOMAIN did not propagate to public DNS within 10 minutes."
+          echo "Expected: $TARGET_NS"
+          echo "Got:      $RESOLVED_NS"
+          exit 1
+      - name: Apply certificate
+        run: terraform apply -auto-approve
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}
+      - name: Export outputs
         env:
           GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -78,22 +139,7 @@ jobs:
           gh variable set ACM_CERTIFICATE_ARN --body "$ACM_ARN"
           gh variable set HOSTED_ZONE_ID --body "$ZONE_ID"
 
-          # Update the Route 53 registered domain's NS records to match the new hosted zone.
-          # Requires the domain to be registered in Route 53 in this same AWS account.
-          NS_LIST=$(aws route53 list-resource-record-sets \
-            --hosted-zone-id "$ZONE_ID" \
-            --query 'ResourceRecordSets[?Type==`NS`].ResourceRecords[].Value' \
-            --output text | tr '\t' '\n' | sed 's/\.$//')
-
-          NS_ARGS=$(echo "$NS_LIST" | awk '{print "Name="$1}' | tr '\n' ' ')
-          aws route53domains update-domain-nameservers \
-            --region us-east-1 \
-            --domain-name "${{ vars.DOMAIN }}" \
-            --nameservers $NS_ARGS
-
           echo "## Global infrastructure deployed" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Domain nameservers updated automatically (domain is registered in Route 53)." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "ACM Certificate ARN: \`$ACM_ARN\`" >> $GITHUB_STEP_SUMMARY
           echo "Hosted Zone ID: \`$ZONE_ID\`" >> $GITHUB_STEP_SUMMARY

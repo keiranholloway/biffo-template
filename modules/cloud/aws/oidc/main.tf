@@ -48,6 +48,9 @@ data "aws_iam_policy_document" "github_actions_trust" {
 resource "aws_iam_role" "github_actions" {
   name               = "biffo-github-actions-${var.project_name}"
   assume_role_policy = data.aws_iam_policy_document.github_actions_trust.json
+  # deploy-global.yml requests a 7200s session to cover the inline wait for
+  # DNS delegation to propagate before requesting the ACM certificate.
+  max_session_duration = 7200
 
   tags = var.tags
 }

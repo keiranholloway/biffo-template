@@ -1,0 +1,48 @@
+name: Terraform Format Check
+
+on:
+  push:
+    paths:
+      - "modules/**"
+      - "infra/**"
+      - ".terraform.lock.hcl"
+  pull_request:
+    paths:
+      - "modules/**"
+      - "infra/**"
+      - ".terraform.lock.hcl"
+
+permissions:
+  contents: read
+
+jobs:
+  fmt:
+    name: Terraform fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        directory:
+          - modules/cloud/aws/events
+          - modules/cloud/aws/cdn
+          - modules/cloud/aws/database
+          - modules/cloud/aws/api-gateway
+          - modules/cloud/aws/networking
+          - modules/cloud/aws/compute
+          - modules/cloud/aws/storage
+          - modules/cloud/aws/auth
+          - modules/cloud/aws/oidc
+          - modules/source-control/github
+          - infra/environments/dev
+          - infra/environments/staging
+          - infra/environments/prod
+          - infra/global
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.9"
+      - run: terraform fmt -check -recursive

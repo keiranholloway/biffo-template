@@ -180,8 +180,11 @@ class PluginTableDefinition(BaseModel):
                     return cls(*parsed)
                 return cls(parsed)
             except (ValueError, SyntaxError):
-                # Fallback: pass raw string to constructor (may fail gracefully)
-                return cls(params)
+                # Fallback: try parsing as int first, then fall back to bare type
+                try:
+                    return cls(int(params))
+                except ValueError:
+                    return cls()
         else:
             cls = type_map.get(type_str) or String
             return cls()

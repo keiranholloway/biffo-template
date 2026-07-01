@@ -45,29 +45,24 @@ jobs:
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
       - run: terraform init -backend-config=backend.hcl
-      - name: Delete any existing hosted zones for the domain
+      - name: Adopt existing hosted zone instead of recreating it
         run: |
           DOMAIN="${{ vars.DOMAIN }}"
-          ZONE_IDS=$(aws route53 list-hosted-zones-by-name \
+          if terraform state list | grep -qx 'aws_route53_zone.main'; then
+            echo "Zone already tracked in state — nothing to do."
+            exit 0
+          fi
+          ZONE_ID=$(aws route53 list-hosted-zones-by-name \
             --dns-name "${DOMAIN}." \
             --query "HostedZones[?Name=='${DOMAIN}.'].Id" \
-            --output text | tr '\t' '\n' | cut -d/ -f3)
-          for ZONE_ID in $ZONE_IDS; do
-            echo "Deleting existing hosted zone: $ZONE_ID"
-            RECORDS=$(aws route53 list-resource-record-sets \
-              --hosted-zone-id "$ZONE_ID" \
-              --query 'ResourceRecordSets[?Type!=`NS` && Type!=`SOA`]' \
-              --output json)
-            COUNT=$(echo "$RECORDS" | jq 'length')
-            if [ "$COUNT" -gt 0 ]; then
-              CHANGES=$(echo "$RECORDS" | jq '[.[] | {Action:"DELETE", ResourceRecordSet:.}]')
-              aws route53 change-resource-record-sets \
-                --hosted-zone-id "$ZONE_ID" \
-                --change-batch "{\"Changes\": $CHANGES}" > /dev/null
-            fi
-            aws route53 delete-hosted-zone --id "$ZONE_ID" > /dev/null
-            echo "  Deleted $ZONE_ID"
-          done
+            --output text | head -1 | cut -d/ -f3)
+          if [ -n "$ZONE_ID" ]; then
+            echo "Found untracked existing zone $ZONE_ID for $DOMAIN — importing it instead of deleting and recreating."
+            echo "Deleting and recreating would incur a duplicate Route 53 monthly zone charge and open a DNS resolution gap until the new NS records propagate to the registrar."
+            terraform import aws_route53_zone.main "$ZONE_ID"
+          else
+            echo "No existing zone found for $DOMAIN — creating fresh."
+          fi
       - run: terraform apply -auto-approve
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}

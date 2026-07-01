@@ -88,6 +88,20 @@ resource "aws_db_parameter_group" "main" {
   tags = var.tags
 }
 
+# Pre-created so Terraform owns these instead of RDS auto-creating untracked,
+# never-expiring log groups the destroy workflow doesn't know to clean up.
+resource "aws_cloudwatch_log_group" "postgresql" {
+  name              = "/aws/rds/instance/${local.name_prefix}-postgres/postgresql"
+  retention_in_days = var.environment == "prod" ? 90 : 14
+  tags              = var.tags
+}
+
+resource "aws_cloudwatch_log_group" "upgrade" {
+  name              = "/aws/rds/instance/${local.name_prefix}-postgres/upgrade"
+  retention_in_days = var.environment == "prod" ? 90 : 14
+  tags              = var.tags
+}
+
 resource "aws_db_instance" "main" {
   identifier = "${local.name_prefix}-postgres"
 
@@ -115,6 +129,8 @@ resource "aws_db_instance" "main" {
   maintenance_window      = "Mon:04:00-Mon:05:00"
 
   enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
+
+  depends_on = [aws_cloudwatch_log_group.postgresql, aws_cloudwatch_log_group.upgrade]
 
   tags = merge(var.tags, { Name = "${local.name_prefix}-postgres" })
 }

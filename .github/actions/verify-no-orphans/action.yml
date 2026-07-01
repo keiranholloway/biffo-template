@@ -24,7 +24,11 @@ runs:
       run: |
         case "$RESOURCE_TYPE" in
           cognito-vpc)
-            POOLS=$(aws cognito-idp list-user-pools \
+            # --max-results is required by this API (not optional) — the CLI still
+            # auto-paginates across all pages by default using it as the page size,
+            # since --no-paginate/--max-items (the actual "cap total results" flags)
+            # aren't set here.
+            POOLS=$(aws cognito-idp list-user-pools --max-results 60 \
               --query "UserPools[?Name=='${PREFIX}'].Id" --output text)
             VPCS=$(aws ec2 describe-vpcs \
               --filters "Name=tag:Name,Values=${PREFIX}-vpc" \

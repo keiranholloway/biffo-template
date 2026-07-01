@@ -66,3 +66,18 @@ jobs:
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_domain: ${{ vars.DOMAIN }}
+      - name: Verify no orphaned Route 53 zone or ACM cert remain
+        run: |
+          DOMAIN="${{ vars.DOMAIN }}"
+          ZONES=$(aws route53 list-hosted-zones-by-name \
+            --dns-name "${DOMAIN}." \
+            --query "HostedZones[?Name=='${DOMAIN}.'].Id" --output text)
+          CERTS=$(aws acm list-certificates --region us-east-1 \
+            --query "CertificateSummaryList[?DomainName=='${DOMAIN}'].CertificateArn" --output text)
+          if [ -n "$ZONES" ] || [ -n "$CERTS" ]; then
+            echo "::error::Orphaned global resources remain after destroy — domain names have no AWS-side uniqueness constraint for Route 53 zones or ACM certs, so a future apply would silently create duplicates instead of erroring."
+            [ -n "$ZONES" ] && echo "::error::Orphaned hosted zone(s): $ZONES"
+            [ -n "$CERTS" ] && echo "::error::Orphaned ACM cert(s): $CERTS"
+            exit 1
+          fi
+          echo "No orphaned Route 53 zone or ACM cert found."

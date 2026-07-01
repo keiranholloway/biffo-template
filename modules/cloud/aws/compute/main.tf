@@ -22,10 +22,11 @@ locals {
   function_name = "${local.name_prefix}-${var.function_name}"
 }
 
-# Dead letter queue for failed invocations
+# Dead letter queue for failed invocations — encrypted at rest with KMS
 resource "aws_sqs_queue" "dlq" {
   name                      = "${local.function_name}-dlq"
   message_retention_seconds = 1209600 # 14 days
+  kms_master_key_id         = var.sqs_kms_key_id
   tags                      = var.tags
 }
 
@@ -47,7 +48,8 @@ resource "aws_security_group" "lambda" {
 
 resource "aws_cloudwatch_log_group" "function" {
   name              = "/aws/lambda/${local.function_name}"
-  retention_in_days = var.environment == "prod" ? 90 : 14
+  retention_in_days = 365 # 1 year — satisfies CKV_AWS_338
+  kms_key_id        = var.cloudwatch_kms_key_id
   tags              = var.tags
 }
 

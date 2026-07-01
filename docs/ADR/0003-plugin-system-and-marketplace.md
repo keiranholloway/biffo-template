@@ -46,6 +46,7 @@ Plugins are catalogued in a **central JSON registry** hosted in a dedicated GitH
 ```
 
 Fields:
+
 - `name` — unique slug, used as directory name on install
 - `version` — full semver of the latest release
 - `minor_version` — the pinned minor version (e.g., `"1.2"`); users install `name@minor_version`
@@ -91,70 +92,68 @@ biffo-plugin-rbac/
     {
       "name": "rbac_roles",
       "columns": [
-        {"name": "id", "type": "UUID", "primary_key": true},
-        {"name": "tenant_id", "type": "TEXT", "indexed": true},
-        {"name": "name", "type": "TEXT", "unique": true},
-        {"name": "description", "type": "TEXT"},
-        {"name": "is_system", "type": "BOOLEAN", "default": "false"},
-        {"name": "created_at", "type": "TIMESTAMP", "auto_now_add": true},
-        {"name": "updated_at", "type": "TIMESTAMP", "auto_now": true}
+        { "name": "id", "type": "UUID", "primary_key": true },
+        { "name": "tenant_id", "type": "TEXT", "indexed": true },
+        { "name": "name", "type": "TEXT", "unique": true },
+        { "name": "description", "type": "TEXT" },
+        { "name": "is_system", "type": "BOOLEAN", "default": "false" },
+        { "name": "created_at", "type": "TIMESTAMP", "auto_now_add": true },
+        { "name": "updated_at", "type": "TIMESTAMP", "auto_now": true }
       ]
     },
     {
       "name": "rbac_permissions",
       "columns": [
-        {"name": "id", "type": "UUID", "primary_key": true},
-        {"name": "tenant_id", "type": "TEXT", "indexed": true},
-        {"name": "resource", "type": "TEXT"},
-        {"name": "action", "type": "TEXT"},
-        {"name": "effect", "type": "TEXT", "default": "\"allow\""},
-        {"name": "description", "type": "TEXT"},
-        {"name": "created_at", "type": "TIMESTAMP", "auto_now_add": true}
+        { "name": "id", "type": "UUID", "primary_key": true },
+        { "name": "tenant_id", "type": "TEXT", "indexed": true },
+        { "name": "resource", "type": "TEXT" },
+        { "name": "action", "type": "TEXT" },
+        { "name": "effect", "type": "TEXT", "default": "\"allow\"" },
+        { "name": "description", "type": "TEXT" },
+        { "name": "created_at", "type": "TIMESTAMP", "auto_now_add": true }
       ]
     },
     {
       "name": "rbac_role_permissions",
       "columns": [
-        {"name": "role_id", "type": "UUID", "foreign_key": "rbac_roles.id"},
-        {"name": "permission_id", "type": "UUID", "foreign_key": "rbac_permissions.id"},
-        {"name": "tenant_id", "type": "TEXT", "indexed": true},
-        {"name": "PRIMARY KEY (role_id, permission_id)"}
+        { "name": "role_id", "type": "UUID", "foreign_key": "rbac_roles.id" },
+        { "name": "permission_id", "type": "UUID", "foreign_key": "rbac_permissions.id" },
+        { "name": "tenant_id", "type": "TEXT", "indexed": true },
+        { "name": "PRIMARY KEY (role_id, permission_id)" }
       ]
     },
     {
       "name": "rbac_user_roles",
       "columns": [
-        {"name": "user_id", "type": "TEXT", "foreign_key": "users.cognito_sub"},
-        {"name": "role_id", "type": "UUID", "foreign_key": "rbac_roles.id"},
-        {"name": "tenant_id", "type": "TEXT", "indexed": true},
-        {"name": "assigned_by", "type": "TEXT", "foreign_key": "users.cognito_sub"},
-        {"name": "expires_at", "type": "TIMESTAMP"},
-        {"name": "assigned_at", "type": "TIMESTAMP", "auto_now_add": true},
-        {"name": "PRIMARY KEY (user_id, role_id)"}
+        { "name": "user_id", "type": "TEXT", "foreign_key": "users.cognito_sub" },
+        { "name": "role_id", "type": "UUID", "foreign_key": "rbac_roles.id" },
+        { "name": "tenant_id", "type": "TEXT", "indexed": true },
+        { "name": "assigned_by", "type": "TEXT", "foreign_key": "users.cognito_sub" },
+        { "name": "expires_at", "type": "TIMESTAMP" },
+        { "name": "assigned_at", "type": "TIMESTAMP", "auto_now_add": true },
+        { "name": "PRIMARY KEY (user_id, role_id)" }
       ]
     }
   ],
   "api_routes": [
-    {"method": "GET", "path": "/rbac/roles", "handler": "list_roles"},
-    {"method": "POST", "path": "/rbac/roles", "handler": "create_role"},
-    {"method": "GET", "path": "/rbac/roles/{role_id}", "handler": "get_role"},
-    {"method": "DELETE", "path": "/rbac/roles/{role_id}", "handler": "delete_role"},
-    {"method": "GET", "path": "/rbac/permissions", "handler": "list_permissions"},
-    {"method": "POST", "path": "/rbac/permissions", "handler": "create_permission"},
-    {"method": "GET", "path": "/rbac/assignments", "handler": "list_assignments"},
-    {"method": "POST", "path": "/rbac/assignments", "handler": "assign_role"},
-    {"method": "DELETE", "path": "/rbac/assignments", "handler": "unassign_role"},
-    {"method": "GET", "path": "/rbac/check", "handler": "check_permission"}
+    { "method": "GET", "path": "/rbac/roles", "handler": "list_roles" },
+    { "method": "POST", "path": "/rbac/roles", "handler": "create_role" },
+    { "method": "GET", "path": "/rbac/roles/{role_id}", "handler": "get_role" },
+    { "method": "DELETE", "path": "/rbac/roles/{role_id}", "handler": "delete_role" },
+    { "method": "GET", "path": "/rbac/permissions", "handler": "list_permissions" },
+    { "method": "POST", "path": "/rbac/permissions", "handler": "create_permission" },
+    { "method": "GET", "path": "/rbac/assignments", "handler": "list_assignments" },
+    { "method": "POST", "path": "/rbac/assignments", "handler": "assign_role" },
+    { "method": "DELETE", "path": "/rbac/assignments", "handler": "unassign_role" },
+    { "method": "GET", "path": "/rbac/check", "handler": "check_permission" }
   ],
-  "event_subscriptions": [
-    {"source": "biffo.core", "detail_type": "UserCreated"}
-  ],
+  "event_subscriptions": [{ "source": "biffo.core", "detail_type": "UserCreated" }],
   "infra_modules": ["database"],
   "ui_components": [
-    {"type": "nav-link", "label": "RBAC", "path": "/admin/rbac"},
-    {"type": "page", "label": "Roles", "path": "/admin/rbac/roles"},
-    {"type": "page", "label": "Permissions", "path": "/admin/rbac/permissions"},
-    {"type": "page", "label": "Assignments", "path": "/admin/rbac/assignments"}
+    { "type": "nav-link", "label": "RBAC", "path": "/admin/rbac" },
+    { "type": "page", "label": "Roles", "path": "/admin/rbac/roles" },
+    { "type": "page", "label": "Permissions", "path": "/admin/rbac/permissions" },
+    { "type": "page", "label": "Assignments", "path": "/admin/rbac/assignments" }
   ],
   "dependencies": {
     "biffo-plugin-sdk": "^1.0"
@@ -181,7 +180,7 @@ Plugins declare their data models and API routes in `biffo.plugin.json`. At inst
 - **Routes** → Route registration entries are appended to `services/api/src/api/routers/__init__.py`. The Core API discovers and mounts these routers at startup.
 - **Events** → Event subscription bindings are added to the EventBridge rule configuration in the plugin's Terraform module.
 
-This means the plugin author never touches the Core API code directly — they declare *what* they need, and the CLI generates *how* it connects. The Core API remains untouched between releases.
+This means the plugin author never touches the Core API code directly — they declare _what_ they need, and the CLI generates _how_ it connects. The Core API remains untouched between releases.
 
 ### 5. Installation Flow
 
@@ -210,6 +209,7 @@ No runtime discovery endpoint is needed. The build-time approach is simpler, typ
 The admin portal (`apps/portal/src/app/admin/`) evolves from its current stub into a plugin marketplace:
 
 **Pages:**
+
 - **Marketplace** (`/admin/plugins`) — Lists all active plugins from the registry with name, description, tags, version, and an "Install" button. Supports filtering by tag and searching by name/description.
 - **Installed** (`/admin/plugins/installed`) — Shows plugins already installed in this deployment, with version, install date, and an "Upgrade" button (if a newer minor version is available).
 - **Plugin Detail** (`/admin/plugins/[name]`) — Full description, changelog, screenshots, required permissions, and install/upgrade action.
@@ -248,12 +248,14 @@ No automatic uninstall happens. The user controls the lifecycle.
 Plugin declares tables and routes in `biffo.plugin.json`. CLI generates the corresponding code (migrations, route registrations) at install time.
 
 **Pros:**
+
 - Plugin authors don't need to understand the Core API's internals
 - Consistent, auditable code generation — no hand-written route glue
 - Core API stays unchanged between releases
 - Easier to validate — manifest is machine-checkable against a JSON schema
 
 **Cons:**
+
 - Less flexibility for complex/custom route logic
 - Generated code adds noise to the repo (but is deterministic and git-tracked)
 
@@ -262,10 +264,12 @@ Plugin declares tables and routes in `biffo.plugin.json`. CLI generates the corr
 Plugin author writes the actual FastAPI routes and models in the Core API after cloning.
 
 **Pros:**
+
 - Full control over implementation
 - No code generation layer to maintain
 
 **Cons:**
+
 - Plugin authors must understand Core API conventions (dependencies, auth, tenant scoping)
 - Higher barrier to entry — defeats the "plug-and-play" goal
 - Risk of inconsistent implementations across plugins
@@ -277,10 +281,12 @@ Plugin author writes the actual FastAPI routes and models in the Core API after 
 Portal fetches an endpoint from the Core API listing installed plugins and their nav entries. Dynamically renders navigation and lazy-loads pages.
 
 **Pros:**
+
 - No rebuild needed when installing plugins
 - True dynamic extensibility
 
 **Cons:**
+
 - Adds an API endpoint and serialization layer
 - Type safety lost — routes are strings, not compile-checked
 - More moving parts (runtime discovery + lazy loading)
@@ -290,12 +296,14 @@ Portal fetches an endpoint from the Core API listing installed plugins and their
 Plugin UI components are cloned into the portal's source tree at install time. Next.js app router picks them up at build time.
 
 **Pros:**
+
 - Leverages Next.js's built-in routing — zero additional infrastructure
 - Type-safe — TypeScript catches missing props at compile time
 - Simpler — no runtime discovery endpoint needed
 - Faster page loads — no dynamic routing overhead
 
 **Cons:**
+
 - Requires a rebuild after install (acceptable — CI handles this)
 - Plugin pages are part of the monorepo, not truly external
 
@@ -306,12 +314,14 @@ Plugin UI components are cloned into the portal's source tree at install time. N
 Plugin source is cloned into `services/<name>/` within the user's monorepo. Terraform modules merged into `modules/plugins/`.
 
 **Pros:**
+
 - Simple — one repo, one deploy, one CI pipeline
 - Plugin code is visible and editable if needed
 - No cross-repo dependency complexity
 - Aligns with existing `_template/` pattern
 
 **Cons:**
+
 - Plugin code leaves the plugin's original repo (fork drift)
 - User is responsible for keeping the cloned code updated
 
@@ -320,10 +330,12 @@ Plugin source is cloned into `services/<name>/` within the user's monorepo. Terr
 CLI forks the plugin repo into the user's GitHub org, then references it.
 
 **Pros:**
+
 - Clean separation — plugin stays in its own repo
 - User can submit PRs back to the original plugin
 
 **Cons:**
+
 - Cross-repo Terraform references are fragile
 - Harder to manage dependencies across repos
 - Over-engineered for the common case (solopreneur with one repo)
@@ -333,10 +345,12 @@ CLI forks the plugin repo into the user's GitHub org, then references it.
 Plugin ships compiled artifacts (Lambda zip, npm package) downloaded from S3/npm.
 
 **Pros:**
+
 - No source code in the monorepo
 - Fast install — no git clone
 
 **Cons:**
+
 - Black box — user can't inspect or modify plugin code
 - Breaks the open-source ethos of Biffo
 - Artifact signing/verification adds complexity
@@ -385,21 +399,25 @@ The overall architecture respects ADR-0001 (tenant isolation) and ADR-0002 (API-
 ## Compliance
 
 **Registry enforcement:**
+
 - The registry schema is validated against a JSON Schema file (`registry-schema.json`) in the registry repo.
 - CI in the registry repo rejects commits that don't produce valid `plugins.json`.
 - Disabled plugins are marked with `status: "disabled"` rather than removed — this preserves historical records and prevents name reuse.
 
 **SDK enforcement:**
+
 - The `biffo-plugin-sdk` package is versioned independently and published to PyPI.
 - Plugins must declare `biffo-plugin-sdk` as a dependency in their `pyproject.toml`.
 - The SDK's `register_plugin()` validates manifests against the same schema used by the registry.
 
 **Installation enforcement:**
+
 - The CLI validates `required_core_version` before cloning — incompatible plugins are rejected.
 - Generated migrations include `tenant_id` columns automatically (enforced by the migration generator).
 - Route registrations are appended to a single file (`routers/__init__.py`) with clear markers for identification.
 
 **Security:**
+
 - Only the Biffo core team can publish plugins to the registry.
 - Plugin source code is scanned for secrets before acceptance (same as core repo).
 - Plugin Terraform modules are reviewed for security compliance (Checkov, tfsec) before approval.

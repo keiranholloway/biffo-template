@@ -81,9 +81,7 @@ def load_manifest(path: str | Path) -> PluginManifest:
     try:
         return PluginManifest(**data)
     except Exception as exc:
-        raise ValueError(
-            f"Schema validation failed for {p}: {exc}"
-        ) from exc
+        raise ValueError(f"Schema validation failed for {p}: {exc}") from exc
 
 
 def register_plugin(manifest: PluginManifest) -> dict[str, Any]:

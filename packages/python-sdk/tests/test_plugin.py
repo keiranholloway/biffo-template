@@ -75,11 +75,15 @@ class TestLoadManifest:
 
     def test_load_valid_manifest(self, tmp_path: Path) -> None:
         manifest_json = tmp_path / "biffo.plugin.json"
-        manifest_json.write_text(json.dumps({
-            "name": "my-plugin",
-            "version": "1.2.3",
-            "description": "Test plugin",
-        }))
+        manifest_json.write_text(
+            json.dumps(
+                {
+                    "name": "my-plugin",
+                    "version": "1.2.3",
+                    "description": "Test plugin",
+                }
+            )
+        )
         result = load_manifest(manifest_json)
         assert result.name == "my-plugin"
         assert result.version == "1.2.3"

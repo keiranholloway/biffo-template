@@ -70,4 +70,4 @@ jobs:
         uses: ./.github/actions/verify-no-orphans
         with:
           resource-type: route53-acm
-          domain: "${{ vars.DOMAIN }}"
+          domain: '${{ vars.DOMAIN }}'

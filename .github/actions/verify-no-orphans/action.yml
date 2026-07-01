@@ -3,17 +3,17 @@ description: Checks that no orphaned AWS resources remain after terraform destro
 
 inputs:
   resource-type:
-    description: "Type of resource to check (cognito-vpc, route53-acm)"
+    description: 'Type of resource to check (cognito-vpc, route53-acm)'
     required: true
   prefix:
-    description: "Resource name prefix (e.g. project-name-dev)"
+    description: 'Resource name prefix (e.g. project-name-dev)'
     required: false
   domain:
-    description: "Domain name for Route53/ACM checks"
+    description: 'Domain name for Route53/ACM checks'
     required: false
 
 runs:
-  using: "composite"
+  using: 'composite'
   steps:
     - name: Check for orphaned resources
       shell: bash

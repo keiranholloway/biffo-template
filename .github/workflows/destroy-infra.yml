@@ -95,7 +95,7 @@ jobs:
         uses: ./.github/actions/verify-no-orphans
         with:
           resource-type: cognito-vpc
-          prefix: "${{ vars.PROJECT_NAME }}-dev"
+          prefix: '${{ vars.PROJECT_NAME }}-dev'
 
   # ─── STAGING ─────────────────────────────────────────────────────────────────
 
@@ -170,7 +170,7 @@ jobs:
         uses: ./.github/actions/verify-no-orphans
         with:
           resource-type: cognito-vpc
-          prefix: "${{ vars.PROJECT_NAME }}-staging"
+          prefix: '${{ vars.PROJECT_NAME }}-staging'
 
   # ─── PROD ────────────────────────────────────────────────────────────────────
   # Requires prod environment approval in GitHub Settings → Environments.
@@ -246,4 +246,4 @@ jobs:
         uses: ./.github/actions/verify-no-orphans
         with:
           resource-type: cognito-vpc
-          prefix: "${{ vars.PROJECT_NAME }}-prod"
+          prefix: '${{ vars.PROJECT_NAME }}-prod'

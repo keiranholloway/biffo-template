@@ -42,13 +42,6 @@ resource "aws_cloudfront_distribution" "portal" {
   comment             = "${local.name_prefix} portal"
   web_acl_id          = var.waf_web_acl_arn != "" ? var.waf_web_acl_arn : null
 
-  # Access logging — satisfies CKV_AWS_86
-  logging {
-    include_cookies = false
-    bucket          = var.access_logging_bucket
-    prefix          = var.access_logging_prefix
-  }
-
   # Alias requires a matching ACM cert — omit both if cert is absent so CloudFront
   # falls back to its default certificate and the distribution can still be created.
   aliases = var.custom_domain != "" && var.acm_certificate_arn != "" ? [var.custom_domain] : []

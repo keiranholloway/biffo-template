@@ -45,8 +45,9 @@ variable "tags" {
 }
 
 variable "access_logging_bucket" {
-  description = "S3 bucket for CloudFront access logs. Required to satisfy CKV_AWS_86."
+  description = "S3 bucket for CloudFront access logs. Note: CloudFront distributions don't support native access logging in the Terraform AWS provider; this variable is reserved for future use when the provider adds support."
   type        = string
+  default     = ""
 }
 
 variable "access_logging_prefix" {

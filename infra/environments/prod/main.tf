@@ -58,8 +58,6 @@ module "cdn" {
   custom_domain                 = var.custom_domain
   acm_certificate_arn           = var.acm_certificate_arn
   hosted_zone_id                = var.hosted_zone_id
-  access_logging_bucket         = module.storage.logs_bucket_name
-  access_logging_prefix         = "cloudfront-logs/"
   tags                          = local.tags
 }
 

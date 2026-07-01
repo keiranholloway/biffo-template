@@ -40,6 +40,17 @@ resource "aws_cloudfront_distribution" "portal" {
   default_root_object = "index.html"
   price_class         = "PriceClass_100"
   comment             = "${local.name_prefix} portal"
+  web_acl_id          = var.waf_web_acl_arn != "" ? var.waf_web_acl_arn : null
+
+  # Access logging — only enabled when a logging bucket is provided
+  dynamic "logging" {
+    for_each = var.access_logging_bucket != "" ? [1] : []
+    content {
+      include_cookies = false
+      bucket          = var.access_logging_bucket
+      prefix          = var.access_logging_prefix
+    }
+  }
 
   # Alias requires a matching ACM cert — omit both if cert is absent so CloudFront
   # falls back to its default certificate and the distribution can still be created.
@@ -49,6 +60,21 @@ resource "aws_cloudfront_distribution" "portal" {
     domain_name              = var.portal_bucket_regional_domain
     origin_id                = "S3-${var.portal_bucket_name}"
     origin_access_control_id = aws_cloudfront_origin_access_control.portal.id
+  }
+
+  # Failover origin — only created when a failover domain is provided
+  dynamic "origin" {
+    for_each = var.failover_origin_domain != "" ? [1] : []
+    content {
+      domain_name = var.failover_origin_domain
+      origin_id   = "failover-origin"
+      custom_origin_config {
+        http_port              = 80
+        https_port             = 443
+        origin_protocol_policy = "https-only"
+        origin_ssl_protocols   = ["TLSv1.2"]
+      }
+    }
   }
 
   default_cache_behavior {
@@ -89,14 +115,17 @@ resource "aws_cloudfront_distribution" "portal" {
   }
 
   restrictions {
-    geo_restriction { restriction_type = "none" }
+    geo_restriction {
+      restriction_type = "blacklist"
+      locations        = [] # No countries blacklisted — configure as needed
+    }
   }
 
   viewer_certificate {
     acm_certificate_arn            = var.acm_certificate_arn != "" ? var.acm_certificate_arn : null
     cloudfront_default_certificate = var.acm_certificate_arn == ""
     ssl_support_method             = var.acm_certificate_arn != "" ? "sni-only" : null
-    minimum_protocol_version       = var.acm_certificate_arn != "" ? "TLSv1.2_2021" : null
+    minimum_protocol_version       = "TLSv1.2_2021"
   }
 
   tags = var.tags

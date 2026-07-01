@@ -64,16 +64,44 @@ jobs:
             echo "Zone already tracked in state — nothing to do."
             exit 0
           fi
-          ZONE_ID=$(aws route53 list-hosted-zones-by-name \
+          ZONE_IDS=$(aws route53 list-hosted-zones-by-name \
             --dns-name "${DOMAIN}." \
             --query "HostedZones[?Name=='${DOMAIN}.'].Id" \
-            --output text | head -1 | cut -d/ -f3)
-          if [ -n "$ZONE_ID" ]; then
+            --output text | tr '\t' '\n' | cut -d/ -f3 | grep -v '^$')
+          ZONE_COUNT=$(echo "$ZONE_IDS" | grep -c '.' || true)
+          if [ "$ZONE_COUNT" -eq 0 ]; then
+            echo "No existing zone found for $DOMAIN — creating fresh."
+          elif [ "$ZONE_COUNT" -gt 1 ]; then
+            echo "::error::Found $ZONE_COUNT hosted zones for $DOMAIN — cannot decide which to adopt. Delete the extras manually before retrying."
+            echo "Orphaned zones: $ZONE_IDS"
+            exit 1
+          else
+            ZONE_ID="$ZONE_IDS"
             echo "Found untracked existing zone $ZONE_ID for $DOMAIN — importing it instead of deleting and recreating."
             echo "Deleting and recreating would incur a duplicate Route 53 monthly zone charge and open a DNS resolution gap until the new NS records propagate to the registrar."
             terraform import aws_route53_zone.main "$ZONE_ID"
+          fi
+      - name: Adopt existing ACM certificate instead of recreating it
+        run: |
+          DOMAIN="${{ vars.DOMAIN }}"
+          if terraform state list | grep -qx 'aws_acm_certificate.wildcard'; then
+            echo "ACM certificate already tracked in state — nothing to do."
+            exit 0
+          fi
+          CERT_ARNS=$(aws acm list-certificates --region us-east-1 \
+            --query "CertificateSummaryList[?DomainName=='${DOMAIN}' || DomainName=='*.${DOMAIN}'].CertificateArn" \
+            --output text | tr '\t' '\n' | grep -v '^$')
+          CERT_COUNT=$(echo "$CERT_ARNS" | grep -c '.' || true)
+          if [ "$CERT_COUNT" -eq 0 ]; then
+            echo "No existing ACM certificate found for $DOMAIN — creating fresh."
+          elif [ "$CERT_COUNT" -gt 1 ]; then
+            echo "::error::Found $CERT_COUNT ACM certificates for $DOMAIN — cannot decide which to adopt. Delete the extras manually before retrying."
+            echo "Orphaned certificates: $CERT_ARNS"
+            exit 1
           else
-            echo "No existing zone found for $DOMAIN — creating fresh."
+            CERT_ARN="$CERT_ARNS"
+            echo "Found untracked existing ACM certificate $CERT_ARN for $DOMAIN — importing it instead of creating a new one."
+            terraform import aws_acm_certificate.wildcard "$CERT_ARN"
           fi
       - name: Apply hosted zone
         run: terraform apply -auto-approve -target=aws_route53_zone.main

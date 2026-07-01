@@ -125,11 +125,15 @@ resource "aws_cloudfront_distribution" "portal" {
 }
 
 # DNS ALIAS record — only created when a custom domain and hosted zone are provided
+# allow_overwrite = true matches the cert_validation record's existing pattern; it ensures
+# that if a prior partial apply left a stale record in the zone, adopting the zone via
+# import doesn't block the next environment-level apply from recreating it.
 resource "aws_route53_record" "portal" {
-  count   = var.custom_domain != "" && var.hosted_zone_id != "" && var.acm_certificate_arn != "" ? 1 : 0
-  zone_id = var.hosted_zone_id
-  name    = var.custom_domain
-  type    = "A"
+  count           = var.custom_domain != "" && var.hosted_zone_id != "" && var.acm_certificate_arn != "" ? 1 : 0
+  zone_id         = var.hosted_zone_id
+  name            = var.custom_domain
+  type            = "A"
+  allow_overwrite = true
 
   alias {
     name                   = aws_cloudfront_distribution.portal.domain_name

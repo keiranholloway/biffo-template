@@ -1,0 +1,62 @@
+name: Verify No Orphaned Resources
+description: Checks that no orphaned AWS resources remain after terraform destroy. Fails loudly if any are found.
+
+inputs:
+  resource-type:
+    description: 'Type of resource to check (cognito-vpc, route53-acm)'
+    required: true
+  prefix:
+    description: 'Resource name prefix (e.g. project-name-dev)'
+    required: false
+  domain:
+    description: 'Domain name for Route53/ACM checks'
+    required: false
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check for orphaned resources
+      shell: bash
+      env:
+        RESOURCE_TYPE: ${{ inputs.resource-type }}
+        PREFIX: ${{ inputs.prefix }}
+        DOMAIN: ${{ inputs.domain }}
+      run: |
+        case "$RESOURCE_TYPE" in
+          cognito-vpc)
+            # --max-results is required by this API (not optional) — the CLI still
+            # auto-paginates across all pages by default using it as the page size,
+            # since --no-paginate/--max-items (the actual "cap total results" flags)
+            # aren't set here.
+            POOLS=$(aws cognito-idp list-user-pools --max-results 60 \
+              --query "UserPools[?Name=='${PREFIX}'].Id" --output text)
+            VPCS=$(aws ec2 describe-vpcs \
+              --filters "Name=tag:Name,Values=${PREFIX}-vpc" \
+              --query "Vpcs[].VpcId" --output text)
+            if [ -n "$POOLS" ] || [ -n "$VPCS" ]; then
+              echo "::error::Orphaned resources remain after destroy — Cognito pool names and VPC name tags have no AWS-side uniqueness constraint, so terraform will silently create duplicates on the next apply instead of erroring."
+              [ -n "$POOLS" ] && echo "::error::Orphaned Cognito pool(s): $POOLS"
+              [ -n "$VPCS" ] && echo "::error::Orphaned VPC(s): $VPCS"
+              exit 1
+            fi
+            echo "No orphaned Cognito pools or VPCs found."
+            ;;
+          route53-acm)
+            ZONES=$(aws route53 list-hosted-zones-by-name \
+              --dns-name "${DOMAIN}." \
+              --query "HostedZones[?Name=='${DOMAIN}.'].Id" --output text)
+            CERTS=$(aws acm list-certificates --region us-east-1 \
+              --query "CertificateSummaryList[?DomainName=='${DOMAIN}'].CertificateArn" --output text)
+            if [ -n "$ZONES" ] || [ -n "$CERTS" ]; then
+              echo "::error::Orphaned global resources remain after destroy — domain names have no AWS-side uniqueness constraint for Route 53 zones or ACM certs, so a future apply would silently create duplicates instead of erroring."
+              [ -n "$ZONES" ] && echo "::error::Orphaned hosted zone(s): $ZONES"
+              [ -n "$CERTS" ] && echo "::error::Orphaned ACM cert(s): $CERTS"
+              exit 1
+            fi
+            echo "No orphaned Route 53 zone or ACM cert found."
+            ;;
+          *)
+            echo "::error::Unknown resource type: $RESOURCE_TYPE"
+            exit 1
+            ;;
+        esac

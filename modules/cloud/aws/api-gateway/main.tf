@@ -36,11 +36,12 @@ resource "aws_apigatewayv2_integration" "lambda" {
   timeout_milliseconds   = 29000
 }
 
-# Health check — no auth required
+# Health check — no auth required (public endpoint)
 resource "aws_apigatewayv2_route" "health" {
-  api_id    = aws_apigatewayv2_api.main.id
-  route_key = "GET /api/v1/health"
-  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  api_id             = aws_apigatewayv2_api.main.id
+  route_key          = "GET /api/v1/health"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "NONE"
 }
 
 # OPTIONS preflight — no auth so CORS preflight is never blocked by the JWT authorizer.

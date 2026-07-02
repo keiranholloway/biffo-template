@@ -103,6 +103,20 @@ def _run_db_init() -> dict:
 
     command.upgrade(cfg, "head")
     logger.info("Database schema at head")
+
+    # Build the ADR-0004 permissions registry from the same bundled manifests
+    # (+ core __crud_permissions__) at deploy time, strictly: a malformed
+    # declaration or a plugin/core table-name collision fails the deploy here,
+    # loudly, rather than silently vanishing from the registry at runtime (where
+    # get_permissions_registry fails closed to all-denied). This does not touch
+    # the database — it only validates and logs the declared CRUD surface.
+    from .permissions import build_permissions_registry, serialize_registry
+
+    registry = build_permissions_registry(strict=True)
+    logger.info(
+        f"Permissions registry: {len(registry)} table(s) declare CRUD permissions",
+        extra={"crud_permissions": serialize_registry(registry)},
+    )
     return {"ok": True}
 
 

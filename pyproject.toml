@@ -27,7 +27,7 @@ pythonVersion = "3.13"
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
-extraPaths = ["services/api/src", "packages/python-sdk/src"]
+extraPaths = ["services/api/src", "packages/python-sdk/src", "services/rbac/src"]
 
 [tool.pytest.ini_options]
 testpaths = ["services", "packages"]

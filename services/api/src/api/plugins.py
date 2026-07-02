@@ -9,17 +9,18 @@ those manifests so the Core API can:
 - auto-generate their table migrations (``migrations/plugin_migrations.py``'s
   ``sync_plugin_migrations``, called from ``main.py``'s ``_run_db_init``)
 
-Known limitation: the Core API Lambda artifact is packaged from
-``services/api/`` alone (see ``.github/workflows/deploy-app.yml`` — only
-``services/api/`` is uploaded/zipped), so sibling ``services/*/`` directories
-are not bundled into a deployed Lambda today. In that context this scan finds
-nothing and both call sites above degrade to a no-op (empty plugin list, zero
-migrations generated) rather than erroring. It *is* fully functional in any
-context where the whole monorepo is checked out — local dev, CI, or a
-``db-init`` invocation run against a full checkout — which is sufficient for
-this chunk since no plugin repository exists yet to deploy end-to-end.
-``BIFFO_PLUGIN_SERVICES_ROOT`` lets ops repoint the scan if deployment
-packaging is later extended to bundle plugin manifests alongside the Lambda.
+The Core API Lambda artifact is packaged from ``services/api/`` alone (see
+``.github/workflows/deploy-app.yml``), so a plugin's full source tree is
+never bundled into the deployed Lambda — but each installed plugin's
+``biffo.plugin.json`` manifest *is*: the packaging step copies every
+``services/*/biffo.plugin.json`` into the zip under ``services/<name>/``,
+and ``BIFFO_PLUGIN_SERVICES_ROOT`` (set by Terraform to ``/var/task/services``,
+where AWS extracts the zip) points this scan at them. Only the manifest
+travels — the generic CRUD layer (``routing/plugin_router.py``) synthesizes
+routes and SQLAlchemy models from the manifest's declared ``tables``/
+``api_routes`` alone, so a plugin's own Python source is never needed here.
+A plugin's non-CRUD code (event subscriptions, custom logic) still runs in
+its own separate deployment, outside the Core API Lambda entirely.
 """
 
 from __future__ import annotations

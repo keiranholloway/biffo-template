@@ -89,7 +89,7 @@ export function deleteSession(projectName: string): void {
 // biffo deploy can find it without requiring a local biffo.config.json.
 
 function projectsDir(): string {
-  return process.env['BIFFO_PROJECTS_DIR'] ?? join(process.cwd(), '.biffo', 'projects')
+  return process.env['BIFFO_PROJECTS_DIR'] ?? join(homedir(), '.biffo', 'projects')
 }
 
 export function saveProjectConfig(config: BiffoConfig): void {

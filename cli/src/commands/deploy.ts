@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
@@ -17,10 +17,17 @@ export const deployCommand = new Command('deploy')
   .option('--app-only', 'Deploy application only, skip Terraform')
   .option('-p, --project <name>', 'Project name (overrides biffo.config.json in current directory)')
   .option('-c, --config <path>', 'Path to biffo.config.json')
+  .option('-y, --yes', 'Skip deployment target confirmation')
   .action(
     async (
       environment: string,
-      options: { infraOnly?: boolean; appOnly?: boolean; project?: string; config?: string },
+      options: {
+        infraOnly?: boolean
+        appOnly?: boolean
+        project?: string
+        config?: string
+        yes?: boolean
+      },
     ) => {
       const validEnvs = ['dev', 'staging', 'prod']
       if (!validEnvs.includes(environment)) {
@@ -31,6 +38,10 @@ export const deployCommand = new Command('deploy')
       const config = await resolveConfig(options)
 
       console.log(chalk.bold(`\n  Biffo — Deploy to ${environment}\n`))
+      if (!options.yes && !(await confirmDeployTarget(config, environment))) {
+        log.warn('Deploy cancelled')
+        return
+      }
 
       const token = resolveGithubToken()
       const github = new GitHubAdapter(token)
@@ -66,13 +77,18 @@ async function resolveConfig(options: { project?: string; config?: string }): Pr
     return cfg
   }
 
-  // Try ./biffo.config.json — but only if it parses successfully (not a template placeholder)
-  try {
-    const raw = JSON.parse(readFileSync(resolve(process.cwd(), 'biffo.config.json'), 'utf8'))
+  // Try ./biffo.config.json. If it exists but is invalid, stop rather than silently
+  // falling back to another saved project.
+  const localConfigPath = resolve(process.cwd(), 'biffo.config.json')
+  if (existsSync(localConfigPath)) {
+    const raw = JSON.parse(readFileSync(localConfigPath, 'utf8'))
     const result = BiffoConfigSchema.safeParse(raw)
     if (result.success) return result.data
-  } catch {
-    /* not found or not parseable — fall through to project store */
+    log.error(`Invalid config at ${localConfigPath}:`)
+    result.error.issues.forEach((i) => log.error(`  ${i.path.join('.')} — ${i.message}`))
+    log.error('Refusing to fall back to a saved project while a local config file is present.')
+    log.error('Fix biffo.config.json, or pass --project <name> / --config <path> explicitly.')
+    process.exit(1)
   }
 
   // Fall back to ~/.biffo/projects/
@@ -104,6 +120,37 @@ async function resolveConfig(options: { project?: string; config?: string }): Pr
   ])
 
   return projects.find((p) => p.project.name === chosen)!
+}
+
+async function confirmDeployTarget(config: BiffoConfig, environment: string): Promise<boolean> {
+  const { org, repo } = (
+    config.source_control as { provider: 'github'; config: { org: string; repo: string } }
+  ).config
+  const awsConfig = (
+    config.cloud as { provider: 'aws'; config: { account_id: string; region: string } }
+  ).config
+  const dns = resolveDnsConfig(config)
+
+  console.log(chalk.bold('  Deployment target\n'))
+  console.log(`  Project:     ${chalk.cyan(config.project.name)}`)
+  console.log(`  Repository:  ${chalk.cyan(`${org}/${repo}`)}`)
+  console.log(`  Environment: ${chalk.cyan(environment)}`)
+  console.log(`  AWS account: ${chalk.cyan(awsConfig.account_id)}`)
+  console.log(`  AWS region:  ${chalk.cyan(awsConfig.region)}`)
+  console.log(`  DNS mode:    ${chalk.cyan(dns.mode)}`)
+  if (dns.domain) console.log(`  Domain:      ${chalk.cyan(dns.domain)}`)
+  console.log()
+
+  const { confirmed } = await inquirer.prompt<{ confirmed: boolean }>([
+    {
+      type: 'confirm',
+      name: 'confirmed',
+      message: 'Deploy to this target?',
+      default: false,
+    },
+  ])
+
+  return confirmed
 }
 
 // ─── Exported for testing ────────────────────────────────────────────────────

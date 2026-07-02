@@ -106,6 +106,17 @@ jobs:
           cp -r src/ package/
           cp -r migrations/ package/
           cp alembic.ini package/
+          # Bundle every installed plugin's manifest (services/*/biffo.plugin.json,
+          # sibling to services/api/ in the full checkout) so discover_plugin_manifests()
+          # can find them at runtime — the Lambda otherwise only ships services/api/
+          # itself. See api.plugins module docstring for the read side of this.
+          mkdir -p package/services
+          for manifest in ../services/*/biffo.plugin.json; do
+            [ -f "$manifest" ] || continue
+            plugin_name=$(basename "$(dirname "$manifest")")
+            mkdir -p "package/services/$plugin_name"
+            cp "$manifest" "package/services/$plugin_name/"
+          done
           cd package && zip -r ../lambda.zip .
           aws lambda update-function-code \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
@@ -204,6 +215,17 @@ jobs:
           cp -r src/ package/
           cp -r migrations/ package/
           cp alembic.ini package/
+          # Bundle every installed plugin's manifest (services/*/biffo.plugin.json,
+          # sibling to services/api/ in the full checkout) so discover_plugin_manifests()
+          # can find them at runtime — the Lambda otherwise only ships services/api/
+          # itself. See api.plugins module docstring for the read side of this.
+          mkdir -p package/services
+          for manifest in ../services/*/biffo.plugin.json; do
+            [ -f "$manifest" ] || continue
+            plugin_name=$(basename "$(dirname "$manifest")")
+            mkdir -p "package/services/$plugin_name"
+            cp "$manifest" "package/services/$plugin_name/"
+          done
           cd package && zip -r ../lambda.zip .
           aws lambda update-function-code \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
@@ -314,6 +336,17 @@ jobs:
           cp -r src/ package/
           cp -r migrations/ package/
           cp alembic.ini package/
+          # Bundle every installed plugin's manifest (services/*/biffo.plugin.json,
+          # sibling to services/api/ in the full checkout) so discover_plugin_manifests()
+          # can find them at runtime — the Lambda otherwise only ships services/api/
+          # itself. See api.plugins module docstring for the read side of this.
+          mkdir -p package/services
+          for manifest in ../services/*/biffo.plugin.json; do
+            [ -f "$manifest" ] || continue
+            plugin_name=$(basename "$(dirname "$manifest")")
+            mkdir -p "package/services/$plugin_name"
+            cp "$manifest" "package/services/$plugin_name/"
+          done
           cd package && zip -r ../lambda.zip .
           aws lambda update-function-code \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \

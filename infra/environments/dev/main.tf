@@ -141,6 +141,10 @@ module "core_api" {
     BIFFO_COGNITO_REGION       = var.aws_region
     BIFFO_EVENT_BUS_NAME       = module.events.event_bus_name
     BIFFO_CORS_ORIGINS         = local.cors_origins
+    # Set so discover_plugin_manifests() finds bundled plugin manifests at
+    # runtime — deploy-app.yml's packaging step copies services/*/biffo.plugin.json
+    # into the Lambda zip under services/, which AWS extracts to /var/task/.
+    BIFFO_PLUGIN_SERVICES_ROOT = "/var/task/services"
   }
   tags = local.tags
 }

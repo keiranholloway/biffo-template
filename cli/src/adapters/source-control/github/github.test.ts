@@ -31,6 +31,10 @@ function makeOctokitMock() {
       getRef: vi.fn(),
       createRef: vi.fn(),
     },
+    actions: {
+      listWorkflowRuns: vi.fn(),
+      createWorkflowDispatch: vi.fn(),
+    },
   }
 }
 
@@ -380,5 +384,116 @@ describe('setRepoSecret', () => {
       'gh secret set MY_SECRET --repo acme/my-app',
       expect.objectContaining({ input: 'super-secret-value' }),
     )
+  })
+})
+
+// ─── getLatestWorkflowRunId / triggerWorkflow ─────────────────────────────────
+//
+// On a just-created repo, GitHub Actions can take a few seconds to discover
+// and index workflow files pushed via template generation — the workflow_id
+// lookup 404s until indexing completes, even though the file itself already
+// exists in the repo.
+
+describe('getLatestWorkflowRunId', () => {
+  it('returns the latest run id when the workflow is already indexed', async () => {
+    octokitMock.actions.listWorkflowRuns = vi
+      .fn()
+      .mockResolvedValue({ data: { workflow_runs: [{ id: 42 }] } })
+
+    const id = await adapter().getLatestWorkflowRunId('acme', 'my-app', 'deploy-global.yml')
+
+    expect(id).toBe(42)
+  })
+
+  it('returns 0 when there are no runs yet', async () => {
+    octokitMock.actions.listWorkflowRuns = vi
+      .fn()
+      .mockResolvedValue({ data: { workflow_runs: [] } })
+
+    const id = await adapter().getLatestWorkflowRunId('acme', 'my-app', 'deploy-global.yml')
+
+    expect(id).toBe(0)
+  })
+
+  it('retries on 404 (workflow not yet indexed) until it succeeds', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { status: 404 })
+    octokitMock.actions.listWorkflowRuns = vi
+      .fn()
+      .mockRejectedValueOnce(notFound)
+      .mockRejectedValueOnce(notFound)
+      .mockResolvedValueOnce({ data: { workflow_runs: [{ id: 7 }] } })
+
+    const id = await adapter().getLatestWorkflowRunId(
+      'acme',
+      'my-app',
+      'deploy-global.yml',
+      10_000,
+      10,
+    )
+
+    expect(id).toBe(7)
+    expect(octokitMock.actions.listWorkflowRuns).toHaveBeenCalledTimes(3)
+  })
+
+  it('throws with the original error if the workflow is never indexed within the timeout', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { status: 404 })
+    octokitMock.actions.listWorkflowRuns = vi.fn().mockRejectedValue(notFound)
+
+    await expect(
+      adapter().getLatestWorkflowRunId('acme', 'my-app', 'deploy-global.yml', 50, 10),
+    ).rejects.toThrow('Not Found')
+  })
+
+  it('does not retry non-404 errors', async () => {
+    const serverError = Object.assign(new Error('Internal Server Error'), { status: 500 })
+    octokitMock.actions.listWorkflowRuns = vi.fn().mockRejectedValue(serverError)
+
+    await expect(
+      adapter().getLatestWorkflowRunId('acme', 'my-app', 'deploy-global.yml'),
+    ).rejects.toThrow('Internal Server Error')
+    expect(octokitMock.actions.listWorkflowRuns).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('triggerWorkflow', () => {
+  it('dispatches the workflow with the given inputs and ref', async () => {
+    octokitMock.actions.createWorkflowDispatch = vi.fn().mockResolvedValue({})
+
+    await adapter().triggerWorkflow(
+      'acme',
+      'my-app',
+      'deploy-infra.yml',
+      { environment: 'dev' },
+      'dev',
+    )
+
+    expect(octokitMock.actions.createWorkflowDispatch).toHaveBeenCalledWith({
+      owner: 'acme',
+      repo: 'my-app',
+      workflow_id: 'deploy-infra.yml',
+      ref: 'dev',
+      inputs: { environment: 'dev' },
+    })
+  })
+
+  it('retries on 404 (workflow not yet indexed) until it succeeds', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { status: 404 })
+    octokitMock.actions.createWorkflowDispatch = vi
+      .fn()
+      .mockRejectedValueOnce(notFound)
+      .mockResolvedValueOnce({})
+
+    await adapter().triggerWorkflow('acme', 'my-app', 'deploy-global.yml', {}, 'main', 10_000, 10)
+
+    expect(octokitMock.actions.createWorkflowDispatch).toHaveBeenCalledTimes(2)
+  })
+
+  it('throws with the original error if the workflow is never indexed within the timeout', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { status: 404 })
+    octokitMock.actions.createWorkflowDispatch = vi.fn().mockRejectedValue(notFound)
+
+    await expect(
+      adapter().triggerWorkflow('acme', 'my-app', 'deploy-global.yml', {}, 'main', 50, 10),
+    ).rejects.toThrow('Not Found')
   })
 })

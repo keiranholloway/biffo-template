@@ -34,6 +34,16 @@ _NOTEPAD_MANIFEST = {
                 {"name": "title", "type": "String(200)"},
                 {"name": "body", "type": "Text", "nullable": True},
             ],
+            # ADR-0004: every operation exposed to any authenticated caller, so
+            # the CRUD/tenant tests below exercise the handlers themselves. The
+            # enforcement tests further down use their own tailored manifests.
+            "permissions": {
+                "list": {"allowed": True},
+                "read": {"allowed": True},
+                "create": {"allowed": True},
+                "update": {"allowed": True},
+                "delete": {"allowed": True},
+            },
         }
     ],
     "api_routes": [
@@ -61,12 +71,13 @@ _NOTEPAD_MANIFEST = {
 }
 
 
-def _caller(tenant_id: str) -> AuthenticatedUser:
+def _caller(tenant_id: str, roles: list[str] | None = None) -> AuthenticatedUser:
     return AuthenticatedUser(
         sub=f"sub-{tenant_id}",
         email="plugin-caller@example.com",
         username="plugin-caller",
         tenant_id=tenant_id,
+        roles=roles or [],
     )
 
 
@@ -247,3 +258,164 @@ class TestRequirePluginTenantContext:
 
     def test_returns_tenant_id_from_caller(self):
         assert require_plugin_tenant_context(_caller("default")) == "default"
+
+
+def _enforcement_client(
+    manifest: dict, caller: AuthenticatedUser
+) -> Generator[TestClient, None, None]:
+    """Build a throwaway app for one manifest + caller, for the ADR-0004
+    enforcement tests. Mirrors the plugin_app fixture but parameterized."""
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+
+    async def _create_tables() -> None:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    asyncio.run(_create_tables())
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
+        async with session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    app = FastAPI()
+    app.include_router(build_plugin_router(manifests=[manifest]), prefix="/api/v1")
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[require_auth] = lambda: caller
+
+    try:
+        yield TestClient(app)
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def _manifest_with_permissions(permissions: dict) -> dict:
+    """A one-table 'gadgets' plugin declaring all five CRUD routes, with the
+    given permissions block."""
+    return {
+        "name": "gadgets",
+        "version": "1.0.0",
+        "tables": [
+            {
+                "name": "gadgets",
+                "columns": [{"name": "label", "type": "String(100)"}],
+                "permissions": permissions,
+            }
+        ],
+        "api_routes": [
+            {"method": "GET", "path": "/g", "table": "gadgets", "operation": "list"},
+            {
+                "method": "GET",
+                "path": "/g/{id}",
+                "table": "gadgets",
+                "operation": "read",
+            },
+            {"method": "POST", "path": "/g", "table": "gadgets", "operation": "create"},
+            {
+                "method": "PUT",
+                "path": "/g/{id}",
+                "table": "gadgets",
+                "operation": "update",
+            },
+            {
+                "method": "DELETE",
+                "path": "/g/{id}",
+                "table": "gadgets",
+                "operation": "delete",
+            },
+        ],
+    }
+
+
+class TestPermissionEnforcement:
+    """ADR-0004: the generic CRUD layer authorises per (table, operation) from
+    the declared permissions block. Default-deny; 404 for not-exposed, 403 for
+    exposed-but-wrong-role."""
+
+    def test_table_with_no_permissions_block_is_fully_invisible(self):
+        # Declares routes but no permissions -> every operation 404s (default-deny),
+        # indistinguishable from a table that doesn't exist.
+        manifest = {
+            "name": "gadgets",
+            "version": "1.0.0",
+            "tables": [
+                {
+                    "name": "gadgets",
+                    "columns": [{"name": "label", "type": "String(100)"}],
+                }
+            ],
+            "api_routes": [
+                {
+                    "method": "GET",
+                    "path": "/g",
+                    "table": "gadgets",
+                    "operation": "list",
+                },
+                {
+                    "method": "POST",
+                    "path": "/g",
+                    "table": "gadgets",
+                    "operation": "create",
+                },
+            ],
+        }
+        for client in _enforcement_client(manifest, _caller("default")):
+            assert client.get("/api/v1/plugins/gadgets/g").status_code == 404
+            assert (
+                client.post(
+                    "/api/v1/plugins/gadgets/g", json={"label": "x"}
+                ).status_code
+                == 404
+            )
+
+    def test_allowed_op_is_reachable_denied_op_is_404(self):
+        manifest = _manifest_with_permissions(
+            {"list": {"allowed": True}}  # only list; create/etc. default-denied
+        )
+        for client in _enforcement_client(manifest, _caller("default")):
+            assert client.get("/api/v1/plugins/gadgets/g").status_code == 200
+            # create declared as a route but not allowed -> 404, not 403.
+            assert (
+                client.post(
+                    "/api/v1/plugins/gadgets/g", json={"label": "x"}
+                ).status_code
+                == 404
+            )
+
+    def test_role_gated_op_forbidden_without_role(self):
+        manifest = _manifest_with_permissions(
+            {
+                "list": {"allowed": True},
+                "create": {"allowed": True, "required_role": ["editor"]},
+            }
+        )
+        # Caller has no roles -> can list, but create is 403 (exposed, wrong role).
+        for client in _enforcement_client(manifest, _caller("default")):
+            assert client.get("/api/v1/plugins/gadgets/g").status_code == 200
+            assert (
+                client.post(
+                    "/api/v1/plugins/gadgets/g", json={"label": "x"}
+                ).status_code
+                == 403
+            )
+
+    def test_role_gated_op_allowed_with_matching_role(self):
+        manifest = _manifest_with_permissions(
+            {"create": {"allowed": True, "required_role": ["editor", "admin"]}}
+        )
+        # Any-of match: caller has 'editor', one of the required roles.
+        for client in _enforcement_client(
+            manifest, _caller("default", roles=["editor"])
+        ):
+            resp = client.post("/api/v1/plugins/gadgets/g", json={"label": "x"})
+            assert resp.status_code == 201
+            assert resp.json()["label"] == "x"

@@ -9,6 +9,7 @@ from mangum import Mangum
 from .config import settings
 from .routers import auth, health, users
 from .routers.admin import plugins as admin_plugins
+from .routing.core_crud_router import build_core_crud_router
 from .routing.plugin_router import build_plugin_router
 
 logger = Logger()
@@ -40,6 +41,10 @@ app.include_router(admin_plugins.router, prefix="/api/v1")
 # docstring for how each installed plugin's manifest reaches the deployed
 # Lambda.
 app.include_router(build_plugin_router(), prefix="/api/v1")
+# Generic CRUD for opt-in core tables (ADR-0004): core TenantScopedModel
+# subclasses declaring __crud_permissions__ are served under /api/v1/data/
+# <table>. Empty in the base deployment (no core table opts in yet).
+app.include_router(build_core_crud_router(), prefix="/api/v1")
 
 handler = Mangum(app, lifespan="off")
 

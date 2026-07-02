@@ -48,7 +48,11 @@ async def test_roles_default_empty_when_claim_null(monkeypatch):
     monkeypatch.setattr(
         auth_module,
         "_verify_token",
-        lambda _token: {"sub": "sub-3", "email": "c@example.com", "cognito:groups": None},
+        lambda _token: {
+            "sub": "sub-3",
+            "email": "c@example.com",
+            "cognito:groups": None,
+        },
     )
 
     caller = await require_auth(credentials=_credentials())

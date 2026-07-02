@@ -7,6 +7,10 @@ on:
       - 'apps/**'
       - 'services/**'
       - 'packages/**'
+      # db/imports/<name>/*.sql, vendored by `biffo data import` (ADR-0005) —
+      # without this, pushing a new/updated DDL import wouldn't trigger a
+      # redeploy the way installing a plugin under services/ already does.
+      - 'db/**'
   workflow_dispatch:
     inputs:
       environment:

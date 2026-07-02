@@ -10,15 +10,16 @@ permissions:
 env:
   TERRAFORM_VERSION: '~> 1.9'
 
-# Destroys shared global infrastructure: Route 53 hosted zone and ACM certificate.
+# Destroys shared global infrastructure: ACM certificate and, in managed Route 53 mode,
+# the hosted zone created by Biffo.
 # Run this AFTER all environment infrastructure has been destroyed via destroy-infra.yml.
 # biffo teardown triggers this automatically — do not run manually unless you know why.
 
 jobs:
   destroy-global:
-    name: Destroy global (Route 53 + ACM)
+    name: Destroy global DNS/certificate
     runs-on: ubuntu-latest
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && vars.DOMAIN != ''
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && vars.DOMAIN != '' && vars.DNS_MODE != 'none'
     defaults:
       run:
         working-directory: infra/global
@@ -40,9 +41,11 @@ jobs:
           EOF
       - run: terraform init -backend-config=backend.hcl
       - name: Delete ACM validation records and empty zone before destroy
+        if: vars.DNS_MODE == '' || vars.DNS_MODE == 'managed-route53'
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_domain: ${{ vars.DOMAIN }}
+          TF_VAR_dns_mode: ${{ vars.DNS_MODE || 'managed-route53' }}
         run: |
           ZONE_ID=$(aws route53 list-hosted-zones-by-name \
             --dns-name "${{ vars.DOMAIN }}." \
@@ -66,12 +69,18 @@ jobs:
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_domain: ${{ vars.DOMAIN }}
-      - name: Verify no orphaned Route 53 zone or ACM cert remain
+          TF_VAR_dns_mode: ${{ vars.DNS_MODE || 'managed-route53' }}
+      - name: Verify no orphaned global resources remain
         run: |
           DOMAIN="${{ vars.DOMAIN }}"
-          ZONES=$(aws route53 list-hosted-zones-by-name \
-            --dns-name "${DOMAIN}." \
-            --query "HostedZones[?Name=='${DOMAIN}.'].Id" --output text)
+          DNS_MODE="${{ vars.DNS_MODE || 'managed-route53' }}"
+          if [ "$DNS_MODE" = "managed-route53" ]; then
+            ZONES=$(aws route53 list-hosted-zones-by-name \
+              --dns-name "${DOMAIN}." \
+              --query "HostedZones[?Name=='${DOMAIN}.'].Id" --output text)
+          else
+            ZONES=""
+          fi
           CERTS=$(aws acm list-certificates --region us-east-1 \
             --query "CertificateSummaryList[?DomainName=='${DOMAIN}'].CertificateArn" --output text)
           if [ -n "$ZONES" ] || [ -n "$CERTS" ]; then

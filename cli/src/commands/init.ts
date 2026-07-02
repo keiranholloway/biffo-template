@@ -5,7 +5,7 @@ import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts'
 import chalk from 'chalk'
 import { Command } from 'commander'
 import inquirer from 'inquirer'
-import { BiffoConfigSchema, type BiffoConfig } from '../config/schema.js'
+import { BiffoConfigSchema, resolveDnsConfig, type BiffoConfig } from '../config/schema.js'
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
 import { log } from '../lib/logger.js'
@@ -181,7 +181,8 @@ export async function runInit(
     const { org, repo } = (
       config.source_control as { provider: 'github'; config: { org: string; repo: string } }
     ).config
-    const domain = config.project.domain
+    const dns = resolveDnsConfig(config)
+    const domain = dns.domain
 
     // Create dev and staging branches from main, then set dev as the default
     await github.createBranch(org, repo, 'dev', 'main')
@@ -192,20 +193,24 @@ export async function runInit(
     await github.configureBranchProtection(config)
     await github.createEnvironments(config)
 
-    // Repo-level domain variable (used by deploy-global + infra workflows)
-    await github.setRepoVariable(org, repo, 'DOMAIN', domain)
-
-    // Per-environment CUSTOM_DOMAIN so each env's infra job gets the right subdomain
-    // dev → dev.domain.com, staging → staging.domain.com, prod → domain.com
-    const envDomains: Record<string, string> = {
-      dev: `dev.${domain}`,
-      staging: `staging.${domain}`,
-      prod: domain,
+    await github.setRepoVariable(org, repo, 'DNS_MODE', dns.mode)
+    if (domain) {
+      await github.setRepoVariable(org, repo, 'DOMAIN', domain)
     }
-    for (const env of config.environments) {
-      const customDomain = envDomains[env] ?? ''
-      if (customDomain) {
-        await github.setEnvVariable(org, repo, env, 'CUSTOM_DOMAIN', customDomain)
+
+    if (domain) {
+      // Per-environment CUSTOM_DOMAIN so each env's infra job gets the right subdomain
+      // dev → dev.domain.com, staging → staging.domain.com, prod → domain.com
+      const envDomains: Record<string, string> = {
+        dev: `dev.${domain}`,
+        staging: `staging.${domain}`,
+        prod: domain,
+      }
+      for (const env of config.environments) {
+        const customDomain = envDomains[env] ?? ''
+        if (customDomain) {
+          await github.setEnvVariable(org, repo, env, 'CUSTOM_DOMAIN', customDomain)
+        }
       }
     }
 
@@ -375,7 +380,33 @@ async function promptForConfig(
       validate: (v: string) => /^[a-z0-9-]+$/.test(v) || 'Must be lowercase kebab-case',
     },
     { type: 'input', name: 'project_description', message: 'Project description:' },
-    { type: 'input', name: 'domain', message: 'Primary domain (e.g. myapp.com):' },
+    {
+      type: 'list',
+      name: 'dns_mode',
+      message: 'DNS / custom domain mode:',
+      choices: [
+        {
+          name: 'Managed Route53 — create DNS zone, certificate, and records automatically',
+          value: 'managed-route53',
+        },
+        {
+          name: 'External DNS — request SSL certificate and print records for manual DNS changes',
+          value: 'external',
+        },
+        {
+          name: 'None — use the default CloudFront domain only',
+          value: 'none',
+        },
+      ],
+      default: 'managed-route53',
+    },
+    {
+      type: 'input',
+      name: 'domain',
+      message: 'Primary domain (e.g. myapp.com):',
+      when: (a: { dns_mode?: string }) => a.dns_mode !== 'none',
+      validate: (v: string) => v.trim().length > 0 || 'Domain is required for this DNS mode',
+    },
     { type: 'input', name: 'github_org', message: 'GitHub org or username:' },
     { type: 'input', name: 'github_repo', message: 'Repository name (will be created):' },
     { type: 'input', name: 'admin_email', message: 'Admin email address:' },
@@ -393,7 +424,10 @@ async function promptForConfig(
     project: {
       name: answers.project_name as string,
       description: answers.project_description as string,
-      domain: answers.domain as string,
+    },
+    dns: {
+      mode: answers.dns_mode as 'managed-route53' | 'external' | 'none',
+      domain: answers.domain as string | undefined,
     },
     source_control: {
       provider: 'github',

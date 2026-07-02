@@ -35,33 +35,66 @@ const ModulesSchema = z.object({
   cdn: z.enum(['cloudfront']).default('cloudfront'),
 })
 
-export const BiffoConfigSchema = z.object({
-  $schema: z.string().optional(),
-  project: z.object({
-    name: z
-      .string()
-      .min(1)
-      .regex(/^[a-z0-9-]+$/, 'Must be lowercase kebab-case'),
-    description: z.string().default(''),
-    domain: z.string().min(1).describe('Primary domain, e.g. myapp.com'),
-  }),
-  source_control: SourceControlConfigSchema,
-  cloud: CloudConfigSchema,
-  environments: z
-    .array(z.enum(['dev', 'staging', 'prod']))
-    .min(1)
-    .default(['dev']),
-  admin: z.object({
-    email: z.string().email(),
-    username: z.string().min(1),
-  }),
-  database: z
-    .object({
-      schema_path: z.string().nullable().default(null),
-      migrations_path: z.string().default('services/api/migrations'),
-    })
-    .default({}),
-  modules: ModulesSchema.default({}),
+const DnsSchema = z.object({
+  mode: z.enum(['managed-route53', 'external', 'none']).default('managed-route53'),
+  domain: z.string().min(1).optional(),
 })
 
+export const BiffoConfigSchema = z
+  .object({
+    $schema: z.string().optional(),
+    project: z.object({
+      name: z
+        .string()
+        .min(1)
+        .regex(/^[a-z0-9-]+$/, 'Must be lowercase kebab-case'),
+      description: z.string().default(''),
+      // Backward compatibility for existing configs. New configs should use dns.domain.
+      domain: z.string().min(1).optional().describe('Primary domain, e.g. myapp.com'),
+    }),
+    dns: DnsSchema.optional(),
+    source_control: SourceControlConfigSchema,
+    cloud: CloudConfigSchema,
+    environments: z
+      .array(z.enum(['dev', 'staging', 'prod']))
+      .min(1)
+      .default(['dev']),
+    admin: z.object({
+      email: z.string().email(),
+      username: z.string().min(1),
+    }),
+    database: z
+      .object({
+        schema_path: z.string().nullable().default(null),
+        migrations_path: z.string().default('services/api/migrations'),
+      })
+      .default({}),
+    modules: ModulesSchema.default({}),
+  })
+  .superRefine((config, ctx) => {
+    const dns = resolveDnsConfig(config)
+    if (dns.mode !== 'none' && !dns.domain) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dns', 'domain'],
+        message: 'DNS domain is required unless dns.mode is "none"',
+      })
+    }
+  })
+
 export type BiffoConfig = z.infer<typeof BiffoConfigSchema>
+export type DnsMode = 'managed-route53' | 'external' | 'none'
+
+export function resolveDnsConfig(config: {
+  project: { domain?: string | undefined }
+  dns?: { mode?: DnsMode | undefined; domain?: string | undefined } | undefined
+}): { mode: DnsMode; domain: string } {
+  const legacyDomain = config.project.domain ?? ''
+  const mode = config.dns?.mode ?? (legacyDomain ? 'managed-route53' : 'none')
+  const domain = config.dns?.domain ?? legacyDomain
+
+  return {
+    mode,
+    domain: mode === 'none' ? '' : domain,
+  }
+}

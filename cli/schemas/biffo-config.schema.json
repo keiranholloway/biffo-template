@@ -8,10 +8,17 @@
   "properties": {
     "project": {
       "type": "object",
-      "required": ["name", "domain"],
+      "required": ["name"],
       "properties": {
         "name": { "type": "string", "pattern": "^[a-z0-9-]+$" },
         "description": { "type": "string" },
+        "domain": { "type": "string" }
+      }
+    },
+    "dns": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["managed-route53", "external", "none"] },
         "domain": { "type": "string" }
       }
     },

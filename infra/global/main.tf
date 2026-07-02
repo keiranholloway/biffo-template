@@ -21,7 +21,13 @@ provider "aws" {
   }
 }
 
+locals {
+  manage_route53 = var.dns_mode == "managed-route53"
+}
+
 resource "aws_route53_zone" "main" {
+  count = local.manage_route53 ? 1 : 0
+
   name = var.domain
 }
 
@@ -36,23 +42,25 @@ resource "aws_acm_certificate" "wildcard" {
 }
 
 resource "aws_route53_record" "cert_validation" {
-  for_each = {
+  for_each = local.manage_route53 ? {
     for dvo in aws_acm_certificate.wildcard.domain_validation_options : dvo.domain_name => {
       name   = dvo.resource_record_name
       record = dvo.resource_record_value
       type   = dvo.resource_record_type
     }
-  }
+  } : {}
 
   allow_overwrite = true
   name            = each.value.name
   records         = [each.value.record]
   ttl             = 60
   type            = each.value.type
-  zone_id         = aws_route53_zone.main.zone_id
+  zone_id         = aws_route53_zone.main[0].zone_id
 }
 
 resource "aws_acm_certificate_validation" "wildcard" {
+  count = local.manage_route53 ? 1 : 0
+
   certificate_arn         = aws_acm_certificate.wildcard.arn
   validation_record_fqdns = [for r in aws_route53_record.cert_validation : r.fqdn]
 }

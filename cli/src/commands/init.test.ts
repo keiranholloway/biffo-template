@@ -30,6 +30,15 @@ const CONFIG = BiffoConfigSchema.parse({
   admin: { email: 'admin@example.com', username: 'admin' },
 })
 
+const CONFIG_NO_DNS = BiffoConfigSchema.parse({
+  project: { name: 'my-app', description: 'Test app' },
+  dns: { mode: 'none' },
+  source_control: { provider: 'github', config: { org: 'acme', repo: 'my-app' } },
+  cloud: { provider: 'aws', config: { account_id: '123456789012', region: 'eu-west-1' } },
+  environments: ['dev'],
+  admin: { email: 'admin@example.com', username: 'admin' },
+})
+
 function makeSession(overrides: Partial<InitSession> = {}): InitSession {
   return {
     version: 1,
@@ -130,6 +139,49 @@ describe('happy path', () => {
   it('deletes the session file on successful completion', async () => {
     await runInit(makeGithubMock() as never, makeAwsMock() as never, CONFIG, makeSession())
     expect(deleteSession).toHaveBeenCalledWith('my-app')
+  })
+
+  it('sets DNS mode and domain variables for legacy managed Route53 configs', async () => {
+    const github = makeGithubMock()
+
+    await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
+
+    expect(github.setRepoVariable).toHaveBeenCalledWith(
+      'acme',
+      'my-app',
+      'DNS_MODE',
+      'managed-route53',
+    )
+    expect(github.setRepoVariable).toHaveBeenCalledWith('acme', 'my-app', 'DOMAIN', 'example.com')
+    expect(github.setEnvVariable).toHaveBeenCalledWith(
+      'acme',
+      'my-app',
+      'dev',
+      'CUSTOM_DOMAIN',
+      'dev.example.com',
+    )
+  })
+
+  it('does not set domain variables when DNS mode is none', async () => {
+    const github = makeGithubMock()
+    const session = makeSession({ config: CONFIG_NO_DNS })
+
+    await runInit(github as never, makeAwsMock() as never, CONFIG_NO_DNS, session)
+
+    expect(github.setRepoVariable).toHaveBeenCalledWith('acme', 'my-app', 'DNS_MODE', 'none')
+    expect(github.setRepoVariable).not.toHaveBeenCalledWith(
+      'acme',
+      'my-app',
+      'DOMAIN',
+      expect.any(String),
+    )
+    expect(github.setEnvVariable).not.toHaveBeenCalledWith(
+      'acme',
+      'my-app',
+      expect.any(String),
+      'CUSTOM_DOMAIN',
+      expect.any(String),
+    )
   })
 })
 

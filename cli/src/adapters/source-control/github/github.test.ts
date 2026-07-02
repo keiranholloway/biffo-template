@@ -326,6 +326,21 @@ describe('configureBranchProtection', () => {
     const [call] = vi.mocked(octokitMock.repos.updateBranchProtection).mock.calls
     expect(call![0]).toMatchSnapshot()
   })
+
+  it('warns and skips (without throwing) when the org plan does not support branch protection on a private repo', async () => {
+    const planLimited = Object.assign(
+      new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'),
+      { status: 403 },
+    )
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValue({ data: {} })
+    octokitMock.repos.updateBranchProtection = vi.fn().mockRejectedValue(planLimited)
+
+    await expect(adapter().configureBranchProtection(CONFIG)).resolves.toBeUndefined()
+
+    // Only the first branch (dev) is attempted — no point retrying staging/main
+    // against the same org-level plan limitation.
+    expect(octokitMock.repos.updateBranchProtection).toHaveBeenCalledTimes(1)
+  })
 })
 
 // ─── createEnvironments ──────────────────────────────────────────────────────

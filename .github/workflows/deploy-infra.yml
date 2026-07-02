@@ -128,7 +128,7 @@ jobs:
             --body "$(terraform output -raw cognito_client_id)" \
             --env dev
           gh variable set CORE_API_LAMBDA_NAME \
-            --body "${{ vars.PROJECT_NAME }}-dev-core-api" \
+            --body "$(terraform output -raw core_api_lambda_name)" \
             --env dev
           gh variable set PORTAL_BUCKET_NAME \
             --body "$(terraform output -raw portal_bucket_name)" \
@@ -230,7 +230,7 @@ jobs:
             --body "$(terraform output -raw cognito_client_id)" \
             --env staging
           gh variable set CORE_API_LAMBDA_NAME \
-            --body "${{ vars.PROJECT_NAME }}-staging-core-api" \
+            --body "$(terraform output -raw core_api_lambda_name)" \
             --env staging
           gh variable set PORTAL_BUCKET_NAME \
             --body "$(terraform output -raw portal_bucket_name)" \
@@ -340,7 +340,7 @@ jobs:
             --body "$(terraform output -raw cognito_client_id)" \
             --env prod
           gh variable set CORE_API_LAMBDA_NAME \
-            --body "${{ vars.PROJECT_NAME }}-prod-core-api" \
+            --body "$(terraform output -raw core_api_lambda_name)" \
             --env prod
           gh variable set PORTAL_BUCKET_NAME \
             --body "$(terraform output -raw portal_bucket_name)" \

@@ -121,10 +121,16 @@ module "database" {
 module "core_api" {
   source = "../../../modules/cloud/aws/compute"
 
-  project_name              = var.project_name
-  environment               = local.environment
-  function_name             = "core-api"
-  handler                   = "src.api.main.lambda_handler"
+  project_name  = var.project_name
+  environment   = local.environment
+  function_name = "core-api"
+  handler       = "src.api.main.lambda_handler"
+  # Bumped from the compute module's 30s default: a DDL import batch
+  # (biffo:ddl-import, ADR-0005) runs one or more .sql files on a single
+  # connection and is expected to comfortably finish well under this, but a
+  # file expected to run longer than this is explicitly out of scope for v1
+  # (split it or apply manually) rather than raised further.
+  timeout                   = 300
   enable_vpc_access         = true
   vpc_id                    = module.networking.vpc_id
   private_subnet_ids        = module.networking.private_subnet_ids
@@ -145,6 +151,10 @@ module "core_api" {
     # runtime — deploy-app.yml's packaging step copies services/*/biffo.plugin.json
     # into the Lambda zip under services/, which AWS extracts to /var/task/.
     BIFFO_PLUGIN_SERVICES_ROOT = "/var/task/services"
+    # Set so discover_ddl_import_dirs() finds bundled DDL imports at runtime —
+    # deploy-app.yml's packaging step copies db/imports/<name>/*.sql into the
+    # Lambda zip under db/imports/, which AWS extracts to /var/task/ (ADR-0005).
+    BIFFO_DDL_IMPORT_ROOT = "/var/task/db/imports"
   }
   tags = local.tags
 }
@@ -209,6 +219,11 @@ module "api_gateway" {
 output "api_gateway_url" {
   description = "HTTP API endpoint — set as NEXT_PUBLIC_API_URL in the portal build"
   value       = module.api_gateway.api_endpoint
+}
+
+output "core_api_lambda_name" {
+  description = "Core API Lambda function name — read by `biffo data apply` (ADR-0005) to invoke the biffo:ddl-import event directly"
+  value       = module.core_api.function_name
 }
 
 output "portal_url" {

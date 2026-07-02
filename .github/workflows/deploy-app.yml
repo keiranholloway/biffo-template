@@ -117,6 +117,17 @@ jobs:
             mkdir -p "package/services/$plugin_name"
             cp "$manifest" "package/services/$plugin_name/"
           done
+          # Bundle every vendored DDL import's .sql files (db/imports/<name>/*.sql,
+          # sibling to services/api/, created by `biffo data import`) so
+          # discover_ddl_import_dirs() can find them at runtime — same reasoning
+          # as the plugin manifest loop above. See api.ddl_import module docstring.
+          mkdir -p package/db/imports
+          for import_dir in ../db/imports/*/; do
+            [ -d "$import_dir" ] || continue
+            import_name=$(basename "$import_dir")
+            mkdir -p "package/db/imports/$import_name"
+            cp "$import_dir"*.sql "package/db/imports/$import_name/" 2>/dev/null || true
+          done
           cd package && zip -r ../lambda.zip .
           aws lambda update-function-code \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
@@ -225,6 +236,17 @@ jobs:
             plugin_name=$(basename "$(dirname "$manifest")")
             mkdir -p "package/services/$plugin_name"
             cp "$manifest" "package/services/$plugin_name/"
+          done
+          # Bundle every vendored DDL import's .sql files (db/imports/<name>/*.sql,
+          # sibling to services/api/, created by `biffo data import`) so
+          # discover_ddl_import_dirs() can find them at runtime — same reasoning
+          # as the plugin manifest loop above. See api.ddl_import module docstring.
+          mkdir -p package/db/imports
+          for import_dir in ../db/imports/*/; do
+            [ -d "$import_dir" ] || continue
+            import_name=$(basename "$import_dir")
+            mkdir -p "package/db/imports/$import_name"
+            cp "$import_dir"*.sql "package/db/imports/$import_name/" 2>/dev/null || true
           done
           cd package && zip -r ../lambda.zip .
           aws lambda update-function-code \
@@ -346,6 +368,17 @@ jobs:
             plugin_name=$(basename "$(dirname "$manifest")")
             mkdir -p "package/services/$plugin_name"
             cp "$manifest" "package/services/$plugin_name/"
+          done
+          # Bundle every vendored DDL import's .sql files (db/imports/<name>/*.sql,
+          # sibling to services/api/, created by `biffo data import`) so
+          # discover_ddl_import_dirs() can find them at runtime — same reasoning
+          # as the plugin manifest loop above. See api.ddl_import module docstring.
+          mkdir -p package/db/imports
+          for import_dir in ../db/imports/*/; do
+            [ -d "$import_dir" ] || continue
+            import_name=$(basename "$import_dir")
+            mkdir -p "package/db/imports/$import_name"
+            cp "$import_dir"*.sql "package/db/imports/$import_name/" 2>/dev/null || true
           done
           cd package && zip -r ../lambda.zip .
           aws lambda update-function-code \

@@ -1,0 +1,106 @@
+name: Release
+
+# Runs on every push of a `v*` tag: bumps/verifies the version via
+# python-semantic-release, builds the sdist/wheel, and publishes to PyPI.
+#
+# ASPIRATIONAL PYPI PUBLISH: this repo (and every plugin repo forked from
+# this template) has no real PyPI project or PYPI_API_TOKEN yet — the
+# plugin ecosystem's own SDK dependency, biffo-plugin-sdk, isn't published
+# either; it currently ships only as packages/python-sdk/ inside the
+# biffo-template monorepo (see #14/#66). This workflow is written as if
+# publishing were already real: once a PyPI project exists for this plugin
+# and PYPI_API_TOKEN is added as a repo secret, this workflow starts
+# publishing on the next tag push with no further changes. Until then, the
+# publish job below runs and fails at the `pypa/gh-action-pypi-publish` step
+# for lack of a token — that's expected, not a bug in this template. See
+# README.md's "PyPI publishing" section.
+#
+# biffo-template does not use semantic-release anywhere else in the
+# monorepo (its own root has no release.yml — checked before writing this;
+# versioning there is manual) so there's no existing in-repo pattern to
+# follow. python-semantic-release is used here as the standard tool for a
+# single, independently-versioned Python package driven by Conventional
+# Commits (which this monorepo's own commitlint config already enforces on
+# every commit message, including in this plugin repo once forked).
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write # required for PyPI trusted publishing
+
+env:
+  PYTHON_VERSION: '3.13'
+
+jobs:
+  release:
+    name: Build, Version & Publish
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/biffo-plugin-example/
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv sync --all-groups
+
+      # Full CI gate re-run on the tag, not just a build — a tag push must
+      # be at least as strict as a merged PR before anything is published.
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pyright
+      - run: uv run pytest --cov
+
+      - name: Determine version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify pyproject.toml version matches tag
+        run: |
+          project_version=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$project_version" != "${{ steps.version.outputs.version }}" ]; then
+            echo "::error::pyproject.toml version ($project_version) does not match tag ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
+      - name: Install python-semantic-release
+        run: uv tool install python-semantic-release
+
+      - name: Generate release notes
+        run: semantic-release changelog
+
+      - name: Build distribution
+        run: uv build
+
+      # PYPI PUBLISH — see the file-level comment above. This step is real
+      # and will run on every `v*` tag push, but has no credentials
+      # configured yet anywhere in the plugin ecosystem (this template, the
+      # SDK, or the RBAC reference plugin) and is expected to fail here
+      # until a PyPI project + trusted publisher (or PYPI_API_TOKEN) is set
+      # up for this specific plugin package.
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Prefer PyPI's trusted publishing (OIDC, via the `id-token: write`
+          # permission above) over a long-lived API token where possible —
+          # configure a trusted publisher for this repo at
+          # https://pypi.org/manage/project/<name>/settings/publishing/
+          # once the project exists. Fall back to `password:
+          # ${{ secrets.PYPI_API_TOKEN }}` if trusted publishing isn't set
+          # up for this project yet.
+          skip-existing: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*

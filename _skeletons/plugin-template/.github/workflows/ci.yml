@@ -1,0 +1,124 @@
+name: CI
+
+# Scaled down from biffo-template's own root .github/workflows/ci.yml for a
+# single Python package: a plugin repo (per ADR-0003) extends the SDK and
+# has no JS/TS and no Terraform of its own — Terraform, if a plugin ships
+# any, is provisioned by the *consuming* project's infra, not this repo's
+# CI (see README's "What this repo does not build" section).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.13'
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-groups
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  typecheck:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-groups
+      - run: uv run pyright
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-groups
+      - run: uv run pytest --cov --cov-report=xml
+      - uses: codecov/codecov-action@v5
+        if: always()
+        with:
+          files: coverage.xml
+
+  validate-manifest:
+    name: Validate biffo.plugin.json
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-groups
+      # Authoritative check: load_manifest() runs the *real* Pydantic model
+      # (biffo_plugin_sdk.plugin.PluginManifest) that the SDK, the Core API's
+      # discover_plugin_manifests(), and `biffo plugin install` all actually
+      # validate against — same reasoning cli/src/lib/plugin-manifest.ts
+      # documents for why the CLI validates this way rather than against
+      # registry-schema.json directly (see the next step).
+      - name: Validate against the SDK's PluginManifest model (authoritative)
+        run: |
+          uv run python -c "
+          from biffo_plugin_sdk.plugin import load_manifest
+          manifest = load_manifest('biffo.plugin.json')
+          print(f'OK: {manifest.name}@{manifest.version} — '
+                f'{len(manifest.tables)} table(s), {len(manifest.api_routes)} route(s)')
+          "
+      # Advisory check, not a gate: registry-schema.json (vendored from
+      # _skeletons/registry/registry-schema.json in biffo-template) is the
+      # nominal marketplace registry schema, but its api_routes shape
+      # predates issue #19's table/operation CRUD-synthesis redesign — it
+      # still requires a free-form `handler` function-name field, and its
+      # `path` regex rejects the `{id}` path parameter every single-row
+      # route (read/update/delete) is required to have. A manifest that is
+      # valid per the real PluginManifest model above (checked and pinned in
+      # this repo's uv.lock) will therefore *fail* strict validation here —
+      # confirmed directly against this template's own example manifest.
+      # Run non-blocking until the registry schema is corrected upstream;
+      # see README.md's "Manifest validation" section for the full story.
+      - name: Validate against the vendored registry schema (advisory, non-blocking)
+        continue-on-error: true
+        run: |
+          uv run python -m jsonschema -i biffo.plugin.json registry-schema.json
+
+  security-secrets:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  security-deps:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-groups
+      - run: uv run pip-audit

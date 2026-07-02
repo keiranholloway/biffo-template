@@ -12,9 +12,11 @@ from biffo_plugin_sdk import (
     BiffoPluginBase,
     ColumnDefinition,
     IndexDefinition,
+    PermissionRule,
     PluginManifest,
     RouteDef,
     TableDefinition,
+    TablePermissions,
     load_manifest,
     register_plugin,
 )
@@ -229,6 +231,89 @@ class TestTableDefinition:
                 columns=[ColumnDefinition(name="slug", type="String(100)")],
                 indexes=[IndexDefinition(name="idx_bad", columns=["nonexistent"])],
             )
+
+
+# --- TablePermissions / PermissionRule tests (ADR-0004, parity with the ---
+# --- Core API's TablePermissions/PermissionRule) ---
+
+
+class TestTablePermissions:
+    def test_absent_permissions_block_defaults_to_fully_denied(self):
+        """A table with no permissions block is invisible to the generic CRUD
+        layer: every operation is {allowed: false, required_role: []}."""
+        table = TableDefinition(name="roles")
+        for op in ("list", "read", "create", "update", "delete"):
+            rule = getattr(table.permissions, op)
+            assert rule.allowed is False
+            assert rule.required_role == []
+
+    def test_partial_block_leaves_other_operations_default_denied(self):
+        """Declaring only `read` leaves list/create/update/delete denied."""
+        table = TableDefinition.model_validate(
+            {"name": "roles", "permissions": {"read": {"allowed": True}}}
+        )
+        assert table.permissions.read.allowed is True
+        assert table.permissions.read.required_role == []
+        for op in ("list", "create", "update", "delete"):
+            rule = getattr(table.permissions, op)
+            assert rule.allowed is False
+            assert rule.required_role == []
+
+    def test_allowed_with_empty_required_role_means_any_authenticated_caller(self):
+        rule = PermissionRule(allowed=True)
+        assert rule.allowed is True
+        assert rule.required_role == []
+
+    def test_required_role_is_an_any_of_allow_list(self):
+        table = TableDefinition.model_validate(
+            {
+                "name": "roles",
+                "permissions": {
+                    "delete": {"allowed": True, "required_role": ["admin", "ops"]}
+                },
+            }
+        )
+        assert table.permissions.delete.allowed is True
+        assert table.permissions.delete.required_role == ["admin", "ops"]
+
+    def test_unknown_operation_key_rejected(self):
+        """A typo'd operation (e.g. 'delet') is a hard error rather than a
+        silently-ignored, permanently-denied operation (extra='forbid')."""
+        with pytest.raises(ValidationError):
+            TablePermissions(delet={"allowed": True})  # type: ignore[call-arg]
+
+    def test_unknown_key_inside_rule_rejected(self):
+        """A typo'd rule key (e.g. 'role' for 'required_role') fails loudly on
+        this security surface rather than being silently ignored."""
+        with pytest.raises(ValidationError):
+            PermissionRule(role=["admin"])  # type: ignore[call-arg]
+
+    def test_permissions_survive_register_round_trip(self):
+        """register_plugin serialises tables via model_dump(mode='json') — the
+        permissions block must ride along so the registry sees it."""
+        manifest = PluginManifest(
+            name="rbac",
+            version="1.0.0",
+            tables=[
+                TableDefinition.model_validate(
+                    {
+                        "name": "roles",
+                        "permissions": {
+                            "list": {"allowed": True},
+                            "delete": {"allowed": True, "required_role": ["admin"]},
+                        },
+                    }
+                )
+            ],
+        )
+
+        registration = register_plugin(manifest)
+
+        json.dumps(registration)  # must not raise
+        perms = registration["tables"][0]["permissions"]
+        assert perms["list"] == {"allowed": True, "required_role": []}
+        assert perms["delete"] == {"allowed": True, "required_role": ["admin"]}
+        assert perms["read"] == {"allowed": False, "required_role": []}
 
 
 # --- load_manifest tests ---

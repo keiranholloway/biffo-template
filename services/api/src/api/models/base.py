@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Any, ClassVar
 
 from sqlalchemy import DateTime, String, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -19,6 +20,20 @@ class TenantScopedModel(Base):
     """
 
     __abstract__ = True
+
+    # Declarative generic-CRUD permissions for this core table (ADR-0004). A
+    # core model opts into the generic CRUD layer by setting this to a dict of
+    # the same shape as a plugin manifest's table `permissions` block, e.g.:
+    #   __crud_permissions__ = {
+    #       "read": {"allowed": True, "required_role": ["admin"]},
+    #   }
+    # It is validated against TablePermissions (models/plugin_table.py) when the
+    # permissions registry is built (ADR-0004 §2) — not here, to keep this base
+    # module free of a circular import back into the manifest models. Empty (the
+    # default) means fully denied: the table is invisible to the generic CRUD
+    # layer. `User` deliberately leaves it unset — /users and /auth/me stay
+    # hand-written because they carry auth-linkage semantics (ADR-0004 §1).
+    __crud_permissions__: ClassVar[dict[str, Any]] = {}
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())

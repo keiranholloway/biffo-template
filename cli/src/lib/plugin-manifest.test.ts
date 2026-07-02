@@ -132,6 +132,66 @@ describe('validateManifest — duplicate names', () => {
   )
 })
 
+describe('validateManifest — permissions (ADR-0004)', () => {
+  const DENIED = { allowed: false, required_role: [] }
+
+  it('defaults an absent permissions block to all five ops fully denied', () => {
+    // Mirrors plugin_table.py's TablePermissions default_factory semantics:
+    // TablePermissions().model_dump() yields every op {allowed:false,
+    // required_role:[]}. This asserts the exact zod-parsed equivalent so the
+    // nested `.default({})` handling is pinned, not assumed.
+    const manifest = validateManifest(validManifest())
+    expect(manifest.tables[0]!.permissions).toEqual({
+      list: DENIED,
+      read: DENIED,
+      create: DENIED,
+      update: DENIED,
+      delete: DENIED,
+    })
+  })
+
+  it('fills in default-denied rules for operations omitted from a partial block', () => {
+    const manifest = validManifest()
+    // Only `read` is specified — the other four must default-deny.
+    ;(manifest.tables[0] as Record<string, unknown>).permissions = {
+      read: { allowed: true, required_role: ['viewer'] },
+    }
+    const parsed = validateManifest(manifest)
+    expect(parsed.tables[0]!.permissions).toEqual({
+      list: DENIED,
+      read: { allowed: true, required_role: ['viewer'] },
+      create: DENIED,
+      update: DENIED,
+      delete: DENIED,
+    })
+  })
+
+  it('accepts allowed:true with an empty required_role (any authenticated caller)', () => {
+    const manifest = validManifest()
+    ;(manifest.tables[0] as Record<string, unknown>).permissions = {
+      list: { allowed: true },
+    }
+    const parsed = validateManifest(manifest)
+    expect(parsed.tables[0]!.permissions.list).toEqual({ allowed: true, required_role: [] })
+  })
+
+  it('rejects an unknown operation key (e.g. "delet")', () => {
+    const manifest = validManifest()
+    ;(manifest.tables[0] as Record<string, unknown>).permissions = {
+      delet: { allowed: true },
+    }
+    expect(() => validateManifest(manifest)).toThrow()
+  })
+
+  it('rejects an unknown key inside a rule (e.g. "role" for "required_role")', () => {
+    const manifest = validManifest()
+    ;(manifest.tables[0] as Record<string, unknown>).permissions = {
+      read: { allowed: true, role: ['viewer'] },
+    }
+    expect(() => validateManifest(manifest)).toThrow()
+  })
+})
+
 describe('validateManifest — routes', () => {
   it('rejects a route referencing a table not declared in this manifest', () => {
     const manifest = validManifest()

@@ -5,10 +5,11 @@
  * Core API and biffo-plugin-sdk actually validate against:
  *
  *   - `packages/python-sdk/src/biffo_plugin_sdk/plugin.py`'s
- *     `ColumnDefinition` / `IndexDefinition` / `TableDefinition` /
- *     `RouteDef` / `PluginManifest`
+ *     `ColumnDefinition` / `IndexDefinition` / `PermissionRule` /
+ *     `TablePermissions` / `TableDefinition` / `RouteDef` / `PluginManifest`
  *   - `services/api/src/api/models/plugin_table.py`'s
- *     `ColumnDefinition` / `IndexDefinition` / `PluginTableDefinition`
+ *     `ColumnDefinition` / `IndexDefinition` / `PermissionRule` /
+ *     `TablePermissions` / `PluginTableDefinition`
  *   - `services/api/src/api/models/plugin_route.py`'s `RouteDefinition`
  *
  * NOT the older `_skeletons/registry/registry-schema.json` shape, which
@@ -66,11 +67,41 @@ const IndexDefinitionSchema = z.object({
   unique: z.boolean().default(false),
 })
 
+// Mirrors plugin_table.py's PermissionRule (ADR-0004). Default-deny: an
+// operation is invisible to the generic CRUD layer unless `allowed` is
+// explicitly true. `required_role` is an any-of allow-list matched against the
+// caller's roles; an empty list means any authenticated caller. `.strict()`
+// mirrors the Pydantic `extra="forbid"` so a typo'd key (e.g. `role` for
+// `required_role`) fails loudly rather than being silently ignored on a
+// security surface.
+const PermissionRuleSchema = z
+  .object({
+    allowed: z.boolean().default(false),
+    required_role: z.array(z.string()).default([]),
+  })
+  .strict()
+
+// Mirrors plugin_table.py's TablePermissions (ADR-0004). Every operation
+// defaults to a fully-denied rule, so a table with no permissions block — or
+// one that omits an operation — is invisible to the generic CRUD layer for
+// that operation. `.strict()` mirrors `extra="forbid"` so an unknown operation
+// key (e.g. `delet`) is a hard error rather than a silently-denied operation.
+const TablePermissionsSchema = z
+  .object({
+    list: PermissionRuleSchema.default({}),
+    read: PermissionRuleSchema.default({}),
+    create: PermissionRuleSchema.default({}),
+    update: PermissionRuleSchema.default({}),
+    delete: PermissionRuleSchema.default({}),
+  })
+  .strict()
+
 const TableDefinitionSchema = z
   .object({
     name: z.string().regex(/^[a-z][a-z0-9_]*$/, 'table name must be snake_case, e.g. rbac_roles'),
     columns: z.array(ColumnDefinitionSchema).default([]),
     indexes: z.array(IndexDefinitionSchema).default([]),
+    permissions: TablePermissionsSchema.default({}),
   })
   .superRefine((table, ctx) => {
     const colCounts = new Map<string, number>()

@@ -1,9 +1,10 @@
 """Plugin manifest schema validation and registration helpers.
 
 The shapes in this file (``ColumnDefinition``, ``IndexDefinition``,
-``TableDefinition``) are kept in field-for-field sync with
-``services/api/src/api/models/plugin_table.py``'s ``ColumnDefinition``/
-``IndexDefinition``/``PluginTableDefinition`` in the biffo-template monorepo.
+``PermissionRule``, ``TablePermissions``, ``TableDefinition``) are kept in
+field-for-field sync with ``services/api/src/api/models/plugin_table.py``'s
+``ColumnDefinition``/``IndexDefinition``/``PermissionRule``/
+``TablePermissions``/``PluginTableDefinition`` in the biffo-template monorepo.
 This package can't import that module directly — it's installed by plugin
 authors' separate repositories, outside the Core API's own deployment — so
 the duplication is unavoidable. If either side changes, update the other.
@@ -25,7 +26,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .client import BiffoAPIClient
 from .events import EventHandler, EventSubscriber
@@ -67,6 +68,59 @@ class IndexDefinition(BaseModel):
     )
 
 
+# The five generic CRUD operations the permission model authorises, in a
+# canonical order. Mirrored as the keys of TablePermissions below, and the
+# equivalents in the Core API's plugin_table.py/plugin_route.py and the CLI.
+CRUD_OPERATIONS: tuple[str, ...] = ("list", "read", "create", "update", "delete")
+
+
+class PermissionRule(BaseModel):
+    """Authorization rule for a single CRUD operation on a table (ADR-0004).
+
+    Default-deny: an operation is invisible to the generic CRUD layer unless
+    ``allowed`` is explicitly true. ``required_role`` is an any-of allow-list
+    matched against the caller's ``cognito:groups`` roles; an empty list means
+    any authenticated caller may perform the operation once it is allowed.
+    Tenant scoping (ADR-0001) is applied unconditionally by the generic layer
+    regardless of this rule and is deliberately not configurable here.
+
+    ``extra="forbid"`` so a typo'd key (e.g. ``role`` for ``required_role``)
+    fails loudly rather than being silently ignored on a security surface.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    allowed: bool = Field(
+        default=False,
+        description="Whether the generic CRUD layer exposes this operation at all.",
+    )
+    required_role: list[str] = Field(
+        default_factory=list,
+        description="Any-of role allow-list; empty means any authenticated caller.",
+    )
+
+
+class TablePermissions(BaseModel):
+    """Per-operation permission block for a table (ADR-0004).
+
+    Every operation defaults to fully denied, so a table with no permissions
+    block — or one that omits an operation — is invisible to the generic CRUD
+    layer for that operation. This is a default-deny allow-list, not a
+    default-expose deny-list.
+
+    ``extra="forbid"`` so an unknown operation key (e.g. ``delet``) is a hard
+    error rather than a silently-ignored, permanently-denied operation.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    list: PermissionRule = Field(default_factory=PermissionRule)
+    read: PermissionRule = Field(default_factory=PermissionRule)
+    create: PermissionRule = Field(default_factory=PermissionRule)
+    update: PermissionRule = Field(default_factory=PermissionRule)
+    delete: PermissionRule = Field(default_factory=PermissionRule)
+
+
 # Mirrors _AUTO_COLUMNS in plugin_table.py, which is itself kept in sync with
 # TenantScopedModel in base.py. If either changes, update all three.
 _AUTO_COLUMNS: list[ColumnDefinition] = [
@@ -91,6 +145,12 @@ class TableDefinition(BaseModel):
     name: str = Field(description="Table name in the database.")
     columns: list[ColumnDefinition] = Field(default_factory=list)
     indexes: list[IndexDefinition] = Field(default_factory=list)
+    permissions: TablePermissions = Field(
+        default_factory=TablePermissions,
+        description="Declarative per-operation generic-CRUD permissions "
+        "(ADR-0004). Absent means fully denied — the table is invisible to the "
+        "generic CRUD layer until an operation is explicitly allowed.",
+    )
 
     @model_validator(mode="before")
     @classmethod

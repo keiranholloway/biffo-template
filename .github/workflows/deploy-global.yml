@@ -1,11 +1,12 @@
 name: Deploy Global Infrastructure
 
 on:
+  # workflow_dispatch only — never a push side effect. A push-triggered path
+  # here would mean every push to main touching infra/global/** (e.g. a
+  # routine PR merge) silently re-applies real DNS/ACM infrastructure the
+  # moment BIFFO_DEPLOY_ENABLED has ever been set true by any `biffo deploy`.
+  # See deploy-infra.yml/deploy-app.yml's prod jobs for the same reasoning.
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'infra/global/**'
 
 permissions:
   id-token: write

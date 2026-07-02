@@ -250,7 +250,13 @@ jobs:
     name: Plan (prod)
     runs-on: ubuntu-latest
     environment: prod
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'))
+    # prod deploys always require an explicit workflow_dispatch, never a push
+    # side effect — BIFFO_DEPLOY_ENABLED is a single repo-wide flag set true
+    # by the very first `biffo deploy` of ANY environment, so a push-triggered
+    # prod path here would mean every future push to main (e.g. a routine PR
+    # merge) silently deploys to production the moment anyone has ever run
+    # `biffo deploy dev` even once.
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
     defaults:
       run:
         working-directory: infra/environments/prod
@@ -287,7 +293,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: prod
     needs: plan-prod
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod' && github.event.inputs.action == 'apply'))
+    # See plan-prod above — prod always requires an explicit workflow_dispatch.
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod' && github.event.inputs.action == 'apply'
     defaults:
       run:
         working-directory: infra/environments/prod

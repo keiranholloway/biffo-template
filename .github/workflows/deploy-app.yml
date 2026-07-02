@@ -229,7 +229,14 @@ jobs:
     name: Build (prod)
     runs-on: ubuntu-latest
     environment: prod
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'))
+    # prod deploys always require an explicit workflow_dispatch, never a push
+    # side effect — BIFFO_DEPLOY_ENABLED is a single repo-wide flag set true
+    # by the very first `biffo deploy` of ANY environment, so a push-triggered
+    # prod path here would mean every future push to main (e.g. a routine PR
+    # merge) silently deploys to production the moment anyone has ever run
+    # `biffo deploy dev` even once. This is what "Manual only" above means —
+    # a prior version of this condition contradicted that comment.
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: pnpm/action-setup@v4
@@ -262,7 +269,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-prod
     environment: prod
-    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    # See build-prod above — prod always requires an explicit workflow_dispatch.
+    # (In practice this job only ever runs via needs: build-prod anyway once
+    # that job is push-gated correctly, but stating it explicitly here too
+    # means this condition is never misleading on its own.)
+    if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: aws-actions/configure-aws-credentials@v6

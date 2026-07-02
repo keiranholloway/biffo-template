@@ -372,14 +372,33 @@ export class GitHubAdapter {
     }
   }
 
-  async getLatestWorkflowRunId(org: string, repo: string, workflowId: string): Promise<number> {
-    const { data } = await this.octokit.actions.listWorkflowRuns({
-      owner: org,
-      repo,
-      workflow_id: workflowId,
-      per_page: 1,
-    })
-    return data.workflow_runs[0]?.id ?? 0
+  async getLatestWorkflowRunId(
+    org: string,
+    repo: string,
+    workflowId: string,
+    timeoutMs = 60_000,
+    intervalMs = 5_000,
+  ): Promise<number> {
+    const deadline = Date.now() + timeoutMs
+    while (true) {
+      try {
+        const { data } = await this.octokit.actions.listWorkflowRuns({
+          owner: org,
+          repo,
+          workflow_id: workflowId,
+          per_page: 1,
+        })
+        return data.workflow_runs[0]?.id ?? 0
+      } catch (err: unknown) {
+        if ((err as { status?: number }).status !== 404 || Date.now() >= deadline) throw err
+        // On a just-created repo, GitHub Actions can take a few seconds to
+        // discover and index workflow files pushed via template generation,
+        // even though the file itself is already present in the repo — the
+        // workflow_id lookup 404s until that indexing completes.
+        log.info(`Workflow ${workflowId} not yet indexed by GitHub Actions, retrying...`)
+        await new Promise((resolve) => setTimeout(resolve, intervalMs))
+      }
+    }
   }
 
   async triggerWorkflow(
@@ -388,14 +407,26 @@ export class GitHubAdapter {
     workflowId: string,
     inputs: Record<string, string> = {},
     ref = 'main',
+    timeoutMs = 60_000,
+    intervalMs = 5_000,
   ): Promise<void> {
-    await this.octokit.actions.createWorkflowDispatch({
-      owner: org,
-      repo,
-      workflow_id: workflowId,
-      ref,
-      inputs,
-    })
+    const deadline = Date.now() + timeoutMs
+    while (true) {
+      try {
+        await this.octokit.actions.createWorkflowDispatch({
+          owner: org,
+          repo,
+          workflow_id: workflowId,
+          ref,
+          inputs,
+        })
+        return
+      } catch (err: unknown) {
+        if ((err as { status?: number }).status !== 404 || Date.now() >= deadline) throw err
+        log.info(`Workflow ${workflowId} not yet indexed by GitHub Actions, retrying...`)
+        await new Promise((resolve) => setTimeout(resolve, intervalMs))
+      }
+    }
   }
 
   async waitForWorkflowRun(

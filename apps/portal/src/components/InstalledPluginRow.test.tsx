@@ -42,12 +42,17 @@ describe('InstalledPluginRow', () => {
     expect(screen.getByText('2 tables · 1 route')).toBeInTheDocument()
   })
 
-  it('links to the plugin detail page', () => {
+  it('links to the plugin detail page via query params, not a dynamic path segment', () => {
     render(<InstalledPluginRow plugin={rbacPlugin} />)
 
+    // Every plugin must link to the exact same statically-generated path
+    // (output: 'export' only pre-renders /admin/plugins/placeholder/) --
+    // a per-plugin path segment 404s on a real deploy since next/link
+    // falls back to a full browser navigation for path segments that
+    // weren't in generateStaticParams(). See page.tsx's comment.
     expect(screen.getByRole('link', { name: /view details/i })).toHaveAttribute(
       'href',
-      '/admin/plugins/rbac',
+      '/admin/plugins/placeholder?source=installed&name=rbac',
     )
   })
 })

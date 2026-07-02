@@ -4,7 +4,7 @@ import type { RegistryPlugin } from '@/lib/plugin-api'
 export function PluginCard({ plugin }: { plugin: RegistryPlugin }) {
   return (
     <Link
-      href={`/admin/plugins/${plugin.name}`}
+      href={`/admin/plugins/placeholder?source=marketplace&name=${encodeURIComponent(plugin.name)}`}
       className="flex flex-col rounded-xl border bg-white p-6 shadow-sm transition hover:shadow-md"
     >
       <div className="flex items-start justify-between gap-2">

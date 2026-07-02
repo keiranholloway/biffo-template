@@ -64,11 +64,21 @@ jobs:
           fi
           # Delete RDS instance (skip final snapshot for teardown)
           if aws rds describe-db-instances --db-instance-identifier "$DB" --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null | grep -qv None; then
+            PROTECTED=$(aws rds describe-db-instances --db-instance-identifier "$DB" --query 'DBInstances[0].DeletionProtection' --output text 2>/dev/null || echo "False")
+            if [ "$PROTECTED" = "True" ]; then
+              echo "Disabling deletion protection on $DB"
+              aws rds modify-db-instance --db-instance-identifier "$DB" --no-deletion-protection --apply-immediately
+              for i in $(seq 1 15); do
+                STILL_PROTECTED=$(aws rds describe-db-instances --db-instance-identifier "$DB" --query 'DBInstances[0].DeletionProtection' --output text 2>/dev/null || echo "False")
+                [ "$STILL_PROTECTED" = "False" ] && break
+                echo "  Waiting for deletion protection to clear..."; sleep 5
+              done
+            fi
             echo "Deleting RDS instance: $DB"
             aws rds delete-db-instance --db-instance-identifier "$DB" \
-              --skip-final-snapshot --delete-automated-backups 2>/dev/null || true
+              --skip-final-snapshot --delete-automated-backups
             echo "Waiting for RDS deletion (up to 15 min)..."
-            aws rds wait db-instance-deleted --db-instance-identifier "$DB" 2>/dev/null || true
+            aws rds wait db-instance-deleted --db-instance-identifier "$DB"
           fi
       - name: Delete CloudWatch log groups
         run: |
@@ -139,11 +149,21 @@ jobs:
             done
           fi
           if aws rds describe-db-instances --db-instance-identifier "$DB" --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null | grep -qv None; then
+            PROTECTED=$(aws rds describe-db-instances --db-instance-identifier "$DB" --query 'DBInstances[0].DeletionProtection' --output text 2>/dev/null || echo "False")
+            if [ "$PROTECTED" = "True" ]; then
+              echo "Disabling deletion protection on $DB"
+              aws rds modify-db-instance --db-instance-identifier "$DB" --no-deletion-protection --apply-immediately
+              for i in $(seq 1 15); do
+                STILL_PROTECTED=$(aws rds describe-db-instances --db-instance-identifier "$DB" --query 'DBInstances[0].DeletionProtection' --output text 2>/dev/null || echo "False")
+                [ "$STILL_PROTECTED" = "False" ] && break
+                echo "  Waiting for deletion protection to clear..."; sleep 5
+              done
+            fi
             echo "Deleting RDS instance: $DB"
             aws rds delete-db-instance --db-instance-identifier "$DB" \
-              --skip-final-snapshot --delete-automated-backups 2>/dev/null || true
+              --skip-final-snapshot --delete-automated-backups
             echo "Waiting for RDS deletion (up to 15 min)..."
-            aws rds wait db-instance-deleted --db-instance-identifier "$DB" 2>/dev/null || true
+            aws rds wait db-instance-deleted --db-instance-identifier "$DB"
           fi
       - name: Delete CloudWatch log groups
         run: |
@@ -215,11 +235,21 @@ jobs:
             done
           fi
           if aws rds describe-db-instances --db-instance-identifier "$DB" --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null | grep -qv None; then
+            PROTECTED=$(aws rds describe-db-instances --db-instance-identifier "$DB" --query 'DBInstances[0].DeletionProtection' --output text 2>/dev/null || echo "False")
+            if [ "$PROTECTED" = "True" ]; then
+              echo "Disabling deletion protection on $DB"
+              aws rds modify-db-instance --db-instance-identifier "$DB" --no-deletion-protection --apply-immediately
+              for i in $(seq 1 15); do
+                STILL_PROTECTED=$(aws rds describe-db-instances --db-instance-identifier "$DB" --query 'DBInstances[0].DeletionProtection' --output text 2>/dev/null || echo "False")
+                [ "$STILL_PROTECTED" = "False" ] && break
+                echo "  Waiting for deletion protection to clear..."; sleep 5
+              done
+            fi
             echo "Deleting RDS instance: $DB"
             aws rds delete-db-instance --db-instance-identifier "$DB" \
-              --skip-final-snapshot --delete-automated-backups 2>/dev/null || true
+              --skip-final-snapshot --delete-automated-backups
             echo "Waiting for RDS deletion (up to 15 min)..."
-            aws rds wait db-instance-deleted --db-instance-identifier "$DB" 2>/dev/null || true
+            aws rds wait db-instance-deleted --db-instance-identifier "$DB"
           fi
       - name: Delete CloudWatch log groups
         run: |

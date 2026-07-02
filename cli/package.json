@@ -23,6 +23,7 @@
   "dependencies": {
     "@aws-sdk/client-cloudformation": "^3.726.1",
     "@aws-sdk/client-iam": "^3.726.1",
+    "@aws-sdk/client-lambda": "^3.726.1",
     "@aws-sdk/client-s3": "^3.726.1",
     "@aws-sdk/client-sts": "^3.726.1",
     "@octokit/rest": "^21.0.2",

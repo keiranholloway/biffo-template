@@ -29,11 +29,20 @@ export class GitAdapter {
    * the target monorepo (which tracks them under its own git history —
    * ADR-0003's "clone into monorepo" distribution model, not a nested repo
    * or submodule).
+   *
+   * `token`, when given, authenticates the clone against a private repo by
+   * embedding it in the URL's userinfo (`https://x-access-token:<token>@...`
+   * — the standard scheme for a GitHub PAT/App token over HTTPS) before
+   * handing it to `git clone`. The *rewritten* URL is only ever passed to
+   * `execa`, never logged or included in a thrown error message — errors
+   * reference the original `repoUrl` so a token can't leak into CLI output
+   * or a crash report.
    */
-  async cloneToTemp(repoUrl: string, namePrefix: string): Promise<string> {
+  async cloneToTemp(repoUrl: string, namePrefix: string, token?: string): Promise<string> {
     const dir = mkdtempSync(join(tmpdir(), `${namePrefix}-${randomUUID().slice(0, 8)}-`))
+    const cloneUrl = token ? injectToken(repoUrl, token) : repoUrl
     try {
-      await execa('git', ['clone', '--depth', '1', repoUrl, dir])
+      await execa('git', ['clone', '--depth', '1', cloneUrl, dir])
     } catch (err) {
       rmSync(dir, { recursive: true, force: true })
       throw new Error(`Failed to clone ${repoUrl}: ${(err as Error).message}`)
@@ -57,4 +66,26 @@ export class GitAdapter {
   async commit(cwd: string, message: string): Promise<void> {
     await execa('git', ['commit', '-m', message], { cwd })
   }
+}
+
+/**
+ * Rewrites an `https://` git URL to embed `token` as HTTP Basic userinfo
+ * (`x-access-token:<token>@host`). Non-`https` URLs (`git@host:...` SSH
+ * form, `file://...` used by this codebase's own integration tests) are
+ * returned unchanged — a token only makes sense for HTTPS auth, and
+ * rewriting an SSH/file URL would silently produce something `git clone`
+ * can't use.
+ */
+function injectToken(repoUrl: string, token: string): string {
+  let parsed: URL
+  try {
+    parsed = new URL(repoUrl)
+  } catch {
+    return repoUrl
+  }
+  if (parsed.protocol !== 'https:') return repoUrl
+
+  parsed.username = 'x-access-token'
+  parsed.password = token
+  return parsed.toString()
 }

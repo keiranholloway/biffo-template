@@ -12,6 +12,7 @@ import {
   ListRolePoliciesCommand,
   UpdateRoleCommand,
 } from '@aws-sdk/client-iam'
+import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda'
 import {
   CreateBucketCommand,
   DeleteBucketCommand,
@@ -362,5 +363,43 @@ export class AwsAdapter {
         .filter(([, v]) => typeof v.value === 'string')
         .map(([k, v]) => [k, v.value as string]),
     )
+  }
+
+  /**
+   * Synchronously invokes `functionName` with `payload` as its JSON event
+   * body, for one-off administrative calls into the Core API Lambda (e.g.
+   * `biffo data apply`'s `"biffo:ddl-import"` event) — not a general-purpose
+   * invoke helper for hot-path/high-volume use.
+   *
+   * `ok` is `false` when Lambda reports `FunctionError` (the handler itself
+   * raised) — matching exactly how deploy-app.yml's own
+   * `if echo "$RESULT" | grep -q FunctionError` shell check already treats
+   * this. `body` is the parsed JSON response payload either way: on success
+   * that's the handler's return value (e.g. `{ok, applied, skipped}`), on
+   * failure it's Lambda's own error envelope (`errorMessage`, `errorType`,
+   * `stackTrace`).
+   */
+  async invokeLambda(
+    functionName: string,
+    payload: unknown,
+  ): Promise<{ ok: boolean; body: Record<string, unknown> }> {
+    const lambda = new LambdaClient({ region: this.region })
+    const response = await lambda.send(
+      new InvokeCommand({
+        FunctionName: functionName,
+        InvocationType: 'RequestResponse',
+        Payload: Buffer.from(JSON.stringify(payload)),
+      }),
+    )
+
+    const rawBody = response.Payload ? Buffer.from(response.Payload).toString('utf-8') : '{}'
+    let body: Record<string, unknown>
+    try {
+      body = JSON.parse(rawBody) as Record<string, unknown>
+    } catch {
+      body = { raw: rawBody }
+    }
+
+    return { ok: !response.FunctionError, body }
   }
 }

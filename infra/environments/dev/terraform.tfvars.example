@@ -10,3 +10,8 @@ admin_username = "admin"
 # instead of the default Cognito no-reply sender. Leave blank to keep defaults.
 # mail_from_address = "admin-env@mail.example.com"
 # mail_source_arn   = "arn:aws:ses:us-east-1:111111111111:identity/mail.example.com"
+
+# Optional: plugins to provision (ADR-0003). Each name must have a matching
+# module "plugin_<name>" block in main.tf and a module directory at
+# modules/plugins/<name>/ — see infra/environments/dev/README.md.
+# enabled_plugins = ["rbac"]

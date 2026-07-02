@@ -20,11 +20,15 @@ variable "runtime" {
 }
 
 variable "vpc_id" {
-  type = string
+  description = "VPC to attach this Lambda's ENIs to. Leave empty (the default) to run the function outside any VPC — appropriate for functions that never touch the database directly (ADR-0002), since VPC attachment buys nothing for them and, in NAT-less networking configs (e.g. dev's enable_nat_gateway = false), would cut off all outbound internet access including calls to the Core API's public endpoint."
+  type        = string
+  default     = ""
 }
 
 variable "private_subnet_ids" {
-  type = list(string)
+  description = "Private subnets to place ENIs in. Only used when vpc_id is set."
+  type        = list(string)
+  default     = []
 }
 
 variable "memory_size" {

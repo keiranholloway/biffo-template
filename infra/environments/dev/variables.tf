@@ -52,3 +52,27 @@ variable "mail_source_arn" {
   type        = string
   default     = ""
 }
+
+variable "enabled_plugins" {
+  description = <<-EOT
+    Plugin names to instantiate this deploy. Each name must have a matching
+    Terraform module at modules/plugins/<name>/ — `biffo plugin install <name>@<minor>`
+    (ADR-0003 chunk 7) copies a plugin's terraform/ directory there. Adding a
+    name here and running `terraform apply` provisions that plugin's compute
+    and event infrastructure; removing a name tears it down.
+
+    Example: ["rbac"]
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.enabled_plugins) == length(distinct(var.enabled_plugins))
+    error_message = "enabled_plugins must not contain duplicate plugin names."
+  }
+
+  validation {
+    condition     = alltrue([for name in var.enabled_plugins : can(regex("^[a-z][a-z0-9-]*$", name))])
+    error_message = "enabled_plugins names must be lowercase alphanumeric with hyphens (matching a services/<name>/ and modules/plugins/<name>/ directory name)."
+  }
+}

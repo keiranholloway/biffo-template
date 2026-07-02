@@ -84,6 +84,8 @@ biffo-plugin-rbac/
 
 **Manifest (`biffo.plugin.json`):** Declares what the plugin provides and what it needs:
 
+Table columns use SQLAlchemy constructor-string types (`"String(36)"`, not PostgreSQL-enum names like `UUID`/`TEXT`/`TIMESTAMP`), and `id`/`tenant_id`/`created_at`/`updated_at` are auto-injected on every table per ADR-0001 — a manifest that declares them itself fails validation (`PluginTableDefinition` in `services/api/src/api/models/plugin_table.py`, mirrored in the SDK's `packages/python-sdk/src/biffo_plugin_sdk/plugin.py`):
+
 ```json
 {
   "name": "rbac",
@@ -92,46 +94,43 @@ biffo-plugin-rbac/
     {
       "name": "rbac_roles",
       "columns": [
-        { "name": "id", "type": "UUID", "primary_key": true },
-        { "name": "tenant_id", "type": "TEXT", "indexed": true },
-        { "name": "name", "type": "TEXT", "unique": true },
-        { "name": "description", "type": "TEXT" },
-        { "name": "is_system", "type": "BOOLEAN", "default": "false" },
-        { "name": "created_at", "type": "TIMESTAMP", "auto_now_add": true },
-        { "name": "updated_at", "type": "TIMESTAMP", "auto_now": true }
+        { "name": "name", "type": "String(100)" },
+        { "name": "description", "type": "Text" },
+        { "name": "is_system", "type": "Boolean", "default": "false" }
+      ],
+      "indexes": [
+        { "name": "ix_rbac_roles_name", "columns": ["name"], "unique": true }
       ]
     },
     {
       "name": "rbac_permissions",
       "columns": [
-        { "name": "id", "type": "UUID", "primary_key": true },
-        { "name": "tenant_id", "type": "TEXT", "indexed": true },
-        { "name": "resource", "type": "TEXT" },
-        { "name": "action", "type": "TEXT" },
-        { "name": "effect", "type": "TEXT", "default": "\"allow\"" },
-        { "name": "description", "type": "TEXT" },
-        { "name": "created_at", "type": "TIMESTAMP", "auto_now_add": true }
+        { "name": "resource", "type": "String(100)" },
+        { "name": "action", "type": "String(50)" },
+        { "name": "effect", "type": "String(10)", "default": "\"allow\"" },
+        { "name": "description", "type": "Text" }
       ]
     },
     {
       "name": "rbac_role_permissions",
       "columns": [
-        { "name": "role_id", "type": "UUID", "foreign_key": "rbac_roles.id" },
-        { "name": "permission_id", "type": "UUID", "foreign_key": "rbac_permissions.id" },
-        { "name": "tenant_id", "type": "TEXT", "indexed": true },
-        { "name": "PRIMARY KEY (role_id, permission_id)" }
+        { "name": "role_id", "type": "String(36)", "description": "References rbac_roles.id" },
+        { "name": "permission_id", "type": "String(36)", "description": "References rbac_permissions.id" }
+      ],
+      "indexes": [
+        { "name": "ix_rbac_role_permissions_role_permission", "columns": ["role_id", "permission_id"], "unique": true }
       ]
     },
     {
       "name": "rbac_user_roles",
       "columns": [
-        { "name": "user_id", "type": "TEXT", "foreign_key": "users.cognito_sub" },
-        { "name": "role_id", "type": "UUID", "foreign_key": "rbac_roles.id" },
-        { "name": "tenant_id", "type": "TEXT", "indexed": true },
-        { "name": "assigned_by", "type": "TEXT", "foreign_key": "users.cognito_sub" },
-        { "name": "expires_at", "type": "TIMESTAMP" },
-        { "name": "assigned_at", "type": "TIMESTAMP", "auto_now_add": true },
-        { "name": "PRIMARY KEY (user_id, role_id)" }
+        { "name": "user_id", "type": "String(64)", "description": "References users.cognito_sub" },
+        { "name": "role_id", "type": "String(36)", "description": "References rbac_roles.id" },
+        { "name": "assigned_by", "type": "String(64)", "description": "References users.cognito_sub" },
+        { "name": "expires_at", "type": "DateTime(timezone=True)", "nullable": true }
+      ],
+      "indexes": [
+        { "name": "ix_rbac_user_roles_user_role", "columns": ["user_id", "role_id"], "unique": true }
       ]
     }
   ],

@@ -1,0 +1,188 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Biffo Plugin Manifest",
+  "description": "Schema for biffo.plugin.json — declares what a plugin provides and needs.",
+  "type": "object",
+  "required": ["name", "version", "tables", "api_routes", "ui_components"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Unique plugin slug (lowercase, kebab-case)."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semver version of this plugin release."
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "Human-readable summary shown in the marketplace."
+    },
+    "author": {
+      "type": "string",
+      "default": "Biffo Team",
+      "description": "Publisher name."
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Categorisation tags for filtering/search."
+    },
+    "required_core_version": {
+      "type": "string",
+      "default": ">=0.0.0",
+      "description": "Minimum Biffo core version (npm-style range)."
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "PostgreSQL table name (snake_case)."
+          },
+          "columns": {
+            "type": "array",
+            "description": "Additional columns beyond id/tenant_id/created_at/updated_at, which are auto-injected on every table per ADR-0001 and must NOT be declared here — doing so fails validation (ColumnDefinition/PluginTableDefinition in services/api/src/api/models/plugin_table.py).",
+            "items": {
+              "type": "object",
+              "required": ["name", "type"],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "not": { "enum": ["id", "tenant_id", "created_at", "updated_at"] },
+                  "description": "Column name. The names id, tenant_id, created_at, and updated_at are reserved (auto-injected) and rejected here."
+                },
+                "type": {
+                  "type": "string",
+                  "pattern": "^(String|Integer|Text|Boolean|Float|DateTime)(\\(.*\\))?$",
+                  "description": "SQLAlchemy column type constructor string, e.g. 'String(255)', 'Integer', or 'DateTime(timezone=True)'. Must be one of the base types plugin_table.py's _TYPE_MAP resolves (String, Integer, Text, Boolean, Float, DateTime) — anything else silently falls back to String, so this schema rejects it up front rather than allowing a PostgreSQL-style type name (e.g. UUID, TIMESTAMP) that looks valid but isn't."
+                },
+                "primary_key": { "type": "boolean", "default": false, "description": "Whether this is the primary key." },
+                "nullable": { "type": "boolean", "default": false, "description": "Whether NULL values are allowed. Defaults to false (NOT NULL)." },
+                "index": { "type": "boolean", "default": false, "description": "Create a database index on this column." },
+                "default": { "type": "string", "description": "SQL default value expression." },
+                "description": { "type": "string", "default": "", "description": "Human-readable column description." }
+              },
+              "additionalProperties": false
+            }
+          },
+          "indexes": {
+            "type": "array",
+            "description": "Explicit (optionally multi-column or unique) indexes on the table, beyond any single-column indexes already requested via a column's index: true.",
+            "items": {
+              "type": "object",
+              "required": ["name", "columns"],
+              "properties": {
+                "name": { "type": "string", "description": "Index name in the database." },
+                "columns": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "minItems": 1,
+                  "description": "Column names included in the index."
+                },
+                "unique": { "type": "boolean", "default": false, "description": "Whether the index enforces uniqueness." }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "Database tables the plugin creates via Alembic migrations."
+    },
+    "api_routes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["method", "path", "handler"],
+        "properties": {
+          "method": {
+            "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"],
+            "description": "HTTP method."
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^/[a-z0-9/_-]+$",
+            "description": "Route path (relative to /api/v1/)."
+          },
+          "handler": {
+            "type": "string",
+            "description": "Function name in the plugin's main module."
+          },
+          "description": { "type": "string" },
+          "request_body": {
+            "type": "object",
+            "properties": {
+              "model": { "type": "string" },
+              "fields": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          },
+          "response_model": {
+            "type": "object",
+            "properties": {
+              "model": { "type": "string" },
+              "fields": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
+      "description": "Core API routes the plugin registers."
+    },
+    "event_subscriptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["detail_type"],
+        "properties": {
+          "source": { "type": "string", "default": "biffo.core" },
+          "detail_type": { "type": "string" },
+          "handler": { "type": "string" }
+        }
+      },
+      "description": "EventBridge events the plugin subscribes to."
+    },
+    "infra_modules": {
+      "type": "array",
+      "items": {
+        "enum": ["compute", "storage", "events", "cdn", "database", "auth", "networking", "oidc", "api-gateway"]
+      },
+      "description": "Terraform module categories the plugin provisions."
+    },
+    "ui_components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "label", "path"],
+        "properties": {
+          "type": {
+            "enum": ["nav-link", "page", "dashboard-widget", "modal", "dialog"],
+            "description": "UI component type."
+          },
+          "label": { "type": "string" },
+          "path": { "type": "string" },
+          "icon": { "type": "string" },
+          "requires_auth": { "type": "boolean", "default": true }
+        }
+      },
+      "description": "Portal UI elements the plugin adds."
+    },
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Python package dependencies (including biffo-plugin-sdk)."
+    }
+  },
+  "additionalProperties": false
+}

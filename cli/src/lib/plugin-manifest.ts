@@ -95,7 +95,15 @@ const TableDefinitionSchema = z
       }
     }
 
-    const validColumns = new Set(table.columns.map((c) => c.name))
+    // Mirrors plugin_table.py's PluginTableDefinition: _ensure_auto_columns
+    // merges the four auto-injected columns (id, tenant_id, created_at,
+    // updated_at) into `columns` *before* _validate_uniqueness checks index
+    // references, so indexing on e.g. tenant_id (a common tenant-scoped
+    // uniqueness pattern — see rbac_roles' idx_rbac_roles_tenant_name in
+    // services/rbac/biffo.plugin.json) is valid there. This must accept the
+    // same auto-column names as valid index targets, or a manifest the real
+    // Core API happily accepts gets rejected here first.
+    const validColumns = new Set([...table.columns.map((c) => c.name), ...RESERVED_COLUMN_NAMES])
     for (const idx of table.indexes) {
       for (const col of idx.columns) {
         if (!validColumns.has(col)) {

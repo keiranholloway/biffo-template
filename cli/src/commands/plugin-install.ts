@@ -5,7 +5,7 @@ import { Command } from 'commander'
 import { GitAdapter } from '../adapters/git/index.js'
 import { RegistryAdapter, type RegistryPluginEntry } from '../adapters/registry/index.js'
 import { log } from '../lib/logger.js'
-import { validateManifest } from '../lib/plugin-manifest.js'
+import { validateManifest, type PluginManifest } from '../lib/plugin-manifest.js'
 
 const TARGET_PATTERN = /^([a-z][a-z0-9-]*)@(\d+\.\d+)$/
 
@@ -41,6 +41,61 @@ export interface PluginInstallOptions {
 }
 
 /**
+ * Parses `<name>@<minor>` targets, e.g. "rbac@1.0". Shared by install and
+ * upgrade — both take the same target shape.
+ */
+export function parsePluginTarget(target: string): { name: string; minor: string } {
+  const match = TARGET_PATTERN.exec(target)
+  if (!match) {
+    throw new Error(`Invalid target '${target}'. Expected format: <name>@<minor>, e.g. rbac@1.0`)
+  }
+  return { name: match[1]!, minor: match[2]! }
+}
+
+export interface ClonedPlugin {
+  tmpDir: string
+  manifest: PluginManifest
+}
+
+/**
+ * Clones a resolved registry entry's repo into a temp dir and validates its
+ * biffo.plugin.json manifest, WITHOUT touching the target project checkout.
+ * Shared by install and upgrade, which differ only in what they do with the
+ * validated result (place into a fresh services/<name>/ vs. replace an
+ * existing one).
+ *
+ * On any failure the temp clone is cleaned up before the error propagates.
+ * On success, cleanup is the caller's responsibility (it still needs the
+ * clone on disk to copy from) — call `git.cleanup(tmpDir)` once done.
+ */
+export async function cloneAndValidatePlugin(
+  entry: RegistryPluginEntry,
+  git: GitAdapter,
+): Promise<ClonedPlugin> {
+  const tmpDir = await git.cloneToTemp(entry.repo, `biffo-plugin-${entry.name}`)
+  try {
+    const manifestPath = join(tmpDir, 'biffo.plugin.json')
+    if (!existsSync(manifestPath)) {
+      throw new Error(
+        `Plugin repo ${entry.repo} does not contain a biffo.plugin.json manifest at its root.`,
+      )
+    }
+
+    const manifest = validateManifest(parseManifestFile(manifestPath))
+    if (manifest.name !== entry.name) {
+      throw new Error(
+        `Manifest name '${manifest.name}' in ${entry.repo} does not match the registry entry '${entry.name}'.`,
+      )
+    }
+
+    return { tmpDir, manifest }
+  } catch (err) {
+    git.cleanup(tmpDir)
+    throw err
+  }
+}
+
+/**
  * Installs a plugin into the current Biffo project checkout.
  *
  * Ground-truth flow (see PR description for the full investigation):
@@ -62,12 +117,7 @@ export async function runPluginInstall(
   options: PluginInstallOptions,
   deps: PluginInstallDeps,
 ): Promise<void> {
-  const match = TARGET_PATTERN.exec(target)
-  if (!match) {
-    throw new Error(`Invalid target '${target}'. Expected format: <name>@<minor>, e.g. rbac@1.0`)
-  }
-  const name = match[1]!
-  const minor = match[2]!
+  const { name, minor } = parsePluginTarget(target)
 
   log.info(`Resolving ${name}@${minor} from the plugin registry...`)
   const entry = await deps.registry.resolvePlugin(name, minor)
@@ -103,24 +153,9 @@ export async function runPluginInstall(
   }
 
   log.info(`Cloning ${entry.repo}...`)
-  const tmpDir = await deps.git.cloneToTemp(entry.repo, `biffo-plugin-${entry.name}`)
+  const { tmpDir, manifest } = await cloneAndValidatePlugin(entry, deps.git)
 
   try {
-    const manifestPath = join(tmpDir, 'biffo.plugin.json')
-    if (!existsSync(manifestPath)) {
-      throw new Error(
-        `Plugin repo ${entry.repo} does not contain a biffo.plugin.json manifest at its root.`,
-      )
-    }
-
-    const manifest = validateManifest(parseManifestFile(manifestPath))
-
-    if (manifest.name !== entry.name) {
-      throw new Error(
-        `Manifest name '${manifest.name}' in ${entry.repo} does not match the registry entry '${entry.name}'.`,
-      )
-    }
-
     log.success(
       `Manifest valid — ${manifest.tables.length} table(s), ${manifest.api_routes.length} route(s)`,
     )

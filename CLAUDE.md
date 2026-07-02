@@ -24,12 +24,18 @@ biffo/
 │   ├── eslint-config/      # Shared ESLint flat config
 │   └── ui/                 # @biffo/ui — shared React component stubs
 ├── modules/
-│   ├── cloud/aws/          # Terraform modules: networking, compute, storage, database, auth, events, cdn, oidc
+│   ├── cloud/aws/          # Terraform modules: networking, compute, storage, database, auth, events, cdn
 │   └── source-control/github/  # Terraform module: GitHub repo + branch protection
 ├── infra/environments/     # Root Terraform configs: dev, staging, prod
 ├── docs/ADR/               # Architecture Decision Records
 └── scripts/                # bootstrap.sh, setup-oidc.sh
 ```
+
+GitHub Actions → AWS OIDC trust is **not** Terraform-managed. `biffo init` bootstraps it
+imperatively via the AWS SDK (`AwsAdapter.setupOidcTrust` in `cli/src/adapters/cloud/aws/index.ts`)
+before Terraform ever runs, because that OIDC role is the credential Terraform's own CI runs
+need in order to authenticate to AWS in the first place — Terraform cannot create the role that
+grants it permission to run. `scripts/setup-oidc.sh` is the equivalent manual/out-of-band fallback.
 
 ## Commands
 

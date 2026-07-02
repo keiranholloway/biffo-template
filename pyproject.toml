@@ -1,5 +1,5 @@
 [tool.uv.workspace]
-members = ["services/*"]
+members = ["services/*", "packages/python-sdk"]
 
 [tool.ruff]
 target-version = "py313"
@@ -27,15 +27,15 @@ pythonVersion = "3.13"
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
-extraPaths = ["services/api/src"]
+extraPaths = ["services/api/src", "packages/python-sdk/src"]
 
 [tool.pytest.ini_options]
-testpaths = ["services"]
+testpaths = ["services", "packages"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
 
 [tool.coverage.run]
-source = ["services"]
+source = ["services", "packages"]
 omit = ["*/tests/*", "*/migrations/*", "services/_template/*"]

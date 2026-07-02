@@ -1,4 +1,11 @@
-"""Plugin table definition models for dynamic schema generation."""
+"""Plugin table definition models for dynamic schema generation.
+
+ColumnDefinition/IndexDefinition/PluginTableDefinition are mirrored in
+packages/python-sdk/src/biffo_plugin_sdk/plugin.py for external plugin
+authors (that package can't import this module — it's installed outside
+the Core API's own deployment). If either side's fields, defaults, or
+validators change, update the other.
+"""
 
 from __future__ import annotations
 

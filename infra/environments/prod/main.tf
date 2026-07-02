@@ -18,8 +18,8 @@ provider "aws" {
 }
 
 locals {
-  environment = "prod"
-  tags        = { Project = var.project_name, Environment = local.environment }
+  environment           = "prod"
+  tags                  = { Project = var.project_name, Environment = local.environment }
   custom_domain_enabled = var.custom_domain != "" && var.acm_certificate_arn != ""
   portal_url            = local.custom_domain_enabled ? "https://${var.custom_domain}" : "https://${module.cdn.distribution_domain}"
   cors_origins_list = concat(

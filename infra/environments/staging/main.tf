@@ -19,8 +19,8 @@ provider "aws" {
 
 # Staging mirrors dev with multi-AZ NAT and DB for closer prod parity
 locals {
-  environment = "staging"
-  tags        = { Project = var.project_name, Environment = local.environment }
+  environment           = "staging"
+  tags                  = { Project = var.project_name, Environment = local.environment }
   custom_domain_enabled = var.custom_domain != "" && var.acm_certificate_arn != ""
   portal_url            = local.custom_domain_enabled ? "https://${var.custom_domain}" : "https://${module.cdn.distribution_domain}"
   cors_origins_list = concat(

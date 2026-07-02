@@ -37,9 +37,8 @@ app.include_router(admin_plugins.router, prefix="/api/v1")
 # the native routers so they group after them in the OpenAPI/Swagger docs.
 # Scans services/*/biffo.plugin.json at import time (build_plugin_router
 # defaults to discover_plugin_manifests()); see api.plugins' module
-# docstring for why this is a no-op in the deployed Lambda today (no plugin
-# repository exists yet to bundle) and fully functional in any full
-# monorepo checkout (local dev, CI).
+# docstring for how each installed plugin's manifest reaches the deployed
+# Lambda.
 app.include_router(build_plugin_router(), prefix="/api/v1")
 
 handler = Mangum(app, lifespan="off")
@@ -58,6 +57,8 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
 
 
 def _run_db_init() -> dict:
+    import shutil
+    import tempfile
     from pathlib import Path
 
     from alembic import command
@@ -67,15 +68,31 @@ def _run_db_init() -> dict:
 
     cfg = Config("alembic.ini")
 
+    # Generating a plugin migration file means writing into versions/ (see
+    # plugin_migrations.generate_migration_for_plugin) — but script_location
+    # (env.py, script.py.mako, the bundled versions/) is part of the Lambda
+    # deployment package, which AWS extracts read-only. Copy the bundled
+    # versions/ into the platform temp dir (the one writable path in a
+    # Lambda execution environment — /tmp there) and redirect Alembic there
+    # via version_locations, same mechanism as
+    # test_plugin_migrations_integration.py's alembic_setup fixture.
+    # script_location itself is untouched: env.py/script.py.mako are only
+    # ever read, never written.
+    bundled_versions_dir = (
+        Path(cfg.get_main_option("script_location") or "migrations") / "versions"
+    )
+    versions_dir = Path(tempfile.gettempdir()) / "migrations_versions"
+    if versions_dir.exists():
+        shutil.rmtree(versions_dir)
+    shutil.copytree(bundled_versions_dir, versions_dir)
+    cfg.set_main_option("version_locations", str(versions_dir))
+
     # Auto-register plugin tables (ADR-0003 / issue #18): generate any
     # migration files for installed-but-not-yet-migrated plugins *before*
     # upgrading, so they're picked up and applied by the same upgrade("head")
     # call below — manifest -> migration file -> applied table, in one
     # db-init run. Idempotent and a no-op when no plugins are discoverable
     # (see api.plugins module docstring for when that's the case).
-    versions_dir = (
-        Path(cfg.get_main_option("script_location") or "migrations") / "versions"
-    )
     generated = sync_plugin_migrations(versions_dir)
     if generated:
         logger.info(

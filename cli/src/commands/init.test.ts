@@ -1,9 +1,31 @@
+import { execSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { BiffoConfigSchema } from '../config/schema.js'
 import type { InitSession } from '../lib/session.js'
-import { applyResolvedAwsCredentials, runInit } from './init.js'
+import { applyResolvedAwsCredentials, initCommand, runInit } from './init.js'
+
+const { inquirerPrompt, stsClient } = vi.hoisted(() => ({
+  inquirerPrompt: vi.fn(),
+  stsClient: vi.fn(() => ({ send: vi.fn() })),
+}))
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────
+
+vi.mock('node:child_process', () => ({
+  execSync: vi.fn(),
+}))
+
+vi.mock('@aws-sdk/client-sts', () => ({
+  GetCallerIdentityCommand: vi.fn(),
+  STSClient: stsClient,
+}))
+
+vi.mock('inquirer', () => ({
+  default: { prompt: inquirerPrompt },
+}))
 
 vi.mock('../lib/session.js', () => ({
   markStepComplete: vi.fn(),
@@ -76,6 +98,28 @@ function makeAwsMock() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+})
+
+describe('command options', () => {
+  it('validates --config --dry-run without prompting or detecting credentials', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'biffo-init-test-'))
+    const configPath = join(dir, 'biffo.config.json')
+    writeFileSync(configPath, JSON.stringify(CONFIG_NO_DNS), 'utf8')
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+
+    try {
+      await initCommand.parseAsync(['node', 'biffo', '--config', configPath, '--dry-run'], {
+        from: 'node',
+      })
+    } finally {
+      log.mockRestore()
+      rmSync(dir, { recursive: true, force: true })
+    }
+
+    expect(inquirerPrompt).not.toHaveBeenCalled()
+    expect(execSync).not.toHaveBeenCalled()
+    expect(stsClient).not.toHaveBeenCalled()
+  })
 })
 
 // ─── Happy path ───────────────────────────────────────────────────────────────

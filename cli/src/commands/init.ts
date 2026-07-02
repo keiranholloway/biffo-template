@@ -22,96 +22,108 @@ import {
 export const initCommand = new Command('init')
   .description('Scaffold a new project from the Biffo template')
   .option('-c, --config <path>', 'Path to a pre-filled biffo.config.json')
+  .option('-y, --yes', 'Accept detected credentials without prompting')
   .option('--dry-run', 'Validate config without making any changes')
   .option('--fresh', 'Ignore any saved session and start from scratch')
-  .action(async (options: { config?: string; dryRun?: boolean; fresh?: boolean }) => {
-    console.log(chalk.bold('\n  Biffo — Project Initialiser\n'))
+  .action(
+    async (options: { config?: string; yes?: boolean; dryRun?: boolean; fresh?: boolean }) => {
+      console.log(chalk.bold('\n  Biffo — Project Initialiser\n'))
 
-    // Resolve credentials up-front — before asking any project questions —
-    // so the user never fills in a long form only to hit a missing-token error.
-    const githubToken = await resolveGithubToken()
-    const { accountId, region, profile } = await resolveAwsCredentials()
+      let session: InitSession | null = null
+      let config: BiffoConfig
+      let githubToken: string | undefined
 
-    let session: InitSession | null = null
-    let config: BiffoConfig
+      if (options.config) {
+        const rawConfig = JSON.parse(readFileSync(resolve(options.config), 'utf8'))
+        config = parseConfig(rawConfig)
+        const { account_id: accountId, region } = getAwsConfig(config)
+        session = {
+          version: 1,
+          config,
+          awsAccountId: accountId,
+          awsRegion: region,
+          completedSteps: [],
+          outputs: {},
+        }
+      } else {
+        // Resolve credentials up-front — before asking any project questions —
+        // so the user never fills in a long form only to hit a missing-token error.
+        githubToken = await resolveGithubToken({ acceptDetected: options.yes === true })
+        const { accountId, region, profile } = await resolveAwsCredentials({
+          acceptDetected: options.yes === true,
+        })
 
-    if (options.config) {
-      const rawConfig = JSON.parse(readFileSync(resolve(options.config), 'utf8'))
-      config = parseConfig(rawConfig)
-      session = {
-        version: 1,
-        config,
-        awsAccountId: accountId,
-        awsRegion: region,
-        completedSteps: [],
-        outputs: {},
-      }
-    } else if (!options.fresh) {
-      // Offer to resume a saved session
-      const saved = findLatestSession()
-      if (saved) {
-        const { resume } = await inquirer.prompt<{ resume: boolean }>([
-          {
-            type: 'confirm',
-            name: 'resume',
-            message:
-              `Resume previous init for ${chalk.bold(saved.config.project?.name ?? '?')}` +
-              ` (completed: ${saved.completedSteps.join(', ') || 'none'})?`,
-            default: true,
-          },
-        ])
-        if (resume) {
-          session = saved
-          session.awsAccountId = accountId
-          session.awsRegion = region
-          config = applyResolvedAwsCredentials(parseConfig(session.config), {
-            accountId,
-            region,
-            profile,
-          })
-          session.config = config
+        if (!options.fresh) {
+          // Offer to resume a saved session
+          const saved = findLatestSession()
+          if (saved) {
+            const { resume } = await inquirer.prompt<{ resume: boolean }>([
+              {
+                type: 'confirm',
+                name: 'resume',
+                message:
+                  `Resume previous init for ${chalk.bold(saved.config.project?.name ?? '?')}` +
+                  ` (completed: ${saved.completedSteps.join(', ') || 'none'})?`,
+                default: true,
+              },
+            ])
+            if (resume) {
+              session = saved
+              session.awsAccountId = accountId
+              session.awsRegion = region
+              config = applyResolvedAwsCredentials(parseConfig(session.config), {
+                accountId,
+                region,
+                profile,
+              })
+              session.config = config
+              saveSession(session)
+              console.log()
+            }
+          }
+        }
+
+        if (!session) {
+          const rawConfig = await promptForConfig(accountId, region, profile)
+          config = parseConfig(rawConfig)
+          session = {
+            version: 1,
+            config,
+            awsAccountId: accountId,
+            awsRegion: region,
+            completedSteps: [],
+            outputs: {},
+          }
           saveSession(session)
-          console.log()
         }
       }
-    }
 
-    if (!session) {
-      const rawConfig = await promptForConfig(accountId, region, profile)
-      config = parseConfig(rawConfig)
-      session = {
-        version: 1,
-        config,
-        awsAccountId: accountId,
-        awsRegion: region,
-        completedSteps: [],
-        outputs: {},
+      config = config!
+
+      log.success('Configuration valid')
+
+      if (options.dryRun) {
+        console.log('\n', JSON.stringify(config, null, 2))
+        return
       }
-      saveSession(session)
-    }
 
-    config = config!
+      githubToken ??= await resolveGithubToken({
+        acceptDetected: options.yes === true || Boolean(options.config),
+      })
+      const github = new GitHubAdapter(githubToken)
+      const aws = new AwsAdapter(config)
 
-    log.success('Configuration valid')
+      await runInit(github, aws, config, session)
 
-    if (options.dryRun) {
-      console.log('\n', JSON.stringify(config, null, 2))
-      return
-    }
+      const { org, repo } = (
+        config.source_control as { provider: 'github'; config: { org: string; repo: string } }
+      ).config
 
-    const github = new GitHubAdapter(githubToken)
-    const aws = new AwsAdapter(config)
-
-    await runInit(github, aws, config, session)
-
-    const { org, repo } = (
-      config.source_control as { provider: 'github'; config: { org: string; repo: string } }
-    ).config
-
-    log.success('\nProject initialised successfully!')
-    console.log(`\n  Repository: https://github.com/${org}/${repo}`)
-    console.log('  Next: clone your repo and run the first deploy\n')
-  })
+      log.success('\nProject initialised successfully!')
+      console.log(`\n  Repository: https://github.com/${org}/${repo}`)
+      console.log('  Next: clone your repo and run the first deploy\n')
+    },
+  )
 
 // ─── Exported for testing ────────────────────────────────────────────────────
 
@@ -247,6 +259,19 @@ function parseConfig(raw: unknown): BiffoConfig {
   return result.data
 }
 
+function getAwsConfig(config: BiffoConfig): {
+  account_id: string
+  region: string
+  profile?: string
+} {
+  return (
+    config.cloud as {
+      provider: 'aws'
+      config: { account_id: string; region: string; profile?: string }
+    }
+  ).config
+}
+
 export function applyResolvedAwsCredentials(
   config: BiffoConfig,
   credentials: { accountId: string; region: string; profile?: string | undefined },
@@ -265,7 +290,7 @@ export function applyResolvedAwsCredentials(
   }
 }
 
-async function resolveGithubToken(): Promise<string> {
+async function resolveGithubToken(options: { acceptDetected?: boolean } = {}): Promise<string> {
   // 1. Explicit env var
   if (process.env['GITHUB_TOKEN']) return process.env['GITHUB_TOKEN']
 
@@ -275,6 +300,11 @@ async function resolveGithubToken(): Promise<string> {
     console.log(
       chalk.green('  ✔') + ` GitHub account ${chalk.bold(ghCreds.login)} detected (via gh CLI)\n`,
     )
+
+    if (options.acceptDetected) {
+      process.env['GITHUB_TOKEN'] = ghCreds.token
+      return ghCreds.token
+    }
 
     const { confirmed } = await inquirer.prompt<{ confirmed: boolean }>([
       {
@@ -329,7 +359,7 @@ function tryGhCliToken(): { token: string; login: string } | null {
   }
 }
 
-async function resolveAwsCredentials(): Promise<{
+async function resolveAwsCredentials(options: { acceptDetected?: boolean } = {}): Promise<{
   accountId: string
   region: string
   profile?: string
@@ -354,6 +384,10 @@ async function resolveAwsCredentials(): Promise<{
         ` AWS account ${chalk.bold(detectedAccountId)} detected` +
         ` (${detectedRegion}, profile: ${profile})\n`,
     )
+
+    if (options.acceptDetected) {
+      return { accountId: detectedAccountId, region: detectedRegion, profile }
+    }
 
     const { confirmed } = await inquirer.prompt<{ confirmed: boolean }>([
       {

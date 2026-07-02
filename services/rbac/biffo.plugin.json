@@ -1,0 +1,241 @@
+{
+  "name": "rbac",
+  "version": "0.1.0",
+  "description": "Fine-grained role-based access control layered on top of Cognito groups: roles, permissions, role<->permission grants, user<->role assignments, and a check_permission API for policy enforcement.",
+  "author": "Biffo Team",
+  "tags": ["auth", "security", "rbac"],
+  "required_core_version": ">=0.0.0",
+  "tables": [
+    {
+      "name": "rbac_roles",
+      "columns": [
+        {
+          "name": "name",
+          "type": "String(100)",
+          "nullable": false,
+          "description": "Role slug, e.g. 'viewer', 'system.admin'. Roles prefixed 'system.' cannot be deleted (application-enforced; see README)."
+        },
+        {
+          "name": "description",
+          "type": "Text",
+          "nullable": true
+        },
+        {
+          "name": "is_system",
+          "type": "Boolean",
+          "nullable": true,
+          "description": "True for built-in roles that cannot be deleted. Nullable because the generic create route has no server-side default (see README's 'declared defaults are not enforced' note) -- treat NULL as false. The plugin itself always sets this explicitly when seeding roles."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_rbac_roles_tenant_name",
+          "columns": ["tenant_id", "name"],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "rbac_permissions",
+      "columns": [
+        {
+          "name": "resource",
+          "type": "String(100)",
+          "nullable": false,
+          "description": "e.g. 'documents', 'users'."
+        },
+        {
+          "name": "action",
+          "type": "String(50)",
+          "nullable": false,
+          "description": "e.g. 'read', 'write'."
+        },
+        {
+          "name": "effect",
+          "type": "String(10)",
+          "nullable": true,
+          "description": "'allow' or 'deny'. Nullable for the same reason as rbac_roles.is_system -- NULL is treated as 'allow' by the plugin's check_permission logic."
+        },
+        {
+          "name": "description",
+          "type": "Text",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_rbac_permissions_tenant_resource_action",
+          "columns": ["tenant_id", "resource", "action"],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "rbac_role_permissions",
+      "columns": [
+        {
+          "name": "role_id",
+          "type": "String(36)",
+          "nullable": false,
+          "index": true,
+          "description": "References rbac_roles.id. PluginTableDefinition (issue #18) has no foreign-key concept -- this is a plain column enforced only at the application layer, not a DB constraint."
+        },
+        {
+          "name": "permission_id",
+          "type": "String(36)",
+          "nullable": false,
+          "index": true,
+          "description": "References rbac_permissions.id (application-enforced, no DB foreign key -- see role_id note)."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_rbac_role_permissions_unique_pair",
+          "columns": ["role_id", "permission_id"],
+          "unique": true,
+          "description": "Stands in for the issue's original 'PRIMARY KEY (role_id, permission_id)' -- PluginTableDefinition always injects its own synthetic 'id' primary key (see README), so a second composite primary key isn't possible; a unique index over the pair is the closest supported equivalent and is enforced identically at the database level."
+        }
+      ]
+    },
+    {
+      "name": "rbac_user_roles",
+      "columns": [
+        {
+          "name": "user_id",
+          "type": "String(36)",
+          "nullable": false,
+          "index": true,
+          "description": "References users.cognito_sub (application-enforced, no DB foreign key -- see rbac_role_permissions.role_id note)."
+        },
+        {
+          "name": "role_id",
+          "type": "String(36)",
+          "nullable": false,
+          "index": true,
+          "description": "References rbac_roles.id (application-enforced, no DB foreign key)."
+        },
+        {
+          "name": "assigned_by",
+          "type": "String(36)",
+          "nullable": true,
+          "description": "cognito_sub of the admin who made the assignment, or NULL for system-assigned rows (e.g. the default-role auto-assignment on UserCreated)."
+        },
+        {
+          "name": "expires_at",
+          "type": "DateTime(timezone=True)",
+          "nullable": true,
+          "description": "Optional expiry for temporary elevated access; NULL means the assignment never expires."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_rbac_user_roles_unique_pair",
+          "columns": ["user_id", "role_id"],
+          "unique": true
+        }
+      ]
+    }
+  ],
+  "api_routes": [
+    {
+      "method": "GET",
+      "path": "/roles",
+      "table": "rbac_roles",
+      "operation": "list",
+      "description": "List all roles for the caller's tenant."
+    },
+    {
+      "method": "POST",
+      "path": "/roles",
+      "table": "rbac_roles",
+      "operation": "create",
+      "description": "Create a role."
+    },
+    {
+      "method": "GET",
+      "path": "/roles/{id}",
+      "table": "rbac_roles",
+      "operation": "read",
+      "description": "Get a single role."
+    },
+    {
+      "method": "DELETE",
+      "path": "/roles/{id}",
+      "table": "rbac_roles",
+      "operation": "delete",
+      "description": "Delete a role. Generic CRUD cannot enforce 'system roles can't be deleted' -- that rule is application-level only (see README)."
+    },
+    {
+      "method": "GET",
+      "path": "/permissions",
+      "table": "rbac_permissions",
+      "operation": "list",
+      "description": "List all permissions."
+    },
+    {
+      "method": "POST",
+      "path": "/permissions",
+      "table": "rbac_permissions",
+      "operation": "create",
+      "description": "Create a permission."
+    },
+    {
+      "method": "GET",
+      "path": "/role-permissions",
+      "table": "rbac_role_permissions",
+      "operation": "list",
+      "description": "List role->permission grants. Not present in the issue's original route table -- added because check_permission has no data to evaluate without a way to grant permissions to roles."
+    },
+    {
+      "method": "POST",
+      "path": "/role-permissions",
+      "table": "rbac_role_permissions",
+      "operation": "create",
+      "description": "Grant a permission to a role."
+    },
+    {
+      "method": "DELETE",
+      "path": "/role-permissions/{id}",
+      "table": "rbac_role_permissions",
+      "operation": "delete",
+      "description": "Revoke a permission from a role, by the grant row's own id."
+    },
+    {
+      "method": "GET",
+      "path": "/assignments",
+      "table": "rbac_user_roles",
+      "operation": "list",
+      "description": "List user->role assignments."
+    },
+    {
+      "method": "POST",
+      "path": "/assignments",
+      "table": "rbac_user_roles",
+      "operation": "create",
+      "description": "Assign a role to a user."
+    },
+    {
+      "method": "DELETE",
+      "path": "/assignments/{id}",
+      "table": "rbac_user_roles",
+      "operation": "delete",
+      "description": "Remove a role assignment, by the assignment row's own id. The issue's original design was 'DELETE /rbac/assignments' identified by a user_id/role_id body -- issue #19's RouteDefinition requires single-row delete operations to address a row via an {id} path parameter, so this deletes by the assignment row's own id instead."
+    }
+  ],
+  "event_subscriptions": [
+    {
+      "source": "biffo.core",
+      "detail_type": "UserCreated",
+      "description": "Auto-assigns the default 'viewer' role to newly created users. Informational only -- Core API route registration (issue #19) only reads 'tables' and 'api_routes' from this manifest; event subscriptions are wired in the plugin's own Lambda (src/rbac/main.py) via the SDK's EventSubscriber, not synthesized by the Core API. NOT YET LIVE: as of this PR, services/api/src/api/routers/auth.py creates User rows on first login but never publishes a UserCreated event (verified by reading events/base.py and every router) -- this subscription is implemented and unit-tested against a synthetic event, but is dormant in a real deployment until Core API publishing is added (tracked as a follow-up, out of scope for this PR)."
+    }
+  ],
+  "ui_components": [
+    { "type": "nav-link", "label": "RBAC", "path": "/admin/rbac" },
+    { "type": "page", "label": "Roles", "path": "/admin/rbac/roles" },
+    { "type": "page", "label": "Permissions", "path": "/admin/rbac/permissions" },
+    { "type": "page", "label": "Assignments", "path": "/admin/rbac/assignments" }
+  ],
+  "dependencies": {
+    "biffo-plugin-sdk": "^1.0"
+  }
+}

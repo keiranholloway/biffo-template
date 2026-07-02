@@ -1,0 +1,21 @@
+[project]
+name = "biffo-plugin-rbac"
+version = "0.1.0"
+description = "RBAC reference plugin (ADR-0003 chunk 14) — roles, permissions, assignments, and policy enforcement layered on top of Cognito groups"
+requires-python = ">=3.13"
+dependencies = [
+  "biffo-plugin-sdk",
+  "aws-lambda-powertools>=3.4.0",
+  "httpx>=0.28.1",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3.4",
+  "pytest-asyncio>=0.25.2",
+  "ruff>=0.8.0",
+  "pyright>=1.1.0",
+]
+
+[tool.uv.sources]
+biffo-plugin-sdk = { workspace = true }

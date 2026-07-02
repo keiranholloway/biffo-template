@@ -1,0 +1,92 @@
+[project]
+name = "biffo-plugin-example"
+version = "0.1.0"
+description = "Example Biffo plugin — replace this with your own plugin's name and description"
+requires-python = ">=3.13"
+dependencies = [
+  # biffo-plugin-sdk is not yet published to PyPI (it currently ships only
+  # as packages/python-sdk/ inside the biffo-template monorepo — see #14/#66
+  # and this repo's README "PyPI dependency" note). This pin is written as
+  # if publishing were real, matching release.yml's aspirational PyPI
+  # publish job (see that file's header comment): once the SDK is actually
+  # released, `uv sync` here starts working immediately with no further
+  # changes. Until then, point this at a path/git dependency instead — see
+  # the README for both options and how to switch between them locally.
+  "biffo-plugin-sdk>=1.0,<2.0",
+  "aws-lambda-powertools>=3.4.0",
+  "httpx>=0.28.1",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3.4",
+  "pytest-asyncio>=0.25.2",
+  "pytest-cov>=6.0.0",
+  "ruff>=0.8.0",
+  "pyright>=1.1.0",
+  "jsonschema>=4.23.0",
+  "pip-audit>=2.7.3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# Explicit rather than relying on hatchling's default "package name matches
+# a src/ directory" heuristic — the project name (`biffo-plugin-example`)
+# is a distribution/PyPI name, while `example_plugin` is the importable
+# package name; they don't have to match, and won't once you rename this
+# template's package to your own plugin's name. Update this path when you do.
+packages = ["src/example_plugin"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "B", "S", "UP", "ANN"]
+ignore = [
+  "S101", # allow assert in tests
+]
+
+[tool.ruff.lint.per-file-ignores]
+# S101: assert is the normal pytest idiom. ANN: test functions don't need
+# return-type annotations. S106: fakes.py's mock BiffoAPIClient(token=...)
+# is a fixed test fixture value, not a real credential.
+"tests/**/*.py" = ["S101", "ANN", "S106"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pyright]
+pythonVersion = "3.13"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/tests/*"]
+
+# python-semantic-release config for release.yml. This repo does not use
+# semantic-release to *create* tags (unlike its most common setup) — it's
+# triggered by an already-pushed `v*` tag instead (see release.yml's header
+# comment), so only `version_toml` (for the tag/pyproject.toml consistency
+# check) and changelog generation are used; `semantic-release version`'s own
+# commit/tag/push behavior is never invoked in CI.
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+branch = "main"
+build_command = "uv build"
+
+[tool.semantic_release.changelog]
+changelog_file = "CHANGELOG.md"

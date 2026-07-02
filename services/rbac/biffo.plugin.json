@@ -137,18 +137,90 @@
     }
   ],
   "api_routes": [
-    { "method": "GET", "path": "/roles", "table": "rbac_roles", "operation": "list", "description": "List all roles for the caller's tenant." },
-    { "method": "POST", "path": "/roles", "table": "rbac_roles", "operation": "create", "description": "Create a role." },
-    { "method": "GET", "path": "/roles/{id}", "table": "rbac_roles", "operation": "read", "description": "Get a single role." },
-    { "method": "DELETE", "path": "/roles/{id}", "table": "rbac_roles", "operation": "delete", "description": "Delete a role. Generic CRUD cannot enforce 'system roles can't be deleted' -- that rule is application-level only (see README)." },
-    { "method": "GET", "path": "/permissions", "table": "rbac_permissions", "operation": "list", "description": "List all permissions." },
-    { "method": "POST", "path": "/permissions", "table": "rbac_permissions", "operation": "create", "description": "Create a permission." },
-    { "method": "GET", "path": "/role-permissions", "table": "rbac_role_permissions", "operation": "list", "description": "List role->permission grants. Not present in the issue's original route table -- added because check_permission has no data to evaluate without a way to grant permissions to roles." },
-    { "method": "POST", "path": "/role-permissions", "table": "rbac_role_permissions", "operation": "create", "description": "Grant a permission to a role." },
-    { "method": "DELETE", "path": "/role-permissions/{id}", "table": "rbac_role_permissions", "operation": "delete", "description": "Revoke a permission from a role, by the grant row's own id." },
-    { "method": "GET", "path": "/assignments", "table": "rbac_user_roles", "operation": "list", "description": "List user->role assignments." },
-    { "method": "POST", "path": "/assignments", "table": "rbac_user_roles", "operation": "create", "description": "Assign a role to a user." },
-    { "method": "DELETE", "path": "/assignments/{id}", "table": "rbac_user_roles", "operation": "delete", "description": "Remove a role assignment, by the assignment row's own id. The issue's original design was 'DELETE /rbac/assignments' identified by a user_id/role_id body -- issue #19's RouteDefinition requires single-row delete operations to address a row via an {id} path parameter, so this deletes by the assignment row's own id instead." }
+    {
+      "method": "GET",
+      "path": "/roles",
+      "table": "rbac_roles",
+      "operation": "list",
+      "description": "List all roles for the caller's tenant."
+    },
+    {
+      "method": "POST",
+      "path": "/roles",
+      "table": "rbac_roles",
+      "operation": "create",
+      "description": "Create a role."
+    },
+    {
+      "method": "GET",
+      "path": "/roles/{id}",
+      "table": "rbac_roles",
+      "operation": "read",
+      "description": "Get a single role."
+    },
+    {
+      "method": "DELETE",
+      "path": "/roles/{id}",
+      "table": "rbac_roles",
+      "operation": "delete",
+      "description": "Delete a role. Generic CRUD cannot enforce 'system roles can't be deleted' -- that rule is application-level only (see README)."
+    },
+    {
+      "method": "GET",
+      "path": "/permissions",
+      "table": "rbac_permissions",
+      "operation": "list",
+      "description": "List all permissions."
+    },
+    {
+      "method": "POST",
+      "path": "/permissions",
+      "table": "rbac_permissions",
+      "operation": "create",
+      "description": "Create a permission."
+    },
+    {
+      "method": "GET",
+      "path": "/role-permissions",
+      "table": "rbac_role_permissions",
+      "operation": "list",
+      "description": "List role->permission grants. Not present in the issue's original route table -- added because check_permission has no data to evaluate without a way to grant permissions to roles."
+    },
+    {
+      "method": "POST",
+      "path": "/role-permissions",
+      "table": "rbac_role_permissions",
+      "operation": "create",
+      "description": "Grant a permission to a role."
+    },
+    {
+      "method": "DELETE",
+      "path": "/role-permissions/{id}",
+      "table": "rbac_role_permissions",
+      "operation": "delete",
+      "description": "Revoke a permission from a role, by the grant row's own id."
+    },
+    {
+      "method": "GET",
+      "path": "/assignments",
+      "table": "rbac_user_roles",
+      "operation": "list",
+      "description": "List user->role assignments."
+    },
+    {
+      "method": "POST",
+      "path": "/assignments",
+      "table": "rbac_user_roles",
+      "operation": "create",
+      "description": "Assign a role to a user."
+    },
+    {
+      "method": "DELETE",
+      "path": "/assignments/{id}",
+      "table": "rbac_user_roles",
+      "operation": "delete",
+      "description": "Remove a role assignment, by the assignment row's own id. The issue's original design was 'DELETE /rbac/assignments' identified by a user_id/role_id body -- issue #19's RouteDefinition requires single-row delete operations to address a row via an {id} path parameter, so this deletes by the assignment row's own id instead."
+    }
   ],
   "event_subscriptions": [
     {

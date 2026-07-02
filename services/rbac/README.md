@@ -96,7 +96,7 @@ possible and documented rather than silently relied upon:
   `_ensure_auto_columns` in `plugin_table.py`) — a manifest cannot declare
   `PRIMARY KEY (role_id, permission_id)` the way the issue's stale example
   did (and even if it could add `primary_key: true` to those columns, that
-  would just add them to a composite key *alongside* the already-unique
+  would just add them to a composite key _alongside_ the already-unique
   `id`, which wouldn't actually reject a duplicate pair — the `id` alone
   guarantees row uniqueness regardless). The one-grant-per-role-permission
   and one-assignment-per-user-role invariants are enforced instead by a

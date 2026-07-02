@@ -66,10 +66,13 @@ jobs:
             echo "Zone already tracked in state — nothing to do."
             exit 0
           fi
+          # grep -v exits 1 (not just "no matches") when the input is empty —
+          # the common case on a domain's first-ever deploy, when no zone
+          # exists yet at all. `|| true` keeps that from aborting the step.
           ZONE_IDS=$(aws route53 list-hosted-zones-by-name \
             --dns-name "${DOMAIN}." \
             --query "HostedZones[?Name=='${DOMAIN}.'].Id" \
-            --output text | tr '\t' '\n' | cut -d/ -f3 | grep -v '^$')
+            --output text | tr '\t' '\n' | cut -d/ -f3 | grep -v '^$' || true)
           ZONE_COUNT=$(echo "$ZONE_IDS" | grep -c '.' || true)
           if [ "$ZONE_COUNT" -eq 0 ]; then
             echo "No existing zone found for $DOMAIN — creating fresh."
@@ -93,9 +96,11 @@ jobs:
             echo "ACM certificate already tracked in state — nothing to do."
             exit 0
           fi
+          # See the hosted-zone step above: grep -v exits 1 on empty input,
+          # which is the common case when no certificate exists yet.
           CERT_ARNS=$(aws acm list-certificates --region us-east-1 \
             --query "CertificateSummaryList[?DomainName=='${DOMAIN}' || DomainName=='*.${DOMAIN}'].CertificateArn" \
-            --output text | tr '\t' '\n' | grep -v '^$')
+            --output text | tr '\t' '\n' | grep -v '^$' || true)
           CERT_COUNT=$(echo "$CERT_ARNS" | grep -c '.' || true)
           if [ "$CERT_COUNT" -eq 0 ]; then
             echo "No existing ACM certificate found for $DOMAIN — creating fresh."

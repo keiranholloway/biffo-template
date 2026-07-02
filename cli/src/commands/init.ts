@@ -24,94 +24,102 @@ export const initCommand = new Command('init')
   .option('-c, --config <path>', 'Path to a pre-filled biffo.config.json')
   .option('--dry-run', 'Validate config without making any changes')
   .option('--fresh', 'Ignore any saved session and start from scratch')
-  .action(async (options: { config?: string; dryRun?: boolean; fresh?: boolean }) => {
-    console.log(chalk.bold('\n  Biffo — Project Initialiser\n'))
+  .option('-y, --yes', 'Auto-accept detected credentials without prompting (implied by --config)')
+  .action(
+    async (options: { config?: string; dryRun?: boolean; fresh?: boolean; yes?: boolean }) => {
+      console.log(chalk.bold('\n  Biffo — Project Initialiser\n'))
 
-    // Resolve credentials up-front — before asking any project questions —
-    // so the user never fills in a long form only to hit a missing-token error.
-    const githubToken = await resolveGithubToken()
-    const { accountId, region, profile } = await resolveAwsCredentials()
+      // Non-interactive whenever a full config is supplied — passing --config already
+      // signals scripted/CI intent, so credential confirms would otherwise hang on
+      // non-TTY stdin (see #85).
+      const nonInteractive = Boolean(options.yes || options.config)
 
-    let session: InitSession | null = null
-    let config: BiffoConfig
+      // Resolve credentials up-front — before asking any project questions —
+      // so the user never fills in a long form only to hit a missing-token error.
+      const githubToken = await resolveGithubToken(nonInteractive)
+      const { accountId, region, profile } = await resolveAwsCredentials(nonInteractive)
 
-    if (options.config) {
-      const rawConfig = JSON.parse(readFileSync(resolve(options.config), 'utf8'))
-      config = parseConfig(rawConfig)
-      session = {
-        version: 1,
-        config,
-        awsAccountId: accountId,
-        awsRegion: region,
-        completedSteps: [],
-        outputs: {},
-      }
-    } else if (!options.fresh) {
-      // Offer to resume a saved session
-      const saved = findLatestSession()
-      if (saved) {
-        const { resume } = await inquirer.prompt<{ resume: boolean }>([
-          {
-            type: 'confirm',
-            name: 'resume',
-            message:
-              `Resume previous init for ${chalk.bold(saved.config.project?.name ?? '?')}` +
-              ` (completed: ${saved.completedSteps.join(', ') || 'none'})?`,
-            default: true,
-          },
-        ])
-        if (resume) {
-          session = saved
-          session.awsAccountId = accountId
-          session.awsRegion = region
-          config = applyResolvedAwsCredentials(parseConfig(session.config), {
-            accountId,
-            region,
-            profile,
-          })
-          session.config = config
-          saveSession(session)
-          console.log()
+      let session: InitSession | null = null
+      let config: BiffoConfig
+
+      if (options.config) {
+        const rawConfig = JSON.parse(readFileSync(resolve(options.config), 'utf8'))
+        config = parseConfig(rawConfig)
+        session = {
+          version: 1,
+          config,
+          awsAccountId: accountId,
+          awsRegion: region,
+          completedSteps: [],
+          outputs: {},
+        }
+      } else if (!options.fresh) {
+        // Offer to resume a saved session
+        const saved = findLatestSession()
+        if (saved) {
+          const { resume } = await inquirer.prompt<{ resume: boolean }>([
+            {
+              type: 'confirm',
+              name: 'resume',
+              message:
+                `Resume previous init for ${chalk.bold(saved.config.project?.name ?? '?')}` +
+                ` (completed: ${saved.completedSteps.join(', ') || 'none'})?`,
+              default: true,
+            },
+          ])
+          if (resume) {
+            session = saved
+            session.awsAccountId = accountId
+            session.awsRegion = region
+            config = applyResolvedAwsCredentials(parseConfig(session.config), {
+              accountId,
+              region,
+              profile,
+            })
+            session.config = config
+            saveSession(session)
+            console.log()
+          }
         }
       }
-    }
 
-    if (!session) {
-      const rawConfig = await promptForConfig(accountId, region, profile)
-      config = parseConfig(rawConfig)
-      session = {
-        version: 1,
-        config,
-        awsAccountId: accountId,
-        awsRegion: region,
-        completedSteps: [],
-        outputs: {},
+      if (!session) {
+        const rawConfig = await promptForConfig(accountId, region, profile)
+        config = parseConfig(rawConfig)
+        session = {
+          version: 1,
+          config,
+          awsAccountId: accountId,
+          awsRegion: region,
+          completedSteps: [],
+          outputs: {},
+        }
+        saveSession(session)
       }
-      saveSession(session)
-    }
 
-    config = config!
+      config = config!
 
-    log.success('Configuration valid')
+      log.success('Configuration valid')
 
-    if (options.dryRun) {
-      console.log('\n', JSON.stringify(config, null, 2))
-      return
-    }
+      if (options.dryRun) {
+        console.log('\n', JSON.stringify(config, null, 2))
+        return
+      }
 
-    const github = new GitHubAdapter(githubToken)
-    const aws = new AwsAdapter(config)
+      const github = new GitHubAdapter(githubToken)
+      const aws = new AwsAdapter(config)
 
-    await runInit(github, aws, config, session)
+      await runInit(github, aws, config, session)
 
-    const { org, repo } = (
-      config.source_control as { provider: 'github'; config: { org: string; repo: string } }
-    ).config
+      const { org, repo } = (
+        config.source_control as { provider: 'github'; config: { org: string; repo: string } }
+      ).config
 
-    log.success('\nProject initialised successfully!')
-    console.log(`\n  Repository: https://github.com/${org}/${repo}`)
-    console.log('  Next: clone your repo and run the first deploy\n')
-  })
+      log.success('\nProject initialised successfully!')
+      console.log(`\n  Repository: https://github.com/${org}/${repo}`)
+      console.log('  Next: clone your repo and run the first deploy\n')
+    },
+  )
 
 // ─── Exported for testing ────────────────────────────────────────────────────
 
@@ -265,7 +273,7 @@ export function applyResolvedAwsCredentials(
   }
 }
 
-async function resolveGithubToken(): Promise<string> {
+async function resolveGithubToken(nonInteractive = false): Promise<string> {
   // 1. Explicit env var
   if (process.env['GITHUB_TOKEN']) return process.env['GITHUB_TOKEN']
 
@@ -276,14 +284,18 @@ async function resolveGithubToken(): Promise<string> {
       chalk.green('  ✔') + ` GitHub account ${chalk.bold(ghCreds.login)} detected (via gh CLI)\n`,
     )
 
-    const { confirmed } = await inquirer.prompt<{ confirmed: boolean }>([
-      {
-        type: 'confirm',
-        name: 'confirmed',
-        message: 'Use these GitHub credentials?',
-        default: true,
-      },
-    ])
+    const confirmed =
+      nonInteractive ||
+      (
+        await inquirer.prompt<{ confirmed: boolean }>([
+          {
+            type: 'confirm',
+            name: 'confirmed',
+            message: 'Use these GitHub credentials?',
+            default: true,
+          },
+        ])
+      ).confirmed
 
     if (confirmed) {
       console.log()
@@ -291,6 +303,12 @@ async function resolveGithubToken(): Promise<string> {
       return ghCreds.token
     }
     console.log()
+  }
+
+  if (nonInteractive) {
+    throw new Error(
+      'No GitHub credentials found. Set GITHUB_TOKEN or run `gh auth login` before using --config/--yes.',
+    )
   }
 
   // 3. Manual entry
@@ -329,7 +347,7 @@ function tryGhCliToken(): { token: string; login: string } | null {
   }
 }
 
-async function resolveAwsCredentials(): Promise<{
+async function resolveAwsCredentials(nonInteractive = false): Promise<{
   accountId: string
   region: string
   profile?: string
@@ -355,14 +373,18 @@ async function resolveAwsCredentials(): Promise<{
         ` (${detectedRegion}, profile: ${profile})\n`,
     )
 
-    const { confirmed } = await inquirer.prompt<{ confirmed: boolean }>([
-      {
-        type: 'confirm',
-        name: 'confirmed',
-        message: 'Use these AWS credentials?',
-        default: true,
-      },
-    ])
+    const confirmed =
+      nonInteractive ||
+      (
+        await inquirer.prompt<{ confirmed: boolean }>([
+          {
+            type: 'confirm',
+            name: 'confirmed',
+            message: 'Use these AWS credentials?',
+            default: true,
+          },
+        ])
+      ).confirmed
 
     if (confirmed) {
       console.log()
@@ -373,6 +395,12 @@ async function resolveAwsCredentials(): Promise<{
       chalk.yellow('  ⚠  Could not detect AWS credentials.\n') +
         '     Run: aws configure\n' +
         '     Or set AWS_PROFILE to switch profiles.\n',
+    )
+  }
+
+  if (nonInteractive) {
+    throw new Error(
+      'Could not detect AWS credentials. Run `aws configure` or set AWS_PROFILE before using --config/--yes.',
     )
   }
 

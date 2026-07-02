@@ -10,16 +10,25 @@ the duplication is unavoidable. If either side changes, update the other.
 This SDK deliberately stops at structural validation: it does not resolve
 column types into real SQLAlchemy columns (that stays Core-API-only, per
 ADR-0002 — no DB client machinery outside services/api/).
+
+``BiffoPluginBase`` (the SDK's main entry point, per ADR-0003 section 3)
+lives in this module rather than a separate file: it wraps ``PluginManifest``
+and ``register_plugin`` directly, so keeping them together avoids a circular
+import between "the manifest" and "the class that registers a manifest".
 """
 
 from __future__ import annotations
 
 import json
+from abc import ABC, abstractmethod
 from collections import Counter
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field, model_validator
+
+from .client import BiffoAPIClient
+from .events import EventHandler, EventSubscriber
 
 
 class ColumnDefinition(BaseModel):
@@ -200,3 +209,92 @@ def register_plugin(manifest: PluginManifest) -> dict[str, Any]:
         "tables": [t.model_dump(mode="json") for t in manifest.tables],
         "api_routes": [r.model_dump(mode="json") for r in manifest.api_routes],
     }
+
+
+class BiffoPluginBase(ABC):
+    """Abstract base class plugin authors extend to implement a Biffo plugin.
+
+    This is the main entry point described in ADR-0003 section 3 — it ties
+    together the rest of the SDK rather than duplicating it:
+
+    - ``self.manifest`` holds the ``PluginManifest`` passed to the
+      constructor; ``register()`` delegates to the module-level
+      ``register_plugin()`` function using it.
+    - ``self.api`` is a ready-to-use ``BiffoAPIClient``, constructed eagerly
+      in ``__init__``. Building an ``httpx.AsyncClient`` doesn't require a
+      running event loop (it only opens connections lazily on the first
+      request), so there's no benefit to deferring construction — and eager
+      construction means a misconfigured environment (missing
+      ``BIFFO_CORE_API_URL``) surfaces at plugin startup instead of on the
+      first API call.
+    - ``self.events`` is an ``EventSubscriber`` private to this instance
+      (not a module-level singleton), so multiple plugin instances — e.g.
+      in tests — never share event registrations. ``subscribe()`` is a thin
+      decorator wrapping ``self.events.register()``.
+
+    The CLI calls ``on_install()``, ``on_uninstall()``, and ``on_upgrade()``
+    during ``biffo plugin install`` / ``uninstall`` / upgrade (ADR-0003
+    section 9). ``on_install`` and ``on_uninstall`` are abstract because
+    every plugin must define its own setup/teardown; ``on_upgrade`` defaults
+    to a no-op since most upgrades need no bespoke migration logic beyond
+    what the CLI already generates.
+    """
+
+    def __init__(
+        self, manifest: PluginManifest, api: BiffoAPIClient | None = None
+    ) -> None:
+        self.manifest = manifest
+        self.api = api if api is not None else BiffoAPIClient()
+        self.events = EventSubscriber()
+
+    @abstractmethod
+    def on_install(self) -> None:
+        """Called by the CLI when the plugin is installed."""
+
+    @abstractmethod
+    def on_uninstall(self) -> None:
+        """Called by the CLI when the plugin is uninstalled."""
+
+    def on_upgrade(self, from_version: str) -> None:
+        """Called by the CLI when the plugin is upgraded from *from_version*.
+
+        No-op by default — override to run bespoke migration logic when a
+        version bump needs more than the CLI's generated Alembic migrations.
+        """
+        return None
+
+    def subscribe(
+        self, detail_type: str, source: str = "biffo.core"
+    ) -> Callable[[EventHandler], EventHandler]:
+        """Decorator registering a handler for events matching *detail_type*.
+
+        Modelled on Flask/FastAPI route decorators (``@app.route(...)``),
+        but bound to this plugin instance — usually applied inside
+        ``__init__`` after ``super().__init__()`` runs — rather than a
+        module-level app singleton, so each plugin instance owns its own
+        ``self.events`` registrations::
+
+            class MyPlugin(BiffoPluginBase):
+                def __init__(self) -> None:
+                    super().__init__(PluginManifest(name="my-plugin", version="1.0.0"))
+
+                    @self.subscribe("user.created")
+                    def handle_user_created(event: BiffoEvent) -> None:
+                        ...
+
+        *source* is accepted to match the events a plugin declares in its
+        manifest's ``event_subscriptions`` (ADR-0003), but ``EventSubscriber``
+        only dispatches by ``detail_type`` today — cross-source filtering is
+        left to a later chunk, same as ``EventSubscriber.dispatch``'s
+        ordering/error-handling semantics.
+        """
+
+        def decorator(handler: EventHandler) -> EventHandler:
+            self.events.register(detail_type, handler)
+            return handler
+
+        return decorator
+
+    def register(self) -> dict[str, Any]:
+        """Delegate to ``register_plugin()`` and return the registration dict."""
+        return register_plugin(self.manifest)

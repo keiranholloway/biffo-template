@@ -57,7 +57,12 @@ jobs:
         if: vars.DNS_MODE == '' || vars.DNS_MODE == 'managed-route53'
         run: |
           DOMAIN="${{ vars.DOMAIN }}"
-          if terraform state list | grep -qx 'aws_route53_zone.main\[0\]'; then
+          # `terraform state list` errors (rather than printing nothing) when the
+          # backend has no state file at all yet — i.e. a project's very first
+          # deploy. `|| true` absorbs that so the check degrades to "not tracked"
+          # instead of aborting the whole step.
+          EXISTING_STATE="$(terraform state list 2>/dev/null || true)"
+          if echo "$EXISTING_STATE" | grep -qx 'aws_route53_zone.main\[0\]'; then
             echo "Zone already tracked in state — nothing to do."
             exit 0
           fi
@@ -81,7 +86,10 @@ jobs:
       - name: Adopt existing ACM certificate instead of recreating it
         run: |
           DOMAIN="${{ vars.DOMAIN }}"
-          if terraform state list | grep -qx 'aws_acm_certificate.wildcard'; then
+          # See the hosted-zone step above: terraform state list errors rather
+          # than printing nothing on a brand-new, never-applied backend.
+          EXISTING_STATE="$(terraform state list 2>/dev/null || true)"
+          if echo "$EXISTING_STATE" | grep -qx 'aws_acm_certificate.wildcard'; then
             echo "ACM certificate already tracked in state — nothing to do."
             exit 0
           fi

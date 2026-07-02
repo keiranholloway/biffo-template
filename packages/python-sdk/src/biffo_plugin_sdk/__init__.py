@@ -1,5 +1,6 @@
 """Biffo Plugin SDK."""
 
+from .client import BiffoAPIClient, BiffoAPIError
 from .plugin import (
     ColumnDefinition,
     IndexDefinition,
@@ -11,6 +12,8 @@ from .plugin import (
 )
 
 __all__ = [
+    "BiffoAPIClient",
+    "BiffoAPIError",
     "ColumnDefinition",
     "IndexDefinition",
     "PluginManifest",

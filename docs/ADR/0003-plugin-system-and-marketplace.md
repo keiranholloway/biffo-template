@@ -98,9 +98,7 @@ Table columns use SQLAlchemy constructor-string types (`"String(36)"`, not Postg
         { "name": "description", "type": "Text" },
         { "name": "is_system", "type": "Boolean", "default": "false" }
       ],
-      "indexes": [
-        { "name": "ix_rbac_roles_name", "columns": ["name"], "unique": true }
-      ]
+      "indexes": [{ "name": "ix_rbac_roles_name", "columns": ["name"], "unique": true }]
     },
     {
       "name": "rbac_permissions",
@@ -115,10 +113,18 @@ Table columns use SQLAlchemy constructor-string types (`"String(36)"`, not Postg
       "name": "rbac_role_permissions",
       "columns": [
         { "name": "role_id", "type": "String(36)", "description": "References rbac_roles.id" },
-        { "name": "permission_id", "type": "String(36)", "description": "References rbac_permissions.id" }
+        {
+          "name": "permission_id",
+          "type": "String(36)",
+          "description": "References rbac_permissions.id"
+        }
       ],
       "indexes": [
-        { "name": "ix_rbac_role_permissions_role_permission", "columns": ["role_id", "permission_id"], "unique": true }
+        {
+          "name": "ix_rbac_role_permissions_role_permission",
+          "columns": ["role_id", "permission_id"],
+          "unique": true
+        }
       ]
     },
     {
@@ -126,11 +132,19 @@ Table columns use SQLAlchemy constructor-string types (`"String(36)"`, not Postg
       "columns": [
         { "name": "user_id", "type": "String(64)", "description": "References users.cognito_sub" },
         { "name": "role_id", "type": "String(36)", "description": "References rbac_roles.id" },
-        { "name": "assigned_by", "type": "String(64)", "description": "References users.cognito_sub" },
+        {
+          "name": "assigned_by",
+          "type": "String(64)",
+          "description": "References users.cognito_sub"
+        },
         { "name": "expires_at", "type": "DateTime(timezone=True)", "nullable": true }
       ],
       "indexes": [
-        { "name": "ix_rbac_user_roles_user_role", "columns": ["user_id", "role_id"], "unique": true }
+        {
+          "name": "ix_rbac_user_roles_user_role",
+          "columns": ["user_id", "role_id"],
+          "unique": true
+        }
       ]
     }
   ],

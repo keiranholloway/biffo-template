@@ -63,11 +63,27 @@
                   "pattern": "^(String|Integer|Text|Boolean|Float|DateTime)(\\(.*\\))?$",
                   "description": "SQLAlchemy column type constructor string, e.g. 'String(255)', 'Integer', or 'DateTime(timezone=True)'. Must be one of the base types plugin_table.py's _TYPE_MAP resolves (String, Integer, Text, Boolean, Float, DateTime) — anything else silently falls back to String, so this schema rejects it up front rather than allowing a PostgreSQL-style type name (e.g. UUID, TIMESTAMP) that looks valid but isn't."
                 },
-                "primary_key": { "type": "boolean", "default": false, "description": "Whether this is the primary key." },
-                "nullable": { "type": "boolean", "default": false, "description": "Whether NULL values are allowed. Defaults to false (NOT NULL)." },
-                "index": { "type": "boolean", "default": false, "description": "Create a database index on this column." },
+                "primary_key": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether this is the primary key."
+                },
+                "nullable": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether NULL values are allowed. Defaults to false (NOT NULL)."
+                },
+                "index": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Create a database index on this column."
+                },
                 "default": { "type": "string", "description": "SQL default value expression." },
-                "description": { "type": "string", "default": "", "description": "Human-readable column description." }
+                "description": {
+                  "type": "string",
+                  "default": "",
+                  "description": "Human-readable column description."
+                }
               },
               "additionalProperties": false
             }
@@ -86,7 +102,11 @@
                   "minItems": 1,
                   "description": "Column names included in the index."
                 },
-                "unique": { "type": "boolean", "default": false, "description": "Whether the index enforces uniqueness." }
+                "unique": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether the index enforces uniqueness."
+                }
               },
               "additionalProperties": false
             }
@@ -156,7 +176,17 @@
     "infra_modules": {
       "type": "array",
       "items": {
-        "enum": ["compute", "storage", "events", "cdn", "database", "auth", "networking", "oidc", "api-gateway"]
+        "enum": [
+          "compute",
+          "storage",
+          "events",
+          "cdn",
+          "database",
+          "auth",
+          "networking",
+          "oidc",
+          "api-gateway"
+        ]
       },
       "description": "Terraform module categories the plugin provisions."
     },

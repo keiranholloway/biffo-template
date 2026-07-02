@@ -1,5 +1,5 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 
 import httpx
@@ -22,6 +22,13 @@ class AuthenticatedUser:
     email: str
     username: str
     tenant_id: str  # Always "default" in single-tenant deployments (ADR-0001)
+    # Group memberships from the verified JWT's `cognito:groups` claim, used by
+    # the generic CRUD layer's declarative permission checks (ADR-0004). Empty
+    # when the caller belongs to no groups — the permission model is any-of
+    # against this list, so an empty list authorises only operations that
+    # require no role. Defaults to empty so non-auth construction sites (tests,
+    # dependency overrides) stay fail-closed without having to opt in.
+    roles: list[str] = field(default_factory=list)
 
 
 @lru_cache(maxsize=1)
@@ -94,6 +101,10 @@ async def require_auth(
     Raises HTTP 401 if the token is missing, expired, or invalid.
     The tenant_id is always 'default' in single-tenant deployments (ADR-0001).
     When multi-tenancy is added, it will be sourced from a custom Cognito claim.
+
+    Roles come from the `cognito:groups` claim already present in the verified
+    token (ADR-0004) — no extra DB round-trip. The claim is absent for a caller
+    in no groups; it is a JSON array of group names when present.
     """
     claims = _verify_token(credentials.credentials)
 
@@ -102,4 +113,5 @@ async def require_auth(
         email=claims.get("email", ""),
         username=claims.get("cognito:username", claims.get("username", "")),
         tenant_id="default",
+        roles=list(claims.get("cognito:groups") or []),
     )

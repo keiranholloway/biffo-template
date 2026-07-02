@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     # EventBridge
     event_bus_name: str = "biffo-events"
 
+    # Plugins (ADR-0003) — directory containing one subdirectory per service,
+    # scanned for */biffo.plugin.json. Empty string uses the monorepo's
+    # services/ directory (see api.plugins._DEFAULT_SERVICES_ROOT); only
+    # meaningful in contexts with a full monorepo checkout — see the
+    # api.plugins module docstring for the deployed-Lambda limitation.
+    plugin_services_root: str = ""
+
     # Application
     environment: str = "dev"
     log_level: str = "INFO"

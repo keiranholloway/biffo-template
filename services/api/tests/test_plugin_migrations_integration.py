@@ -1,0 +1,162 @@
+"""Integration test for the plugin migration pipeline (issue #18 gap 5):
+plugin manifest -> generated Alembic migration file -> real `alembic upgrade`
+-> table actually exists in the database.
+
+Unlike test_plugin_migrations.py (which only asserts on generated source text
+or that it compiles), this drives the real Alembic machinery end to end
+against a throwaway SQLite database, chained onto the repo's actual 0001
+migration — exactly the way `alembic upgrade head` (via
+services/api/src/api/main.py's `_run_db_init`) runs it in production against
+Postgres.
+"""
+
+import shutil
+import sys
+from pathlib import Path
+
+import pytest
+import sqlalchemy as sa
+from alembic import command
+from alembic.config import Config
+
+from api.migrations.plugin_migrations import (
+    generate_migration_for_plugin,
+    sync_plugin_migrations,
+)
+
+_SERVICES_API_DIR = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture
+def alembic_setup(tmp_path, monkeypatch):
+    """A real Alembic Config chained onto the repo's actual 0001 migration,
+    pointed at a throwaway SQLite file DB and a throwaway versions/
+    directory, so the test never touches the real
+    services/api/migrations/versions/ directory or a real Postgres instance.
+    """
+    db_path = tmp_path / "test.db"
+    monkeypatch.setenv("BIFFO_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    # migrations/env.py imports `src.api.config` — a *different* module
+    # object from `api.config` (this repo's tests import `api.*`; alembic's
+    # own env.py imports `src.api.*`, resolved via its `prepend_sys_path = .`
+    # ini option once cwd is services/api). If some earlier test already
+    # imported it in this session, the env var alone won't be re-read on a
+    # cached module, so patch the already-imported singleton too.
+    if "src.api.config" in sys.modules:
+        monkeypatch.setattr(
+            sys.modules["src.api.config"].settings,
+            "database_url",
+            f"sqlite+aiosqlite:///{db_path}",
+        )
+
+    versions_dir = tmp_path / "versions"
+    versions_dir.mkdir()
+    shutil.copy(
+        _SERVICES_API_DIR / "migrations" / "versions" / "0001_create_users_table.py",
+        versions_dir / "0001_create_users_table.py",
+    )
+
+    # alembic.ini's script_location/prepend_sys_path are relative — chdir so
+    # they (and env.py's `src.api.config` import) resolve the same way they
+    # do when the real Lambda's _run_db_init runs `Config("alembic.ini")`.
+    monkeypatch.chdir(_SERVICES_API_DIR)
+    cfg = Config("alembic.ini")
+    cfg.set_main_option("version_locations", str(versions_dir))
+    return cfg, versions_dir, db_path
+
+
+def _table_names(db_path: Path) -> set[str]:
+    engine = sa.create_engine(f"sqlite:///{db_path}")
+    try:
+        return set(sa.inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+class TestPluginMigrationIntegration:
+    """Manifest -> migration file -> alembic upgrade -> real table."""
+
+    def test_generated_migration_creates_table_via_alembic_upgrade(self, alembic_setup):
+        cfg, versions_dir, db_path = alembic_setup
+        manifest = {
+            "name": "widgets",
+            "version": "1.0.0",
+            "tables": [
+                {
+                    "name": "widgets",
+                    "columns": [
+                        {"name": "label", "type": "String(100)", "index": True}
+                    ],
+                }
+            ],
+        }
+        generate_migration_for_plugin(manifest, versions_dir)
+
+        command.upgrade(cfg, "head")
+
+        tables = _table_names(db_path)
+        assert "users" in tables  # base 0001 migration still applies
+        assert "widgets" in tables
+
+        # The plugin table actually carries the tenant-isolation columns
+        # (ADR-0001), not just a name match via SQLAlchemy reflection.
+        engine = sa.create_engine(f"sqlite:///{db_path}")
+        try:
+            columns = {c["name"] for c in sa.inspect(engine).get_columns("widgets")}
+        finally:
+            engine.dispose()
+        assert {"id", "tenant_id", "created_at", "updated_at", "label"} <= columns
+
+    def test_multi_table_manifest_creates_all_tables(self, alembic_setup):
+        """Regression: multi-table manifests used to generate invalid Python
+        (IndentationError), so `alembic upgrade` would fail before it even
+        got to run any SQL."""
+        cfg, versions_dir, db_path = alembic_setup
+        manifest = {
+            "name": "rbac",
+            "version": "1.0.0",
+            "tables": [{"name": "roles"}, {"name": "permissions"}],
+        }
+        generate_migration_for_plugin(manifest, versions_dir)
+
+        command.upgrade(cfg, "head")
+
+        assert {"roles", "permissions"} <= _table_names(db_path)
+
+    def test_sync_plugin_migrations_end_to_end_from_discovered_manifest(
+        self, alembic_setup, tmp_path
+    ):
+        """Full loop: a plugin manifest discovered on disk (the way
+        api.plugins.discover_plugin_manifests finds services/<name>/
+        biffo.plugin.json) gets a migration generated by
+        sync_plugin_migrations and then actually applied by `alembic
+        upgrade`, with no manual generate_migration_for_plugin call in
+        between — this is exactly what main.py's _run_db_init does on every
+        deploy.
+        """
+        cfg, versions_dir, db_path = alembic_setup
+
+        services_root = tmp_path / "services"
+        plugin_dir = services_root / "gizmos"
+        plugin_dir.mkdir(parents=True)
+        (plugin_dir / "biffo.plugin.json").write_text(
+            '{"name": "gizmos", "version": "1.0.0", '
+            '"tables": [{"name": "gizmos", "columns": '
+            '[{"name": "serial", "type": "String(64)"}]}]}'
+        )
+
+        generated = sync_plugin_migrations(versions_dir, services_root=services_root)
+        assert len(generated) == 1
+
+        command.upgrade(cfg, "head")
+
+        assert "gizmos" in _table_names(db_path)
+
+        # Idempotent: re-running discovery + upgrade (as every db-init call
+        # does) doesn't error, fork a second head, or duplicate the table.
+        generated_again = sync_plugin_migrations(
+            versions_dir, services_root=services_root
+        )
+        assert generated_again == []
+        command.upgrade(cfg, "head")
+        assert "gizmos" in _table_names(db_path)

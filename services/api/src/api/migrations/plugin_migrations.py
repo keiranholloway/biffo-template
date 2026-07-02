@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from alembic.script import ScriptDirectory
+
 from api.models.plugin_table import (
     ColumnDefinition,
     PluginTableDefinition,
@@ -30,6 +32,42 @@ def generate_migration_name(table_name: str) -> str:
 def _short_sha256(input_str: str, length: int = 8) -> str:
     """Compute a short hex digest of SHA-256 for deterministic IDs."""
     return hashlib.sha256(input_str.encode()).hexdigest()[:length]
+
+
+def get_current_head_revision(versions_dir: Path) -> str | None:
+    """Return the current Alembic head revision id for versions_dir, or None
+    if the chain is empty.
+
+    Delegates to Alembic's own ScriptDirectory rather than hand-parsing
+    revision/down_revision assignments out of each file, so branching/merge
+    edge cases raise the same errors `alembic upgrade head` would raise
+    instead of silently picking the wrong parent.
+
+    Args:
+        versions_dir: Directory containing Alembic version files.
+    """
+    # `dir` normally points at the folder holding script.py.mako alongside a
+    # versions/ subfolder; version_locations overrides where version files are
+    # actually read from, so this works whether or not versions_dir's parent
+    # looks like a real Alembic script location (e.g. a bare tempdir in tests).
+    script = ScriptDirectory(
+        str(versions_dir.parent), version_locations=[str(versions_dir)]
+    )
+    return script.get_current_head()
+
+
+def _compute_plugin_revision(
+    manifest: dict[str, Any], tables: list[PluginTableDefinition]
+) -> str:
+    """Deterministic revision id for a plugin's current table set.
+
+    Used both to name the generated migration and, by sync_plugin_migrations,
+    to detect that a plugin's migration was already generated so re-running
+    discovery on every db-init doesn't create duplicate migrations/heads.
+    """
+    return _short_sha256(
+        f"{manifest.get('name', '')}-{'-'.join(t.name for t in tables)}"
+    )
 
 
 def parse_plugin_tables_from_manifest(
@@ -158,9 +196,13 @@ def generate_migration_for_plugin(
     migration_name = generate_migration_name(table_names)
 
     # Build migration content
-    revision = _short_sha256(
-        f"{manifest.get('name', '')}-{'-'.join(t.name for t in tables)}"
-    )
+    revision = _compute_plugin_revision(manifest, tables)
+    # Chain onto whatever's actually at the head of versions_dir right now,
+    # instead of hard-coding None — otherwise every generated plugin
+    # migration forks its own second head instead of appending to the chain
+    # (breaks "alembic upgrade head" / the "existing migrations are not
+    # affected — new ones are appended" acceptance criterion).
+    down_revision = get_current_head_revision(versions_dir)
 
     # Build CREATE TABLE statements for upgrade
     create_statements = []
@@ -174,8 +216,14 @@ def generate_migration_for_plugin(
         # Collect (create, drop) index statement pairs
         index_statements.extend(_build_index_statements(table))
 
-    create_block = "\n    ".join(create_statements)
-    drop_block = "\n    ".join(drop_statements)
+    # Plain "\n" join — every line gets its function-body indent added exactly
+    # once, below, by the per-line "    {line}" prefixing. Joining with
+    # "\n    " here as well used to double-indent every statement after the
+    # first, which is invisible with a single table (join has nothing to
+    # join) but produces an IndentationError as soon as a manifest declares
+    # more than one table.
+    create_block = "\n".join(create_statements)
+    drop_block = "\n".join(drop_statements)
 
     # Index DDL goes after CREATE TABLE in upgrade, before DROP TABLE in downgrade
     index_up_lines = [f"    {create}" for create, _ in index_statements]
@@ -205,7 +253,7 @@ def generate_migration_for_plugin(
     migration_content = f"""\"\"\"{migration_name}
 
 Revision ID: {revision}
-Revises:
+Revises: {down_revision or ""}
 Create Date: {now}
 
 \"\"\"
@@ -217,7 +265,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = '{revision}'
-down_revision = None
+down_revision = {down_revision!r}
 branch_labels = None
 depends_on = None
 
@@ -235,3 +283,50 @@ def downgrade() -> None:
     migration_path = versions_dir / filename
     migration_path.write_text(migration_content)
     return migration_path
+
+
+def _migration_already_generated(revision: str, versions_dir: Path) -> bool:
+    """Whether a migration file for this deterministic revision id already
+    exists in versions_dir."""
+    return any(versions_dir.glob(f"{revision}_*.py"))
+
+
+def sync_plugin_migrations(
+    versions_dir: Path,
+    services_root: Path | None = None,
+) -> list[Path]:
+    """Discover installed plugins and generate any migration files they're
+    still missing, chaining each onto the current head in turn.
+
+    This is the real call site for the generator (previously dead code, only
+    ever invoked from its own unit tests): main.py's `_run_db_init()` calls
+    this immediately before `command.upgrade(cfg, "head")`, so a plugin
+    manifest that appears between deploys gets both its migration generated
+    *and* applied in the same db-init run.
+
+    Idempotent — a plugin whose manifest+tables already produced a migration
+    file (matched by the deterministic revision id `generate_migration_for_plugin`
+    derives from the manifest name and table names) is skipped, so calling this
+    on every db-init doesn't generate duplicate migrations or fork new heads
+    each deploy. Plugins with no tables are skipped (nothing to migrate).
+
+    Args:
+        versions_dir: Directory where Alembic stores migration files.
+        services_root: Passed through to discover_plugin_manifests; None uses
+            its default (the monorepo's services/ directory).
+
+    Returns:
+        Paths to any newly generated migration files, in the order applied.
+    """
+    from api.plugins import discover_plugin_manifests
+
+    generated: list[Path] = []
+    for manifest in discover_plugin_manifests(services_root):
+        tables = parse_plugin_tables_from_manifest(manifest)
+        if not tables:
+            continue
+        revision = _compute_plugin_revision(manifest, tables)
+        if _migration_already_generated(revision, versions_dir):
+            continue
+        generated.append(generate_migration_for_plugin(manifest, versions_dir))
+    return generated

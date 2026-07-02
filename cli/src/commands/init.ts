@@ -1,6 +1,7 @@
 import { execSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts'
 import chalk from 'chalk'
 import { Command } from 'commander'
@@ -29,7 +30,7 @@ export const initCommand = new Command('init')
     // Resolve credentials up-front — before asking any project questions —
     // so the user never fills in a long form only to hit a missing-token error.
     const githubToken = await resolveGithubToken()
-    const { accountId, region } = await resolveAwsCredentials()
+    const { accountId, region, profile } = await resolveAwsCredentials()
 
     let session: InitSession | null = null
     let config: BiffoConfig
@@ -63,14 +64,20 @@ export const initCommand = new Command('init')
           session = saved
           session.awsAccountId = accountId
           session.awsRegion = region
-          config = parseConfig(session.config)
+          config = applyResolvedAwsCredentials(parseConfig(session.config), {
+            accountId,
+            region,
+            profile,
+          })
+          session.config = config
+          saveSession(session)
           console.log()
         }
       }
     }
 
     if (!session) {
-      const rawConfig = await promptForConfig(accountId, region)
+      const rawConfig = await promptForConfig(accountId, region, profile)
       config = parseConfig(rawConfig)
       session = {
         version: 1,
@@ -240,6 +247,24 @@ function parseConfig(raw: unknown): BiffoConfig {
   return result.data
 }
 
+export function applyResolvedAwsCredentials(
+  config: BiffoConfig,
+  credentials: { accountId: string; region: string; profile?: string | undefined },
+): BiffoConfig {
+  return {
+    ...config,
+    cloud: {
+      provider: 'aws',
+      config: {
+        ...config.cloud.config,
+        account_id: credentials.accountId,
+        region: credentials.region,
+        ...(credentials.profile ? { profile: credentials.profile } : {}),
+      },
+    },
+  }
+}
+
 async function resolveGithubToken(): Promise<string> {
   // 1. Explicit env var
   if (process.env['GITHUB_TOKEN']) return process.env['GITHUB_TOKEN']
@@ -304,7 +329,11 @@ function tryGhCliToken(): { token: string; login: string } | null {
   }
 }
 
-async function resolveAwsCredentials(): Promise<{ accountId: string; region: string }> {
+async function resolveAwsCredentials(): Promise<{
+  accountId: string
+  region: string
+  profile?: string
+}> {
   const profile = process.env['AWS_PROFILE'] ?? process.env['AWS_DEFAULT_PROFILE'] ?? 'default'
   const detectedRegion =
     process.env['AWS_DEFAULT_REGION'] ?? process.env['AWS_REGION'] ?? 'us-east-1'
@@ -337,7 +366,7 @@ async function resolveAwsCredentials(): Promise<{ accountId: string; region: str
 
     if (confirmed) {
       console.log()
-      return { accountId: detectedAccountId, region: detectedRegion }
+      return { accountId: detectedAccountId, region: detectedRegion, profile }
     }
   } else {
     console.log(
@@ -347,13 +376,71 @@ async function resolveAwsCredentials(): Promise<{ accountId: string; region: str
     )
   }
 
-  // Manual entry (either user declined auto-detected creds, or detection failed)
+  return promptForAwsProfile(detectedRegion)
+}
+
+async function promptForAwsProfile(
+  detectedRegion: string,
+): Promise<{ accountId: string; region: string; profile?: string }> {
+  const profiles = discoverAwsProfiles()
+
+  if (profiles.length > 0) {
+    const answers = await inquirer.prompt<{
+      selected_profile: string
+      profile: string
+      region: string
+    }>([
+      {
+        type: 'list',
+        name: 'selected_profile',
+        message: 'AWS profile for the target account:',
+        choices: [
+          ...profiles.map((p) => ({ name: p, value: p })),
+          { name: 'Enter another profile name', value: '__manual__' },
+          { name: 'Use current environment credentials', value: '' },
+        ],
+        default: profiles.includes('default') ? 'default' : profiles[0],
+      },
+      {
+        type: 'input',
+        name: 'profile',
+        message: 'AWS profile name:',
+        when: (a: { selected_profile?: string }) => a.selected_profile === '__manual__',
+        validate: (v: string) => v.trim().length > 0 || 'Profile is required',
+      },
+      {
+        type: 'input',
+        name: 'region',
+        message: 'AWS region:',
+        default: detectedRegion,
+      },
+    ])
+
+    const selectedProfile =
+      answers.selected_profile === '__manual__' ? answers.profile.trim() : answers.selected_profile
+    const identity = await verifySelectedAwsCredentials(selectedProfile, answers.region)
+    if (!identity.Account) {
+      throw new Error(
+        `AWS profile ${selectedProfile || '<environment>'} did not return an account ID.`,
+      )
+    }
+
+    console.log(
+      chalk.green('  ✔') +
+        ` AWS profile ${chalk.bold(selectedProfile || '<environment>')} resolves to account ${chalk.bold(identity.Account!)}\n`,
+    )
+    return {
+      accountId: identity.Account!,
+      region: answers.region,
+      ...(selectedProfile ? { profile: selectedProfile } : {}),
+    }
+  }
+
   const answers = await inquirer.prompt<{ account_id: string; region: string }>([
     {
       type: 'input',
       name: 'account_id',
       message: 'AWS account ID (12 digits):',
-      default: detectedAccountId,
       validate: (v: string) => /^\d{12}$/.test(v) || 'Must be 12 digits',
     },
     {
@@ -364,13 +451,59 @@ async function resolveAwsCredentials(): Promise<{ accountId: string; region: str
     },
   ])
 
+  process.env['AWS_REGION'] = answers.region
+  process.env['AWS_DEFAULT_REGION'] = answers.region
+  const identity = await verifySelectedAwsCredentials('', answers.region)
+  if (identity.Account !== answers.account_id) {
+    throw new Error(
+      `AWS credentials resolve to account ${identity.Account}, expected ${answers.account_id}.\n` +
+        `  Select an AWS profile for ${answers.account_id}, or export credentials for that account and rerun \`biffo init\`.`,
+    )
+  }
+
   console.log()
   return { accountId: answers.account_id, region: answers.region }
+}
+
+async function verifySelectedAwsCredentials(
+  profile: string,
+  region: string,
+): Promise<{ Account?: string | undefined }> {
+  if (profile) {
+    process.env['AWS_PROFILE'] = profile
+    process.env['AWS_DEFAULT_PROFILE'] = profile
+    process.env['AWS_SDK_LOAD_CONFIG'] = '1'
+  }
+  process.env['AWS_REGION'] = region
+  process.env['AWS_DEFAULT_REGION'] = region
+
+  const sts = new STSClient({ region })
+  return sts.send(new GetCallerIdentityCommand({}))
+}
+
+function discoverAwsProfiles(): string[] {
+  const files = [join(homedir(), '.aws', 'credentials'), join(homedir(), '.aws', 'config')]
+  const profiles = new Set<string>()
+
+  for (const file of files) {
+    if (!existsSync(file)) continue
+    const content = readFileSync(file, 'utf8')
+    for (const match of content.matchAll(/^\s*\[([^\]]+)\]\s*$/gm)) {
+      const section = match[1]?.trim()
+      if (!section) continue
+      profiles.add(section === 'default' ? 'default' : section.replace(/^profile\s+/, ''))
+    }
+  }
+
+  return [...profiles].sort((a, b) =>
+    a === 'default' ? -1 : b === 'default' ? 1 : a.localeCompare(b),
+  )
 }
 
 async function promptForConfig(
   awsAccountId: string,
   awsRegion: string,
+  awsProfile?: string,
 ): Promise<Partial<BiffoConfig>> {
   const answers = await inquirer.prompt([
     {
@@ -435,7 +568,11 @@ async function promptForConfig(
     },
     cloud: {
       provider: 'aws',
-      config: { account_id: awsAccountId, region: awsRegion },
+      config: {
+        account_id: awsAccountId,
+        region: awsRegion,
+        ...(awsProfile ? { profile: awsProfile } : {}),
+      },
     },
     environments: answers.environments as ('dev' | 'staging' | 'prod')[],
     admin: { email: answers.admin_email as string, username: answers.admin_username as string },

@@ -48,6 +48,7 @@
           "properties": {
             "account_id": { "type": "string", "pattern": "^\\d{12}$" },
             "region": { "type": "string" },
+            "profile": { "type": "string" },
             "oidc_role_arn": { "type": "string" }
           }
         }

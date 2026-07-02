@@ -32,8 +32,16 @@ export class AwsAdapter {
 
   constructor(config: BiffoConfig) {
     const awsConfig = (
-      config.cloud as { provider: 'aws'; config: { account_id: string; region: string } }
+      config.cloud as {
+        provider: 'aws'
+        config: { account_id: string; region: string; profile?: string }
+      }
     ).config
+    if (awsConfig.profile) {
+      process.env['AWS_PROFILE'] = awsConfig.profile
+      process.env['AWS_DEFAULT_PROFILE'] = awsConfig.profile
+      process.env['AWS_SDK_LOAD_CONFIG'] = '1'
+    }
     this.region = awsConfig.region
     this.accountId = awsConfig.account_id
   }

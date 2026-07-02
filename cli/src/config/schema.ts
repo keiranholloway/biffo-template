@@ -6,6 +6,7 @@ const AwsConfigSchema = z.object({
     .regex(/^\d{12}$/, 'AWS account ID must be 12 digits')
     .describe('12-digit AWS account ID'),
   region: z.string().default('us-east-1'),
+  profile: z.string().optional(),
   oidc_role_arn: z
     .string()
     .regex(/^arn:aws:iam::\d{12}:role\/.+/, 'Must be a valid IAM role ARN')

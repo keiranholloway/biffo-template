@@ -9,7 +9,7 @@ from typing import Any
 
 from alembic.script import ScriptDirectory
 
-from api.models.plugin_table import (
+from ..models.plugin_table import (
     ColumnDefinition,
     PluginTableDefinition,
     resolve_type_call,
@@ -318,7 +318,7 @@ def sync_plugin_migrations(
     Returns:
         Paths to any newly generated migration files, in the order applied.
     """
-    from api.plugins import discover_plugin_manifests
+    from ..plugins import discover_plugin_manifests
 
     generated: list[Path] = []
     for manifest in discover_plugin_manifests(services_root):

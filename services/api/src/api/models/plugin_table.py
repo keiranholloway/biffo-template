@@ -181,7 +181,8 @@ class PluginTableDefinition(BaseModel):
             A new SQLAlchemy model class inheriting from TenantScopedModel.
         """
         from sqlalchemy import Column
-        from api.models.base import TenantScopedModel
+
+        from .base import TenantScopedModel
 
         kwargs: dict[str, Any] = {"__tablename__": self.name}
 

@@ -58,17 +58,23 @@ describe('runDataImport — end-to-end', () => {
     rmSync(projectRoot, { recursive: true, force: true })
   })
 
-  // Explicit timeouts (well above vitest's 5000ms default): these tests
-  // spawn a real `git clone` child process, which measurably exceeds the
-  // default on GitHub Actions' shared runners even though it's near-instant
-  // locally — not a hang, just slower real subprocess I/O than the mocked
-  // unit tests in data-import.test.ts.
+  // Explicit `token` on every file:// case below: without it, runDataImport
+  // falls through to resolveDdlImportToken()'s `gh auth token` / interactive
+  // prompt fallback — harmless (and fast) locally with `gh` authenticated,
+  // but on a CI runner with no `gh` session it hits the prompt and hangs on
+  // stdin, which is what actually caused this suite's first CI failure (not
+  // clone speed, despite the misleading "Test timed out" message). A
+  // file://-sourced test never needs real auth, so any non-empty string
+  // here is fine — it only needs to short-circuit resolution.
+  const UNUSED_TOKEN = 'unused-test-token'
+
   it('clones the real repo, copies only .sql files from --path, and commits', async () => {
     await runDataImport(
       'tabsii',
       {
         source: `file://${dataSourceRepo}`,
         path: 'ddl/modules',
+        token: UNUSED_TOKEN,
         dryRun: false,
         cwd: projectRoot,
       },
@@ -91,7 +97,7 @@ describe('runDataImport — end-to-end', () => {
 
     const status = await execa('git', ['status', '--porcelain'], { cwd: projectRoot })
     expect(status.stdout.trim()).toBe('')
-  }, 15_000)
+  })
 
   it('supports a local directory source with no git clone at all', async () => {
     await runDataImport(
@@ -109,6 +115,7 @@ describe('runDataImport — end-to-end', () => {
       {
         source: `file://${dataSourceRepo}`,
         path: 'ddl/modules',
+        token: UNUSED_TOKEN,
         dryRun: true,
         cwd: projectRoot,
       },
@@ -118,5 +125,5 @@ describe('runDataImport — end-to-end', () => {
     expect(existsSync(join(projectRoot, 'db', 'imports', 'tabsii'))).toBe(false)
     const status = await execa('git', ['status', '--porcelain'], { cwd: projectRoot })
     expect(status.stdout.trim()).toBe('')
-  }, 15_000)
+  })
 })

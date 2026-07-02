@@ -27,8 +27,8 @@
 #     A plugin that needs platform data calls the Core API over HTTPS
 #     (BIFFO_CORE_API_URL, see variables.tf) using the plugin SDK's
 #     BiffoAPIClient, exactly like any other API consumer.
-#   - It never attaches to the VPC unless var.vpc_id is explicitly set —
-#     see variables.tf's vpc_id description for why.
+#   - It never attaches to the VPC unless var.enable_vpc_access is set to
+#     true — see variables.tf's enable_vpc_access description for why.
 #
 # Loose coupling: this module must not reference other plugin modules or
 # their resources. Each plugin is instantiated independently by the root
@@ -57,6 +57,7 @@ module "function" {
   runtime            = var.runtime
   memory_size        = var.memory_size
   timeout            = var.timeout
+  enable_vpc_access  = var.enable_vpc_access
   vpc_id             = var.vpc_id
   private_subnet_ids = var.private_subnet_ids
   event_bus_name     = var.event_bus_name

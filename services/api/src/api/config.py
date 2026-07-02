@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     # api.plugins module docstring for the deployed-Lambda limitation.
     plugin_services_root: str = ""
 
+    # DDL data imports (ADR-0005) — directory containing one subdirectory per
+    # import, scanned for */*.sql. Empty string uses the monorepo's
+    # db/imports/ directory (see api.ddl_import._DEFAULT_DDL_IMPORT_ROOT);
+    # set by Terraform to /var/task/db/imports in the deployed Lambda.
+    ddl_import_root: str = ""
+
     # Application
     environment: str = "dev"
     log_level: str = "INFO"

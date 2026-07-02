@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { BiffoConfigSchema } from '../config/schema.js'
 import type { InitSession } from '../lib/session.js'
-import { runInit } from './init.js'
+import { applyResolvedAwsCredentials, runInit } from './init.js'
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────
 
@@ -182,6 +182,22 @@ describe('happy path', () => {
       'CUSTOM_DOMAIN',
       expect.any(String),
     )
+  })
+})
+
+describe('credential resolution', () => {
+  it('overlays selected AWS credentials onto a resumed config', () => {
+    const resolved = applyResolvedAwsCredentials(CONFIG, {
+      accountId: CONFIG.cloud.config.account_id,
+      region: 'eu-west-1',
+      profile: 'tabsii',
+    })
+
+    expect(resolved.cloud.config).toMatchObject({
+      account_id: CONFIG.cloud.config.account_id,
+      region: 'eu-west-1',
+      profile: 'tabsii',
+    })
   })
 })
 

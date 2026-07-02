@@ -33,23 +33,34 @@ variable "timeout" {
   default = 30
 }
 
-variable "vpc_id" {
+variable "enable_vpc_access" {
   description = <<-EOT
-    VPC to attach this plugin's Lambda to. Leave empty (the default) — per
+    Attach this plugin's Lambda to a VPC. Leave false (the default) — per
     ADR-0002, plugins never access the database directly, only the Core API
     over HTTPS and EventBridge, so VPC attachment is normally unnecessary.
     In NAT-less networking configs (e.g. dev's enable_nat_gateway = false),
     attaching to the VPC would also cut off the outbound internet access
-    this Lambda needs to reach the Core API's public endpoint. Only set
+    this Lambda needs to reach the Core API's public endpoint. Only enable
     this if the plugin has a genuine, ADR-0002-compliant reason to reach a
     VPC-only resource (e.g. ElastiCache) — never to reach the database.
+
+    Must be an explicit boolean, not inferred from whether vpc_id is set —
+    vpc_id can be only known after apply (e.g. if it were ever passed from
+    a VPC created in the same plan), and Terraform's count/for_each in the
+    underlying compute module cannot depend on a not-yet-known value.
   EOT
+  type        = bool
+  default     = false
+}
+
+variable "vpc_id" {
+  description = "VPC to attach this plugin's Lambda to. Only used when enable_vpc_access is true."
   type        = string
   default     = ""
 }
 
 variable "private_subnet_ids" {
-  description = "Private subnets to place ENIs in. Only used when vpc_id is set."
+  description = "Private subnets to place ENIs in. Only used when enable_vpc_access is true."
   type        = list(string)
   default     = []
 }

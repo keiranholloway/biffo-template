@@ -91,6 +91,7 @@ module "core_api" {
   handler                   = "src.api.main.lambda_handler"
   memory_size               = 1024
   timeout                   = 30
+  enable_vpc_access         = true
   vpc_id                    = module.networking.vpc_id
   private_subnet_ids        = module.networking.private_subnet_ids
   db_credentials_secret_arn = module.database.credentials_secret_arn

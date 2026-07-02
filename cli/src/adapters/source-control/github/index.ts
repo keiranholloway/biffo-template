@@ -256,7 +256,27 @@ export class GitHubAdapter {
           await this.octokit.repos.updateBranchProtection(params)
           break
         } catch (err: unknown) {
-          if ((err as { status?: number }).status !== 404 || Date.now() >= deadline) throw err
+          const status = (err as { status?: number }).status
+          if (status === 403) {
+            // GitHub requires Team/Enterprise for branch protection on a
+            // private repo owned by an organization (free-plan orgs and
+            // most personal accounts on paid individual plans differ here —
+            // this 403 is the API's own signal, not something worth trying
+            // to predict from the plan name in advance). Skipping is safe:
+            // callers can add protection later via the same GitHub UI/API
+            // once the org's plan supports it, or after making the repo
+            // public. Retrying the same request or trying the next branch
+            // would just hit the identical 403 again.
+            log.warn(`Branch protection unavailable for ${org}/${repo}: ${(err as Error).message}`)
+            log.warn(
+              '  This usually means the organization is on a plan that only supports branch ' +
+                'protection on public repos (GitHub Team/Enterprise is required for private ' +
+                'org repos). Skipping branch protection — add it later via GitHub once the ' +
+                'plan allows it, or make the repo public.',
+            )
+            return
+          }
+          if (status !== 404 || Date.now() >= deadline) throw err
           log.info('Branch protection endpoint not yet ready, retrying...')
           await new Promise((resolve) => setTimeout(resolve, protectionIntervalMs))
         }

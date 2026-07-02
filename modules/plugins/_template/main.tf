@@ -1,0 +1,117 @@
+# Template Terraform module for a Biffo plugin (ADR-0003 chunk 12 / issue #25).
+#
+# Copy this directory to modules/plugins/<name>/ inside a plugin repo (as
+# terraform/, per ADR-0003 section 2's plugin repo layout) and adjust as
+# needed. `biffo plugin install <name>@<minor>` copies that terraform/
+# directory into the user's monorepo at modules/plugins/<name>/; the root
+# config then instantiates it with a `module "plugin_<name>"` block gated on
+# `enabled_plugins` (see infra/environments/dev/main.tf's "Plugin modules"
+# section for the exact block shape to add).
+#
+# This module deliberately wraps two existing modules rather than
+# reimplementing Lambda/IAM/EventBridge from scratch:
+#   - modules/cloud/aws/compute — the plugin's Lambda function, with the
+#     same DLQ/logging/tracing/least-privilege IAM baseline every Biffo
+#     function gets.
+#   - modules/cloud/aws/events (via the shared event_bus_name passed in) —
+#     this module adds only the subscription rule/target/permission a
+#     plugin needs to react to events on the bus the root config already
+#     owns. No new bus is created.
+#
+# What this module does NOT do, per ADR-0002 ("no DB clients outside
+# services/api/", "microservices call the API via HTTP and react to
+# EventBridge events"):
+#   - It never creates a database, and never receives
+#     db_credentials_secret_arn — that variable is wired to the Core API's
+#     Lambda only (infra/environments/dev/main.tf's module "core_api" block).
+#     A plugin that needs platform data calls the Core API over HTTPS
+#     (BIFFO_CORE_API_URL, see variables.tf) using the plugin SDK's
+#     BiffoAPIClient, exactly like any other API consumer.
+#   - It never attaches to the VPC unless var.vpc_id is explicitly set —
+#     see variables.tf's vpc_id description for why.
+#
+# Loose coupling: this module must not reference other plugin modules or
+# their resources. Each plugin is instantiated independently by the root
+# config; nothing here should assume any other plugin is installed.
+
+terraform {
+  required_providers {
+    aws = { source = "hashicorp/aws", version = "~> 5.0" }
+  }
+}
+
+locals {
+  name_prefix       = "${var.project_name}-${var.environment}"
+  function_name     = "${local.name_prefix}-plugin-${var.plugin_name}"
+  has_subscriptions = length(var.event_subscriptions) > 0
+}
+
+# Compute — the plugin's Lambda function.
+module "function" {
+  source = "../../cloud/aws/compute"
+
+  project_name       = var.project_name
+  environment        = var.environment
+  function_name      = "plugin-${var.plugin_name}"
+  handler            = var.handler
+  runtime            = var.runtime
+  memory_size        = var.memory_size
+  timeout            = var.timeout
+  vpc_id             = var.vpc_id
+  private_subnet_ids = var.private_subnet_ids
+  event_bus_name     = var.event_bus_name
+
+  # No db_credentials_secret_arn — see the ADR-0002 note above.
+  environment_variables = merge(
+    {
+      BIFFO_CORE_API_URL = var.core_api_url
+      BIFFO_PLUGIN_NAME  = var.plugin_name
+    },
+    var.environment_variables,
+  )
+
+  sqs_kms_key_id        = var.sqs_kms_key_id
+  cloudwatch_kms_key_id = var.cloudwatch_kms_key_id
+  tags                  = var.tags
+}
+
+# Events — subscribe the plugin's Lambda to its declared event_subscriptions
+# on the shared bus. Each subscription is matched as its own source +
+# detail-type pair via `$or`, rather than independent `source`/`detail-type`
+# arrays, to avoid EventBridge matching the cross product of unrelated
+# source/detail-type combinations when a plugin subscribes to more than one
+# event.
+resource "aws_cloudwatch_event_rule" "subscription" {
+  count          = local.has_subscriptions ? 1 : 0
+  name           = "${local.function_name}-events"
+  description    = "Routes subscribed events to the ${var.plugin_name} plugin"
+  event_bus_name = var.event_bus_name
+
+  event_pattern = jsonencode({
+    "$or" = [
+      for s in var.event_subscriptions : {
+        source      = [s.source]
+        detail-type = [s.detail_type]
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_cloudwatch_event_target" "subscription" {
+  count          = local.has_subscriptions ? 1 : 0
+  rule           = aws_cloudwatch_event_rule.subscription[0].name
+  event_bus_name = var.event_bus_name
+  target_id      = "${var.plugin_name}-lambda"
+  arn            = module.function.function_arn
+}
+
+resource "aws_lambda_permission" "subscription" {
+  count         = local.has_subscriptions ? 1 : 0
+  statement_id  = "AllowEventBridgeInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = module.function.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.subscription[0].arn
+}

@@ -158,6 +158,49 @@ module "api_gateway" {
   tags                 = local.tags
 }
 
+# ---------------------------------------------------------------------------
+# Plugin modules (ADR-0003 chunk 12 / issue #25)
+#
+# Terraform requires a module's `source` argument to be a static string
+# literal — it cannot be built from `var.enabled_plugins` at runtime, so this
+# root config cannot loop over an arbitrary plugin list with one generic
+# module block. Instead, each installed plugin gets its own explicit
+# `module "plugin_<name>"` block below, individually gated on membership in
+# `enabled_plugins` via `for_each`. `biffo plugin install <name>@<minor>`
+# (issue #20/ADR-0003 chunk 7) copies the plugin's own terraform/ directory
+# into modules/plugins/<name>/ — once that directory exists, add a block
+# following this exact shape (copy-paste and replace <name>):
+#
+#   module "plugin_<name>" {
+#     source   = "../../../modules/plugins/<name>"
+#     for_each = contains(var.enabled_plugins, "<name>") ? { "<name>" = true } : {}
+#
+#     project_name   = var.project_name
+#     environment    = local.environment
+#     plugin_name    = "<name>"
+#     handler        = "src.lambda.main.handler"
+#     event_bus_name = module.events.event_bus_name
+#     core_api_url   = module.api_gateway.api_endpoint
+#     tags           = local.tags
+#   }
+#
+# No block references `vpc_id`/`private_subnet_ids` or
+# `db_credentials_secret_arn` by default — per ADR-0002, plugins reach
+# platform data through the Core API (`core_api_url`) and react to
+# `event_bus_name`, never the database directly. See
+# modules/plugins/_template/README.md for the full variable contract, and
+# infra/environments/dev/README.md for the end-to-end "adding a plugin"
+# walkthrough, including how to aggregate each plugin's outputs (e.g.
+# `module.plugin_<name>[<name>].function_arn`) into the outputs below.
+#
+# No plugin module directory exists in this checkout yet (no plugin has
+# shipped a terraform/ directory — see modules/plugins/_template/README.md),
+# so there are currently no live `module "plugin_*"` blocks here. Keep the
+# root backend/provider configuration above and the module blocks below
+# untouched when adding one — only append new `module "plugin_<name>"`
+# blocks and their corresponding output entries.
+# ---------------------------------------------------------------------------
+
 output "api_gateway_url" {
   description = "HTTP API endpoint — set as NEXT_PUBLIC_API_URL in the portal build"
   value       = module.api_gateway.api_endpoint
@@ -185,4 +228,9 @@ output "cognito_user_pool_id" {
 
 output "cognito_client_id" {
   value = module.auth.client_id
+}
+
+output "enabled_plugins" {
+  description = "Plugin names this deploy was configured with. Aggregate per-plugin outputs (e.g. Lambda ARNs) here as module \"plugin_<name>\" blocks are added — see the \"Plugin modules\" section above."
+  value       = var.enabled_plugins
 }

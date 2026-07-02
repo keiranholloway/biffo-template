@@ -30,8 +30,10 @@ resource "aws_sqs_queue" "dlq" {
   tags                      = var.tags
 }
 
-# Security group — outbound to DB SG handled at the DB module level
+# Security group — outbound to DB SG handled at the DB module level.
+# Only created when this function is attached to a VPC (var.vpc_id != "").
 resource "aws_security_group" "lambda" {
+  count       = var.vpc_id != "" ? 1 : 0
   name        = "${local.function_name}-sg"
   description = "Lambda function security group for ${local.function_name}"
   vpc_id      = var.vpc_id
@@ -72,6 +74,7 @@ resource "aws_iam_role" "lambda" {
 }
 
 resource "aws_iam_role_policy_attachment" "vpc_access" {
+  count      = var.vpc_id != "" ? 1 : 0
   role       = aws_iam_role.lambda.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
@@ -136,9 +139,12 @@ resource "aws_lambda_function" "main" {
     target_arn = aws_sqs_queue.dlq.arn
   }
 
-  vpc_config {
-    subnet_ids         = var.private_subnet_ids
-    security_group_ids = [aws_security_group.lambda.id]
+  dynamic "vpc_config" {
+    for_each = var.vpc_id != "" ? [1] : []
+    content {
+      subnet_ids         = var.private_subnet_ids
+      security_group_ids = [aws_security_group.lambda[0].id]
+    }
   }
 
   environment {

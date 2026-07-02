@@ -9,6 +9,7 @@ from mangum import Mangum
 from .config import settings
 from .routers import auth, health, users
 from .routers.admin import plugins as admin_plugins
+from .routing.plugin_router import build_plugin_router
 
 logger = Logger()
 tracer = Tracer()
@@ -32,6 +33,14 @@ app.include_router(health.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(admin_plugins.router, prefix="/api/v1")
+# Auto-register plugin-declared routes (ADR-0003 chunk 6 / issue #19), after
+# the native routers so they group after them in the OpenAPI/Swagger docs.
+# Scans services/*/biffo.plugin.json at import time (build_plugin_router
+# defaults to discover_plugin_manifests()); see api.plugins' module
+# docstring for why this is a no-op in the deployed Lambda today (no plugin
+# repository exists yet to bundle) and fully functional in any full
+# monorepo checkout (local dev, CI).
+app.include_router(build_plugin_router(), prefix="/api/v1")
 
 handler = Mangum(app, lifespan="off")
 

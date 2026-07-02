@@ -128,13 +128,81 @@ class TableDefinition(BaseModel):
         return self
 
 
-class RouteDef(BaseModel):
-    """Definition of an API route for plugin manifests."""
+# Operation -> the HTTP method(s) it's allowed to use. Deliberately reuses
+# ADR-0004's list/read/create/update/delete vocabulary for its permissions
+# registry, so a future permissions block on a route/table can be expressed
+# in the same terms without a renaming migration.
+_OPERATION_METHODS: dict[str, frozenset[str]] = {
+    "list": frozenset({"GET"}),
+    "read": frozenset({"GET"}),
+    "create": frozenset({"POST"}),
+    "update": frozenset({"PUT", "PATCH"}),
+    "delete": frozenset({"DELETE"}),
+}
 
-    method: Literal["GET", "POST", "PUT", "DELETE", "PATCH"]
-    path: str
-    handler: str
+# Operations that address a single row need an {id} path parameter; the
+# collection-level operations (list, create) must not have one.
+_SINGLE_ROW_OPERATIONS: frozenset[str] = frozenset({"read", "update", "delete"})
+
+
+class RouteDef(BaseModel):
+    """Definition of an API route for plugin manifests.
+
+    Mirrors ``services/api/src/api/models/plugin_route.py``'s
+    ``RouteDefinition`` in the biffo-template monorepo (same duplication
+    rationale as ``ColumnDefinition``/``TableDefinition`` above).
+
+    Per ADR-0002, a plugin cannot ship executable route-handler code that the
+    Core API imports and runs inside its own process — plugins talk to the
+    Core API over HTTP, they are not linked into it. So a route's "handler"
+    is not code: it is a declaration of which of the plugin's own tables
+    (declared in this same manifest's ``tables``) the route exposes, and
+    which generic CRUD ``operation`` the Core API should synthesize for it,
+    scoped to the caller's tenant_id (ADR-0001). This is why this model has
+    ``table``/``operation`` fields instead of a free-form ``handler: str``
+    naming a Python function.
+    """
+
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
+    path: str = Field(
+        description="Path relative to the plugin's mount point "
+        "(/api/v1/plugins/<name>), e.g. '/widgets' or '/widgets/{id}'. "
+        "Must start with '/'."
+    )
+    table: str = Field(
+        description="Name of a table declared in this manifest's `tables`."
+    )
+    operation: Literal["list", "read", "create", "update", "delete"] = Field(
+        description="Generic CRUD operation the Core API synthesizes for "
+        "this route against `table`."
+    )
     description: str = ""
+
+    @model_validator(mode="after")
+    def _validate_method_and_path(self) -> "RouteDef":
+        if not self.path.startswith("/"):
+            raise ValueError(f"path must start with '/': {self.path!r}")
+
+        allowed_methods = _OPERATION_METHODS[self.operation]
+        if self.method not in allowed_methods:
+            raise ValueError(
+                f"operation '{self.operation}' requires method in "
+                f"{sorted(allowed_methods)}, got {self.method!r}"
+            )
+
+        has_id = "{id}" in self.path
+        needs_id = self.operation in _SINGLE_ROW_OPERATIONS
+        if needs_id and not has_id:
+            raise ValueError(
+                f"operation '{self.operation}' addresses a single row and "
+                f"requires an '{{id}}' path parameter: {self.path!r}"
+            )
+        if not needs_id and has_id:
+            raise ValueError(
+                f"operation '{self.operation}' is collection-level and must "
+                f"not have an '{{id}}' path parameter: {self.path!r}"
+            )
+        return self
 
 
 class PluginManifest(BaseModel):
@@ -152,6 +220,21 @@ class PluginManifest(BaseModel):
     tables: list[TableDefinition] = []
     api_routes: list[RouteDef] = []
     required_core_version: str = ">=0.0.0"
+
+    @model_validator(mode="after")
+    def _validate_routes_reference_declared_tables(self) -> "PluginManifest":
+        """A route can only expose a table this same manifest declares — it
+        can't reference another plugin's table, and can't be declared
+        without the table it serves."""
+        table_names = {t.name for t in self.tables}
+        for route in self.api_routes:
+            if route.table not in table_names:
+                raise ValueError(
+                    f"Route {route.method} {route.path} references table "
+                    f"{route.table!r}, which is not declared in this "
+                    f"manifest's 'tables' ({sorted(table_names)})."
+                )
+        return self
 
     def model_dump_serializable(self) -> dict[str, Any]:
         """Return a JSON-serialisable dict (no Pydantic internals)."""

@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 
+from ..models.plugin_route import RouteDefinition
 from ..models.plugin_table import PluginTableDefinition
 
 
@@ -15,3 +16,4 @@ class InstalledPluginResponse(BaseModel):
     version: str
     description: str = ""
     tables: list[PluginTableDefinition] = []
+    routes: list[RouteDefinition] = []

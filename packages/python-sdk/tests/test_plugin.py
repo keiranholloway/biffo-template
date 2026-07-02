@@ -75,7 +75,9 @@ class TestPluginManifestModel:
                 ),
             ],
             api_routes=[
-                RouteDef(method="GET", path="/rbac/roles", handler="list_roles"),
+                RouteDef(
+                    method="GET", path="/roles", table="rbac_roles", operation="list"
+                ),
             ],
         )
         assert len(manifest.tables) == 2
@@ -99,6 +101,67 @@ class TestPluginManifestModel:
     def test_missing_version_raises_validation_error(self):
         with pytest.raises(ValidationError):
             PluginManifest(name="foo")  # type: ignore[call-arg]  # missing version
+
+    def test_route_referencing_undeclared_table_rejected(self):
+        """A route can't expose a table the manifest doesn't itself declare —
+        matches the Core API's parse_plugin_routes_from_manifest cross-check
+        (services/api/src/api/models/plugin_route.py)."""
+        with pytest.raises(ValidationError):
+            PluginManifest(
+                name="rbac",
+                version="1.0.0",
+                tables=[TableDefinition(name="roles")],
+                api_routes=[
+                    RouteDef(
+                        method="GET",
+                        path="/permissions",
+                        table="permissions",
+                        operation="list",
+                    )
+                ],
+            )
+
+
+# --- RouteDef tests ---
+
+
+class TestRouteDef:
+    def test_minimal_route(self):
+        route = RouteDef(
+            method="GET", path="/widgets", table="widgets", operation="list"
+        )
+        assert route.method == "GET"
+        assert route.table == "widgets"
+        assert route.operation == "list"
+        assert route.description == ""
+
+    def test_operation_method_mismatch_rejected(self):
+        """'create' must use POST, not GET — a mismatched method/operation
+        pair is rejected outright rather than silently accepted."""
+        with pytest.raises(ValidationError):
+            RouteDef(method="GET", path="/widgets", table="widgets", operation="create")
+
+    def test_update_accepts_put_or_patch(self):
+        RouteDef(
+            method="PUT", path="/widgets/{id}", table="widgets", operation="update"
+        )
+        RouteDef(
+            method="PATCH", path="/widgets/{id}", table="widgets", operation="update"
+        )
+
+    def test_single_row_operation_requires_id_path_param(self):
+        with pytest.raises(ValidationError):
+            RouteDef(method="GET", path="/widgets", table="widgets", operation="read")
+
+    def test_collection_operation_rejects_id_path_param(self):
+        with pytest.raises(ValidationError):
+            RouteDef(
+                method="GET", path="/widgets/{id}", table="widgets", operation="list"
+            )
+
+    def test_path_must_start_with_slash(self):
+        with pytest.raises(ValidationError):
+            RouteDef(method="GET", path="widgets", table="widgets", operation="list")
 
 
 # --- TableDefinition tests (parity with the Core API's PluginTableDefinition) ---
@@ -213,7 +276,7 @@ class TestRegisterPlugin:
             version="1.0.0",
             tables=[TableDefinition(name="roles")],
             api_routes=[
-                RouteDef(method="GET", path="/rbac/roles", handler="list_roles")
+                RouteDef(method="GET", path="/roles", table="roles", operation="list")
             ],
         )
 

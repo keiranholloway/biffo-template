@@ -26,3 +26,21 @@ def require_tenant_context(caller: AuthenticatedUser = Depends(require_auth)) ->
             detail="tenant_id missing from auth context",
         )
     return caller.tenant_id
+
+
+def require_plugin_tenant_context(
+    caller: AuthenticatedUser = Depends(require_auth),
+) -> str:
+    """
+    FastAPI dependency used by every dynamically-registered plugin route
+    (ADR-0003 chunk 6 / issue #19).
+
+    Currently identical to require_tenant_context — every plugin route is
+    tenant-scoped exactly like a native route (CLAUDE.md invariant #2).
+    Deliberately kept as its own dependency, rather than plugin routes
+    depending on require_tenant_context directly, so a future authorization
+    layer (ADR-0004's declarative per-table `permissions`/`required_role`)
+    has a single seam to extend without touching every generated plugin
+    route handler in api.routing.plugin_router.
+    """
+    return require_tenant_context(caller)

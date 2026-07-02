@@ -7,6 +7,9 @@ import pytest
 from pydantic import ValidationError
 
 from biffo_plugin_sdk import (
+    BiffoAPIClient,
+    BiffoEvent,
+    BiffoPluginBase,
     ColumnDefinition,
     IndexDefinition,
     PluginManifest,
@@ -223,3 +226,168 @@ class TestRegisterPlugin:
         assert registration["name"] == "rbac"
         assert registration["tables"][0]["name"] == "roles"
         assert registration["api_routes"][0]["method"] == "GET"
+
+
+# --- BiffoPluginBase tests ---
+
+
+class ExamplePlugin(BiffoPluginBase):
+    """Concrete plugin used across BiffoPluginBase tests. Demonstrates the
+    full lifecycle end to end: manifest → self.api → @self.subscribe wiring
+    → lifecycle hooks, the shape every real plugin author's subclass follows.
+    """
+
+    def __init__(self, api: BiffoAPIClient | None = None) -> None:
+        super().__init__(PluginManifest(name="example", version="1.0.0"), api=api)
+        self.install_called = False
+        self.uninstall_called = False
+        self.upgraded_from: str | None = None
+        self.received_events: list[BiffoEvent] = []
+
+        @self.subscribe("user.created")
+        def handle_user_created(event: BiffoEvent) -> None:
+            self.received_events.append(event)
+
+    def on_install(self) -> None:
+        self.install_called = True
+
+    def on_uninstall(self) -> None:
+        self.uninstall_called = True
+
+    def on_upgrade(self, from_version: str) -> None:
+        self.upgraded_from = from_version
+
+
+class IncompletePlugin(BiffoPluginBase):
+    """Missing on_uninstall — used to prove ABC enforcement rejects it."""
+
+    def on_install(self) -> None:
+        pass
+
+
+class TestBiffoPluginBaseAbstract:
+    def test_cannot_instantiate_directly(self) -> None:
+        with pytest.raises(TypeError):
+            BiffoPluginBase(PluginManifest(name="x", version="1.0.0"))  # type: ignore[abstract]
+
+    def test_cannot_instantiate_subclass_missing_abstract_method(self) -> None:
+        with pytest.raises(TypeError):
+            IncompletePlugin(PluginManifest(name="x", version="1.0.0"))  # type: ignore[abstract]
+
+
+class TestBiffoPluginBaseLifecycleHooks:
+    def test_on_install_and_on_uninstall_are_callable(self) -> None:
+        plugin = ExamplePlugin()
+
+        plugin.on_install()
+        plugin.on_uninstall()
+
+        assert plugin.install_called is True
+        assert plugin.uninstall_called is True
+
+    def test_on_upgrade_default_is_noop(self) -> None:
+        class MinimalPlugin(BiffoPluginBase):
+            def on_install(self) -> None:
+                pass
+
+            def on_uninstall(self) -> None:
+                pass
+
+        plugin = MinimalPlugin(PluginManifest(name="minimal", version="1.0.0"))
+
+        assert plugin.on_upgrade("0.9.0") is None
+
+    def test_on_upgrade_can_be_overridden(self) -> None:
+        plugin = ExamplePlugin()
+
+        plugin.on_upgrade("0.9.0")
+
+        assert plugin.upgraded_from == "0.9.0"
+
+
+class TestBiffoPluginBaseApi:
+    def test_default_api_is_a_biffo_api_client(self) -> None:
+        plugin = ExamplePlugin()
+
+        assert isinstance(plugin.api, BiffoAPIClient)
+
+    def test_api_can_be_injected(self) -> None:
+        injected = BiffoAPIClient(base_url="https://api.example.com", token="t")
+
+        plugin = ExamplePlugin(api=injected)
+
+        assert plugin.api is injected
+
+
+class TestBiffoPluginBaseSubscribe:
+    def test_decorator_registers_handler_on_events(self) -> None:
+        plugin = ExamplePlugin()
+
+        assert plugin.events.has_subscription("user.created")
+
+    def test_decorator_returns_the_original_handler(self) -> None:
+        plugin = ExamplePlugin()
+        recorded: list[str] = []
+
+        @plugin.subscribe("thing.happened")
+        def handler(event: BiffoEvent) -> None:
+            recorded.append(event.detail_type)
+
+        assert handler in plugin.events.get_handlers("thing.happened")
+
+    def test_subscribe_accepts_a_source_argument(self) -> None:
+        plugin = ExamplePlugin()
+
+        @plugin.subscribe("thing.happened", source="some-other-plugin")
+        def handler(event: BiffoEvent) -> None:
+            pass
+
+        assert plugin.events.has_subscription("thing.happened")
+
+    async def test_registered_handler_is_dispatched_via_events(self) -> None:
+        plugin = ExamplePlugin()
+        event = BiffoEvent(detail_type="user.created", payload={"id": "1"})
+
+        await plugin.events.dispatch(event)
+
+        assert plugin.received_events == [event]
+
+    def test_each_instance_has_its_own_event_registrations(self) -> None:
+        plugin_one = ExamplePlugin()
+        plugin_two = ExamplePlugin()
+
+        assert plugin_one.events is not plugin_two.events
+        assert plugin_one.events.get_handlers(
+            "user.created"
+        ) != plugin_two.events.get_handlers("user.created")
+
+
+class TestBiffoPluginBaseRegister:
+    def test_register_delegates_to_register_plugin(self) -> None:
+        plugin = ExamplePlugin()
+
+        registration = plugin.register()
+
+        assert registration == register_plugin(plugin.manifest)
+        assert registration["name"] == "example"
+        assert registration["version"] == "1.0.0"
+
+
+class TestBiffoPluginBaseEndToEnd:
+    """A concrete subclass working end to end: manifest → register() →
+    self.api → @subscribe → lifecycle hooks, all through the public API."""
+
+    def test_full_lifecycle(self) -> None:
+        plugin = ExamplePlugin()
+
+        registration = plugin.register()
+        plugin.on_install()
+        plugin.on_upgrade("1.0.0")
+        plugin.on_uninstall()
+
+        assert registration["name"] == "example"
+        assert plugin.install_called is True
+        assert plugin.upgraded_from == "1.0.0"
+        assert plugin.uninstall_called is True
+        assert isinstance(plugin.api, BiffoAPIClient)
+        assert plugin.events.has_subscription("user.created")

@@ -75,6 +75,64 @@ describe('GitAdapter', () => {
 
       expect(existsSync(capturedDir)).toBe(false)
     })
+
+    it('embeds a given token as userinfo on an https URL passed to git clone', async () => {
+      execaMock.mockResolvedValue({} as never)
+
+      const dir = await adapter.cloneToTemp(
+        'https://github.com/acme/private-repo.git',
+        'biffo-data-acme',
+        'ghp_supersecrettoken123',
+      )
+
+      expect(execaMock).toHaveBeenCalledWith('git', [
+        'clone',
+        '--depth',
+        '1',
+        'https://x-access-token:ghp_supersecrettoken123@github.com/acme/private-repo.git',
+        dir,
+      ])
+
+      adapter.cleanup(dir)
+    })
+
+    it('never leaks the token in a thrown error message — only the original URL appears', async () => {
+      execaMock.mockRejectedValue(new Error('authentication failed'))
+
+      let caught: Error | undefined
+      try {
+        await adapter.cloneToTemp(
+          'https://github.com/acme/private-repo.git',
+          'biffo-data-acme',
+          'ghp_supersecrettoken123',
+        )
+      } catch (err) {
+        caught = err as Error
+      }
+
+      expect(caught?.message).toContain('https://github.com/acme/private-repo.git')
+      expect(caught?.message).not.toContain('ghp_supersecrettoken123')
+    })
+
+    it('leaves a non-https URL (SSH, file://) unchanged even when a token is given', async () => {
+      execaMock.mockResolvedValue({} as never)
+
+      const dir = await adapter.cloneToTemp(
+        'git@github.com:acme/private-repo.git',
+        'biffo-data-acme',
+        'ghp_supersecrettoken123',
+      )
+
+      expect(execaMock).toHaveBeenCalledWith('git', [
+        'clone',
+        '--depth',
+        '1',
+        'git@github.com:acme/private-repo.git',
+        dir,
+      ])
+
+      adapter.cleanup(dir)
+    })
   })
 
   describe('add / commit', () => {

@@ -15,6 +15,7 @@ import {
   ListAttachedRolePoliciesCommand,
   ListRolePoliciesCommand,
 } from '@aws-sdk/client-iam'
+import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda'
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts'
 import { mockClient } from 'aws-sdk-client-mock'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -24,6 +25,7 @@ import { AwsAdapter } from './index.js'
 const stsMock = mockClient(STSClient)
 const iamMock = mockClient(IAMClient)
 const s3Mock = mockClient(S3Client)
+const lambdaMock = mockClient(LambdaClient)
 
 const CONFIG = BiffoConfigSchema.parse({
   project: { name: 'my-app', description: '', domain: 'example.com' },
@@ -37,6 +39,7 @@ beforeEach(() => {
   stsMock.reset()
   iamMock.reset()
   s3Mock.reset()
+  lambdaMock.reset()
 })
 
 // ─── verifyCredentials ────────────────────────────────────────────────────────
@@ -230,5 +233,62 @@ describe('teardownTerraformBackend', () => {
 
     expect(s3Mock).not.toHaveReceivedCommand(DeleteObjectsCommand)
     expect(s3Mock).toHaveReceivedCommand(DeleteBucketCommand)
+  })
+})
+
+// ─── invokeLambda ────────────────────────────────────────────────────────────
+
+describe('invokeLambda', () => {
+  it('invokes the function with the given payload and returns ok:true with the parsed body on success', async () => {
+    lambdaMock.on(InvokeCommand).resolves({
+      Payload: new TextEncoder().encode(
+        JSON.stringify({ ok: true, applied: ['000_first.sql'], skipped: [] }),
+      ),
+    })
+
+    const result = await new AwsAdapter(CONFIG).invokeLambda('my-app-dev-core-api', {
+      source: 'biffo:ddl-import',
+      directory: 'tabsii',
+    })
+
+    expect(result).toEqual({
+      ok: true,
+      body: { ok: true, applied: ['000_first.sql'], skipped: [] },
+    })
+    expect(lambdaMock).toHaveReceivedCommandWith(InvokeCommand, {
+      FunctionName: 'my-app-dev-core-api',
+      InvocationType: 'RequestResponse',
+      Payload: Buffer.from(JSON.stringify({ source: 'biffo:ddl-import', directory: 'tabsii' })),
+    })
+  })
+
+  it('returns ok:false with the parsed error payload when Lambda reports FunctionError', async () => {
+    lambdaMock.on(InvokeCommand).resolves({
+      FunctionError: 'Unhandled',
+      Payload: new TextEncoder().encode(
+        JSON.stringify({ errorMessage: 'boom', errorType: 'ValueError' }),
+      ),
+    })
+
+    const result = await new AwsAdapter(CONFIG).invokeLambda('my-app-dev-core-api', {
+      source: 'biffo:ddl-import',
+      directory: 'does-not-exist',
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.body).toEqual({ errorMessage: 'boom', errorType: 'ValueError' })
+  })
+
+  it('falls back to a raw-text body when the payload is not valid JSON', async () => {
+    lambdaMock.on(InvokeCommand).resolves({
+      Payload: new TextEncoder().encode('not json'),
+    })
+
+    const result = await new AwsAdapter(CONFIG).invokeLambda('my-app-dev-core-api', {
+      source: 'biffo:ddl-import',
+      directory: 'tabsii',
+    })
+
+    expect(result.body).toEqual({ raw: 'not json' })
   })
 })

@@ -3,7 +3,7 @@ description: Checks that no orphaned AWS resources remain after terraform destro
 
 inputs:
   resource-type:
-    description: 'Type of resource to check (cognito-vpc, route53-acm)'
+    description: 'Type of resource to check (cognito-vpc, route53-acm, acm)'
     required: true
   prefix:
     description: 'Resource name prefix (e.g. project-name-dev)'
@@ -54,6 +54,15 @@ runs:
               exit 1
             fi
             echo "No orphaned Route 53 zone or ACM cert found."
+            ;;
+          acm)
+            CERTS=$(aws acm list-certificates --region us-east-1 \
+              --query "CertificateSummaryList[?DomainName=='${DOMAIN}'].CertificateArn" --output text)
+            if [ -n "$CERTS" ]; then
+              echo "::error::Orphaned ACM cert(s) remain after destroy: $CERTS"
+              exit 1
+            fi
+            echo "No orphaned ACM cert found."
             ;;
           *)
             echo "::error::Unknown resource type: $RESOURCE_TYPE"

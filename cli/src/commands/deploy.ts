@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
 import inquirer from 'inquirer'
-import { BiffoConfigSchema, type BiffoConfig } from '../config/schema.js'
+import { BiffoConfigSchema, resolveDnsConfig, type BiffoConfig } from '../config/schema.js'
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
 import { log } from '../lib/logger.js'
@@ -135,8 +135,9 @@ export async function runDeploy(
 
   const skipInfra = options.appOnly === true
   const skipApp = options.infraOnly === true
-  const hasDomain = Boolean(config.project.domain)
-  const totalSteps = skipInfra || skipApp ? 2 : hasDomain ? 5 : 4
+  const dns = resolveDnsConfig(config)
+  const hasGlobalInfra = dns.mode !== 'none' && Boolean(dns.domain)
+  const totalSteps = skipInfra || skipApp ? 2 : hasGlobalInfra ? 5 : 4
 
   const actionsUrl = `https://github.com/${org}/${repo}/actions`
 
@@ -150,8 +151,9 @@ export async function runDeploy(
       await github.setRepoVariable(org, repo, 'TF_STATE_BUCKET', stateBucket)
       await github.setRepoVariable(org, repo, 'BIFFO_ADMIN_EMAIL', config.admin.email)
       await github.setRepoVariable(org, repo, 'BIFFO_ADMIN_USERNAME', config.admin.username)
-      if (config.project.domain) {
-        await github.setRepoVariable(org, repo, 'DOMAIN', config.project.domain)
+      await github.setRepoVariable(org, repo, 'DNS_MODE', dns.mode)
+      if (dns.domain) {
+        await github.setRepoVariable(org, repo, 'DOMAIN', dns.domain)
       }
       // Store the caller's token so the workflow can write environment-scoped variables
       // after Terraform apply — GITHUB_TOKEN cannot write environment variables.
@@ -168,12 +170,21 @@ export async function runDeploy(
     log.success('Repository variables set')
   }
 
-  // Step 2: Deploy global infrastructure (Route 53 + ACM cert) — only when domain configured
-  if (!skipInfra && hasDomain) {
-    log.step(2, totalSteps, 'Deploying global infrastructure (DNS + SSL certificate)...')
+  // Step 2: Deploy global infrastructure — only when a custom domain is configured.
+  if (!skipInfra && hasGlobalInfra) {
+    const globalLabel =
+      dns.mode === 'external'
+        ? 'Requesting SSL certificate for external DNS...'
+        : 'Deploying global infrastructure (DNS + SSL certificate)...'
+    log.step(2, totalSteps, globalLabel)
     const globalBaselineId = await github.getLatestWorkflowRunId(org, repo, 'deploy-global.yml')
     await github.triggerWorkflow(org, repo, 'deploy-global.yml', {}, 'main')
-    log.info('  Provisioning Route 53 hosted zone and ACM wildcard certificate...')
+    if (dns.mode === 'external') {
+      log.info('  DNS will not be changed automatically.')
+      log.info('  The workflow summary will list ACM validation CNAMEs to add manually.')
+    } else {
+      log.info('  Provisioning Route 53 hosted zone and ACM wildcard certificate...')
+    }
     log.info(`  Watch live: ${actionsUrl}`)
     const globalResult = await github.waitForWorkflowRun(
       org,
@@ -190,11 +201,15 @@ export async function runDeploy(
       process.exit(1)
     }
     log.success(`Global infrastructure deployed (run #${globalResult.id})`)
+    if (dns.mode === 'external') {
+      log.info('  If the certificate is still pending, add the validation CNAMEs and rerun:')
+      log.info(`  biffo deploy ${environment} --infra-only`)
+    }
   }
 
   // Step 3 (or 2 without domain): Trigger and wait for infrastructure deploy (skip when --app-only)
   if (!skipInfra) {
-    const infraStep = hasDomain ? 3 : 2
+    const infraStep = hasGlobalInfra ? 3 : 2
     log.step(infraStep, totalSteps, `Triggering infrastructure deploy to ${environment}...`)
     const infraBaselineId = await github.getLatestWorkflowRunId(org, repo, 'deploy-infra.yml')
     await github.triggerWorkflow(
@@ -226,7 +241,7 @@ export async function runDeploy(
 
   // Step 4 (or 3/1): Trigger and wait for application deploy (skip when --infra-only)
   if (!skipApp) {
-    const step = skipInfra ? 1 : hasDomain ? 4 : 3
+    const step = skipInfra ? 1 : hasGlobalInfra ? 4 : 3
     log.step(step, totalSteps, `Triggering application deploy to ${environment}...`)
     const appBaselineId = await github.getLatestWorkflowRunId(org, repo, 'deploy-app.yml')
     await github.triggerWorkflow(org, repo, 'deploy-app.yml', { environment }, branch)
@@ -258,6 +273,21 @@ export async function runDeploy(
     if (outputs.portal_url) console.log(`  Portal:      ${chalk.cyan(outputs.portal_url)}`)
     if (outputs.api_gateway_url)
       console.log(`  API:         ${chalk.cyan(outputs.api_gateway_url)}`)
+    if (dns.mode === 'external' && outputs.cloudfront_distribution_domain) {
+      console.log(`  DNS target:  ${chalk.cyan(outputs.cloudfront_distribution_domain)}`)
+      console.log()
+      console.log(chalk.dim('  External DNS:'))
+      console.log(
+        chalk.dim(
+          `    Add ACM validation CNAMEs from the deploy-global workflow summary if the cert is pending.`,
+        ),
+      )
+      console.log(
+        chalk.dim(
+          `    After ACM is issued, point your DNS record at ${outputs.cloudfront_distribution_domain}.`,
+        ),
+      )
+    }
     console.log(`  Actions:     ${actionsUrl}`)
     console.log()
     console.log(chalk.dim('  Next steps:'))

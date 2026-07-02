@@ -27,9 +27,10 @@ locals {
     Project     = var.project_name
     Environment = local.environment
   }
-  portal_url = var.custom_domain != "" ? "https://${var.custom_domain}" : "https://${module.cdn.distribution_domain}"
+  custom_domain_enabled = var.custom_domain != "" && var.acm_certificate_arn != ""
+  portal_url            = local.custom_domain_enabled ? "https://${var.custom_domain}" : "https://${module.cdn.distribution_domain}"
   cors_origins_list = concat(
-    var.custom_domain != "" ? ["https://${var.custom_domain}"] : [],
+    local.custom_domain_enabled ? ["https://${var.custom_domain}"] : [],
     ["https://${module.cdn.distribution_domain}", "http://localhost:3000"],
   )
   cors_origins = jsonencode(local.cors_origins_list)
@@ -172,6 +173,10 @@ output "portal_bucket_name" {
 
 output "cloudfront_distribution_id" {
   value = module.cdn.distribution_id
+}
+
+output "cloudfront_distribution_domain" {
+  value = module.cdn.distribution_domain
 }
 
 output "cognito_user_pool_id" {

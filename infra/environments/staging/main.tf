@@ -19,11 +19,12 @@ provider "aws" {
 
 # Staging mirrors dev with multi-AZ NAT and DB for closer prod parity
 locals {
-  environment = "staging"
-  tags        = { Project = var.project_name, Environment = local.environment }
-  portal_url  = var.custom_domain != "" ? "https://${var.custom_domain}" : "https://${module.cdn.distribution_domain}"
+  environment           = "staging"
+  tags                  = { Project = var.project_name, Environment = local.environment }
+  custom_domain_enabled = var.custom_domain != "" && var.acm_certificate_arn != ""
+  portal_url            = local.custom_domain_enabled ? "https://${var.custom_domain}" : "https://${module.cdn.distribution_domain}"
   cors_origins_list = concat(
-    var.custom_domain != "" ? ["https://${var.custom_domain}"] : [],
+    local.custom_domain_enabled ? ["https://${var.custom_domain}"] : [],
     ["https://${module.cdn.distribution_domain}", "http://localhost:3000"],
   )
   cors_origins = jsonencode(local.cors_origins_list)
@@ -138,6 +139,7 @@ output "portal_url" {
 }
 output "portal_bucket_name" { value = module.storage.portal_bucket_name }
 output "cloudfront_distribution_id" { value = module.cdn.distribution_id }
+output "cloudfront_distribution_domain" { value = module.cdn.distribution_domain }
 output "cognito_user_pool_id" { value = module.auth.user_pool_id }
 output "cognito_client_id" { value = module.auth.client_id }
 

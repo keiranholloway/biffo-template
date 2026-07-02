@@ -8,13 +8,19 @@ Opinionated repo template and scaffolding CLI for solopreneurs. One command prov
 npx @biffo/cli init
 ```
 
-The CLI will prompt for your project name, domain, AWS account, and GitHub org, then:
+The CLI will prompt for your project name, DNS mode, AWS account, and GitHub org, then:
 
 1. Creates a GitHub repo from this template
 2. Configures branch protection and GitHub Environments
 3. Provisions an OIDC trust between GitHub Actions and your AWS account
 4. Bootstraps the Terraform state backend
 5. Triggers the first CI run
+
+DNS modes:
+
+- `managed-route53`: Biffo creates a Route 53 hosted zone, validates an ACM certificate, and creates CloudFront DNS records.
+- `external`: Biffo requests the ACM certificate but does not change DNS. Add the validation CNAMEs from the workflow summary, rerun deploy, then point your DNS provider at the CloudFront target.
+- `none`: Biffo skips custom DNS and uses the default CloudFront domain.
 
 ## What you get
 

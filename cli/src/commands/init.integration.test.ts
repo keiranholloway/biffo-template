@@ -111,7 +111,10 @@ function setupStep5GithubHandlers() {
     http.put(`${GH}/repos/acme/my-app/branches/main/protection`, () => HttpResponse.json({})),
     // createEnvironments
     http.put(`${GH}/repos/acme/my-app/environments/:env`, () => HttpResponse.json({})),
-    // setRepoVariable DOMAIN: PATCH returns 404 (doesn't exist yet) → POST creates it
+    // setRepoVariable DNS_MODE / DOMAIN: PATCH returns 404 (doesn't exist yet) → POST creates it
+    http.patch(`${GH}/repos/acme/my-app/actions/variables/DNS_MODE`, () =>
+      HttpResponse.json({ message: 'Not Found' }, { status: 404 }),
+    ),
     http.patch(`${GH}/repos/acme/my-app/actions/variables/DOMAIN`, () =>
       HttpResponse.json({ message: 'Not Found' }, { status: 404 }),
     ),

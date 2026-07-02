@@ -2,7 +2,10 @@
   "$schema": "./cli/schemas/biffo-config.schema.json",
   "project": {
     "name": "{{PROJECT_NAME}}",
-    "description": "{{PROJECT_DESCRIPTION}}",
+    "description": "{{PROJECT_DESCRIPTION}}"
+  },
+  "dns": {
+    "mode": "{{DNS_MODE}}",
     "domain": "{{DOMAIN}}"
   },
   "source_control": {

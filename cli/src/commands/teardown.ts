@@ -3,7 +3,7 @@ import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts'
 import chalk from 'chalk'
 import { Command } from 'commander'
 import inquirer from 'inquirer'
-import { BiffoConfigSchema } from '../config/schema.js'
+import { BiffoConfigSchema, resolveDnsConfig } from '../config/schema.js'
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
 import { log } from '../lib/logger.js'
@@ -73,7 +73,7 @@ export const teardownCommand = new Command('teardown')
       region = cloud.config.region
       adminEmail = savedConfig.admin.email
       adminUsername = savedConfig.admin.username
-      domain = savedConfig.project.domain
+      domain = resolveDnsConfig(savedConfig).domain
       console.log(chalk.yellow('  Loaded config for: ') + chalk.bold(projectName))
       console.log(`  Repository: ${org}/${repo}`)
       console.log()
@@ -107,7 +107,8 @@ export const teardownCommand = new Command('teardown')
     }
 
     const config = BiffoConfigSchema.safeParse({
-      project: { name: projectName, description: '', domain: domain || 'example.com' },
+      project: { name: projectName, description: '', domain: domain || undefined },
+      dns: { mode: domain ? 'managed-route53' : 'none', domain: domain || undefined },
       source_control: { provider: 'github', config: { org, repo } },
       cloud: { provider: 'aws', config: { account_id: accountId!, region } },
       environments: ['dev'],

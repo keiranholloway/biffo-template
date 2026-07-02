@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BiffoConfigSchema } from './schema.js'
+import { BiffoConfigSchema, resolveDnsConfig } from './schema.js'
 
 const BASE = {
   project: { name: 'my-app', description: 'A test app', domain: 'myapp.com' },
@@ -67,5 +67,39 @@ describe('BiffoConfigSchema', () => {
     if (!result.success) return
     expect(result.data.database.migrations_path).toBe('services/api/migrations')
     expect(result.data.database.schema_path).toBeNull()
+  })
+
+  it('treats legacy project.domain configs as managed Route53', () => {
+    const config = BiffoConfigSchema.parse(BASE)
+    expect(resolveDnsConfig(config)).toEqual({ mode: 'managed-route53', domain: 'myapp.com' })
+  })
+
+  it('accepts external DNS config', () => {
+    const config = BiffoConfigSchema.parse({
+      ...BASE,
+      project: { name: 'my-app', description: 'A test app' },
+      dns: { mode: 'external', domain: 'myapp.com' },
+    })
+    expect(resolveDnsConfig(config)).toEqual({ mode: 'external', domain: 'myapp.com' })
+  })
+
+  it('accepts no custom DNS without a domain', () => {
+    const config = BiffoConfigSchema.parse({
+      ...BASE,
+      project: { name: 'my-app', description: 'A test app' },
+      dns: { mode: 'none' },
+    })
+    expect(resolveDnsConfig(config)).toEqual({ mode: 'none', domain: '' })
+  })
+
+  it('rejects external DNS without a domain', () => {
+    const result = BiffoConfigSchema.safeParse({
+      ...BASE,
+      project: { name: 'my-app', description: 'A test app' },
+      dns: { mode: 'external' },
+    })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues[0]?.path).toEqual(['dns', 'domain'])
   })
 })

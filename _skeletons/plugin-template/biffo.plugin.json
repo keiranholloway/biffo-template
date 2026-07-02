@@ -33,7 +33,13 @@
           "columns": ["tenant_id", "name"],
           "unique": true
         }
-      ]
+      ],
+      "permissions": {
+        "list": { "allowed": true },
+        "read": { "allowed": true },
+        "create": { "allowed": true, "required_role": ["example-plugin.admin"] },
+        "delete": { "allowed": true, "required_role": ["example-plugin.admin"] }
+      }
     }
   ],
   "api_routes": [

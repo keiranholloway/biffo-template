@@ -110,6 +110,98 @@
               },
               "additionalProperties": false
             }
+          },
+          "permissions": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Declarative per-operation generic-CRUD permissions (ADR-0004; TablePermissions in services/api/src/api/models/plugin_table.py). Default-deny: an absent permissions block, an absent operation key, or an operation with allowed:false ALL make the table invisible to the generic CRUD layer for that operation. required_role is an any-of allow-list matched against the caller's roles (cognito:groups); an empty list means any authenticated caller. Tenant scoping (ADR-0001) is always applied and is deliberately not configurable here. Only the five operation keys below are permitted.",
+            "properties": {
+              "list": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "allowed": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Whether the generic CRUD layer exposes this operation at all."
+                  },
+                  "required_role": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "default": [],
+                    "description": "Any-of role allow-list; empty means any authenticated caller."
+                  }
+                }
+              },
+              "read": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "allowed": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Whether the generic CRUD layer exposes this operation at all."
+                  },
+                  "required_role": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "default": [],
+                    "description": "Any-of role allow-list; empty means any authenticated caller."
+                  }
+                }
+              },
+              "create": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "allowed": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Whether the generic CRUD layer exposes this operation at all."
+                  },
+                  "required_role": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "default": [],
+                    "description": "Any-of role allow-list; empty means any authenticated caller."
+                  }
+                }
+              },
+              "update": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "allowed": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Whether the generic CRUD layer exposes this operation at all."
+                  },
+                  "required_role": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "default": [],
+                    "description": "Any-of role allow-list; empty means any authenticated caller."
+                  }
+                }
+              },
+              "delete": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "allowed": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Whether the generic CRUD layer exposes this operation at all."
+                  },
+                  "required_role": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "default": [],
+                    "description": "Any-of role allow-list; empty means any authenticated caller."
+                  }
+                }
+              }
+            }
           }
         },
         "additionalProperties": false
@@ -120,45 +212,29 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["method", "path", "handler"],
+        "required": ["method", "path", "table", "operation"],
         "properties": {
           "method": {
-            "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"],
-            "description": "HTTP method."
+            "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+            "description": "HTTP method. Must be compatible with `operation` (list/read=GET, create=POST, update=PUT/PATCH, delete=DELETE) — see plugin_route.py's _OPERATION_METHODS."
           },
           "path": {
             "type": "string",
-            "pattern": "^/[a-z0-9/_-]+$",
-            "description": "Route path (relative to /api/v1/)."
+            "pattern": "^/[a-zA-Z0-9/_{}-]+$",
+            "description": "Path relative to the plugin's mount point (/api/v1/plugins/<name>), e.g. '/widgets' or '/widgets/{id}'. Must start with '/'. Single-row operations (read/update/delete) address a row via an '{id}' path parameter; collection operations (list/create) must not."
           },
-          "handler": {
+          "table": {
             "type": "string",
-            "description": "Function name in the plugin's main module."
+            "description": "Name of a table declared in this manifest's `tables` that this route exposes. A route cannot reference another plugin's table (RouteDefinition / parse_plugin_routes_from_manifest in services/api/src/api/models/plugin_route.py)."
           },
-          "description": { "type": "string" },
-          "request_body": {
-            "type": "object",
-            "properties": {
-              "model": { "type": "string" },
-              "fields": {
-                "type": "array",
-                "items": { "type": "string" }
-              }
-            }
+          "operation": {
+            "enum": ["list", "read", "create", "update", "delete"],
+            "description": "Generic CRUD operation the Core API synthesizes for this route against `table`, scoped to the caller's tenant_id (ADR-0001). A plugin manifest cannot ship executable handler code the Core API imports and runs (ADR-0002); routes are declarative (issue #19)."
           },
-          "response_model": {
-            "type": "object",
-            "properties": {
-              "model": { "type": "string" },
-              "fields": {
-                "type": "array",
-                "items": { "type": "string" }
-              }
-            }
-          }
+          "description": { "type": "string" }
         }
       },
-      "description": "Core API routes the plugin registers."
+      "description": "Declarative generic-CRUD routes the Core API synthesizes against this plugin's own tables (issue #19 / ADR-0002), mounted under /api/v1/plugins/<name>."
     },
     "event_subscriptions": {
       "type": "array",

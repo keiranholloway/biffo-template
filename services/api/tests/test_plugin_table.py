@@ -6,7 +6,9 @@ from pydantic import ValidationError
 from api.models.plugin_table import (
     ColumnDefinition,
     IndexDefinition,
+    PermissionRule,
     PluginTableDefinition,
+    TablePermissions,
     resolve_type_call,
 )
 
@@ -245,3 +247,62 @@ class TestPluginTableDefinition:
         table = PluginTableDefinition(name="test_tbl")
         model_class = table.to_sqlalchemy_model()
         assert issubclass(model_class, Base)
+
+
+class TestTablePermissions:
+    """ADR-0004: declarative per-operation CRUD permissions on a table."""
+
+    def test_absent_block_defaults_to_fully_denied(self):
+        table = PluginTableDefinition(name="roles")
+        for op in ("list", "read", "create", "update", "delete"):
+            rule = getattr(table.permissions, op)
+            assert rule.allowed is False
+            assert rule.required_role == []
+
+    def test_permission_rule_defaults(self):
+        rule = PermissionRule()
+        assert rule.allowed is False
+        assert rule.required_role == []
+
+    def test_partial_block_leaves_other_ops_denied(self):
+        # model_validate is the real ingestion path (JSON manifest dict -> model).
+        table = PluginTableDefinition.model_validate(
+            {
+                "name": "roles",
+                "permissions": {"read": {"allowed": True, "required_role": ["admin"]}},
+            }
+        )
+        assert table.permissions.read.allowed is True
+        assert table.permissions.read.required_role == ["admin"]
+        # Everything not mentioned stays default-deny.
+        assert table.permissions.list.allowed is False
+        assert table.permissions.create.allowed is False
+
+    def test_allowed_with_empty_roles_means_any_authenticated_caller(self):
+        table = PluginTableDefinition.model_validate(
+            {"name": "roles", "permissions": {"list": {"allowed": True}}}
+        )
+        assert table.permissions.list.allowed is True
+        assert table.permissions.list.required_role == []
+
+    def test_unknown_operation_key_is_rejected(self):
+        # A typo'd operation must fail loudly, not be silently denied forever.
+        with pytest.raises(ValidationError):
+            PluginTableDefinition.model_validate(
+                {"name": "roles", "permissions": {"delet": {"allowed": True}}}
+            )
+
+    def test_unknown_rule_key_is_rejected(self):
+        with pytest.raises(ValidationError):
+            TablePermissions.model_validate({"read": {"allowed": True, "role": ["a"]}})
+
+    def test_full_block_round_trips_through_json(self):
+        block = {
+            op: {"allowed": True, "required_role": [f"{op}-role"]}
+            for op in ("list", "read", "create", "update", "delete")
+        }
+        table = PluginTableDefinition.model_validate(
+            {"name": "roles", "permissions": block}
+        )
+        dumped = table.model_dump(mode="json")["permissions"]
+        assert dumped == block

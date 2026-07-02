@@ -3,11 +3,7 @@
   "version": "0.1.0",
   "description": "Fine-grained role-based access control layered on top of Cognito groups: roles, permissions, role<->permission grants, user<->role assignments, and a check_permission API for policy enforcement.",
   "author": "Biffo Team",
-  "tags": [
-    "auth",
-    "security",
-    "rbac"
-  ],
+  "tags": ["auth", "security", "rbac"],
   "required_core_version": ">=0.0.0",
   "tables": [
     {
@@ -34,10 +30,7 @@
       "indexes": [
         {
           "name": "idx_rbac_roles_tenant_name",
-          "columns": [
-            "tenant_id",
-            "name"
-          ],
+          "columns": ["tenant_id", "name"],
           "unique": true
         }
       ],
@@ -52,21 +45,15 @@
         },
         "create": {
           "allowed": true,
-          "required_role": [
-            "admin"
-          ]
+          "required_role": ["admin"]
         },
         "update": {
           "allowed": true,
-          "required_role": [
-            "admin"
-          ]
+          "required_role": ["admin"]
         },
         "delete": {
           "allowed": true,
-          "required_role": [
-            "admin"
-          ]
+          "required_role": ["admin"]
         }
       }
     },
@@ -100,11 +87,7 @@
       "indexes": [
         {
           "name": "idx_rbac_permissions_tenant_resource_action",
-          "columns": [
-            "tenant_id",
-            "resource",
-            "action"
-          ],
+          "columns": ["tenant_id", "resource", "action"],
           "unique": true
         }
       ],
@@ -119,21 +102,15 @@
         },
         "create": {
           "allowed": true,
-          "required_role": [
-            "admin"
-          ]
+          "required_role": ["admin"]
         },
         "update": {
           "allowed": true,
-          "required_role": [
-            "admin"
-          ]
+          "required_role": ["admin"]
         },
         "delete": {
           "allowed": true,
-          "required_role": [
-            "admin"
-          ]
+          "required_role": ["admin"]
         }
       }
     },
@@ -158,10 +135,7 @@
       "indexes": [
         {
           "name": "idx_rbac_role_permissions_unique_pair",
-          "columns": [
-            "role_id",
-            "permission_id"
-          ],
+          "columns": ["role_id", "permission_id"],
           "unique": true,
           "description": "Stands in for the issue's original 'PRIMARY KEY (role_id, permission_id)' -- PluginTableDefinition always injects its own synthetic 'id' primary key (see README), so a second composite primary key isn't possible; a unique index over the pair is the closest supported equivalent and is enforced identically at the database level."
         }
@@ -177,21 +151,15 @@
         },
         "create": {
           "allowed": true,
-          "required_role": [
-            "admin"
-          ]
+          "required_role": ["admin"]
         },
         "update": {
           "allowed": true,
-          "required_role": [
-            "admin"
-          ]
+          "required_role": ["admin"]
         },
         "delete": {
           "allowed": true,
-          "required_role": [
-            "admin"
-          ]
+          "required_role": ["admin"]
         }
       }
     },
@@ -228,10 +196,7 @@
       "indexes": [
         {
           "name": "idx_rbac_user_roles_unique_pair",
-          "columns": [
-            "user_id",
-            "role_id"
-          ],
+          "columns": ["user_id", "role_id"],
           "unique": true
         }
       ],
@@ -246,21 +211,15 @@
         },
         "create": {
           "allowed": true,
-          "required_role": [
-            "admin"
-          ]
+          "required_role": ["admin"]
         },
         "update": {
           "allowed": true,
-          "required_role": [
-            "admin"
-          ]
+          "required_role": ["admin"]
         },
         "delete": {
           "allowed": true,
-          "required_role": [
-            "admin"
-          ]
+          "required_role": ["admin"]
         }
       }
     }

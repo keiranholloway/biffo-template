@@ -1,28 +1,42 @@
 'use client'
 
-import { useParams } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
 import { PluginDetail } from '@/components/PluginDetail'
+import { InstalledPluginDetail } from '@/components/InstalledPluginDetail'
 
 /**
  * `generateStaticParams()` can only be exported from a server component
- * (page.tsx), while reading the *actual* browser URL requires the client
- * hook `useParams()` — Next.js forbids combining `"use client"` and
- * `generateStaticParams()` in the same file. So the split is: page.tsx
- * (server) declares the one static param needed to satisfy `output: 'export'`,
- * and this client component resolves the real slug at runtime via
- * `useParams()`, which reflects the actual URL matched against the compiled
- * route table — not whatever placeholder was baked in at build time. See
- * the comment in page.tsx for the full static-export rationale.
+ * (page.tsx); resolving the real plugin identity at runtime requires client
+ * hooks, hence the split between that file (server) and this one (client).
+ * See page.tsx's comment for why the identity travels as `?source=&name=`
+ * query params rather than the `[slug]` path segment itself — every plugin
+ * links to the exact same statically-generated path, so this component
+ * never sees a meaningful `slug` param; it reads `useSearchParams()`
+ * instead, which reflects the actual URL regardless of what was baked in
+ * at build time.
+ *
+ * `source` distinguishes two genuinely different data sources sharing this
+ * one route: `installed` (this deployment's own services/*, via
+ * InstalledPluginDetail) and `marketplace` (the external
+ * biffo-plugins-registry, via PluginDetail) — an installed reference plugin
+ * like services/rbac is never published to the marketplace registry, so
+ * routing it through the marketplace lookup would incorrectly show
+ * "not found".
  */
 export function PluginDetailPageClient() {
-  const params = useParams<{ slug: string }>()
-  const slug = params.slug
+  const searchParams = useSearchParams()
+  const name = searchParams.get('name') ?? ''
+  const source = searchParams.get('source') ?? 'marketplace'
 
   return (
     <div>
       <h1 className="text-2xl font-bold text-gray-900">Plugin</h1>
       <div className="mt-6">
-        <PluginDetail slug={slug} />
+        {source === 'installed' ? (
+          <InstalledPluginDetail name={name} />
+        ) : (
+          <PluginDetail slug={name} />
+        )}
       </div>
     </div>
   )

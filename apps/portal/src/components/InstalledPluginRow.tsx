@@ -33,7 +33,7 @@ export function InstalledPluginRow({ plugin }: { plugin: InstalledPlugin }) {
           </p>
         </div>
         <Link
-          href={`/admin/plugins/${plugin.name}`}
+          href={`/admin/plugins/placeholder?source=installed&name=${encodeURIComponent(plugin.name)}`}
           className="shrink-0 text-sm font-medium text-blue-600 hover:text-blue-800"
         >
           View details &rarr;

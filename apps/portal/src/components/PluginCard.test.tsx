@@ -35,9 +35,14 @@ describe('PluginCard', () => {
     expect(screen.getByText('security')).toBeInTheDocument()
   })
 
-  it('links to the plugin detail route by slug', () => {
+  it('links to the plugin detail page via query params, not a dynamic path segment', () => {
     render(<PluginCard plugin={plugin({ name: 'analytics' })} />)
-    expect(screen.getByRole('link')).toHaveAttribute('href', '/admin/plugins/analytics')
+    // See InstalledPluginRow.test.tsx's equivalent assertion for why: only
+    // /admin/plugins/placeholder/ is statically generated under output: 'export'.
+    expect(screen.getByRole('link')).toHaveAttribute(
+      'href',
+      '/admin/plugins/placeholder?source=marketplace&name=analytics',
+    )
   })
 
   it('falls back to Biffo Team when author is missing', () => {

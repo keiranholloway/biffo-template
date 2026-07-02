@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useAuth } from '@/context/auth-context'
 import { Button } from '@biffo/ui'
 
@@ -9,7 +10,12 @@ export function Nav() {
 
   return (
     <nav className="flex items-center justify-between border-b px-6 py-4">
-      <span className="text-lg font-semibold">Biffo Portal</span>
+      <div className="flex items-center gap-6">
+        <span className="text-lg font-semibold">Biffo Portal</span>
+        <Link href="/admin/plugins" className="text-sm text-gray-600 hover:text-gray-900">
+          Plugins
+        </Link>
+      </div>
       <div className="flex items-center gap-4">
         {username != null && <span className="text-sm text-gray-600">{username}</span>}
         <Button variant="secondary" onClick={logout} className="text-sm">

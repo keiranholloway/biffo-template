@@ -33,7 +33,11 @@ extraPaths = ["services/api/src", "packages/python-sdk/src", "services/rbac/src"
 # Their own Python code is type-checked by their own pyright config once
 # copied into a real repo, not by this monorepo's root config, which has no
 # extraPaths entry for their (unpublished) dependencies.
-exclude = ["_skeletons"]
+# NOTE: setting `exclude` explicitly replaces pyright's built-in default
+# excludes (.venv, node_modules, dot-dirs) rather than extending them, so
+# those must be re-listed here too or pyright will walk and type-check
+# every installed dependency (10k+ files).
+exclude = ["_skeletons", ".venv", "node_modules", "**/__pycache__", "**/.*"]
 
 [tool.pytest.ini_options]
 testpaths = ["services", "packages"]

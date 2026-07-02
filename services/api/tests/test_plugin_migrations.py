@@ -9,7 +9,9 @@ from api.migrations.plugin_migrations import (
     _column_to_alembic_def,
     generate_migration_for_plugin,
     generate_migration_name,
+    get_current_head_revision,
     parse_plugin_tables_from_manifest,
+    sync_plugin_migrations,
 )
 from api.models.plugin_table import ColumnDefinition
 
@@ -219,9 +221,186 @@ class TestGenerateMigrationForPlugin:
         content = migration_file.read_text()
         assert "roles" in content
         assert "permissions" in content
+        # Regression: multi-table manifests used to produce an extra
+        # indent level on every statement after the first (a "\n    ".join
+        # separator on top of the uniform per-line 4-space prefix), which is
+        # invisible with a single table but raises IndentationError as soon
+        # as there's more than one — found independently while working #65.
+        compile(content, str(migration_file), "exec")
+
+    def test_multiple_tables_with_columns_and_indexes_produce_valid_python(self):
+        """A closer-to-real-world multi-table manifest (columns + an
+        index=True column on more than one table) — the exact shape that
+        triggered the double-indent codegen bug."""
+        manifest = {
+            "name": "rbac",
+            "version": "1.0.0",
+            "tables": [
+                {
+                    "name": "roles",
+                    "columns": [{"name": "slug", "type": "String(100)", "index": True}],
+                },
+                {
+                    "name": "permissions",
+                    "columns": [{"name": "code", "type": "String(100)"}],
+                },
+            ],
+        }
+        migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
+        content = migration_file.read_text()
+        compile(content, str(migration_file), "exec")
+        assert content.count("op.create_table(") == 2
+        assert content.count("op.drop_table(") == 2
 
     def test_migration_name_in_filename(self):
         manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
         migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
         assert "roles" in migration_file.name
         assert migration_file.suffix == ".py"
+
+
+class TestGetCurrentHeadRevision:
+    """Test down_revision chaining onto the real Alembic version chain
+    (issue #18 gap: down_revision was hard-coded to None, so every generated
+    plugin migration forked its own second head instead of appending)."""
+
+    def setup_method(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.versions_dir = Path(self.tmpdir) / "versions"
+        self.versions_dir.mkdir()
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_empty_versions_dir_has_no_head(self):
+        assert get_current_head_revision(self.versions_dir) is None
+
+    def test_first_generated_migration_has_no_down_revision(self):
+        manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
+        migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
+        content = migration_file.read_text()
+        assert "down_revision = None" in content
+
+    def test_generated_migration_chains_onto_existing_head(self):
+        existing = self.versions_dir / "0001_create_users_table.py"
+        existing.write_text(
+            "revision = '0001'\n"
+            "down_revision = None\n"
+            "branch_labels = None\n"
+            "depends_on = None\n"
+            "def upgrade(): pass\n"
+            "def downgrade(): pass\n"
+        )
+        assert get_current_head_revision(self.versions_dir) == "0001"
+
+        manifest = {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
+        migration_file = generate_migration_for_plugin(manifest, self.versions_dir)
+        content = migration_file.read_text()
+        assert "down_revision = '0001'" in content
+        # The generated migration is now itself the head — it appended to
+        # the chain rather than forking a second one.
+        assert (
+            get_current_head_revision(self.versions_dir)
+            == migration_file.stem.split("_")[0]
+        )
+
+    def test_second_plugin_migration_chains_onto_first_not_original_head(self):
+        existing = self.versions_dir / "0001_create_users_table.py"
+        existing.write_text(
+            "revision = '0001'\n"
+            "down_revision = None\n"
+            "branch_labels = None\n"
+            "depends_on = None\n"
+            "def upgrade(): pass\n"
+            "def downgrade(): pass\n"
+        )
+        first = generate_migration_for_plugin(
+            {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]},
+            self.versions_dir,
+        )
+        second = generate_migration_for_plugin(
+            {"name": "billing", "version": "1.0.0", "tables": [{"name": "invoices"}]},
+            self.versions_dir,
+        )
+        first_revision = first.stem.split("_")[0]
+        second_content = second.read_text()
+        assert f"down_revision = '{first_revision}'" in second_content
+        # There is exactly one head — no forked branch.
+        assert get_current_head_revision(self.versions_dir) == second.stem.split("_")[0]
+
+
+class TestSyncPluginMigrations:
+    """Test the discover -> generate wiring that main.py's _run_db_init calls
+    (issue #18 gap: the generator was previously dead code, never invoked
+    outside its own unit tests)."""
+
+    def setup_method(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.versions_dir = Path(self.tmpdir) / "versions"
+        self.versions_dir.mkdir()
+        self.services_root = Path(self.tmpdir) / "services"
+        self.services_root.mkdir()
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmpdir)
+
+    def _write_manifest(self, plugin_name: str, manifest: dict) -> None:
+        import json
+
+        plugin_dir = self.services_root / plugin_name
+        plugin_dir.mkdir()
+        (plugin_dir / "biffo.plugin.json").write_text(json.dumps(manifest))
+
+    def test_no_plugins_generates_nothing(self):
+        generated = sync_plugin_migrations(
+            self.versions_dir, services_root=self.services_root
+        )
+        assert generated == []
+
+    def test_generates_migration_for_discovered_plugin(self):
+        self._write_manifest(
+            "rbac", {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
+        )
+        generated = sync_plugin_migrations(
+            self.versions_dir, services_root=self.services_root
+        )
+        assert len(generated) == 1
+        assert generated[0].exists()
+
+    def test_plugin_with_no_tables_is_skipped(self):
+        self._write_manifest("noop", {"name": "noop", "version": "1.0.0", "tables": []})
+        generated = sync_plugin_migrations(
+            self.versions_dir, services_root=self.services_root
+        )
+        assert generated == []
+
+    def test_rerunning_sync_is_idempotent(self):
+        self._write_manifest(
+            "rbac", {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
+        )
+        first = sync_plugin_migrations(
+            self.versions_dir, services_root=self.services_root
+        )
+        second = sync_plugin_migrations(
+            self.versions_dir, services_root=self.services_root
+        )
+        assert len(first) == 1
+        assert second == []
+        # Only one migration file exists, not a duplicate.
+        assert len(list(self.versions_dir.glob("*.py"))) == 1
+
+    def test_multiple_plugins_chain_onto_a_single_head(self):
+        self._write_manifest(
+            "rbac", {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
+        )
+        self._write_manifest(
+            "billing",
+            {"name": "billing", "version": "1.0.0", "tables": [{"name": "invoices"}]},
+        )
+        generated = sync_plugin_migrations(
+            self.versions_dir, services_root=self.services_root
+        )
+        assert len(generated) == 2
+        # Exactly one head — sync_plugin_migrations must not fork branches
+        # when generating migrations for multiple plugins in one pass.
+        assert get_current_head_revision(self.versions_dir) is not None

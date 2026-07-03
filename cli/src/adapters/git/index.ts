@@ -66,6 +66,57 @@ export class GitAdapter {
   async commit(cwd: string, message: string): Promise<void> {
     await execa('git', ['commit', '-m', message], { cwd })
   }
+
+  /** The current branch name (e.g. "main"). */
+  async currentBranch(cwd: string): Promise<string> {
+    const { stdout } = await execa('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd })
+    return stdout.trim()
+  }
+
+  /** True if the working tree or index has uncommitted changes. */
+  async hasUncommittedChanges(cwd: string): Promise<boolean> {
+    const { stdout } = await execa('git', ['status', '--porcelain'], { cwd })
+    return stdout.trim().length > 0
+  }
+
+  /** The fetch URL of a remote (default "origin"). */
+  async getRemoteUrl(cwd: string, remote = 'origin'): Promise<string> {
+    const { stdout } = await execa('git', ['remote', 'get-url', remote], { cwd })
+    return stdout.trim()
+  }
+
+  /** Create and switch to a new branch. Fails if it already exists. */
+  async createBranch(cwd: string, branch: string): Promise<void> {
+    await execa('git', ['switch', '-c', branch], { cwd })
+  }
+
+  /**
+   * Push the current HEAD to `branch` on the remote. When `token` is given and
+   * the remote is HTTPS, it's embedded in the push URL for auth (SSH/file
+   * remotes push with ambient credentials). The authenticated URL is never
+   * logged or included in a thrown error — a push failure references only the
+   * remote name, so a token can't leak into CLI output or a crash report.
+   */
+  async push(
+    cwd: string,
+    branch: string,
+    opts: { remote?: string; token?: string } = {},
+  ): Promise<void> {
+    const remote = opts.remote ?? 'origin'
+    let target = remote
+    if (opts.token) {
+      const url = await this.getRemoteUrl(cwd, remote)
+      const authed = injectToken(url, opts.token)
+      if (authed !== url) target = authed // HTTPS remote — push to the tokenized URL
+    }
+    try {
+      await execa('git', ['push', target, `HEAD:refs/heads/${branch}`], { cwd })
+    } catch {
+      // Deliberately do NOT include the underlying error (it can contain the
+      // tokenized URL). Reference only the remote name.
+      throw new Error(`Failed to push branch '${branch}' to remote '${remote}'.`)
+    }
+  }
 }
 
 /**

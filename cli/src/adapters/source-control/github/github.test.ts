@@ -31,6 +31,9 @@ function makeOctokitMock() {
       getRef: vi.fn(),
       createRef: vi.fn(),
     },
+    pulls: {
+      create: vi.fn(),
+    },
     actions: {
       listWorkflowRuns: vi.fn(),
       createWorkflowDispatch: vi.fn(),
@@ -495,5 +498,31 @@ describe('triggerWorkflow', () => {
     await expect(
       adapter().triggerWorkflow('acme', 'my-app', 'deploy-global.yml', {}, 'main', 50, 10),
     ).rejects.toThrow('Not Found')
+  })
+})
+
+describe('createPullRequest (ADR-0006 Phase 3b)', () => {
+  it('creates a PR and returns its url and number', async () => {
+    octokitMock.pulls.create.mockResolvedValue({
+      data: { html_url: 'https://github.com/acme/app/pull/12', number: 12 },
+    })
+    const adapter = new GitHubAdapter('token')
+    const result = await adapter.createPullRequest({
+      owner: 'acme',
+      repo: 'app',
+      head: 'biffo/core-upgrade-0.1.0-to-0.2.0',
+      base: 'main',
+      title: 'Upgrade Biffo core',
+      body: 'body',
+    })
+    expect(octokitMock.pulls.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner: 'acme',
+        repo: 'app',
+        head: expect.any(String),
+        base: 'main',
+      }),
+    )
+    expect(result).toEqual({ url: 'https://github.com/acme/app/pull/12', number: 12 })
   })
 })

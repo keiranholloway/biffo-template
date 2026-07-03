@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, parse as parsePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
@@ -115,4 +115,11 @@ export function readInstanceCoreVersion(cwd: string): string | null {
     throw new Error(`${INSTANCE_CORE_FILE} is invalid: ${detail}`)
   }
   return result.data.version
+}
+
+/** Write `<cwd>/biffo.core.json` recording `version` — used by an upgrade to
+ * bump the instance's recorded core version in the same commit. */
+export function writeInstanceCoreVersion(cwd: string, version: string): void {
+  parseCoreVersion(version) // validate
+  writeFileSync(join(cwd, INSTANCE_CORE_FILE), `${JSON.stringify({ version }, null, 2)}\n`)
 }

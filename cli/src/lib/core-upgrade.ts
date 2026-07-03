@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { execa } from 'execa'
 import { type CoreManifest, listTemplateOwnedFiles } from './core-manifest.js'
 
@@ -192,4 +192,52 @@ async function classify(
   // Both changed differently — three-way merge.
   const { conflicted, content } = await mergeFile(baseContent, oursContent, theirsContent)
   return { path, status: conflicted ? 'conflict' : 'merged', conflicted, content }
+}
+
+export interface ApplyResult {
+  written: string[]
+  deleted: string[]
+}
+
+/**
+ * Apply an upgrade plan to the instance working tree (ADR-0006 Phase 3b).
+ * Writes resolved content (take-theirs / merged / added, and conflict entries
+ * *with their conflict markers* so the PR surfaces them), and deletes cleanly-
+ * removed files. Leaves unchanged / keep-ours / remove-conflict files as they
+ * are. The caller is responsible for staging/committing the result.
+ */
+export function applyUpgradePlan(instanceDir: string, plan: UpgradePlan): ApplyResult {
+  const written: string[] = []
+  const deleted: string[] = []
+  for (const e of plan.entries) {
+    const abs = join(instanceDir, e.path)
+    if (e.status === 'removed') {
+      if (existsSync(abs)) {
+        rmSync(abs)
+        deleted.push(e.path)
+      }
+      continue
+    }
+    if (e.content !== undefined) {
+      mkdirSync(dirname(abs), { recursive: true })
+      writeFileSync(abs, e.content)
+      written.push(e.path)
+    }
+  }
+  return { written, deleted }
+}
+
+/** Parse a GitHub owner/repo from an SSH or HTTPS remote URL (tokenised HTTPS
+ * userinfo, if present, is ignored). Throws if it isn't a recognisable GitHub URL. */
+export function parseGitHubRepo(remoteUrl: string): { owner: string; repo: string } {
+  const ssh = /^git@[^:]+:([^/]+)\/(.+?)(?:\.git)?\/?$/.exec(remoteUrl)
+  if (ssh && ssh[1] && ssh[2]) return { owner: ssh[1], repo: ssh[2] }
+  const https = /^https?:\/\/[^/]+\/([^/]+)\/(.+?)(?:\.git)?\/?$/.exec(remoteUrl)
+  if (https && https[1] && https[2]) return { owner: https[1], repo: https[2] }
+  throw new Error(`Could not parse a GitHub owner/repo from remote URL: ${remoteUrl}`)
+}
+
+/** Branch name for a core-upgrade PR, sanitised to safe git ref characters. */
+export function upgradeBranchName(from: string, to: string): string {
+  return `biffo/core-upgrade-${from}-to-${to}`.replace(/[^a-zA-Z0-9._/-]/g, '-')
 }

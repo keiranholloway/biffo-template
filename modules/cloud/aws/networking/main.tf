@@ -170,6 +170,37 @@ resource "aws_vpc_endpoint" "cognito_idp" {
   tags = merge(var.tags, { Name = "${local.name_prefix}-cognito-idp-endpoint" })
 }
 
+# Secrets Manager interface endpoint — so a no-NAT Lambda can fetch secrets at
+# runtime (e.g. the DB credentials secret, or the PR-signer's GitHub App key,
+# ADR-0008) instead of relying on values baked into env vars. No-NAT only; with
+# a NAT gateway the Lambda reaches the public endpoint (issue #147).
+resource "aws_vpc_endpoint" "secretsmanager" {
+  count               = var.enable_nat_gateway ? 0 : 1
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.${data.aws_region.current.name}.secretsmanager"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = aws_subnet.private[*].id
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
+  private_dns_enabled = true
+
+  tags = merge(var.tags, { Name = "${local.name_prefix}-secretsmanager-endpoint" })
+}
+
+# EventBridge interface endpoint — so event publishing (PutEvents) actually
+# reaches EventBridge from a no-NAT Lambda instead of hanging. No-NAT only
+# (issue #147).
+resource "aws_vpc_endpoint" "events" {
+  count               = var.enable_nat_gateway ? 0 : 1
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.${data.aws_region.current.name}.events"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = aws_subnet.private[*].id
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
+  private_dns_enabled = true
+
+  tags = merge(var.tags, { Name = "${local.name_prefix}-events-endpoint" })
+}
+
 # VPC Flow Logs
 resource "aws_cloudwatch_log_group" "vpc_flow_logs" {
   name              = "/biffo/${local.name_prefix}/vpc-flow-logs"

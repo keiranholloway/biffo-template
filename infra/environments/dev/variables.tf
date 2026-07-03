@@ -76,3 +76,32 @@ variable "enabled_plugins" {
     error_message = "enabled_plugins names must be lowercase alphanumeric with hyphens (matching a services/<name>/ and modules/plugins/<name>/ directory name)."
   }
 }
+
+variable "sibling_origins" {
+  description = <<-EOT
+    Sibling microservices (ADR-0007) registered for path-based routing on
+    this project's CloudFront distribution — each entry routes
+    baseurl.com/<name>/* to that sibling's own S3 bucket. `biffo sibling
+    create`'s registration step writes to this via
+    infra/environments/<env>/siblings.auto.tfvars.json (Terraform
+    auto-loads any *.auto.tfvars.json file — no HCL editing required),
+    not by hand-editing terraform.tfvars.
+
+    Example: [{ name = "billing", bucket_regional_domain = "biffo-billing-dev.s3.eu-west-1.amazonaws.com" }]
+  EOT
+  type = list(object({
+    name                   = string
+    bucket_regional_domain = string
+  }))
+  default = []
+
+  validation {
+    condition     = length(var.sibling_origins) == length(distinct([for s in var.sibling_origins : s.name]))
+    error_message = "sibling_origins must not contain duplicate sibling names."
+  }
+
+  validation {
+    condition     = alltrue([for s in var.sibling_origins : can(regex("^[a-z][a-z0-9-]*$", s.name))])
+    error_message = "sibling_origins names must be lowercase alphanumeric with hyphens (matching the baseurl.com/<name>/ path segment)."
+  }
+}

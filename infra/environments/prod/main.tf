@@ -60,6 +60,7 @@ module "cdn" {
   custom_domain                 = var.custom_domain
   acm_certificate_arn           = var.acm_certificate_arn
   hosted_zone_id                = var.hosted_zone_id
+  sibling_origins               = var.sibling_origins
   tags                          = local.tags
 }
 
@@ -194,4 +195,23 @@ variable "mail_source_arn" {
   description = "ARN of the SES identity for mail_from_address. Required when mail_from_address is set."
   type        = string
   default     = ""
+}
+
+variable "sibling_origins" {
+  description = "Sibling microservices (ADR-0007) registered for path-based routing on this project's CloudFront distribution. Populated via infra/environments/<env>/siblings.auto.tfvars.json, written by biffo sibling create's registration step — not hand-edited."
+  type = list(object({
+    name                   = string
+    bucket_regional_domain = string
+  }))
+  default = []
+
+  validation {
+    condition     = length(var.sibling_origins) == length(distinct([for s in var.sibling_origins : s.name]))
+    error_message = "sibling_origins must not contain duplicate sibling names."
+  }
+
+  validation {
+    condition     = alltrue([for s in var.sibling_origins : can(regex("^[a-z][a-z0-9-]*$", s.name))])
+    error_message = "sibling_origins names must be lowercase alphanumeric with hyphens (matching the baseurl.com/<name>/ path segment)."
+  }
 }

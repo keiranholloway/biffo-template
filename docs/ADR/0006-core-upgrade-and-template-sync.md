@@ -114,7 +114,10 @@ upgrade avoid clobbering the user's own work.
 2. For each template-owned path, perform a **three-way merge**: base = the
    template at the instance's _current_ version, ours = the instance's working
    file, theirs = the template at the _target_ version. This preserves
-   instance-local edits to core files where they don't conflict.
+   instance-local edits to core files where they don't conflict. The base and
+   target trees are **auto-resolved** from the `core-v<version>` git tags (via
+   `git archive` into temp dirs) — no manual checkouts required. `--from-template`
+   / `--to-template` remain as overrides for pre-tag instances or local testing.
 3. Apply the result on a **new branch** and **open a PR** on the instance's
    repo (never a direct push — branch protection, CLAUDE.md invariant #5).
    Bump `biffo.core.json` to the target version in the same PR.

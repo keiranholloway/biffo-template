@@ -17,18 +17,24 @@ import {
   planCoreUpgrade,
   upgradeBranchName,
 } from '../lib/core-upgrade.js'
+import { type MaterializedTree, materializeTemplateAtTag } from '../lib/core-template-trees.js'
 import { log } from '../lib/logger.js'
 
 export const coreUpgradeCommand = new Command('upgrade')
   .description('Three-way-merge template-owned files for a core upgrade; preview it or open a PR')
   .option('--cwd <path>', 'Instance repo root to upgrade (defaults to the current directory)')
-  .requiredOption(
+  .option(
+    '--template-repo <path>',
+    'Path to a biffo-template git checkout whose core-v* tags supply the base/target trees (defaults to the template this CLI ships with)',
+  )
+  .option('--to <version>', 'Target core version (defaults to the template’s latest core.version)')
+  .option(
     '--from-template <path>',
-    'Path to a biffo-template checkout at the instance’s CURRENT core version (the merge base)',
+    'Override: path to a template checkout at the instance’s CURRENT version (the merge base). Normally auto-resolved from the core-v<version> tag.',
   )
   .option(
     '--to-template <path>',
-    'Path to a biffo-template checkout at the TARGET core version (defaults to the template this CLI ships with)',
+    'Override: path to a template checkout at the TARGET version. Normally auto-resolved.',
   )
   .option('--apply', 'Apply the plan on a new branch and open a PR (default: dry run)')
   .option('--allow-conflicts', 'With --apply, open the PR even if some files conflict')
@@ -37,7 +43,9 @@ export const coreUpgradeCommand = new Command('upgrade')
   .action(
     async (options: {
       cwd?: string
-      fromTemplate: string
+      templateRepo?: string
+      to?: string
+      fromTemplate?: string
       toTemplate?: string
       apply?: boolean
       allowConflicts?: boolean
@@ -47,10 +55,12 @@ export const coreUpgradeCommand = new Command('upgrade')
       const cwd = options.cwd ? resolve(options.cwd) : process.cwd()
       const runOptions: CoreUpgradeOptions = {
         cwd,
-        baseDir: resolve(options.fromTemplate),
         apply: options.apply ?? false,
         allowConflicts: options.allowConflicts ?? false,
       }
+      if (options.templateRepo) runOptions.templateRepo = resolve(options.templateRepo)
+      if (options.to) runOptions.toVersion = options.to
+      if (options.fromTemplate) runOptions.baseDir = resolve(options.fromTemplate)
       if (options.toTemplate) runOptions.theirsDir = resolve(options.toTemplate)
       if (options.base) runOptions.base = options.base
       if (options.remote) runOptions.remote = options.remote
@@ -65,8 +75,17 @@ export const coreUpgradeCommand = new Command('upgrade')
 
 export interface CoreUpgradeOptions {
   cwd: string
-  baseDir: string
+  /** Explicit merge-base template checkout. When omitted, the base tree is
+   * auto-resolved from the `core-v<instance version>` tag in `templateRepo`. */
+  baseDir?: string
+  /** Explicit target template checkout. When omitted, resolved from the target
+   * version's tag (or the template working tree when the target is its version). */
   theirsDir?: string
+  /** Git repo (a biffo-template clone) whose `core-v*` tags the base/target
+   * trees are materialized from. Defaults to the template this CLI ships with. */
+  templateRepo?: string
+  /** Target core version. Defaults to the template's latest `core.version`. */
+  toVersion?: string
   apply?: boolean
   allowConflicts?: boolean
   base?: string
@@ -98,6 +117,9 @@ export interface CoreUpgradeDeps {
   git: CoreUpgradeGit
   makeGitHub: (token: string) => CoreUpgradeGitHub
   resolveToken: () => string
+  /** Materialize the template tree at a core version's tag. Injectable so the
+   * auto-resolution path is testable without a real tagged repo. */
+  materialize?: (repo: string, version: string) => MaterializedTree
 }
 
 function defaultDeps(): CoreUpgradeDeps {
@@ -105,6 +127,7 @@ function defaultDeps(): CoreUpgradeDeps {
     git: new GitAdapter(),
     makeGitHub: (token) => new GitHubAdapter(token),
     resolveToken: resolveGitHubToken,
+    materialize: materializeTemplateAtTag,
   }
 }
 
@@ -135,15 +158,67 @@ export async function runCoreUpgrade(
   options: CoreUpgradeOptions,
   deps: CoreUpgradeDeps = defaultDeps(),
 ): Promise<void> {
-  const theirsDir = options.theirsDir ?? resolveTemplateRoot()
-  const manifest = readCoreManifest(theirsDir)
+  const cleanups: Array<() => void> = []
+  try {
+    await runCoreUpgradeResolved(options, deps, cleanups)
+  } finally {
+    for (const c of cleanups) c()
+  }
+}
 
-  const fromVersion = readCoreVersionFile(join(options.baseDir, 'core.version'))
-  const toVersion = readCoreVersionFile(join(theirsDir, 'core.version'))
+async function runCoreUpgradeResolved(
+  options: CoreUpgradeOptions,
+  deps: CoreUpgradeDeps,
+  cleanups: Array<() => void>,
+): Promise<void> {
+  const materialize = deps.materialize ?? materializeTemplateAtTag
+  const templateRepo = options.templateRepo ? resolve(options.templateRepo) : resolveTemplateRoot()
   const instanceVersion = readInstanceCoreVersion(options.cwd)
 
+  // Target tree (theirs): explicit checkout > template working tree (when the
+  // target is its own version) > the target version's tag. `toVersion` is read
+  // from whichever tree is used, so display and branch naming stay consistent.
+  let theirsDir: string
+  let toVersion: string
+  if (options.theirsDir) {
+    theirsDir = options.theirsDir
+    toVersion = readCoreVersionFile(join(theirsDir, 'core.version'))
+  } else {
+    const workingVersion = readCoreVersionFile(join(templateRepo, 'core.version'))
+    toVersion = options.toVersion ?? workingVersion
+    if (toVersion === workingVersion) {
+      theirsDir = templateRepo
+    } else {
+      const t = materialize(templateRepo, toVersion)
+      cleanups.push(t.cleanup)
+      theirsDir = t.dir
+    }
+  }
+
+  // Base tree (merge base): explicit checkout > the instance version's tag.
+  let baseDir: string
+  let fromVersion: string
+  if (options.baseDir) {
+    baseDir = options.baseDir
+    fromVersion = readCoreVersionFile(join(baseDir, 'core.version'))
+  } else {
+    if (instanceVersion === null) {
+      throw new Error(
+        `Cannot determine this instance's current core version (no biffo.core.json or ` +
+          `core.version in ${options.cwd}). Pass --from-template to supply the merge base ` +
+          `explicitly.`,
+      )
+    }
+    fromVersion = instanceVersion
+    const b = materialize(templateRepo, fromVersion)
+    cleanups.push(b.cleanup)
+    baseDir = b.dir
+  }
+
+  const manifest = readCoreManifest(theirsDir)
+
   const plan = await planCoreUpgrade({
-    baseDir: options.baseDir,
+    baseDir,
     oursDir: options.cwd,
     theirsDir,
     manifest,

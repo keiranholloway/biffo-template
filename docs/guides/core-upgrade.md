@@ -64,23 +64,21 @@ biffo core diff --to-template /tmp/biffo-template
 
 ## 3. Open the upgrade PR
 
-`upgrade` needs a **merge base** — a template checkout at your instance's _current_ version (`--from-template`) — plus the target (`--to-template`, default the CLI's). It three-way-merges base → yours → target so your local core edits survive.
+`upgrade` three-way-merges base → yours → target so your local core edits survive. It **auto-resolves** both trees from the `core-v<version>` git tags — the base from your instance's current version, the target from the CLI's latest (or `--to <version>`) — so you don't supply any template checkouts:
 
 ```bash
-# a checkout at the instance's current core version (the merge base)
-git -C /tmp/biffo-template-base checkout <tag-or-commit-for-current-version>
-
-biffo core upgrade \
-  --from-template /tmp/biffo-template-base \
-  --to-template   /tmp/biffo-template \
-  --apply --base dev
+biffo core upgrade --apply --base dev
 ```
+
+Override the auto-resolution only when you need to (e.g. a pre-tag instance, or testing against a local template): `--template-repo <path>` picks which clone's tags to use, and `--from-template` / `--to-template` bypass the tags with explicit checkouts.
 
 What `--apply` does, in order: creates a branch `biffo/core-upgrade-<from>-to-<to>`, writes the merged files (and bumps `biffo.core.json`), commits, pushes, and opens a PR against `--base` (default: your current branch). It never pushes to a protected branch directly.
 
 Useful flags:
 
 - `--apply` — actually do it (without this, it's a dry-run preview).
+- `--to <version>` — target a specific core version (default: the CLI's latest). Resolved from its `core-v<version>` tag.
+- `--template-repo <path>` — the biffo-template clone whose tags supply the trees (default: the template the CLI ships with).
 - `--allow-conflicts` — open the PR even if some files conflict (see below). Without it, a conflicting plan aborts and just prints the report.
 - `--base <branch>` — the branch the PR targets (e.g. `dev`, which triggers your deploy).
 - `--remote <name>` — the git remote to push to / open the PR on (default `origin`).

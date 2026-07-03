@@ -16,6 +16,70 @@ from biffo_plugin_sdk import TablePermissions
 # The five operations, taken from the model so this can't drift from it.
 OPERATIONS: tuple[str, ...] = tuple(TablePermissions.model_fields)
 
+# --- Prettier-compatible JSON serialization --------------------------------
+#
+# Plugin manifests are prettier-formatted (printWidth 100) and every instance's
+# CI runs `prettier --check` over JSON. Re-dumping with json.dumps(indent=2)
+# would expand every short array onto its own lines — so a one-line permission
+# change would (a) add pointless diff noise across the whole file and (b) *fail*
+# the instance's prettier check, turning the signer's own PRs red.
+#
+# This serializer reproduces prettier's JSON output for these manifests:
+# non-empty objects always break (one entry per line — how the manifests are
+# generated, and what prettier preserves for a `{` followed by a newline),
+# while arrays of primitives collapse onto one line when they fit within the
+# print width and break one-per-line otherwise. The result is byte-identical to
+# prettier for a manifest, so an edited manifest diffs only where it changed.
+
+_PRINT_WIDTH = 100
+_INDENT = 2
+
+
+def _is_primitive(value: Any) -> bool:
+    return value is None or isinstance(value, (bool, int, float, str))
+
+
+def _render(value: Any, line_indent: int, prefix_len: int) -> str:
+    """Render ``value`` as prettier-compatible JSON.
+
+    ``line_indent`` is the indentation of the line this value sits on; nested
+    entries indent one level deeper. ``prefix_len`` is how many characters
+    already precede the value on its line (indent + ``"key": ``) — used only to
+    decide whether an inline array fits within the print width.
+    """
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+        inner = line_indent + _INDENT
+        pad = " " * inner
+        entries = []
+        for key, val in value.items():
+            rendered_key = json.dumps(key, ensure_ascii=False)
+            rendered = _render(val, inner, inner + len(rendered_key) + 2)
+            entries.append(f"{pad}{rendered_key}: {rendered}")
+        return "{\n" + ",\n".join(entries) + "\n" + " " * line_indent + "}"
+
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        if all(_is_primitive(item) for item in value):
+            inline = (
+                "[" + ", ".join(json.dumps(i, ensure_ascii=False) for i in value) + "]"
+            )
+            if prefix_len + len(inline) <= _PRINT_WIDTH:
+                return inline
+        inner = line_indent + _INDENT
+        pad = " " * inner
+        items = [pad + _render(item, inner, inner) for item in value]
+        return "[\n" + ",\n".join(items) + "\n" + " " * line_indent + "]"
+
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _format_manifest(data: Any) -> str:
+    """Serialize ``data`` to prettier-compatible JSON with a trailing newline."""
+    return _render(data, 0, 0) + "\n"
+
 
 def apply_permission_change(
     manifest_json: str,
@@ -63,4 +127,4 @@ def apply_permission_change(
     TablePermissions.model_validate(permissions)
 
     target["permissions"] = permissions
-    return json.dumps(data, indent=2) + "\n"
+    return _format_manifest(data)

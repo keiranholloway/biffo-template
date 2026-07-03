@@ -67,3 +67,12 @@ variable "failover_origin_domain" {
   type        = string
   default     = ""
 }
+
+variable "sibling_origins" {
+  description = "Sibling microservices (ADR-0007) registered for path-based routing on this distribution. Each entry adds one S3 origin (reusing the portal's own OAC — origin_access_control is keyed by signing behavior, not per-bucket, so a single OAC covers every same-account S3 origin) and one ordered_cache_behavior matching \"<name>/*\", so baseurl.com/<name>/* routes to that sibling's own bucket instead of the portal's. The sibling's own bucket policy (granting this distribution's ARN read access) is the sibling's own Terraform's responsibility, not this module's — so no bucket name/ARN is needed here, only what routing requires. Populated via infra/environments/<env>/siblings.auto.tfvars.json in the consuming project (biffo sibling create's registration PR writes to that file, not to this module) — empty by default, so a project with no siblings is unaffected."
+  type = list(object({
+    name                   = string
+    bucket_regional_domain = string
+  }))
+  default = []
+}

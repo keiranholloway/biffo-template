@@ -71,6 +71,7 @@ module "cdn" {
   custom_domain                 = var.custom_domain
   acm_certificate_arn           = var.acm_certificate_arn
   hosted_zone_id                = var.hosted_zone_id
+  sibling_origins               = var.sibling_origins
   tags                          = local.tags
 }
 

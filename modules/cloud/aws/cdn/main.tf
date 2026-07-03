@@ -67,6 +67,22 @@ resource "aws_cloudfront_distribution" "portal" {
     }
   }
 
+  # Sibling microservices (ADR-0007) — one origin per registered sibling,
+  # reusing this same portal OAC (origin_access_control is keyed by signing
+  # behavior, not per-bucket, so one OAC legitimately covers every
+  # same-account S3 origin). The sibling's own bucket policy (granting this
+  # distribution's ARN read access) is created by the SIBLING'S OWN
+  # Terraform, not here — this module doesn't own or manage sibling buckets,
+  # only routes to them.
+  dynamic "origin" {
+    for_each = var.sibling_origins
+    content {
+      domain_name              = origin.value.bucket_regional_domain
+      origin_id                = "sibling-${origin.value.name}"
+      origin_access_control_id = aws_cloudfront_origin_access_control.portal.id
+    }
+  }
+
   default_cache_behavior {
     allowed_methods        = ["GET", "HEAD", "OPTIONS"]
     cached_methods         = ["GET", "HEAD"]
@@ -86,6 +102,40 @@ resource "aws_cloudfront_distribution" "portal" {
     function_association {
       event_type   = "viewer-request"
       function_arn = aws_cloudfront_function.rewrite.arn
+    }
+  }
+
+  # One ordered_cache_behavior per sibling, matching "<name>/*" so
+  # baseurl.com/<name>/* routes to that sibling's own origin instead of
+  # falling through to default_cache_behavior (the portal). CloudFront
+  # evaluates ordered_cache_behavior blocks in list order before
+  # default_cache_behavior, most-specific-first — for_each's stable
+  # per-key ordering here is fine since path_pattern values are disjoint
+  # (no two siblings share a name), so behavior evaluation order between
+  # siblings never matters, only that each is more specific than "*".
+  dynamic "ordered_cache_behavior" {
+    for_each = var.sibling_origins
+    content {
+      path_pattern           = "${ordered_cache_behavior.value.name}/*"
+      allowed_methods        = ["GET", "HEAD", "OPTIONS"]
+      cached_methods         = ["GET", "HEAD"]
+      target_origin_id       = "sibling-${ordered_cache_behavior.value.name}"
+      viewer_protocol_policy = "redirect-to-https"
+      compress               = true
+
+      forwarded_values {
+        query_string = false
+        cookies { forward = "none" }
+      }
+
+      min_ttl     = 0
+      default_ttl = 3600
+      max_ttl     = 86400
+
+      function_association {
+        event_type   = "viewer-request"
+        function_arn = aws_cloudfront_function.rewrite.arn
+      }
     }
   }
 

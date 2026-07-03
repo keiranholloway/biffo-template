@@ -79,6 +79,29 @@ function makeAwsMock() {
   }
 }
 
+// Fake "cloned core repo" dirs, seeded with (or without) ADR-0007's
+// `sibling_origins` support so the registration pre-flight (issue #151) sees a
+// realistic modules/cloud/aws/cdn. Cleaned up after each test.
+const coreClones: string[] = []
+
+function seedCoreClone(withSiblingSupport = true): string {
+  const dir = mkdtempSync(join(tmpdir(), 'sibling-core-clone-'))
+  coreClones.push(dir)
+  const cdnDir = join(dir, 'modules', 'cloud', 'aws', 'cdn')
+  mkdirSync(cdnDir, { recursive: true })
+  writeFileSync(
+    join(cdnDir, 'variables.tf'),
+    withSiblingSupport
+      ? 'variable "sibling_origins" {\n  type = any\n}\n'
+      : 'variable "aliases" {}\n',
+  )
+  return dir
+}
+
+afterEach(() => {
+  for (const dir of coreClones.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
+
 function makeGitMock(): SiblingCreateGit & Record<string, ReturnType<typeof vi.fn>> {
   return {
     init: vi.fn().mockResolvedValue(undefined),
@@ -86,7 +109,7 @@ function makeGitMock(): SiblingCreateGit & Record<string, ReturnType<typeof vi.f
     add: vi.fn().mockResolvedValue(undefined),
     commit: vi.fn().mockResolvedValue(undefined),
     push: vi.fn().mockResolvedValue(undefined),
-    cloneForEditing: vi.fn().mockResolvedValue('/tmp/fake-core-clone'),
+    cloneForEditing: vi.fn().mockResolvedValue(seedCoreClone()),
     createBranch: vi.fn().mockResolvedValue(undefined),
     currentBranch: vi.fn().mockResolvedValue('dev'),
     getRemoteUrl: vi.fn().mockResolvedValue('https://github.com/acme/core-app.git'),
@@ -223,6 +246,41 @@ describe('runSiblingCreate', () => {
       'github_config',
       'register_with_core',
     ])
+  })
+
+  it('fails registration if the core project lacks sibling CDN routing support', async () => {
+    const github = makeGithubMock()
+    const aws = makeAwsMock()
+    const coreAws = makeAwsMock()
+    coreAws.readTerraformOutputs.mockResolvedValue(CORE_OUTPUTS)
+    const git = makeGitMock()
+    // Core clone whose modules/cloud/aws/cdn predates ADR-0007 (no sibling_origins).
+    git.cloneForEditing.mockResolvedValue(seedCoreClone(false))
+    const session = makeSession()
+
+    await expect(
+      runSiblingCreate(
+        github as never,
+        aws as never,
+        coreAws as never,
+        git,
+        SIBLING_CONFIG,
+        session,
+        {
+          coreConfig: CORE_CONFIG,
+          skeletonRoot,
+          githubToken: 'gh-token',
+        },
+      ),
+    ).rejects.toThrow(/doesn't support sibling CDN routing/)
+
+    // It fails the pre-flight before committing the tfvars change or opening a PR.
+    expect(github.createPullRequest).not.toHaveBeenCalled()
+    expect(git.commit).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining('register sibling'),
+    )
+    expect(session.completedSteps).not.toContain('register_with_core')
   })
 
   it('skips steps already marked complete', async () => {

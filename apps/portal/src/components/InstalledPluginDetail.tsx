@@ -4,10 +4,37 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/context/auth-context'
 import { createApiClient } from '@/lib/api-client'
-import { fetchInstalledPlugins, type InstalledPlugin } from '@/lib/plugin-api'
+import {
+  fetchInstalledPlugins,
+  type InstalledPlugin,
+  type PluginRouteDefinition,
+} from '@/lib/plugin-api'
 
 interface InstalledPluginDetailProps {
   name: string
+}
+
+/**
+ * The full, callable path the Core API serves a plugin route at. The manifest
+ * declares `path` relative to the plugin (e.g. `/roles`); the Core API mounts
+ * every plugin under `/api/v1/plugins/<name>` (see services/api routers), so
+ * that prefix is what a caller actually hits.
+ */
+function fullRoutePath(pluginName: string, path: string): string {
+  return `/api/v1/plugins/${pluginName}${path}`
+}
+
+/** Group a plugin's routes by the table they map to, preserving first-seen order. */
+function groupRoutesByTable(
+  routes: PluginRouteDefinition[],
+): { table: string; routes: PluginRouteDefinition[] }[] {
+  const groups = new Map<string, PluginRouteDefinition[]>()
+  for (const route of routes) {
+    const existing = groups.get(route.table)
+    if (existing) existing.push(route)
+    else groups.set(route.table, [route])
+  }
+  return [...groups].map(([table, tableRoutes]) => ({ table, routes: tableRoutes }))
 }
 
 type LoadState =
@@ -131,23 +158,41 @@ export function InstalledPluginDetail({ name }: InstalledPluginDetailProps) {
       </div>
 
       <div className="rounded-xl border bg-white p-6 shadow-sm">
-        <h2 className="text-sm font-semibold text-gray-900">Routes ({plugin.routes.length})</h2>
+        <h2 className="text-sm font-semibold text-gray-900">Endpoints ({plugin.routes.length})</h2>
+        <p className="mt-1 text-xs text-gray-400">
+          A route is visible here once declared, but only serves if its table&apos;s permissions
+          allow the operation (ADR-0004). Enablement stays config-as-code.
+        </p>
         {plugin.routes.length === 0 ? (
           <p className="mt-2 text-sm text-gray-500">No routes declared.</p>
         ) : (
-          <ul className="mt-3 flex flex-col gap-2">
-            {plugin.routes.map((route) => (
-              <li
-                key={`${route.method} ${route.path}`}
-                className="flex items-center gap-3 rounded-lg bg-gray-50 px-3 py-2"
-              >
-                <span className="shrink-0 rounded bg-gray-900 px-2 py-0.5 font-mono text-xs font-medium text-white">
-                  {route.method}
-                </span>
-                <code className="font-mono text-sm text-gray-800">{route.path}</code>
-              </li>
+          <div className="mt-3 flex flex-col gap-5">
+            {groupRoutesByTable(plugin.routes).map(({ table, routes }) => (
+              <div key={table}>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  <code className="font-mono normal-case">{table}</code>
+                </h3>
+                <ul className="mt-2 flex flex-col gap-2">
+                  {routes.map((route) => (
+                    <li
+                      key={`${route.method} ${route.path}`}
+                      className="flex flex-wrap items-center gap-3 rounded-lg bg-gray-50 px-3 py-2"
+                    >
+                      <span className="w-16 shrink-0 rounded bg-gray-900 px-2 py-0.5 text-center font-mono text-xs font-medium text-white">
+                        {route.method}
+                      </span>
+                      <code className="font-mono text-sm text-gray-800">
+                        {fullRoutePath(plugin.name, route.path)}
+                      </code>
+                      <span className="ml-auto rounded bg-gray-200 px-2 py-0.5 font-mono text-xs text-gray-600">
+                        {route.operation}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
       </div>
     </div>

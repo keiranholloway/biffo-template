@@ -49,6 +49,13 @@ const rbacPlugin: InstalledPlugin = {
   routes: [
     { method: 'GET', path: '/roles', table: 'rbac_roles', operation: 'list', description: '' },
     { method: 'POST', path: '/roles', table: 'rbac_roles', operation: 'create', description: '' },
+    {
+      method: 'GET',
+      path: '/permissions',
+      table: 'rbac_permissions',
+      operation: 'list',
+      description: '',
+    },
   ],
 }
 
@@ -71,14 +78,28 @@ describe('InstalledPluginDetail', () => {
     expect(screen.getByText('v0.1.0')).toBeInTheDocument()
     expect(screen.getByText('Fine-grained role-based access control.')).toBeInTheDocument()
 
-    expect(screen.getByText('rbac_roles')).toBeInTheDocument()
+    // Table names appear in both the Tables section and as Endpoint group headings.
+    expect(screen.getAllByText('rbac_roles').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('1 column')).toBeInTheDocument()
-    expect(screen.getByText('rbac_permissions')).toBeInTheDocument()
+    expect(screen.getAllByText('rbac_permissions').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('0 columns')).toBeInTheDocument()
 
-    expect(screen.getAllByText('/roles')).toHaveLength(2)
-    expect(screen.getByText('GET')).toBeInTheDocument()
+    // Endpoints render as full, callable Core API paths, grouped by table,
+    // with their HTTP method and CRUD operation.
+    expect(screen.getAllByText('/api/v1/plugins/rbac/roles')).toHaveLength(2) // GET + POST
+    expect(screen.getByText('/api/v1/plugins/rbac/permissions')).toBeInTheDocument()
+    expect(screen.getAllByText('GET')).toHaveLength(2)
     expect(screen.getByText('POST')).toBeInTheDocument()
+    expect(screen.getAllByText('list')).toHaveLength(2)
+    expect(screen.getByText('create')).toBeInTheDocument()
+  })
+
+  it('shows an empty state when a plugin declares no routes', async () => {
+    fetchInstalledPlugins.mockResolvedValue([{ ...rbacPlugin, routes: [] }])
+    render(<InstalledPluginDetail name="rbac" />)
+
+    expect(await screen.findByText('Endpoints (0)')).toBeInTheDocument()
+    expect(screen.getByText('No routes declared.')).toBeInTheDocument()
   })
 
   it('shows a not-installed message when no installed plugin matches the name', async () => {

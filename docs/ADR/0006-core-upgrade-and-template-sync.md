@@ -1,8 +1,16 @@
 # ADR-0006: Core Upgrade and Template Sync
 
-**Status:** Proposed  
+**Status:** Accepted  
 **Date:** 2026-07-02  
+**Accepted:** 2026-07-03  
 **Deciders:** Keiran Holloway (Technical Architect)
+
+> Implemented and merged across PRs #110 (versioning + `biffo core status`),
+> #111 (`core-manifest.json` boundary + `biffo core diff`), #112 (three-way
+> merge engine + `biffo core upgrade` dry run), and #113 (`--apply`: branch →
+> PR), with boundary refinements in #115 (`.terraform`) and #117
+> (`migrations/versions`). See [the core-upgrade guide](../guides/core-upgrade.md)
+> for how to use it.
 
 ---
 

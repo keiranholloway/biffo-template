@@ -157,3 +157,52 @@ describe('GitAdapter', () => {
     })
   })
 })
+
+describe('GitAdapter core-upgrade ops (ADR-0006 Phase 3b)', () => {
+  let adapter: GitAdapter
+  beforeEach(() => {
+    adapter = new GitAdapter()
+    execaMock.mockReset()
+  })
+
+  it('currentBranch returns the trimmed branch name', async () => {
+    execaMock.mockResolvedValue({ stdout: 'main\n' } as never)
+    await expect(adapter.currentBranch('/r')).resolves.toBe('main')
+    expect(execaMock).toHaveBeenCalledWith('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: '/r',
+    })
+  })
+
+  it('hasUncommittedChanges reflects porcelain output', async () => {
+    execaMock.mockResolvedValue({ stdout: ' M file\n' } as never)
+    await expect(adapter.hasUncommittedChanges('/r')).resolves.toBe(true)
+    execaMock.mockResolvedValue({ stdout: '' } as never)
+    await expect(adapter.hasUncommittedChanges('/r')).resolves.toBe(false)
+  })
+
+  it('createBranch switches to a new branch', async () => {
+    execaMock.mockResolvedValue({} as never)
+    await adapter.createBranch('/r', 'biffo/x')
+    expect(execaMock).toHaveBeenCalledWith('git', ['switch', '-c', 'biffo/x'], { cwd: '/r' })
+  })
+
+  it('push injects the token into an HTTPS remote URL', async () => {
+    execaMock
+      .mockResolvedValueOnce({ stdout: 'https://github.com/acme/app.git' } as never) // get-url
+      .mockResolvedValueOnce({} as never) // push
+    await adapter.push('/r', 'biffo/x', { token: 'SECRET' })
+    const pushCall = execaMock.mock.calls.find((c) => (c[1] as string[])[0] === 'push')
+    const url = (pushCall?.[1] as string[])[1]
+    expect(url).toContain('x-access-token:SECRET@github.com')
+  })
+
+  it('push error message never leaks the token', async () => {
+    execaMock
+      .mockResolvedValueOnce({ stdout: 'https://github.com/acme/app.git' } as never)
+      .mockRejectedValueOnce(new Error('remote rejected https://x-access-token:SECRET@github.com'))
+    await expect(adapter.push('/r', 'biffo/x', { token: 'SECRET' })).rejects.toThrow(
+      /Failed to push branch 'biffo\/x'/,
+    )
+    await expect(adapter.push('/r', 'biffo/x', { token: 'SECRET' })).rejects.not.toThrow(/SECRET/)
+  })
+})

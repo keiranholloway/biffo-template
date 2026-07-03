@@ -27,6 +27,30 @@ export class GitHubAdapter {
     this.templateRepo = opts.templateRepo ?? 'biffo-template'
   }
 
+  /**
+   * Open a pull request and return its URL and number. Used by
+   * `biffo core upgrade --apply` (ADR-0006 Phase 3b) to propose a core upgrade
+   * as a reviewable PR rather than pushing to a protected branch.
+   */
+  async createPullRequest(args: {
+    owner: string
+    repo: string
+    head: string
+    base: string
+    title: string
+    body: string
+  }): Promise<{ url: string; number: number }> {
+    const { data } = await this.octokit.pulls.create({
+      owner: args.owner,
+      repo: args.repo,
+      head: args.head,
+      base: args.base,
+      title: args.title,
+      body: args.body,
+    })
+    return { url: data.html_url, number: data.number }
+  }
+
   async createRepoFromTemplate(config: BiffoConfig): Promise<string> {
     const { org, repo } = (
       config.source_control as { provider: 'github'; config: { org: string; repo: string } }

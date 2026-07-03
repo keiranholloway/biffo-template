@@ -149,3 +149,84 @@ describe('gitMergeFile (real git integration)', () => {
     expect(content).toContain('>>>>>>>')
   })
 })
+
+import { existsSync, readFileSync } from 'node:fs'
+import { applyUpgradePlan, parseGitHubRepo, upgradeBranchName } from './core-upgrade.js'
+import type { UpgradePlan } from './core-upgrade.js'
+
+describe('applyUpgradePlan', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'apply-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('writes content entries, deletes removed, and leaves keep-ours alone', () => {
+    writeFileSync(join(dir, 'existing.py'), 'stays')
+    mkdirSync(join(dir, 'services', 'api'), { recursive: true })
+    writeFileSync(join(dir, 'services', 'api', 'gone.py'), 'old')
+
+    const plan: UpgradePlan = {
+      entries: [
+        { path: 'services/api/new.py', status: 'added', conflicted: false, content: 'NEW' },
+        { path: 'services/api/merged.py', status: 'merged', conflicted: false, content: 'MERGED' },
+        { path: 'services/api/gone.py', status: 'removed', conflicted: false },
+        { path: 'existing.py', status: 'keep-ours', conflicted: false },
+      ],
+      changes: [],
+      conflicts: [],
+      summary: {} as never,
+    }
+
+    const result = applyUpgradePlan(dir, plan)
+
+    expect(readFileSync(join(dir, 'services/api/new.py'), 'utf8')).toBe('NEW')
+    expect(readFileSync(join(dir, 'services/api/merged.py'), 'utf8')).toBe('MERGED')
+    expect(existsSync(join(dir, 'services/api/gone.py'))).toBe(false)
+    expect(readFileSync(join(dir, 'existing.py'), 'utf8')).toBe('stays') // untouched
+    expect(result.written.sort()).toEqual(['services/api/merged.py', 'services/api/new.py'])
+    expect(result.deleted).toEqual(['services/api/gone.py'])
+  })
+
+  it('writes conflict entries verbatim (markers included)', () => {
+    const plan: UpgradePlan = {
+      entries: [
+        {
+          path: 'a.py',
+          status: 'conflict',
+          conflicted: true,
+          content: '<<<<<<<\nours\n=======\ntheirs\n>>>>>>>',
+        },
+      ],
+      changes: [],
+      conflicts: [],
+      summary: {} as never,
+    }
+    applyUpgradePlan(dir, plan)
+    expect(readFileSync(join(dir, 'a.py'), 'utf8')).toContain('<<<<<<<')
+  })
+})
+
+describe('parseGitHubRepo', () => {
+  it.each([
+    ['git@github.com:acme/my-app.git', 'acme', 'my-app'],
+    ['git@github.com:acme/my-app', 'acme', 'my-app'],
+    ['https://github.com/acme/my-app.git', 'acme', 'my-app'],
+    ['https://github.com/acme/my-app', 'acme', 'my-app'],
+    ['https://x-access-token:TOKEN@github.com/acme/my-app.git', 'acme', 'my-app'],
+  ])('parses %s', (url, owner, repo) => {
+    expect(parseGitHubRepo(url)).toEqual({ owner, repo })
+  })
+
+  it('throws on an unrecognisable URL', () => {
+    expect(() => parseGitHubRepo('ftp://nope')).toThrow()
+  })
+})
+
+describe('upgradeBranchName', () => {
+  it('builds a sanitised branch name', () => {
+    expect(upgradeBranchName('0.1.0', '0.2.0')).toBe('biffo/core-upgrade-0.1.0-to-0.2.0')
+  })
+})

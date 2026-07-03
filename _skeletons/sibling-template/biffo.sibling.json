@@ -1,0 +1,6 @@
+{
+  "name": "example-sibling",
+  "core_project": "example-core-project",
+  "path_prefix": "example-sibling",
+  "description": "Rewritten by `biffo sibling create` (ADR-0007) with this sibling's real name, its paired core project's name, and its registered path prefix. Not meant to be hand-edited afterwards — path_prefix in particular must always match the entry this sibling was registered under in the core project's infra/siblings.auto.tfvars.json."
+}

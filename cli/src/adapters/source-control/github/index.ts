@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process'
 import { Octokit } from '@octokit/rest'
-import type { BiffoConfig } from '../../../config/schema.js'
+import type { BiffoConfig, ProvisioningConfig } from '../../../config/schema.js'
 import { log } from '../../../lib/logger.js'
 
 export interface GitHubAdapterOptions {
@@ -300,7 +300,7 @@ export class GitHubAdapter {
   }
 
   async configureBranchProtection(
-    config: BiffoConfig,
+    config: ProvisioningConfig,
     protectionIntervalMs = 3_000,
     statusChecks: string[] = DEFAULT_STATUS_CHECKS,
   ): Promise<void> {
@@ -371,7 +371,7 @@ export class GitHubAdapter {
     log.success('Branch protection configured on dev, staging, and main')
   }
 
-  async createEnvironments(config: BiffoConfig): Promise<void> {
+  async createEnvironments(config: ProvisioningConfig): Promise<void> {
     const { org, repo } = (
       config.source_control as { provider: 'github'; config: { org: string; repo: string } }
     ).config

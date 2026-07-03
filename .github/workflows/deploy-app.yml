@@ -148,6 +148,30 @@ jobs:
           if echo "$RESULT" | grep -q FunctionError; then
             echo "Schema init failed:" && cat db-init-response.json && exit 1
           fi
+      # Package and deploy the isolated PR-signer Lambda (ADR-0008), only when
+      # the instance has provisioned one (enable_pr_signer surfaces its function
+      # name as PR_SIGNER_LAMBDA_NAME). Unlike the Core API above, this packages
+      # straight from the checkout, not the api-service artifact: the signer
+      # depends on the workspace SDK (packages/python-sdk), which the artifact
+      # doesn't carry. Third-party deps come from the workspace lock (excluding
+      # workspace members, hence --no-emit-workspace/--no-emit-project); the SDK
+      # itself is installed from source with --no-deps.
+      - name: Package and deploy PR-signer Lambda
+        if: vars.PR_SIGNER_LAMBDA_NAME != ''
+        run: |
+          uv export --package biffo-pr-signer --no-dev --frozen \
+            --no-emit-workspace --no-emit-project \
+            --output-file pr-signer-requirements.txt
+          uv pip install -r pr-signer-requirements.txt --target pr-signer-package/
+          uv pip install ./packages/python-sdk --target pr-signer-package/ --no-deps
+          cp -r services/pr-signer/src pr-signer-package/
+          cd pr-signer-package && zip -r ../pr-signer-lambda.zip .
+          cd ..
+          aws lambda update-function-code \
+            --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }} \
+            --zip-file fileb://pr-signer-lambda.zip
+          aws lambda wait function-updated \
+            --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }}
 
   # ─── STAGING ─────────────────────────────────────────────────────────────────
   # Manual only — run workflow_dispatch with environment=staging.
@@ -268,6 +292,30 @@ jobs:
           if echo "$RESULT" | grep -q FunctionError; then
             echo "Schema init failed:" && cat db-init-response.json && exit 1
           fi
+      # Package and deploy the isolated PR-signer Lambda (ADR-0008), only when
+      # the instance has provisioned one (enable_pr_signer surfaces its function
+      # name as PR_SIGNER_LAMBDA_NAME). Unlike the Core API above, this packages
+      # straight from the checkout, not the api-service artifact: the signer
+      # depends on the workspace SDK (packages/python-sdk), which the artifact
+      # doesn't carry. Third-party deps come from the workspace lock (excluding
+      # workspace members, hence --no-emit-workspace/--no-emit-project); the SDK
+      # itself is installed from source with --no-deps.
+      - name: Package and deploy PR-signer Lambda
+        if: vars.PR_SIGNER_LAMBDA_NAME != ''
+        run: |
+          uv export --package biffo-pr-signer --no-dev --frozen \
+            --no-emit-workspace --no-emit-project \
+            --output-file pr-signer-requirements.txt
+          uv pip install -r pr-signer-requirements.txt --target pr-signer-package/
+          uv pip install ./packages/python-sdk --target pr-signer-package/ --no-deps
+          cp -r services/pr-signer/src pr-signer-package/
+          cd pr-signer-package && zip -r ../pr-signer-lambda.zip .
+          cd ..
+          aws lambda update-function-code \
+            --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }} \
+            --zip-file fileb://pr-signer-lambda.zip
+          aws lambda wait function-updated \
+            --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }}
 
   # ─── PROD ────────────────────────────────────────────────────────────────────
   # Manual only — run workflow_dispatch with environment=prod.
@@ -400,3 +448,27 @@ jobs:
           if echo "$RESULT" | grep -q FunctionError; then
             echo "Schema init failed:" && cat db-init-response.json && exit 1
           fi
+      # Package and deploy the isolated PR-signer Lambda (ADR-0008), only when
+      # the instance has provisioned one (enable_pr_signer surfaces its function
+      # name as PR_SIGNER_LAMBDA_NAME). Unlike the Core API above, this packages
+      # straight from the checkout, not the api-service artifact: the signer
+      # depends on the workspace SDK (packages/python-sdk), which the artifact
+      # doesn't carry. Third-party deps come from the workspace lock (excluding
+      # workspace members, hence --no-emit-workspace/--no-emit-project); the SDK
+      # itself is installed from source with --no-deps.
+      - name: Package and deploy PR-signer Lambda
+        if: vars.PR_SIGNER_LAMBDA_NAME != ''
+        run: |
+          uv export --package biffo-pr-signer --no-dev --frozen \
+            --no-emit-workspace --no-emit-project \
+            --output-file pr-signer-requirements.txt
+          uv pip install -r pr-signer-requirements.txt --target pr-signer-package/
+          uv pip install ./packages/python-sdk --target pr-signer-package/ --no-deps
+          cp -r services/pr-signer/src pr-signer-package/
+          cd pr-signer-package && zip -r ../pr-signer-lambda.zip .
+          cd ..
+          aws lambda update-function-code \
+            --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }} \
+            --zip-file fileb://pr-signer-lambda.zip
+          aws lambda wait function-updated \
+            --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }}

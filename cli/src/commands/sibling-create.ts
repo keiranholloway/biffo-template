@@ -495,6 +495,21 @@ async function configureSiblingGithub(
     await github.setEnvVariable(org, repo, env, 'CORE_COGNITO_CLIENT_ID', identity.cognitoClientId)
     await github.setEnvVariable(org, repo, env, 'CORE_API_URL', identity.apiUrl)
     await github.setEnvVariable(org, repo, env, 'CORE_PORTAL_URL', identity.portalUrl)
+    // The sibling's frontend is served from the SAME origin as the core
+    // portal (baseurl.com/<name>, shared-origin SSO — ADR-0007), so the
+    // portal's own origin is the only one that will ever call this
+    // sibling's own API. Without this, the deploy workflow's
+    // TF_VAR_cors_origins falls back to its template default
+    // (["http://localhost:3000"]), and every real browser call to
+    // /api/v1/whoami is silently blocked by CORS — the frontend gets a
+    // session but can never independently verify it.
+    await github.setEnvVariable(
+      org,
+      repo,
+      env,
+      'CORS_ORIGINS_JSON',
+      JSON.stringify([identity.portalUrl]),
+    )
   }
 
   if (session.outputs.oidcRoleArn) {

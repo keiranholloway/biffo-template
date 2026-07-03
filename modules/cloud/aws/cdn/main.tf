@@ -6,6 +6,22 @@ terraform {
 
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
+
+  # CloudFront path_pattern "<name>/*" does NOT match the bare "/<name>"
+  # (no trailing slash, nothing after it) — only "/<name>/" or
+  # "/<name>/anything". Since that's exactly how a human types or links to
+  # a sibling (baseurl.com/<name>, no trailing slash), each sibling needs a
+  # SECOND, exact-match behavior for the bare name too. A single looser
+  # pattern like "<name>*" (no slash) would also match unrelated paths that
+  # merely start with the same characters (e.g. "crm-billing" matching
+  # "crm*") — two precise patterns per sibling is the correct fix, not a
+  # broader wildcard.
+  sibling_cache_behaviors = flatten([
+    for s in var.sibling_origins : [
+      { name = s.name, path_pattern = s.name },
+      { name = s.name, path_pattern = "${s.name}/*" },
+    ]
+  ])
 }
 
 # Rewrites clean URLs to their index.html equivalents so Next.js static export
@@ -105,18 +121,19 @@ resource "aws_cloudfront_distribution" "portal" {
     }
   }
 
-  # One ordered_cache_behavior per sibling, matching "<name>/*" so
-  # baseurl.com/<name>/* routes to that sibling's own origin instead of
-  # falling through to default_cache_behavior (the portal). CloudFront
-  # evaluates ordered_cache_behavior blocks in list order before
-  # default_cache_behavior, most-specific-first — for_each's stable
-  # per-key ordering here is fine since path_pattern values are disjoint
-  # (no two siblings share a name), so behavior evaluation order between
-  # siblings never matters, only that each is more specific than "*".
+  # Two ordered_cache_behaviors per sibling (see local.sibling_cache_behaviors)
+  # — the exact bare name and the "<name>/*" wildcard — so both
+  # baseurl.com/<name> and baseurl.com/<name>/* route to that sibling's own
+  # origin instead of falling through to default_cache_behavior (the
+  # portal). CloudFront evaluates ordered_cache_behavior blocks in list
+  # order before default_cache_behavior, most-specific-first — for_each's
+  # stable per-key ordering here is fine since path_pattern values are
+  # disjoint (no two siblings share a name), so behavior evaluation order
+  # between siblings never matters, only that each is more specific than "*".
   dynamic "ordered_cache_behavior" {
-    for_each = var.sibling_origins
+    for_each = { for b in local.sibling_cache_behaviors : b.path_pattern => b }
     content {
-      path_pattern           = "${ordered_cache_behavior.value.name}/*"
+      path_pattern           = ordered_cache_behavior.value.path_pattern
       allowed_methods        = ["GET", "HEAD", "OPTIONS"]
       cached_methods         = ["GET", "HEAD"]
       target_origin_id       = "sibling-${ordered_cache_behavior.value.name}"

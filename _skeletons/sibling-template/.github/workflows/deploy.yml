@@ -167,6 +167,9 @@ jobs:
           aws cloudfront create-invalidation \
             --distribution-id "${{ vars.PARENT_CLOUDFRONT_DISTRIBUTION_ID }}" \
             --paths "/${{ vars.PATH_PREFIX }}/*"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.13'
       - name: Package and deploy Lambda
         working-directory: services/api
         run: |

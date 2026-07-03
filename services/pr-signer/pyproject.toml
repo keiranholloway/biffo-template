@@ -5,6 +5,8 @@ description = "Isolated PR-signer for the endpoint control plane (ADR-0008) — 
 requires-python = ">=3.13"
 dependencies = [
   "biffo-plugin-sdk",
+  "httpx>=0.28.1",
+  "pyjwt[crypto]>=2.10.0",
 ]
 
 [dependency-groups]

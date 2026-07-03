@@ -86,6 +86,14 @@ describe('listTemplateOwnedFiles + computeCoreDiff', () => {
     expect(files).toEqual(['services/api/main.py'])
   })
 
+  it('never descends into .terraform (a terraform init leaves huge provider binaries there)', () => {
+    write(template, 'modules/cloud/aws/main.tf', 'resource {}')
+    // A provider binary under a template-owned path — must be skipped, not read.
+    write(template, 'modules/cloud/aws/.terraform/providers/registry/aws_v5', 'BINARY')
+    const files = listTemplateOwnedFiles(template, MANIFEST)
+    expect(files).toEqual(['modules/cloud/aws/main.tf'])
+  })
+
   it('classifies added / removed / modified / unchanged from the instance perspective', () => {
     // unchanged
     write(template, 'core.version', '0.2.0\n')

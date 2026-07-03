@@ -33,6 +33,11 @@ const HARD_EXCLUDED_DIRS: ReadonlySet<string> = new Set([
   'coverage',
   '.pytest_cache',
   '.ruff_cache',
+  // A `terraform init` leaves provider binaries (hundreds of MB) under
+  // `.terraform/`; walking into it and reading them as text crashes with
+  // "Cannot create a string longer than 0x1fffffe8 characters". Never part
+  // of a core upgrade — the tracked terraform is the .tf files, not .terraform/.
+  '.terraform',
 ])
 
 /** Walk up from `startDir` for a directory that holds both a core-manifest.json

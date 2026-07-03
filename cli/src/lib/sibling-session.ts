@@ -34,9 +34,6 @@ export interface CoreIdentity {
   cognitoClientId: string
   apiUrl: string
   portalUrl: string
-  cloudfrontDistributionId?: string
-  cloudfrontDistributionDomain?: string
-  siblingsRegionalDomain?: string
 }
 
 export interface SiblingSession {
@@ -46,7 +43,10 @@ export interface SiblingSession {
   awsRegion: string
   completedSteps: CompletedSiblingStep[]
   outputs: {
-    coreIdentity?: CoreIdentity
+    // Keyed by environment — each environment has its own Cognito pool
+    // (infra/environments/<env>/main.tf in the core project), so a sibling
+    // provisioning multiple environments needs a separate identity per one.
+    coreIdentity?: Record<string, CoreIdentity>
     cloneUrl?: string
     oidcRoleArn?: string
     tfStateBucket?: string

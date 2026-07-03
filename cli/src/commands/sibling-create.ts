@@ -1,30 +1,46 @@
-import { cpSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { GitAdapter } from '../adapters/git/index.js'
-import { DEFAULT_STATUS_CHECKS, GitHubAdapter } from '../adapters/source-control/github/index.js'
+import { GitHubAdapter } from '../adapters/source-control/github/index.js'
 import { BiffoConfigSchema, type BiffoConfig } from '../config/schema.js'
 import { SiblingConfigSchema, type SiblingConfig } from '../config/sibling-schema.js'
+import { parseGitHubRepo } from '../lib/core-upgrade.js'
 import { resolveGithubToken } from '../lib/credentials.js'
 import { log } from '../lib/logger.js'
 import { loadProjectConfig } from '../lib/session.js'
+import {
+  deleteSiblingSession,
+  findLatestSiblingSession,
+  markSiblingStepComplete,
+  saveSiblingSession,
+  type CoreIdentity,
+  type SiblingSession,
+} from '../lib/sibling-session.js'
 
 export const siblingCreateCommand = new Command('create')
-  .description('Create a standalone sibling app repository from the Biffo sibling template')
+  .description(
+    'Create a standalone sibling app repository from the Biffo sibling template (ADR-0007)',
+  )
   .argument('<name>', 'Sibling name; must match config.project.name')
   .requiredOption('-c, --config <path>', 'Path to a pre-filled biffo.sibling.json')
-  .option('--template <path>', 'Path to sibling template (defaults to bundled skeleton)')
+  .option('--template <path>', 'Path to sibling template (defaults to the bundled skeleton)')
   .option('--dry-run', 'Validate config and print planned changes without creating anything')
+  .option('--fresh', 'Ignore any saved session and start from scratch')
   .action(
-    async (name: string, options: { config: string; template?: string; dryRun?: boolean }) => {
+    async (
+      name: string,
+      options: { config: string; template?: string; dryRun?: boolean; fresh?: boolean },
+    ) => {
       try {
-        await runSiblingCreate(name, {
+        await runSiblingCreateCommand(name, {
           configPath: resolve(options.config),
           templateRoot: options.template ? resolve(options.template) : defaultSiblingTemplateRoot(),
           dryRun: options.dryRun === true,
+          fresh: options.fresh === true,
         })
       } catch (err) {
         log.error((err as Error).message)
@@ -33,33 +49,16 @@ export const siblingCreateCommand = new Command('create')
     },
   )
 
-export interface SiblingCreateOptions {
+interface CommandOptions {
   configPath: string
   templateRoot: string
   dryRun: boolean
+  fresh: boolean
 }
 
-export interface SiblingCreateDeps {
-  git: Pick<GitAdapter, 'init' | 'addRemote' | 'add' | 'commit' | 'push' | 'cleanup'>
-  github: Pick<
-    GitHubAdapter,
-    | 'createEmptyRepo'
-    | 'createBranch'
-    | 'setDefaultBranch'
-    | 'configureBranchProtection'
-    | 'createEnvironments'
-    | 'setRepoSecret'
-    | 'setRepoVariable'
-  >
-  aws: Pick<AwsAdapter, 'verifyCredentials' | 'setupOidcTrust' | 'bootstrapTerraformBackend'>
-  makeTempDir: () => string
-}
+async function runSiblingCreateCommand(name: string, options: CommandOptions): Promise<void> {
+  console.log(chalk.bold('\n  Biffo — Sibling App Creator\n'))
 
-export async function runSiblingCreate(
-  name: string,
-  options: SiblingCreateOptions,
-  deps?: SiblingCreateDeps,
-): Promise<void> {
   const config = readSiblingConfig(options.configPath)
   if (config.project.name !== name) {
     throw new Error(
@@ -68,81 +67,209 @@ export async function runSiblingCreate(
   }
 
   const coreConfig = resolveCoreConfig(config, options.configPath)
-  const pathPrefix = config.core.path_prefix ?? config.project.name
-  const { org, repo } = githubRepo(config)
 
   if (options.dryRun) {
-    printDryRun(config, coreConfig, pathPrefix, options.templateRoot)
+    printDryRun(config, coreConfig, options.templateRoot)
     return
   }
 
-  const token = await resolveGithubToken(true)
-  const runtimeDeps =
-    deps ??
-    ({
-      git: new GitAdapter(),
-      github: new GitHubAdapter(token),
-      aws: new AwsAdapter(config),
-      makeTempDir: () => mkdtempSync(join(tmpdir(), `biffo-sibling-${name}-`)),
-    } satisfies SiblingCreateDeps)
-
-  let workDir = ''
-  try {
-    log.step(1, 6, 'Verifying AWS credentials...')
-    await runtimeDeps.aws.verifyCredentials()
-
-    log.step(2, 6, 'Creating sibling GitHub repository...')
-    const cloneUrl = await runtimeDeps.github.createEmptyRepo(org, repo, config.project.description)
-
-    log.step(3, 6, 'Writing sibling template...')
-    workDir = runtimeDeps.makeTempDir()
-    writeSiblingTemplate(options.templateRoot, workDir, config, {
-      coreProjectName: coreConfig.project.name,
-      pathPrefix,
-    })
-    await runtimeDeps.git.init(workDir, 'main')
-    await runtimeDeps.git.addRemote(workDir, 'origin', cloneUrl)
-    await runtimeDeps.git.add(workDir, ['.'])
-    await runtimeDeps.git.commit(workDir, `feat: scaffold ${name} sibling app`)
-    await runtimeDeps.git.push(workDir, 'main', { token } as never)
-    log.success('Sibling skeleton pushed')
-
-    log.step(4, 6, 'Configuring AWS bootstrap resources...')
-    const oidcRoleArn = await runtimeDeps.aws.setupOidcTrust(config)
-    const tfStateBucket = await runtimeDeps.aws.bootstrapTerraformBackend(config.project.name)
-
-    log.step(5, 6, 'Configuring GitHub branches and environments...')
-    await runtimeDeps.github.createBranch(org, repo, 'dev', 'main')
-    await runtimeDeps.github.createBranch(org, repo, 'staging', 'main')
-    await runtimeDeps.github.setDefaultBranch(org, repo, 'dev')
-    await runtimeDeps.github.createEnvironments(config)
-    await runtimeDeps.github.configureBranchProtection(config, 3_000, DEFAULT_STATUS_CHECKS)
-
-    log.step(6, 6, 'Setting sibling repository secrets and variables...')
-    await runtimeDeps.github.setRepoSecret(org, repo, 'SIBLING_OIDC_ROLE_ARN', oidcRoleArn)
-    await runtimeDeps.github.setRepoSecret(org, repo, 'SIBLING_GITHUB_TOKEN', token)
-    await setSiblingVariables(runtimeDeps.github, config, coreConfig, {
-      tfStateBucket,
-      pathPrefix,
-    })
-
-    console.log(chalk.bold('\n  Sibling app created\n'))
-    console.log(`  Repository: https://github.com/${org}/${repo}`)
-    console.log(`  Path:       /${pathPrefix}`)
-    console.log('\n  Next:')
-    console.log(
-      '    1. Push to dev or run the sibling Deploy workflow to provision its bucket/API.',
-    )
-    console.log(
-      '    2. Add the resulting SITE_BUCKET_REGIONAL_DOMAIN to the core project siblings.auto.tfvars.json and open a core registration PR.',
-    )
-    console.log(
-      '    3. After the core registration PR deploys, set PARENT_CLOUDFRONT_DISTRIBUTION_ARN and rerun the sibling Deploy workflow.\n',
-    )
-  } finally {
-    if (workDir) runtimeDeps.git.cleanup(workDir)
+  if (!existsSync(options.templateRoot)) {
+    throw new Error(`Sibling template not found at ${options.templateRoot}`)
   }
+
+  let session: SiblingSession | null = null
+  if (!options.fresh) {
+    const saved = findLatestSiblingSession()
+    if (saved && saved.config.project?.name === name) {
+      session = saved
+      console.log(
+        chalk.dim(
+          `  Resuming previous sibling create for ${name} ` +
+            `(completed: ${saved.completedSteps.join(', ') || 'none'})\n`,
+        ),
+      )
+    }
+  }
+  if (!session) {
+    session = {
+      version: 1,
+      config,
+      awsAccountId: (config.cloud as { config: { account_id: string } }).config.account_id,
+      awsRegion: (config.cloud as { config: { region: string } }).config.region,
+      completedSteps: [],
+      outputs: {},
+    }
+    saveSiblingSession(session)
+  }
+
+  const token = await resolveGithubToken(true)
+  const github = new GitHubAdapter(token)
+  const aws = new AwsAdapter(config)
+  const coreAws = new AwsAdapter(coreConfig)
+  const git = new GitAdapter()
+
+  await runSiblingCreate(github, aws, coreAws, git, config, session, {
+    coreConfig,
+    skeletonRoot: options.templateRoot,
+    githubToken: token,
+  })
+
+  const { org, repo } = githubRepo(config)
+  const pathPrefix = config.core.path_prefix ?? config.project.name
+
+  log.success('\nSibling repo created successfully!')
+  console.log(`\n  Repository: https://github.com/${org}/${repo}`)
+  console.log(`  Path:       /${pathPrefix}`)
+  if (session.outputs.registrationPrUrl) {
+    console.log(
+      `  Registration PR (against ${coreConfig.project.name}): ${session.outputs.registrationPrUrl}`,
+    )
+  }
+  console.log(
+    '\n  Next steps:\n' +
+      `  1. Merge the registration PR above — until it merges, baseurl.com/${pathPrefix} won't route anywhere.\n` +
+      '  2. Add a SIBLING_GITHUB_TOKEN secret to this new repo (a PAT with repo scope) — needed by its\n' +
+      '     deploy workflow to export Terraform outputs as environment variables, same as the core project.\n' +
+      "  3. Push to `dev` (or run the Deploy workflow manually) to provision this sibling's own AWS resources.\n" +
+      '  4. Once the registration PR has ALSO merged and the core project has redeployed, set\n' +
+      '     PARENT_CLOUDFRONT_DISTRIBUTION_ARN on this repo and re-run its Deploy workflow — see this\n' +
+      '     repo\'s README, "The two-phase CDN registration".\n',
+  )
 }
+
+// ─── Exported for testing ────────────────────────────────────────────────────
+
+export interface SiblingCreateGit {
+  init(cwd: string, initialBranch?: string): Promise<void>
+  addRemote(cwd: string, name: string, url: string): Promise<void>
+  add(cwd: string, paths: string[]): Promise<void>
+  commit(cwd: string, message: string): Promise<void>
+  push(cwd: string, branch: string, opts?: { remote?: string; token?: string }): Promise<void>
+  cloneForEditing(repoUrl: string, namePrefix: string, token?: string): Promise<string>
+  createBranch(cwd: string, branch: string): Promise<void>
+  currentBranch(cwd: string): Promise<string>
+  getRemoteUrl(cwd: string, remote?: string): Promise<string>
+  cleanup(dir: string): void
+}
+
+export interface SiblingCreateOptions {
+  coreConfig: BiffoConfig
+  skeletonRoot: string
+  githubToken: string
+}
+
+export async function runSiblingCreate(
+  github: GitHubAdapter,
+  aws: AwsAdapter,
+  coreAws: AwsAdapter,
+  git: SiblingCreateGit,
+  config: SiblingConfig,
+  session: SiblingSession,
+  options: SiblingCreateOptions,
+): Promise<void> {
+  const totalSteps = 7
+  const { org, repo } = githubRepo(config)
+  const pathPrefix = config.core.path_prefix ?? config.project.name
+
+  // Step 1: Verify AWS credentials
+  if (!session.completedSteps.includes('verify_credentials')) {
+    log.step(1, totalSteps, 'Verifying AWS credentials...')
+    await aws.verifyCredentials()
+    markSiblingStepComplete(session, 'verify_credentials')
+  } else {
+    log.step(1, totalSteps, 'AWS credentials already verified — skipping')
+  }
+
+  // Step 2: Resolve the core project's identity (Cognito pool/client, API URL,
+  // portal URL) — once per environment this sibling provisions, since each
+  // environment has its own Cognito pool (see infra/environments/<env>/main.tf).
+  if (!session.completedSteps.includes('resolve_core_identity')) {
+    log.step(2, totalSteps, "Resolving core project's identity...")
+    session.outputs.coreIdentity = await resolveCoreIdentity(
+      coreAws,
+      options.coreConfig,
+      config.environments,
+    )
+    markSiblingStepComplete(session, 'resolve_core_identity')
+  } else {
+    log.step(2, totalSteps, 'Core identity already resolved — skipping')
+  }
+  const coreIdentity = session.outputs.coreIdentity
+  if (!coreIdentity) {
+    throw new Error(
+      'internal error: resolve_core_identity did not populate session.outputs.coreIdentity',
+    )
+  }
+
+  // Step 3: Create the GitHub repo and push the sibling skeleton as its first commit
+  if (!session.completedSteps.includes('create_repo')) {
+    log.step(3, totalSteps, 'Creating GitHub repository and pushing sibling skeleton...')
+    const cloneUrl = await github.createEmptyRepo(
+      org,
+      repo,
+      config.project.description || undefined,
+    )
+    session.outputs.cloneUrl = cloneUrl
+    await pushSkeleton(
+      git,
+      options.skeletonRoot,
+      cloneUrl,
+      config,
+      options.coreConfig,
+      options.githubToken,
+    )
+    markSiblingStepComplete(session, 'create_repo')
+  } else {
+    log.step(3, totalSteps, 'GitHub repository already created — skipping')
+  }
+
+  // Step 4: Set up OIDC trust between GitHub Actions and AWS
+  if (!session.completedSteps.includes('oidc_trust')) {
+    log.step(4, totalSteps, 'Configuring OIDC trust...')
+    session.outputs.oidcRoleArn = await aws.setupOidcTrust(config)
+    markSiblingStepComplete(session, 'oidc_trust')
+  } else {
+    log.step(4, totalSteps, 'OIDC trust already configured — skipping')
+  }
+
+  // Step 5: Bootstrap Terraform backend
+  if (!session.completedSteps.includes('terraform_backend')) {
+    log.step(5, totalSteps, 'Bootstrapping Terraform state backend...')
+    session.outputs.tfStateBucket = await aws.bootstrapTerraformBackend(config.project.name)
+    markSiblingStepComplete(session, 'terraform_backend')
+  } else {
+    log.step(5, totalSteps, 'Terraform backend already bootstrapped — skipping')
+  }
+
+  // Step 6: Configure GitHub (branches, branch protection, environments, secrets, variables)
+  if (!session.completedSteps.includes('github_config')) {
+    log.step(6, totalSteps, 'Configuring GitHub repository...')
+    await configureSiblingGithub(github, config, session, coreIdentity)
+    markSiblingStepComplete(session, 'github_config')
+  } else {
+    log.step(6, totalSteps, 'GitHub already configured — skipping')
+  }
+
+  // Step 7: Register this sibling with the core project for CDN path routing
+  if (!session.completedSteps.includes('register_with_core')) {
+    log.step(7, totalSteps, 'Opening a registration PR against the core project...')
+    session.outputs.registrationPrUrl = await registerWithCore(
+      git,
+      github,
+      config,
+      options.coreConfig,
+      pathPrefix,
+      options.githubToken,
+    )
+    markSiblingStepComplete(session, 'register_with_core')
+  } else {
+    log.step(7, totalSteps, 'Already registered with the core project — skipping')
+  }
+
+  deleteSiblingSession(config.project.name)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function readSiblingConfig(path: string): SiblingConfig {
   const raw = JSON.parse(readFileSync(path, 'utf8'))
@@ -164,7 +291,7 @@ function readSiblingConfig(path: string): SiblingConfig {
     throw new Error(
       'Invalid sibling configuration:\n' +
         result.error.issues
-          .map((issue) => `  ${issue.path.join('.')} - ${issue.message}`)
+          .map((issue) => `  ${issue.path.join('.')} — ${issue.message}`)
           .join('\n'),
     )
   }
@@ -176,7 +303,6 @@ function resolveCoreConfig(config: SiblingConfig, configPath: string): BiffoConf
     const corePath = resolve(dirname(configPath), config.core.config_path)
     return parseCoreConfig(corePath)
   }
-
   if (config.core.project_name) {
     const saved = loadProjectConfig(config.core.project_name)
     if (saved) return saved
@@ -185,7 +311,7 @@ function resolveCoreConfig(config: SiblingConfig, configPath: string): BiffoConf
         'Set core.config_path to the core project biffo.config.json instead.',
     )
   }
-
+  // Unreachable — SiblingConfigSchema's superRefine already requires one of these.
   throw new Error('Either core.project_name or core.config_path is required.')
 }
 
@@ -195,13 +321,90 @@ function parseCoreConfig(path: string): BiffoConfig {
     throw new Error(
       `Invalid core configuration at ${path}:\n` +
         result.error.issues
-          .map((issue) => `  ${issue.path.join('.')} - ${issue.message}`)
+          .map((issue) => `  ${issue.path.join('.')} — ${issue.message}`)
           .join('\n'),
     )
   }
   return result.data
 }
 
+async function resolveCoreIdentity(
+  coreAws: AwsAdapter,
+  coreConfig: BiffoConfig,
+  environments: string[],
+): Promise<Record<string, CoreIdentity>> {
+  const coreAwsConfig = (
+    coreConfig.cloud as {
+      provider: 'aws'
+      config: { account_id: string; tf_state_bucket?: string }
+    }
+  ).config
+  const stateBucket =
+    coreAwsConfig.tf_state_bucket ??
+    `${coreConfig.project.name}-terraform-state-${coreAwsConfig.account_id}`
+
+  const coreIdentity: Record<string, CoreIdentity> = {}
+  for (const env of environments) {
+    const stateKey = `${env}/terraform.tfstate`
+    log.info(`Reading ${coreConfig.project.name}'s Terraform outputs for ${env}...`)
+    const outputs = await coreAws.readTerraformOutputs(stateBucket, stateKey)
+
+    for (const key of [
+      'cognito_user_pool_id',
+      'cognito_client_id',
+      'api_gateway_url',
+      'portal_url',
+    ]) {
+      if (!outputs[key]) {
+        throw new Error(
+          `${key} not found in ${coreConfig.project.name}'s Terraform outputs for ${env}. ` +
+            `Has the core project been deployed to ${env}? Run \`biffo deploy ${env}\` from the core project first.`,
+        )
+      }
+    }
+
+    coreIdentity[env] = {
+      cognitoUserPoolId: outputs['cognito_user_pool_id']!,
+      cognitoClientId: outputs['cognito_client_id']!,
+      apiUrl: outputs['api_gateway_url']!,
+      portalUrl: outputs['portal_url']!,
+    }
+  }
+  return coreIdentity
+}
+
+async function pushSkeleton(
+  git: SiblingCreateGit,
+  skeletonRoot: string,
+  cloneUrl: string,
+  config: SiblingConfig,
+  coreConfig: BiffoConfig,
+  githubToken: string,
+): Promise<void> {
+  const workDir = mkdtempSync(join(tmpdir(), `biffo-sibling-${config.project.name}-`))
+  try {
+    writeSiblingTemplate(skeletonRoot, workDir, config, {
+      coreProjectName: coreConfig.project.name,
+      pathPrefix: config.core.path_prefix ?? config.project.name,
+    })
+    await git.init(workDir, 'main')
+    await git.addRemote(workDir, 'origin', cloneUrl)
+    await git.add(workDir, ['.'])
+    await git.commit(workDir, `feat: scaffold ${config.project.name} sibling app (ADR-0007)`)
+    await git.push(workDir, 'main', { token: githubToken })
+  } finally {
+    git.cleanup(workDir)
+  }
+}
+
+/**
+ * Copies the sibling skeleton into `targetDir` and rewrites the two files
+ * that need real, per-sibling values baked in: `biffo.sibling.json` (its own
+ * identity) and, for local-dev convenience only, `apps/frontend/.env.example`
+ * (real CI/deploy values are wired separately, as GitHub Environment
+ * variables — see configureSiblingGithub — since Next.js inlines
+ * NEXT_PUBLIC_* at build time from the CI runner's env, not from this file).
+ */
 export function writeSiblingTemplate(
   templateRoot: string,
   targetDir: string,
@@ -220,7 +423,7 @@ export function writeSiblingTemplate(
         name: config.project.name,
         core_project: context.coreProjectName,
         path_prefix: context.pathPrefix,
-        description: config.project.description,
+        ...(config.project.description ? { description: config.project.description } : {}),
       },
       null,
       2,
@@ -240,57 +443,177 @@ export function writeSiblingTemplate(
   }
 }
 
-async function setSiblingVariables(
-  github: Pick<GitHubAdapter, 'setRepoVariable'>,
+async function configureSiblingGithub(
+  github: GitHubAdapter,
   config: SiblingConfig,
-  coreConfig: BiffoConfig,
-  values: { tfStateBucket: string; pathPrefix: string },
+  session: SiblingSession,
+  coreIdentity: Record<string, CoreIdentity>,
 ): Promise<void> {
   const { org, repo } = githubRepo(config)
-  const coreAws = awsConfig(coreConfig)
-  const variables: Record<string, string> = {
-    SIBLING_DEPLOY_ENABLED: 'true',
-    PROJECT_NAME: config.project.name,
-    AWS_REGION: awsConfig(config).region,
-    TF_STATE_BUCKET: values.tfStateBucket,
-    CORE_API_URL: '',
-    CORE_PORTAL_URL: '',
-    CORE_COGNITO_USER_POOL_ID: '',
-    CORE_COGNITO_CLIENT_ID: '',
-    CORS_ORIGINS_JSON: '["http://localhost:3000"]',
-    PARENT_CLOUDFRONT_DISTRIBUTION_ID: '',
-    PARENT_CLOUDFRONT_DISTRIBUTION_ARN: '',
-    CORE_PROJECT_NAME: coreConfig.project.name,
-    CORE_AWS_REGION: coreAws.region,
-    SIBLING_PATH_PREFIX: values.pathPrefix,
+
+  // Always all three branches, regardless of which environments this sibling
+  // provisions (matches `biffo init`'s own convention — config.environments
+  // only controls GitHub *Environments* and per-env variables below, not the
+  // branch structure itself).
+  await github.createBranch(org, repo, 'dev', 'main')
+  await github.createBranch(org, repo, 'staging', 'main')
+  await github.setDefaultBranch(org, repo, 'dev')
+
+  await github.configureBranchProtection(config)
+  await github.createEnvironments(config)
+
+  await github.setRepoVariable(org, repo, 'PROJECT_NAME', config.project.name)
+  await github.setRepoVariable(org, repo, 'AWS_REGION', awsConfig(config).region)
+  await github.setRepoVariable(org, repo, 'SIBLING_DEPLOY_ENABLED', 'true')
+  if (session.outputs.tfStateBucket) {
+    await github.setRepoVariable(org, repo, 'TF_STATE_BUCKET', session.outputs.tfStateBucket)
   }
 
-  for (const [name, value] of Object.entries(variables)) {
-    await github.setRepoVariable(org, repo, name, value)
+  for (const env of config.environments) {
+    const identity = coreIdentity[env]
+    if (!identity) continue
+    await github.setEnvVariable(
+      org,
+      repo,
+      env,
+      'CORE_COGNITO_USER_POOL_ID',
+      identity.cognitoUserPoolId,
+    )
+    await github.setEnvVariable(org, repo, env, 'CORE_COGNITO_CLIENT_ID', identity.cognitoClientId)
+    await github.setEnvVariable(org, repo, env, 'CORE_API_URL', identity.apiUrl)
+    await github.setEnvVariable(org, repo, env, 'CORE_PORTAL_URL', identity.portalUrl)
+  }
+
+  if (session.outputs.oidcRoleArn) {
+    await github.setRepoSecret(org, repo, 'SIBLING_OIDC_ROLE_ARN', session.outputs.oidcRoleArn)
   }
 }
 
-function printDryRun(
+/** AWS's S3 virtual-hosted-style regional domain — us-east-1 uses the legacy
+ * global endpoint form, every other region includes the region in the host. */
+function bucketRegionalDomain(bucketName: string, region: string): string {
+  return region === 'us-east-1'
+    ? `${bucketName}.s3.amazonaws.com`
+    : `${bucketName}.s3.${region}.amazonaws.com`
+}
+
+/** Matches modules/cloud/aws/storage/main.tf's local.site_bucket naming. */
+function siteBucketName(projectName: string, environment: string, accountId: string): string {
+  return `${projectName}-${environment}-site-${accountId}`
+}
+
+async function registerWithCore(
+  git: SiblingCreateGit,
+  github: GitHubAdapter,
   config: SiblingConfig,
   coreConfig: BiffoConfig,
   pathPrefix: string,
-  templateRoot: string,
-): void {
+  githubToken: string,
+): Promise<string> {
+  const { org: coreOrg, repo: coreRepo } = (
+    coreConfig.source_control as { provider: 'github'; config: { org: string; repo: string } }
+  ).config
+  const coreCloneUrl = `https://github.com/${coreOrg}/${coreRepo}.git`
+  const coreAwsRegion = awsConfig(coreConfig).region
+  const siblingAccountId = (config.cloud as { provider: 'aws'; config: { account_id: string } })
+    .config.account_id
+
+  const cloneDir = await git.cloneForEditing(
+    coreCloneUrl,
+    `biffo-sibling-register-${config.project.name}`,
+    githubToken,
+  )
+  try {
+    const base = await git.currentBranch(cloneDir)
+    const branch = `biffo/register-sibling-${config.project.name}`.replace(/[^a-zA-Z0-9._/-]/g, '-')
+    await git.createBranch(cloneDir, branch)
+
+    const touchedFiles: string[] = []
+    for (const env of config.environments) {
+      const bucketName = siteBucketName(config.project.name, env, siblingAccountId)
+      const domain = bucketRegionalDomain(bucketName, coreAwsRegion)
+      const relativePath = join('infra', 'environments', env, 'siblings.auto.tfvars.json')
+      const filePath = join(cloneDir, relativePath)
+
+      const existing = existsSync(filePath)
+        ? (JSON.parse(readFileSync(filePath, 'utf8')) as {
+            sibling_origins?: Array<{ name: string; bucket_regional_domain: string }>
+          })
+        : {}
+      const siblings = (existing.sibling_origins ?? []).filter((s) => s.name !== pathPrefix)
+      siblings.push({ name: pathPrefix, bucket_regional_domain: domain })
+
+      mkdirSync(dirname(filePath), { recursive: true })
+      writeFileSync(filePath, JSON.stringify({ sibling_origins: siblings }, null, 2) + '\n')
+      touchedFiles.push(relativePath)
+    }
+
+    await git.add(cloneDir, touchedFiles)
+    await git.commit(
+      cloneDir,
+      `infra(cdn): register sibling "${pathPrefix}" for path-based routing (ADR-0007)`,
+    )
+    await git.push(cloneDir, branch, { token: githubToken })
+
+    const remoteUrl = await git.getRemoteUrl(cloneDir)
+    const { owner, repo } = parseGitHubRepo(remoteUrl)
+    const pr = await github.createPullRequest({
+      owner,
+      repo,
+      head: branch,
+      base,
+      title: `Register sibling "${pathPrefix}" for CDN routing (ADR-0007)`,
+      body: buildRegistrationPrBody(config, pathPrefix, touchedFiles),
+    })
+    return pr.url
+  } finally {
+    git.cleanup(cloneDir)
+  }
+}
+
+function buildRegistrationPrBody(
+  config: SiblingConfig,
+  pathPrefix: string,
+  touchedFiles: string[],
+): string {
   const { org, repo } = githubRepo(config)
-  console.log(chalk.bold('\n  Dry run - no changes will be made\n'))
+  return [
+    'Automated sibling registration generated by `biffo sibling create` (ADR-0007).',
+    '',
+    `Adds **${org}/${repo}** to this project's CloudFront distribution as a new path-routed origin — ` +
+      `once merged and redeployed, \`baseurl.com/${pathPrefix}/*\` routes to that sibling's own S3 bucket.`,
+    '',
+    `## Files changed (${touchedFiles.length})`,
+    '',
+    ...touchedFiles.map((f) => `- \`${f}\``),
+    '',
+    '## After merging',
+    '',
+    "This sibling's own S3 bucket policy still needs this distribution's real ARN " +
+      '(a two-phase handshake — see the sibling repo\'s README, "The two-phase CDN registration"). ' +
+      'Once this PR merges and this project redeploys, set `PARENT_CLOUDFRONT_DISTRIBUTION_ARN` on the ' +
+      'sibling repo and re-run its deploy workflow.',
+  ].join('\n')
+}
+
+function printDryRun(config: SiblingConfig, coreConfig: BiffoConfig, templateRoot: string): void {
+  const { org, repo } = githubRepo(config)
+  const pathPrefix = config.core.path_prefix ?? config.project.name
+  console.log(chalk.bold('\n  Dry run — no changes will be made\n'))
   console.log(`  Sibling:       ${config.project.name}`)
   console.log(`  Repository:    ${org}/${repo}`)
   console.log(`  Core project:  ${coreConfig.project.name}`)
   console.log(`  Path prefix:   /${pathPrefix}`)
+  console.log(`  Environments:  ${config.environments.join(', ')}`)
   console.log(`  Template:      ${templateRoot}`)
   console.log('\n  Would:')
+  console.log("    - resolve the core project's Cognito/API identity for each environment")
   console.log('    - create an empty private sibling GitHub repository')
   console.log('    - copy and rewrite _skeletons/sibling-template into the repo')
   console.log('    - push main, create dev/staging, and set dev as default')
-  console.log('    - create AWS OIDC trust and Terraform state bucket')
-  console.log(
-    '    - configure repository secrets, variables, environments, and branch protection\n',
-  )
+  console.log('    - create AWS OIDC trust and a Terraform state bucket')
+  console.log('    - configure repository secrets, variables, environments, and branch protection')
+  console.log('    - open a PR against the core project to register this sibling for CDN routing\n')
 }
 
 function githubRepo(config: SiblingConfig): { org: string; repo: string } {
@@ -304,7 +627,7 @@ function awsConfig(config: SiblingConfig | BiffoConfig): { region: string } {
 
 function defaultSiblingTemplateRoot(): string {
   let dir = dirname(new URL(import.meta.url).pathname)
-  while (true) {
+  for (;;) {
     const candidate = join(dir, '_skeletons', 'sibling-template')
     if (existsSync(candidate)) return candidate
     const parent = dirname(dir)

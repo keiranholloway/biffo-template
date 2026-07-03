@@ -26,7 +26,7 @@ export const SiblingConfigSchema = z
     environments: z
       .array(z.enum(['dev', 'staging', 'prod']))
       .min(1)
-      .default(['dev', 'staging', 'prod']),
+      .default(['dev']),
     // The core project this sibling is paired with (ADR-0007) — never
     // provisions its own Cognito pool or CloudFront distribution, always
     // plugs into the core project's.

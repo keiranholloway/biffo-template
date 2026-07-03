@@ -73,6 +73,9 @@ variable "sibling_origins" {
   type = list(object({
     name                   = string
     bucket_regional_domain = string
+    # Optional human description, surfaced on the portal's Microservices tab
+    # (baked into siblings.json at deploy time). Not used for routing.
+    description = optional(string)
   }))
   default = []
 }

@@ -57,6 +57,19 @@ jobs:
         with:
           enable-cache: true
       - run: pnpm install --frozen-lockfile
+      # Generate the Microservices tab's data (ADR-0007) from this env's sibling
+      # registry so the static portal can list siblings without a server. Link is
+      # /<name> (no trailing slash — CloudFront path routing is exact).
+      - name: Generate siblings manifest
+        run: |
+          SRC=infra/environments/dev/siblings.auto.tfvars.json
+          OUT=apps/portal/public/siblings.json
+          if [ -f "$SRC" ]; then
+            jq '{ siblings: [.sibling_origins[] | { name, description: (.description // "") }] }' "$SRC" > "$OUT"
+          else
+            echo '{ "siblings": [] }' > "$OUT"
+          fi
+          cat "$OUT"
       - name: Build portal
         env:
           NEXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ vars.COGNITO_USER_POOL_ID }}
@@ -201,6 +214,19 @@ jobs:
         with:
           enable-cache: true
       - run: pnpm install --frozen-lockfile
+      # Generate the Microservices tab's data (ADR-0007) from this env's sibling
+      # registry so the static portal can list siblings without a server. Link is
+      # /<name> (no trailing slash — CloudFront path routing is exact).
+      - name: Generate siblings manifest
+        run: |
+          SRC=infra/environments/staging/siblings.auto.tfvars.json
+          OUT=apps/portal/public/siblings.json
+          if [ -f "$SRC" ]; then
+            jq '{ siblings: [.sibling_origins[] | { name, description: (.description // "") }] }' "$SRC" > "$OUT"
+          else
+            echo '{ "siblings": [] }' > "$OUT"
+          fi
+          cat "$OUT"
       - name: Build portal
         env:
           NEXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ vars.COGNITO_USER_POOL_ID }}
@@ -353,6 +379,19 @@ jobs:
         with:
           enable-cache: true
       - run: pnpm install --frozen-lockfile
+      # Generate the Microservices tab's data (ADR-0007) from this env's sibling
+      # registry so the static portal can list siblings without a server. Link is
+      # /<name> (no trailing slash — CloudFront path routing is exact).
+      - name: Generate siblings manifest
+        run: |
+          SRC=infra/environments/prod/siblings.auto.tfvars.json
+          OUT=apps/portal/public/siblings.json
+          if [ -f "$SRC" ]; then
+            jq '{ siblings: [.sibling_origins[] | { name, description: (.description // "") }] }' "$SRC" > "$OUT"
+          else
+            echo '{ "siblings": [] }' > "$OUT"
+          fi
+          cat "$OUT"
       - name: Build portal
         env:
           NEXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ vars.COGNITO_USER_POOL_ID }}

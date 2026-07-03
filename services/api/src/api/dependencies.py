@@ -1,7 +1,10 @@
+from collections.abc import Awaitable, Callable
+
 from fastapi import Depends, HTTPException, status
 
 from .events.base import EventPublisher
 from .middleware.auth import AuthenticatedUser, require_auth
+from .permissions import PermissionsRegistry, lookup_permission
 
 _event_publisher: EventPublisher | None = None
 
@@ -44,3 +47,47 @@ def require_plugin_tenant_context(
     route handler in api.routing.plugin_router.
     """
     return require_tenant_context(caller)
+
+
+def require_crud_permission(
+    table: str,
+    operation: str,
+    registry: PermissionsRegistry,
+) -> Callable[..., Awaitable[None]]:
+    """Build the ADR-0004 authorization guard for one generic-CRUD route.
+
+    Attached as a route-level dependency by the plugin and core-table routers,
+    it runs before the handler and enforces the declarative permission model:
+
+    - ``(table, operation)`` not in the registry, or ``allowed: false`` -> 404.
+      A table/operation that isn't exposed must be indistinguishable from one
+      that doesn't exist (ADR-0004 §4), so this deliberately mirrors the
+      handler's own "row not found" 404 rather than returning 403.
+    - ``required_role`` non-empty and disjoint from the caller's roles -> 403.
+      The operation is exposed; the caller simply lacks the role. An empty
+      ``required_role`` authorises any authenticated caller.
+
+    Tenant scoping is applied separately and unconditionally by the handler
+    (require_plugin_tenant_context), independent of this guard — it is never a
+    table-configurable permission.
+
+    ``registry`` is passed in (not read from the global cache) so a router's
+    routes and their permission checks are always built from the same manifest
+    set, which keeps tests hermetic.
+    """
+
+    async def guard(caller: AuthenticatedUser = Depends(require_auth)) -> None:
+        rule = lookup_permission(table, operation, registry=registry)
+        if rule is None or not rule.allowed:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Not found"
+            )
+        if rule.required_role and not set(rule.required_role).intersection(
+            caller.roles
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to perform this action",
+            )
+
+    return guard

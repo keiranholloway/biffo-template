@@ -33,7 +33,29 @@
           "columns": ["tenant_id", "name"],
           "unique": true
         }
-      ]
+      ],
+      "permissions": {
+        "list": {
+          "allowed": true,
+          "required_role": []
+        },
+        "read": {
+          "allowed": true,
+          "required_role": []
+        },
+        "create": {
+          "allowed": true,
+          "required_role": ["admin"]
+        },
+        "update": {
+          "allowed": true,
+          "required_role": ["admin"]
+        },
+        "delete": {
+          "allowed": true,
+          "required_role": ["admin"]
+        }
+      }
     },
     {
       "name": "rbac_permissions",
@@ -68,7 +90,29 @@
           "columns": ["tenant_id", "resource", "action"],
           "unique": true
         }
-      ]
+      ],
+      "permissions": {
+        "list": {
+          "allowed": true,
+          "required_role": []
+        },
+        "read": {
+          "allowed": true,
+          "required_role": []
+        },
+        "create": {
+          "allowed": true,
+          "required_role": ["admin"]
+        },
+        "update": {
+          "allowed": true,
+          "required_role": ["admin"]
+        },
+        "delete": {
+          "allowed": true,
+          "required_role": ["admin"]
+        }
+      }
     },
     {
       "name": "rbac_role_permissions",
@@ -95,7 +139,29 @@
           "unique": true,
           "description": "Stands in for the issue's original 'PRIMARY KEY (role_id, permission_id)' -- PluginTableDefinition always injects its own synthetic 'id' primary key (see README), so a second composite primary key isn't possible; a unique index over the pair is the closest supported equivalent and is enforced identically at the database level."
         }
-      ]
+      ],
+      "permissions": {
+        "list": {
+          "allowed": true,
+          "required_role": []
+        },
+        "read": {
+          "allowed": true,
+          "required_role": []
+        },
+        "create": {
+          "allowed": true,
+          "required_role": ["admin"]
+        },
+        "update": {
+          "allowed": true,
+          "required_role": ["admin"]
+        },
+        "delete": {
+          "allowed": true,
+          "required_role": ["admin"]
+        }
+      }
     },
     {
       "name": "rbac_user_roles",
@@ -133,7 +199,29 @@
           "columns": ["user_id", "role_id"],
           "unique": true
         }
-      ]
+      ],
+      "permissions": {
+        "list": {
+          "allowed": true,
+          "required_role": []
+        },
+        "read": {
+          "allowed": true,
+          "required_role": []
+        },
+        "create": {
+          "allowed": true,
+          "required_role": ["admin"]
+        },
+        "update": {
+          "allowed": true,
+          "required_role": ["admin"]
+        },
+        "delete": {
+          "allowed": true,
+          "required_role": ["admin"]
+        }
+      }
     }
   ],
   "api_routes": [
@@ -230,10 +318,26 @@
     }
   ],
   "ui_components": [
-    { "type": "nav-link", "label": "RBAC", "path": "/admin/rbac" },
-    { "type": "page", "label": "Roles", "path": "/admin/rbac/roles" },
-    { "type": "page", "label": "Permissions", "path": "/admin/rbac/permissions" },
-    { "type": "page", "label": "Assignments", "path": "/admin/rbac/assignments" }
+    {
+      "type": "nav-link",
+      "label": "RBAC",
+      "path": "/admin/rbac"
+    },
+    {
+      "type": "page",
+      "label": "Roles",
+      "path": "/admin/rbac/roles"
+    },
+    {
+      "type": "page",
+      "label": "Permissions",
+      "path": "/admin/rbac/permissions"
+    },
+    {
+      "type": "page",
+      "label": "Assignments",
+      "path": "/admin/rbac/assignments"
+    }
   ],
   "dependencies": {
     "biffo-plugin-sdk": "^1.0"

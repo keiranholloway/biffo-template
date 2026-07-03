@@ -156,11 +156,15 @@ class TestSdkManifestValidation:
 
 
 def _caller(tenant_id: str) -> AuthenticatedUser:
+    # The rbac management tests legitimately act as an admin: under ADR-0004
+    # generic-CRUD enforcement, create/update/delete on rbac tables require
+    # the "admin" role, so the default caller these fixtures use must carry it.
     return AuthenticatedUser(
         sub=f"sub-{tenant_id}",
         email="rbac-caller@example.com",
         username="rbac-caller",
         tenant_id=tenant_id,
+        roles=["admin"],
     )
 
 
@@ -401,3 +405,58 @@ class TestUniqueIndexesEnforcedViaRealMigration:
                     )
         finally:
             engine.dispose()
+
+
+class TestRbacPermissionEnforcement:
+    """ADR-0004 role gating on the *real* rbac manifest: `list`/`read` are
+    open to any authenticated caller (required_role: []), while
+    `create`/`update`/`delete` require the "admin" role. The
+    ``require_crud_permission`` guard build_plugin_router() attaches returns
+    403 when the caller lacks a required role -- proven here end to end
+    against the on-disk manifest, varying only the caller's roles per case
+    (via the same dependency_overrides[require_auth] swap
+    test_plugin_router_integration.py uses for its tenant-isolation test)."""
+
+    @staticmethod
+    def _non_admin() -> AuthenticatedUser:
+        return AuthenticatedUser(
+            sub="sub-nonadmin",
+            email="nonadmin@example.com",
+            username="nonadmin",
+            tenant_id="default",
+            roles=[],
+        )
+
+    @staticmethod
+    def _admin() -> AuthenticatedUser:
+        return AuthenticatedUser(
+            sub="sub-admin",
+            email="admin@example.com",
+            username="admin",
+            tenant_id="default",
+            roles=["admin"],
+        )
+
+    def test_non_admin_can_list_roles(self, rbac_app: FastAPI) -> None:
+        rbac_app.dependency_overrides[require_auth] = self._non_admin
+        client = TestClient(rbac_app)
+        resp = client.get("/api/v1/plugins/rbac/roles")
+        assert resp.status_code == 200
+
+    def test_non_admin_cannot_create_role(self, rbac_app: FastAPI) -> None:
+        rbac_app.dependency_overrides[require_auth] = self._non_admin
+        client = TestClient(rbac_app)
+        resp = client.post(
+            "/api/v1/plugins/rbac/roles",
+            json={"name": "viewer", "is_system": False},
+        )
+        assert resp.status_code == 403
+
+    def test_admin_can_create_role(self, rbac_app: FastAPI) -> None:
+        rbac_app.dependency_overrides[require_auth] = self._admin
+        client = TestClient(rbac_app)
+        resp = client.post(
+            "/api/v1/plugins/rbac/roles",
+            json={"name": "viewer", "is_system": False},
+        )
+        assert resp.status_code == 201

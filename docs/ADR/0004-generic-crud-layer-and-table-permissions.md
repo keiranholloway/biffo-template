@@ -1,8 +1,15 @@
 # ADR-0004: Generic CRUD Layer and Declarative Table Permissions
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-01
+**Accepted:** 2026-07-02
 **Deciders:** Keiran Holloway (Technical Architect)
+
+> Implemented across PRs #99 (roles from `cognito:groups`), #101 (declarative
+> `permissions` block), #103 (build-time permissions registry), and #106
+> (enforcement + opt-in core-table CRUD). The **Implementation** section below
+> records the decisions this ADR originally left as follow-ups (the HTTP route
+> surface, the 404-vs-403 split, and how the registry is baked), now resolved.
 
 ---
 
@@ -135,8 +142,70 @@ Option C is the more complete long-term answer — a real RBAC plugin genuinely 
 
 ### Neutral
 
-- This ADR does not build the generic CRUD layer's HTTP surface (path conventions, pagination, filtering) — only the discovery/permission model it depends on. The route surface is a follow-up decision.
+- The HTTP route surface was a follow-up when this ADR was proposed; it is now built and documented in the **Implementation** section below (path conventions, the 404-vs-403 split). Pagination and filtering remain out of scope — a future follow-up.
 - Complex or custom-logic tables can still skip this entirely and use hand-written routes, exactly as `users.py`/`auth.py` do today — the generic layer is additive, not a replacement for hand-written routes.
+
+---
+
+## Implementation
+
+The design above was implemented in four stacked PRs; this section records the
+decisions the ADR originally deferred.
+
+### Roles (PR #99)
+
+`AuthenticatedUser` (`middleware/auth.py`) carries `roles: list[str]`, sourced
+from the verified JWT's `cognito:groups` claim — no DB round-trip. It defaults
+to an empty list (fail-closed: a caller in no groups, and non-auth construction
+sites, get no roles rather than an error).
+
+### Declaration (PR #101)
+
+`permissions` is a per-table block of five operations (`list`/`read`/`create`/
+`update`/`delete`), each `{ allowed: bool = false, required_role: string[] = [] }`.
+Defined once on `PluginTableDefinition` (`models/plugin_table.py`) and mirrored
+field-for-field in the Python SDK and the CLI's zod validator; both the block
+and each rule forbid unknown keys, so a typo'd operation (`"delet"`) or field
+(`"role"`) is a hard error rather than a silently-denied operation. Core tables
+opt in with an equivalent `__crud_permissions__: ClassVar[dict]` on their
+`TenantScopedModel` subclass (`User` deliberately abstains).
+
+### Registry (PR #103)
+
+`build_permissions_registry()` (`permissions.py`) compiles plugin manifests'
+`permissions` blocks and core models' `__crud_permissions__` into one
+table→operation→rule mapping. **How it is baked:** a Lambda filesystem is
+read-only (and `/tmp` is not shared across execution environments), so rather
+than pre-serialising a JSON file into the deployment zip, the registry is
+derived deterministically **at cold start** from the manifests already baked
+into the package (`/var/task/services/*/biffo.plugin.json`, see `api.plugins`)
+plus the imported core models, then memoised for the container's lifetime. This
+reads only static declarations — never `information_schema` — which is the
+property this ADR's §2 requires; the phrasing "baked in the same way
+`BIFFO_COGNITO_JWKS_JSON` is" is satisfied by the manifests being the baked
+artifact. `_run_db_init` additionally builds the registry **strictly** at deploy
+time, so a malformed core block or a plugin/core table-name collision fails the
+deploy loudly instead of vanishing at runtime (where the build fails closed to
+all-denied).
+
+### HTTP surface & enforcement (PR #106)
+
+- **Plugin tables** are served at `/api/v1/plugins/<name>/<path>` from the
+  plugin's declared `api_routes` (unchanged from issue #19). **Core tables** that
+  opt in are served at `/api/v1/data/<table>` (collection) and
+  `/api/v1/data/<table>/{id}` (single row); since a core table has no
+  `api_routes` declaration, its `permissions` block decides which operations are
+  mounted at all (only `allowed` ones).
+- A single guard, `dependencies.require_crud_permission(table, operation,
+registry)`, runs before every generic handler (plugin and core alike). The
+  **404-vs-403 split**: a `(table, operation)` that is absent or `allowed: false`
+  returns **404** — indistinguishable from a table that doesn't exist (§4); an
+  operation that _is_ exposed but whose `required_role` is disjoint from the
+  caller's roles returns **403**. Tenant scoping (ADR-0001) is applied
+  separately and unconditionally by the handler and is never registry-driven.
+- Handlers are shared between the plugin and core routers
+  (`routing/crud_handlers.py`), so both enforce identical tenant-scoping and
+  body-field rules.
 
 ---
 
@@ -149,7 +218,7 @@ Option C is the more complete long-term answer — a real RBAC plugin genuinely 
 
 **Build-time enforcement:**
 
-- The permissions registry artifact is generated by the same migration-generation step (`plugin_migrations.py`) that already runs in CI for schema changes — a table can't gain generic CRUD exposure without that generation step running and being reviewed as part of the normal migration PR.
+- The registry is validated at deploy time: `_run_db_init` (the same `biffo:db-init` invocation that runs `sync_plugin_migrations`) builds it in strict mode, so a malformed `permissions` block, a bad core `__crud_permissions__`, or a plugin/core table-name collision fails the deploy — a table can't gain generic CRUD exposure without that step passing. (As implemented the registry is derived from the bundled manifests at cold start rather than emitted as a separate file by `plugin_migrations.py`; see the Implementation section for why the read-only Lambda filesystem makes cold-start derivation the equivalent of "a static artifact loaded once at cold start.")
 
 **Runtime enforcement:**
 

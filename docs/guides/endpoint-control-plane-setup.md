@@ -97,7 +97,7 @@ admin in the body. Review and merge it as you would any change.
   (~1 hour) and scoped to that installation.
 - **Blast radius is isolated.** Only the PR-signer holds the App credential. A
   compromise of the Core API does not yield repo-write access — the Core API can
-  only *ask* the signer to open a PR for an already-authorized change, and every
+  only _ask_ the signer to open a PR for an already-authorized change, and every
   such change still requires a human to merge the PR.
 - **Auditability.** The signer emits a structured audit log for every PR it
   opens (who requested it, what changed, the resulting branch and PR URL), and

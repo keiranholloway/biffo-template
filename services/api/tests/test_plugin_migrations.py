@@ -404,3 +404,30 @@ class TestSyncPluginMigrations:
         # Exactly one head — sync_plugin_migrations must not fork branches
         # when generating migrations for multiple plugins in one pass.
         assert get_current_head_revision(self.versions_dir) is not None
+
+    def test_only_restricts_to_the_named_plugin(self):
+        self._write_manifest(
+            "rbac", {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
+        )
+        self._write_manifest(
+            "billing",
+            {"name": "billing", "version": "1.0.0", "tables": [{"name": "invoices"}]},
+        )
+        generated = sync_plugin_migrations(
+            self.versions_dir, services_root=self.services_root, only={"rbac"}
+        )
+        assert len(generated) == 1
+        assert "roles" in generated[0].name
+
+    def test_only_is_a_noop_when_the_named_plugin_already_has_a_migration(self):
+        self._write_manifest(
+            "rbac", {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
+        )
+        first = sync_plugin_migrations(
+            self.versions_dir, services_root=self.services_root, only={"rbac"}
+        )
+        second = sync_plugin_migrations(
+            self.versions_dir, services_root=self.services_root, only={"rbac"}
+        )
+        assert len(first) == 1
+        assert second == []

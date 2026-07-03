@@ -57,26 +57,32 @@ export interface PluginUninstallOptions {
 /**
  * Removes an installed plugin from the current Biffo project checkout.
  *
- * Ground-truth flow (see PR description for the full investigation):
- * there is no separate "route registration" or "migration" artifact to
- * individually delete. Core API routes and tables are derived purely by
- * scanning `services/*\/biffo.plugin.json` at db-init time
- * (`api.plugins.discover_plugin_manifests`, wired into
- * `main.py::_run_db_init`) — so removing `services/<name>/` itself is what
- * removes the plugin from future discovery. There is nothing under
+ * Ground-truth flow (see PR description for the full investigation): Core
+ * API routes are derived by scanning `services/*\/biffo.plugin.json` at
+ * startup (`api.plugins.discover_plugin_manifests`, wired into
+ * `build_plugin_router()`) — so removing `services/<name>/` itself is what
+ * removes the plugin's routes from future discovery. There is nothing under
  * `apps/portal/` to remove either: `biffo plugin install` (#20) never
  * copies anything into the portal, so "UI components" has nothing to clean
  * up on the CLI side.
  *
+ * Migrations are deliberately NOT touched by uninstall. Since `biffo plugin
+ * install`/`upgrade`/`sync-migrations` generate a real, git-committed
+ * migration file under `services/api/migrations/versions/` (not an
+ * ephemeral one — see `PluginMigrationsAdapter`'s docstring), that file is a
+ * permanent historical record: deleting it could break `alembic
+ * upgrade`/`downgrade` for any environment that has already applied it, not
+ * just future ones. This also means a subsequent re-install of the same
+ * plugin stays idempotent for free — the migration file is still there, so
+ * `sync_plugin_migrations` finds it and generates nothing new.
+ *
  * `--keep-data` is accepted for API symmetry with the issue's acceptance
- * criteria but is a real no-op either way: the Core API's migration
- * generator (`services/api/src/api/migrations/plugin_migrations.py`) only
- * ever emits additive CREATE TABLE migrations for plugins it currently
- * discovers. There is no "drop" migration triggered by a plugin manifest
- * disappearing from services/, and per ADR-0002 the CLI has no DB client
- * to drop anything itself even if it wanted to. So a plugin's tables
- * always survive an uninstall from the CLI's perspective, regardless of
- * this flag — seeing it explains that rather than performs it.
+ * criteria but is a real no-op either way: there is no "drop" migration
+ * triggered by a plugin manifest disappearing from services/, and per
+ * ADR-0002 the CLI has no DB client to drop anything itself even if it
+ * wanted to. So a plugin's tables always survive an uninstall from the
+ * CLI's perspective, regardless of this flag — seeing it explains that
+ * rather than performs it.
  */
 export async function runPluginUninstall(
   name: string,
@@ -160,10 +166,10 @@ export async function runPluginUninstall(
     )
   } else {
     log.warn(
-      'Any tables this plugin created remain in the database — the CLI has no DB client ' +
-        '(ADR-0002) and the Core API only ever generates additive migrations for plugins it ' +
-        'discovers. Dropping tables, if desired, requires a manual Alembic migration written ' +
-        'against the Core API.',
+      'Any tables this plugin created remain in the database, and its migration file at ' +
+        'services/api/migrations/versions/ is NOT removed (it is a permanent historical ' +
+        'record — see notes). Dropping tables, if desired, requires a manual Alembic ' +
+        'migration written against the Core API.',
     )
   }
 }

@@ -22,6 +22,29 @@ import { runPluginInstall } from './plugin-install.js'
 const REGISTRY_URL = 'https://example.com/registry/plugins.json'
 const server = setupServer()
 
+/**
+ * A real-but-stubbed PluginMigrationsAdapter: writes a dummy migration file
+ * directly, no subprocess. Keeps this integration test tier uv/Python-free
+ * (consistent with every other CLI integration test — see
+ * adapters/plugin-migrations/index.ts's docstring for why the real adapter
+ * needs uv/Python, and index.test.ts for the mocked-execa coverage of that
+ * real adapter's own behavior instead).
+ */
+class FakePluginMigrationsAdapter {
+  async generate(cwd: string, pluginNames?: string[]): Promise<string[]> {
+    if (!pluginNames || pluginNames.length === 0) return []
+    const versionsDir = join(cwd, 'services', 'api', 'migrations', 'versions')
+    mkdirSync(versionsDir, { recursive: true })
+    const paths: string[] = []
+    for (const name of pluginNames) {
+      const path = join(versionsDir, `fake_${name}_migration.py`)
+      writeFileSync(path, `# fake migration for ${name}\n`)
+      paths.push(path)
+    }
+    return paths
+  }
+}
+
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
 afterEach(() => server.resetHandlers())
 afterAll(() => server.close())
@@ -103,7 +126,11 @@ describe('runPluginInstall — end-to-end', () => {
     await runPluginInstall(
       'widgets@1.3',
       { dryRun: false, cwd: projectRoot },
-      { registry: new RegistryAdapter(REGISTRY_URL), git: new GitAdapter() },
+      {
+        registry: new RegistryAdapter(REGISTRY_URL),
+        git: new GitAdapter(),
+        migrations: new FakePluginMigrationsAdapter() as never,
+      },
     )
 
     const manifestPath = join(projectRoot, 'services', 'widgets', 'biffo.plugin.json')
@@ -131,7 +158,11 @@ describe('runPluginInstall — end-to-end', () => {
       runPluginInstall(
         'invoicing@1.0',
         { dryRun: false, cwd: projectRoot },
-        { registry: new RegistryAdapter(REGISTRY_URL), git: new GitAdapter() },
+        {
+          registry: new RegistryAdapter(REGISTRY_URL),
+          git: new GitAdapter(),
+          migrations: new FakePluginMigrationsAdapter() as never,
+        },
       ),
     ).rejects.toThrow("Plugin 'invoicing' was not found")
 
@@ -142,7 +173,11 @@ describe('runPluginInstall — end-to-end', () => {
     await runPluginInstall(
       'widgets@1.3',
       { dryRun: true, cwd: projectRoot },
-      { registry: new RegistryAdapter(REGISTRY_URL), git: new GitAdapter() },
+      {
+        registry: new RegistryAdapter(REGISTRY_URL),
+        git: new GitAdapter(),
+        migrations: new FakePluginMigrationsAdapter() as never,
+      },
     )
 
     expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(false)

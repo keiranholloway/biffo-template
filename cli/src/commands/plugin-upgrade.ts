@@ -1,9 +1,10 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
 import inquirer from 'inquirer'
 import { GitAdapter } from '../adapters/git/index.js'
+import { PluginMigrationsAdapter } from '../adapters/plugin-migrations/index.js'
 import { RegistryAdapter, type RegistryPluginEntry } from '../adapters/registry/index.js'
 import { log } from '../lib/logger.js'
 import { validateManifest } from '../lib/plugin-manifest.js'
@@ -23,7 +24,11 @@ export const pluginUpgradeCommand = new Command('upgrade')
       await runPluginUpgrade(
         target,
         { dryRun: options.dryRun ?? false, force: options.force ?? false, cwd },
-        { registry: new RegistryAdapter(), git: new GitAdapter() },
+        {
+          registry: new RegistryAdapter(),
+          git: new GitAdapter(),
+          migrations: new PluginMigrationsAdapter(),
+        },
       )
     } catch (err) {
       log.error((err as Error).message)
@@ -34,6 +39,7 @@ export const pluginUpgradeCommand = new Command('upgrade')
 export interface PluginUpgradeDeps {
   registry: RegistryAdapter
   git: GitAdapter
+  migrations: PluginMigrationsAdapter
 }
 
 export interface PluginUpgradeOptions {
@@ -163,6 +169,25 @@ export async function runPluginUpgrade(
       log.success(`Copied Terraform module to modules/plugins/${entry.name}/`)
     }
 
+    if (manifest.tables.length > 0) {
+      // A new minor version's manifest may declare new tables (or the same
+      // ones) — generate_migration_for_plugin only ever produces additive
+      // CREATE TABLE migrations, so this either appends a new, separately
+      // chained migration for genuinely new tables, or is a no-op if the
+      // table set is unchanged from what was already committed. It never
+      // rewrites/replaces a previous migration.
+      log.info(
+        `Generating migration for services/${entry.name}/'s ${manifest.tables.length} table(s)...`,
+      )
+      const generatedPaths = await deps.migrations.generate(options.cwd, [entry.name])
+      for (const absPath of generatedPaths) {
+        stagePaths.push(relative(options.cwd, absPath))
+      }
+      if (generatedPaths.length > 0) {
+        log.success(`Generated migration: ${relative(options.cwd, generatedPaths[0]!)}`)
+      }
+    }
+
     const label = currentVersion
       ? `${entry.name} ${currentVersion} -> ${entry.version}`
       : `${entry.name} to ${entry.version}`
@@ -173,9 +198,7 @@ export async function runPluginUpgrade(
 
     console.log(chalk.bold('\n  Plugin upgraded!\n'))
     console.log(`  ${entry.name}@${entry.version} is committed at services/${entry.name}/`)
-    console.log(
-      '  Push and redeploy to apply its updated tables and routes (auto-discovered at db-init):',
-    )
+    console.log('  Push and redeploy to apply its updated tables and routes:')
     console.log(chalk.dim(`    git push`))
     console.log(chalk.dim(`    biffo deploy <environment> --app-only\n`))
   } finally {

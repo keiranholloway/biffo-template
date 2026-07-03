@@ -20,6 +20,27 @@ import { runPluginUpgrade } from './plugin-upgrade.js'
 const REGISTRY_URL = 'https://example.com/registry/plugins.json'
 const server = setupServer()
 
+/**
+ * A real-but-stubbed PluginMigrationsAdapter: writes a dummy migration file
+ * directly, no subprocess. Keeps this integration test tier uv/Python-free
+ * — see plugin-install.integration.test.ts's copy of this fake for the full
+ * rationale.
+ */
+class FakePluginMigrationsAdapter {
+  async generate(cwd: string, pluginNames?: string[]): Promise<string[]> {
+    if (!pluginNames || pluginNames.length === 0) return []
+    const versionsDir = join(cwd, 'services', 'api', 'migrations', 'versions')
+    mkdirSync(versionsDir, { recursive: true })
+    const paths: string[] = []
+    for (const name of pluginNames) {
+      const path = join(versionsDir, `fake_${name}_migration.py`)
+      writeFileSync(path, `# fake migration for ${name}\n`)
+      paths.push(path)
+    }
+    return paths
+  }
+}
+
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
 afterEach(() => server.resetHandlers())
 afterAll(() => server.close())
@@ -103,7 +124,11 @@ describe('runPluginUpgrade — end-to-end', () => {
     await runPluginUpgrade(
       'widgets@1.1',
       { dryRun: false, force: true, cwd: projectRoot },
-      { registry: new RegistryAdapter(REGISTRY_URL), git: new GitAdapter() },
+      {
+        registry: new RegistryAdapter(REGISTRY_URL),
+        git: new GitAdapter(),
+        migrations: new FakePluginMigrationsAdapter() as never,
+      },
     )
 
     const manifestPath = join(projectRoot, 'services', 'widgets', 'biffo.plugin.json')
@@ -124,7 +149,11 @@ describe('runPluginUpgrade — end-to-end', () => {
     await runPluginUpgrade(
       'widgets@1.1',
       { dryRun: true, force: true, cwd: projectRoot },
-      { registry: new RegistryAdapter(REGISTRY_URL), git: new GitAdapter() },
+      {
+        registry: new RegistryAdapter(REGISTRY_URL),
+        git: new GitAdapter(),
+        migrations: new FakePluginMigrationsAdapter() as never,
+      },
     )
 
     const manifestPath = join(projectRoot, 'services', 'widgets', 'biffo.plugin.json')

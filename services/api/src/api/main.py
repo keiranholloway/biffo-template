@@ -64,48 +64,24 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
 
 
 def _run_db_init() -> dict:
-    import shutil
-    import tempfile
-    from pathlib import Path
-
     from alembic import command
     from alembic.config import Config
 
-    from .migrations.plugin_migrations import sync_plugin_migrations
-
+    # Plugin table migrations are generated and committed at CLI time now
+    # (`biffo plugin install`/`upgrade`/`sync-migrations`, via
+    # services/api/scripts/generate_plugin_migrations.py) — not here. This
+    # used to also copy the bundled versions/ into a writable /tmp dir and
+    # dynamically generate any missing plugin migration before upgrading,
+    # but that ran on every single Lambda invocation against a directory
+    # wiped clean each time, so a generated migration's down_revision was
+    # silently recomputed on every deploy and never actually persisted,
+    # corrupting the revision graph the moment a later real migration was
+    # added (see plugin_migrations.sync_plugin_migrations's docstring and
+    # ADR-0003's implementation note for the incident this fixed).
+    # `command.upgrade` below only reads migration scripts and writes to the
+    # DB's alembic_version table — never to the script directory — so it can
+    # use alembic.ini's bundled, read-only script_location directly.
     cfg = Config("alembic.ini")
-
-    # Generating a plugin migration file means writing into versions/ (see
-    # plugin_migrations.generate_migration_for_plugin) — but script_location
-    # (env.py, script.py.mako, the bundled versions/) is part of the Lambda
-    # deployment package, which AWS extracts read-only. Copy the bundled
-    # versions/ into the platform temp dir (the one writable path in a
-    # Lambda execution environment — /tmp there) and redirect Alembic there
-    # via version_locations, same mechanism as
-    # test_plugin_migrations_integration.py's alembic_setup fixture.
-    # script_location itself is untouched: env.py/script.py.mako are only
-    # ever read, never written.
-    bundled_versions_dir = (
-        Path(cfg.get_main_option("script_location") or "migrations") / "versions"
-    )
-    versions_dir = Path(tempfile.gettempdir()) / "migrations_versions"
-    if versions_dir.exists():
-        shutil.rmtree(versions_dir)
-    shutil.copytree(bundled_versions_dir, versions_dir)
-    cfg.set_main_option("version_locations", str(versions_dir))
-
-    # Auto-register plugin tables (ADR-0003 / issue #18): generate any
-    # migration files for installed-but-not-yet-migrated plugins *before*
-    # upgrading, so they're picked up and applied by the same upgrade("head")
-    # call below — manifest -> migration file -> applied table, in one
-    # db-init run. Idempotent and a no-op when no plugins are discoverable
-    # (see api.plugins module docstring for when that's the case).
-    generated = sync_plugin_migrations(versions_dir)
-    if generated:
-        logger.info(
-            f"Generated {len(generated)} plugin migration(s): {[p.name for p in generated]}"
-        )
-
     command.upgrade(cfg, "head")
     logger.info("Database schema at head")
 

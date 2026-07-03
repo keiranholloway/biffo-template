@@ -55,6 +55,10 @@ function makeGitMock(clonedDir: string) {
   }
 }
 
+function makeMigrationsMock(generatedPaths: string[] = []) {
+  return { generate: vi.fn().mockResolvedValue(generatedPaths) }
+}
+
 describe('runPluginInstall', () => {
   let projectRoot: string
 
@@ -69,12 +73,13 @@ describe('runPluginInstall', () => {
   it('rejects a malformed target argument', async () => {
     const registry = makeRegistryMock()
     const git = makeGitMock(makeClonedPluginDir())
+    const migrations = makeMigrationsMock()
 
     await expect(
       runPluginInstall(
         'widgets',
         { dryRun: false, cwd: projectRoot },
-        { registry: registry as never, git: git as never },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
       ),
     ).rejects.toThrow('Invalid target')
 
@@ -84,11 +89,12 @@ describe('runPluginInstall', () => {
   it('resolves name@minor and passes both parts to the registry', async () => {
     const registry = makeRegistryMock()
     const git = makeGitMock(makeClonedPluginDir())
+    const migrations = makeMigrationsMock()
 
     await runPluginInstall(
       'widgets@1.0',
       { dryRun: false, cwd: projectRoot },
-      { registry: registry as never, git: git as never },
+      { registry: registry as never, git: git as never, migrations: migrations as never },
     )
 
     expect(registry.resolvePlugin).toHaveBeenCalledWith('widgets', '1.0')
@@ -98,11 +104,12 @@ describe('runPluginInstall', () => {
     const clonedDir = makeClonedPluginDir()
     const registry = makeRegistryMock()
     const git = makeGitMock(clonedDir)
+    const migrations = makeMigrationsMock()
 
     await runPluginInstall(
       'widgets@1.0',
       { dryRun: false, cwd: projectRoot },
-      { registry: registry as never, git: git as never },
+      { registry: registry as never, git: git as never, migrations: migrations as never },
     )
 
     expect(git.cloneToTemp).toHaveBeenCalledWith(REGISTRY_ENTRY.repo, 'biffo-plugin-widgets')
@@ -114,11 +121,12 @@ describe('runPluginInstall', () => {
   it('stages and commits with a Conventional Commit message', async () => {
     const registry = makeRegistryMock()
     const git = makeGitMock(makeClonedPluginDir())
+    const migrations = makeMigrationsMock()
 
     await runPluginInstall(
       'widgets@1.0',
       { dryRun: false, cwd: projectRoot },
-      { registry: registry as never, git: git as never },
+      { registry: registry as never, git: git as never, migrations: migrations as never },
     )
 
     expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets'])
@@ -128,11 +136,12 @@ describe('runPluginInstall', () => {
   it('copies a Terraform module when the plugin repo ships one, without touching main.tf', async () => {
     const registry = makeRegistryMock()
     const git = makeGitMock(makeClonedPluginDir(VALID_MANIFEST, true))
+    const migrations = makeMigrationsMock()
 
     await runPluginInstall(
       'widgets@1.0',
       { dryRun: false, cwd: projectRoot },
-      { registry: registry as never, git: git as never },
+      { registry: registry as never, git: git as never, migrations: migrations as never },
     )
 
     const copiedTf = join(projectRoot, 'modules', 'plugins', 'widgets', 'main.tf')
@@ -148,11 +157,12 @@ describe('runPluginInstall', () => {
   it('does not copy a terraform/ directory when the plugin repo has none', async () => {
     const registry = makeRegistryMock()
     const git = makeGitMock(makeClonedPluginDir())
+    const migrations = makeMigrationsMock()
 
     await runPluginInstall(
       'widgets@1.0',
       { dryRun: false, cwd: projectRoot },
-      { registry: registry as never, git: git as never },
+      { registry: registry as never, git: git as never, migrations: migrations as never },
     )
 
     expect(existsSync(join(projectRoot, 'modules', 'plugins', 'widgets'))).toBe(false)
@@ -163,11 +173,12 @@ describe('runPluginInstall', () => {
     const clonedDir = makeClonedPluginDir()
     const registry = makeRegistryMock()
     const git = makeGitMock(clonedDir)
+    const migrations = makeMigrationsMock()
 
     await runPluginInstall(
       'widgets@1.0',
       { dryRun: false, cwd: projectRoot },
-      { registry: registry as never, git: git as never },
+      { registry: registry as never, git: git as never, migrations: migrations as never },
     )
 
     expect(git.cleanup).toHaveBeenCalledWith(clonedDir)
@@ -178,12 +189,13 @@ describe('runPluginInstall', () => {
     mkdirSync(join(projectRoot, 'services', 'widgets'), { recursive: true })
     const registry = makeRegistryMock()
     const git = makeGitMock(makeClonedPluginDir())
+    const migrations = makeMigrationsMock()
 
     await expect(
       runPluginInstall(
         'widgets@1.0',
         { dryRun: false, cwd: projectRoot },
-        { registry: registry as never, git: git as never },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
       ),
     ).rejects.toThrow('already installed')
 
@@ -194,13 +206,14 @@ describe('runPluginInstall', () => {
     const notAProject = mkdtempSync(join(tmpdir(), 'not-a-biffo-project-'))
     const registry = makeRegistryMock()
     const git = makeGitMock(makeClonedPluginDir())
+    const migrations = makeMigrationsMock()
 
     try {
       await expect(
         runPluginInstall(
           'widgets@1.0',
           { dryRun: false, cwd: notAProject },
-          { registry: registry as never, git: git as never },
+          { registry: registry as never, git: git as never, migrations: migrations as never },
         ),
       ).rejects.toThrow('root of a Biffo project checkout')
     } finally {
@@ -211,13 +224,14 @@ describe('runPluginInstall', () => {
   it('rejects when cwd is not a git repository', async () => {
     const registry = makeRegistryMock()
     const git = makeGitMock(makeClonedPluginDir())
+    const migrations = makeMigrationsMock()
     git.isGitRepo.mockResolvedValue(false)
 
     await expect(
       runPluginInstall(
         'widgets@1.0',
         { dryRun: false, cwd: projectRoot },
-        { registry: registry as never, git: git as never },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
       ),
     ).rejects.toThrow('is not a git repository')
 
@@ -229,12 +243,13 @@ describe('runPluginInstall', () => {
       resolvePlugin: vi.fn().mockRejectedValue(new Error("Plugin 'widgets' was not found")),
     }
     const git = makeGitMock(makeClonedPluginDir())
+    const migrations = makeMigrationsMock()
 
     await expect(
       runPluginInstall(
         'widgets@1.0',
         { dryRun: false, cwd: projectRoot },
-        { registry: registry as never, git: git as never },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
       ),
     ).rejects.toThrow('was not found')
 
@@ -244,13 +259,14 @@ describe('runPluginInstall', () => {
   it('propagates a clone failure and leaves no partial install behind', async () => {
     const registry = makeRegistryMock()
     const git = makeGitMock(makeClonedPluginDir())
+    const migrations = makeMigrationsMock()
     git.cloneToTemp.mockRejectedValue(new Error('Failed to clone https://example.com: not found'))
 
     await expect(
       runPluginInstall(
         'widgets@1.0',
         { dryRun: false, cwd: projectRoot },
-        { registry: registry as never, git: git as never },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
       ),
     ).rejects.toThrow('Failed to clone')
 
@@ -261,12 +277,13 @@ describe('runPluginInstall', () => {
     const clonedDir = makeClonedPluginDir({ name: 'widgets' }) // missing required `version`
     const registry = makeRegistryMock()
     const git = makeGitMock(clonedDir)
+    const migrations = makeMigrationsMock()
 
     await expect(
       runPluginInstall(
         'widgets@1.0',
         { dryRun: false, cwd: projectRoot },
-        { registry: registry as never, git: git as never },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
       ),
     ).rejects.toThrow()
 
@@ -279,12 +296,13 @@ describe('runPluginInstall', () => {
     const clonedDir = makeClonedPluginDir({ ...VALID_MANIFEST, name: 'not-widgets' })
     const registry = makeRegistryMock()
     const git = makeGitMock(clonedDir)
+    const migrations = makeMigrationsMock()
 
     await expect(
       runPluginInstall(
         'widgets@1.0',
         { dryRun: false, cwd: projectRoot },
-        { registry: registry as never, git: git as never },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
       ),
     ).rejects.toThrow('does not match the registry entry')
 
@@ -295,12 +313,13 @@ describe('runPluginInstall', () => {
     const clonedDir = mkdtempSync(join(tmpdir(), 'biffo-plugin-src-empty-'))
     const registry = makeRegistryMock()
     const git = makeGitMock(clonedDir)
+    const migrations = makeMigrationsMock()
 
     await expect(
       runPluginInstall(
         'widgets@1.0',
         { dryRun: false, cwd: projectRoot },
-        { registry: registry as never, git: git as never },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
       ),
     ).rejects.toThrow('does not contain a biffo.plugin.json manifest')
   })
@@ -309,11 +328,12 @@ describe('runPluginInstall', () => {
     it('does not clone, write files, or commit', async () => {
       const registry = makeRegistryMock()
       const git = makeGitMock(makeClonedPluginDir())
+      const migrations = makeMigrationsMock()
 
       await runPluginInstall(
         'widgets@1.0',
         { dryRun: true, cwd: projectRoot },
-        { registry: registry as never, git: git as never },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
       )
 
       expect(git.cloneToTemp).not.toHaveBeenCalled()
@@ -325,14 +345,82 @@ describe('runPluginInstall', () => {
     it('still resolves the plugin against the registry', async () => {
       const registry = makeRegistryMock()
       const git = makeGitMock(makeClonedPluginDir())
+      const migrations = makeMigrationsMock()
 
       await runPluginInstall(
         'widgets@1.0',
         { dryRun: true, cwd: projectRoot },
-        { registry: registry as never, git: git as never },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
       )
 
       expect(registry.resolvePlugin).toHaveBeenCalledWith('widgets', '1.0')
+    })
+  })
+
+  describe('migration generation', () => {
+    it('generates a migration and stages it in the same commit when the manifest has tables', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir())
+      const generatedPath = join(
+        projectRoot,
+        'services',
+        'api',
+        'migrations',
+        'versions',
+        'abc123_add_widgets_items_table.py',
+      )
+      const migrations = makeMigrationsMock([generatedPath])
+
+      await runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      expect(migrations.generate).toHaveBeenCalledWith(projectRoot, ['widgets'])
+      expect(git.add).toHaveBeenCalledWith(projectRoot, [
+        'services/widgets',
+        join('services', 'api', 'migrations', 'versions', 'abc123_add_widgets_items_table.py'),
+      ])
+    })
+
+    it('skips calling migrations.generate when the manifest declares no tables', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(
+        makeClonedPluginDir({ ...VALID_MANIFEST, tables: [], api_routes: [] }),
+      )
+      const migrations = makeMigrationsMock()
+
+      await runPluginInstall(
+        'widgets@1.0',
+        { dryRun: false, cwd: projectRoot },
+        { registry: registry as never, git: git as never, migrations: migrations as never },
+      )
+
+      expect(migrations.generate).not.toHaveBeenCalled()
+      expect(git.add).toHaveBeenCalledWith(projectRoot, ['services/widgets'])
+    })
+
+    it('propagates a migration-generation failure and does not commit', async () => {
+      const registry = makeRegistryMock()
+      const git = makeGitMock(makeClonedPluginDir())
+      const migrations = {
+        generate: vi.fn().mockRejectedValue(new Error('needs `uv` (Python) on PATH')),
+      }
+
+      await expect(
+        runPluginInstall(
+          'widgets@1.0',
+          { dryRun: false, cwd: projectRoot },
+          { registry: registry as never, git: git as never, migrations: migrations as never },
+        ),
+      ).rejects.toThrow('needs `uv`')
+
+      expect(git.add).not.toHaveBeenCalled()
+      expect(git.commit).not.toHaveBeenCalled()
+      // The plugin source itself is left copied-but-uncommitted, matching
+      // this command's existing no-rollback behavior for any other failure.
+      expect(existsSync(join(projectRoot, 'services', 'widgets'))).toBe(true)
     })
   })
 })

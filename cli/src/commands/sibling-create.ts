@@ -550,6 +550,33 @@ function readExistingSiblingOrigins(filePath: string): {
   }
 }
 
+/**
+ * Pre-flight (issue #151): a sibling only actually routes if the core project's
+ * `modules/cloud/aws/cdn` supports ADR-0007's `sibling_origins` (origin +
+ * ordered_cache_behavior dynamic blocks, PR #120). A core that hasn't run
+ * `biffo core upgrade` to a template version with it would still merge the
+ * registration PR cleanly and report a green deploy — but CloudFront would never
+ * gain the origin/behavior, so the failure is completely silent. Check the
+ * capability directly (rather than inferring from a version number that can
+ * drift) and fail with an actionable message before writing anything.
+ */
+function assertCoreSupportsSiblingRouting(cloneDir: string, coreRepo: string): void {
+  const cdnVarsPath = join(cloneDir, 'modules', 'cloud', 'aws', 'cdn', 'variables.tf')
+  let declaresSiblingOrigins = false
+  try {
+    declaresSiblingOrigins = /variable\s+"sibling_origins"/.test(readFileSync(cdnVarsPath, 'utf8'))
+  } catch {
+    declaresSiblingOrigins = false
+  }
+  if (!declaresSiblingOrigins) {
+    throw new Error(
+      `The core project "${coreRepo}" doesn't support sibling CDN routing yet ` +
+        `(its modules/cloud/aws/cdn predates ADR-0007). Run \`biffo core upgrade\` ` +
+        `against it first, then re-run \`biffo sibling create\`.`,
+    )
+  }
+}
+
 async function registerWithCore(
   git: SiblingCreateGit,
   github: GitHubAdapter,
@@ -572,6 +599,8 @@ async function registerWithCore(
     githubToken,
   )
   try {
+    assertCoreSupportsSiblingRouting(cloneDir, coreRepo)
+
     const base = await git.currentBranch(cloneDir)
     const branch = `biffo/register-sibling-${config.project.name}`.replace(/[^a-zA-Z0-9._/-]/g, '-')
     await git.createBranch(cloneDir, branch)

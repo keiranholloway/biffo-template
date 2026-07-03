@@ -1,0 +1,34 @@
+name: Core Version Tag
+
+# Keeps a git tag `core-v<version>` in lockstep with core.version on main, so
+# `biffo core upgrade` can resolve the template tree at any core version (the
+# merge base for an instance's upgrade) — ADR-0006.
+on:
+  push:
+    branches: [main]
+    paths:
+      - core.version
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Tag core version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+      - name: Tag core-v<version> if missing
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < core.version)"
+          TAG="core-v${VERSION}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "Tag ${TAG} already exists — nothing to do."
+            exit 0
+          fi
+          git tag -a "${TAG}" -m "Biffo core ${VERSION}"
+          git push origin "${TAG}"
+          echo "Created and pushed ${TAG}."

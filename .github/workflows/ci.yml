@@ -15,6 +15,25 @@ env:
   PYTHON_VERSION: '3.13'
 
 jobs:
+  core-version-guard:
+    name: Core Version Guard
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Fail if a template-owned path changed without a core.version bump (ADR-0006).
+      - run: pnpm --filter @biffo/cli check:core-bump
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+
   lint-js:
     name: Lint (JS/TS)
     runs-on: ubuntu-latest

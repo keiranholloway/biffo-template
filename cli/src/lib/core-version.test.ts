@@ -1,7 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   compareCoreVersions,
@@ -10,10 +9,6 @@ import {
   readCoreVersionFile,
   readInstanceCoreVersion,
 } from './core-version.js'
-
-const here = dirname(fileURLToPath(import.meta.url))
-// cli/src/lib -> repo root is three levels up.
-const repoRoot = join(here, '..', '..', '..')
 
 describe('parseCoreVersion', () => {
   it('parses a semver into a numeric tuple', () => {
@@ -69,8 +64,19 @@ describe('readInstanceCoreVersion', () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  it('returns null when biffo.core.json is absent', () => {
+  it('returns null when neither biffo.core.json nor core.version is present', () => {
     expect(readInstanceCoreVersion(dir)).toBeNull()
+  })
+
+  it('falls back to the inherited core.version when biffo.core.json is absent', () => {
+    writeFileSync(join(dir, 'core.version'), '0.2.0\n')
+    expect(readInstanceCoreVersion(dir)).toBe('0.2.0')
+  })
+
+  it('prefers biffo.core.json (the upgrade record) over the inherited core.version', () => {
+    writeFileSync(join(dir, 'core.version'), '0.2.0\n')
+    writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: '0.3.0' }))
+    expect(readInstanceCoreVersion(dir)).toBe('0.3.0')
   })
 
   it('reads the recorded version', () => {
@@ -86,15 +92,5 @@ describe('readInstanceCoreVersion', () => {
   it('throws when version is missing or not semver', () => {
     writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: '1.2' }))
     expect(() => readInstanceCoreVersion(dir)).toThrow(/invalid/)
-  })
-})
-
-describe('template repo invariant', () => {
-  it('root core.version and biffo.core.json record the same version', () => {
-    const version = readCoreVersionFile(join(repoRoot, 'core.version'))
-    const instance = JSON.parse(readFileSync(join(repoRoot, 'biffo.core.json'), 'utf8')) as {
-      version: string
-    }
-    expect(instance.version).toBe(version)
   })
 })

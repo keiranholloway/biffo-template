@@ -180,3 +180,19 @@ jobs:
           aws lambda update-function-code \
             --function-name "${{ vars.LAMBDA_FUNCTION_NAME }}" \
             --zip-file fileb://../lambda.zip
+      - name: Smoke test the deployed Lambda
+        run: |
+          # Deploy succeeding just means the zip uploaded — it says nothing
+          # about whether the Lambda can actually boot (e.g. a native
+          # dependency built for the wrong Python ABI fails at import time,
+          # not at deploy time). GET /api/v1/health is unauthenticated by
+          # design specifically so this check can hit the real API Gateway
+          # route with no token, proving the Lambda imports and serves a
+          # request end to end, not just that code was uploaded.
+          aws lambda wait function-updated \
+            --function-name "${{ vars.LAMBDA_FUNCTION_NAME }}"
+          if ! curl -sf --retry 5 --retry-delay 3 --retry-all-errors \
+              "${{ vars.API_URL }}/api/v1/health"; then
+            echo "::error::Health check failed after deploy — the Lambda uploaded but isn't serving requests. Check CloudWatch logs for ${{ vars.LAMBDA_FUNCTION_NAME }}."
+            exit 1
+          fi

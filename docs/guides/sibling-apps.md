@@ -9,6 +9,7 @@ For the design rationale (why it works this way, not how to use it), see [ADR-00
 - A core Biffo project that's already been through `biffo init` **and deployed** (`biffo deploy <environment>`) to every environment you want this sibling to run in. `biffo sibling create` reads that deployment's real Terraform outputs (Cognito pool/client IDs, API URL, portal URL) — it fails with a clear error if the core project hasn't been deployed to a given environment yet.
 - A GitHub token with `repo`, `workflow`, and `admin:org` (if using an org) scopes, resolved the same way `biffo init` resolves one: `GITHUB_TOKEN` env var, or `gh auth login`. Unlike `biffo init`, `biffo sibling create` does **not** prompt interactively for a token — it needs one of these two to already be in place.
 - AWS credentials (env vars, or `AWS_PROFILE`) that resolve to the AWS account you want _this sibling's own_ resources created in — usually the same account as your core project, but doesn't have to be.
+- A configured **global** git identity (`git config --global user.name`/`user.email`). The skeleton-push step (step 3 below) commits into a fresh temporary directory outside any existing repo, so it has no repo-local config to fall back to — with neither set, `git commit` fails there with `Author identity unknown`, which looks unrelated to `biffo sibling create` itself if you don't already know this.
 
 ## 1. Write a `biffo.sibling.json`
 
@@ -101,6 +102,8 @@ with no second login — this is the shared-Cognito-session SSO from ADR-0007 wo
 **`No project named '<name>' found`** (from `core.project_name`) — either the core project wasn't scaffolded with `biffo init` on _this_ machine, or the name doesn't match. Use `core.config_path` pointing at the core project's `biffo.config.json` instead.
 
 **`No GitHub credentials found. Set GITHUB_TOKEN or run gh auth login`** — `biffo sibling create` never prompts for a token interactively; set one of these two first.
+
+**`Author identity unknown` / `git commit` fails while "Creating GitHub repository and pushing sibling skeleton..."** — no global git identity is configured on this machine (see Prerequisites). Run `git config --global user.name "..."` and `git config --global user.email "..."`, then re-run `biffo sibling create` — it's resumable, so this picks up right where it left off.
 
 **Stuck on a spinner at `baseurl.com/<name>`** — check the sibling's own `/api/v1/whoami` endpoint is reachable (its own API Gateway + Lambda must be deployed — step 3 in "Finish wiring the new repo"). The page calls this to independently re-verify the session before rendering.
 

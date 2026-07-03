@@ -1,3 +1,6 @@
+# Agent worktrees (see AGENTS.md) — isolated checkouts, never committed
+.worktrees/
+
 # Dependencies
 node_modules
 .pnpm-store

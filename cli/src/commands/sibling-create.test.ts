@@ -192,6 +192,13 @@ describe('runSiblingCreate', () => {
       'CORE_COGNITO_USER_POOL_ID',
       'us-east-1_abc123',
     )
+    expect(github.setEnvVariable).toHaveBeenCalledWith(
+      'acme',
+      'reports',
+      'dev',
+      'CORS_ORIGINS_JSON',
+      '["https://baseurl.com"]',
+    )
     expect(github.setRepoSecret).toHaveBeenCalledWith(
       'acme',
       'reports',

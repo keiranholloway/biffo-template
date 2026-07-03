@@ -18,7 +18,8 @@
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check:core-bump": "tsx src/scripts/check-core-version-bump.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cloudformation": "^3.726.1",

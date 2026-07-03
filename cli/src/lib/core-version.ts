@@ -95,14 +95,29 @@ export function getLatestCoreVersion(fromDir?: string): string {
 }
 
 /**
- * The core version an instance repo records, read from `<cwd>/biffo.core.json`.
- * Returns null when the file is absent (not a Biffo instance, or one scaffolded
- * before core versioning existed). Throws when present but malformed, so a
- * corrupt record is surfaced rather than silently treated as "no version".
+ * The core version an instance repo is currently on.
+ *
+ * `core.version` is the single committed source of truth for a core version —
+ * the template ships it and every instance inherits a copy via template
+ * generation. `biffo.core.json` is NOT a committed seed; it is written only when
+ * `biffo core upgrade` records an upgrade (so the *next* upgrade knows the
+ * from-version independently of the synced `core.version` file).
+ *
+ * Resolution therefore prefers the explicit upgrade record and falls back to the
+ * inherited `core.version`:
+ *   1. `<cwd>/biffo.core.json` if present (an instance that has been upgraded);
+ *   2. otherwise `<cwd>/core.version` (a freshly-scaffolded instance);
+ *   3. otherwise null (not a Biffo instance).
+ *
+ * Throws when `biffo.core.json` is present but malformed, so a corrupt record is
+ * surfaced rather than silently treated as "no version".
  */
 export function readInstanceCoreVersion(cwd: string): string | null {
   const path = join(cwd, INSTANCE_CORE_FILE)
-  if (!existsSync(path)) return null
+  if (!existsSync(path)) {
+    const inherited = join(cwd, CORE_VERSION_FILE)
+    return existsSync(inherited) ? readCoreVersionFile(inherited) : null
+  }
   let parsed: unknown
   try {
     parsed = JSON.parse(readFileSync(path, 'utf8'))

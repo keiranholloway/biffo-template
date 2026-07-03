@@ -60,11 +60,40 @@ a **branch + pull request**, which the instance's own existing CI
 ### 1. Core versioning
 
 `biffo-template` carries an explicit **core version** (a `core.version` file at
-the repo root, semver, independent of any package version). Each scaffolded
-instance records the core version it was initialised from — and last upgraded
-to — in a committed `biffo.core.json` at its repo root. This makes ADR-0003's
-already-referenced `required_core_version` meaningful and gives the upgrade a
-well-defined _from_ and _to_.
+the repo root, semver, independent of any package version). This is the **single
+committed source of truth** for a core version: the template ships it, and every
+scaffolded instance inherits a copy via template generation — so an instance's
+current version is simply the `core.version` it carries.
+
+`biffo.core.json` is **not** a committed seed (that would duplicate the number in
+both the template and every instance). It is written by `biffo core upgrade` to
+record the version an instance was last upgraded to, so the _next_ upgrade knows
+the _from_ version independently of the synced (template-owned) `core.version`
+file. Resolution of an instance's current version therefore prefers
+`biffo.core.json` if an upgrade has recorded one, and otherwise falls back to the
+inherited `core.version`. This makes ADR-0003's already-referenced
+`required_core_version` meaningful and gives the upgrade a well-defined _from_
+and _to_.
+
+#### Versioning discipline (enforced)
+
+The mechanism only works if `core.version` actually moves. It initially did not
+— it sat at `0.1.0` across many template-owned releases, which made
+`biffo core status` a permanent "up to date" and `biffo core upgrade` a no-op
+for every instance. Two guardrails keep version and history in lockstep:
+
+- **CI guard (`Core Version Guard`).** A required check fails any pull request
+  that changes a template-owned path (per `core-manifest.json`) without bumping
+  `core.version`. Patch for fixes, minor for features, major for breaking core
+  changes. Implemented by `cli/src/lib/core-version-guard.ts` (reusing the same
+  `isTemplateOwned` logic as the sync) and run via
+  `pnpm --filter @biffo/cli check:core-bump`.
+- **Auto-tagging (`Core Version Tag`).** On merge to `main`, a git tag
+  `core-v<version>` is created for the new `core.version`. These tags are the
+  recoverable template trees `biffo core upgrade` uses as its merge **base** (the
+  template as it was at an instance's current version) and **target** — without
+  them, the base tree is unrecoverable and the three-way merge produces spurious
+  conflicts.
 
 ### 2. Core-owned path manifest
 

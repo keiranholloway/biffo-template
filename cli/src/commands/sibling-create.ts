@@ -463,6 +463,19 @@ async function configureSiblingGithub(
   await github.createEnvironments(config)
 
   await github.setRepoVariable(org, repo, 'PROJECT_NAME', config.project.name)
+  // Deliberately separate from PROJECT_NAME: the routing path segment
+  // (baseurl.com/<PATH_PREFIX>/*) can differ from the sibling's own
+  // project/repo name (e.g. project "tabsii-crm" routed at "/crm") — the
+  // deploy workflow's S3 sync destination, Next.js basePath, and CDN
+  // invalidation paths must all use this, not PROJECT_NAME, or the built
+  // site ends up uploaded/rewritten under a prefix CloudFront never
+  // routes to.
+  await github.setRepoVariable(
+    org,
+    repo,
+    'PATH_PREFIX',
+    config.core.path_prefix ?? config.project.name,
+  )
   await github.setRepoVariable(org, repo, 'AWS_REGION', awsConfig(config).region)
   await github.setRepoVariable(org, repo, 'SIBLING_DEPLOY_ENABLED', 'true')
   if (session.outputs.tfStateBucket) {

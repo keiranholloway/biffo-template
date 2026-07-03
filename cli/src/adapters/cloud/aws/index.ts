@@ -24,14 +24,14 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3'
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts'
-import type { BiffoConfig } from '../../../config/schema.js'
+import type { ProvisioningConfig } from '../../../config/schema.js'
 import { log } from '../../../lib/logger.js'
 
 export class AwsAdapter {
   private region: string
   private accountId: string
 
-  constructor(config: BiffoConfig) {
+  constructor(config: ProvisioningConfig) {
     const awsConfig = (
       config.cloud as {
         provider: 'aws'
@@ -258,7 +258,7 @@ export class AwsAdapter {
     log.success(`Terraform state bucket deleted: ${bucketName}`)
   }
 
-  async setupOidcTrust(config: BiffoConfig): Promise<string> {
+  async setupOidcTrust(config: ProvisioningConfig): Promise<string> {
     const { org, repo } = (
       config.source_control as { provider: 'github'; config: { org: string; repo: string } }
     ).config

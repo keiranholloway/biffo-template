@@ -1,6 +1,10 @@
 import { z } from 'zod'
 
-const AwsConfigSchema = z.object({
+// Exported so cli/src/config/sibling-schema.ts (ADR-0007) can reuse the exact
+// same source_control/cloud shapes — a sibling's identity config is a
+// deliberately smaller, separate schema (no admin/database/modules), but
+// its GitHub/AWS identity fields are identical to the core project's.
+export const AwsConfigSchema = z.object({
   account_id: z
     .string()
     .regex(/^\d{12}$/, 'AWS account ID must be 12 digits')
@@ -14,16 +18,16 @@ const AwsConfigSchema = z.object({
   tf_state_bucket: z.string().optional(),
 })
 
-const GitHubConfigSchema = z.object({
+export const GitHubConfigSchema = z.object({
   org: z.string().min(1).describe('GitHub organisation or username'),
   repo: z.string().min(1).describe('Repository name (will be created)'),
 })
 
-const SourceControlConfigSchema = z.discriminatedUnion('provider', [
+export const SourceControlConfigSchema = z.discriminatedUnion('provider', [
   z.object({ provider: z.literal('github'), config: GitHubConfigSchema }),
 ])
 
-const CloudConfigSchema = z.discriminatedUnion('provider', [
+export const CloudConfigSchema = z.discriminatedUnion('provider', [
   z.object({ provider: z.literal('aws'), config: AwsConfigSchema }),
 ])
 
@@ -85,6 +89,16 @@ export const BiffoConfigSchema = z
 
 export type BiffoConfig = z.infer<typeof BiffoConfigSchema>
 export type DnsMode = 'managed-route53' | 'external' | 'none'
+
+// The subset of BiffoConfig that AwsAdapter's identity/OIDC-trust methods and
+// GitHubAdapter's branch/environment-provisioning methods actually touch
+// (project name, source_control, cloud, environments) — narrowed out so a
+// SiblingConfig (ADR-0007), which has no admin/database/modules of its own,
+// can still be passed to those methods without a fake full BiffoConfig.
+export type ProvisioningConfig = Pick<
+  BiffoConfig,
+  'project' | 'source_control' | 'cloud' | 'environments'
+>
 
 export function resolveDnsConfig(config: {
   project: { domain?: string | undefined }

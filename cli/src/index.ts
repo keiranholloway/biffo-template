@@ -6,6 +6,7 @@ import { deployCommand } from './commands/deploy.js'
 import { destroyCommand } from './commands/destroy.js'
 import { initCommand } from './commands/init.js'
 import { pluginCommand } from './commands/plugin.js'
+import { siblingCommand } from './commands/sibling.js'
 import { teardownCommand } from './commands/teardown.js'
 
 const program = new Command()
@@ -22,5 +23,6 @@ program.addCommand(teardownCommand)
 program.addCommand(pluginCommand)
 program.addCommand(dataCommand)
 program.addCommand(coreCommand)
+program.addCommand(siblingCommand)
 
 program.parse()

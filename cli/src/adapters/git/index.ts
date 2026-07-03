@@ -54,9 +54,51 @@ export class GitAdapter {
     return dir
   }
 
-  /** Removes a directory created by cloneToTemp. Safe to call more than once. */
+  /**
+   * Like cloneToTemp, but keeps `.git` intact — for `biffo sibling create`'s
+   * core-project registration PR (ADR-0007), which needs to branch/commit/
+   * push against a repo it doesn't already have checked out locally (unlike
+   * `biffo core upgrade`, which edits the user's own already-cloned working
+   * tree in place and never clones anything itself). A full (non-shallow)
+   * clone, since a shallow clone's single commit can still branch/commit/
+   * push fine, but `--depth 1` intentionally omits history callers of this
+   * method have no need for.
+   */
+  async cloneForEditing(repoUrl: string, namePrefix: string, token?: string): Promise<string> {
+    const dir = mkdtempSync(join(tmpdir(), `${namePrefix}-${randomUUID().slice(0, 8)}-`))
+    const cloneUrl = token ? injectToken(repoUrl, token) : repoUrl
+    try {
+      await execa('git', ['clone', cloneUrl, dir])
+    } catch (err) {
+      rmSync(dir, { recursive: true, force: true })
+      throw new Error(`Failed to clone ${repoUrl}: ${(err as Error).message}`)
+    }
+    return dir
+  }
+
+  /** Removes a directory created by cloneToTemp/cloneForEditing. Safe to call more than once. */
   cleanup(dir: string): void {
     rmSync(dir, { recursive: true, force: true })
+  }
+
+  /**
+   * `git init` a fresh working tree — for `biffo sibling create` (ADR-0007),
+   * which writes the `_skeletons/sibling-template/` skeleton's content into
+   * a plain directory (it's read directly off disk, not itself a git
+   * remote) and needs to push it as a brand-new GitHub repo's first commit.
+   *
+   * Sets the initial branch name explicitly (`-b`) rather than relying on
+   * the running machine's `init.defaultBranch` git config, which isn't
+   * guaranteed to be "main" (or even consistent between a dev's laptop and
+   * a CI runner).
+   */
+  async init(cwd: string, initialBranch = 'main'): Promise<void> {
+    await execa('git', ['init', '-b', initialBranch], { cwd })
+  }
+
+  /** Adds a remote. Fails if a remote with this name already exists. */
+  async addRemote(cwd: string, name: string, url: string): Promise<void> {
+    await execa('git', ['remote', 'add', name, url], { cwd })
   }
 
   async add(cwd: string, paths: string[]): Promise<void> {

@@ -136,6 +136,22 @@ describe('GitAdapter', () => {
   })
 
   describe('add / commit', () => {
+    it('initializes a repo with an explicit initial branch', async () => {
+      execaMock.mockResolvedValue({} as never)
+      await adapter.init('/repo', 'main')
+      expect(execaMock).toHaveBeenCalledWith('git', ['init', '-b', 'main'], { cwd: '/repo' })
+    })
+
+    it('adds a named remote', async () => {
+      execaMock.mockResolvedValue({} as never)
+      await adapter.addRemote('/repo', 'origin', 'https://github.com/acme/reports.git')
+      expect(execaMock).toHaveBeenCalledWith(
+        'git',
+        ['remote', 'add', 'origin', 'https://github.com/acme/reports.git'],
+        { cwd: '/repo' },
+      )
+    })
+
     it('stages the given paths', async () => {
       execaMock.mockResolvedValue({} as never)
       await adapter.add('/repo', ['services/widgets', 'modules/plugins/widgets'])

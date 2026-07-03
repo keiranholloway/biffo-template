@@ -117,6 +117,30 @@ data "aws_iam_policy_document" "lambda_permissions" {
     }
   }
 
+  # Read additional, function-specific secrets (e.g. the PR-signer's GitHub App
+  # key, ADR-0008). Scoped to the exact ARNs supplied — never secret-wildcard.
+  dynamic "statement" {
+    for_each = length(var.readable_secret_arns) > 0 ? [1] : []
+    content {
+      sid       = "ReadableSecretsAccess"
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = var.readable_secret_arns
+    }
+  }
+
+  # Invoke specific other Lambdas over IAM (e.g. the Core API invoking the
+  # isolated PR-signer, ADR-0008). Scoped to the exact function ARNs supplied.
+  dynamic "statement" {
+    for_each = length(var.invoke_function_arns) > 0 ? [1] : []
+    content {
+      sid       = "InvokeFunctions"
+      effect    = "Allow"
+      actions   = ["lambda:InvokeFunction"]
+      resources = var.invoke_function_arns
+    }
+  }
+
   # Cognito admin operations for user management (add users, assign to groups,
   # suspend/remove). Scoped to the single user pool ARN — never pool-wildcard,
   # keeping the least-privilege posture (no AdministratorAccess).

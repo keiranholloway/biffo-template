@@ -77,6 +77,51 @@ variable "enabled_plugins" {
   }
 }
 
+variable "enable_pr_signer" {
+  description = <<-EOT
+    Provision the isolated PR-signer for the endpoint control plane (ADR-0008).
+    When true, this creates the signer Lambda, a Secrets Manager secret for its
+    GitHub App private key, and grants the Core API permission to invoke it.
+
+    Requires a registered GitHub App with `contents:write` + `pull_requests:write`
+    on this repo (see docs/guides/endpoint-control-plane-setup.md) and the App
+    private key uploaded to the created secret out-of-band — the key is never
+    stored in Terraform. Defaults off so the platform stands up without one.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "pr_signer_github_app_id" {
+  description = "GitHub App ID for the PR-signer. Required when enable_pr_signer is true."
+  type        = string
+  default     = ""
+}
+
+variable "pr_signer_github_installation_id" {
+  description = "GitHub App installation ID (the App installed on this repo). Required when enable_pr_signer is true."
+  type        = string
+  default     = ""
+}
+
+variable "pr_signer_repo_owner" {
+  description = "Owner (org or user) of the repo the signer opens PRs against. Required when enable_pr_signer is true."
+  type        = string
+  default     = ""
+}
+
+variable "pr_signer_repo_name" {
+  description = "Name of the repo the signer opens PRs against. Required when enable_pr_signer is true."
+  type        = string
+  default     = ""
+}
+
+variable "pr_signer_base_branch" {
+  description = "Base branch the signer opens permission-change PRs against."
+  type        = string
+  default     = "main"
+}
+
 variable "sibling_origins" {
   description = <<-EOT
     Sibling microservices (ADR-0007) registered for path-based routing on

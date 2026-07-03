@@ -4,6 +4,8 @@
 **Date:** 2026-07-02  
 **Deciders:** Keiran Holloway (Technical Architect)
 
+For usage instructions, see the [DDL data-import guide](../guides/data-import.md).
+
 ---
 
 ## Context

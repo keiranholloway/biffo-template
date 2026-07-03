@@ -8,7 +8,8 @@
 > #124 (`GitHubAdapter.createEmptyRepo` + parameterised branch-protection
 > checks), #125 (`_skeletons/sibling-template/` — the Next.js + FastAPI
 > skeleton), #128 (`biffo sibling create`), and this PR (portal `return_to`
-> redirect support + this document).
+> redirect support + this document). See
+> [the sibling-apps guide](../guides/sibling-apps.md) for how to use it.
 
 ---
 

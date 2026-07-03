@@ -20,6 +20,15 @@ on:
         options: [plan, apply]
         default: plan
 
+# Never cancel-in-progress here (unlike ci.yml) — this workflow runs
+# `terraform apply`. Cancelling mid-apply can leave real infrastructure
+# half-applied, which is worse than just queuing a second trigger behind
+# the first (e.g. a push landing right after a manual re-run for the same
+# environment).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   TERRAFORM_VERSION: '~> 1.9'
 

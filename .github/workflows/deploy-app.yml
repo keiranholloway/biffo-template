@@ -19,6 +19,15 @@ on:
         type: choice
         options: [dev, staging, prod]
 
+# Never cancel-in-progress here (unlike ci.yml) — this workflow packages and
+# ships application code. A second trigger for the same branch (e.g. a push
+# landing right after a manual re-run) queues behind the first instead of
+# running alongside it, so two overlapping S3 syncs / Lambda code updates
+# for the same environment can't race each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   id-token: write
   contents: read

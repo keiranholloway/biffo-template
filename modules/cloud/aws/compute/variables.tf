@@ -63,6 +63,12 @@ variable "event_bus_name" {
   default = ""
 }
 
+variable "cognito_user_pool_arn" {
+  description = "ARN of the Cognito user pool this function may administer (create/disable/delete users, manage group membership). Only supplied to the Core API function, which owns user management. Empty = no Cognito admin permissions granted."
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

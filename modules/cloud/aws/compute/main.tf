@@ -116,6 +116,31 @@ data "aws_iam_policy_document" "lambda_permissions" {
       resources = ["arn:aws:events:*:*:event-bus/${var.event_bus_name}"]
     }
   }
+
+  # Cognito admin operations for user management (add users, assign to groups,
+  # suspend/remove). Scoped to the single user pool ARN — never pool-wildcard,
+  # keeping the least-privilege posture (no AdministratorAccess).
+  dynamic "statement" {
+    for_each = var.cognito_user_pool_arn != "" ? [1] : []
+    content {
+      sid    = "CognitoUserAdmin"
+      effect = "Allow"
+      actions = [
+        "cognito-idp:AdminCreateUser",
+        "cognito-idp:AdminGetUser",
+        "cognito-idp:AdminDisableUser",
+        "cognito-idp:AdminEnableUser",
+        "cognito-idp:AdminDeleteUser",
+        "cognito-idp:AdminAddUserToGroup",
+        "cognito-idp:AdminRemoveUserFromGroup",
+        "cognito-idp:AdminListGroupsForUser",
+        "cognito-idp:AdminUserGlobalSignOut",
+        "cognito-idp:ListUsers",
+        "cognito-idp:ListGroups",
+      ]
+      resources = [var.cognito_user_pool_arn]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "lambda" {

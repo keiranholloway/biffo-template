@@ -128,6 +128,48 @@ resource "aws_vpc_endpoint" "s3" {
   tags            = merge(var.tags, { Name = "${local.name_prefix}-s3-endpoint" })
 }
 
+# Interface VPC endpoints let the in-VPC Lambda reach AWS service control-plane
+# APIs (e.g. Cognito admin operations for user management) without outbound
+# internet. Interface endpoints are billed hourly, so — like the S3 gateway
+# endpoint above — they're only created in the NAT-less posture where they're
+# actually required; with NAT, this traffic egresses through the NAT gateway.
+resource "aws_security_group" "vpc_endpoints" {
+  count       = var.enable_nat_gateway ? 0 : 1
+  name        = "${local.name_prefix}-vpce"
+  description = "Allow HTTPS from within the VPC to interface VPC endpoints"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description = "HTTPS from within the VPC"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+
+  egress {
+    description = "Responses back into the VPC"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = [var.vpc_cidr]
+  }
+
+  tags = merge(var.tags, { Name = "${local.name_prefix}-vpce-sg" })
+}
+
+resource "aws_vpc_endpoint" "cognito_idp" {
+  count               = var.enable_nat_gateway ? 0 : 1
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.${data.aws_region.current.name}.cognito-idp"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = aws_subnet.private[*].id
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
+  private_dns_enabled = true
+
+  tags = merge(var.tags, { Name = "${local.name_prefix}-cognito-idp-endpoint" })
+}
+
 # VPC Flow Logs
 resource "aws_cloudwatch_log_group" "vpc_flow_logs" {
   name              = "/biffo/${local.name_prefix}/vpc-flow-logs"

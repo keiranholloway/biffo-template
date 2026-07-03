@@ -14,6 +14,7 @@ vi.mock('@/lib/api-client', () => ({
 
 const {
   fetchUsers,
+  fetchGroups,
   createUser,
   assignGroup,
   removeGroup,
@@ -22,6 +23,7 @@ const {
   deleteUser,
 } = vi.hoisted(() => ({
   fetchUsers: vi.fn(),
+  fetchGroups: vi.fn(),
   createUser: vi.fn(),
   assignGroup: vi.fn(),
   removeGroup: vi.fn(),
@@ -35,6 +37,7 @@ vi.mock('@/lib/user-admin-api', async () => {
   return {
     ...actual, // keeps ASSIGNABLE_GROUPS
     fetchUsers,
+    fetchGroups,
     createUser,
     assignGroup,
     removeGroup,
@@ -68,6 +71,7 @@ describe('UsersPage', () => {
   beforeEach(() => {
     for (const fn of [
       fetchUsers,
+      fetchGroups,
       createUser,
       assignGroup,
       removeGroup,
@@ -77,6 +81,7 @@ describe('UsersPage', () => {
     ]) {
       fn.mockReset()
     }
+    fetchGroups.mockResolvedValue({ groups: ['admin', 'editor', 'viewer'] })
   })
 
   it('renders users with email, status and groups', async () => {
@@ -184,5 +189,16 @@ describe('UsersPage', () => {
     fetchUsers.mockRejectedValue(new Error('boom'))
     render(<UsersPage />)
     expect(await screen.findByText('boom')).toBeInTheDocument()
+  })
+
+  it('populates the group picker from the API (custom taxonomy)', async () => {
+    fetchUsers.mockResolvedValue({ users: [], next_token: null })
+    fetchGroups.mockResolvedValue({ groups: ['admin', 'billing'] })
+
+    render(<UsersPage />)
+
+    // The custom "billing" group (not in the hardcoded fallback) appears as an
+    // assignable checkbox in the Add-user form.
+    expect(await screen.findByLabelText('billing')).toBeInTheDocument()
   })
 })

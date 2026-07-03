@@ -9,6 +9,7 @@ import {
   assignGroup,
   createUser,
   deleteUser,
+  fetchGroups,
   fetchUsers,
   reactivateUser,
   removeGroup,
@@ -21,8 +22,10 @@ function errorMessage(err: unknown): string {
 
 function CreateUserForm({
   onCreate,
+  assignable,
 }: {
   onCreate: (email: string, groups: string[]) => Promise<void>
+  assignable: readonly string[]
 }) {
   const [email, setEmail] = useState('')
   const [groups, setGroups] = useState<string[]>([])
@@ -72,7 +75,7 @@ function CreateUserForm({
         <div className="flex flex-col text-xs text-gray-600">
           Initial groups
           <div className="mt-1 flex gap-3">
-            {ASSIGNABLE_GROUPS.map((group) => (
+            {assignable.map((group) => (
               <label key={group} className="flex items-center gap-1 text-sm text-gray-800">
                 <input
                   type="checkbox"
@@ -102,12 +105,14 @@ function GroupChips({
   user,
   onAdd,
   onRemove,
+  assignable,
 }: {
   user: AdminUser
   onAdd: (group: string) => void
   onRemove: (group: string) => void
+  assignable: readonly string[]
 }) {
-  const available = ASSIGNABLE_GROUPS.filter((g) => !user.groups.includes(g))
+  const available = assignable.filter((g) => !user.groups.includes(g))
   return (
     <span className="flex flex-wrap items-center gap-1">
       {user.groups.length === 0 && <span className="text-xs text-gray-400">none</span>}
@@ -154,8 +159,21 @@ export default function UsersPage() {
   const { getIdToken } = useAuth()
   const [users, setUsers] = useState<AdminUser[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Live group taxonomy from the API; falls back to the baseline until it loads
+  // (or if the endpoint is unavailable) so the picker always renders (issue #148).
+  const [assignable, setAssignable] = useState<string[]>([...ASSIGNABLE_GROUPS])
 
   const client = useMemo(() => createApiClient(getIdToken), [getIdToken])
+
+  useEffect(() => {
+    fetchGroups(client)
+      .then((result) => {
+        if (result.groups.length > 0) setAssignable(result.groups)
+      })
+      .catch(() => {
+        /* keep the fallback groups */
+      })
+  }, [client])
 
   const reload = useCallback(async () => {
     try {
@@ -195,6 +213,7 @@ export default function UsersPage() {
       )}
 
       <CreateUserForm
+        assignable={assignable}
         onCreate={(email, groups) => run(() => createUser(client, { email, groups }))}
       />
 
@@ -242,6 +261,7 @@ export default function UsersPage() {
                   <td className="px-4 py-2">
                     <GroupChips
                       user={user}
+                      assignable={assignable}
                       onAdd={(group) => {
                         void run(() => assignGroup(client, user.username, group))
                       }}

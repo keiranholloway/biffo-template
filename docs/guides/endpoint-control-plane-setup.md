@@ -105,13 +105,20 @@ admin in the body. Review and merge it as you would any change.
 - **Never commit the PEM.** It lives only in Secrets Manager. `terraform.tfvars`
   is gitignored; keep the key out of it too — only IDs belong there.
 
+## Deploying the signer's code
+
+The Lambda is created (by Terraform) with placeholder code; the deploy pipeline
+publishes the real code. `.github/workflows/deploy-app.yml` packages and pushes
+`services/pr-signer` to the function named by the `PR_SIGNER_LAMBDA_NAME`
+Actions variable (set it to the `pr_signer_lambda_name` Terraform output). When
+that variable is unset — e.g. instances without the signer — the step is skipped.
+
+A push to your integration branch that touches `services/**` (or a manual
+`workflow_dispatch`) therefore redeploys the signer automatically, the same way
+it redeploys the Core API.
+
 ## Remaining wiring
 
-Provisioning (this guide) stands the infrastructure up. Still required before
-the flow works end to end:
-
-- **Deploy the signer's code** to its Lambda (the function is created with a
-  placeholder; the deploy pipeline must publish `services/pr-signer`).
 - **Core API permission endpoint** (`POST /api/v1/admin/endpoints/permission`)
   that authorizes the admin and invokes the signer.
 - **Portal enable toggle** on the Endpoints view.

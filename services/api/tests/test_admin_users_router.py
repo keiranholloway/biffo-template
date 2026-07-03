@@ -1,0 +1,247 @@
+"""Tests for the admin user-management router (/api/v1/admin/users).
+
+Drives the HTTP layer via TestClient against a moto fake Cognito pool and an
+in-memory SQLite DB (for the is_active mirror), mirroring the harness in
+test_core_crud_router.py.
+"""
+
+import asyncio
+from collections.abc import AsyncGenerator, Generator
+
+import boto3
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from moto import mock_aws
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.pool import StaticPool
+
+from api.cognito import CognitoAdmin
+from api.database import get_db
+from api.dependencies import get_cognito_admin
+from api.middleware.auth import AuthenticatedUser, require_auth
+from api.models.base import Base
+from api.models.user import User
+from api.routers.admin import users as admin_users
+
+REGION = "us-east-1"
+_BASE = "/api/v1/admin/users"
+
+
+def _caller(roles: list[str]) -> AuthenticatedUser:
+    return AuthenticatedUser(
+        sub="admin-sub",
+        email="admin@example.com",
+        username="admin",
+        tenant_id="default",
+        roles=roles,
+    )
+
+
+@pytest.fixture
+def harness() -> Generator[dict, None, None]:
+    with mock_aws():
+        client = boto3.client("cognito-idp", region_name=REGION)
+        pool_id = client.create_user_pool(PoolName="test")["UserPool"]["Id"]
+        for group in ("admin", "editor", "viewer"):
+            client.create_group(UserPoolId=pool_id, GroupName=group)
+        cog = CognitoAdmin(client=client, user_pool_id=pool_id, region=REGION)
+
+        engine = create_async_engine(
+            "sqlite+aiosqlite:///:memory:",
+            poolclass=StaticPool,
+            connect_args={"check_same_thread": False},
+        )
+        asyncio.run(_create_tables(engine))
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+        async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
+            async with session_factory() as session:
+                try:
+                    yield session
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+                    raise
+
+        app = FastAPI()
+        app.include_router(admin_users.router, prefix="/api/v1")
+        app.dependency_overrides[get_db] = override_get_db
+        app.dependency_overrides[get_cognito_admin] = lambda: cog
+        app.dependency_overrides[require_auth] = lambda: _caller(["admin"])
+
+        yield {
+            "app": app,
+            "client": TestClient(app),
+            "cog": cog,
+            "session_factory": session_factory,
+        }
+
+        asyncio.run(engine.dispose())
+
+
+async def _create_tables(engine) -> None:
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
+async def _seed_db_user(session_factory, *, cognito_sub: str, email: str) -> None:
+    async with session_factory() as session:
+        session.add(
+            User(cognito_sub=cognito_sub, email=email, username=email, is_active=True)
+        )
+        await session.commit()
+
+
+async def _db_is_active(session_factory, cognito_sub: str) -> bool | None:
+    async with session_factory() as session:
+        result = await session.execute(
+            select(User.is_active).where(User.cognito_sub == cognito_sub)
+        )
+        return result.scalar_one_or_none()
+
+
+# --- create ------------------------------------------------------------------
+
+
+def test_create_user_returns_201(harness):
+    resp = harness["client"].post(
+        _BASE, json={"email": "alice@example.com", "suppress_invite_email": True}
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["email"] == "alice@example.com"
+    assert body["sub"]
+    assert body["groups"] == []
+
+
+def test_create_user_with_initial_groups(harness):
+    resp = harness["client"].post(
+        _BASE,
+        json={
+            "email": "bob@example.com",
+            "groups": ["editor"],
+            "suppress_invite_email": True,
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.json()["groups"] == ["editor"]
+
+
+def test_create_duplicate_user_returns_409(harness):
+    payload = {"email": "carol@example.com", "suppress_invite_email": True}
+    assert harness["client"].post(_BASE, json=payload).status_code == 201
+    assert harness["client"].post(_BASE, json=payload).status_code == 409
+
+
+# --- authorization -----------------------------------------------------------
+
+
+def test_non_admin_caller_is_forbidden(harness):
+    harness["app"].dependency_overrides[require_auth] = lambda: _caller([])
+    resp = harness["client"].post(
+        _BASE, json={"email": "eve@example.com", "suppress_invite_email": True}
+    )
+    assert resp.status_code == 403
+
+
+# --- read --------------------------------------------------------------------
+
+
+def test_list_and_get_users(harness):
+    harness["cog"].create_user(email="dave@example.com", suppress_invite_email=True)
+
+    listing = harness["client"].get(_BASE)
+    assert listing.status_code == 200
+    emails = {u["email"] for u in listing.json()["users"]}
+    assert "dave@example.com" in emails
+
+    got = harness["client"].get(f"{_BASE}/dave@example.com")
+    assert got.status_code == 200
+    assert got.json()["email"] == "dave@example.com"
+
+
+def test_get_missing_user_returns_404(harness):
+    assert harness["client"].get(f"{_BASE}/nobody@example.com").status_code == 404
+
+
+# --- group membership --------------------------------------------------------
+
+
+def test_add_and_remove_group(harness):
+    harness["cog"].create_user(email="heidi@example.com", suppress_invite_email=True)
+
+    added = harness["client"].post(
+        f"{_BASE}/heidi@example.com/groups", json={"group": "editor"}
+    )
+    assert added.status_code == 200
+    assert "editor" in added.json()["groups"]
+
+    removed = harness["client"].delete(f"{_BASE}/heidi@example.com/groups/editor")
+    assert removed.status_code == 200
+    assert "editor" not in removed.json()["groups"]
+
+
+# --- suspend / reactivate / delete + DB mirror -------------------------------
+
+
+def test_suspend_disables_and_mirrors_is_active(harness):
+    user = harness["cog"].create_user(
+        email="frank@example.com", suppress_invite_email=True
+    )
+    asyncio.run(
+        _seed_db_user(
+            harness["session_factory"], cognito_sub=user["sub"], email=user["email"]
+        )
+    )
+
+    resp = harness["client"].post(f"{_BASE}/frank@example.com/suspend")
+    assert resp.status_code == 200
+    assert resp.json()["enabled"] is False
+    assert asyncio.run(_db_is_active(harness["session_factory"], user["sub"])) is False
+
+
+def test_reactivate_enables_and_mirrors_is_active(harness):
+    user = harness["cog"].create_user(
+        email="grace@example.com", suppress_invite_email=True
+    )
+    asyncio.run(
+        _seed_db_user(
+            harness["session_factory"], cognito_sub=user["sub"], email=user["email"]
+        )
+    )
+    harness["client"].post(f"{_BASE}/grace@example.com/suspend")
+
+    resp = harness["client"].post(f"{_BASE}/grace@example.com/reactivate")
+    assert resp.status_code == 200
+    assert resp.json()["enabled"] is True
+    assert asyncio.run(_db_is_active(harness["session_factory"], user["sub"])) is True
+
+
+def test_delete_removes_from_cognito_and_deactivates_db_row(harness):
+    user = harness["cog"].create_user(
+        email="ivan@example.com", suppress_invite_email=True
+    )
+    asyncio.run(
+        _seed_db_user(
+            harness["session_factory"], cognito_sub=user["sub"], email=user["email"]
+        )
+    )
+
+    resp = harness["client"].delete(f"{_BASE}/ivan@example.com")
+    assert resp.status_code == 204
+    assert harness["client"].get(f"{_BASE}/ivan@example.com").status_code == 404
+    assert asyncio.run(_db_is_active(harness["session_factory"], user["sub"])) is False
+
+
+def test_suspend_without_db_row_still_succeeds(harness):
+    """A user provisioned but never logged in has no DB row — the mirror is a
+    no-op, not an error."""
+    harness["cog"].create_user(email="judy@example.com", suppress_invite_email=True)
+    resp = harness["client"].post(f"{_BASE}/judy@example.com/suspend")
+    assert resp.status_code == 200

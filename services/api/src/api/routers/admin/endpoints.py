@@ -11,16 +11,28 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 from aws_lambda_powertools import Logger
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import ValidationError
 
+from ...config import settings
+from ...dependencies import require_admin
+from ...endpoint_control import (
+    LambdaSignerInvoker,
+    SignerInvocationError,
+    SignerInvoker,
+    request_permission_change,
+)
 from ...middleware.auth import AuthenticatedUser, require_auth
 from ...migrations.plugin_migrations import parse_plugin_tables_from_manifest
 from ...models.plugin_route import parse_plugin_routes_from_manifest
 from ...models.plugin_table import CRUD_OPERATIONS, TablePermissions
 from ...permissions import iter_core_crud_models
 from ...plugins import discover_plugin_manifests
-from ...schemas.endpoint import EndpointResponse
+from ...schemas.endpoint import (
+    EndpointPermissionRequest,
+    EndpointPermissionResult,
+    EndpointResponse,
+)
 
 logger = Logger()
 
@@ -119,3 +131,80 @@ async def list_endpoints(
     """List the live generic-CRUD endpoints on this deployment and the role each
     requires. Read-only; auth required (same rationale as /admin/plugins)."""
     return collect_endpoints()
+
+
+# The signer invoker is a warm-reused singleton (like the event publisher). It's
+# only constructed when the control plane is configured; tests replace it.
+_invoker: SignerInvoker | None = None
+
+
+def _get_invoker() -> SignerInvoker:
+    global _invoker
+    if _invoker is None:
+        _invoker = LambdaSignerInvoker(settings.pr_signer_function_name)
+    return _invoker
+
+
+@router.post(
+    "/permission",
+    response_model=EndpointPermissionResult,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def change_endpoint_permission(
+    body: EndpointPermissionRequest,
+    caller: AuthenticatedUser = Depends(require_admin),
+) -> EndpointPermissionResult:
+    """Request a change to one plugin table/operation's API permission (ADR-0008).
+
+    **Admin only.** This mutates nothing live — it invokes the isolated PR-signer
+    (the Core API never holds the GitHub credential), which opens a pull request.
+    The change deploys only when that PR is merged through the normal pipeline
+    (config-as-code, ADR-0004). Returns **202** with the PR URL and branch.
+
+    The signer is the last-gate validator; its status is relayed: ``409`` when
+    the permission is already set that way or the edit is invalid, ``400`` for a
+    bad request, ``502`` if the signer or GitHub fails.
+    """
+    if not settings.pr_signer_function_name:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="The endpoint control plane is not configured on this deployment.",
+        )
+
+    requester = caller.email or caller.username or caller.sub
+    try:
+        result = request_permission_change(
+            _get_invoker(),
+            plugin=body.plugin,
+            table=body.table,
+            operation=body.operation,
+            allowed=body.allowed,
+            required_role=body.required_role,
+            requester=requester,
+        )
+    except SignerInvocationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
+
+    if result.status == 200 and result.pr_url and result.branch:
+        logger.info(
+            "endpoint permission change requested",
+            extra={
+                "requester": requester,
+                "plugin": body.plugin,
+                "table": body.table,
+                "operation": body.operation,
+                "pr_url": result.pr_url,
+            },
+        )
+        return EndpointPermissionResult(pr_url=result.pr_url, branch=result.branch)
+
+    # Relay the signer's own status where it's a meaningful client error.
+    mapped = (
+        result.status if result.status in (400, 409) else status.HTTP_502_BAD_GATEWAY
+    )
+    raise HTTPException(
+        status_code=mapped,
+        detail=result.error or "The PR-signer could not complete the request.",
+    )

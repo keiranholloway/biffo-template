@@ -37,6 +37,17 @@ class Settings(BaseSettings):
     # set by Terraform to /var/task/db/imports in the deployed Lambda.
     ddl_import_root: str = ""
 
+    # Endpoint control plane (ADR-0008) — the isolated PR-signer Lambda the Core
+    # API invokes to open a permission-change PR. Empty means the control plane
+    # isn't provisioned on this deployment (the admin permission endpoint then
+    # returns 501). Set by Terraform from the pr_signer module's function name.
+    pr_signer_function_name: str = ""
+
+    # Cognito group that authorises admin-only endpoints (ADR-0008 permission
+    # changes, and future user management). Membership comes from the verified
+    # cognito:groups claim; matches the baseline "admin" group Terraform seeds.
+    admin_group: str = "admin"
+
     # Application
     environment: str = "dev"
     log_level: str = "INFO"

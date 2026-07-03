@@ -2,6 +2,7 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import Depends, HTTPException, status
 
+from .config import settings
 from .events.base import EventPublisher
 from .middleware.auth import AuthenticatedUser, require_auth
 from .permissions import PermissionsRegistry, lookup_permission
@@ -47,6 +48,25 @@ def require_plugin_tenant_context(
     route handler in api.routing.plugin_router.
     """
     return require_tenant_context(caller)
+
+
+def require_admin(
+    caller: AuthenticatedUser = Depends(require_auth),
+) -> AuthenticatedUser:
+    """FastAPI dependency: require the caller to be in the admin group.
+
+    Admin-only endpoints (ADR-0008 endpoint permission changes, and future user
+    management) gate on ``settings.admin_group``, matched against the caller's
+    ``cognito:groups`` (ADR-0004 authorization model). A caller who is
+    authenticated but lacks the group gets 403 — distinct from the 401 an
+    unauthenticated caller gets from ``require_auth``.
+    """
+    if settings.admin_group not in caller.roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator role required",
+        )
+    return caller
 
 
 def require_crud_permission(

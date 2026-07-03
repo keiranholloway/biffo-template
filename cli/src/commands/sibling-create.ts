@@ -538,11 +538,15 @@ function siteBucketName(projectName: string, environment: string, accountId: str
  * cloned temp directory.
  */
 function readExistingSiblingOrigins(filePath: string): {
-  sibling_origins?: Array<{ name: string; bucket_regional_domain: string }>
+  sibling_origins?: Array<{ name: string; bucket_regional_domain: string; description?: string }>
 } {
   try {
     return JSON.parse(readFileSync(filePath, 'utf8')) as {
-      sibling_origins?: Array<{ name: string; bucket_regional_domain: string }>
+      sibling_origins?: Array<{
+        name: string
+        bucket_regional_domain: string
+        description?: string
+      }>
     }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {}
@@ -614,7 +618,13 @@ async function registerWithCore(
 
       const existing = readExistingSiblingOrigins(filePath)
       const siblings = (existing.sibling_origins ?? []).filter((s) => s.name !== pathPrefix)
-      siblings.push({ name: pathPrefix, bucket_regional_domain: domain })
+      // description feeds the portal's Microservices tab (built into siblings.json
+      // at deploy time). Omitted when the sibling has none, to keep entries lean.
+      siblings.push({
+        name: pathPrefix,
+        bucket_regional_domain: domain,
+        ...(config.project.description ? { description: config.project.description } : {}),
+      })
 
       mkdirSync(dirname(filePath), { recursive: true })
       writeFileSync(filePath, JSON.stringify({ sibling_origins: siblings }, null, 2) + '\n')

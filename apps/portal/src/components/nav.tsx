@@ -12,6 +12,9 @@ export function Nav() {
     <nav className="flex items-center justify-between border-b px-6 py-4">
       <div className="flex items-center gap-6">
         <span className="text-lg font-semibold">Biffo Portal</span>
+        <Link href="/admin/microservices" className="text-sm text-gray-600 hover:text-gray-900">
+          Microservices
+        </Link>
         <Link href="/admin/marketplace" className="text-sm text-gray-600 hover:text-gray-900">
           Marketplace
         </Link>

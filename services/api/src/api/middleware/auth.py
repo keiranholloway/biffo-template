@@ -4,11 +4,15 @@ from functools import lru_cache
 
 import httpx
 from aws_lambda_powertools import Logger
-from fastapi import HTTPException, Security, status
+from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
+from ..database import get_db
+from ..models.user import User
 
 logger = Logger()
 _security = HTTPBearer()
@@ -92,19 +96,15 @@ def _verify_token(token: str) -> dict:
     return claims
 
 
-async def require_auth(
-    credentials: HTTPAuthorizationCredentials = Security(_security),
+def identity_from_token(
+    credentials: HTTPAuthorizationCredentials,
 ) -> AuthenticatedUser:
-    """
-    FastAPI dependency that verifies the Cognito JWT and returns the caller's identity.
+    """Verify the Cognito JWT and map its claims to the caller's identity.
 
-    Raises HTTP 401 if the token is missing, expired, or invalid.
-    The tenant_id is always 'default' in single-tenant deployments (ADR-0001).
-    When multi-tenancy is added, it will be sourced from a custom Cognito claim.
-
-    Roles come from the `cognito:groups` claim already present in the verified
-    token (ADR-0004) — no extra DB round-trip. The claim is absent for a caller
-    in no groups; it is a JSON array of group names when present.
+    Pure — no DB. The tenant_id is always 'default' in single-tenant deployments
+    (ADR-0001). Roles come from the `cognito:groups` claim already present in the
+    verified token (ADR-0004) — no extra round-trip. The claim is absent for a
+    caller in no groups; it is a JSON array of group names when present.
     """
     claims = _verify_token(credentials.credentials)
 
@@ -115,3 +115,42 @@ async def require_auth(
         tenant_id="default",
         roles=list(claims.get("cognito:groups") or []),
     )
+
+
+async def _ensure_active(db: AsyncSession, cognito_sub: str) -> None:
+    """Reject a deactivated user (issue #150).
+
+    Cognito's suspend flow (AdminDisableUser + AdminUserGlobalSignOut) revokes
+    refresh tokens immediately, but an already-issued access token stays valid
+    until it expires (~1h). Enforcing the DB `users.is_active` flag — set by the
+    admin suspend/reactivate endpoints — on every request closes that window.
+    A user with no row yet (provisioned but never logged in) is treated as
+    active; the row is created on first login.
+    """
+    result = await db.execute(
+        select(User.is_active).where(User.cognito_sub == cognito_sub)
+    )
+    if result.scalar_one_or_none() is False:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account is deactivated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+async def require_auth(
+    credentials: HTTPAuthorizationCredentials = Security(_security),
+    db: AsyncSession = Depends(get_db),
+) -> AuthenticatedUser:
+    """
+    FastAPI dependency: verify the Cognito JWT, enforce the user isn't
+    deactivated, and return the caller's identity.
+
+    Raises HTTP 401 if the token is missing/expired/invalid, or if the user's
+    DB row is marked inactive (issue #150). This is the single authorization
+    seam every authenticated route flows through, so the is_active check applies
+    everywhere — at the cost of one indexed lookup by `cognito_sub` per request.
+    """
+    user = identity_from_token(credentials)
+    await _ensure_active(db, user.sub)
+    return user

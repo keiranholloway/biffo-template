@@ -117,15 +117,19 @@ resource "aws_cognito_user_pool_client" "portal" {
   prevent_user_existence_errors = "ENABLED"
 }
 
+# Hosted-UI / managed-login domain. AWS disables cognito-idp VPC endpoints
+# (PrivateLink) for ANY pool that has a domain configured. dev is NAT-less and
+# reaches Cognito's admin API through that VPC endpoint (for user management),
+# so a dev pool MUST NOT have a domain — otherwise those calls fail with
+# "PrivateLink access is disabled for the user pool that has ManagedLogin
+# configured". The portal signs in via SRP (amazon-cognito-identity-js) and JWKS
+# is fetched by pool id, so the hosted UI is unused anyway; dev simply omits it.
+# staging/prod have NAT (Cognito egresses normally, no endpoint), so they keep
+# the domain for any hosted-UI/OAuth use. managed_login_version = 1 pins classic.
 resource "aws_cognito_user_pool_domain" "main" {
-  domain       = var.domain_prefix
-  user_pool_id = aws_cognito_user_pool.main.id
-  # Classic Hosted UI. AWS defaults new domains to Managed Login (v2), and AWS
-  # disables PrivateLink (VPC interface endpoints) for any pool with Managed
-  # Login configured — which breaks the Core API Lambda's cognito-idp calls in
-  # NAT-less environments (it reaches Cognito via that endpoint). The portal
-  # authenticates via SRP (amazon-cognito-identity-js), not the Hosted UI, so
-  # pinning to classic has no UX impact.
+  count                 = var.environment == "dev" ? 0 : 1
+  domain                = var.domain_prefix
+  user_pool_id          = aws_cognito_user_pool.main.id
   managed_login_version = 1
 }
 

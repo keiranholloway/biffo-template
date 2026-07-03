@@ -15,6 +15,10 @@ async function handleResponse<T>(res: Response): Promise<T> {
     const body = await res.text().catch(() => res.statusText)
     throw new ApiError(res.status, body)
   }
+  // 204 No Content (e.g. DELETE) has an empty body — res.json() would throw.
+  if (res.status === 204) {
+    return undefined as T
+  }
   return res.json() as Promise<T>
 }
 

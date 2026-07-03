@@ -21,6 +21,9 @@ export function Nav() {
         <Link href="/admin/endpoints" className="text-sm text-gray-600 hover:text-gray-900">
           Endpoints
         </Link>
+        <Link href="/admin/users" className="text-sm text-gray-600 hover:text-gray-900">
+          Users
+        </Link>
       </div>
       <div className="flex items-center gap-4">
         {username != null && <span className="text-sm text-gray-600">{username}</span>}

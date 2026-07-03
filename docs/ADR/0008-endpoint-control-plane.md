@@ -16,12 +16,12 @@ This is not just a UI feature — it introduces something the platform doesn't h
 
 ## Decision
 
-Add an **admin-only control-plane action** — `POST /api/v1/admin/endpoints/permission` on the Core API — that, given `(source, plugin|table, operation, allowed, required_role)`:
+Split the control plane into **two components** so the repo-write credential is isolated from the data API:
 
-1. reads the owning file at the base branch's head via the **GitHub Contents API**,
-2. applies the single permission change,
-3. commits it to a new branch and **opens a PR** on the instance repo (never a direct push),
-4. returns the PR URL for the portal to link to.
+1. **Core API admin endpoint** — `POST /api/v1/admin/endpoints/permission`. Authenticates the caller (Cognito JWT), authorizes them (`admin` group), validates the requested `(source, plugin|table, operation, allowed, required_role)` change against the `TablePermissions` model, and then **invokes the PR-signer** with that validated payload plus the requester's identity. It returns the resulting PR URL to the portal. **The Core API never holds a repo-write credential.**
+2. **PR-signer Lambda** — a dedicated, minimal function with **no public/API-Gateway endpoint** (invocable only via the AWS SDK). It is the only component that can read the **GitHub App** private key (from Secrets Manager, granted to its role alone). On invocation it re-validates the payload, then via the **GitHub Contents API**: reads the owning file at the base branch's head, applies the single permission change, commits it to a new branch, and **opens a PR** on the instance repo (never a direct push). It returns the PR URL and emits an audit event.
+
+**Internal trust is IAM, not a shared secret.** The Core API's execution role is granted `lambda:InvokeFunction` on the signer and nothing else; the signer's resource policy accepts only that caller. The GitHub App secret is readable **only** by the signer's role — so a compromise of the data API cannot reach the repo credential.
 
 It never merges or deploys — a human reviews and merges, then the existing pipeline applies it.
 
@@ -33,21 +33,21 @@ It never merges or deploys — a human reviews and merges, then the existing pip
 
 ### Where the control plane runs
 
-#### Option A — In the Core API _(chosen)_
+#### Option A — Entirely in the Core API
 
-A new admin route on the existing FastAPI service.
+A single admin route on the FastAPI service that also holds the GitHub App key and opens the PR.
 
-**Pros:** reuses the existing auth (Cognito JWT + role check), one service, no new deploy target. The portal already talks to it.
+**Pros:** one service, reuses existing auth, no new deploy target.
 
-**Cons:** gives the data API a GitHub repo-write credential — a genuine expansion of its blast radius. Needs a GitHub client in Python.
+**Cons:** gives the **data API** a repo-write credential — a compromise of the Core API (which already holds all tenant data) would also yield repo write. For a feature where security is the deciding constraint, that shared blast radius is the wrong default.
 
-#### Option B — A separate control-plane service/Lambda
+#### Option B — Core API + isolated PR-signer Lambda _(chosen)_
 
-Isolate the repo-write credential in its own service.
+The Core API does authz + validation and invokes a dedicated PR-signer Lambda (over IAM) that alone holds the GitHub App credential and performs the edit + PR.
 
-**Pros:** the data API never holds repo-write creds.
+**Pros:** the repo-write credential is reachable only by a minimal, no-public-endpoint function; a compromise of the data API does not yield repo write (defense in depth). Clear separation of "who's allowed" (Core API) from "who can touch the repo" (signer).
 
-**Cons:** another service to build, deploy, secure, and route to — heavy for a solopreneur platform whose whole premise is fewer moving parts. The isolation is real but modest, since the token is PR-scoped and admin-gated either way.
+**Cons:** one more small service to build, deploy, and secure. Accepted deliberately because security is the primary constraint here.
 
 #### Option C — Portal → backend proxy that runs the CLI
 
@@ -62,7 +62,7 @@ The ADR-0003 "install via a backend proxy" sketch: a server runs `biffo` + git.
 
 ## Rationale
 
-Option A keeps the platform to one service and reuses its auth, which matters more here than the modest credential isolation Option B buys — especially since the token is PR-only and the action is admin-gated, so the worst case is "an admin opens a PR they could have opened by hand." The Contents API makes the edit stateless and cheap. Restricting v1 to plugin (JSON) permissions avoids the genuinely hard and error-prone problem of rewriting Python source, while still covering the common case (plugins are where most CRUD tables live).
+Because security is the deciding constraint, the credential that can write to the repo is isolated in a dedicated PR-signer (Option B) rather than co-located with the data API (Option A) — a compromise of the Core API must not also grant repo write. The Core API keeps what it's already good at (verifying the caller is an authenticated admin) and delegates the privileged act to a minimal function with no public surface, trusted over IAM rather than a shared secret. The Contents API makes the signer stateless and cheap (no clone, no writable FS, no git binary). Restricting v1 to plugin (JSON) permissions avoids mechanically rewriting Python source — both an error-prone and a security-sensitive operation — while still covering the common case (plugins are where most CRUD tables live).
 
 ## Consequences
 
@@ -73,7 +73,7 @@ Option A keeps the platform to one service and reuses its auth, which matters mo
 
 ### Negative / Trade-offs
 
-- The Core API now needs a **GitHub App / PR-scoped token** configured per instance — a new onboarding/secret-management step, and a new credential on the data service.
+- A new per-instance setup step: registering/installing a **GitHub App** and storing its key for the signer — plus a **new PR-signer Lambda** (and its IAM/Terraform) to build, deploy, and maintain. Accepted as the cost of isolating the credential.
 - **Core-table (`__crud_permissions__`) toggling is not supported in v1** — editing Python source safely is out of scope; those still change by hand. Follow-up options: move core `__crud_permissions__` into a JSON sidecar the model reads, or an AST-based editor. To be decided separately.
 - Still not instant — it's a PR + merge + deploy, by design. (A live runtime toggle would be a different ADR that supersedes ADR-0004's build-time-artifact decision.)
 
@@ -89,7 +89,8 @@ Security is the deciding constraint for this feature, so the controls are specif
 - **Least-privilege credential.** A **GitHub App** installed on only the instance repo, with the minimum fine-grained permissions (`contents: write`, `pull_requests: write`) — **not** a personal access token and **not** an org-wide token. The App's private key lives in a secrets manager (AWS Secrets Manager); the server mints a **short-lived installation token** per operation and discards it. Tokens/keys are never returned to the client, never logged, and never written to the repo.
 - **No privileged write path.** The action can only open a PR. It cannot merge, cannot push to a protected branch, and cannot disable branch protection — branch protection + human review remain the gate on what deploys (CLAUDE.md invariant #5). A compromised caller can at most open a PR an admin would still have to merge.
 - **Constrained mutation.** The only thing the action may change is the `permissions` block of a table that already exists in a discovered manifest. The requested change is validated against the same Pydantic `TablePermissions` model before anything is written — it cannot write arbitrary files, arbitrary paths, or arbitrary content, and it cannot touch executable source (hence plugin-JSON only in v1).
-- **Defense in depth (optional, flagged for decision).** The GitHub App credential can be isolated in a dedicated minimal "PR-signer" function the Core API calls, so a compromise of the data API doesn't directly yield the repo credential. This adds a service; given the credential is already PR-scoped, single-repo, and short-lived, and deploy is gated by human review, the marginal benefit is modest — **recommended as a follow-up hardening, not a v1 blocker.** (Confirm if you'd rather isolate it from day one.)
+- **Credential isolation (chosen, day one).** The GitHub App private key is readable only by the PR-signer's role — not the Core API's. The signer has no public/API-Gateway endpoint and is invocable only by the Core API's role over IAM (`lambda:InvokeFunction`). So even a full compromise of the data API yields no repo-write credential and no direct path to open a PR except through the signer's validated, PR-only interface.
+- **Payload re-validation at the boundary.** The signer does not trust its caller blindly — it re-validates the change against `TablePermissions` and confirms the target table/plugin exists before writing, so a bug or compromise upstream still can't make it write arbitrary content.
 
 ## Auditability
 

@@ -53,6 +53,7 @@ See [CLAUDE.md](CLAUDE.md) for full project context and commands.
 ## Guides
 
 - [Importing a DDL data model](docs/guides/data-import.md) — `biffo data import`/`apply`/`list`
+- [Exposing CRUD endpoints](docs/guides/generic-crud-endpoints.md) — turn on list/read/create/update/delete for a table via permissions
 
 ## Architecture decisions
 

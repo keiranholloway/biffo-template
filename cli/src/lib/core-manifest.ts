@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
@@ -161,7 +161,9 @@ export interface CoreDiff {
 }
 
 function sameFile(a: string, b: string): boolean {
-  if (statSync(a).size !== statSync(b).size) return false
+  // Read both and compare buffers directly — no stat-then-read (that's a
+  // check-then-use race, CodeQL js/file-system-race). Core-owned files are
+  // source-sized, so reading both in full is cheap.
   return readFileSync(a).equals(readFileSync(b))
 }
 

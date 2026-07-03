@@ -123,18 +123,29 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # gitleaks/gitleaks-action@v2 requires a paid GITLEAKS_LICENSE for
+      # organization-owned repos — this repo is a personal account today so it
+      # doesn't hit that, but every instance/sibling scaffolded from this
+      # template that lands under an org would (confirmed: tabsii-com/
+      # tabsii-platform and tabsii-com/tabsii-crm both did). Install the free,
+      # open-source gitleaks CLI directly instead, so scaffolded repos don't
+      # inherit a check that silently breaks the moment they're org-owned.
+      - name: Install gitleaks
+        run: |
+          curl -sSfL -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz -C /usr/local/bin gitleaks
+          gitleaks version
+      # First pass: scan git history (fetch-depth: 0 above), catching secrets
+      # committed then removed within the same history.
+      - name: gitleaks git history scan
+        run: gitleaks detect --redact -v --exit-code=2
       # Second pass: scan every file in the working tree (no-git mode).
       # This mirrors what generated repos see on their first CI run — the initial
       # commit includes every template file, so secrets in unchanged files would
-      # pass the diff scan above but fail there. Running both here closes the gap.
+      # pass the history scan above but fail there. Running both here closes the gap.
       - name: gitleaks filesystem scan
-        run: |
-          GITLEAKS=$(find /tmp -maxdepth 4 -name gitleaks -type f 2>/dev/null | head -1)
-          [ -n "$GITLEAKS" ] || { echo "::error::gitleaks binary not found"; exit 1; }
-          "$GITLEAKS" detect --no-git --redact -v --exit-code=2
+        run: gitleaks detect --no-git --redact -v --exit-code=2
 
   security-sast-python:
     name: SAST (Python / Bandit)

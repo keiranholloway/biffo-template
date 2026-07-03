@@ -72,8 +72,21 @@ resource "aws_cognito_user_pool" "main" {
     allow_admin_create_user_only = false
   }
 
-  user_pool_add_ons {
-    advanced_security_mode = var.environment == "prod" ? "ENFORCED" : "AUDIT"
+  # Feature tier. Advanced security (threat protection) requires the Plus tier,
+  # and AWS disables cognito-idp VPC endpoints (PrivateLink) for Essentials/Plus
+  # pools ("PrivateLink access is disabled for the user pool that has ManagedLogin
+  # configured"). dev is NAT-less and reaches Cognito's admin API through that VPC
+  # endpoint, so dev must stay on the Lite tier or user-management calls fail.
+  # staging/prod have NAT (Cognito egresses normally), so they keep Plus +
+  # threat protection. The domain's managed_login_version is unrelated to this.
+  user_pool_tier = var.environment == "dev" ? "LITE" : "PLUS"
+
+  dynamic "user_pool_add_ons" {
+    # Lite has no advanced security; omit the block entirely on dev.
+    for_each = var.environment == "dev" ? [] : [1]
+    content {
+      advanced_security_mode = var.environment == "prod" ? "ENFORCED" : "AUDIT"
+    }
   }
 
   tags = var.tags

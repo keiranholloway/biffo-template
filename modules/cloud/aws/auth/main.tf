@@ -107,6 +107,13 @@ resource "aws_cognito_user_pool_client" "portal" {
 resource "aws_cognito_user_pool_domain" "main" {
   domain       = var.domain_prefix
   user_pool_id = aws_cognito_user_pool.main.id
+  # Classic Hosted UI. AWS defaults new domains to Managed Login (v2), and AWS
+  # disables PrivateLink (VPC interface endpoints) for any pool with Managed
+  # Login configured — which breaks the Core API Lambda's cognito-idp calls in
+  # NAT-less environments (it reaches Cognito via that endpoint). The portal
+  # authenticates via SRP (amazon-cognito-identity-js), not the Hosted UI, so
+  # pinning to classic has no UX impact.
+  managed_login_version = 1
 }
 
 # Seed the initial admin user — Cognito emails a temporary password to admin_email.

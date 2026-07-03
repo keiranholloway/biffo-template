@@ -1,0 +1,110 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import {
+  type CoreManifest,
+  computeCoreDiff,
+  findTemplateRoot,
+  isTemplateOwned,
+  listTemplateOwnedFiles,
+  readCoreManifest,
+} from './core-manifest.js'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const repoRoot = join(here, '..', '..', '..')
+
+const MANIFEST: CoreManifest = {
+  version: 1,
+  templateOwned: ['services/api/', 'modules/', 'core.version', 'package.json'],
+  userOwned: ['services/', 'infra/', 'README.md'],
+}
+
+describe('isTemplateOwned (longest-prefix, tie -> user)', () => {
+  it('matches a template directory subtree', () => {
+    expect(isTemplateOwned('services/api/src/main.py', MANIFEST)).toBe(true)
+    expect(isTemplateOwned('modules/cloud/aws/main.tf', MANIFEST)).toBe(true)
+  })
+  it('matches an exact template file', () => {
+    expect(isTemplateOwned('core.version', MANIFEST)).toBe(true)
+    expect(isTemplateOwned('package.json', MANIFEST)).toBe(true)
+  })
+  it('a more specific template prefix beats a broad user prefix', () => {
+    // services/ is userOwned, but services/api/ is a longer templateOwned prefix
+    expect(isTemplateOwned('services/api/src/x.py', MANIFEST)).toBe(true)
+  })
+  it('a user subtree under no more-specific template prefix is user-owned', () => {
+    expect(isTemplateOwned('services/rbac/biffo.plugin.json', MANIFEST)).toBe(false)
+    expect(isTemplateOwned('infra/environments/dev/main.tf', MANIFEST)).toBe(false)
+    expect(isTemplateOwned('README.md', MANIFEST)).toBe(false)
+  })
+  it('an unlisted path is not template-owned', () => {
+    expect(isTemplateOwned('apps/portal/page.tsx', MANIFEST)).toBe(false)
+  })
+})
+
+describe('real repo core-manifest.json', () => {
+  it('parses and classifies core vs user paths as expected', () => {
+    const manifest = readCoreManifest(repoRoot)
+    expect(manifest.version).toBe(1)
+    expect(isTemplateOwned('services/api/src/api/main.py', manifest)).toBe(true)
+    expect(isTemplateOwned('services/rbac/biffo.plugin.json', manifest)).toBe(false)
+    expect(isTemplateOwned('infra/environments/dev/main.tf', manifest)).toBe(false)
+    expect(isTemplateOwned('biffo.core.json', manifest)).toBe(false)
+  })
+
+  it('findTemplateRoot locates the repo root from a nested dir', () => {
+    expect(findTemplateRoot(here)).toBe(repoRoot)
+  })
+})
+
+describe('listTemplateOwnedFiles + computeCoreDiff', () => {
+  let template: string
+  let instance: string
+
+  beforeEach(() => {
+    template = mkdtempSync(join(tmpdir(), 'biffo-tmpl-'))
+    instance = mkdtempSync(join(tmpdir(), 'biffo-inst-'))
+  })
+  afterEach(() => {
+    rmSync(template, { recursive: true, force: true })
+    rmSync(instance, { recursive: true, force: true })
+  })
+
+  function write(root: string, rel: string, content: string): void {
+    const p = join(root, rel)
+    mkdirSync(dirname(p), { recursive: true })
+    writeFileSync(p, content)
+  }
+
+  it('lists only template-owned files and skips excluded dirs', () => {
+    write(template, 'services/api/main.py', 'x')
+    write(template, 'services/rbac/plugin.json', 'y') // user-owned
+    write(template, 'node_modules/foo/index.js', 'z') // hard-excluded
+    const files = listTemplateOwnedFiles(template, MANIFEST)
+    expect(files).toEqual(['services/api/main.py'])
+  })
+
+  it('classifies added / removed / modified / unchanged from the instance perspective', () => {
+    // unchanged
+    write(template, 'core.version', '0.2.0\n')
+    write(instance, 'core.version', '0.2.0\n')
+    // modified
+    write(template, 'services/api/main.py', 'new')
+    write(instance, 'services/api/main.py', 'old')
+    // added (in template, not instance)
+    write(template, 'services/api/new_file.py', 'brand new')
+    // removed (in instance, not template)
+    write(instance, 'services/api/gone.py', 'obsolete')
+    // user-owned differences are ignored entirely
+    write(template, 'services/rbac/a.json', '1')
+    write(instance, 'services/rbac/a.json', '2')
+
+    const diff = computeCoreDiff(template, instance, MANIFEST)
+    expect(diff.modified).toEqual(['services/api/main.py'])
+    expect(diff.added).toEqual(['services/api/new_file.py'])
+    expect(diff.removed).toEqual(['services/api/gone.py'])
+    expect(diff.unchanged).toBe(1)
+  })
+})

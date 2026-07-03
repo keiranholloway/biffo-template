@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "note": "ADR-0006 template-owned path boundary. Ownership is resolved by longest matching prefix; a prefix ending in '/' matches a directory subtree, otherwise it matches an exact file. On a tie, user-owned wins (fail-closed: an upgrade never touches a path it isn't sure the template owns). Conservatively excludes apps/ (portal carries user/plugin pages) and infra/environments/ (per-instance config and secrets) for now; that boundary can widen later.",
+  "templateOwned": [
+    "services/api/",
+    "services/_template/",
+    "modules/",
+    "packages/",
+    "cli/",
+    ".github/",
+    "scripts/",
+    "docs/ADR/",
+    "core.version",
+    "core-manifest.json",
+    "package.json",
+    "pnpm-workspace.yaml",
+    "turbo.json",
+    "eslint.config.mjs",
+    "ruff.toml",
+    "pyproject.toml",
+    "commitlint.config.js",
+    "CLAUDE.md"
+  ],
+  "userOwned": [
+    "services/",
+    "infra/",
+    "apps/",
+    "db/",
+    "README.md",
+    "biffo.config.json",
+    "biffo.core.json",
+    "biffo.plugins.json",
+    "pnpm-lock.yaml",
+    "uv.lock"
+  ]
+}

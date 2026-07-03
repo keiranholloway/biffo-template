@@ -1,4 +1,5 @@
 import { Command } from 'commander'
+import { coreDiffCommand } from './core-diff.js'
 import { coreStatusCommand } from './core-status.js'
 
 export const coreCommand = new Command('core').description(
@@ -6,3 +7,4 @@ export const coreCommand = new Command('core').description(
 )
 
 coreCommand.addCommand(coreStatusCommand)
+coreCommand.addCommand(coreDiffCommand)

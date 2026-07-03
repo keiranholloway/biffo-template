@@ -15,3 +15,14 @@ admin_username = "admin"
 # module "plugin_<name>" block in main.tf and a module directory at
 # modules/plugins/<name>/ — see infra/environments/dev/README.md.
 # enabled_plugins = ["rbac"]
+
+# Optional: endpoint control plane — isolated PR-signer (ADR-0008). Requires a
+# registered GitHub App with contents:write + pull_requests:write on this repo;
+# see docs/guides/endpoint-control-plane-setup.md. After apply, upload the App
+# private key (PEM) to the created secret out-of-band — never put it here.
+# enable_pr_signer                 = true
+# pr_signer_github_app_id          = "123456"
+# pr_signer_github_installation_id = "45678901"
+# pr_signer_repo_owner             = "my-org"
+# pr_signer_repo_name              = "my-project"
+# pr_signer_base_branch            = "main"

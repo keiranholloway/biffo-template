@@ -58,6 +58,18 @@ variable "db_credentials_secret_arn" {
   default     = ""
 }
 
+variable "readable_secret_arns" {
+  description = "Additional Secrets Manager secret ARNs this function may read (secretsmanager:GetSecretValue). Kept separate from db_credentials_secret_arn so a non-DB function (e.g. the PR-signer reading its GitHub App key, ADR-0008) gets least-privilege access to just its own secret without the database seam."
+  type        = list(string)
+  default     = []
+}
+
+variable "invoke_function_arns" {
+  description = "Lambda function ARNs this function may invoke (lambda:InvokeFunction). Grants one function least-privilege permission to call another over IAM — e.g. the Core API invoking the isolated PR-signer (ADR-0008) without itself holding the signer's GitHub credential."
+  type        = list(string)
+  default     = []
+}
+
 variable "event_bus_name" {
   type    = string
   default = ""

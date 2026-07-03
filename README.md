@@ -56,6 +56,7 @@ See [CLAUDE.md](CLAUDE.md) for full project context and commands.
 - [Exposing CRUD endpoints](docs/guides/generic-crud-endpoints.md) — turn on list/read/create/update/delete for a table via permissions
 - [Building & installing plugins](docs/guides/plugins.md) — `biffo plugin install` and authoring a `biffo.plugin.json`
 - [Upgrading an instance's core](docs/guides/core-upgrade.md) — `biffo core status`/`diff`/`upgrade`
+- [Creating a sibling app](docs/guides/sibling-apps.md) — `biffo sibling create`, shared-session SSO, path-based routing
 
 ## Architecture decisions
 

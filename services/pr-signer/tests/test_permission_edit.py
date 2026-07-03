@@ -99,3 +99,85 @@ def test_rejects_manifest_without_tables():
             allowed=True,
             required_role=[],
         )
+
+
+# --- prettier-compatible formatting (minimal, CI-clean diffs) ---------------
+
+# A canonically prettier-formatted manifest: short arrays inline, objects broken
+# one entry per line, printWidth 100. This is byte-for-byte what `prettier`
+# produces (verified against prettier 3), so re-serialization must reproduce it.
+CANON = """\
+{
+  "name": "notepad",
+  "version": "1.0.0",
+  "tags": ["auth", "notes"],
+  "tables": [
+    {
+      "name": "notes",
+      "columns": ["tenant_id", "title"],
+      "permissions": {
+        "list": {
+          "allowed": true,
+          "required_role": []
+        },
+        "create": {
+          "allowed": true,
+          "required_role": ["admin"]
+        }
+      }
+    }
+  ]
+}
+"""
+
+
+def test_output_is_prettier_clean_and_minimal_diff():
+    # Change only notes.list required_role [] -> ["admin"].
+    out = apply_permission_change(
+        CANON, table="notes", operation="list", allowed=True, required_role=["admin"]
+    )
+    # Short arrays stay INLINE (json.dumps(indent=2) would have expanded them).
+    assert '"tags": ["auth", "notes"]' in out
+    assert '"columns": ["tenant_id", "title"]' in out
+    assert '"required_role": ["admin"]' in out  # the changed line, inline
+    # The ONLY changed line is notes.list.required_role — everything else byte-identical.
+    changed = [
+        line
+        for line in _diff_lines(CANON, out)
+        if (line.startswith("+") or line.startswith("-"))
+        and not line.startswith("+++")
+        and not line.startswith("---")
+    ]
+    assert changed == [
+        '-          "required_role": []',
+        '+          "required_role": ["admin"]',
+    ]
+
+
+def test_idempotent_on_canonical_manifest():
+    # Re-applying an already-set permission reproduces the file byte-for-byte,
+    # so open_permission_pr correctly detects a no-op (it compares content).
+    out = apply_permission_change(
+        CANON, table="notes", operation="create", allowed=True, required_role=["admin"]
+    )
+    assert out == CANON
+
+
+def test_long_array_wraps_when_it_exceeds_print_width():
+    roles = [f"role-number-{n:02d}" for n in range(12)]  # well over 100 cols inline
+    out = apply_permission_change(
+        CANON, table="notes", operation="update", allowed=True, required_role=roles
+    )
+    # Wrapped one-per-line, not inline.
+    assert '"required_role": [\n            "role-number-00",' in out
+    assert json.loads(out)  # still valid JSON
+    perms = _table(out, "notes")["permissions"]
+    assert perms["update"]["required_role"] == roles
+
+
+def _diff_lines(before: str, after: str) -> list[str]:
+    import difflib
+
+    return list(
+        difflib.unified_diff(before.splitlines(), after.splitlines(), lineterm="", n=0)
+    )

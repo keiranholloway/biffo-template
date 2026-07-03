@@ -137,6 +137,10 @@ module "core_api" {
   private_subnet_ids        = module.networking.private_subnet_ids
   db_credentials_secret_arn = module.database.credentials_secret_arn
   event_bus_name            = module.events.event_bus_name
+  # Lets the Core API administer Cognito users (add/assign-group/suspend/remove).
+  # Runtime reachability is provided by the cognito-idp interface VPC endpoint
+  # the networking module creates in this NAT-less environment.
+  cognito_user_pool_arn = module.auth.user_pool_arn
   environment_variables = {
     BIFFO_ENVIRONMENT = local.environment
     # Full DB URL baked in — Lambda has no outbound internet so it can't call

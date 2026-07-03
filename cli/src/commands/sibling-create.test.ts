@@ -178,6 +178,13 @@ describe('runSiblingCreate', () => {
     expect(aws.setupOidcTrust).toHaveBeenCalledWith(SIBLING_CONFIG)
     expect(aws.bootstrapTerraformBackend).toHaveBeenCalledWith('reports')
     expect(github.configureBranchProtection).toHaveBeenCalledWith(SIBLING_CONFIG)
+    expect(github.setRepoVariable).toHaveBeenCalledWith(
+      'acme',
+      'reports',
+      'PROJECT_NAME',
+      'reports',
+    )
+    expect(github.setRepoVariable).toHaveBeenCalledWith('acme', 'reports', 'PATH_PREFIX', 'reports')
     expect(github.setEnvVariable).toHaveBeenCalledWith(
       'acme',
       'reports',
@@ -269,6 +276,45 @@ describe('runSiblingCreate', () => {
       join('infra', 'environments', 'dev', 'siblings.auto.tfvars.json'),
       join('infra', 'environments', 'staging', 'siblings.auto.tfvars.json'),
     ])
+  })
+
+  it('sets PATH_PREFIX separately from PROJECT_NAME when they differ', async () => {
+    // Reproduces the real-world case that caught this bug: a sibling whose
+    // repo/project name ("tabsii-crm") differs from the path it's routed
+    // on ("crm"). The deploy workflow's S3 sync destination, Next.js
+    // basePath, and CDN invalidation paths must all key off path_prefix,
+    // not project.name, or the built site is uploaded under a prefix
+    // CloudFront never routes requests to.
+    const github = makeGithubMock()
+    const aws = makeAwsMock()
+    const coreAws = makeAwsMock()
+    coreAws.readTerraformOutputs.mockResolvedValue(CORE_OUTPUTS)
+    const git = makeGitMock()
+    const session = makeSession()
+
+    const differingPrefixConfig = SiblingConfigSchema.parse({
+      ...SIBLING_CONFIG,
+      project: { name: 'tabsii-crm', description: 'Tabsii CRM' },
+      core: { ...SIBLING_CONFIG.core, path_prefix: 'crm' },
+    })
+
+    await runSiblingCreate(
+      github as never,
+      aws as never,
+      coreAws as never,
+      git,
+      differingPrefixConfig,
+      session,
+      { coreConfig: CORE_CONFIG, skeletonRoot, githubToken: 'gh-token' },
+    )
+
+    expect(github.setRepoVariable).toHaveBeenCalledWith(
+      'acme',
+      'reports',
+      'PROJECT_NAME',
+      'tabsii-crm',
+    )
+    expect(github.setRepoVariable).toHaveBeenCalledWith('acme', 'reports', 'PATH_PREFIX', 'crm')
   })
 
   it('propagates errors without marking the failing step complete', async () => {

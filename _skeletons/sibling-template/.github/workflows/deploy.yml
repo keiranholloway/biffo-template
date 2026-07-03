@@ -136,8 +136,8 @@ jobs:
         working-directory: apps/frontend
         env:
           NEXT_PUBLIC_SIBLING_NAME: ${{ vars.PROJECT_NAME }}
-          NEXT_PUBLIC_SIBLING_PATH_PREFIX: /${{ vars.PROJECT_NAME }}
-          NEXT_PUBLIC_BASE_PATH: /${{ vars.PROJECT_NAME }}
+          NEXT_PUBLIC_SIBLING_PATH_PREFIX: /${{ vars.PATH_PREFIX }}
+          NEXT_PUBLIC_BASE_PATH: /${{ vars.PATH_PREFIX }}
           NEXT_PUBLIC_CORE_PORTAL_URL: ${{ vars.CORE_PORTAL_URL }}
           NEXT_PUBLIC_CORE_COGNITO_USER_POOL_ID: ${{ vars.CORE_COGNITO_USER_POOL_ID }}
           NEXT_PUBLIC_CORE_COGNITO_CLIENT_ID: ${{ vars.CORE_COGNITO_CLIENT_ID }}
@@ -153,11 +153,11 @@ jobs:
           # segment (basePath), because the core project's CloudFront
           # forwards the full request URI (e.g. /<name>/foo.html) straight
           # through to this bucket with no prefix stripping.
-          aws s3 sync apps/frontend/out/ "s3://${{ vars.SITE_BUCKET_NAME }}/${{ vars.PROJECT_NAME }}/" \
+          aws s3 sync apps/frontend/out/ "s3://${{ vars.SITE_BUCKET_NAME }}/${{ vars.PATH_PREFIX }}/" \
             --delete \
             --cache-control "public, max-age=31536000, immutable" \
             --exclude "*.html"
-          aws s3 sync apps/frontend/out/ "s3://${{ vars.SITE_BUCKET_NAME }}/${{ vars.PROJECT_NAME }}/" \
+          aws s3 sync apps/frontend/out/ "s3://${{ vars.SITE_BUCKET_NAME }}/${{ vars.PATH_PREFIX }}/" \
             --delete \
             --cache-control "no-cache" \
             --include "*.html"
@@ -166,7 +166,7 @@ jobs:
         run: |
           aws cloudfront create-invalidation \
             --distribution-id "${{ vars.PARENT_CLOUDFRONT_DISTRIBUTION_ID }}" \
-            --paths "/${{ vars.PROJECT_NAME }}/*"
+            --paths "/${{ vars.PATH_PREFIX }}/*"
       - name: Package and deploy Lambda
         working-directory: services/api
         run: |

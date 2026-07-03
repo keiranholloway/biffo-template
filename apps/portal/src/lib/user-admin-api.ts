@@ -27,14 +27,23 @@ export interface CreateUserRequest {
 }
 
 /**
- * The baseline groups a portal admin can assign, mirroring the Cognito groups
- * provisioned in Terraform (modules/cloud/aws/auth). Kept as a constant because
- * the Core API exposes no "list groups" endpoint; a deployment that customizes
- * its group taxonomy should update this list.
+ * Fallback groups used only until `fetchGroups` resolves (or if it fails) —
+ * the baseline Cognito groups Terraform provisions (modules/cloud/aws/auth).
+ * The live list comes from `GET /api/v1/admin/groups` so a deployment that
+ * customizes its taxonomy needs no UI edit (issue #148).
  */
 export const ASSIGNABLE_GROUPS = ['admin', 'editor', 'viewer'] as const
 
+export interface GroupList {
+  groups: string[]
+}
+
 type Client = ReturnType<typeof createApiClient>
+
+/** List the Cognito groups a user can be assigned to on this deployment. */
+export function fetchGroups(client: Pick<Client, 'get'>): Promise<GroupList> {
+  return client.get<GroupList>('/api/v1/admin/groups')
+}
 
 const BASE = '/api/v1/admin/users'
 

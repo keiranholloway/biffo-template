@@ -1,15 +1,32 @@
 'use client'
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import type { CognitoUser } from 'amazon-cognito-identity-js'
 import { useAuth } from '@/context/auth-context'
 import { completeNewPassword } from '@/lib/auth'
+import { sanitizeReturnTo } from '@/lib/return-to'
 import { Button } from '@biffo/ui'
 
+// useSearchParams() requires a Suspense boundary in the App Router (it opts
+// the tree below it out of static rendering) — the actual form lives in
+// LoginForm so this default export can provide that boundary.
 export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  )
+}
+
+function LoginForm() {
   const { login } = useAuth()
   const router = useRouter()
+  // Set by a sibling app (ADR-0007) when it finds no shared session and
+  // bounces here — e.g. /login?return_to=/my-sibling/. Sanitised to a
+  // same-origin relative path only; see sanitizeReturnTo's own comment for
+  // why an absolute URL here would be an open-redirect risk.
+  const returnTo = sanitizeReturnTo(useSearchParams().get('return_to'))
 
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -30,7 +47,7 @@ export default function LoginPage() {
     try {
       const result = await login(username, password)
       if (result.kind === 'success') {
-        router.push('/dashboard')
+        router.push(returnTo)
       } else {
         setPendingUser(result.user)
         setPendingAttributes(result.userAttributes)
@@ -55,7 +72,7 @@ export default function LoginPage() {
     try {
       if (!pendingUser) return
       await completeNewPassword(pendingUser, newPassword, pendingAttributes)
-      router.push('/dashboard')
+      router.push(returnTo)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to set password')
     } finally {

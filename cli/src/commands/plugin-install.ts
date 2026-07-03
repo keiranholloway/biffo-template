@@ -1,8 +1,9 @@
 import { cpSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
 import { GitAdapter } from '../adapters/git/index.js'
+import { PluginMigrationsAdapter } from '../adapters/plugin-migrations/index.js'
 import { RegistryAdapter, type RegistryPluginEntry } from '../adapters/registry/index.js'
 import { log } from '../lib/logger.js'
 import { validateManifest, type PluginManifest } from '../lib/plugin-manifest.js'
@@ -22,7 +23,11 @@ export const pluginInstallCommand = new Command('install')
       await runPluginInstall(
         target,
         { dryRun: options.dryRun ?? false, cwd },
-        { registry: new RegistryAdapter(), git: new GitAdapter() },
+        {
+          registry: new RegistryAdapter(),
+          git: new GitAdapter(),
+          migrations: new PluginMigrationsAdapter(),
+        },
       )
     } catch (err) {
       log.error((err as Error).message)
@@ -33,6 +38,7 @@ export const pluginInstallCommand = new Command('install')
 export interface PluginInstallDeps {
   registry: RegistryAdapter
   git: GitAdapter
+  migrations: PluginMigrationsAdapter
 }
 
 export interface PluginInstallOptions {
@@ -102,15 +108,19 @@ export async function cloneAndValidatePlugin(
  * there is no "auto-registration endpoint" to call — the Core API
  * discovers `services/*\/biffo.plugin.json` on its own at db-init time
  * (`api.plugins.discover_plugin_manifests`, wired into
- * `main.py::_run_db_init` via `sync_plugin_migrations` and into
  * `build_plugin_router()`). So "installing" a plugin from the CLI's
  * perspective is: resolve it in the registry, clone its source into
  * `services/<name>/`, copy its Terraform module (if any) into
- * `modules/plugins/<name>/`, and commit — the next deploy's db-init does
- * the rest. Deliberately does not `git push` (no existing biffo command
- * does that on the user's behalf either; see deploy.ts/init.ts, which
- * push infrastructure change *requests* to GitHub Actions but never call
- * `git push` themselves).
+ * `modules/plugins/<name>/`, generate a real Alembic migration for its
+ * declared tables (`deps.migrations.generate`, a `uv run python` call into
+ * `services/api/scripts/generate_plugin_migrations.py` — see that
+ * adapter's docstring for why this is a subprocess rather than a
+ * TypeScript port), and commit all of it together — the next deploy's
+ * db-init applies the already-committed migration (it no longer generates
+ * anything itself; see `main.py::_run_db_init`). Deliberately does not
+ * `git push` (no existing biffo command does that on the user's behalf
+ * either; see deploy.ts/init.ts, which push infrastructure change
+ * *requests* to GitHub Actions but never call `git push` themselves).
  */
 export async function runPluginInstall(
   target: string,
@@ -180,6 +190,27 @@ export async function runPluginInstall(
       )
     }
 
+    if (manifest.tables.length > 0) {
+      // If this throws (e.g. `uv` missing), services/<name>/ is left
+      // copied-but-uncommitted on disk — no rollback happens anywhere else
+      // in this function either. Recovery is a two-step manual process:
+      // fix `uv`, then `biffo plugin sync-migrations <name>` (re-running
+      // `install` will fail with "already installed" now that targetDir
+      // exists) followed by `git add`/`git commit` yourself.
+      log.info(
+        `Generating migration for services/${entry.name}/'s ${manifest.tables.length} table(s)...`,
+      )
+      const generatedPaths = await deps.migrations.generate(options.cwd, [entry.name])
+      for (const absPath of generatedPaths) {
+        stagePaths.push(relative(options.cwd, absPath))
+      }
+      if (generatedPaths.length > 0) {
+        log.success(`Generated migration: ${relative(options.cwd, generatedPaths[0]!)}`)
+      }
+    } else {
+      log.info(`${entry.name} declares no tables — nothing to migrate.`)
+    }
+
     const commitMessage = `feat(plugins): install ${entry.name}@${entry.version}`
     await deps.git.add(options.cwd, stagePaths)
     await deps.git.commit(options.cwd, commitMessage)
@@ -187,9 +218,7 @@ export async function runPluginInstall(
 
     console.log(chalk.bold('\n  Plugin installed!\n'))
     console.log(`  ${entry.name}@${entry.version} is committed at services/${entry.name}/`)
-    console.log(
-      '  Push and redeploy to register its tables and routes (auto-discovered at db-init):',
-    )
+    console.log('  Push and redeploy to apply its migration and register its routes:')
     console.log(chalk.dim(`    git push`))
     console.log(chalk.dim(`    biffo deploy <environment> --app-only\n`))
   } finally {

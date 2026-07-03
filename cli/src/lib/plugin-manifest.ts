@@ -19,14 +19,20 @@
  * Core API (or the SDK) actually parses. The CLI validates against the
  * real, currently-enforced shape so a manifest that passes here is
  * guaranteed to also pass `sync_plugin_migrations()` /
- * `parse_plugin_routes_from_manifest()` at the next db-init, rather than
- * failing there after already being committed to the user's repo.
+ * `parse_plugin_routes_from_manifest()`, rather than failing at the next
+ * db-init after already being committed to the user's repo.
  *
- * This package can't import the Python models directly (a plugin's CLI
- * install happens outside any Python environment), so the duplication is
- * unavoidable — same rationale the Python side already documents for why
+ * This package can't import the Python models directly, so the duplication
+ * is unavoidable — same rationale the Python side already documents for why
  * biffo-plugin-sdk duplicates the Core API's models. If any of the three
  * Python sources above change, update this file too.
+ *
+ * Note: manifest *validation* here stays pure TypeScript/Zod, no Python
+ * needed. `biffo plugin install`/`upgrade`/`sync-migrations` as a whole,
+ * however, DO require a local Python/`uv` toolchain for the migration
+ * *generation* step downstream of this validation (see
+ * `adapters/plugin-migrations/index.ts`'s docstring for that trade-off) —
+ * this file's validation logic itself has no such requirement.
  */
 import { z } from 'zod'
 

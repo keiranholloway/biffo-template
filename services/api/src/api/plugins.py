@@ -6,8 +6,9 @@ CLI clones it there at ``biffo plugin install`` time). This module scans for
 those manifests so the Core API can:
 
 - list installed plugins with their table schemas (``routers/admin/plugins.py``)
-- auto-generate their table migrations (``migrations/plugin_migrations.py``'s
-  ``sync_plugin_migrations``, called from ``main.py``'s ``_run_db_init``)
+- generate their table migrations at CLI time (``migrations/plugin_migrations.py``'s
+  ``sync_plugin_migrations``, called from ``scripts/generate_plugin_migrations.py``
+  by ``biffo plugin install``/``upgrade``/``sync-migrations``)
 
 The Core API Lambda artifact is packaged from ``services/api/`` alone (see
 ``.github/workflows/deploy-app.yml``), so a plugin's full source tree is

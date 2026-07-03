@@ -203,7 +203,7 @@ When a user runs `biffo plugin install rbac@1.0`:
 2. **Resolve plugin** — Looks up `rbac` at minor version `1.0`. Validates `required_core_version` against the current Biffo version.
 3. **Clone plugin repo** — Clones into `services/rbac/` within the user's monorepo.
 4. **Merge Terraform** — Copies `terraform/` from the plugin into `modules/plugins/rbac/`. Adds a conditional module block to `infra/environments/<env>/main.tf` gated by an `enabled_plugins` list.
-5. **Generate migrations** — Parses `biffo.plugin.json` table definitions and generates Alembic migration files in `services/api/src/api/migrations/versions/`.
+5. **Generate migrations** — Parses `biffo.plugin.json` table definitions and generates a real, git-committed Alembic migration file in `services/api/migrations/versions/` (via a `uv run python` call into `services/api/scripts/generate_plugin_migrations.py`, a thin CLI wrapper around the same generator used by `biffo plugin upgrade`/`sync-migrations`). See the "Implementation Note" below.
 6. **Register routes** — Appends route registration entries to `services/api/src/api/routers/__init__.py`.
 7. **Add UI components** — Copies plugin UI pages/components into `apps/portal/src/app/` and `apps/portal/src/components/`. Next.js app router picks them up automatically at build time.
 8. **Update manifest** — Records the installed plugin (name, minor version, install date) in a local `biffo.plugins.json` file in the repo root.
@@ -245,8 +245,8 @@ Minor-version pinning ensures that breaking changes (new required fields, schema
 
 Upgrade and teardown are the **responsibility of the application** (the user's deployment), not the platform:
 
-- **Upgrade** — User runs `biffo plugin install <name>@<new_minor>`. The CLI pulls the new version, generates new migrations, and pushes. The user's CI runs `terraform apply` and `alembic upgrade head`.
-- **Teardown (uninstall)** — User runs `biffo plugin uninstall <name>`. The CLI removes the plugin's code, Terraform modules, routes, and UI components. A cleanup migration drops the plugin's tables. The user reviews and applies.
+- **Upgrade** — User runs `biffo plugin upgrade <name>@<new_minor>`. The CLI pulls the new version, generates and commits any new migrations the updated manifest requires, and commits. The user pushes; their CI runs `terraform apply` and `alembic upgrade head`.
+- **Teardown (uninstall)** — User runs `biffo plugin uninstall <name>`. The CLI removes the plugin's code and Terraform modules and commits. Migrations are deliberately NOT touched — no cleanup/drop migration is generated (see the "Implementation Note" below for why). Any tables the plugin created remain in the database; dropping them, if desired, requires a manually-written Alembic migration.
 
 No automatic uninstall happens. The user controls the lifecycle.
 
@@ -406,6 +406,16 @@ The overall architecture respects ADR-0001 (tenant isolation) and ADR-0002 (API-
 - The `biffo-plugin-sdk` is a thin utility layer — it adds a dependency but no framework overhead.
 - Plugin CI/CD pipelines are independent but must conform to Biffo's conventions (branch naming, environment structure).
 - The marketplace is officially curated — community submissions are welcome but require approval.
+
+---
+
+## Implementation Note (migration generation timing)
+
+Section 5's "Generate migrations" step describes generating a real, committed migration file at CLI install/upgrade time. For a period this ADR was aspirational rather than accurate: the actual implementation generated a plugin's migration dynamically at Lambda `db-init` time instead, into a directory recreated fresh on every deploy — so the generated file never persisted to git.
+
+This shipped a real production bug: once any real, committed migration was added _after_ a plugin's dynamically-generated one, the plugin's migration silently regenerated with a different `down_revision` on the next deploy, corrupting the revision graph so that the newer, genuinely-committed migration never actually applied — while `db-init` kept reporting success. This surfaced in a real deployment (tabsii-platform) as a table (`ddl_import_history`, ADR-0005) that appeared to migrate cleanly but never actually existed.
+
+Fixed by moving generation back to CLI time, matching this ADR's original intent: `biffo plugin install`/`upgrade` now call `services/api/scripts/generate_plugin_migrations.py` (a `uv run python` subprocess — see `cli/src/adapters/plugin-migrations/index.ts`'s docstring for why this reuses the existing Python generator rather than a TypeScript port) to write a real file into `services/api/migrations/versions/` before committing. A standalone `biffo plugin sync-migrations [name]` command exists for two related cases: a plugin whose `services/<name>/` was added to the repo out-of-band (e.g. cloned from a template that already committed a reference plugin), and one-time backfill for any plugin installed before this fix existed (its migration, like this incident's, only ever existed ephemerally). `main.py::_run_db_init` no longer generates anything — it only ever applies migrations already committed under `services/api/migrations/versions/`.
 
 ---
 

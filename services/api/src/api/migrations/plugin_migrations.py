@@ -294,26 +294,34 @@ def _migration_already_generated(revision: str, versions_dir: Path) -> bool:
 def sync_plugin_migrations(
     versions_dir: Path,
     services_root: Path | None = None,
+    only: set[str] | None = None,
 ) -> list[Path]:
     """Discover installed plugins and generate any migration files they're
     still missing, chaining each onto the current head in turn.
 
-    This is the real call site for the generator (previously dead code, only
-    ever invoked from its own unit tests): main.py's `_run_db_init()` calls
-    this immediately before `command.upgrade(cfg, "head")`, so a plugin
-    manifest that appears between deploys gets both its migration generated
-    *and* applied in the same db-init run.
+    The real call site is `services/api/scripts/generate_plugin_migrations.py`,
+    invoked by the Node CLI at `biffo plugin install`/`upgrade`/`sync-migrations`
+    time, writing into the real, git-committed versions/ directory. This
+    function's idempotency guarantee (below) only holds when versions_dir is
+    a persistent, git-tracked directory — it does NOT hold against a
+    directory that's recreated on every call. (That was the previous, buggy
+    design: main.py's `_run_db_init()` used to call this against a fresh
+    `/tmp` copy on every Lambda invocation, so a plugin's migration was
+    silently regenerated with a different down_revision on every deploy,
+    corrupting the revision graph — see ADR-0003's implementation note.)
 
     Idempotent — a plugin whose manifest+tables already produced a migration
     file (matched by the deterministic revision id `generate_migration_for_plugin`
     derives from the manifest name and table names) is skipped, so calling this
-    on every db-init doesn't generate duplicate migrations or fork new heads
-    each deploy. Plugins with no tables are skipped (nothing to migrate).
+    against a persistent versions_dir doesn't generate duplicate migrations or
+    fork new heads. Plugins with no tables are skipped (nothing to migrate).
 
     Args:
         versions_dir: Directory where Alembic stores migration files.
         services_root: Passed through to discover_plugin_manifests; None uses
             its default (the monorepo's services/ directory).
+        only: Restrict to these plugin names; None processes every
+            discovered plugin.
 
     Returns:
         Paths to any newly generated migration files, in the order applied.
@@ -322,6 +330,8 @@ def sync_plugin_migrations(
 
     generated: list[Path] = []
     for manifest in discover_plugin_manifests(services_root):
+        if only is not None and manifest.get("name") not in only:
+            continue
         tables = parse_plugin_tables_from_manifest(manifest)
         if not tables:
             continue

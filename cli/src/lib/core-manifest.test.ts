@@ -54,6 +54,17 @@ describe('real repo core-manifest.json', () => {
     expect(isTemplateOwned('biffo.core.json', manifest)).toBe(false)
   })
 
+  it('carves out migrations/versions (append-only per-instance chain) but keeps the framework', () => {
+    const manifest = readCoreManifest(repoRoot)
+    // Instance-accumulated migration files must NOT be synced from the template.
+    expect(
+      isTemplateOwned('services/api/migrations/versions/0001_create_users_table.py', manifest),
+    ).toBe(false)
+    // ...but the migration framework files stay template-owned.
+    expect(isTemplateOwned('services/api/migrations/env.py', manifest)).toBe(true)
+    expect(isTemplateOwned('services/api/migrations/script.py.mako', manifest)).toBe(true)
+  })
+
   it('findTemplateRoot locates the repo root from a nested dir', () => {
     expect(findTemplateRoot(here)).toBe(repoRoot)
   })

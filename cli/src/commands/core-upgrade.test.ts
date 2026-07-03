@@ -107,6 +107,41 @@ describe('runCoreUpgrade --apply', () => {
     expect(log.success).toHaveBeenCalledWith(expect.stringContaining('pull/7'))
   })
 
+  it('auto-resolves the merge base from the instance version tag when --from-template is omitted', async () => {
+    const { deps, git, createPullRequest } = fakeDeps()
+    const cleanup = vi.fn()
+    // Fake materialize: the base tree at the instance's version (0.1.0) is the
+    // `base` fixture; the target (0.2.0) equals templateRepo's working version,
+    // so it is used directly and never materialized.
+    const materialize = vi.fn((_repo: string, version: string) => {
+      expect(version).toBe('0.1.0')
+      return { dir: base, cleanup }
+    })
+
+    await runCoreUpgrade(
+      { cwd: instance, templateRepo: theirs, apply: true },
+      { ...deps, materialize },
+    )
+
+    expect(materialize).toHaveBeenCalledTimes(1)
+    expect(materialize).toHaveBeenCalledWith(theirs, '0.1.0')
+    expect(cleanup).toHaveBeenCalledTimes(1) // temp base tree disposed
+    // Same result as the explicit-dirs path.
+    expect(git.createBranch).toHaveBeenCalledWith(instance, 'biffo/core-upgrade-0.1.0-to-0.2.0')
+    expect(readFileSync(join(instance, 'services/api/main.py'), 'utf8')).toBe('v2')
+    expect(createPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ title: expect.stringContaining('0.1.0 → 0.2.0') }),
+    )
+  })
+
+  it('errors when the instance version is unknown and no --from-template is given', async () => {
+    rmSync(join(instance, 'biffo.core.json'))
+    const { deps } = fakeDeps()
+    await expect(
+      runCoreUpgrade({ cwd: instance, templateRepo: theirs }, { ...deps, materialize: vi.fn() }),
+    ).rejects.toThrow(/current core version/)
+  })
+
   it('refuses to apply a conflicting plan without --allow-conflicts', async () => {
     // Make the instance locally edit main.py so it conflicts with theirs.
     w(instance, 'services/api/main.py', 'LOCAL EDIT')

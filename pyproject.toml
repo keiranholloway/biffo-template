@@ -4,7 +4,7 @@ members = ["services/*", "packages/python-sdk"]
 [tool.ruff]
 target-version = "py313"
 line-length = 100
-exclude = ["services/_template", "migrations"]
+exclude = [".worktrees", "services/_template", "migrations"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "B", "S", "UP", "ANN"]
@@ -37,7 +37,7 @@ extraPaths = ["services/api/src", "packages/python-sdk/src", "services/rbac/src"
 # excludes (.venv, node_modules, dot-dirs) rather than extending them, so
 # those must be re-listed here too or pyright will walk and type-check
 # every installed dependency (10k+ files).
-exclude = ["_skeletons", ".venv", "node_modules", "**/__pycache__", "**/.*"]
+exclude = [".worktrees", "_skeletons", ".venv", "node_modules", "**/__pycache__", "**/.*"]
 
 [tool.pytest.ini_options]
 testpaths = ["services", "packages"]

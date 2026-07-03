@@ -1,5 +1,14 @@
 # Biffo — AI Assistant Context
 
+## Rules of engagement
+
+The tool-agnostic rules of engagement for **all** automated agents (worktrees,
+branching, PRs, merging, security, template→instance distribution) live in
+[`AGENTS.md`](AGENTS.md) and are imported below. They are binding for any code
+change in this repo; `AGENTS.md` is the single source of truth.
+
+@AGENTS.md
+
 ## What this project is
 
 Biffo is an opinionated repo template and scaffolding CLI for solopreneurs. Running `biffo init` creates a new GitHub repository pre-configured with AWS infrastructure, CI/CD, governance guardrails, and security defaults. The intent is to solve "system architecture" as a solved problem so founders build products instead of plumbing.

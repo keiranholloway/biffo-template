@@ -33,11 +33,35 @@ live at runtime (config-as-code is preserved; ADR-0004).
   implemented. The long-lived App private key lives in Secrets Manager and is
   used only to sign JWTs — it is never handed to the data plane.
 
+- `handler` — the Lambda entrypoint (composition root). The Core API is the only
+  caller: it authorizes the admin, then invokes this function **directly over
+  IAM** (no public endpoint) with a flat JSON event:
+
+  ```json
+  {
+    "requester": "admin@example.com",
+    "plugin": "notes",
+    "table": "note",
+    "operation": "create",
+    "allowed": true,
+    "required_role": ["admin"]
+  }
+  ```
+
+  It validates the event, reads the App key from Secrets Manager by id (cached
+  per warm container; never logged), builds `GitHubAppContents`, calls
+  `open_permission_pr`, and returns `{ statusCode, pr_url, branch, audit }`.
+  Expected failures map to a status: `400` (bad event), `409` (no-op / invalid
+  edit), `502` (GitHub error). On success the audit record is emitted as a
+  structured log.
+
+  Config comes from env (`BIFFO_PR_SIGNER_APP_ID`, `…_INSTALLATION_ID`,
+  `…_REPO_OWNER`, `…_REPO_NAME`, `…_PRIVATE_KEY_SECRET_ID`,
+  optional `…_BASE_BRANCH`). The App private key itself is **not** an env var —
+  only its Secrets Manager id is.
+
 ## Still to come
 
-- The Lambda handler: read the App key from Secrets Manager, build
-  `GitHubAppContents.for_installation(...)`, call `open_permission_pr`, emit the
-  audit record, return the PR URL.
 - Terraform/IAM: the signer Lambda + its Secrets Manager read, and the Core API
   role's `lambda:InvokeFunction` grant on the signer (no public endpoint).
 - Core API `POST /api/v1/admin/endpoints/permission` (admin authz + validate +

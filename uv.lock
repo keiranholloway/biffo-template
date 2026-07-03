@@ -276,6 +276,7 @@ name = "biffo-pr-signer"
 version = "0.1.0"
 source = { virtual = "services/pr-signer" }
 dependencies = [
+    { name = "aws-lambda-powertools" },
     { name = "biffo-plugin-sdk" },
     { name = "httpx" },
     { name = "pyjwt", extra = ["crypto"] },
@@ -283,6 +284,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "boto3" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "ruff" },
@@ -290,6 +292,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aws-lambda-powertools", specifier = ">=3.4.0" },
     { name = "biffo-plugin-sdk", editable = "packages/python-sdk" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10.0" },
@@ -297,6 +300,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "boto3", specifier = ">=1.35.0" },
     { name = "pyright", specifier = ">=1.1.0" },
     { name = "pytest", specifier = ">=8.3.4" },
     { name = "ruff", specifier = ">=0.8.0" },

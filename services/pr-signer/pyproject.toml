@@ -5,6 +5,7 @@ description = "Isolated PR-signer for the endpoint control plane (ADR-0008) — 
 requires-python = ">=3.13"
 dependencies = [
   "biffo-plugin-sdk",
+  "aws-lambda-powertools>=3.4.0",
   "httpx>=0.28.1",
   "pyjwt[crypto]>=2.10.0",
 ]
@@ -14,6 +15,9 @@ dev = [
   "pytest>=8.3.4",
   "ruff>=0.8.0",
   "pyright>=1.1.0",
+  # boto3 is provided by the Lambda runtime, so it is not a runtime dependency;
+  # it is dev-only here so type-checking and tests can see it.
+  "boto3>=1.35.0",
 ]
 
 [tool.uv.sources]

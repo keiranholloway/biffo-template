@@ -7,6 +7,7 @@ members = [
     "biffo-api",
     "biffo-plugin-rbac",
     "biffo-plugin-sdk",
+    "biffo-pr-signer",
     "biffo-service-template",
 ]
 
@@ -267,6 +268,31 @@ dev = [
     { name = "pyright", specifier = ">=1.1.0" },
     { name = "pytest", specifier = ">=8.3.4" },
     { name = "pytest-asyncio", specifier = ">=0.25.2" },
+    { name = "ruff", specifier = ">=0.8.0" },
+]
+
+[[package]]
+name = "biffo-pr-signer"
+version = "0.1.0"
+source = { virtual = "services/pr-signer" }
+dependencies = [
+    { name = "biffo-plugin-sdk" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pyright" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "biffo-plugin-sdk", editable = "packages/python-sdk" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pyright", specifier = ">=1.1.0" },
+    { name = "pytest", specifier = ">=8.3.4" },
     { name = "ruff", specifier = ">=0.8.0" },
 ]
 

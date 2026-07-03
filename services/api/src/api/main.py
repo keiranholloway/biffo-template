@@ -8,6 +8,7 @@ from mangum import Mangum
 
 from .config import settings
 from .routers import auth, health, users
+from .routers.admin import endpoints as admin_endpoints
 from .routers.admin import plugins as admin_plugins
 from .routing.core_crud_router import build_core_crud_router
 from .routing.plugin_router import build_plugin_router
@@ -34,6 +35,7 @@ app.include_router(health.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(admin_plugins.router, prefix="/api/v1")
+app.include_router(admin_endpoints.router, prefix="/api/v1")
 # Auto-register plugin-declared routes (ADR-0003 chunk 6 / issue #19), after
 # the native routers so they group after them in the OpenAPI/Swagger docs.
 # Scans services/*/biffo.plugin.json at import time (build_plugin_router

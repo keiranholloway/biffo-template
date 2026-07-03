@@ -80,6 +80,12 @@ def _iter_core_crud_models() -> list[type[Any]]:
     return out
 
 
+def iter_core_crud_models() -> list[type[Any]]:
+    """Public accessor for the core models that opt into the generic CRUD layer
+    (via a non-empty ``__crud_permissions__``)."""
+    return _iter_core_crud_models()
+
+
 def _add(
     registry: PermissionsRegistry,
     table: str,

@@ -14,6 +14,7 @@ An ADR captures a significant architectural decision: the context that forced it
 | [ADR-0004](0004-generic-crud-layer-and-table-permissions.md)          | Generic CRUD Layer and Declarative Table Permissions        | Proposed | 2026-07-01 |
 | [ADR-0005](0005-ddl-import-module.md)                                 | DDL Data-Import Module                                      | Accepted | 2026-07-02 |
 | [ADR-0006](0006-core-upgrade-and-template-sync.md)                    | Core Upgrade and Template Sync                              | Accepted | 2026-07-02 |
+| [ADR-0008](0008-endpoint-control-plane.md)                            | Endpoint Control Plane (enable-via-PR)                      | Proposed | 2026-07-03 |
 
 ## Format
 

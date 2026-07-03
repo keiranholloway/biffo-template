@@ -50,6 +50,10 @@ DNS modes:
 
 See [CLAUDE.md](CLAUDE.md) for full project context and commands.
 
+## Guides
+
+- [Importing a DDL data model](docs/guides/data-import.md) — `biffo data import`/`apply`/`list`
+
 ## Architecture decisions
 
 All significant decisions are documented in [docs/ADR/](docs/ADR/).

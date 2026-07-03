@@ -502,6 +502,26 @@ function siteBucketName(projectName: string, environment: string, accountId: str
   return `${projectName}-${environment}-site-${accountId}`
 }
 
+/**
+ * Reads siblings.auto.tfvars.json if present. Reads directly and catches
+ * ENOENT rather than checking existsSync first — an existence check
+ * followed by a separate read is a TOCTOU race (the file could be removed
+ * in between), even though in practice nothing else touches this freshly
+ * cloned temp directory.
+ */
+function readExistingSiblingOrigins(filePath: string): {
+  sibling_origins?: Array<{ name: string; bucket_regional_domain: string }>
+} {
+  try {
+    return JSON.parse(readFileSync(filePath, 'utf8')) as {
+      sibling_origins?: Array<{ name: string; bucket_regional_domain: string }>
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {}
+    throw err
+  }
+}
+
 async function registerWithCore(
   git: SiblingCreateGit,
   github: GitHubAdapter,
@@ -535,11 +555,7 @@ async function registerWithCore(
       const relativePath = join('infra', 'environments', env, 'siblings.auto.tfvars.json')
       const filePath = join(cloneDir, relativePath)
 
-      const existing = existsSync(filePath)
-        ? (JSON.parse(readFileSync(filePath, 'utf8')) as {
-            sibling_origins?: Array<{ name: string; bucket_regional_domain: string }>
-          })
-        : {}
+      const existing = readExistingSiblingOrigins(filePath)
       const siblings = (existing.sibling_origins ?? []).filter((s) => s.name !== pathPrefix)
       siblings.push({ name: pathPrefix, bucket_regional_domain: domain })
 

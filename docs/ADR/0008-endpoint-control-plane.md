@@ -23,9 +23,11 @@ Add an **admin-only control-plane action** — `POST /api/v1/admin/endpoints/per
 3. commits it to a new branch and **opens a PR** on the instance repo (never a direct push),
 4. returns the PR URL for the portal to link to.
 
-It never merges or deploys — a human reviews and merges, then the existing pipeline applies it. It is gated on an **admin** Cognito group and authenticates to GitHub with a **narrowly-scoped, PR-only token** (GitHub App installation token) configured per instance.
+It never merges or deploys — a human reviews and merges, then the existing pipeline applies it.
 
-**Plugin tables first.** A plugin's `permissions` block lives in JSON (`services/<plugin>/biffo.plugin.json`) and is safe to patch programmatically. A core table's `__crud_permissions__` lives in **Python source**, which is not safe to edit mechanically — so core-table toggling is **out of scope for the first version** and tracked as a follow-up (see Consequences).
+**Security is the primary constraint** (see the dedicated section below): the action is gated on an **admin** Cognito group verified from the JWT, authenticates to GitHub with a **GitHub App** minting **short-lived, fine-grained, single-repo installation tokens** (never a long-lived PAT), never returns or logs any secret, and only ever opens a PR — it cannot merge or push to a protected branch. **Every change is fully auditable** (below).
+
+**Plugin tables first.** A plugin's `permissions` block lives in JSON (`services/<plugin>/biffo.plugin.json`) and is safe to patch programmatically. A core table's `__crud_permissions__` lives in **Python source**, which is not safe to edit mechanically — so core-table toggling is **out of scope for the first version** and tracked as a follow-up (see Consequences). (This is also a security consideration: never mechanically rewrite executable source.)
 
 ## Options Considered
 
@@ -79,12 +81,29 @@ Option A keeps the platform to one service and reuses its auth, which matters mo
 
 - The edit/PR machinery overlaps `biffo core upgrade` (ADR-0006) conceptually but is a much smaller, single-file operation via the API rather than the CLI.
 
+## Security model
+
+Security is the deciding constraint for this feature, so the controls are specified here rather than left to implementation:
+
+- **Authentication & authorization.** Every call requires a valid Cognito JWT (verified signature/audience, as every route already does) **and** membership of an `admin` group, checked server-side on each request — same role mechanism ADR-0004 uses. No unauthenticated or non-admin path exists.
+- **Least-privilege credential.** A **GitHub App** installed on only the instance repo, with the minimum fine-grained permissions (`contents: write`, `pull_requests: write`) — **not** a personal access token and **not** an org-wide token. The App's private key lives in a secrets manager (AWS Secrets Manager); the server mints a **short-lived installation token** per operation and discards it. Tokens/keys are never returned to the client, never logged, and never written to the repo.
+- **No privileged write path.** The action can only open a PR. It cannot merge, cannot push to a protected branch, and cannot disable branch protection — branch protection + human review remain the gate on what deploys (CLAUDE.md invariant #5). A compromised caller can at most open a PR an admin would still have to merge.
+- **Constrained mutation.** The only thing the action may change is the `permissions` block of a table that already exists in a discovered manifest. The requested change is validated against the same Pydantic `TablePermissions` model before anything is written — it cannot write arbitrary files, arbitrary paths, or arbitrary content, and it cannot touch executable source (hence plugin-JSON only in v1).
+- **Defense in depth (optional, flagged for decision).** The GitHub App credential can be isolated in a dedicated minimal "PR-signer" function the Core API calls, so a compromise of the data API doesn't directly yield the repo credential. This adds a service; given the credential is already PR-scoped, single-repo, and short-lived, and deploy is gated by human review, the marginal benefit is modest — **recommended as a follow-up hardening, not a v1 blocker.** (Confirm if you'd rather isolate it from day one.)
+
+## Auditability
+
+Every change is traceable end to end:
+
+- **Immutable git record.** The change is a commit on a branch and a PR — permanent history of exactly what changed, when, and (once merged) by whom.
+- **Attributed to a human.** The PR title/body and commit record the **requesting admin's identity** (email/username from the verified JWT) — "Requested by `<email>` via the portal endpoints view" — so the git trail names a person, not a bot.
+- **Server-side audit log.** Each call emits a structured audit event (requester identity, source/plugin/table, operation, old→new `allowed`/`required_role`, timestamp, and the resulting PR URL) to the deployment's log/audit sink — a record independent of the repo, including of _attempts_.
+- **Two-person integrity.** Because it's PR→review→merge, the requester and the merger can be different people; the deploy that actually changes behavior is a separate, reviewed, logged step.
+
 ## Compliance
 
-- **PRs, never pushes** — the action opens a PR on the instance repo; branch protection and review still gate what actually deploys (CLAUDE.md invariant #5).
-- **Admin-gated** — requires an `admin` Cognito group, enforced the same way the generic CRUD layer checks roles (ADR-0004).
-- **Least-privilege credential** — a PR-scoped GitHub App installation token, not a broad PAT; stored as a deployment secret, never returned to the client or logged.
-- **Config-as-code preserved** — the source of truth stays the file in the repo; this action only automates the edit a human would make.
+- Config-as-code is preserved — the source of truth stays the file in the repo (ADR-0004); this action only automates the edit a human would otherwise make by hand, and changes take effect only via the normal reviewed deploy (ADR-0006 pattern).
+- The security and auditability controls above are the acceptance criteria for the implementation PR; a build that skips the admin check, uses a broad/long-lived token, or omits the audit event does not satisfy this ADR.
 
 ## Related Decisions
 

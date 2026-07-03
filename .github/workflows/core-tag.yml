@@ -23,6 +23,8 @@ jobs:
       - name: Tag core-v<version> if missing
         run: |
           set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           VERSION="$(tr -d '[:space:]' < core.version)"
           TAG="core-v${VERSION}"
           if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then

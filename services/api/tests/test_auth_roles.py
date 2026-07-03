@@ -2,7 +2,7 @@
 claim, so the generic CRUD permission layer can authorise without a DB lookup."""
 
 import api.middleware.auth as auth_module
-from api.middleware.auth import AuthenticatedUser, require_auth
+from api.middleware.auth import AuthenticatedUser, identity_from_token
 from fastapi.security import HTTPAuthorizationCredentials
 
 
@@ -24,7 +24,7 @@ async def test_roles_populated_from_cognito_groups(monkeypatch):
         },
     )
 
-    caller = await require_auth(credentials=_credentials())
+    caller = identity_from_token(_credentials())
 
     assert caller.roles == ["admin", "editor"]
     assert caller.sub == "sub-1"
@@ -37,7 +37,7 @@ async def test_roles_default_empty_when_claim_absent(monkeypatch):
         lambda _token: {"sub": "sub-2", "email": "b@example.com"},
     )
 
-    caller = await require_auth(credentials=_credentials())
+    caller = identity_from_token(_credentials())
 
     assert caller.roles == []
 
@@ -55,7 +55,7 @@ async def test_roles_default_empty_when_claim_null(monkeypatch):
         },
     )
 
-    caller = await require_auth(credentials=_credentials())
+    caller = identity_from_token(_credentials())
 
     assert caller.roles == []
 

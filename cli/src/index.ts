@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander'
+import { coreCommand } from './commands/core.js'
 import { dataCommand } from './commands/data.js'
 import { deployCommand } from './commands/deploy.js'
 import { destroyCommand } from './commands/destroy.js'
@@ -20,5 +21,6 @@ program.addCommand(destroyCommand)
 program.addCommand(teardownCommand)
 program.addCommand(pluginCommand)
 program.addCommand(dataCommand)
+program.addCommand(coreCommand)
 
 program.parse()

@@ -1,8 +1,17 @@
 # ADR-0003: Plugin System and Marketplace
 
-**Status:** Proposed  
+**Status:** Accepted  
 **Date:** 2026-06-30  
+**Accepted:** 2026-07-03  
 **Deciders:** Keiran Holloway (Technical Architect)
+
+> Implemented: the `biffo plugin` CLI (install/uninstall/upgrade/list/info), the
+> `biffo.plugin.json` manifest + declarative table/route registration, the
+> generic-CRUD route synthesis (`plugin_router.py`), and the portal marketplace
+> pages. Still in progress: the central plugin registry
+> (`keiranholloway/biffo-plugins-registry`) is not yet populated, and some
+> install wiring (e.g. Terraform module inclusion) is partial. See
+> [the plugins guide](../guides/plugins.md) for what works today.
 
 ---
 

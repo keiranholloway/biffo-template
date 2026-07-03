@@ -10,10 +10,10 @@ An ADR captures a significant architectural decision: the context that forced it
 | --------------------------------------------------------------------- | ----------------------------------------------------------- | -------- | ---------- |
 | [ADR-0001](0001-single-tenant-architecture-with-multi-tenant-seam.md) | Single-Tenant Architecture with Multi-Tenant Seam           | Accepted | 2026-06-27 |
 | [ADR-0002](0002-api-only-data-integration-pattern.md)                 | API-Only Data Integration and EventBridge for State Changes | Accepted | 2026-06-27 |
-| [ADR-0003](0003-plugin-system-and-marketplace.md)                     | Plugin System and Marketplace                               | Proposed | 2026-06-30 |
+| [ADR-0003](0003-plugin-system-and-marketplace.md)                     | Plugin System and Marketplace                               | Accepted | 2026-06-30 |
 | [ADR-0004](0004-generic-crud-layer-and-table-permissions.md)          | Generic CRUD Layer and Declarative Table Permissions        | Proposed | 2026-07-01 |
 | [ADR-0005](0005-ddl-import-module.md)                                 | DDL Data-Import Module                                      | Accepted | 2026-07-02 |
-| [ADR-0006](0006-core-upgrade-and-template-sync.md)                    | Core Upgrade and Template Sync                              | Proposed | 2026-07-02 |
+| [ADR-0006](0006-core-upgrade-and-template-sync.md)                    | Core Upgrade and Template Sync                              | Accepted | 2026-07-02 |
 
 ## Format
 

@@ -83,12 +83,17 @@ Store the PEM only where you keep other break-glass secrets, and delete the
 local copy afterwards. Rotating the key later is just another `put-secret-value`
 (the signer reads the current value each cold start).
 
-## 4. Verify
+## 4. Use it
 
-Once the signer's code is deployed, changing a permission from the portal's
-Endpoints view (or invoking the Core API's permission endpoint) should produce a
-pull request in your repo, authored by the App and attributing the requesting
-admin in the body. Review and merge it as you would any change.
+Once the signer's code is deployed, open the portal's **Admin → Endpoints** view.
+Each plugin endpoint has a **Change** button: toggle whether it's enabled and pick
+the required role(s), then **Open pull request**. The Core API authorizes you
+(admin only), invokes the signer, and the signer opens a PR in your repo —
+authored by the App and attributing you in the body. The view links straight to
+it. **Review and merge the PR** to apply the change; nothing is live until then.
+
+(The same is available programmatically via
+`POST /api/v1/admin/endpoints/permission` on the Core API.)
 
 ## Security notes
 
@@ -117,10 +122,7 @@ A push to your integration branch that touches `services/**` (or a manual
 `workflow_dispatch`) therefore redeploys the signer automatically, the same way
 it redeploys the Core API.
 
-## Remaining wiring
+The control plane is complete end to end: portal Endpoints view → Core API
+(admin authz) → PR-signer → pull request → your review and merge.
 
-- **Core API permission endpoint** (`POST /api/v1/admin/endpoints/permission`)
-  that authorizes the admin and invokes the signer.
-- **Portal enable toggle** on the Endpoints view.
-
-See ADR-0008 for the full design and phase breakdown.
+See ADR-0008 for the full design and rationale.

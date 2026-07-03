@@ -2,7 +2,7 @@ import { execSync } from 'node:child_process'
 import { Octokit } from '@octokit/rest'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { BiffoConfigSchema } from '../../../config/schema.js'
-import { GitHubAdapter } from './index.js'
+import { DEFAULT_STATUS_CHECKS, GitHubAdapter } from './index.js'
 
 vi.mock('@octokit/rest')
 vi.mock('node:child_process')
@@ -22,6 +22,8 @@ function makeOctokitMock() {
       get: vi.fn(),
       update: vi.fn(),
       createUsingTemplate: vi.fn(),
+      createInOrg: vi.fn(),
+      createForAuthenticatedUser: vi.fn(),
       delete: vi.fn(),
       getBranch: vi.fn(),
       updateBranchProtection: vi.fn(),
@@ -142,6 +144,104 @@ describe('ensureTemplateFlag', () => {
     await expect(adapter().createRepoFromTemplate(CONFIG)).rejects.toThrow(
       'https://github.com/tmpl-owner/tmpl-repo/settings',
     )
+  })
+})
+
+// ─── createEmptyRepo ───────────────────────────────────────────────────────────
+
+describe('createEmptyRepo', () => {
+  it('skips creation and returns clone_url when the repo already exists', async () => {
+    octokitMock.repos.get.mockResolvedValueOnce({
+      data: { clone_url: 'https://github.com/acme/my-sibling.git' },
+    })
+
+    const url = await adapter().createEmptyRepo('acme', 'my-sibling')
+
+    expect(url).toBe('https://github.com/acme/my-sibling.git')
+    expect(octokitMock.repos.createInOrg).not.toHaveBeenCalled()
+    expect(octokitMock.repos.createForAuthenticatedUser).not.toHaveBeenCalled()
+  })
+
+  it('creates the repo via createInOrg when the destination does not exist', async () => {
+    octokitMock.repos.get.mockRejectedValueOnce(
+      Object.assign(new Error('Not Found'), { status: 404 }),
+    )
+    octokitMock.repos.createInOrg.mockResolvedValueOnce({
+      data: {
+        clone_url: 'https://github.com/acme/my-sibling.git',
+        html_url: 'https://github.com/acme/my-sibling',
+      },
+    })
+
+    const url = await adapter().createEmptyRepo('acme', 'my-sibling', 'A sibling app')
+
+    expect(url).toBe('https://github.com/acme/my-sibling.git')
+    expect(octokitMock.repos.createInOrg).toHaveBeenCalledWith(
+      expect.objectContaining({
+        org: 'acme',
+        name: 'my-sibling',
+        private: true,
+        description: 'A sibling app',
+      }),
+    )
+    expect(octokitMock.repos.createForAuthenticatedUser).not.toHaveBeenCalled()
+  })
+
+  it('omits description entirely when none is provided', async () => {
+    octokitMock.repos.get.mockRejectedValueOnce(
+      Object.assign(new Error('Not Found'), { status: 404 }),
+    )
+    octokitMock.repos.createInOrg.mockResolvedValueOnce({
+      data: { clone_url: 'x', html_url: 'x' },
+    })
+
+    await adapter().createEmptyRepo('acme', 'my-sibling')
+
+    const [call] = vi.mocked(octokitMock.repos.createInOrg).mock.calls
+    expect(call![0]).not.toHaveProperty('description')
+  })
+
+  it('falls back to createForAuthenticatedUser when org creation 404s', async () => {
+    octokitMock.repos.get.mockRejectedValueOnce(
+      Object.assign(new Error('Not Found'), { status: 404 }),
+    )
+    octokitMock.repos.createInOrg.mockRejectedValueOnce(
+      Object.assign(new Error('Not Found'), { status: 404 }),
+    )
+    octokitMock.repos.createForAuthenticatedUser.mockResolvedValueOnce({
+      data: {
+        clone_url: 'https://github.com/keiran/my-sibling.git',
+        html_url: 'https://github.com/keiran/my-sibling',
+      },
+    })
+
+    const url = await adapter().createEmptyRepo('keiran', 'my-sibling')
+
+    expect(url).toBe('https://github.com/keiran/my-sibling.git')
+    expect(octokitMock.repos.createForAuthenticatedUser).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'my-sibling', private: true }),
+    )
+  })
+
+  it('re-throws non-404 errors from the existence check', async () => {
+    octokitMock.repos.get.mockRejectedValueOnce(
+      Object.assign(new Error('Server Error'), { status: 500 }),
+    )
+
+    await expect(adapter().createEmptyRepo('acme', 'my-sibling')).rejects.toThrow('Server Error')
+    expect(octokitMock.repos.createInOrg).not.toHaveBeenCalled()
+  })
+
+  it('re-throws non-404 errors from createInOrg without falling back', async () => {
+    octokitMock.repos.get.mockRejectedValueOnce(
+      Object.assign(new Error('Not Found'), { status: 404 }),
+    )
+    octokitMock.repos.createInOrg.mockRejectedValueOnce(
+      Object.assign(new Error('Forbidden'), { status: 403 }),
+    )
+
+    await expect(adapter().createEmptyRepo('acme', 'my-sibling')).rejects.toThrow('Forbidden')
+    expect(octokitMock.repos.createForAuthenticatedUser).not.toHaveBeenCalled()
   })
 })
 
@@ -332,6 +432,33 @@ describe('configureBranchProtection', () => {
 
     const [call] = vi.mocked(octokitMock.repos.updateBranchProtection).mock.calls
     expect(call![0]).toMatchSnapshot()
+  })
+
+  it('defaults to DEFAULT_STATUS_CHECKS when no statusChecks argument is passed', async () => {
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValue({ data: {} })
+    octokitMock.repos.updateBranchProtection = vi.fn().mockResolvedValue({})
+
+    await adapter().configureBranchProtection(CONFIG)
+
+    expect(octokitMock.repos.updateBranchProtection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        required_status_checks: expect.objectContaining({ contexts: DEFAULT_STATUS_CHECKS }),
+      }),
+    )
+  })
+
+  it('threads a custom statusChecks list through to required_status_checks.contexts', async () => {
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValue({ data: {} })
+    octokitMock.repos.updateBranchProtection = vi.fn().mockResolvedValue({})
+    const customChecks = ['Lint (JS/TS)', 'Test (JS/TS)', 'Terraform Validate & Security']
+
+    await adapter().configureBranchProtection(CONFIG, 3_000, customChecks)
+
+    expect(octokitMock.repos.updateBranchProtection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        required_status_checks: expect.objectContaining({ contexts: customChecks }),
+      }),
+    )
   })
 
   it('warns and skips (without throwing) when the org plan does not support branch protection on a private repo', async () => {

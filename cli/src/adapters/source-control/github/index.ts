@@ -8,6 +8,26 @@ export interface GitHubAdapterOptions {
   templateRepo?: string
 }
 
+/**
+ * The 11 status checks a fresh `biffo init` scaffold requires — must match
+ * job *names* (not ids) in `.github/workflows/ci.yml`. `configureBranchProtection`
+ * defaults to this list; a caller with a different repo shape (e.g. `biffo
+ * sibling create`, ADR-0007) can pass its own subset/superset instead.
+ */
+export const DEFAULT_STATUS_CHECKS = [
+  'Lint (JS/TS)',
+  'Lint (Python)',
+  'Test (JS/TS)',
+  'Test (Python)',
+  'Type Check (TS)',
+  'Type Check (Python)',
+  'Dependency Audit (JS)',
+  'Dependency Audit (Python)',
+  'Secret Scan',
+  'SAST (Python / Bandit)',
+  'Terraform Validate & Security',
+]
+
 export class GitHubAdapter {
   private octokit: Octokit
   private templateOwner: string
@@ -111,6 +131,60 @@ export class GitHubAdapter {
           `  (Settings → General → check "Template repository") then re-run biffo init.`,
       )
     }
+  }
+
+  /**
+   * Creates a plain empty repository — no GitHub template-generation
+   * involved. Used by `biffo sibling create` (ADR-0007): the sibling
+   * skeleton lives at `_skeletons/sibling-template/` inside biffo-template
+   * itself and is pushed in as the new repo's first commit by the caller
+   * (via GitAdapter), rather than requiring a second, separately-published
+   * GitHub template repo for `createRepoFromTemplate`'s `is_template`
+   * machinery to point at.
+   *
+   * `repos.createInOrg` and `repos.createForAuthenticatedUser` are distinct
+   * REST endpoints (org-owned vs personal-account-owned repos) — unlike
+   * `createRepoFromTemplate`'s generate endpoint, which accepts either kind
+   * of owner uniformly via one `owner` field. Tries org creation first (the
+   * common case); a 404 there means `org` isn't actually a GitHub
+   * organization, so falls back to creating it under the authenticated
+   * user's own account instead.
+   */
+  async createEmptyRepo(org: string, repo: string, description?: string): Promise<string> {
+    // If the repo already exists (e.g. a previous failed sibling create), skip creation.
+    try {
+      const { data: existing } = await this.octokit.repos.get({ owner: org, repo })
+      log.info(`Repository ${org}/${repo} already exists — skipping creation`)
+      return existing.clone_url
+    } catch (err: unknown) {
+      if ((err as { status?: number }).status !== 404) throw err
+      // 404 = doesn't exist yet, proceed with creation
+    }
+
+    log.info(`Creating repository ${org}/${repo}...`)
+
+    try {
+      const { data } = await this.octokit.repos.createInOrg({
+        org,
+        name: repo,
+        private: true,
+        ...(description !== undefined ? { description } : {}),
+      })
+      log.success(`Repository created: ${data.html_url}`)
+      return data.clone_url
+    } catch (err: unknown) {
+      if ((err as { status?: number }).status !== 404) throw err
+      // 404 = `org` isn't a GitHub organization — fall back to the
+      // authenticated user's own personal account.
+    }
+
+    const { data } = await this.octokit.repos.createForAuthenticatedUser({
+      name: repo,
+      private: true,
+      ...(description !== undefined ? { description } : {}),
+    })
+    log.success(`Repository created: ${data.html_url}`)
+    return data.clone_url
   }
 
   async deleteRepo(org: string, repo: string): Promise<void> {
@@ -228,24 +302,11 @@ export class GitHubAdapter {
   async configureBranchProtection(
     config: BiffoConfig,
     protectionIntervalMs = 3_000,
+    statusChecks: string[] = DEFAULT_STATUS_CHECKS,
   ): Promise<void> {
     const { org, repo } = (
       config.source_control as { provider: 'github'; config: { org: string; repo: string } }
     ).config
-
-    const statusChecks = [
-      'Lint (JS/TS)',
-      'Lint (Python)',
-      'Test (JS/TS)',
-      'Test (Python)',
-      'Type Check (TS)',
-      'Type Check (Python)',
-      'Dependency Audit (JS)',
-      'Dependency Audit (Python)',
-      'Secret Scan',
-      'SAST (Python / Bandit)',
-      'Terraform Validate & Security',
-    ]
 
     // Protect all three branches: dev → staging → main (prod)
     // dev: default branch; all feature work lands here via PR

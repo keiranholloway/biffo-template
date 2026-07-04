@@ -142,6 +142,14 @@ async function classify(
   const inOurs = ours.has(path)
   const inTheirs = theirs.has(path)
 
+  // Present only in the instance — added locally under a template-owned path
+  // (e.g. an instance-specific ADR or a file the template never shipped). There
+  // is no base or upstream version to merge against, so leave it untouched
+  // rather than trying to read a non-existent base/theirs copy.
+  if (!inBase && !inTheirs) {
+    return { path, status: 'keep-ours', conflicted: false }
+  }
+
   // Added upstream (not in base).
   if (!inBase && inTheirs) {
     const theirsContent = read(opts.theirsDir, path)

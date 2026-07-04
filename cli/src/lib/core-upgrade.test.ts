@@ -72,6 +72,16 @@ describe('planCoreUpgrade (classification)', () => {
     expect(p.changes).toHaveLength(0)
   })
 
+  it('keep-ours (no crash) when a template-owned path exists only in the instance', async () => {
+    // Instance added its own file under a template-owned subtree — the template
+    // never shipped it, so there is no base or upstream copy to merge against.
+    w(ours, 'services/api/instance_only.py', 'local')
+    const p = await plan()
+    expect(statusOf(p.entries, 'services/api/instance_only.py')).toBe('keep-ours')
+    expect(p.changes).toHaveLength(0)
+    expect(p.conflicts).toHaveLength(0)
+  })
+
   it('unchanged when ours and theirs made the identical change', async () => {
     w(base, 'services/api/a.py', 'v1')
     w(ours, 'services/api/a.py', 'v2')

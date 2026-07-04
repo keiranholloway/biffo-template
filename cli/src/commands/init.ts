@@ -208,6 +208,10 @@ export async function runInit(
     await github.configureBranchProtection(config)
     await github.createEnvironments(config)
 
+    // Native GitHub security: Dependabot vulnerability alerts (free; the CI
+    // gitleaks/bandit/checkov jobs and the CodeQL workflow cover the rest).
+    await github.enableVulnerabilityAlerts(org, repo)
+
     await github.setRepoVariable(org, repo, 'DNS_MODE', dns.mode)
     if (domain) {
       await github.setRepoVariable(org, repo, 'DOMAIN', domain)

@@ -59,6 +59,7 @@ function makeGithubMock() {
     setDefaultBranch: vi.fn().mockResolvedValue(undefined),
     configureBranchProtection: vi.fn().mockResolvedValue(undefined),
     createEnvironments: vi.fn().mockResolvedValue(undefined),
+    enableVulnerabilityAlerts: vi.fn().mockResolvedValue(undefined),
     setRepoVariable: vi.fn().mockResolvedValue(undefined),
     setEnvVariable: vi.fn().mockResolvedValue(undefined),
     setRepoSecret: vi.fn().mockResolvedValue(undefined),
@@ -201,6 +202,7 @@ describe('runSiblingCreate', () => {
     expect(aws.setupOidcTrust).toHaveBeenCalledWith(SIBLING_CONFIG)
     expect(aws.bootstrapTerraformBackend).toHaveBeenCalledWith('reports')
     expect(github.configureBranchProtection).toHaveBeenCalledWith(SIBLING_CONFIG)
+    expect(github.enableVulnerabilityAlerts).toHaveBeenCalledOnce()
     expect(github.setRepoVariable).toHaveBeenCalledWith(
       'acme',
       'reports',

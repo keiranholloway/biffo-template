@@ -61,6 +61,7 @@ function makeGithubMock() {
     setRepoVariable: vi.fn().mockResolvedValue(undefined),
     setEnvVariable: vi.fn().mockResolvedValue(undefined),
     setRepoSecret: vi.fn().mockResolvedValue(undefined),
+    enableVulnerabilityAlerts: vi.fn().mockResolvedValue(undefined),
   }
 }
 
@@ -94,6 +95,7 @@ describe('happy path', () => {
     expect(aws.bootstrapTerraformBackend).toHaveBeenCalledOnce()
     expect(github.configureBranchProtection).toHaveBeenCalledOnce()
     expect(github.createEnvironments).toHaveBeenCalledOnce()
+    expect(github.enableVulnerabilityAlerts).toHaveBeenCalledOnce()
   })
 
   it('marks each step complete in order', async () => {

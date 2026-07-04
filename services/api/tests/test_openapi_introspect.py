@@ -157,10 +157,11 @@ class TestCollectOpenapiEndpoints:
         assert widget.permission_editable is False  # core rows change in code
         assert widget.summary == "read widgets"
 
+        # A hand-written core route (not under /plugins/) is owned by core.
         demo = by_key[("POST", "/api/v1/public/demo-requests")]
-        assert demo.source == "bespoke"
-        assert demo.required_role is None  # unknown for bespoke
-        assert demo.permission_editable is False
+        assert demo.source == "core"
+        assert demo.required_role is None  # unknown — its guard isn't in OpenAPI
+        assert demo.permission_editable is False  # only plugin CRUD is editable
         assert demo.tags == ["public"]
 
     def test_plugin_rows_are_permission_editable(self):

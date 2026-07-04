@@ -298,9 +298,14 @@ def collect_openapi_endpoints(
                     )
                 )
             else:
+                # A route not produced by the generic-CRUD layer (a hand-written
+                # router). Ownership is by location: routes under /plugins/ belong
+                # to a plugin, everything else is core (in services/api/).
                 out.append(
                     EndpointResponse(
-                        source="bespoke",
+                        source="plugin"
+                        if path.startswith("/api/v1/plugins/")
+                        else "core",
                         method=upper,
                         path=path,
                         summary=summary,

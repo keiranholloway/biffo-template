@@ -9,10 +9,15 @@ class EndpointResponse(BaseModel):
     Assembled from the app's OpenAPI schema (so it reflects every mounted route,
     not just generic CRUD), enriched with generic-CRUD permission metadata where a
     route matches one — ``permission_editable`` is True only for those (they can
-    be retuned via a PR, ADR-0008). Bespoke routes appear as ``source="bespoke"``.
+    be retuned via a PR, ADR-0008).
+
+    ``source`` is OWNERSHIP: ``core`` (a route in ``services/api/`` — whether a
+    hand-written router or the generic-CRUD layer) or ``plugin`` (mounted under
+    ``/api/v1/plugins/<name>/``). It is not "how the route is produced": a
+    hand-written core endpoint is still ``core``.
     """
 
-    source: Literal["plugin", "core", "bespoke"]
+    source: Literal["plugin", "core"]
     plugin: str | None = None  # plugin name, for source == "plugin"
     table: str | None = None  # for generic-CRUD rows
     operation: str | None = None  # list | read | create | update | delete
@@ -20,8 +25,8 @@ class EndpointResponse(BaseModel):
     path: str  # full path, e.g. /api/v1/plugins/rbac/roles or /api/v1/data/widgets
     summary: str | None = None  # OpenAPI operation summary
     tags: list[str] = Field(default_factory=list)
-    # any-of; [] means any authenticated caller; None means unknown (bespoke —
-    # the guard is a hand-written dependency, not surfaced in OpenAPI).
+    # any-of; [] means any authenticated caller; None means unknown (a
+    # hand-written route whose guard is a dependency, not surfaced in OpenAPI).
     required_role: list[str] | None = None
     permission_editable: bool = False  # True only for plugin generic-CRUD rows
 

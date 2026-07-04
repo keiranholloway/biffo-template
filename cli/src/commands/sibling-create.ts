@@ -462,6 +462,10 @@ async function configureSiblingGithub(
   await github.configureBranchProtection(config)
   await github.createEnvironments(config)
 
+  // Native GitHub security parity with the core project: Dependabot alerts
+  // (the sibling skeleton ships the CI scanners + CodeQL + Renovate).
+  await github.enableVulnerabilityAlerts(org, repo)
+
   await github.setRepoVariable(org, repo, 'PROJECT_NAME', config.project.name)
   // Deliberately separate from PROJECT_NAME: the routing path segment
   // (baseurl.com/<PATH_PREFIX>/*) can differ from the sibling's own

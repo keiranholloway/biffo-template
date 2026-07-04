@@ -457,6 +457,23 @@ export class GitHubAdapter {
     }
   }
 
+  /**
+   * Enable GitHub Dependabot alerts (native vulnerability alerts) on a repo.
+   * Best-effort: some plans/repos don't support it, so a failure logs a warning
+   * rather than aborting provisioning — the repo is already usable without it.
+   */
+  async enableVulnerabilityAlerts(org: string, repo: string): Promise<void> {
+    try {
+      await this.octokit.request('PUT /repos/{owner}/{repo}/vulnerability-alerts', {
+        owner: org,
+        repo,
+      })
+      log.info(`Enabled Dependabot alerts on ${org}/${repo}`)
+    } catch (err: unknown) {
+      log.warn(`Could not enable Dependabot alerts on ${org}/${repo}: ${(err as Error).message}`)
+    }
+  }
+
   async getLatestWorkflowRunId(
     org: string,
     repo: string,

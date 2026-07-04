@@ -12,16 +12,9 @@ exports[`configureBranchProtection (HTTP level) > sends the correct branch prote
   },
   "required_status_checks": {
     "contexts": [
-      "Lint (JS/TS)",
-      "Lint (Python)",
-      "Test (JS/TS)",
-      "Test (Python)",
-      "Type Check (TS)",
-      "Type Check (Python)",
-      "Dependency Audit (JS)",
-      "Dependency Audit (Python)",
+      "JS (lint, types, test, audit)",
+      "Python (lint, types, test, security)",
       "Secret Scan",
-      "SAST (Python / Bandit)",
       "Terraform Validate & Security",
     ],
     "strict": true,

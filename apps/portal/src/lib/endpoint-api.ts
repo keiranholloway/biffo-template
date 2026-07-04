@@ -1,25 +1,83 @@
 import type { createApiClient } from './api-client'
 
 /**
- * A live generic-CRUD endpoint as returned by the Core API's
- * `GET /api/v1/admin/endpoints` — one row per reachable route, with the role it
- * requires (ADR-0004).
+ * A live API endpoint as returned by `GET /api/v1/admin/endpoints` — one row per
+ * mounted route (from the app's OpenAPI schema). Generic-CRUD routes are
+ * enriched with permission metadata (`permission_editable` is true only for
+ * plugin ones); bespoke hand-written routes have `source: 'bespoke'`,
+ * `table`/`operation` null, and `required_role` null (their guard is a
+ * dependency, not surfaced in OpenAPI).
  */
 export interface Endpoint {
-  source: 'plugin' | 'core'
+  source: 'plugin' | 'core' | 'bespoke'
   plugin: string | null
-  table: string
-  operation: string
+  table: string | null
+  operation: string | null
   method: string
   path: string
-  required_role: string[]
+  summary: string | null
+  tags: string[]
+  required_role: string[] | null
+  permission_editable: boolean
 }
 
-/** Fetch the live generic-CRUD endpoints for this deployment. */
+/** Fetch every live endpoint for this deployment. */
 export function fetchEndpoints(
   client: Pick<ReturnType<typeof createApiClient>, 'get'>,
 ): Promise<Endpoint[]> {
   return client.get<Endpoint[]>('/api/v1/admin/endpoints')
+}
+
+// ── Endpoint "specifics" (the swagger-ish detail view) ──────────────────────
+
+export interface SchemaField {
+  name: string
+  type: string
+  required: boolean
+  description: string | null
+  notes: string | null
+}
+
+export interface ParamSpec {
+  name: string
+  location: string
+  type: string
+  required: boolean
+  description: string | null
+}
+
+export interface BodySpec {
+  content_type: string
+  fields: SchemaField[]
+  example: unknown
+}
+
+export interface ResponseSpec {
+  status_code: string
+  description: string | null
+  content_type: string | null
+  fields: SchemaField[]
+  example: unknown
+}
+
+export interface EndpointDetail {
+  method: string
+  path: string
+  summary: string | null
+  description: string | null
+  parameters: ParamSpec[]
+  request_body: BodySpec | null
+  responses: ResponseSpec[]
+}
+
+/** Fetch the request/response specifics for one route (from OpenAPI). */
+export function fetchEndpointDetail(
+  client: Pick<ReturnType<typeof createApiClient>, 'get'>,
+  method: string,
+  path: string,
+): Promise<EndpointDetail> {
+  const qs = `?method=${encodeURIComponent(method)}&path=${encodeURIComponent(path)}`
+  return client.get<EndpointDetail>(`/api/v1/admin/endpoints/detail${qs}`)
 }
 
 /**

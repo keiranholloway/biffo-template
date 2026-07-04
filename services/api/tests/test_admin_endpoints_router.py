@@ -48,7 +48,7 @@ class TestCollectEndpoints:
             ],
         )
         eps = collect_endpoints([manifest], core_models=[])
-        paths = {(e.method, e.path, tuple(e.required_role)) for e in eps}
+        paths = {(e.method, e.path, tuple(e.required_role or [])) for e in eps}
         assert ("GET", "/api/v1/plugins/notepad/notes", ()) in paths
         assert ("POST", "/api/v1/plugins/notepad/notes", ("admin",)) in paths
         # read is declared but not allowed -> not live
@@ -66,7 +66,7 @@ class TestCollectEndpoints:
             },
         )
         eps = collect_endpoints([], core_models=[model])
-        got = {(e.method, e.path, tuple(e.required_role), e.source) for e in eps}
+        got = {(e.method, e.path, tuple(e.required_role or []), e.source) for e in eps}
         assert ("GET", "/api/v1/data/widgets", (), "core") in got
         assert ("GET", "/api/v1/data/widgets/{id}", (), "core") in got
         assert ("DELETE", "/api/v1/data/widgets/{id}", ("admin",), "core") in got
@@ -99,8 +99,8 @@ class TestCollectEndpoints:
 
 
 class TestEndpointsRoute:
-    """HTTP layer: auth required, returns the live endpoints for this deployment
-    (which includes the on-disk rbac plugin)."""
+    """HTTP layer: auth required, returns EVERY mounted route for this deployment
+    (from OpenAPI), with the on-disk rbac plugin's CRUD rows enriched."""
 
     def _client(self, roles=("admin",)):
         from fastapi.testclient import TestClient
@@ -124,8 +124,10 @@ class TestEndpointsRoute:
             assert resp.status_code == 200
             data = resp.json()
             assert isinstance(data, list)
-            # the rbac plugin is installed on disk -> its allowed routes are live
+            # the rbac plugin is installed on disk -> its allowed CRUD routes are live
             assert any(e["path"].startswith("/api/v1/plugins/rbac/") for e in data)
+            # now ALSO lists bespoke routes (hand-written, non-CRUD) from OpenAPI
+            assert any(e["source"] == "bespoke" for e in data)
             # every item carries the shape the portal renders
             for e in data:
                 assert {
@@ -134,7 +136,9 @@ class TestEndpointsRoute:
                     "operation",
                     "method",
                     "path",
+                    "summary",
                     "required_role",
+                    "permission_editable",
                 } <= e.keys()
         finally:
             app.dependency_overrides.clear()
@@ -145,6 +149,65 @@ class TestEndpointsRoute:
         from api.main import app
 
         resp = TestClient(app).get("/api/v1/admin/endpoints")
+        assert resp.status_code in (401, 403)
+
+
+class TestEndpointDetailRoute:
+    """GET /admin/endpoints/detail: the request/response specifics for one route."""
+
+    def _client(self, roles=("admin",)):
+        from fastapi.testclient import TestClient
+
+        from api.main import app
+        from api.middleware.auth import AuthenticatedUser, require_auth
+
+        app.dependency_overrides[require_auth] = lambda: AuthenticatedUser(
+            sub="s",
+            email="e@x.com",
+            username="u",
+            tenant_id="default",
+            roles=list(roles),
+        )
+        return app, TestClient(app)
+
+    def test_detail_for_a_listed_route(self):
+        app, client = self._client()
+        try:
+            listing = client.get("/api/v1/admin/endpoints").json()
+            assert listing
+            first = listing[0]
+            resp = client.get(
+                "/api/v1/admin/endpoints/detail",
+                params={"method": first["method"], "path": first["path"]},
+            )
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert body["method"] == first["method"]
+            assert body["path"] == first["path"]
+            assert "responses" in body and "parameters" in body
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_unknown_route_is_404(self):
+        app, client = self._client()
+        try:
+            resp = client.get(
+                "/api/v1/admin/endpoints/detail",
+                params={"method": "GET", "path": "/api/v1/does-not-exist"},
+            )
+            assert resp.status_code == 404
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_requires_auth(self):
+        from fastapi.testclient import TestClient
+
+        from api.main import app
+
+        resp = TestClient(app).get(
+            "/api/v1/admin/endpoints/detail",
+            params={"method": "GET", "path": "/api/v1/whoami"},
+        )
         assert resp.status_code in (401, 403)
 
 

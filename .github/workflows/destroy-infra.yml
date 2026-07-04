@@ -24,7 +24,7 @@ permissions:
 jobs:
   destroy-dev:
     name: Destroy (dev)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: dev
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event.inputs.environment == 'dev'
     defaults:
@@ -111,7 +111,7 @@ jobs:
 
   destroy-staging:
     name: Destroy (staging)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: staging
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event.inputs.environment == 'staging'
     defaults:
@@ -197,7 +197,7 @@ jobs:
 
   destroy-prod:
     name: Destroy (prod)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: prod
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event.inputs.environment == 'prod'
     defaults:

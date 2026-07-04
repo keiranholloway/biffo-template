@@ -50,7 +50,7 @@ env:
 jobs:
   build-dev:
     name: Build (dev)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: dev
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/dev') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev'))
     steps:
@@ -95,7 +95,7 @@ jobs:
 
   deploy-dev:
     name: Deploy to dev
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     needs: build-dev
     environment: dev
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/dev'
@@ -228,7 +228,7 @@ jobs:
 
   build-staging:
     name: Build (staging)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: staging
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/staging') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging'))
     steps:
@@ -273,7 +273,7 @@ jobs:
 
   deploy-staging:
     name: Deploy to staging
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     needs: build-staging
     environment: staging
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/staging'
@@ -407,7 +407,7 @@ jobs:
 
   build-prod:
     name: Build (prod)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: prod
     # prod deploys always require an explicit workflow_dispatch, never a push
     # side effect — BIFFO_DEPLOY_ENABLED is a single repo-wide flag set true
@@ -459,7 +459,7 @@ jobs:
 
   deploy-prod:
     name: Deploy to prod
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     needs: build-prod
     environment: prod
     # See build-prod above — prod always requires an explicit workflow_dispatch.

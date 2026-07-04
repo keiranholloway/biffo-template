@@ -14,17 +14,14 @@ export interface GitHubAdapterOptions {
  * defaults to this list; a caller with a different repo shape (e.g. `biffo
  * sibling create`, ADR-0007) can pass its own subset/superset instead.
  */
+// Must match the job `name:` values in .github/workflows/ci.yml. CI consolidates
+// all JS checks into one job and all Python checks into another (per-job billing
+// + repeated installs make a dozen sub-minute jobs wasteful), so lint/type/test/
+// audit/SAST are folded into the two toolchain checks below.
 export const DEFAULT_STATUS_CHECKS = [
-  'Lint (JS/TS)',
-  'Lint (Python)',
-  'Test (JS/TS)',
-  'Test (Python)',
-  'Type Check (TS)',
-  'Type Check (Python)',
-  'Dependency Audit (JS)',
-  'Dependency Audit (Python)',
+  'JS (lint, types, test, audit)',
+  'Python (lint, types, test, security)',
   'Secret Scan',
-  'SAST (Python / Bandit)',
   'Terraform Validate & Security',
 ]
 

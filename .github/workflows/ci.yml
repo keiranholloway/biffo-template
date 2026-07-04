@@ -14,6 +14,14 @@ env:
   NODE_VERSION: '22'
   PYTHON_VERSION: '3.13'
 
+# Jobs are consolidated by toolchain (one JS job, one Python job) rather than one
+# job per check. GitHub bills every job's wall time rounded UP to a full minute
+# and each job re-runs checkout + dependency install, so a dozen sub-minute jobs
+# cost ~12 billed minutes for ~5 minutes of real work and install deps a dozen
+# times. Installing once per toolchain and running the checks as steps cuts that
+# roughly in half. Check steps use `if: ${{ !cancelled() }}` so a failure in one
+# check still runs the rest — you see every failure in a run, not just the first.
+
 jobs:
   core-version-guard:
     name: Core Version Guard
@@ -34,8 +42,8 @@ jobs:
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
 
-  lint-js:
-    name: Lint (JS/TS)
+  js:
+    name: JS (lint, types, test, audit)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -45,37 +53,24 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run lint
-      - run: pnpm run format:check
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: pnpm run lint
+      - name: Format check
+        if: ${{ !cancelled() }}
+        run: pnpm run format:check
+      - name: Type check
+        if: ${{ !cancelled() }}
+        run: pnpm run typecheck
+      - name: Test
+        if: ${{ !cancelled() }}
+        run: pnpm run test
+      - name: Dependency audit
+        if: ${{ !cancelled() }}
+        run: pnpm audit --audit-level=high
 
-  typecheck:
-    name: Type Check (TS)
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run typecheck
-
-  test-js:
-    name: Test (JS/TS)
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run test
-
-  lint-python:
-    name: Lint (Python)
+  python:
+    name: Python (lint, types, test, security)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -83,35 +78,36 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-groups
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
-
-  typecheck-python:
-    name: Type Check (Python)
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - run: uv sync --all-groups
-      - run: uv run pyright
-
-  test-python:
-    name: Test (Python)
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - run: uv sync --all-groups
-      # Exit code 5 = no tests collected — valid for the template repo before tests are added
-      - run: uv run pytest --cov --cov-report=xml || [ $? -eq 5 ]
-      - uses: codecov/codecov-action@v5
-        if: always()
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: uv run ruff check .
+      - name: Format check
+        if: ${{ !cancelled() }}
+        run: uv run ruff format --check .
+      - name: Type check
+        if: ${{ !cancelled() }}
+        run: uv run pyright
+      - name: Test
+        if: ${{ !cancelled() }}
+        # Exit code 5 = no tests collected — valid for the template repo before tests are added
+        run: uv run pytest --cov --cov-report=xml || [ $? -eq 5 ]
+      - name: Coverage upload
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
         with:
           files: coverage.xml
+      - name: SAST (Bandit)
+        if: ${{ !cancelled() }}
+        run: uv run bandit -r services/ -ll -x services/_template/ --format json -o bandit-report.json
+      - name: Upload Bandit report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit-report.json
+      - name: Dependency audit
+        if: ${{ !cancelled() }}
+        run: uv run pip-audit
 
   security-secrets:
     name: Secret Scan
@@ -146,46 +142,6 @@ jobs:
       # pass the history scan above but fail there. Running both here closes the gap.
       - name: gitleaks filesystem scan
         run: gitleaks detect --no-git --redact -v --exit-code=2
-
-  security-sast-python:
-    name: SAST (Python / Bandit)
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - run: uv sync --all-groups
-      - run: uv run bandit -r services/ -ll -x services/_template/ --format json -o bandit-report.json
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: bandit-report
-          path: bandit-report.json
-
-  security-deps-js:
-    name: Dependency Audit (JS)
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm audit --audit-level=high
-
-  security-deps-python:
-    name: Dependency Audit (Python)
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - run: uv sync --all-groups
-      - run: uv run pip-audit
 
   infra-validate:
     name: Terraform Validate & Security

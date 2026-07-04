@@ -13,6 +13,12 @@ on:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
+    # CodeQL's SARIF upload needs GitHub Advanced Security, which is a paid add-on
+    # on private repos. Without it the analysis still runs (burning minutes) but
+    # the upload fails, so gate the whole job behind an opt-in variable — set
+    # `ENABLE_CODE_SCANNING=true` once GHAS is enabled. Dormant (0 minutes) by
+    # default. Mirrors the sibling-template gate.
+    if: vars.ENABLE_CODE_SCANNING == 'true'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 15
     permissions:

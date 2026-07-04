@@ -1,22 +1,29 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 
 class EndpointResponse(BaseModel):
-    """A single live generic-CRUD endpoint and the role required to call it.
+    """A single live API endpoint in the admin "Endpoints" listing.
 
-    Assembled from what the plugin and core-table routers actually mount, so it
-    reflects the live surface, not just what a manifest declares.
+    Assembled from the app's OpenAPI schema (so it reflects every mounted route,
+    not just generic CRUD), enriched with generic-CRUD permission metadata where a
+    route matches one — ``permission_editable`` is True only for those (they can
+    be retuned via a PR, ADR-0008). Bespoke routes appear as ``source="bespoke"``.
     """
 
-    source: Literal["plugin", "core"]
+    source: Literal["plugin", "core", "bespoke"]
     plugin: str | None = None  # plugin name, for source == "plugin"
-    table: str
-    operation: str  # list | read | create | update | delete
+    table: str | None = None  # for generic-CRUD rows
+    operation: str | None = None  # list | read | create | update | delete
     method: str  # GET | POST | PUT | PATCH | DELETE
     path: str  # full path, e.g. /api/v1/plugins/rbac/roles or /api/v1/data/widgets
-    required_role: list[str]  # any-of; [] means any authenticated caller
+    summary: str | None = None  # OpenAPI operation summary
+    tags: list[str] = Field(default_factory=list)
+    # any-of; [] means any authenticated caller; None means unknown (bespoke —
+    # the guard is a hand-written dependency, not surfaced in OpenAPI).
+    required_role: list[str] | None = None
+    permission_editable: bool = False  # True only for plugin generic-CRUD rows
 
 
 class EndpointPermissionRequest(BaseModel):
@@ -39,3 +46,59 @@ class EndpointPermissionResult(BaseModel):
 
     pr_url: str
     branch: str
+
+
+# ── Endpoint "specifics" (the swagger-ish detail view) ──────────────────────
+# Derived from the app's OpenAPI schema for one route: request/response shapes as
+# flat field tables plus a synthesized example. Read-only for now; a "try it"
+# console is a planned fast-follow that can layer onto this same model.
+
+
+class ParamSpec(BaseModel):
+    """A path/query/header parameter."""
+
+    name: str
+    location: str  # "path" | "query" | "header" | "cookie"
+    type: str
+    required: bool
+    description: str | None = None
+
+
+class SchemaField(BaseModel):
+    """One property of a request/response object, flattened for display."""
+
+    name: str
+    type: str  # human label, e.g. "string", "array<string>", "string | null"
+    required: bool
+    description: str | None = None
+    notes: str | None = None  # enum/format/constraints summary
+
+
+class BodySpec(BaseModel):
+    """A request body (its top-level object fields + an example)."""
+
+    content_type: str
+    fields: list[SchemaField] = Field(default_factory=list)
+    example: Any | None = None
+
+
+class ResponseSpec(BaseModel):
+    """One documented response, keyed by status code."""
+
+    status_code: str
+    description: str | None = None
+    content_type: str | None = None
+    fields: list[SchemaField] = Field(default_factory=list)
+    example: Any | None = None
+
+
+class EndpointDetail(BaseModel):
+    """The full specifics for one endpoint, for the expandable detail panel."""
+
+    method: str
+    path: str
+    summary: str | None = None
+    description: str | None = None
+    parameters: list[ParamSpec] = Field(default_factory=list)
+    request_body: BodySpec | None = None
+    responses: list[ResponseSpec] = Field(default_factory=list)

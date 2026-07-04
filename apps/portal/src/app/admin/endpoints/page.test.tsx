@@ -20,13 +20,14 @@ vi.mock('@/lib/api-client', async () => {
   }
 })
 
-const { fetchEndpoints, changeEndpointPermission } = vi.hoisted(() => ({
+const { fetchEndpoints, changeEndpointPermission, fetchEndpointDetail } = vi.hoisted(() => ({
   fetchEndpoints: vi.fn(),
   changeEndpointPermission: vi.fn(),
+  fetchEndpointDetail: vi.fn(),
 }))
 vi.mock('@/lib/endpoint-api', async () => {
   const actual = await vi.importActual<typeof EndpointApiModule>('@/lib/endpoint-api')
-  return { ...actual, fetchEndpoints, changeEndpointPermission }
+  return { ...actual, fetchEndpoints, changeEndpointPermission, fetchEndpointDetail }
 })
 
 const endpoints: Endpoint[] = [
@@ -37,7 +38,10 @@ const endpoints: Endpoint[] = [
     operation: 'list',
     method: 'GET',
     path: '/api/v1/plugins/rbac/roles',
+    summary: 'list rbac_roles',
+    tags: ['plugin:rbac'],
     required_role: [],
+    permission_editable: true,
   },
   {
     source: 'plugin',
@@ -46,16 +50,22 @@ const endpoints: Endpoint[] = [
     operation: 'create',
     method: 'POST',
     path: '/api/v1/plugins/rbac/roles',
+    summary: 'create rbac_roles',
+    tags: ['plugin:rbac'],
     required_role: ['admin'],
+    permission_editable: true,
   },
   {
-    source: 'core',
+    source: 'bespoke',
     plugin: null,
-    table: 'widgets',
-    operation: 'list',
-    method: 'GET',
-    path: '/api/v1/data/widgets',
-    required_role: [],
+    table: null,
+    operation: null,
+    method: 'POST',
+    path: '/api/v1/public/demo-requests',
+    summary: 'Submit demo request',
+    tags: ['public'],
+    required_role: null,
+    permission_editable: false,
   },
 ]
 
@@ -63,6 +73,7 @@ describe('EndpointsPage', () => {
   beforeEach(() => {
     fetchEndpoints.mockReset()
     changeEndpointPermission.mockReset()
+    fetchEndpointDetail.mockReset()
   })
 
   it('renders the live endpoints with method, path and role', async () => {
@@ -73,10 +84,13 @@ describe('EndpointsPage', () => {
     await waitFor(() => {
       expect(screen.getAllByText('/api/v1/plugins/rbac/roles')).toHaveLength(2)
     })
-    expect(screen.getByText('POST')).toBeInTheDocument()
+    expect(screen.getAllByText('POST').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('admin')).toBeInTheDocument()
     // empty required_role renders as "any authenticated"
     expect(screen.getAllByText('any authenticated').length).toBeGreaterThanOrEqual(1)
+    // bespoke routes are listed too (all routes, swagger-ish)
+    expect(screen.getByText('/api/v1/public/demo-requests')).toBeInTheDocument()
+    expect(screen.getByText('bespoke')).toBeInTheDocument()
   })
 
   it('shows an empty state when nothing is exposed', async () => {
@@ -99,7 +113,7 @@ describe('EndpointsPage', () => {
     })
   })
 
-  it('offers a Change control only for plugin endpoints, not core', async () => {
+  it('offers a Change control only for permission-editable (plugin) endpoints', async () => {
     fetchEndpoints.mockResolvedValue(endpoints)
 
     render(<EndpointsPage />)
@@ -107,8 +121,63 @@ describe('EndpointsPage', () => {
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: 'Change' })).toHaveLength(2)
     })
-    // the core row shows an "in code" hint instead
+    // the bespoke row shows an "in code" hint instead
     expect(screen.getByText('in code')).toBeInTheDocument()
+  })
+
+  it('expands a row to show its request/response specifics, fetched on demand', async () => {
+    fetchEndpoints.mockResolvedValue(endpoints)
+    fetchEndpointDetail.mockResolvedValue({
+      method: 'POST',
+      path: '/api/v1/public/demo-requests',
+      summary: 'Submit demo request',
+      description: 'Capture a demo request.',
+      parameters: [],
+      request_body: {
+        content_type: 'application/json',
+        fields: [
+          {
+            name: 'email',
+            type: 'string',
+            required: true,
+            description: null,
+            notes: 'format: email',
+          },
+        ],
+        example: { email: 'string' },
+      },
+      responses: [
+        {
+          status_code: '201',
+          description: 'Created',
+          content_type: 'application/json',
+          fields: [{ name: 'id', type: 'string', required: true, description: null, notes: null }],
+          example: { id: 'string' },
+        },
+      ],
+    })
+    const user = userEvent.setup()
+
+    render(<EndpointsPage />)
+    await waitFor(() => {
+      expect(screen.getByText('/api/v1/public/demo-requests')).toBeInTheDocument()
+    })
+
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Show details for POST /api/v1/public/demo-requests',
+      }),
+    )
+
+    // Request body + response fields render from the fetched detail.
+    expect(await screen.findByText('email')).toBeInTheDocument()
+    expect(screen.getByText('id')).toBeInTheDocument()
+    expect(screen.getByText('201')).toBeInTheDocument()
+    expect(fetchEndpointDetail).toHaveBeenCalledWith(
+      expect.anything(),
+      'POST',
+      '/api/v1/public/demo-requests',
+    )
   })
 
   it('opens a PR when an admin changes a plugin permission, then shows the link', async () => {

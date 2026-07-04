@@ -11,7 +11,7 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 from aws_lambda_powertools import Logger
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import ValidationError
 
 from ...config import settings
@@ -26,9 +26,11 @@ from ...middleware.auth import AuthenticatedUser, require_auth
 from ...migrations.plugin_migrations import parse_plugin_tables_from_manifest
 from ...models.plugin_route import parse_plugin_routes_from_manifest
 from ...models.plugin_table import CRUD_OPERATIONS, TablePermissions
+from ...openapi_introspect import build_endpoint_detail, collect_openapi_endpoints
 from ...permissions import iter_core_crud_models
 from ...plugins import discover_plugin_manifests
 from ...schemas.endpoint import (
+    EndpointDetail,
     EndpointPermissionRequest,
     EndpointPermissionResult,
     EndpointResponse,
@@ -126,11 +128,32 @@ def collect_endpoints(
 
 @router.get("", response_model=list[EndpointResponse])
 async def list_endpoints(
+    request: Request,
     _caller: AuthenticatedUser = Depends(require_auth),
 ) -> list[EndpointResponse]:
-    """List the live generic-CRUD endpoints on this deployment and the role each
-    requires. Read-only; auth required (same rationale as /admin/plugins)."""
-    return collect_endpoints()
+    """List every mounted API route on this deployment (from the app's OpenAPI
+    schema), enriched with generic-CRUD permission metadata where a route matches
+    one. Read-only; auth required (same rationale as /admin/plugins)."""
+    return collect_openapi_endpoints(request.app.openapi(), collect_endpoints())
+
+
+@router.get("/detail", response_model=EndpointDetail)
+async def endpoint_detail(
+    request: Request,
+    method: str,
+    path: str,
+    _caller: AuthenticatedUser = Depends(require_auth),
+) -> EndpointDetail:
+    """The request/response specifics for one route, derived from OpenAPI (the
+    swagger-ish detail panel). ``method``+``path`` identify the route exactly as
+    listed by ``GET /admin/endpoints``. Read-only; auth required."""
+    detail = build_endpoint_detail(request.app.openapi(), method, path)
+    if detail is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No such endpoint: {method.upper()} {path}",
+        )
+    return detail
 
 
 # The signer invoker is a warm-reused singleton (like the event publisher). It's

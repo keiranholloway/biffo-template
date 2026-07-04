@@ -1,12 +1,15 @@
 'use client'
 
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
+import { EndpointDetail } from '@/components/EndpointDetail'
 import { useAuth } from '@/context/auth-context'
 import { ApiError, createApiClient } from '@/lib/api-client'
 import {
   changeEndpointPermission,
   type Endpoint,
+  type EndpointDetail as Detail,
   type EndpointPermissionResult,
+  fetchEndpointDetail,
   fetchEndpoints,
 } from '@/lib/endpoint-api'
 
@@ -22,8 +25,15 @@ const METHOD_COLOR: Record<string, string> = {
 // as checkboxes; an empty selection means "any authenticated caller".
 const KNOWN_ROLES = ['admin', 'editor', 'viewer']
 
+// Unique per mounted route — used as the React key and the expand/edit handle.
 function endpointKey(e: Endpoint): string {
-  return `${e.source}:${e.plugin ?? ''}:${e.table}:${e.operation}`
+  return `${e.method} ${e.path}`
+}
+
+interface DetailState {
+  loading: boolean
+  error: string | null
+  detail: Detail | null
 }
 
 function permissionErrorMessage(err: unknown): string {
@@ -40,7 +50,10 @@ function permissionErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error'
 }
 
-function RoleCell({ roles }: { roles: string[] }) {
+function RoleCell({ roles }: { roles: string[] | null }) {
+  if (roles == null) {
+    return <span className="text-xs text-gray-400">—</span>
+  }
   if (roles.length === 0) {
     return <span className="text-xs text-gray-400">any authenticated</span>
   }
@@ -60,6 +73,10 @@ export default function EndpointsPage() {
   const [endpoints, setEndpoints] = useState<Endpoint[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  // Expandable schema-detail state (one open at a time; results cached by key).
+  const [expandedKey, setExpandedKey] = useState<string | null>(null)
+  const [details, setDetails] = useState<Record<string, DetailState>>({})
+
   // Inline permission editor state.
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [formAllowed, setFormAllowed] = useState(true)
@@ -77,12 +94,39 @@ export default function EndpointsPage() {
       })
   }, [getIdToken])
 
+  const toggleExpand = useCallback(
+    (e: Endpoint) => {
+      const key = endpointKey(e)
+      if (expandedKey === key) {
+        setExpandedKey(null)
+        return
+      }
+      setExpandedKey(key)
+      // Fetch once, then serve from cache on re-expand.
+      if (details[key] == null) {
+        setDetails((prev) => ({ ...prev, [key]: { loading: true, error: null, detail: null } }))
+        fetchEndpointDetail(createApiClient(getIdToken), e.method, e.path)
+          .then((detail) => {
+            setDetails((prev) => ({ ...prev, [key]: { loading: false, error: null, detail } }))
+          })
+          .catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : 'Failed to load details.'
+            setDetails((prev) => ({
+              ...prev,
+              [key]: { loading: false, error: message, detail: null },
+            }))
+          })
+      }
+    },
+    [expandedKey, details, getIdToken],
+  )
+
   function startEdit(e: Endpoint) {
     setResult(null)
     setFormError(null)
     setEditingKey(endpointKey(e))
     setFormAllowed(true) // listed endpoints are live; the edit can disable or retune roles
-    setFormRoles(e.required_role)
+    setFormRoles(e.required_role ?? [])
   }
 
   function toggleRole(role: string) {
@@ -90,7 +134,7 @@ export default function EndpointsPage() {
   }
 
   async function submit(e: Endpoint) {
-    if (e.plugin == null) return
+    if (e.plugin == null || e.table == null || e.operation == null) return
     setSubmitting(true)
     setFormError(null)
     try {
@@ -114,10 +158,10 @@ export default function EndpointsPage() {
     <div>
       <h1 className="text-2xl font-bold text-gray-900">Endpoints</h1>
       <p className="mt-1 text-sm text-gray-600">
-        The live generic-CRUD endpoints on this deployment and the role each requires. For{' '}
-        <strong>plugin</strong> endpoints you can change the required role or disable one — this
-        opens a pull request; the change goes live only when it&apos;s merged. Core endpoints change
-        in code.
+        Every live API route on this deployment. Expand a row to see its request and response
+        formats. For <strong>plugin</strong> endpoints you can change the required role or disable
+        one — this opens a pull request; the change goes live only when it&apos;s merged. Core and
+        bespoke endpoints change in code.
       </p>
 
       {result != null && (
@@ -149,10 +193,6 @@ export default function EndpointsPage() {
       {endpoints != null && endpoints.length === 0 && (
         <div className="mt-8 rounded-xl border border-dashed border-gray-300 bg-white p-8 text-center">
           <p className="text-sm font-medium text-gray-600">No endpoints exposed yet</p>
-          <p className="mt-1 text-xs text-gray-400">
-            Add a <code className="font-mono">permissions</code> block to a plugin table, or{' '}
-            <code className="font-mono">__crud_permissions__</code> to a core model, then deploy.
-          </p>
         </div>
       )}
 
@@ -161,6 +201,7 @@ export default function EndpointsPage() {
           <table className="min-w-full divide-y divide-gray-200 text-sm">
             <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
               <tr>
+                <th className="w-8 px-2 py-2" />
                 <th className="px-4 py-2">Method</th>
                 <th className="px-4 py-2">Path</th>
                 <th className="px-4 py-2">Source</th>
@@ -172,9 +213,28 @@ export default function EndpointsPage() {
               {endpoints.map((e) => {
                 const key = endpointKey(e)
                 const editing = editingKey === key
+                const expanded = expandedKey === key
+                const detailState = details[key]
                 return (
                   <Fragment key={key}>
-                    <tr>
+                    <tr className={expanded ? 'bg-gray-50' : undefined}>
+                      <td className="px-2 py-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            toggleExpand(e)
+                          }}
+                          aria-expanded={expanded}
+                          aria-label={`${expanded ? 'Hide' : 'Show'} details for ${e.method} ${e.path}`}
+                          className="flex h-6 w-6 items-center justify-center rounded text-gray-500 hover:bg-gray-100"
+                        >
+                          <span
+                            className={`inline-block transition-transform ${expanded ? 'rotate-90' : ''}`}
+                          >
+                            ▸
+                          </span>
+                        </button>
+                      </td>
                       <td className="px-4 py-2">
                         <span
                           className={`rounded px-1.5 py-0.5 font-mono text-xs font-semibold ${
@@ -184,21 +244,34 @@ export default function EndpointsPage() {
                           {e.method}
                         </span>
                       </td>
-                      <td className="px-4 py-2 font-mono text-xs text-gray-800">{e.path}</td>
+                      <td className="px-4 py-2 font-mono text-xs text-gray-800">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            toggleExpand(e)
+                          }}
+                          className="text-left hover:underline"
+                        >
+                          {e.path}
+                        </button>
+                        {e.summary != null && e.summary !== '' && (
+                          <span className="ml-2 font-sans text-gray-400">{e.summary}</span>
+                        )}
+                      </td>
                       <td className="px-4 py-2 text-xs text-gray-600">
                         {e.source === 'plugin' ? (
                           <>
                             plugin <span className="font-medium text-gray-800">{e.plugin}</span>
                           </>
                         ) : (
-                          'core'
+                          e.source
                         )}
                       </td>
                       <td className="px-4 py-2">
                         <RoleCell roles={e.required_role} />
                       </td>
                       <td className="px-4 py-2 text-right">
-                        {e.source === 'plugin' ? (
+                        {e.permission_editable ? (
                           <button
                             type="button"
                             onClick={() => {
@@ -217,8 +290,23 @@ export default function EndpointsPage() {
                         )}
                       </td>
                     </tr>
+
+                    {expanded && (
+                      <tr className="bg-gray-50">
+                        <td />
+                        <td colSpan={5} className="px-4 py-4">
+                          <EndpointDetail
+                            detail={detailState?.detail ?? null}
+                            loading={detailState?.loading ?? true}
+                            error={detailState?.error ?? null}
+                          />
+                        </td>
+                      </tr>
+                    )}
+
                     {editing && (
                       <tr className="bg-gray-50">
+                        <td />
                         <td colSpan={5} className="px-4 py-4">
                           <div
                             className="flex flex-col gap-3"

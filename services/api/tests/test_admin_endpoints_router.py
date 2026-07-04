@@ -126,8 +126,10 @@ class TestEndpointsRoute:
             assert isinstance(data, list)
             # the rbac plugin is installed on disk -> its allowed CRUD routes are live
             assert any(e["path"].startswith("/api/v1/plugins/rbac/") for e in data)
-            # now ALSO lists bespoke routes (hand-written, non-CRUD) from OpenAPI
-            assert any(e["source"] == "bespoke" for e in data)
+            # now ALSO lists hand-written core routes (non-CRUD) from OpenAPI,
+            # correctly owned by "core" (not a separate "bespoke" bucket)
+            assert any(e["source"] == "core" for e in data)
+            assert all(e["source"] in ("core", "plugin") for e in data)
             # every item carries the shape the portal renders
             for e in data:
                 assert {

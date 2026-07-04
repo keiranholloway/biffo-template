@@ -2,14 +2,15 @@ import type { createApiClient } from './api-client'
 
 /**
  * A live API endpoint as returned by `GET /api/v1/admin/endpoints` — one row per
- * mounted route (from the app's OpenAPI schema). Generic-CRUD routes are
- * enriched with permission metadata (`permission_editable` is true only for
- * plugin ones); bespoke hand-written routes have `source: 'bespoke'`,
- * `table`/`operation` null, and `required_role` null (their guard is a
- * dependency, not surfaced in OpenAPI).
+ * mounted route (from the app's OpenAPI schema). `source` is ownership: `core`
+ * (a route in `services/api/` — hand-written or generic-CRUD) or `plugin` (under
+ * `/api/v1/plugins/<name>/`). Generic-CRUD routes are enriched with permission
+ * metadata (`permission_editable` is true only for plugin ones); hand-written
+ * routes have `table`/`operation` null and `required_role` null (their guard is
+ * a dependency, not surfaced in OpenAPI).
  */
 export interface Endpoint {
-  source: 'plugin' | 'core' | 'bespoke'
+  source: 'plugin' | 'core'
   plugin: string | null
   table: string | null
   operation: string | null

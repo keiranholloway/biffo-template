@@ -160,8 +160,8 @@ export default function EndpointsPage() {
       <p className="mt-1 text-sm text-gray-600">
         Every live API route on this deployment. Expand a row to see its request and response
         formats. For <strong>plugin</strong> endpoints you can change the required role or disable
-        one — this opens a pull request; the change goes live only when it&apos;s merged. Core and
-        bespoke endpoints change in code.
+        one — this opens a pull request; the change goes live only when it&apos;s merged. Core
+        endpoints change in code.
       </p>
 
       {result != null && (

@@ -56,7 +56,7 @@ const endpoints: Endpoint[] = [
     permission_editable: true,
   },
   {
-    source: 'bespoke',
+    source: 'core',
     plugin: null,
     table: null,
     operation: null,
@@ -88,9 +88,9 @@ describe('EndpointsPage', () => {
     expect(screen.getByText('admin')).toBeInTheDocument()
     // empty required_role renders as "any authenticated"
     expect(screen.getAllByText('any authenticated').length).toBeGreaterThanOrEqual(1)
-    // bespoke routes are listed too (all routes, swagger-ish)
+    // hand-written routes are listed too (all routes, swagger-ish), owned by core
     expect(screen.getByText('/api/v1/public/demo-requests')).toBeInTheDocument()
-    expect(screen.getByText('bespoke')).toBeInTheDocument()
+    expect(screen.getByText('core')).toBeInTheDocument()
   })
 
   it('shows an empty state when nothing is exposed', async () => {
@@ -121,7 +121,7 @@ describe('EndpointsPage', () => {
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: 'Change' })).toHaveLength(2)
     })
-    // the bespoke row shows an "in code" hint instead
+    // the non-editable (hand-written core) row shows an "in code" hint instead
     expect(screen.getByText('in code')).toBeInTheDocument()
   })
 

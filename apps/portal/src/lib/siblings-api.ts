@@ -25,8 +25,20 @@ export async function fetchSiblings(): Promise<Sibling[]> {
 /**
  * Same-origin path link to a sibling. **No trailing slash** — CloudFront routes
  * `baseurl/<name>` exactly, and a trailing slash has bitten us before (e.g.
- * `/cms` works, `/cms/` does not).
+ * `/cms` works, `/cms/` does not). This is the clickable *entry point*.
  */
 export function siblingHref(name: string): string {
   return `/${name}`
+}
+
+/**
+ * Every same-origin route pattern a sibling is served at. Mirrors the two
+ * CloudFront cache behaviors the CDN module creates per sibling (see
+ * `modules/cloud/aws/cdn`): the bare `/<name>` (the entry point) and the
+ * wildcard `/<name>/*` (its sub-routes) — because CloudFront's `<name>/*` does
+ * not match the bare `/<name>`, so both are needed. Listed on the card so the
+ * routing is visible; only the bare path is a clickable destination.
+ */
+export function siblingPaths(name: string): string[] {
+  return [`/${name}`, `/${name}/*`]
 }

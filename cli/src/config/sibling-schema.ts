@@ -20,6 +20,27 @@ export const SiblingConfigSchema = z
           'Must be lowercase kebab-case, starting with a letter (it becomes a URL path segment)',
         ),
       description: z.string().default(''),
+      // Notable routes this sibling exposes, shown as labelled links on the
+      // core project's Microservices tab (ADR-0007). Each `path` is relative to
+      // the sibling's own path_prefix (so "demo" renders as /<prefix>/demo), and
+      // `label` is the human name. Empty by default — a sibling with no declared
+      // routes just shows its single root link. Declare real routes here as you
+      // build the sibling's pages; the values flow to the core's
+      // siblings.auto.tfvars.json at registration and into siblings.json at deploy.
+      routes: z
+        .array(
+          z.object({
+            path: z
+              .string()
+              .min(1)
+              .regex(
+                /^[a-z0-9][a-z0-9/-]*$/,
+                'Sub-path relative to the sibling prefix, no leading slash (e.g. "demo" or "apply")',
+              ),
+            label: z.string().min(1),
+          }),
+        )
+        .default([]),
     }),
     source_control: SourceControlConfigSchema,
     cloud: CloudConfigSchema,

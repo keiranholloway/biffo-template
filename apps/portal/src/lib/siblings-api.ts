@@ -5,10 +5,24 @@
  * static portal can render the Microservices tab without a server round-trip.
  */
 
+/** A notable route a sibling exposes, declared in its `biffo.sibling.json`. */
+export interface SiblingRoute {
+  /** Sub-path relative to the sibling's prefix, no leading slash (e.g. `demo`). */
+  path: string
+  /** Human label shown on the card (e.g. `Book a demo`). */
+  label: string
+}
+
 export interface Sibling {
   /** Routing/display name — also the CloudFront path segment. */
   name: string
   description: string
+  /**
+   * Notable routes the sibling declares (ADR-0007). Optional — a sibling with
+   * none just shows its single root link. Populated from the sibling's own
+   * `biffo.sibling.json` via the core's `siblings.auto.tfvars.json`.
+   */
+  routes?: SiblingRoute[]
 }
 
 /** Fetch the registered siblings for this deployment. */
@@ -32,13 +46,9 @@ export function siblingHref(name: string): string {
 }
 
 /**
- * Every same-origin route pattern a sibling is served at. Mirrors the two
- * CloudFront cache behaviors the CDN module creates per sibling (see
- * `modules/cloud/aws/cdn`): the bare `/<name>` (the entry point) and the
- * wildcard `/<name>/*` (its sub-routes) — because CloudFront's `<name>/*` does
- * not match the bare `/<name>`, so both are needed. Listed on the card so the
- * routing is visible; only the bare path is a clickable destination.
+ * Same-origin link to one of a sibling's declared routes: `/<name>/<path>`, no
+ * trailing slash (CloudFront's `<name>/*` behavior routes it to the sibling).
  */
-export function siblingPaths(name: string): string[] {
-  return [`/${name}`, `/${name}/*`]
+export function siblingRouteHref(name: string, path: string): string {
+  return `/${name}/${path}`
 }

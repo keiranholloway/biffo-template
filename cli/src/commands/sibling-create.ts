@@ -424,6 +424,10 @@ export function writeSiblingTemplate(
         core_project: context.coreProjectName,
         path_prefix: context.pathPrefix,
         ...(config.project.description ? { description: config.project.description } : {}),
+        // Always written (even when empty) so the field is discoverable — declare
+        // this sibling's notable routes here and they surface on the core's
+        // Microservices tab. See SiblingConfigSchema.project.routes.
+        routes: config.project.routes,
       },
       null,
       2,
@@ -542,7 +546,12 @@ function siteBucketName(projectName: string, environment: string, accountId: str
  * cloned temp directory.
  */
 function readExistingSiblingOrigins(filePath: string): {
-  sibling_origins?: Array<{ name: string; bucket_regional_domain: string; description?: string }>
+  sibling_origins?: Array<{
+    name: string
+    bucket_regional_domain: string
+    description?: string
+    routes?: Array<{ path: string; label: string }>
+  }>
 } {
   try {
     return JSON.parse(readFileSync(filePath, 'utf8')) as {
@@ -550,6 +559,7 @@ function readExistingSiblingOrigins(filePath: string): {
         name: string
         bucket_regional_domain: string
         description?: string
+        routes?: Array<{ path: string; label: string }>
       }>
     }
   } catch (err) {
@@ -622,12 +632,15 @@ async function registerWithCore(
 
       const existing = readExistingSiblingOrigins(filePath)
       const siblings = (existing.sibling_origins ?? []).filter((s) => s.name !== pathPrefix)
-      // description feeds the portal's Microservices tab (built into siblings.json
-      // at deploy time). Omitted when the sibling has none, to keep entries lean.
+      // description and routes feed the portal's Microservices tab (built into
+      // siblings.json at deploy time). Both omitted when empty, to keep entries
+      // lean; Terraform silently drops these extra attributes (the sibling_origins
+      // variable is typed to name + bucket only), so they're display-only.
       siblings.push({
         name: pathPrefix,
         bucket_regional_domain: domain,
         ...(config.project.description ? { description: config.project.description } : {}),
+        ...(config.project.routes.length > 0 ? { routes: config.project.routes } : {}),
       })
 
       mkdirSync(dirname(filePath), { recursive: true })

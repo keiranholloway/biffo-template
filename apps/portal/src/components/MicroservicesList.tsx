@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { type Sibling, fetchSiblings, siblingHref, siblingPaths } from '@/lib/siblings-api'
+import { type Sibling, fetchSiblings, siblingHref, siblingRouteHref } from '@/lib/siblings-api'
 
 /**
  * The Microservices tab (ADR-0007): the sibling apps registered for this
@@ -51,26 +51,40 @@ export function MicroservicesList() {
       {siblings != null && siblings.length > 0 && (
         <ul className="mt-6 grid gap-3 sm:grid-cols-2">
           {siblings.map((s) => (
-            <li key={s.name}>
-              <a
-                href={siblingHref(s.name)}
-                className="flex h-full flex-col rounded-xl border bg-white p-4 shadow-sm transition hover:border-gray-400 hover:shadow"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-medium text-gray-900">{s.name}</span>
-                  <span className="text-sm text-blue-600">Open →</span>
-                </div>
-                {s.description !== '' && (
-                  <p className="mt-2 text-sm text-gray-600">{s.description}</p>
-                )}
-                <div className="mt-3 space-y-0.5">
-                  {siblingPaths(s.name).map((path) => (
-                    <code key={path} className="block font-mono text-xs text-gray-400">
-                      {path}
-                    </code>
+            <li
+              key={s.name}
+              className="flex h-full flex-col rounded-xl border bg-white p-4 shadow-sm transition hover:border-gray-400 hover:shadow"
+            >
+              <div className="flex items-center justify-between">
+                <a href={siblingHref(s.name)} className="font-medium text-gray-900 hover:underline">
+                  {s.name}
+                </a>
+                <a href={siblingHref(s.name)} className="text-sm text-blue-600 hover:underline">
+                  Open →
+                </a>
+              </div>
+              {s.description !== '' && (
+                <p className="mt-2 text-sm text-gray-600">{s.description}</p>
+              )}
+              {s.routes && s.routes.length > 0 ? (
+                <ul className="mt-3 space-y-1 border-t border-gray-100 pt-3">
+                  {s.routes.map((r) => (
+                    <li key={r.path}>
+                      <a
+                        href={siblingRouteHref(s.name, r.path)}
+                        className="flex items-baseline justify-between gap-2 text-sm text-gray-700 hover:text-blue-600"
+                      >
+                        <span>{r.label}</span>
+                        <code className="font-mono text-xs text-gray-400">
+                          {siblingRouteHref(s.name, r.path)}
+                        </code>
+                      </a>
+                    </li>
                   ))}
-                </div>
-              </a>
+                </ul>
+              ) : (
+                <code className="mt-3 font-mono text-xs text-gray-400">{siblingHref(s.name)}</code>
+              )}
             </li>
           ))}
         </ul>

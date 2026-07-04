@@ -31,16 +31,34 @@ describe('MicroservicesList', () => {
     expect(cmsLink).toHaveAttribute('href', '/cms')
   })
 
-  it('lists every route pattern per sibling (bare entry + wildcard), not just the link', async () => {
-    fetchSiblings.mockResolvedValue([{ name: 'intake', description: 'Public lead capture' }])
+  it('lists each declared route as a labelled link under the sibling', async () => {
+    fetchSiblings.mockResolvedValue([
+      {
+        name: 'intake',
+        description: 'Public lead capture',
+        routes: [
+          { path: 'demo', label: 'Book a demo' },
+          { path: 'apply', label: 'Apply' },
+        ],
+      },
+    ])
 
     render(<MicroservicesList />)
 
-    // Both CloudFront behaviors are shown on the card...
-    expect(await screen.findByText('/intake')).toBeInTheDocument()
-    expect(screen.getByText('/intake/*')).toBeInTheDocument()
-    // ...but only the bare path is the clickable entry point.
-    expect(screen.getByText('intake').closest('a')).toHaveAttribute('href', '/intake')
+    // Declared routes render as labelled links to /<name>/<path>.
+    expect(await screen.findByText('Book a demo')).toBeInTheDocument()
+    expect(screen.getByText('Book a demo').closest('a')).toHaveAttribute('href', '/intake/demo')
+    expect(screen.getByText('Apply').closest('a')).toHaveAttribute('href', '/intake/apply')
+    // The wildcard plumbing path is NOT shown.
+    expect(screen.queryByText('/intake/*')).not.toBeInTheDocument()
+  })
+
+  it('shows just the root link for a sibling with no declared routes', async () => {
+    fetchSiblings.mockResolvedValue([{ name: 'crm', description: 'CRM' }])
+    render(<MicroservicesList />)
+    expect(await screen.findByText('crm')).toBeInTheDocument()
+    expect(screen.getByText('crm').closest('a')).toHaveAttribute('href', '/crm')
+    expect(screen.getByText('/crm')).toBeInTheDocument()
   })
 
   it('shows an empty state when there are no siblings', async () => {

@@ -72,7 +72,7 @@ jobs:
           SRC=infra/environments/dev/siblings.auto.tfvars.json
           OUT=apps/portal/public/siblings.json
           if [ -f "$SRC" ]; then
-            jq '{ siblings: [.sibling_origins[] | { name, description: (.description // "") }] }' "$SRC" > "$OUT"
+            jq '{ siblings: [.sibling_origins[] | { name, description: (.description // ""), routes: (.routes // []) }] }' "$SRC" > "$OUT"
           else
             echo '{ "siblings": [] }' > "$OUT"
           fi
@@ -250,7 +250,7 @@ jobs:
           SRC=infra/environments/staging/siblings.auto.tfvars.json
           OUT=apps/portal/public/siblings.json
           if [ -f "$SRC" ]; then
-            jq '{ siblings: [.sibling_origins[] | { name, description: (.description // "") }] }' "$SRC" > "$OUT"
+            jq '{ siblings: [.sibling_origins[] | { name, description: (.description // ""), routes: (.routes // []) }] }' "$SRC" > "$OUT"
           else
             echo '{ "siblings": [] }' > "$OUT"
           fi
@@ -436,7 +436,7 @@ jobs:
           SRC=infra/environments/prod/siblings.auto.tfvars.json
           OUT=apps/portal/public/siblings.json
           if [ -f "$SRC" ]; then
-            jq '{ siblings: [.sibling_origins[] | { name, description: (.description // "") }] }' "$SRC" > "$OUT"
+            jq '{ siblings: [.sibling_origins[] | { name, description: (.description // ""), routes: (.routes // []) }] }' "$SRC" > "$OUT"
           else
             echo '{ "siblings": [] }' > "$OUT"
           fi

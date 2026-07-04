@@ -154,10 +154,40 @@ describe('writeSiblingTemplate', () => {
       core_project: 'core-app',
       path_prefix: 'reports',
       description: 'Reports sibling',
+      // Scaffolded (empty) so the field is discoverable for the developer to fill.
+      routes: [],
     })
     expect(readFileSync(join(target, 'apps', 'frontend', '.env.example'), 'utf8')).toContain(
       'NEXT_PUBLIC_SIBLING_NAME=reports',
     )
+  })
+
+  it('writes declared routes into the sibling biffo.sibling.json', () => {
+    const template = mkdtempSync(join(tmpdir(), 'tmpl-'))
+    mkdirSync(join(template, 'apps', 'frontend'), { recursive: true })
+    writeFileSync(join(template, 'biffo.sibling.json'), '{}')
+
+    const target = mkdtempSync(join(tmpdir(), 'tgt-'))
+    const configWithRoutes = SiblingConfigSchema.parse({
+      project: {
+        name: 'reports',
+        description: 'Reports sibling',
+        routes: [{ path: 'weekly', label: 'Weekly report' }],
+      },
+      source_control: { provider: 'github', config: { org: 'acme', repo: 'reports' } },
+      cloud: { provider: 'aws', config: { account_id: '123456789012', region: 'eu-west-1' } },
+      environments: ['dev'],
+      core: { config_path: './biffo.config.json', path_prefix: 'reports' },
+    })
+
+    writeSiblingTemplate(template, target, configWithRoutes, {
+      coreProjectName: 'core-app',
+      pathPrefix: 'reports',
+    })
+
+    expect(JSON.parse(readFileSync(join(target, 'biffo.sibling.json'), 'utf8')).routes).toEqual([
+      { path: 'weekly', label: 'Weekly report' },
+    ])
   })
 })
 

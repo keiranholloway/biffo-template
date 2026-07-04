@@ -43,5 +43,10 @@
       "uv run ruff check --fix",
       "uv run ruff format"
     ]
+  },
+  "pnpm": {
+    "overrides": {
+      "postcss@<8.5.10": ">=8.5.10"
+    }
   }
 }

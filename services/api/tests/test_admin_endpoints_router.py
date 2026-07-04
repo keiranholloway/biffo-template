@@ -48,7 +48,7 @@ class TestCollectEndpoints:
             ],
         )
         eps = collect_endpoints([manifest], core_models=[])
-        paths = {(e.method, e.path, tuple(e.required_role)) for e in eps}
+        paths = {(e.method, e.path, tuple(e.required_role or [])) for e in eps}
         assert ("GET", "/api/v1/plugins/notepad/notes", ()) in paths
         assert ("POST", "/api/v1/plugins/notepad/notes", ("admin",)) in paths
         # read is declared but not allowed -> not live
@@ -66,7 +66,7 @@ class TestCollectEndpoints:
             },
         )
         eps = collect_endpoints([], core_models=[model])
-        got = {(e.method, e.path, tuple(e.required_role), e.source) for e in eps}
+        got = {(e.method, e.path, tuple(e.required_role or []), e.source) for e in eps}
         assert ("GET", "/api/v1/data/widgets", (), "core") in got
         assert ("GET", "/api/v1/data/widgets/{id}", (), "core") in got
         assert ("DELETE", "/api/v1/data/widgets/{id}", ("admin",), "core") in got

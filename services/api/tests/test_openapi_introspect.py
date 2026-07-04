@@ -98,8 +98,10 @@ class TestBuildEndpointDetail:
         assert "one of: new, contacted" in (by_name["status"].notes or "")
 
         # A synthesized example is produced from the $ref-resolved schema.
-        assert body.example["name"] == "string"
-        assert body.example["status"] == "new"  # first enum value
+        example = body.example
+        assert isinstance(example, dict)
+        assert example["name"] == "string"
+        assert example["status"] == "new"  # first enum value
 
     def test_responses_include_schema_and_bare_status(self):
         detail = build_endpoint_detail(OPENAPI, "POST", "/api/v1/public/demo-requests")

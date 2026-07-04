@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { type Sibling, fetchSiblings, siblingHref } from '@/lib/siblings-api'
+import { type Sibling, fetchSiblings, siblingHref, siblingPaths } from '@/lib/siblings-api'
 
 /**
  * The Microservices tab (ADR-0007): the sibling apps registered for this
@@ -63,7 +63,13 @@ export function MicroservicesList() {
                 {s.description !== '' && (
                   <p className="mt-2 text-sm text-gray-600">{s.description}</p>
                 )}
-                <code className="mt-3 font-mono text-xs text-gray-400">{siblingHref(s.name)}</code>
+                <div className="mt-3 space-y-0.5">
+                  {siblingPaths(s.name).map((path) => (
+                    <code key={path} className="block font-mono text-xs text-gray-400">
+                      {path}
+                    </code>
+                  ))}
+                </div>
               </a>
             </li>
           ))}

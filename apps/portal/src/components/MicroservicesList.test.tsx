@@ -31,6 +31,18 @@ describe('MicroservicesList', () => {
     expect(cmsLink).toHaveAttribute('href', '/cms')
   })
 
+  it('lists every route pattern per sibling (bare entry + wildcard), not just the link', async () => {
+    fetchSiblings.mockResolvedValue([{ name: 'intake', description: 'Public lead capture' }])
+
+    render(<MicroservicesList />)
+
+    // Both CloudFront behaviors are shown on the card...
+    expect(await screen.findByText('/intake')).toBeInTheDocument()
+    expect(screen.getByText('/intake/*')).toBeInTheDocument()
+    // ...but only the bare path is the clickable entry point.
+    expect(screen.getByText('intake').closest('a')).toHaveAttribute('href', '/intake')
+  })
+
   it('shows an empty state when there are no siblings', async () => {
     fetchSiblings.mockResolvedValue([])
     render(<MicroservicesList />)

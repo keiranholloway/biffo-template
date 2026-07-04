@@ -52,7 +52,7 @@ permissions:
 jobs:
   plan-dev:
     name: Plan (dev)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: dev
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/dev') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev'))
     defaults:
@@ -88,7 +88,7 @@ jobs:
 
   apply-dev:
     name: Apply (dev)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: dev
     needs: plan-dev
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/dev') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev' && github.event.inputs.action == 'apply'))
@@ -154,7 +154,7 @@ jobs:
 
   plan-staging:
     name: Plan (staging)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: staging
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/staging') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging'))
     defaults:
@@ -190,7 +190,7 @@ jobs:
 
   apply-staging:
     name: Apply (staging)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: staging
     needs: plan-staging
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/staging') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && github.event.inputs.action == 'apply'))
@@ -257,7 +257,7 @@ jobs:
 
   plan-prod:
     name: Plan (prod)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: prod
     # prod deploys always require an explicit workflow_dispatch, never a push
     # side effect — BIFFO_DEPLOY_ENABLED is a single repo-wide flag set true
@@ -299,7 +299,7 @@ jobs:
 
   apply-prod:
     name: Apply (prod)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: prod
     needs: plan-prod
     # See plan-prod above — prod always requires an explicit workflow_dispatch.

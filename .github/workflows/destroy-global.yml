@@ -18,7 +18,7 @@ env:
 jobs:
   destroy-global:
     name: Destroy global DNS/certificate
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && vars.DOMAIN != '' && vars.DNS_MODE != 'none'
     defaults:
       run:

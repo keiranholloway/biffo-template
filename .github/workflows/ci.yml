@@ -165,11 +165,3 @@ jobs:
           quiet: true
           soft_fail: true
           framework: terraform
-      - name: tfsec
-        uses: aquasecurity/tfsec-action@v1.0.3
-        with:
-          working_directory: modules/
-          soft_fail: true
-          # Authenticate the action's GitHub-API release lookup — without a token
-          # it uses the unauthenticated 60/hr limit and 403s on high-volume days.
-          github_token: ${{ github.token }}

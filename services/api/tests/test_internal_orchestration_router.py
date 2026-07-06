@@ -1,0 +1,176 @@
+"""Integration test for the internal orchestration router (ADR-0009).
+
+Drives the service-only routes end to end through FastAPI's TestClient against
+in-memory SQLite, with require_service_principal overridden to a stub caller
+(the IAM gate is enforced by API Gateway + tested separately in
+test_service_auth.py). The StaticPool/in-memory-SQLite fixture pattern mirrors
+test_core_crud_router.py.
+"""
+
+import asyncio
+from collections.abc import AsyncGenerator, Generator
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
+
+from api.database import get_db
+from api.middleware.service_auth import ServicePrincipal, require_service_principal
+from api.models.base import Base
+from api.models.orchestration import (  # noqa: F401 — registers tables on Base.metadata
+    ActionLog,
+    WorkflowDefinition,
+    WorkflowRun,
+)
+from api.routers import internal_orchestration
+
+_EVENTS = "/api/v1/internal/orchestration/events"
+
+
+@pytest.fixture
+def orchestration_app() -> Generator[tuple[FastAPI, async_sessionmaker], None, None]:
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+
+    async def _create_tables() -> None:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    asyncio.run(_create_tables())
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
+        async with session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    app = FastAPI()
+    app.include_router(internal_orchestration.router, prefix="/api/v1")
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[require_service_principal] = lambda: ServicePrincipal(
+        principal_arn="arn:aws:sts::123:assumed-role/test-engine/session"
+    )
+
+    yield app, session_factory
+
+    asyncio.run(engine.dispose())
+
+
+@pytest.fixture
+def client(orchestration_app) -> TestClient:
+    app, _ = orchestration_app
+    return TestClient(app)
+
+
+async def _seed_definition(session_factory, **overrides) -> str:
+    fields = dict(
+        tenant_id="default",
+        name="notify sales",
+        trigger_source="biffo.core",
+        trigger_detail_type="demo.requested",
+        action_type="email",
+        action_config={"to": "sales@example.com"},
+        enabled=True,
+    )
+    fields.update(overrides)
+    async with session_factory() as session:
+        definition = WorkflowDefinition(**fields)
+        session.add(definition)
+        await session.commit()
+        return definition.id
+
+
+def _seed(session_factory, **overrides) -> str:
+    return asyncio.run(_seed_definition(session_factory, **overrides))
+
+
+def _event_body(idempotency_key: str = "demo-1") -> dict:
+    return {
+        "source": "biffo.core",
+        "detail_type": "demo.requested",
+        "idempotency_key": idempotency_key,
+        "event": {"demo_request_id": idempotency_key, "email": "lead@example.com"},
+    }
+
+
+def test_dispatch_returns_claimed_run(orchestration_app, client):
+    _, session_factory = orchestration_app
+    _seed(session_factory)
+
+    resp = client.post(_EVENTS, json=_event_body())
+
+    assert resp.status_code == 200
+    runs = resp.json()["runs"]
+    assert len(runs) == 1
+    assert runs[0]["created"] is True
+    assert runs[0]["action_type"] == "email"
+    assert runs[0]["action_config"] == {"to": "sales@example.com"}
+
+
+def test_dispatch_replay_is_idempotent(orchestration_app, client):
+    _, session_factory = orchestration_app
+    _seed(session_factory)
+
+    first = client.post(_EVENTS, json=_event_body()).json()["runs"][0]
+    second = client.post(_EVENTS, json=_event_body()).json()["runs"][0]
+
+    assert first["created"] is True
+    assert second["created"] is False
+    assert first["run_id"] == second["run_id"]
+
+
+def test_dispatch_no_match_returns_empty(client):
+    resp = client.post(_EVENTS, json=_event_body())
+
+    assert resp.status_code == 200
+    assert resp.json()["runs"] == []
+
+
+def test_record_result_sets_status(orchestration_app, client):
+    _, session_factory = orchestration_app
+    _seed(session_factory)
+    run_id = client.post(_EVENTS, json=_event_body()).json()["runs"][0]["run_id"]
+
+    resp = client.post(
+        f"/api/v1/internal/orchestration/runs/{run_id}/result",
+        json={
+            "action_type": "email",
+            "status": "succeeded",
+            "response": {"message_id": "ses-123"},
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "succeeded"
+
+
+def test_record_result_unknown_run_is_404(client):
+    resp = client.post(
+        "/api/v1/internal/orchestration/runs/nope/result",
+        json={"action_type": "email", "status": "failed", "error": "boom"},
+    )
+
+    assert resp.status_code == 404
+
+
+def test_record_result_rejects_invalid_status(orchestration_app, client):
+    _, session_factory = orchestration_app
+    _seed(session_factory)
+    run_id = client.post(_EVENTS, json=_event_body()).json()["runs"][0]["run_id"]
+
+    resp = client.post(
+        f"/api/v1/internal/orchestration/runs/{run_id}/result",
+        json={"action_type": "email", "status": "bogus"},
+    )
+
+    assert resp.status_code == 422

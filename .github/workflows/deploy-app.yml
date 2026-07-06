@@ -222,6 +222,50 @@ jobs:
             --zip-file fileb://pr-signer-lambda.zip
           aws lambda wait function-updated \
             --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }}
+      # Package and deploy each enabled plugin's own Lambda (ADR-0003, #196).
+      # deploy-infra (running in parallel) creates the function from a placeholder
+      # zip with ignore_changes on its code; this step ships the real handler. A
+      # plugin owns a Lambda once its terraform module is installed at
+      # modules/plugins/<name>/. The function name is <project>-<env>-plugin-<name>,
+      # derived from the Core API Lambda name (strip -core-api) so no extra var is
+      # needed. Packaged from the checkout like the PR-signer: third-party deps from
+      # the workspace lock (workspace members excluded), the SDK from source, and the
+      # plugin's own src/ at the package root to match the <name>.main.handler; the
+      # manifest is bundled at the task root (the plugin's manifest.py walks up to it).
+      - name: Package and deploy plugin Lambdas
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          prefix='${{ vars.CORE_API_LAMBDA_NAME }}'
+          prefix="${prefix%-core-api}"
+          for manifest in services/*/biffo.plugin.json; do
+            plugin_dir="$(dirname "$manifest")"
+            name="$(basename "$plugin_dir")"
+            [ -d "modules/plugins/$name" ] || { echo "skip $name (no installed terraform module)"; continue; }
+            fn="${prefix}-plugin-${name}"
+            echo "::group::plugin $name -> $fn"
+            found=""
+            for i in $(seq 1 30); do
+              if aws lambda get-function --function-name "$fn" >/dev/null 2>&1; then found=1; break; fi
+              echo "waiting for $fn to exist ($i/30)"; sleep 10
+            done
+            if [ -z "$found" ]; then echo "$fn not found (plugin not enabled this env?); skipping"; echo "::endgroup::"; continue; fi
+            pkg_name="$(sed -n 's/^name *= *"\(.*\)".*/\1/p' "$plugin_dir/pyproject.toml" | head -1)"
+            rm -rf "plugin-$name-package"
+            uv export --package "$pkg_name" --no-dev --frozen \
+              --no-emit-workspace --no-emit-project \
+              --output-file "plugin-$name-requirements.txt"
+            uv pip install -r "plugin-$name-requirements.txt" --target "plugin-$name-package/"
+            uv pip install ./packages/python-sdk --target "plugin-$name-package/" --no-deps
+            cp -r "$plugin_dir"/src/. "plugin-$name-package/"
+            cp "$manifest" "plugin-$name-package/biffo.plugin.json"
+            (cd "plugin-$name-package" && zip -rq "../plugin-$name.zip" .)
+            aws lambda update-function-code \
+              --function-name "$fn" \
+              --zip-file "fileb://plugin-$name.zip"
+            aws lambda wait function-updated --function-name "$fn"
+            echo "::endgroup::"
+          done
 
   # ─── STAGING ─────────────────────────────────────────────────────────────────
   # Manual only — run workflow_dispatch with environment=staging.
@@ -400,6 +444,50 @@ jobs:
             --zip-file fileb://pr-signer-lambda.zip
           aws lambda wait function-updated \
             --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }}
+      # Package and deploy each enabled plugin's own Lambda (ADR-0003, #196).
+      # deploy-infra (running in parallel) creates the function from a placeholder
+      # zip with ignore_changes on its code; this step ships the real handler. A
+      # plugin owns a Lambda once its terraform module is installed at
+      # modules/plugins/<name>/. The function name is <project>-<env>-plugin-<name>,
+      # derived from the Core API Lambda name (strip -core-api) so no extra var is
+      # needed. Packaged from the checkout like the PR-signer: third-party deps from
+      # the workspace lock (workspace members excluded), the SDK from source, and the
+      # plugin's own src/ at the package root to match the <name>.main.handler; the
+      # manifest is bundled at the task root (the plugin's manifest.py walks up to it).
+      - name: Package and deploy plugin Lambdas
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          prefix='${{ vars.CORE_API_LAMBDA_NAME }}'
+          prefix="${prefix%-core-api}"
+          for manifest in services/*/biffo.plugin.json; do
+            plugin_dir="$(dirname "$manifest")"
+            name="$(basename "$plugin_dir")"
+            [ -d "modules/plugins/$name" ] || { echo "skip $name (no installed terraform module)"; continue; }
+            fn="${prefix}-plugin-${name}"
+            echo "::group::plugin $name -> $fn"
+            found=""
+            for i in $(seq 1 30); do
+              if aws lambda get-function --function-name "$fn" >/dev/null 2>&1; then found=1; break; fi
+              echo "waiting for $fn to exist ($i/30)"; sleep 10
+            done
+            if [ -z "$found" ]; then echo "$fn not found (plugin not enabled this env?); skipping"; echo "::endgroup::"; continue; fi
+            pkg_name="$(sed -n 's/^name *= *"\(.*\)".*/\1/p' "$plugin_dir/pyproject.toml" | head -1)"
+            rm -rf "plugin-$name-package"
+            uv export --package "$pkg_name" --no-dev --frozen \
+              --no-emit-workspace --no-emit-project \
+              --output-file "plugin-$name-requirements.txt"
+            uv pip install -r "plugin-$name-requirements.txt" --target "plugin-$name-package/"
+            uv pip install ./packages/python-sdk --target "plugin-$name-package/" --no-deps
+            cp -r "$plugin_dir"/src/. "plugin-$name-package/"
+            cp "$manifest" "plugin-$name-package/biffo.plugin.json"
+            (cd "plugin-$name-package" && zip -rq "../plugin-$name.zip" .)
+            aws lambda update-function-code \
+              --function-name "$fn" \
+              --zip-file "fileb://plugin-$name.zip"
+            aws lambda wait function-updated --function-name "$fn"
+            echo "::endgroup::"
+          done
 
   # ─── PROD ────────────────────────────────────────────────────────────────────
   # Manual only — run workflow_dispatch with environment=prod.
@@ -590,3 +678,47 @@ jobs:
             --zip-file fileb://pr-signer-lambda.zip
           aws lambda wait function-updated \
             --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }}
+      # Package and deploy each enabled plugin's own Lambda (ADR-0003, #196).
+      # deploy-infra (running in parallel) creates the function from a placeholder
+      # zip with ignore_changes on its code; this step ships the real handler. A
+      # plugin owns a Lambda once its terraform module is installed at
+      # modules/plugins/<name>/. The function name is <project>-<env>-plugin-<name>,
+      # derived from the Core API Lambda name (strip -core-api) so no extra var is
+      # needed. Packaged from the checkout like the PR-signer: third-party deps from
+      # the workspace lock (workspace members excluded), the SDK from source, and the
+      # plugin's own src/ at the package root to match the <name>.main.handler; the
+      # manifest is bundled at the task root (the plugin's manifest.py walks up to it).
+      - name: Package and deploy plugin Lambdas
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          prefix='${{ vars.CORE_API_LAMBDA_NAME }}'
+          prefix="${prefix%-core-api}"
+          for manifest in services/*/biffo.plugin.json; do
+            plugin_dir="$(dirname "$manifest")"
+            name="$(basename "$plugin_dir")"
+            [ -d "modules/plugins/$name" ] || { echo "skip $name (no installed terraform module)"; continue; }
+            fn="${prefix}-plugin-${name}"
+            echo "::group::plugin $name -> $fn"
+            found=""
+            for i in $(seq 1 30); do
+              if aws lambda get-function --function-name "$fn" >/dev/null 2>&1; then found=1; break; fi
+              echo "waiting for $fn to exist ($i/30)"; sleep 10
+            done
+            if [ -z "$found" ]; then echo "$fn not found (plugin not enabled this env?); skipping"; echo "::endgroup::"; continue; fi
+            pkg_name="$(sed -n 's/^name *= *"\(.*\)".*/\1/p' "$plugin_dir/pyproject.toml" | head -1)"
+            rm -rf "plugin-$name-package"
+            uv export --package "$pkg_name" --no-dev --frozen \
+              --no-emit-workspace --no-emit-project \
+              --output-file "plugin-$name-requirements.txt"
+            uv pip install -r "plugin-$name-requirements.txt" --target "plugin-$name-package/"
+            uv pip install ./packages/python-sdk --target "plugin-$name-package/" --no-deps
+            cp -r "$plugin_dir"/src/. "plugin-$name-package/"
+            cp "$manifest" "plugin-$name-package/biffo.plugin.json"
+            (cd "plugin-$name-package" && zip -rq "../plugin-$name.zip" .)
+            aws lambda update-function-code \
+              --function-name "$fn" \
+              --zip-file "fileb://plugin-$name.zip"
+            aws lambda wait function-updated --function-name "$fn"
+            echo "::endgroup::"
+          done

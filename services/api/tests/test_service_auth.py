@@ -1,0 +1,91 @@
+"""Tests for inbound service-to-service authentication (ADR-0009).
+
+`require_service_principal` reads the SigV4-verified IAM principal from the API
+Gateway v2 event that Mangum stores at `request.scope["aws.event"]`, and enforces
+the configured allowlist. These unit-test the dependency directly with a
+hand-built Request scope standing in for what API Gateway + Mangum deliver.
+"""
+
+import pytest
+from fastapi import HTTPException
+from starlette.requests import Request
+
+from api.config import settings
+from api.middleware.service_auth import (
+    ServicePrincipal,
+    require_service_principal,
+)
+
+ORCHESTRATOR_ARN = (
+    "arn:aws:sts::123456789012:assumed-role/"
+    "acme-dev-plugin-orchestrator-role/orchestrator-session"
+)
+ALLOWLIST = ["arn:aws:sts::123456789012:assumed-role/acme-dev-plugin-*/*"]
+
+
+def _request_with_iam(user_arn: str | None) -> Request:
+    """Build a minimal Request whose aws.event mirrors an IAM-authorized route.
+
+    When user_arn is None the requestContext carries no iam block, as it would
+    for a request that never traversed an AWS_IAM route.
+    """
+    request_context: dict = {"http": {"method": "POST"}}
+    if user_arn is not None:
+        request_context["authorizer"] = {"iam": {"userArn": user_arn}}
+    scope = {
+        "type": "http",
+        "aws.event": {"requestContext": request_context},
+    }
+    return Request(scope)
+
+
+@pytest.fixture
+def allowlist(monkeypatch):
+    monkeypatch.setattr(settings, "service_principal_arn_allowlist", list(ALLOWLIST))
+
+
+async def test_allowlisted_principal_is_accepted(allowlist):
+    principal = await require_service_principal(_request_with_iam(ORCHESTRATOR_ARN))
+
+    assert isinstance(principal, ServicePrincipal)
+    assert principal.principal_arn == ORCHESTRATOR_ARN
+    assert principal.tenant_id == "default"
+    assert principal.roles == []
+
+
+async def test_non_allowlisted_principal_is_forbidden(allowlist):
+    other = "arn:aws:sts::123456789012:assumed-role/some-other-role/sess"
+
+    with pytest.raises(HTTPException) as exc:
+        await require_service_principal(_request_with_iam(other))
+
+    assert exc.value.status_code == 403
+
+
+async def test_missing_iam_context_is_unauthorized(allowlist):
+    """A request that didn't come through an IAM-authorized route has no iam
+    block — treated as unauthenticated (401), not merely un-allowlisted."""
+    with pytest.raises(HTTPException) as exc:
+        await require_service_principal(_request_with_iam(None))
+
+    assert exc.value.status_code == 401
+
+
+async def test_empty_allowlist_fails_closed(monkeypatch):
+    """With no allowlist configured, even a well-formed IAM principal is rejected."""
+    monkeypatch.setattr(settings, "service_principal_arn_allowlist", [])
+
+    with pytest.raises(HTTPException) as exc:
+        await require_service_principal(_request_with_iam(ORCHESTRATOR_ARN))
+
+    assert exc.value.status_code == 403
+
+
+async def test_no_aws_event_fails_closed(allowlist):
+    """Local dev / non-Mangum requests have no aws.event at all -> 401."""
+    request = Request({"type": "http"})
+
+    with pytest.raises(HTTPException) as exc:
+        await require_service_principal(request)
+
+    assert exc.value.status_code == 401

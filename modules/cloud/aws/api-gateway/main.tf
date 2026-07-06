@@ -66,6 +66,20 @@ resource "aws_apigatewayv2_route" "options" {
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
+# Internal service-to-service surface (ADR-0009). Machine callers (ADR-0003
+# plugins such as the orchestration engine) have no Cognito identity; they sign
+# requests with SigV4 and are authorised by IAM here, not by the JWT authorizer.
+# This route is more specific than $default, so it takes precedence for the
+# /api/v1/internal/* prefix. It is inert until the Core API mounts an internal
+# route AND a caller is granted execute-api:Invoke and added to the app-level
+# allowlist (BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST).
+resource "aws_apigatewayv2_route" "internal" {
+  api_id             = aws_apigatewayv2_api.main.id
+  route_key          = "ANY /api/v1/internal/{proxy+}"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "AWS_IAM"
+}
+
 # Catch-all — all other routes require a valid Cognito JWT
 resource "aws_apigatewayv2_route" "default" {
   api_id             = aws_apigatewayv2_api.main.id

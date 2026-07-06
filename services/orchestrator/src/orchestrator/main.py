@@ -19,6 +19,13 @@ from .plugin import OrchestratorPlugin
 logger = Logger()
 tracer = Tracer()
 
+# Reuse one event loop across warm invocations. asyncio.run() closes the loop
+# each call, but the plugin's reused httpx client pools connections bound to
+# the first loop -> "RuntimeError: Event loop is closed" on the next
+# invocation. Mirrors services/api/src/api/main.py.
+_loop = asyncio.new_event_loop()
+asyncio.set_event_loop(_loop)
+
 _plugin: OrchestratorPlugin | None = None
 
 
@@ -35,8 +42,13 @@ def _get_plugin() -> OrchestratorPlugin:
 def handler(event: dict, context: LambdaContext) -> dict:
     logger.info("Received event", extra={"event": event})
 
+    global _loop
+    if _loop.is_closed():
+        _loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_loop)
+
     biffo_event = create_event_handler(event)
     plugin = _get_plugin()
-    asyncio.run(plugin.events.dispatch(biffo_event))
+    _loop.run_until_complete(plugin.events.dispatch(biffo_event))
 
     return {"statusCode": 200}

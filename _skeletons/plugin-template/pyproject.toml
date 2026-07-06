@@ -13,7 +13,7 @@ dependencies = [
   # changes. Until then, point this at a path/git dependency instead — see
   # the README for both options and how to switch between them locally.
   "biffo-plugin-sdk>=1.0,<2.0",
-  "aws-lambda-powertools>=3.4.0",
+  "aws-lambda-powertools[tracer]>=3.4.0",
   "httpx>=0.28.1",
 ]
 

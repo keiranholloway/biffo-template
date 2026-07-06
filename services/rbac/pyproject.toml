@@ -5,7 +5,7 @@ description = "RBAC reference plugin (ADR-0003 chunk 14) — roles, permissions,
 requires-python = ">=3.13"
 dependencies = [
   "biffo-plugin-sdk",
-  "aws-lambda-powertools>=3.4.0",
+  "aws-lambda-powertools[tracer]>=3.4.0",
   "httpx>=0.28.1",
 ]
 

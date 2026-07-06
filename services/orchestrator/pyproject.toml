@@ -5,7 +5,7 @@ description = "Event-driven orchestration engine plugin (ADR-0003): subscribes t
 requires-python = ">=3.13"
 dependencies = [
   "biffo-plugin-sdk",
-  "aws-lambda-powertools>=3.4.0",
+  "aws-lambda-powertools[tracer]>=3.4.0",
   "httpx>=0.28.1",
   "boto3>=1.35.0",
 ]

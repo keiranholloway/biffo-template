@@ -211,7 +211,7 @@ name = "biffo-plugin-orchestrator"
 version = "0.1.0"
 source = { virtual = "services/orchestrator" }
 dependencies = [
-    { name = "aws-lambda-powertools" },
+    { name = "aws-lambda-powertools", extra = ["tracer"] },
     { name = "biffo-plugin-sdk" },
     { name = "boto3" },
     { name = "httpx" },
@@ -227,7 +227,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aws-lambda-powertools", specifier = ">=3.4.0" },
+    { name = "aws-lambda-powertools", extras = ["tracer"], specifier = ">=3.4.0" },
     { name = "biffo-plugin-sdk", editable = "packages/python-sdk" },
     { name = "boto3", specifier = ">=1.35.0" },
     { name = "httpx", specifier = ">=0.28.1" },
@@ -246,7 +246,7 @@ name = "biffo-plugin-rbac"
 version = "0.1.0"
 source = { virtual = "services/rbac" }
 dependencies = [
-    { name = "aws-lambda-powertools" },
+    { name = "aws-lambda-powertools", extra = ["tracer"] },
     { name = "biffo-plugin-sdk" },
     { name = "httpx" },
 ]
@@ -261,7 +261,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aws-lambda-powertools", specifier = ">=3.4.0" },
+    { name = "aws-lambda-powertools", extras = ["tracer"], specifier = ">=3.4.0" },
     { name = "biffo-plugin-sdk", editable = "packages/python-sdk" },
     { name = "httpx", specifier = ">=0.28.1" },
 ]

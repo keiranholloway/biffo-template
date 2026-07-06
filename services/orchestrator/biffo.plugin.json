@@ -1,0 +1,20 @@
+{
+  "name": "orchestrator",
+  "version": "0.1.0",
+  "description": "Event-driven orchestration engine: subscribes to platform EventBridge events and dispatches actions (email, and later SMS/voice/agentic) based on workflow definitions stored in the Core API. Durable state lives in Core (ADR-0002); this plugin runs its own Lambda and reaches Core over the IAM-authenticated internal API (ADR-0009).",
+  "author": "Biffo Team",
+  "tags": ["orchestration", "automation", "events"],
+  "required_core_version": ">=0.6.0",
+  "tables": [],
+  "api_routes": [],
+  "event_subscriptions": [
+    {
+      "source": "biffo.core",
+      "detail_type": "demo.requested",
+      "description": "Thin-wedge trigger: on a demo request, dispatch the email action of any enabled workflow definition matching (biffo.core, demo.requested). Subscriptions are wired into the plugin's own Lambda via the SDK EventSubscriber (see src/orchestrator/main.py) and the plugin's EventBridge rule (terraform/), not synthesized by the Core API."
+    }
+  ],
+  "dependencies": {
+    "biffo-plugin-sdk": "^1.0"
+  }
+}

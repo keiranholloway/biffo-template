@@ -5,6 +5,7 @@ requires-python = ">=3.13"
 [manifest]
 members = [
     "biffo-api",
+    "biffo-plugin-orchestrator",
     "biffo-plugin-rbac",
     "biffo-plugin-sdk",
     "biffo-pr-signer",
@@ -202,6 +203,41 @@ dev = [
     { name = "pytest", specifier = ">=8.3.4" },
     { name = "pytest-asyncio", specifier = ">=0.25.2" },
     { name = "pytest-cov", specifier = ">=6.0.0" },
+    { name = "ruff", specifier = ">=0.8.0" },
+]
+
+[[package]]
+name = "biffo-plugin-orchestrator"
+version = "0.1.0"
+source = { virtual = "services/orchestrator" }
+dependencies = [
+    { name = "aws-lambda-powertools" },
+    { name = "biffo-plugin-sdk" },
+    { name = "boto3" },
+    { name = "httpx" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pyright" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aws-lambda-powertools", specifier = ">=3.4.0" },
+    { name = "biffo-plugin-sdk", editable = "packages/python-sdk" },
+    { name = "boto3", specifier = ">=1.35.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pyright", specifier = ">=1.1.0" },
+    { name = "pytest", specifier = ">=8.3.4" },
+    { name = "pytest-asyncio", specifier = ">=0.25.2" },
     { name = "ruff", specifier = ">=0.8.0" },
 ]
 

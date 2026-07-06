@@ -1,0 +1,76 @@
+"""Tests for the SigV4-signing Core API client (ADR-0009)."""
+
+from __future__ import annotations
+
+import httpx
+import pytest
+from botocore.credentials import Credentials
+
+from orchestrator.signed_client import SignedCoreClient
+
+_CREDS = Credentials("AKIDTEST", "SECRETTEST")
+
+
+def _client(handler) -> SignedCoreClient:
+    transport = httpx.MockTransport(handler)
+    return SignedCoreClient(
+        base_url="https://core.example.com",
+        region="eu-west-1",
+        credentials=_CREDS,
+        client=httpx.AsyncClient(transport=transport),
+    )
+
+
+async def test_post_is_sigv4_signed():
+    captured: dict[str, object] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["auth"] = request.headers.get("Authorization")
+        captured["date"] = request.headers.get("X-Amz-Date")
+        captured["body"] = request.content
+        return httpx.Response(200, json={"runs": []})
+
+    client = _client(handle)
+    result = await client.post("/api/v1/internal/orchestration/events", json={"a": 1})
+
+    assert result == {"runs": []}
+    auth = captured["auth"]
+    assert isinstance(auth, str)
+    assert auth.startswith("AWS4-HMAC-SHA256")
+    assert "Credential=AKIDTEST/" in auth
+    assert "SignedHeaders=" in auth
+    assert captured["date"]
+    # The body signed must be exactly what is sent.
+    assert captured["body"] == b'{"a": 1}'
+
+
+async def test_get_includes_params_in_signed_url():
+    seen: dict[str, str] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers.get("Authorization", "")
+        return httpx.Response(200, json=[])
+
+    client = _client(handle)
+    await client.get(
+        "/api/v1/internal/orchestration/triggers",
+        params={"source": "biffo.core", "detail_type": "demo.requested"},
+    )
+
+    assert "source=biffo.core" in seen["url"]
+    assert "detail_type=demo.requested" in seen["url"]
+    assert seen["auth"].startswith("AWS4-HMAC-SHA256")
+
+
+async def test_error_response_raises():
+    from biffo_plugin_sdk import BiffoAPIError
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"detail": "Service principal not authorized"})
+
+    client = _client(handle)
+    with pytest.raises(BiffoAPIError) as exc:
+        await client.post("/api/v1/internal/orchestration/events", json={})
+
+    assert exc.value.status_code == 403

@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     # cognito:groups claim; matches the baseline "admin" group Terraform seeds.
     admin_group: str = "admin"
 
+    # Internal service-to-service auth (ADR-0009) — allowlist of IAM principal
+    # ARNs permitted on /api/v1/internal/* routes. The SigV4-verified caller's
+    # requestContext.authorizer.iam.userArn is matched (fnmatch glob) against
+    # this list. Fails closed: empty means no service caller is accepted. Set by
+    # Terraform (JSON array) from each authorised plugin's Lambda role ARN, e.g.
+    # ["arn:aws:sts::123456789012:assumed-role/acme-dev-plugin-orchestrator-*/*"].
+    service_principal_arn_allowlist: list[str] = []
+
     # Application
     environment: str = "dev"
     log_level: str = "INFO"

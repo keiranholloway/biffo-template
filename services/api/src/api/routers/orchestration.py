@@ -19,8 +19,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..dependencies import require_admin
-from ..events.registry import registered_events
+from ..events import emit_event
+from ..events.registry import (
+    WORKFLOW_DEFINITION_CREATED,
+    WORKFLOW_DEFINITION_DELETED,
+    WORKFLOW_DEFINITION_UPDATED,
+    registered_events,
+)
 from ..middleware.auth import AuthenticatedUser
+from ..models.orchestration import WorkflowDefinition
 from ..permissions import get_permissions_registry
 from ..orchestration import (
     create_definition,
@@ -118,6 +125,11 @@ async def get_catalog(
     return WorkflowCatalog(triggers=triggers, actions=WORKFLOW_ACTIONS)
 
 
+def _definition_payload(definition: WorkflowDefinition) -> dict[str, Any]:
+    """Full-row, JSON-safe payload for a workflow-definition state-change event."""
+    return WorkflowDefinitionResponse.model_validate(definition).model_dump(mode="json")
+
+
 async def _require_known_trigger(
     db: AsyncSession, *, tenant_id: str, source: str, detail_type: str
 ) -> None:
@@ -165,6 +177,12 @@ async def create_workflow(
         action_config=body.action_config,
         enabled=body.enabled,
     )
+    emit_event(
+        db,
+        WORKFLOW_DEFINITION_CREATED,
+        _definition_payload(definition),
+        tenant_id=caller.tenant_id,
+    )
     return WorkflowDefinitionResponse.model_validate(definition)
 
 
@@ -209,6 +227,12 @@ async def update_workflow(
     )
     if definition is None:
         raise _not_found()
+    emit_event(
+        db,
+        WORKFLOW_DEFINITION_UPDATED,
+        _definition_payload(definition),
+        tenant_id=caller.tenant_id,
+    )
     return WorkflowDefinitionResponse.model_validate(definition)
 
 
@@ -227,6 +251,13 @@ async def set_workflow_enabled(
     )
     if definition is None:
         raise _not_found()
+    # A toggle is a row update; the payload's ``enabled`` carries the new state.
+    emit_event(
+        db,
+        WORKFLOW_DEFINITION_UPDATED,
+        _definition_payload(definition),
+        tenant_id=caller.tenant_id,
+    )
     return WorkflowDefinitionResponse.model_validate(definition)
 
 
@@ -239,8 +270,14 @@ async def delete_workflow(
     deleted = await delete_definition(
         db, tenant_id=caller.tenant_id, definition_id=definition_id
     )
-    if not deleted:
+    if deleted is None:
         raise _not_found()
+    emit_event(
+        db,
+        WORKFLOW_DEFINITION_DELETED,
+        _definition_payload(deleted),
+        tenant_id=caller.tenant_id,
+    )
 
 
 def _not_found() -> HTTPException:

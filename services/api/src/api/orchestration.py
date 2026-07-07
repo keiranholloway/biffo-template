@@ -390,12 +390,15 @@ async def set_definition_enabled(
 
 async def delete_definition(
     db: AsyncSession, *, tenant_id: str, definition_id: str
-) -> bool:
+) -> WorkflowDefinition | None:
+    """Delete the definition, returning the (now-deleted) row so the caller can
+    emit its state-change payload, or ``None`` if it didn't exist. The returned
+    instance's attributes stay readable until the surrounding commit expires it."""
     definition = await get_definition(
         db, tenant_id=tenant_id, definition_id=definition_id
     )
     if definition is None:
-        return False
+        return None
     await db.delete(definition)
     await db.flush()
-    return True
+    return definition

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from api.database import get_db
+from api.events.emit import is_declared, pending_events
 from api.middleware.auth import AuthenticatedUser, require_auth
 from api.models.base import Base
 from api.models.orchestration import (  # noqa: F401 — registers tables on Base.metadata
@@ -75,11 +76,16 @@ def app() -> Generator[tuple[FastAPI, async_sessionmaker], None, None]:
     asyncio.run(_create())
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
+    # Record events buffered on the session post-commit (emit_event, ADR-0002) so
+    # tests can assert what would reach the bus — the real get_db publishes them.
+    published: list = []
+
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         async with session_factory() as session:
             try:
                 yield session
                 await session.commit()
+                published.extend(pending_events(session))
             except Exception:
                 await session.rollback()
                 raise
@@ -88,6 +94,7 @@ def app() -> Generator[tuple[FastAPI, async_sessionmaker], None, None]:
     fastapi.include_router(orchestration.router, prefix="/api/v1")
     fastapi.dependency_overrides[get_db] = override_get_db
     fastapi.dependency_overrides[require_auth] = lambda: _caller()
+    fastapi.state.published = published
 
     yield fastapi, session_factory
 
@@ -309,6 +316,65 @@ def test_catalog_includes_declared_crud_events(client: TestClient, monkeypatch):
     assert "widgets.deleted" not in by_dt
     # registry business events are still present
     assert "demo.requested" in by_dt
+
+
+# --- workflow-definition state-change events (ADR-0002, #225) ----------------
+
+
+def _published(app) -> list:
+    fastapi, _ = app
+    return fastapi.state.published
+
+
+def test_create_emits_workflow_definition_created(app, client: TestClient):
+    row = client.post(_BASE, json=_valid_body()).json()
+
+    events = _published(app)
+    assert len(events) == 1
+    event = events[0]
+    assert (event.source, event.detail_type) == (
+        "biffo.core",
+        "workflow_definition.created",
+    )
+    assert is_declared(event.source, event.detail_type)  # compliance gate
+    assert event.payload["id"] == row["id"]
+    assert event.payload["name"] == "Notify sales"
+
+
+def test_update_emits_workflow_definition_updated(app, client: TestClient):
+    row = client.post(_BASE, json=_valid_body()).json()
+    _published(app).clear()
+
+    client.put(f"{_BASE}/{row['id']}", json=_valid_body(name="Renamed"))
+
+    events = _published(app)
+    assert len(events) == 1
+    assert events[0].detail_type == "workflow_definition.updated"
+    assert events[0].payload["name"] == "Renamed"
+
+
+def test_toggle_emits_workflow_definition_updated(app, client: TestClient):
+    row = client.post(_BASE, json=_valid_body()).json()
+    _published(app).clear()
+
+    client.post(f"{_BASE}/{row['id']}/enabled", json={"enabled": False})
+
+    events = _published(app)
+    assert len(events) == 1
+    assert events[0].detail_type == "workflow_definition.updated"
+    assert events[0].payload["enabled"] is False
+
+
+def test_delete_emits_workflow_definition_deleted(app, client: TestClient):
+    row = client.post(_BASE, json=_valid_body()).json()
+    _published(app).clear()
+
+    assert client.delete(f"{_BASE}/{row['id']}").status_code == 204
+
+    events = _published(app)
+    assert len(events) == 1
+    assert events[0].detail_type == "workflow_definition.deleted"
+    assert events[0].payload["id"] == row["id"]
 
 
 def test_create_accepts_a_declared_crud_trigger(client: TestClient, monkeypatch):

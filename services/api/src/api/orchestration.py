@@ -132,6 +132,10 @@ async def dispatch_event(
 
     claimed: list[ClaimedRun] = []
     for definition in definitions:
+        # An optional payload filter refines a coarse (source, detail_type) match —
+        # e.g. leads.updated only when status == "won" (#226). No filter → always.
+        if not _matches_trigger_filter(definition.trigger_filter, event):
+            continue
         claimed.append(
             await _claim_run(
                 db,
@@ -142,6 +146,19 @@ async def dispatch_event(
             )
         )
     return claimed
+
+
+def _matches_trigger_filter(
+    trigger_filter: dict[str, Any] | None, event: dict[str, Any]
+) -> bool:
+    """A definition's ``trigger_filter`` (reserved JSON column, #226) is an all-of
+    exact-match predicate over the event payload: ``{"field": value}`` fires the
+    workflow only when the payload's ``field`` equals ``value``. An empty/None
+    filter matches every event — this is how ``leads.updated`` becomes a precise
+    trigger (e.g. reached a stage / became listed) without a new event type."""
+    if not trigger_filter:
+        return True
+    return all(event.get(key) == expected for key, expected in trigger_filter.items())
 
 
 async def observe_trigger(
@@ -309,12 +326,14 @@ async def create_definition(
     action_type: str,
     action_config: dict[str, Any],
     enabled: bool,
+    trigger_filter: dict[str, Any] | None = None,
 ) -> WorkflowDefinition:
     definition = WorkflowDefinition(
         tenant_id=tenant_id,
         name=name,
         trigger_source=trigger_source,
         trigger_detail_type=trigger_detail_type,
+        trigger_filter=trigger_filter,
         action_type=action_type,
         action_config=action_config,
         enabled=enabled,
@@ -336,6 +355,7 @@ async def update_definition(
     action_type: str,
     action_config: dict[str, Any],
     enabled: bool,
+    trigger_filter: dict[str, Any] | None = None,
 ) -> WorkflowDefinition | None:
     definition = await get_definition(
         db, tenant_id=tenant_id, definition_id=definition_id
@@ -345,6 +365,7 @@ async def update_definition(
     definition.name = name
     definition.trigger_source = trigger_source
     definition.trigger_detail_type = trigger_detail_type
+    definition.trigger_filter = trigger_filter
     definition.action_type = action_type
     definition.action_config = action_config
     definition.enabled = enabled

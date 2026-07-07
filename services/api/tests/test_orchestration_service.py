@@ -136,6 +136,75 @@ async def test_dispatch_is_tenant_scoped(db_session):
     assert claimed == []
 
 
+async def test_dispatch_honors_trigger_filter(db_session):
+    # Two definitions on the same coarse (source, detail_type); a payload filter
+    # refines each so only the one whose predicate matches claims a run (#226).
+    await _make_definition(
+        db_session,
+        name="won-only",
+        trigger_detail_type="leads.updated",
+        trigger_filter={"status": "won"},
+    )
+    await _make_definition(
+        db_session,
+        name="lost-only",
+        trigger_detail_type="leads.updated",
+        trigger_filter={"status": "lost"},
+    )
+
+    claimed = await svc.dispatch_event(
+        db_session,
+        tenant_id="default",
+        source="biffo.core",
+        detail_type="leads.updated",
+        idempotency_key="lead-1",
+        event={"id": "lead-1", "status": "won"},
+    )
+
+    assert len(claimed) == 1
+    assert claimed[0].created is True
+    assert await _count(db_session, WorkflowRun) == 1
+
+
+async def test_dispatch_empty_filter_matches_every_event(db_session):
+    # A None/empty filter is the wildcard: the definition fires regardless of
+    # payload — the default behaviour for triggers that don't need refining.
+    await _make_definition(
+        db_session, trigger_detail_type="leads.updated", trigger_filter=None
+    )
+
+    claimed = await svc.dispatch_event(
+        db_session,
+        tenant_id="default",
+        source="biffo.core",
+        detail_type="leads.updated",
+        idempotency_key="lead-1",
+        event={"id": "lead-1", "status": "anything"},
+    )
+
+    assert len(claimed) == 1
+
+
+async def test_dispatch_filter_miss_claims_nothing(db_session):
+    await _make_definition(
+        db_session,
+        trigger_detail_type="leads.updated",
+        trigger_filter={"status": "won"},
+    )
+
+    claimed = await svc.dispatch_event(
+        db_session,
+        tenant_id="default",
+        source="biffo.core",
+        detail_type="leads.updated",
+        idempotency_key="lead-1",
+        event={"id": "lead-1", "status": "open"},
+    )
+
+    assert claimed == []
+    assert await _count(db_session, WorkflowRun) == 0
+
+
 async def test_record_result_updates_run_and_writes_log(db_session):
     definition = await _make_definition(db_session)
     [claimed] = await svc.dispatch_event(

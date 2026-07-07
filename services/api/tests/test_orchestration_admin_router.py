@@ -117,6 +117,31 @@ def test_create_then_list_and_get(client: TestClient):
     assert got.json()["action_config"]["to"] == "sales@example.com"
 
 
+def test_trigger_filter_round_trips(client: TestClient):
+    # A payload filter is optional; when set it persists and comes back on read,
+    # so the builder can edit it (#226).
+    created = client.post(_BASE, json=_valid_body(trigger_filter={"status": "won"}))
+    assert created.status_code == 201, created.text
+    assert created.json()["trigger_filter"] == {"status": "won"}
+
+    got = client.get(f"{_BASE}/{created.json()['id']}")
+    assert got.json()["trigger_filter"] == {"status": "won"}
+
+
+def test_trigger_filter_defaults_to_null(client: TestClient):
+    created = client.post(_BASE, json=_valid_body())
+    assert created.status_code == 201
+    assert created.json()["trigger_filter"] is None
+
+
+def test_update_can_set_and_clear_trigger_filter(client: TestClient):
+    row = client.post(_BASE, json=_valid_body(trigger_filter={"status": "won"})).json()
+
+    cleared = client.put(f"{_BASE}/{row['id']}", json=_valid_body(trigger_filter=None))
+    assert cleared.status_code == 200
+    assert cleared.json()["trigger_filter"] is None
+
+
 def test_create_rejects_invalid_action_config(client: TestClient):
     body = _valid_body(
         action_config={"from": "no-reply@example.com"}

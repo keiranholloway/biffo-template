@@ -12,6 +12,8 @@ change is needed — the JWT ``$default`` API Gateway route covers it.
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +21,7 @@ from ..database import get_db
 from ..dependencies import require_admin
 from ..events.registry import registered_events
 from ..middleware.auth import AuthenticatedUser
+from ..permissions import get_permissions_registry
 from ..orchestration import (
     create_definition,
     delete_definition,
@@ -48,23 +51,58 @@ async def get_catalog(
 ) -> WorkflowCatalog:
     """The triggers and actions the builder offers (drives the UI dropdowns).
 
-    Triggers are the **declared** platform events (``events/registry.py``) unioned
-    with events this tenant has been **observed** dispatching (self-building
-    catalog, ADR-0010); actions are the engine's action registry.
+    Triggers are every **declared** event (defined in code — a registered
+    ``EventType`` or a generic-CRUD ``<table>.<op>`` from the permissions registry,
+    ADR-0002/#222), unioned with any event this tenant has been **observed**
+    dispatching that isn't declared (a compliance anomaly, ADR-0010). Actions are
+    the engine's action registry.
     """
-    triggers = [
-        {
-            "source": e.source,
-            "detail_type": e.detail_type,
-            "label": e.label,
-            "description": e.description,
-            "origin": "declared",
-        }
-        for e in registered_events()
-    ]
-    declared = {(e.source, e.detail_type) for e in registered_events()}
+    triggers: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    # Declared business events (events/registry.py).
+    for e in registered_events():
+        triggers.append(
+            {
+                "source": e.source,
+                "detail_type": e.detail_type,
+                "label": e.label,
+                "description": e.description,
+                "origin": "declared",
+            }
+        )
+        seen.add((e.source, e.detail_type))
+
+    # Declared generic-CRUD events: <table>.<op> for every table+operation the
+    # CRUD layer exposes (declared implicitly by __crud_permissions__). Every such
+    # mutation emits (ADR-0002), so each is a valid trigger even before it fires.
+    for table, block in get_permissions_registry().items():
+        for op, verb in (
+            ("create", "created"),
+            ("update", "updated"),
+            ("delete", "deleted"),
+        ):
+            if not getattr(block, op).allowed:
+                continue
+            key = ("biffo.core", f"{table}.{verb}")
+            if key in seen:
+                continue
+            triggers.append(
+                {
+                    "source": "biffo.core",
+                    "detail_type": f"{table}.{verb}",
+                    "label": f"{table} {verb}",
+                    "description": f"A {table} row was {verb}.",
+                    "origin": "declared",
+                }
+            )
+            seen.add(key)
+
+    # Observed-but-undeclared events (should be empty under the compliance gate;
+    # surfaced so an anomaly is visible rather than hidden).
     for observed in await list_observed_triggers(db, tenant_id=caller.tenant_id):
-        if (observed.source, observed.detail_type) in declared:
+        key = (observed.source, observed.detail_type)
+        if key in seen:
             continue
         triggers.append(
             {
@@ -75,6 +113,8 @@ async def get_catalog(
                 "origin": "observed",
             }
         )
+        seen.add(key)
+
     return WorkflowCatalog(triggers=triggers, actions=WORKFLOW_ACTIONS)
 
 

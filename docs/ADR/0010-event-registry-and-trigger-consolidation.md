@@ -9,8 +9,8 @@
 ## Context
 
 The orchestration engine (ADR-0003 plugin + the orchestration Core feature) lets an
-admin build a **workflow**: a *trigger* (an EventBridge event, identified by
-`source` + `detail_type`) mapped to an *action*. As we set out to offer a **broader,
+admin build a **workflow**: a _trigger_ (an EventBridge event, identified by
+`source` + `detail_type`) mapped to an _action_. As we set out to offer a **broader,
 growing selection of triggers**, we found that "what a trigger is" is declared in
 **four independent, hand-maintained places**, and they already drift:
 
@@ -76,10 +76,10 @@ grows as new events appear on the bus.
 
 - **One source of truth.** A trigger is declared once. Terraform and plugin code
   declare zero triggers; the enabled `WorkflowDefinition` rows are the separate,
-  single source for *what is active*. No copy can drift because there are no copies.
+  single source for _what is active_. No copy can drift because there are no copies.
 - **Kills magic strings.** Publishers reference a typed constant; a renamed
   `detail_type` changes in one place.
-- **Distribution follows ownership (ADR-0006).** The registry *facility* and the
+- **Distribution follows ownership (ADR-0006).** The registry _facility_ and the
   Core reference events are template-owned (this repo) and reach instances via
   `biffo core upgrade`. Instance/domain events are declared in the instance's own
   emitting code — each still in exactly one place.

@@ -56,8 +56,10 @@ def test_register_is_idempotent_last_wins_on_identity():
     after = len(registered_events())
     # same (source, detail_type) does not add a second entry; content is replaced
     assert after == before
-    assert find_event("test.source", "dup.identity") is second
-    assert find_event("test.source", "dup.identity").label == "Second"
+    resolved = find_event("test.source", "dup.identity")
+    assert resolved is not None
+    assert resolved is second
+    assert resolved.label == "Second"
     assert first not in registered_events()
 
 

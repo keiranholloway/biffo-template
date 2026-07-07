@@ -61,8 +61,13 @@ class OrchestratorPlugin(BiffoPluginBase):
         super().__init__(manifest, api=api if api is not None else SignedCoreClient())
         self._ses = ses_client if ses_client is not None else boto3.client("ses")
 
-        @self.subscribe("demo.requested")
-        async def _on_demo_requested(event: BiffoEvent) -> None:
+        # Generic forwarder: react to *every* event and let Core decide what to
+        # do (match it against enabled workflow definitions). Adding a new trigger
+        # is then just a workflow definition — no plugin code change, no per-event
+        # subscription to keep in sync (ADR-0010, epic #210). The broad EventBridge
+        # rule is what delivers all events to this Lambda (#214).
+        @self.subscribe_all()
+        async def _forward(event: BiffoEvent) -> None:
             await self.process_event(event)
 
     def on_install(self) -> None:

@@ -9,9 +9,9 @@
   "api_routes": [],
   "event_subscriptions": [
     {
-      "source": "biffo.core",
-      "detail_type": "demo.requested",
-      "description": "Thin-wedge trigger: on a demo request, dispatch the email action of any enabled workflow definition matching (biffo.core, demo.requested). Subscriptions are wired into the plugin's own Lambda via the SDK EventSubscriber (see src/orchestrator/main.py) and the plugin's EventBridge rule (terraform/), not synthesized by the Core API."
+      "source": "*",
+      "detail_type": "*",
+      "description": "Catch-all: the engine is a generic forwarder — it reacts to every event and posts it to the Core internal API, which matches enabled workflow definitions (by source + detail_type) and decides what to run. Wired via the SDK's subscribe_all() (see src/orchestrator/plugin.py) and a broad EventBridge rule (terraform/); adding a new trigger needs no plugin change (ADR-0010, epic #210)."
     }
   ],
   "dependencies": {

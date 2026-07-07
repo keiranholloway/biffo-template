@@ -8,9 +8,10 @@ outcome.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .base import BiffoBaseSchema
 
@@ -60,3 +61,125 @@ class WorkflowRunResponse(BiffoBaseSchema):
     dedupe_key: str
     status: str
     trigger_event: dict[str, Any]
+
+
+# ── User-facing workflow-definition CRUD (portal admin builder) ──────────────
+#
+# The catalog is the single source of truth for the builder's dropdowns
+# (GET .../catalog) AND for request validation below. Triggers mirror the events
+# the platform publishes; actions mirror the engine's action registry
+# (services/orchestrator/.../actions.py). Extend these two lists to offer a new
+# trigger or action in the UI.
+
+WORKFLOW_TRIGGERS: list[dict[str, Any]] = [
+    {
+        "source": "biffo.core",
+        "detail_type": "demo.requested",
+        "label": "Demo requested",
+        "description": 'Someone submits the "Book a demo" form.',
+    },
+    {
+        "source": "biffo.core",
+        "detail_type": "lead.captured",
+        "label": "Lead captured",
+        "description": "A lead comes in from the website or marketplace.",
+    },
+]
+
+WORKFLOW_ACTIONS: list[dict[str, Any]] = [
+    {
+        "type": "email",
+        "label": "Send email",
+        "config_fields": [
+            {"name": "from", "label": "From", "type": "email", "required": True},
+            {"name": "to", "label": "To", "type": "email", "required": True},
+            {"name": "subject", "label": "Subject", "type": "text", "required": True},
+            {"name": "body", "label": "Body", "type": "textarea", "required": True},
+        ],
+    },
+]
+
+# Deliberately permissive — enough to reject obvious typos in the form, not a
+# full RFC 5322 validator (avoids a new email-validator dependency).
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class WorkflowCatalog(BaseModel):
+    """What the builder offers: available triggers and actions (+ config fields)."""
+
+    triggers: list[dict[str, Any]]
+    actions: list[dict[str, Any]]
+
+
+class WorkflowDefinitionResponse(BiffoBaseSchema):
+    name: str
+    trigger_source: str
+    trigger_detail_type: str
+    action_type: str
+    action_config: dict[str, Any]
+    enabled: bool
+
+
+class WorkflowDefinitionBody(BaseModel):
+    """Shared, validated body for create + update.
+
+    Validates the trigger and action against the catalog, and the action_config
+    shape against the chosen action_type (email → from/to/subject/body, with a
+    basic email-format check). ``id``/``tenant_id`` are never accepted from the
+    body — they are set server-side.
+    """
+
+    name: str = Field(min_length=1, max_length=200)
+    trigger_source: str = Field(min_length=1, max_length=128)
+    trigger_detail_type: str = Field(min_length=1, max_length=128)
+    action_type: str = Field(min_length=1, max_length=64)
+    action_config: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def _validate_trigger_and_action(self) -> WorkflowDefinitionBody:
+        known_trigger = any(
+            t["source"] == self.trigger_source
+            and t["detail_type"] == self.trigger_detail_type
+            for t in WORKFLOW_TRIGGERS
+        )
+        if not known_trigger:
+            raise ValueError(
+                f"Unknown trigger: {self.trigger_source}/{self.trigger_detail_type}"
+            )
+
+        action = next(
+            (a for a in WORKFLOW_ACTIONS if a["type"] == self.action_type), None
+        )
+        if action is None:
+            raise ValueError(f"Unknown action_type: {self.action_type}")
+
+        for field in action["config_fields"]:
+            value = self.action_config.get(field["name"])
+            if field["required"] and not (isinstance(value, str) and value.strip()):
+                raise ValueError(
+                    f"action_config.{field['name']} is required "
+                    f"for the {self.action_type} action"
+                )
+            if (
+                field["type"] == "email"
+                and isinstance(value, str)
+                and value
+                and not _EMAIL_RE.match(value)
+            ):
+                raise ValueError(
+                    f"action_config.{field['name']} must be a valid email address"
+                )
+        return self
+
+
+class CreateWorkflowDefinitionRequest(WorkflowDefinitionBody):
+    pass
+
+
+class UpdateWorkflowDefinitionRequest(WorkflowDefinitionBody):
+    pass
+
+
+class SetEnabledRequest(BaseModel):
+    enabled: bool

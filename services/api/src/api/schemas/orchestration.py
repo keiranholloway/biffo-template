@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+from ..events.registry import find_event
 from .base import BiffoBaseSchema
 
 
@@ -65,26 +66,11 @@ class WorkflowRunResponse(BiffoBaseSchema):
 
 # ── User-facing workflow-definition CRUD (portal admin builder) ──────────────
 #
-# The catalog is the single source of truth for the builder's dropdowns
-# (GET .../catalog) AND for request validation below. Triggers mirror the events
-# the platform publishes; actions mirror the engine's action registry
-# (services/orchestrator/.../actions.py). Extend these two lists to offer a new
-# trigger or action in the UI.
-
-WORKFLOW_TRIGGERS: list[dict[str, Any]] = [
-    {
-        "source": "biffo.core",
-        "detail_type": "demo.requested",
-        "label": "Demo requested",
-        "description": 'Someone submits the "Book a demo" form.',
-    },
-    {
-        "source": "biffo.core",
-        "detail_type": "lead.captured",
-        "label": "Lead captured",
-        "description": "A lead comes in from the website or marketplace.",
-    },
-]
+# Triggers come from the canonical event registry (``events/registry.py``, ADR-0010)
+# — the single source of truth for what a trigger is, shared with the publishers
+# that emit those events. Actions mirror the engine's action registry
+# (services/orchestrator/.../actions.py); extend WORKFLOW_ACTIONS to offer a new
+# action in the UI.
 
 WORKFLOW_ACTIONS: list[dict[str, Any]] = [
     {
@@ -138,12 +124,7 @@ class WorkflowDefinitionBody(BaseModel):
 
     @model_validator(mode="after")
     def _validate_trigger_and_action(self) -> WorkflowDefinitionBody:
-        known_trigger = any(
-            t["source"] == self.trigger_source
-            and t["detail_type"] == self.trigger_detail_type
-            for t in WORKFLOW_TRIGGERS
-        )
-        if not known_trigger:
+        if find_event(self.trigger_source, self.trigger_detail_type) is None:
             raise ValueError(
                 f"Unknown trigger: {self.trigger_source}/{self.trigger_detail_type}"
             )

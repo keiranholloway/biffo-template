@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..dependencies import require_admin
+from ..events.registry import registered_events
 from ..middleware.auth import AuthenticatedUser
 from ..orchestration import (
     create_definition,
@@ -28,7 +29,6 @@ from ..orchestration import (
 )
 from ..schemas.orchestration import (
     WORKFLOW_ACTIONS,
-    WORKFLOW_TRIGGERS,
     CreateWorkflowDefinitionRequest,
     SetEnabledRequest,
     UpdateWorkflowDefinitionRequest,
@@ -43,8 +43,21 @@ router = APIRouter(prefix="/orchestration/workflows", tags=["orchestration"])
 async def get_catalog(
     _caller: AuthenticatedUser = Depends(require_admin),
 ) -> WorkflowCatalog:
-    """The triggers and actions the builder offers (drives the UI dropdowns)."""
-    return WorkflowCatalog(triggers=WORKFLOW_TRIGGERS, actions=WORKFLOW_ACTIONS)
+    """The triggers and actions the builder offers (drives the UI dropdowns).
+
+    Triggers are the declared platform events (``events/registry.py``); actions are
+    the engine's action registry.
+    """
+    triggers = [
+        {
+            "source": e.source,
+            "detail_type": e.detail_type,
+            "label": e.label,
+            "description": e.description,
+        }
+        for e in registered_events()
+    ]
+    return WorkflowCatalog(triggers=triggers, actions=WORKFLOW_ACTIONS)
 
 
 @router.get("", response_model=list[WorkflowDefinitionResponse])

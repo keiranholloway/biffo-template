@@ -23,7 +23,9 @@ from ..orchestration import (
     create_definition,
     delete_definition,
     get_definition,
+    is_known_trigger,
     list_definitions,
+    list_observed_triggers,
     set_definition_enabled,
     update_definition,
 )
@@ -41,12 +43,14 @@ router = APIRouter(prefix="/orchestration/workflows", tags=["orchestration"])
 
 @router.get("/catalog", response_model=WorkflowCatalog)
 async def get_catalog(
-    _caller: AuthenticatedUser = Depends(require_admin),
+    caller: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
 ) -> WorkflowCatalog:
     """The triggers and actions the builder offers (drives the UI dropdowns).
 
-    Triggers are the declared platform events (``events/registry.py``); actions are
-    the engine's action registry.
+    Triggers are the **declared** platform events (``events/registry.py``) unioned
+    with events this tenant has been **observed** dispatching (self-building
+    catalog, ADR-0010); actions are the engine's action registry.
     """
     triggers = [
         {
@@ -54,10 +58,37 @@ async def get_catalog(
             "detail_type": e.detail_type,
             "label": e.label,
             "description": e.description,
+            "origin": "declared",
         }
         for e in registered_events()
     ]
+    declared = {(e.source, e.detail_type) for e in registered_events()}
+    for observed in await list_observed_triggers(db, tenant_id=caller.tenant_id):
+        if (observed.source, observed.detail_type) in declared:
+            continue
+        triggers.append(
+            {
+                "source": observed.source,
+                "detail_type": observed.detail_type,
+                "label": observed.detail_type,
+                "description": "Seen on the event bus.",
+                "origin": "observed",
+            }
+        )
     return WorkflowCatalog(triggers=triggers, actions=WORKFLOW_ACTIONS)
+
+
+async def _require_known_trigger(
+    db: AsyncSession, *, tenant_id: str, source: str, detail_type: str
+) -> None:
+    """422 unless the trigger is a declared or already-observed event."""
+    if not await is_known_trigger(
+        db, tenant_id=tenant_id, source=source, detail_type=detail_type
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Unknown trigger: {source}/{detail_type}",
+        )
 
 
 @router.get("", response_model=list[WorkflowDefinitionResponse])
@@ -77,6 +108,12 @@ async def create_workflow(
     caller: AuthenticatedUser = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> WorkflowDefinitionResponse:
+    await _require_known_trigger(
+        db,
+        tenant_id=caller.tenant_id,
+        source=body.trigger_source,
+        detail_type=body.trigger_detail_type,
+    )
     definition = await create_definition(
         db,
         tenant_id=caller.tenant_id,
@@ -111,6 +148,12 @@ async def update_workflow(
     caller: AuthenticatedUser = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> WorkflowDefinitionResponse:
+    await _require_known_trigger(
+        db,
+        tenant_id=caller.tenant_id,
+        source=body.trigger_source,
+        detail_type=body.trigger_detail_type,
+    )
     definition = await update_definition(
         db,
         tenant_id=caller.tenant_id,

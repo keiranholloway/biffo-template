@@ -63,6 +63,27 @@ class WorkflowDefinition(TenantScopedModel):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
+class TriggerCatalog(TenantScopedModel):
+    """An event type observed at dispatch — the self-building trigger catalog.
+
+    Declared events come from the code registry (``events/registry.py``, ADR-0010);
+    this table records events the engine has actually *seen* on the bus, so the
+    builder can offer them as triggers too — including events the registry does
+    not (yet) name (e.g. a new sibling/plugin event). Upserted per tenant on each
+    dispatch: ``created_at`` is first-seen, ``updated_at`` is last-seen.
+    """
+
+    __tablename__ = "orchestration_trigger_catalog"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "source", "detail_type", name="uq_orch_trigger_catalog"
+        ),
+    )
+
+    source: Mapped[str] = mapped_column(String(128), nullable=False)
+    detail_type: Mapped[str] = mapped_column(String(128), nullable=False)
+
+
 class WorkflowRun(TenantScopedModel):
     """One execution of a definition for one triggering event (idempotent)."""
 

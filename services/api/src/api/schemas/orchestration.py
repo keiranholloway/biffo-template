@@ -13,7 +13,6 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
-from ..events.registry import find_event
 from .base import BiffoBaseSchema
 
 
@@ -109,10 +108,11 @@ class WorkflowDefinitionResponse(BiffoBaseSchema):
 class WorkflowDefinitionBody(BaseModel):
     """Shared, validated body for create + update.
 
-    Validates the trigger and action against the catalog, and the action_config
-    shape against the chosen action_type (email → from/to/subject/body, with a
-    basic email-format check). ``id``/``tenant_id`` are never accepted from the
-    body — they are set server-side.
+    Validates the action against the catalog and the ``action_config`` shape
+    against the chosen ``action_type`` (email → from/to/subject/body, with a basic
+    email-format check). The **trigger** is validated in the router, which can
+    check the tenant's observed events (registry ∪ observed, ADR-0010) — not just
+    the in-memory registry. ``id``/``tenant_id`` are never accepted from the body.
     """
 
     name: str = Field(min_length=1, max_length=200)
@@ -123,12 +123,7 @@ class WorkflowDefinitionBody(BaseModel):
     enabled: bool = True
 
     @model_validator(mode="after")
-    def _validate_trigger_and_action(self) -> WorkflowDefinitionBody:
-        if find_event(self.trigger_source, self.trigger_detail_type) is None:
-            raise ValueError(
-                f"Unknown trigger: {self.trigger_source}/{self.trigger_detail_type}"
-            )
-
+    def _validate_action(self) -> WorkflowDefinitionBody:
         action = next(
             (a for a in WORKFLOW_ACTIONS if a["type"] == self.action_type), None
         )

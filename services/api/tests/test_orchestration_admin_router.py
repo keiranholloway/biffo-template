@@ -20,9 +20,11 @@ from api.middleware.auth import AuthenticatedUser, require_auth
 from api.models.base import Base
 from api.models.orchestration import (  # noqa: F401 — registers tables on Base.metadata
     ActionLog,
+    TriggerCatalog,
     WorkflowDefinition,
     WorkflowRun,
 )
+from api.orchestration import observe_trigger
 from api.routers import orchestration
 
 _BASE = "/api/v1/orchestration/workflows"
@@ -172,7 +174,61 @@ def test_catalog(client: TestClient):
     assert resp.status_code == 200
     body = resp.json()
     assert any(t["detail_type"] == "demo.requested" for t in body["triggers"])
+    # declared events are tagged so the UI can badge them
+    assert all(
+        t["origin"] == "declared"
+        for t in body["triggers"]
+        if t["detail_type"] == "demo.requested"
+    )
     assert any(a["type"] == "email" for a in body["actions"])
+
+
+def _observe(session_factory, source: str, detail_type: str) -> None:
+    async def _run() -> None:
+        async with session_factory() as session:
+            await observe_trigger(
+                session, tenant_id="default", source=source, detail_type=detail_type
+            )
+            await session.commit()
+
+    asyncio.run(_run())
+
+
+def test_observed_trigger_appears_in_catalog_and_is_selectable(app, client: TestClient):
+    _, session_factory = app
+    # An event the code registry does not name is seen on the bus...
+    _observe(session_factory, "biffo.core", "brand.approved")
+
+    body = client.get(f"{_BASE}/catalog").json()
+    observed = [t for t in body["triggers"] if t["detail_type"] == "brand.approved"]
+    assert observed and observed[0]["origin"] == "observed"
+
+    # ...and is now a valid pick (validation accepts registry ∪ observed).
+    created = client.post(_BASE, json=_valid_body(trigger_detail_type="brand.approved"))
+    assert created.status_code == 201
+
+
+def test_observe_trigger_is_idempotent(app):
+    _, session_factory = app
+    _observe(session_factory, "biffo.core", "unit.onboarded")
+    _observe(session_factory, "biffo.core", "unit.onboarded")
+
+    async def _count() -> int:
+        from sqlalchemy import func, select
+
+        async with session_factory() as session:
+            result = await session.execute(
+                select(func.count()).select_from(TriggerCatalog)
+            )
+            return result.scalar_one()
+
+    assert asyncio.run(_count()) == 1
+
+
+def test_unknown_trigger_not_observed_is_rejected(client: TestClient):
+    # Not in the registry and never observed -> 422.
+    resp = client.post(_BASE, json=_valid_body(trigger_detail_type="never.seen"))
+    assert resp.status_code == 422
 
 
 def test_tenant_isolation(app, client: TestClient):

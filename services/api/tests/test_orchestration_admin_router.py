@@ -260,3 +260,41 @@ def test_non_admin_is_forbidden(app, client: TestClient):
     fastapi.dependency_overrides[require_auth] = lambda: _caller(roles=[])
     assert client.get(_BASE).status_code == 403
     assert client.post(_BASE, json=_valid_body()).status_code == 403
+
+
+def test_catalog_includes_declared_crud_events(client: TestClient, monkeypatch):
+    from api.models.plugin_table import PermissionRule, TablePermissions
+
+    registry = {
+        "widgets": TablePermissions(
+            create=PermissionRule(allowed=True), update=PermissionRule(allowed=True)
+        )
+    }
+    # The catalog endpoint reads the permissions registry directly (imported name).
+    monkeypatch.setattr(
+        "api.routers.orchestration.get_permissions_registry", lambda **_: registry
+    )
+
+    body = client.get(f"{_BASE}/catalog").json()
+    by_dt = {t["detail_type"]: t for t in body["triggers"]}
+    # Every allowed CRUD op is a declared trigger, shown before it ever fires.
+    assert by_dt["widgets.created"]["origin"] == "declared"
+    assert by_dt["widgets.updated"]["origin"] == "declared"
+    # delete not allowed -> not offered
+    assert "widgets.deleted" not in by_dt
+    # registry business events are still present
+    assert "demo.requested" in by_dt
+
+
+def test_create_accepts_a_declared_crud_trigger(client: TestClient, monkeypatch):
+    from api.models.plugin_table import PermissionRule, TablePermissions
+
+    registry = {"widgets": TablePermissions(create=PermissionRule(allowed=True))}
+    # is_known_trigger -> is_declared lazily imports get_permissions_registry
+    # from api.permissions, so patch it there.
+    monkeypatch.setattr(
+        "api.permissions.get_permissions_registry", lambda **_: registry
+    )
+
+    resp = client.post(_BASE, json=_valid_body(trigger_detail_type="widgets.created"))
+    assert resp.status_code == 201, resp.text

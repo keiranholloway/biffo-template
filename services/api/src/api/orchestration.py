@@ -19,17 +19,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from aws_lambda_powertools import Logger
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .events.registry import find_event
+from .events.emit import is_declared
 from .models.orchestration import (
     ActionLog,
     TriggerCatalog,
     WorkflowDefinition,
     WorkflowRun,
 )
+
+
+logger = Logger()
 
 
 @dataclass(frozen=True)
@@ -148,7 +152,16 @@ async def observe_trigger(
     Insert-if-new (touch ``last_seen`` otherwise), the insert isolated in a
     SAVEPOINT so a concurrent duplicate rolls back only the insert — mirroring
     ``_claim_run`` — and never poisons the caller's transaction.
+
+    Compliance monitor (ADR-0002/#222): every event should be defined in code, so
+    an observed event that isn't declared is an anomaly — log it. It's still
+    recorded so the anomaly is visible in the catalog rather than hidden.
     """
+    if not is_declared(source, detail_type):
+        logger.warning(
+            "Observed an undeclared event on the bus (not defined in code)",
+            extra={"source": source, "detail_type": detail_type},
+        )
     touch = (
         update(TriggerCatalog)
         .where(
@@ -200,7 +213,7 @@ async def is_known_trigger(
     The builder restricts picks to known events; a declared event is valid for
     every tenant, an observed one only for the tenant that has seen it.
     """
-    if find_event(source, detail_type) is not None:
+    if is_declared(source, detail_type):
         return True
     result = await db.execute(
         select(TriggerCatalog.id).where(

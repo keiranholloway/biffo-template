@@ -171,3 +171,112 @@ async def record_result(
     # sync in a threadpool) doesn't trigger lazy IO — MissingGreenlet otherwise.
     await db.refresh(run)
     return run
+
+
+# ── Workflow-definition CRUD (user-facing, the portal builder) ───────────────
+# All tenant-scoped (ADR-0001). Each returns the ORM row after refreshing so the
+# response_model can serialize server-default columns without lazy IO.
+
+
+async def list_definitions(
+    db: AsyncSession, *, tenant_id: str
+) -> list[WorkflowDefinition]:
+    result = await db.execute(
+        select(WorkflowDefinition)
+        .where(WorkflowDefinition.tenant_id == tenant_id)
+        .order_by(WorkflowDefinition.created_at)
+    )
+    return list(result.scalars().all())
+
+
+async def get_definition(
+    db: AsyncSession, *, tenant_id: str, definition_id: str
+) -> WorkflowDefinition | None:
+    result = await db.execute(
+        select(WorkflowDefinition).where(
+            WorkflowDefinition.tenant_id == tenant_id,
+            WorkflowDefinition.id == definition_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def create_definition(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    name: str,
+    trigger_source: str,
+    trigger_detail_type: str,
+    action_type: str,
+    action_config: dict[str, Any],
+    enabled: bool,
+) -> WorkflowDefinition:
+    definition = WorkflowDefinition(
+        tenant_id=tenant_id,
+        name=name,
+        trigger_source=trigger_source,
+        trigger_detail_type=trigger_detail_type,
+        action_type=action_type,
+        action_config=action_config,
+        enabled=enabled,
+    )
+    db.add(definition)
+    await db.flush()
+    await db.refresh(definition)
+    return definition
+
+
+async def update_definition(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    definition_id: str,
+    name: str,
+    trigger_source: str,
+    trigger_detail_type: str,
+    action_type: str,
+    action_config: dict[str, Any],
+    enabled: bool,
+) -> WorkflowDefinition | None:
+    definition = await get_definition(
+        db, tenant_id=tenant_id, definition_id=definition_id
+    )
+    if definition is None:
+        return None
+    definition.name = name
+    definition.trigger_source = trigger_source
+    definition.trigger_detail_type = trigger_detail_type
+    definition.action_type = action_type
+    definition.action_config = action_config
+    definition.enabled = enabled
+    await db.flush()
+    await db.refresh(definition)
+    return definition
+
+
+async def set_definition_enabled(
+    db: AsyncSession, *, tenant_id: str, definition_id: str, enabled: bool
+) -> WorkflowDefinition | None:
+    definition = await get_definition(
+        db, tenant_id=tenant_id, definition_id=definition_id
+    )
+    if definition is None:
+        return None
+    definition.enabled = enabled
+    await db.flush()
+    await db.refresh(definition)
+    return definition
+
+
+async def delete_definition(
+    db: AsyncSession, *, tenant_id: str, definition_id: str
+) -> bool:
+    definition = await get_definition(
+        db, tenant_id=tenant_id, definition_id=definition_id
+    )
+    if definition is None:
+        return False
+    await db.delete(definition)
+    await db.flush()
+    return True

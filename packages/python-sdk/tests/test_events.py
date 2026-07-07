@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from biffo_plugin_sdk import BiffoEvent, EventSubscriber, create_event_handler
+from biffo_plugin_sdk.events import WILDCARD
 
 
 def make_raw_event(
@@ -146,6 +147,14 @@ class TestEventSubscriberHasSubscription:
 
         assert subscriber.has_subscription("user.created") is False
 
+    def test_true_for_any_detail_type_when_wildcard_registered(self) -> None:
+        subscriber = EventSubscriber()
+        subscriber.register_all(lambda event: None)
+
+        # A wildcard handler means every event has a subscription.
+        assert subscriber.has_subscription("user.created") is True
+        assert subscriber.has_subscription("anything.at.all") is True
+
 
 class TestEventSubscriberDispatch:
     """dispatch() is a minimal helper proving both handler styles run;
@@ -202,6 +211,38 @@ class TestEventSubscriberDispatch:
         event = BiffoEvent(detail_type="user.created", payload={})
 
         await subscriber.dispatch(event)  # must not raise
+
+    async def test_dispatch_invokes_wildcard_handler_for_any_event(self) -> None:
+        subscriber = EventSubscriber()
+        received: list[str] = []
+        subscriber.register_all(lambda event: received.append(event.detail_type))
+
+        await subscriber.dispatch(BiffoEvent(detail_type="order.placed", payload={}))
+        await subscriber.dispatch(BiffoEvent(detail_type="brand.approved", payload={}))
+
+        # The wildcard handler ran for every detail_type, without enumerating them.
+        assert received == ["order.placed", "brand.approved"]
+
+    async def test_dispatch_runs_specific_then_wildcard_handlers(self) -> None:
+        subscriber = EventSubscriber()
+        order: list[str] = []
+        subscriber.register("user.created", lambda event: order.append("specific"))
+        subscriber.register_all(lambda event: order.append("wildcard"))
+
+        await subscriber.dispatch(BiffoEvent(detail_type="user.created", payload={}))
+
+        assert order == ["specific", "wildcard"]
+
+    async def test_dispatch_does_not_double_invoke_wildcard(self) -> None:
+        # An event whose detail_type is literally "*" must not run the wildcard
+        # handlers twice (once as specific, once as wildcard).
+        subscriber = EventSubscriber()
+        calls: list[str] = []
+        subscriber.register_all(lambda event: calls.append("w"))
+
+        await subscriber.dispatch(BiffoEvent(detail_type=WILDCARD, payload={}))
+
+        assert calls == ["w"]
 
 
 # --- create_event_handler ---

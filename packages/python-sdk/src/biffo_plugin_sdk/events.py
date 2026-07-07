@@ -55,39 +55,57 @@ SyncEventHandler = Callable[[BiffoEvent], None]
 AsyncEventHandler = Callable[[BiffoEvent], Awaitable[None]]
 EventHandler = SyncEventHandler | AsyncEventHandler
 
+#: Wildcard ``detail_type`` — a handler registered under this key runs for *every*
+#: event, regardless of its detail_type. Lets a plugin be a generic forwarder
+#: (e.g. the orchestration engine) that reacts to any event without enumerating
+#: them, so new triggers need no plugin code change (ADR-0010, epic #210).
+WILDCARD = "*"
+
 
 class EventSubscriber:
     """Registry mapping EventBridge ``detail-type`` values to handlers.
 
     Handlers may be sync or async — ``register``/``get_handlers``/
-    ``has_subscription`` accept and return either without distinction. Full
-    dispatch (invoking handlers, awaiting async ones, error handling) is
-    deferred to a later chunk; ``dispatch`` here is a minimal helper that
-    just proves both handler styles run without raising.
+    ``has_subscription`` accept and return either without distinction. A handler
+    registered under :data:`WILDCARD` runs for every event, in addition to any
+    detail-type-specific handlers.
     """
 
     def __init__(self) -> None:
         self._handlers: dict[str, list[EventHandler]] = defaultdict(list)
 
     def register(self, detail_type: str, handler: EventHandler) -> None:
-        """Register *handler* to be invoked for events with *detail_type*."""
+        """Register *handler* for events with *detail_type* (or all, if WILDCARD)."""
         self._handlers[detail_type].append(handler)
 
+    def register_all(self, handler: EventHandler) -> None:
+        """Register *handler* to run for every event (a catch-all forwarder)."""
+        self._handlers[WILDCARD].append(handler)
+
     def get_handlers(self, detail_type: str) -> list[EventHandler]:
-        """Return the handlers registered for *detail_type* (empty if none)."""
+        """Return the handlers registered for *detail_type* (empty if none).
+
+        Does not include wildcard handlers — use :meth:`dispatch` (or pass
+        :data:`WILDCARD`) for those.
+        """
         return list(self._handlers.get(detail_type, []))
 
     def has_subscription(self, detail_type: str) -> bool:
-        """Return whether any handler is registered for *detail_type*."""
-        return bool(self._handlers.get(detail_type))
+        """Whether any handler — specific or wildcard — will run for *detail_type*."""
+        return bool(self._handlers.get(detail_type) or self._handlers.get(WILDCARD))
 
     async def dispatch(self, event: BiffoEvent) -> None:
-        """Invoke every handler registered for *event*'s detail_type.
+        """Invoke every handler for *event* — its detail_type's, then wildcards.
 
         Sync handlers run inline; async handlers (or anything returning an
-        awaitable) are awaited.
+        awaitable) are awaited. Detail-type-specific handlers run before wildcard
+        handlers; each is registered once, so a handler bound to both keys runs
+        for both.
         """
-        for handler in self.get_handlers(event.detail_type):
+        handlers = self.get_handlers(event.detail_type)
+        if event.detail_type != WILDCARD:
+            handlers += self.get_handlers(WILDCARD)
+        for handler in handlers:
             result = handler(event)
             if inspect.isawaitable(result):
                 await result

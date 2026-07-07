@@ -104,3 +104,24 @@ async def test_idempotency_key_falls_back_to_content_hash():
 
     key = core.event_posts()[0]["idempotency_key"]
     assert key.startswith("demo.requested:")
+
+
+async def test_forwards_any_event_via_catch_all_subscription():
+    # The engine is a generic forwarder (subscribe_all): an arbitrary event —
+    # not just demo.requested — is dispatched to Core, which decides what runs.
+    core = FakeCore([])
+    ses = FakeSes()
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=ses)
+
+    event = BiffoEvent(
+        source="biffo.core",
+        detail_type="brand.approved",
+        payload={"id": "b1"},
+    )
+    await plugin.events.dispatch(event)
+
+    posted = core.event_posts()
+    assert len(posted) == 1
+    assert posted[0]["source"] == "biffo.core"
+    assert posted[0]["detail_type"] == "brand.approved"
+    assert posted[0]["idempotency_key"] == "b1"

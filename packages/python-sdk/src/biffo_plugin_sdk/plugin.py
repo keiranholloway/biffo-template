@@ -438,6 +438,25 @@ class BiffoPluginBase(ABC):
 
         return decorator
 
+    def subscribe_all(self) -> Callable[[EventHandler], EventHandler]:
+        """Decorator registering a handler for **every** event (a catch-all).
+
+        Use for a generic forwarder that reacts to any event without enumerating
+        detail types — e.g. the orchestration engine forwards every event to the
+        Core API, which decides (from stored workflow definitions) what to do, so
+        adding a new trigger needs no plugin code change (ADR-0010, epic #210)::
+
+            @self.subscribe_all()
+            async def _forward(event: BiffoEvent) -> None:
+                await self.process_event(event)
+        """
+
+        def decorator(handler: EventHandler) -> EventHandler:
+            self.events.register_all(handler)
+            return handler
+
+        return decorator
+
     def register(self) -> dict[str, Any]:
         """Delegate to ``register_plugin()`` and return the registration dict."""
         return register_plugin(self.manifest)

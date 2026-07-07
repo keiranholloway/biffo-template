@@ -100,7 +100,8 @@ class TestCollectEndpoints:
 
 class TestEndpointsRoute:
     """HTTP layer: auth required, returns EVERY mounted route for this deployment
-    (from OpenAPI), with the on-disk rbac plugin's CRUD rows enriched."""
+    (from OpenAPI). Plugin-declared CRUD routes are enriched when a plugin ships
+    them; the base template has none, so every row here is core."""
 
     def _client(self, roles=("admin",)):
         from fastapi.testclient import TestClient
@@ -124,10 +125,8 @@ class TestEndpointsRoute:
             assert resp.status_code == 200
             data = resp.json()
             assert isinstance(data, list)
-            # the rbac plugin is installed on disk -> its allowed CRUD routes are live
-            assert any(e["path"].startswith("/api/v1/plugins/rbac/") for e in data)
-            # now ALSO lists hand-written core routes (non-CRUD) from OpenAPI,
-            # correctly owned by "core" (not a separate "bespoke" bucket)
+            # lists hand-written core routes (non-CRUD) from OpenAPI, correctly
+            # owned by "core" (not a separate "bespoke" bucket)
             assert any(e["source"] == "core" for e in data)
             assert all(e["source"] in ("core", "plugin") for e in data)
             # every item carries the shape the portal renders

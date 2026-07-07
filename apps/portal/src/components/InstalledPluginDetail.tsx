@@ -48,7 +48,7 @@ type LoadState =
  * /admin/plugins/available), as opposed to PluginDetail.tsx which looks up
  * the external marketplace registry. These are two different data sources
  * with overlapping but not identical name spaces — an installed plugin like
- * services/rbac is a local reference implementation, never published to
+ * services/orchestrator is a local implementation, never published to
  * keiranholloway/biffo-plugins-registry, so it would incorrectly show
  * "not found" if routed through the marketplace lookup instead of this one.
  *

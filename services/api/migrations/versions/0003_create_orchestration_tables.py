@@ -1,12 +1,12 @@
 """create orchestration tables
 
 Revision ID: 0003
-Revises: b2694068
+Revises: 0002
 Create Date: 2026-07-06
 
 Domain state for the orchestration engine (Core-owned, ADR-0002): workflow
 definitions (trigger->action rules), runs (idempotent per event), and the
-action audit log. Chains off the current head (the rbac plugin migration).
+action audit log.
 """
 
 from collections.abc import Sequence
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0003"
-down_revision: str | None = "b2694068"
+down_revision: str | None = "0002"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

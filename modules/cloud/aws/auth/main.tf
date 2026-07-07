@@ -151,8 +151,8 @@ resource "aws_cognito_user" "admin" {
 # Baseline authorization groups. Group membership is the source of truth for
 # authorization: the Core API reads the `cognito:groups` JWT claim into the
 # caller's roles and matches it against declarative table/route permissions
-# (ADR-0004). These three mirror the rbac reference plugin's seed roles.
-# Lower precedence wins when a user is in multiple groups.
+# (ADR-0004). Authorization is a core concern (ADR-0011): these baseline groups
+# are the seed of it. Lower precedence wins when a user is in multiple groups.
 locals {
   cognito_groups = {
     admin  = { precedence = 1, description = "Full administrative access, including user management." }

@@ -48,8 +48,8 @@ export default function PluginsPage() {
           <p className="text-sm font-medium text-gray-600">No plugins installed yet</p>
           <p className="mt-1 text-xs text-gray-400">
             Install a plugin under <code className="font-mono">services/</code> (see{' '}
-            <code className="font-mono">services/rbac</code> for a reference implementation) and it
-            will appear here automatically.
+            <code className="font-mono">services/orchestrator</code> for a reference implementation)
+            and it will appear here automatically.
           </p>
         </div>
       )}

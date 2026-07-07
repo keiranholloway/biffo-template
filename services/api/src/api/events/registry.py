@@ -116,3 +116,31 @@ USER_CREATED = register_event(
         "authenticated request.",
     )
 )
+
+USER_SUSPENDED = register_event(
+    EventType(
+        source="biffo.core",
+        detail_type="user.suspended",
+        label="User suspended",
+        description="An admin disables a user (Cognito disable + global sign-out).",
+    )
+)
+
+USER_REACTIVATED = register_event(
+    EventType(
+        source="biffo.core",
+        detail_type="user.reactivated",
+        label="User reactivated",
+        description="An admin re-enables a previously suspended user.",
+    )
+)
+
+USER_DELETED = register_event(
+    EventType(
+        source="biffo.core",
+        detail_type="user.deleted",
+        label="User deleted",
+        description="An admin deletes a user from Cognito (their DB row is "
+        "deactivated, not removed).",
+    )
+)

@@ -19,11 +19,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models.orchestration import ActionLog, WorkflowDefinition, WorkflowRun
+from .events.registry import find_event
+from .models.orchestration import (
+    ActionLog,
+    TriggerCatalog,
+    WorkflowDefinition,
+    WorkflowRun,
+)
 
 
 @dataclass(frozen=True)
@@ -103,6 +109,13 @@ async def dispatch_event(
     event: dict[str, Any],
 ) -> list[ClaimedRun]:
     """Match an event to enabled definitions and claim one run per match."""
+    # Record the event type so the builder can offer it as a trigger even if the
+    # code registry doesn't name it (self-building catalog, ADR-0010). Best-effort
+    # and isolated in a SAVEPOINT so it never disturbs the dispatch itself.
+    await observe_trigger(
+        db, tenant_id=tenant_id, source=source, detail_type=detail_type
+    )
+
     result = await db.execute(
         select(WorkflowDefinition).where(
             WorkflowDefinition.tenant_id == tenant_id,
@@ -125,6 +138,78 @@ async def dispatch_event(
             )
         )
     return claimed
+
+
+async def observe_trigger(
+    db: AsyncSession, *, tenant_id: str, source: str, detail_type: str
+) -> None:
+    """Upsert an observed (source, detail_type) into the trigger catalog.
+
+    Insert-if-new (touch ``last_seen`` otherwise), the insert isolated in a
+    SAVEPOINT so a concurrent duplicate rolls back only the insert — mirroring
+    ``_claim_run`` — and never poisons the caller's transaction.
+    """
+    touch = (
+        update(TriggerCatalog)
+        .where(
+            TriggerCatalog.tenant_id == tenant_id,
+            TriggerCatalog.source == source,
+            TriggerCatalog.detail_type == detail_type,
+        )
+        .values(updated_at=func.now())
+    )
+    exists = await db.execute(
+        select(TriggerCatalog.id).where(
+            TriggerCatalog.tenant_id == tenant_id,
+            TriggerCatalog.source == source,
+            TriggerCatalog.detail_type == detail_type,
+        )
+    )
+    if exists.scalar_one_or_none() is not None:
+        await db.execute(touch)
+        return
+    try:
+        async with db.begin_nested():
+            db.add(
+                TriggerCatalog(
+                    tenant_id=tenant_id, source=source, detail_type=detail_type
+                )
+            )
+            await db.flush()
+    except IntegrityError:
+        await db.execute(touch)  # lost an insert race — the row now exists
+
+
+async def list_observed_triggers(
+    db: AsyncSession, *, tenant_id: str
+) -> list[TriggerCatalog]:
+    """Every event type this tenant has been seen dispatching, newest-seen first."""
+    result = await db.execute(
+        select(TriggerCatalog)
+        .where(TriggerCatalog.tenant_id == tenant_id)
+        .order_by(TriggerCatalog.updated_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def is_known_trigger(
+    db: AsyncSession, *, tenant_id: str, source: str, detail_type: str
+) -> bool:
+    """Whether (source, detail_type) is a declared (registry) or observed trigger.
+
+    The builder restricts picks to known events; a declared event is valid for
+    every tenant, an observed one only for the tenant that has seen it.
+    """
+    if find_event(source, detail_type) is not None:
+        return True
+    result = await db.execute(
+        select(TriggerCatalog.id).where(
+            TriggerCatalog.tenant_id == tenant_id,
+            TriggerCatalog.source == source,
+            TriggerCatalog.detail_type == detail_type,
+        )
+    )
+    return result.scalar_one_or_none() is not None
 
 
 async def record_result(

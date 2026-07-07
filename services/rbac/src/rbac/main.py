@@ -5,7 +5,7 @@ rules (ADR-0002): never import a DB client, talk to the Core API only via
 ``BiffoAPIClient``, react to state changes via EventBridge.
 
 This handler's only wired responsibility today is dispatching EventBridge
-events the plugin subscribes to (currently just ``biffo.core/UserCreated``,
+events the plugin subscribes to (currently just ``biffo.core/user.created``,
 see plugin.py) through ``RbacPlugin``'s ``EventSubscriber``.
 ``check_permission`` (permissions.py's ``PermissionChecker``) deliberately
 has no HTTP entrypoint wired up here — there is no Terraform (issue #25)

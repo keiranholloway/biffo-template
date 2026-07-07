@@ -56,14 +56,14 @@ def test_handler_dispatches_user_created_event(monkeypatch) -> None:
     monkeypatch.setattr(main_module, "_get_plugin", lambda: fake_plugin)
     monkeypatch.setattr(main_module, "_plugin", None)
 
-    raw_event = _eventbridge_event("UserCreated", {"cognito_sub": "user-123"})
+    raw_event = _eventbridge_event("user.created", {"cognito_sub": "user-123"})
 
     result = main_module.handler(raw_event, _FakeContext())
 
     assert result == {"statusCode": 200}
     assert len(fake_plugin.events.dispatched) == 1
     dispatched = fake_plugin.events.dispatched[0]
-    assert dispatched.detail_type == "UserCreated"
+    assert dispatched.detail_type == "user.created"
     assert dispatched.tenant_id == "default"
     assert dispatched.payload == {"cognito_sub": "user-123"}
 
@@ -76,7 +76,7 @@ def test_handler_tolerates_detail_delivered_as_json_string(monkeypatch) -> None:
     fake_plugin = _FakePlugin()
     monkeypatch.setattr(main_module, "_get_plugin", lambda: fake_plugin)
 
-    raw_event = _eventbridge_event("UserCreated", {"cognito_sub": "user-456"})
+    raw_event = _eventbridge_event("user.created", {"cognito_sub": "user-456"})
     raw_event["detail"] = json.dumps(raw_event["detail"])
 
     main_module.handler(raw_event, _FakeContext())

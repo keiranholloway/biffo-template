@@ -106,3 +106,13 @@ LEAD_CAPTURED = register_event(
         description="A lead comes in from the website or marketplace.",
     )
 )
+
+USER_CREATED = register_event(
+    EventType(
+        source="biffo.core",
+        detail_type="user.created",
+        label="User created",
+        description="A user record is first created in Core, on their first "
+        "authenticated request.",
+    )
+)

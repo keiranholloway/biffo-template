@@ -1,9 +1,9 @@
 """RbacPlugin — this plugin's BiffoPluginBase implementation.
 
-Seeds a baseline role set on install and reacts to ``biffo.core/UserCreated``
-by auto-assigning the default "viewer" role — see README.md for the caveat
-that UserCreated is not currently published by the Core API, so this
-subscription is wired and tested but dormant in a real deployment today.
+Seeds a baseline role set on install and reacts to ``biffo.core/user.created``
+by auto-assigning the default "viewer" role. Core publishes ``user.created`` when
+a user record is first created on first login (``routers/auth.py``, ADR-0010), so
+this subscription is live once the plugin is installed.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ class RbacPlugin(BiffoPluginBase):
         super().__init__(manifest, api=api)
         self.permissions = PermissionChecker(self.api)
 
-        @self.subscribe("UserCreated")
+        @self.subscribe("user.created")
         async def _on_user_created(event: BiffoEvent) -> None:
             await self._assign_default_role(event)
 
@@ -115,7 +115,7 @@ class RbacPlugin(BiffoPluginBase):
         user_id = event.payload.get("cognito_sub") or event.payload.get("user_id")
         if not user_id:
             logger.warning(
-                "UserCreated event missing cognito_sub/user_id in payload; "
+                "user.created event missing cognito_sub/user_id in payload; "
                 "skipping default role assignment",
                 extra={"payload": event.payload},
             )
@@ -125,7 +125,7 @@ class RbacPlugin(BiffoPluginBase):
         if role_id is None:
             logger.warning(
                 f"Default role {DEFAULT_ROLE_NAME!r} not found; on_install() "
-                "must seed baseline roles before UserCreated events are "
+                "must seed baseline roles before user.created events are "
                 "dispatched."
             )
             return

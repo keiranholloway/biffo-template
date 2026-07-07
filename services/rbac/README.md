@@ -20,7 +20,7 @@ doesn't exist yet. See "Scope and known gaps" below.
   checkout.
 - `src/rbac/plugin.py` — `RbacPlugin(BiffoPluginBase)`: seeds a baseline role
   set (`system.admin`, `editor`, `viewer`) on install, and subscribes to
-  `biffo.core/UserCreated` to auto-assign the `viewer` role to new users.
+  `biffo.core/user.created` to auto-assign the `viewer` role to new users.
 - `src/rbac/permissions.py` — `PermissionChecker`: the `check_permission`
   logic (see "Why check_permission isn't a manifest route" below), with an
   in-memory TTL cache.
@@ -133,26 +133,19 @@ possible and documented rather than silently relied upon:
   `DELETE /role-permissions/{id}` — without them, `check_permission` would
   have no way to have any data to evaluate.
 
-## `UserCreated` — wired, but not live yet
+## `user.created` — live
 
-`RbacPlugin` subscribes to `biffo.core/UserCreated` and auto-assigns the
-`viewer` role (see `src/rbac/plugin.py`). This is implemented using the SDK's
-real `EventSubscriber`/`@subscribe` (issue #16/#17) and is unit-tested
-end-to-end against a synthetic `BiffoEvent` (`tests/test_plugin.py`,
+`RbacPlugin` subscribes to `biffo.core/user.created` and auto-assigns the
+`viewer` role (see `src/rbac/plugin.py`), implemented with the SDK's real
+`EventSubscriber`/`@subscribe` (issue #16/#17) and unit-tested end-to-end
+against a synthetic `BiffoEvent` (`tests/test_rbac_plugin.py`,
 `tests/test_main.py`).
 
-**However**, as of this PR, `services/api/src/api/routers/auth.py`'s
-`get_current_user` creates a `User` row on first login but never calls
-`EventPublisher.publish(...)` — verified by reading `events/base.py` and
-every router in `services/api/src/api/routers/`. No code path in the Core
-API publishes `UserCreated` today. This subscription is therefore dormant
-in a real deployment: it will fire the moment the Core API starts
-publishing that event, but this PR deliberately does not modify
-`services/api/src/api/routers/auth.py` to add that publish call — that's a
-Core API behavior change to a hot, already-tested path
-(`/auth/me`, called on every login), outside issue #27's own stated
-dependencies (chunks 1/5/6 only), and is flagged as a follow-up rather than
-folded into this PR.
+Core publishes `user.created` from `services/api/src/api/routers/auth.py`'s
+`get_current_user` when a `User` row is first created on first login (via
+`EventPublisher.publish(USER_CREATED.build(...))`, ADR-0010). So once the
+plugin is installed, the subscription is live: a new user's first login
+auto-assigns their default role.
 
 ## Out of scope for this PR (blocked on chunks that don't exist yet)
 

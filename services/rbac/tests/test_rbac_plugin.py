@@ -1,5 +1,5 @@
 """Tests for RbacPlugin: lifecycle hooks, manifest loading, and the
-UserCreated -> default-role-assignment event subscription.
+user.created -> default-role-assignment event subscription.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ class TestManifestLoading:
 class TestSubscription:
     def test_subscribes_to_user_created(self) -> None:
         plugin, _ = _make_plugin()
-        assert plugin.events.has_subscription("UserCreated")
+        assert plugin.events.has_subscription("user.created")
 
 
 class TestOnInstall:
@@ -100,7 +100,7 @@ class TestUserCreatedAutoAssignsDefaultRole:
         await plugin.seed_baseline_roles()
 
         event = BiffoEvent(
-            detail_type="UserCreated",
+            detail_type="user.created",
             tenant_id="default",
             payload={"cognito_sub": "user-123", "email": "new@example.com"},
         )
@@ -119,7 +119,7 @@ class TestUserCreatedAutoAssignsDefaultRole:
         plugin, fake = _make_plugin()
         await plugin.seed_baseline_roles()
 
-        event = BiffoEvent(detail_type="UserCreated", payload={"user_id": "user-456"})
+        event = BiffoEvent(detail_type="user.created", payload={"user_id": "user-456"})
         await plugin.events.dispatch(event)
 
         assert fake.tables["assignments"][0]["user_id"] == "user-456"
@@ -129,7 +129,7 @@ class TestUserCreatedAutoAssignsDefaultRole:
         await plugin.seed_baseline_roles()
 
         event = BiffoEvent(
-            detail_type="UserCreated", payload={"email": "no-id@example.com"}
+            detail_type="user.created", payload={"email": "no-id@example.com"}
         )
         await plugin.events.dispatch(event)
 
@@ -141,7 +141,7 @@ class TestUserCreatedAutoAssignsDefaultRole:
         plugin, fake = _make_plugin()
 
         event = BiffoEvent(
-            detail_type="UserCreated", payload={"cognito_sub": "user-789"}
+            detail_type="user.created", payload={"cognito_sub": "user-789"}
         )
         await plugin.events.dispatch(event)
 
@@ -160,7 +160,7 @@ class TestUserCreatedAutoAssignsDefaultRole:
         assert len(fake.request_log) == calls_before  # served from cache
 
         event = BiffoEvent(
-            detail_type="UserCreated", payload={"cognito_sub": "user-999"}
+            detail_type="user.created", payload={"cognito_sub": "user-999"}
         )
         await plugin.events.dispatch(event)
 

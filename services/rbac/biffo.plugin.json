@@ -184,7 +184,7 @@
           "name": "assigned_by",
           "type": "String(36)",
           "nullable": true,
-          "description": "cognito_sub of the admin who made the assignment, or NULL for system-assigned rows (e.g. the default-role auto-assignment on UserCreated)."
+          "description": "cognito_sub of the admin who made the assignment, or NULL for system-assigned rows (e.g. the default-role auto-assignment on user.created)."
         },
         {
           "name": "expires_at",
@@ -313,8 +313,8 @@
   "event_subscriptions": [
     {
       "source": "biffo.core",
-      "detail_type": "UserCreated",
-      "description": "Auto-assigns the default 'viewer' role to newly created users. Informational only -- Core API route registration (issue #19) only reads 'tables' and 'api_routes' from this manifest; event subscriptions are wired in the plugin's own Lambda (src/rbac/main.py) via the SDK's EventSubscriber, not synthesized by the Core API. NOT YET LIVE: as of this PR, services/api/src/api/routers/auth.py creates User rows on first login but never publishes a UserCreated event (verified by reading events/base.py and every router) -- this subscription is implemented and unit-tested against a synthetic event, but is dormant in a real deployment until Core API publishing is added (tracked as a follow-up, out of scope for this PR)."
+      "detail_type": "user.created",
+      "description": "Auto-assigns the default 'viewer' role to newly created users. Informational only -- Core API route registration (issue #19) only reads 'tables' and 'api_routes' from this manifest; event subscriptions are wired in the plugin's own Lambda (src/rbac/main.py) via the SDK's EventSubscriber, not synthesized by the Core API. Core publishes user.created from routers/auth.py when a User row is first created on first login (ADR-0010), so this subscription is live once the plugin is installed."
     }
   ],
   "ui_components": [

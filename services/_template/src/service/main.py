@@ -35,7 +35,7 @@ def handler(event: dict, context: LambdaContext) -> dict:
 
     # EventBridge event shape:
     # event["source"]      — e.g. "biffo.core"
-    # event["detail-type"] — e.g. "UserCreated"
+    # event["detail-type"] — e.g. "user.created"
     # event["detail"]["tenant_id"]
     # event["detail"]["payload"]
 

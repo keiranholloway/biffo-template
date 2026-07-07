@@ -112,7 +112,9 @@ async def dispatch_event(
     # Record the event type so the builder can offer it as a trigger even if the
     # code registry doesn't name it (self-building catalog, ADR-0010). Best-effort
     # and isolated in a SAVEPOINT so it never disturbs the dispatch itself.
-    await observe_trigger(db, tenant_id=tenant_id, source=source, detail_type=detail_type)
+    await observe_trigger(
+        db, tenant_id=tenant_id, source=source, detail_type=detail_type
+    )
 
     result = await db.execute(
         select(WorkflowDefinition).where(

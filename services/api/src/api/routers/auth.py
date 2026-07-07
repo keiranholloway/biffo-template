@@ -5,8 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..dependencies import get_event_publisher
-from ..events import EventPublisher
+from ..events import emit_event
 from ..events.registry import USER_CREATED
 from ..middleware.auth import AuthenticatedUser, require_auth
 from ..models.user import User
@@ -19,7 +18,6 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 async def get_current_user(
     caller: AuthenticatedUser = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
-    publisher: EventPublisher = Depends(get_event_publisher),
 ) -> User:
     """
     Returns the authenticated user's profile.
@@ -52,19 +50,19 @@ async def get_current_user(
         await db.flush()
         await db.refresh(user)
         # A user record now exists in Core — announce it so orchestration workflows
-        # (and plugins like rbac's default-role assignment) can react. Best-effort:
-        # publish() swallows errors so a bus hiccup never fails the login. Fires
-        # once per user (only on the create branch), after flush so user.id exists.
-        publisher.publish(
-            USER_CREATED.build(
-                {
-                    "user_id": user.id,
-                    "cognito_sub": user.cognito_sub,
-                    "email": user.email,
-                    "username": user.username,
-                },
-                tenant_id=user.tenant_id,
-            )
+        # can react. Buffered and published after the request commits (ADR-0002,
+        # #222), so a rolled-back login never emits. Fires once per user (only on
+        # the create branch), after flush so user.id exists.
+        emit_event(
+            db,
+            USER_CREATED,
+            {
+                "user_id": user.id,
+                "cognito_sub": user.cognito_sub,
+                "email": user.email,
+                "username": user.username,
+            },
+            tenant_id=user.tenant_id,
         )
     else:
         user.last_login_at = datetime.now(tz=timezone.utc)

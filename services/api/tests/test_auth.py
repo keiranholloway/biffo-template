@@ -1,25 +1,16 @@
-"""Regression test for the auth.py get_current_user first-login response bug."""
+"""Regression test for the auth.py get_current_user first-login response bug,
+plus the user.created emission (now buffered on the session, published post-commit
+by get_db — ADR-0002 / #222)."""
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from api.events import BiffoEvent, EventPublisher
+from api.events import pending_events
 from api.middleware.auth import AuthenticatedUser
 from api.models.base import Base
 from api.models.user import User  # noqa: F401 — registers the users table on Base.metadata
 from api.routers.auth import get_current_user
 from api.schemas.user import UserResponse
-
-
-class _RecordingPublisher(EventPublisher):
-    """Stand-in for EventPublisher that records published events (no AWS)."""
-
-    def __init__(self) -> None:
-        # Deliberately skip super().__init__ — no boto3 client in tests.
-        self.events: list[BiffoEvent] = []
-
-    def publish(self, event: BiffoEvent) -> None:
-        self.events.append(event)
 
 
 @pytest.fixture
@@ -48,8 +39,7 @@ async def test_first_login_creates_user_with_populated_response_fields(db_sessio
         tenant_id="default",
     )
 
-    publisher = _RecordingPublisher()
-    user = await get_current_user(caller=caller, db=db_session, publisher=publisher)
+    user = await get_current_user(caller=caller, db=db_session)
 
     # This is exactly what response_model=UserResponse validates on the way out —
     # it must not raise, and every field must be populated (not None).
@@ -60,9 +50,11 @@ async def test_first_login_creates_user_with_populated_response_fields(db_sessio
     assert user.created_at is not None
     assert user.updated_at is not None
 
-    # First login announces a user.created event carrying the new user's identity.
-    assert len(publisher.events) == 1
-    event = publisher.events[0]
+    # First login buffers a user.created event on the session (published by get_db
+    # after commit) carrying the new user's identity.
+    buffered = pending_events(db_session)
+    assert len(buffered) == 1
+    event = buffered[0]
     assert event.detail_type == "user.created"
     assert event.payload["user_id"] == user.id
     assert event.payload["cognito_sub"] == "test-sub-123"
@@ -77,13 +69,12 @@ async def test_returning_user_login_updates_last_login_at(db_session):
         tenant_id="default",
     )
 
-    publisher = _RecordingPublisher()
-    first = await get_current_user(caller=caller, db=db_session, publisher=publisher)
+    first = await get_current_user(caller=caller, db=db_session)
     await db_session.commit()
 
-    second = await get_current_user(caller=caller, db=db_session, publisher=publisher)
+    second = await get_current_user(caller=caller, db=db_session)
 
     assert second.id == first.id
     assert second.last_login_at is not None
-    # user.created fires only on creation — a returning login publishes nothing new.
-    assert len(publisher.events) == 1
+    # user.created fires only on creation — a returning login buffers nothing new.
+    assert len(pending_events(db_session)) == 1

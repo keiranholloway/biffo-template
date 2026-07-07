@@ -47,3 +47,9 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
+        else:
+            # Publish buffered state-change events only after the commit succeeds
+            # (ADR-0002, epic #222) — never on a rolled-back transaction.
+            from .events.emit import publish_pending
+
+            await publish_pending(session)

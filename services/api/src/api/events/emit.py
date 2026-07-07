@@ -1,0 +1,74 @@
+"""Transaction-safe, compliance-gated event emission (ADR-0002).
+
+Handlers don't publish to EventBridge directly. They call
+``emit_event(db, EVENT, payload)``, which **buffers** the event on the request's
+session. ``get_db`` publishes the buffer **after** the transaction commits — never
+before, so a mutation that rolls back never produces a "phantom" event — and only
+for events that are **declared in code** (a registered ``EventType``; Phase B also
+admits a generic-CRUD ``<table>.<op>``). An undeclared event is refused and logged,
+so nothing non-compliant reaches the bus (ADR-0002, epic #222).
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from aws_lambda_powertools import Logger
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .base import BiffoEvent
+from .registry import EventType, find_event
+
+logger = Logger()
+
+# Where the per-request buffer lives: SQLAlchemy's session-scoped ``.info`` dict,
+# so it travels with the session and is discarded (unpublished) on rollback.
+_BUFFER_KEY = "biffo_pending_events"
+
+
+def emit_event(
+    db: AsyncSession,
+    event: EventType,
+    payload: dict[str, Any],
+    *,
+    tenant_id: str = "default",
+) -> None:
+    """Buffer a declared state-change event for publication after this request
+    commits. Does **not** publish here — never on an uncommitted transaction."""
+    built = event.build(payload, tenant_id=tenant_id)
+    db.info.setdefault(_BUFFER_KEY, []).append(built)
+
+
+def pending_events(db: AsyncSession) -> list[BiffoEvent]:
+    """The events buffered so far on this session (test/introspection helper)."""
+    return list(db.info.get(_BUFFER_KEY, []))
+
+
+def is_declared(source: str, detail_type: str) -> bool:
+    """Whether an event is allowed on the bus — i.e. defined in code.
+
+    Phase A: a registered ``EventType``. Phase B extends this to also admit a
+    generic-CRUD ``<table>.<op>`` derived from the permissions registry.
+    """
+    return find_event(source, detail_type) is not None
+
+
+async def publish_pending(db: AsyncSession) -> None:
+    """Publish the buffered events — called by ``get_db`` *after* a successful
+    commit. Refuses any undeclared event (the compliance gate) and never raises
+    into the request (``EventPublisher.publish`` is itself best-effort)."""
+    events: list[BiffoEvent] = db.info.pop(_BUFFER_KEY, [])
+    if not events:
+        return
+    # Lazy import to avoid a database <- dependencies <- events import cycle.
+    from ..dependencies import get_event_publisher
+
+    publisher = get_event_publisher()
+    for event in events:
+        if not is_declared(event.source, event.detail_type):
+            logger.error(
+                "Refusing to publish an undeclared event (not defined in code)",
+                extra={"source": event.source, "detail_type": event.detail_type},
+            )
+            continue
+        publisher.publish(event)

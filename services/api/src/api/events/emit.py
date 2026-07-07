@@ -44,13 +44,27 @@ def pending_events(db: AsyncSession) -> list[BiffoEvent]:
     return list(db.info.get(_BUFFER_KEY, []))
 
 
+_CRUD_OP = {"created": "create", "updated": "update", "deleted": "delete"}
+
+
 def is_declared(source: str, detail_type: str) -> bool:
     """Whether an event is allowed on the bus — i.e. defined in code.
 
-    Phase A: a registered ``EventType``. Phase B extends this to also admit a
-    generic-CRUD ``<table>.<op>`` derived from the permissions registry.
+    Two ways an event is declared: a registered ``EventType`` (a business event),
+    or a generic-CRUD ``<table>.<op>`` where that table's ``__crud_permissions__``
+    allows the operation (declared implicitly by the CRUD surface, ADR-0004).
     """
-    return find_event(source, detail_type) is not None
+    if find_event(source, detail_type) is not None:
+        return True
+    if source == "biffo.core":
+        table, sep, op = detail_type.rpartition(".")
+        if sep and op in _CRUD_OP:
+            from ..permissions import get_permissions_registry
+
+            block = get_permissions_registry().get(table)
+            if block is not None:
+                return bool(getattr(block, _CRUD_OP[op]).allowed)
+    return False
 
 
 async def publish_pending(db: AsyncSession) -> None:

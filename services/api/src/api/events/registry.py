@@ -116,3 +116,62 @@ USER_CREATED = register_event(
         "authenticated request.",
     )
 )
+
+USER_SUSPENDED = register_event(
+    EventType(
+        source="biffo.core",
+        detail_type="user.suspended",
+        label="User suspended",
+        description="An admin disables a user (Cognito disable + global sign-out).",
+    )
+)
+
+USER_REACTIVATED = register_event(
+    EventType(
+        source="biffo.core",
+        detail_type="user.reactivated",
+        label="User reactivated",
+        description="An admin re-enables a previously suspended user.",
+    )
+)
+
+USER_DELETED = register_event(
+    EventType(
+        source="biffo.core",
+        detail_type="user.deleted",
+        label="User deleted",
+        description="An admin deletes a user from Cognito (their DB row is "
+        "deactivated, not removed).",
+    )
+)
+
+# Workflow-definition builder CRUD (the orchestration config plane). Hand-written,
+# not generic-CRUD, so the emits are declared here. Enable/disable is emitted as
+# an "updated" — the payload carries the new ``enabled`` state.
+WORKFLOW_DEFINITION_CREATED = register_event(
+    EventType(
+        source="biffo.core",
+        detail_type="workflow_definition.created",
+        label="Workflow created",
+        description="An admin creates an orchestration workflow definition.",
+    )
+)
+
+WORKFLOW_DEFINITION_UPDATED = register_event(
+    EventType(
+        source="biffo.core",
+        detail_type="workflow_definition.updated",
+        label="Workflow updated",
+        description="An admin edits a workflow definition or toggles it "
+        "enabled/disabled.",
+    )
+)
+
+WORKFLOW_DEFINITION_DELETED = register_event(
+    EventType(
+        source="biffo.core",
+        detail_type="workflow_definition.deleted",
+        label="Workflow deleted",
+        description="An admin deletes a workflow definition.",
+    )
+)

@@ -19,6 +19,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...cognito import CognitoAdmin, CognitoAdminError
 from ...database import get_db
 from ...dependencies import get_cognito_admin, require_admin
+from ...events import emit_event
+from ...events.registry import (
+    USER_DELETED,
+    USER_REACTIVATED,
+    USER_SUSPENDED,
+    EventType,
+)
 from ...middleware.auth import AuthenticatedUser
 from ...models.user import User
 from ...schemas.user import (
@@ -62,6 +69,26 @@ async def _mirror_is_active(db: AsyncSession, cognito_sub: str, active: bool) ->
     exists. A user provisioned but never logged in has no row yet — nothing to do."""
     await db.execute(
         update(User).where(User.cognito_sub == cognito_sub).values(is_active=active)
+    )
+
+
+def _emit_user_lifecycle(
+    db: AsyncSession, event: EventType, user: dict, *, tenant_id: str
+) -> None:
+    """Buffer a user-lifecycle state-change for publish after commit (ADR-0002).
+
+    These actions live in Cognito with a best-effort DB mirror, so there's no
+    generic-CRUD emit — the event is raised here. It reflects the admin action
+    (fired once Cognito succeeds) regardless of whether a DB mirror row exists."""
+    emit_event(
+        db,
+        event,
+        {
+            "cognito_sub": user["sub"],
+            "username": user["username"],
+            "email": user["email"],
+        },
+        tenant_id=tenant_id,
     )
 
 
@@ -153,7 +180,7 @@ async def remove_user_from_group(
 @router.post("/{username}/suspend", response_model=AdminUserResponse)
 async def suspend_user(
     username: str,
-    _admin: AuthenticatedUser = Depends(require_admin),
+    admin: AuthenticatedUser = Depends(require_admin),
     cog: CognitoAdmin = Depends(get_cognito_admin),
     db: AsyncSession = Depends(get_db),
 ) -> AdminUserResponse:
@@ -167,13 +194,14 @@ async def suspend_user(
     except CognitoAdminError as err:
         _raise_http(err)
     await _mirror_is_active(db, user["sub"], active=False)
+    _emit_user_lifecycle(db, USER_SUSPENDED, user, tenant_id=admin.tenant_id)
     return _to_response(cog, user)
 
 
 @router.post("/{username}/reactivate", response_model=AdminUserResponse)
 async def reactivate_user(
     username: str,
-    _admin: AuthenticatedUser = Depends(require_admin),
+    admin: AuthenticatedUser = Depends(require_admin),
     cog: CognitoAdmin = Depends(get_cognito_admin),
     db: AsyncSession = Depends(get_db),
 ) -> AdminUserResponse:
@@ -183,13 +211,14 @@ async def reactivate_user(
     except CognitoAdminError as err:
         _raise_http(err)
     await _mirror_is_active(db, user["sub"], active=True)
+    _emit_user_lifecycle(db, USER_REACTIVATED, user, tenant_id=admin.tenant_id)
     return _to_response(cog, user)
 
 
 @router.delete("/{username}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(
     username: str,
-    _admin: AuthenticatedUser = Depends(require_admin),
+    admin: AuthenticatedUser = Depends(require_admin),
     cog: CognitoAdmin = Depends(get_cognito_admin),
     db: AsyncSession = Depends(get_db),
 ) -> None:
@@ -201,3 +230,4 @@ async def delete_user(
     except CognitoAdminError as err:
         _raise_http(err)
     await _mirror_is_active(db, user["sub"], active=False)
+    _emit_user_lifecycle(db, USER_DELETED, user, tenant_id=admin.tenant_id)

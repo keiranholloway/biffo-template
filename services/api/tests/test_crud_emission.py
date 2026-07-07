@@ -12,7 +12,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from api.events import is_declared, pending_events
 from api.models.base import Base, TenantScopedModel
-from api.models.plugin_table import TablePermissions
+from api.models.plugin_table import PermissionRule, TablePermissions
 from api.routing.crud_handlers import (
     make_create_handler,
     make_delete_handler,
@@ -113,7 +113,7 @@ async def test_opt_out_model_emits_nothing(session):
 
 
 def test_is_declared_admits_allowed_crud_ops(monkeypatch):
-    registry = {"widgets": TablePermissions(create={"allowed": True})}
+    registry = {"widgets": TablePermissions(create=PermissionRule(allowed=True))}
     monkeypatch.setattr(
         "api.permissions.get_permissions_registry", lambda **_: registry
     )

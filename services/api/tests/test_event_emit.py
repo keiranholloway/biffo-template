@@ -1,8 +1,9 @@
 """Transaction-safe, compliance-gated emission (events/emit.py, ADR-0002 / #222)."""
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import api.dependencies as dependencies
 import api.database as database
@@ -42,7 +43,7 @@ def publisher(monkeypatch) -> _RecordingPublisher:
 
 
 def test_emit_event_buffers_and_does_not_publish(publisher):
-    db = _FakeSession()
+    db = cast(AsyncSession, _FakeSession())
     emit_event(db, DEMO_REQUESTED, {"demo_request_id": "d1"}, tenant_id="default")
 
     buffered = pending_events(db)
@@ -59,7 +60,7 @@ def test_is_declared_gate():
 
 
 async def test_publish_pending_publishes_declared_and_clears(publisher):
-    db = _FakeSession()
+    db = cast(AsyncSession, _FakeSession())
     emit_event(db, DEMO_REQUESTED, {"demo_request_id": "d1"})
 
     await publish_pending(db)
@@ -73,7 +74,7 @@ async def test_publish_pending_publishes_declared_and_clears(publisher):
 
 
 async def test_publish_pending_refuses_undeclared(publisher):
-    db = _FakeSession()
+    db = cast(AsyncSession, _FakeSession())
     # An EventType that was never register_event()'d is not "defined in code".
     undeclared = EventType("biffo.core", "made.up.event", "Made up", "")
     emit_event(db, undeclared, {"x": 1})

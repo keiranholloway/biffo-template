@@ -22,9 +22,11 @@ terraform {
 }
 
 locals {
-  name_prefix       = "${var.project_name}-${var.environment}"
-  function_name     = "${local.name_prefix}-plugin-${var.plugin_name}"
-  has_subscriptions = length(var.event_subscriptions) > 0
+  name_prefix   = "${var.project_name}-${var.environment}"
+  function_name = "${local.name_prefix}-plugin-${var.plugin_name}"
+  # The engine is a generic forwarder (subscribe_all): a rule is always created,
+  # matching every event so a new trigger needs no Terraform change (ADR-0010).
+  has_subscriptions = var.subscribe_all || length(var.event_subscriptions) > 0
 }
 
 # Compute — the engine's Lambda. Non-VPC (no enable_vpc_access) so it can reach
@@ -82,21 +84,27 @@ resource "aws_iam_role_policy" "engine" {
   policy = data.aws_iam_policy_document.engine.json
 }
 
-# Events — subscribe the engine's Lambda to its declared subscriptions on the
-# shared bus. Each pair is matched via `$or` to avoid cross-product matching.
+# Events — route bus events to the engine's Lambda. By default (subscribe_all)
+# the rule matches every event; the engine forwards each to the Core API, which
+# decides what runs from the enabled workflow definitions (ADR-0010).
 resource "aws_cloudwatch_event_rule" "subscription" {
   count          = local.has_subscriptions ? 1 : 0
   name           = "${local.function_name}-events"
   description    = "Routes subscribed events to the ${var.plugin_name} plugin"
   event_bus_name = var.event_bus_name
 
-  # A single subscription uses a flat pattern; two or more are OR-ed. EventBridge
-  # rejects a `$or` with fewer than 2 elements ("There must have at least 2
-  # Objects in $or relationship"), so the single-subscription case must not use
-  # it. jsonencode is applied inside each branch so the conditional's arms are
-  # both strings — a `cond ? {flat} : {$or}` on differently-shaped objects is an
-  # "Inconsistent conditional result types" error at apply (validate misses it).
-  event_pattern = length(var.event_subscriptions) == 1 ? jsonencode({
+  # subscribe_all → match every event on the bus: the engine forwards each to the
+  # Core API, which matches enabled workflow definitions and decides what runs, so
+  # adding a trigger is just a definition — no Terraform change (ADR-0010). Else a
+  # single subscription uses a flat pattern and two or more are OR-ed: EventBridge
+  # rejects a `$or` with fewer than 2 elements ("There must have at least 2 Objects
+  # in $or relationship"), so the single-subscription case must not use it.
+  # jsonencode is applied inside each branch so the conditional's arms are all
+  # strings — a `cond ? {a} : {b}` on differently-shaped objects is an "Inconsistent
+  # conditional result types" error at apply (validate misses it).
+  event_pattern = var.subscribe_all ? jsonencode({
+    source = [{ prefix = "" }]
+    }) : length(var.event_subscriptions) == 1 ? jsonencode({
     source        = [var.event_subscriptions[0].source]
     "detail-type" = [var.event_subscriptions[0].detail_type]
     }) : jsonencode({

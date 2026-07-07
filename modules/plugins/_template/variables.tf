@@ -77,12 +77,18 @@ variable "event_bus_name" {
 }
 
 variable "event_subscriptions" {
-  description = "Events this plugin reacts to, mirroring biffo.plugin.json's `event_subscriptions` array (ADR-0003 section 2), e.g. [{ source = \"biffo.core\", detail_type = \"UserCreated\" }]. Leave empty if the plugin only calls the Core API and never reacts to events — no EventBridge rule is created in that case."
+  description = "Events this plugin reacts to, mirroring biffo.plugin.json's `event_subscriptions` array (ADR-0003 section 2), e.g. [{ source = \"biffo.core\", detail_type = \"UserCreated\" }]. Leave empty if the plugin only calls the Core API and never reacts to events — no EventBridge rule is created in that case. Ignored when `subscribe_all` is true."
   type = list(object({
     source      = string
     detail_type = string
   }))
   default = []
+}
+
+variable "subscribe_all" {
+  description = "Subscribe to every event on the bus (a generic forwarder). When true, `event_subscriptions` is ignored and the rule matches all events, so the plugin — not Terraform — decides what to act on and a new trigger needs no infra change (ADR-0010). Use for engines like the orchestrator that forward everything to the Core API for matching."
+  type        = bool
+  default     = false
 }
 
 variable "environment_variables" {

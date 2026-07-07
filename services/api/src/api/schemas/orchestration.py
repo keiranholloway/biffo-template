@@ -100,6 +100,7 @@ class WorkflowDefinitionResponse(BiffoBaseSchema):
     name: str
     trigger_source: str
     trigger_detail_type: str
+    trigger_filter: dict[str, Any] | None = None
     action_type: str
     action_config: dict[str, Any]
     enabled: bool
@@ -118,6 +119,10 @@ class WorkflowDefinitionBody(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     trigger_source: str = Field(min_length=1, max_length=128)
     trigger_detail_type: str = Field(min_length=1, max_length=128)
+    # Optional all-of exact-match predicate over the event payload (#226): a
+    # workflow on e.g. ``leads.updated`` with ``{"status": "won"}`` fires only when
+    # the payload's ``status`` equals ``"won"``. None/empty → matches every event.
+    trigger_filter: dict[str, Any] | None = None
     action_type: str = Field(min_length=1, max_length=64)
     action_config: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True

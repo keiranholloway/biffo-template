@@ -3,7 +3,7 @@
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from api.events import BiffoEvent
+from api.events import BiffoEvent, EventPublisher
 from api.middleware.auth import AuthenticatedUser
 from api.models.base import Base
 from api.models.user import User  # noqa: F401 — registers the users table on Base.metadata
@@ -11,10 +11,11 @@ from api.routers.auth import get_current_user
 from api.schemas.user import UserResponse
 
 
-class _RecordingPublisher:
+class _RecordingPublisher(EventPublisher):
     """Stand-in for EventPublisher that records published events (no AWS)."""
 
     def __init__(self) -> None:
+        # Deliberately skip super().__init__ — no boto3 client in tests.
         self.events: list[BiffoEvent] = []
 
     def publish(self, event: BiffoEvent) -> None:

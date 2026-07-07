@@ -41,9 +41,11 @@ terraform {
 }
 
 locals {
-  name_prefix       = "${var.project_name}-${var.environment}"
-  function_name     = "${local.name_prefix}-plugin-${var.plugin_name}"
-  has_subscriptions = length(var.event_subscriptions) > 0
+  name_prefix   = "${var.project_name}-${var.environment}"
+  function_name = "${local.name_prefix}-plugin-${var.plugin_name}"
+  # A rule is created when the plugin subscribes to specific events, or when it
+  # is a generic forwarder that reacts to every event (subscribe_all).
+  has_subscriptions = var.subscribe_all || length(var.event_subscriptions) > 0
 }
 
 # Compute — the plugin's Lambda function.
@@ -88,13 +90,17 @@ resource "aws_cloudwatch_event_rule" "subscription" {
   description    = "Routes subscribed events to the ${var.plugin_name} plugin"
   event_bus_name = var.event_bus_name
 
-  # A single subscription uses a flat pattern; two or more are OR-ed. EventBridge
-  # rejects a `$or` with fewer than 2 elements ("There must have at least 2
-  # Objects in $or relationship"), so the single-subscription case must not use
-  # it. jsonencode is applied inside each branch so the conditional's arms are
-  # both strings — a `cond ? {flat} : {$or}` on differently-shaped objects is an
-  # "Inconsistent conditional result types" error at apply (validate misses it).
-  event_pattern = length(var.event_subscriptions) == 1 ? jsonencode({
+  # subscribe_all → match every event on the bus (a generic forwarder; the plugin
+  # decides what to do, so new triggers need no Terraform change — ADR-0010). Else
+  # a single subscription uses a flat pattern and two or more are OR-ed: EventBridge
+  # rejects a `$or` with fewer than 2 elements ("There must have at least 2 Objects
+  # in $or relationship"), so the single-subscription case must not use it.
+  # jsonencode is applied inside each branch so the conditional's arms are all
+  # strings — a `cond ? {a} : {b}` on differently-shaped objects is an "Inconsistent
+  # conditional result types" error at apply (validate misses it).
+  event_pattern = var.subscribe_all ? jsonencode({
+    source = [{ prefix = "" }]
+    }) : length(var.event_subscriptions) == 1 ? jsonencode({
     source        = [var.event_subscriptions[0].source]
     "detail-type" = [var.event_subscriptions[0].detail_type]
     }) : jsonencode({

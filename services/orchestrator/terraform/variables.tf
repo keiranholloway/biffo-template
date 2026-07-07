@@ -56,15 +56,19 @@ variable "event_bus_name" {
   type        = string
 }
 
+variable "subscribe_all" {
+  description = "The engine is a generic forwarder: subscribe to every event on the bus and let the Core API match it against enabled workflow definitions. Adding a trigger is then just a definition — no Terraform change (ADR-0010). Set false only to pin the engine to an explicit `event_subscriptions` allowlist."
+  type        = bool
+  default     = true
+}
+
 variable "event_subscriptions" {
-  description = "Events the engine reacts to, mirroring biffo.plugin.json's event_subscriptions. Defaults to the thin-wedge trigger (demo.requested)."
+  description = "Explicit event allowlist, used only when `subscribe_all` is false. Mirrors biffo.plugin.json's event_subscriptions."
   type = list(object({
     source      = string
     detail_type = string
   }))
-  default = [
-    { source = "biffo.core", detail_type = "demo.requested" },
-  ]
+  default = []
 }
 
 variable "environment_variables" {

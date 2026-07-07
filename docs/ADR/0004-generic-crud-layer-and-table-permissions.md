@@ -5,6 +5,12 @@
 **Accepted:** 2026-07-02
 **Deciders:** Keiran Holloway (Technical Architect)
 
+> **Superseded in part by [ADR-0011](0011-authorization-is-a-core-concern.md):**
+> the "future dedicated RBAC plugin" this ADR contemplates (Option C, and the
+> "superseded by a real RBAC plugin" language throughout) was **not** pursued.
+> Authorization is a core concern; the `required_role` / permission-code
+> primitive below is the permanent core mechanism, not a stopgap.
+
 > Implemented across PRs #99 (roles from `cognito:groups`), #101 (declarative
 > `permissions` block), #103 (build-time permissions registry), and #106
 > (enforcement + opt-in core-table CRUD). The **Implementation** section below

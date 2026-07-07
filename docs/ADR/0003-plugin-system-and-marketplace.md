@@ -5,6 +5,12 @@
 **Accepted:** 2026-07-03  
 **Deciders:** Keiran Holloway (Technical Architect)
 
+> **Superseded in part by [ADR-0011](0011-authorization-is-a-core-concern.md):**
+> the `rbac` plugin used as this ADR's worked example has been **removed** —
+> authorization is a core concern, not a plugin. The example snippets below are
+> kept for illustration only; for a live plugin see `services/orchestrator`, and
+> to start one, `_skeletons/plugin-template`.
+
 > Implemented: the `biffo plugin` CLI (install/uninstall/upgrade/list/info), the
 > `biffo.plugin.json` manifest + declarative table/route registration, the
 > generic-CRUD route synthesis (`plugin_router.py`), and the portal marketplace

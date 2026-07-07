@@ -22,7 +22,7 @@ class EndpointResponse(BaseModel):
     table: str | None = None  # for generic-CRUD rows
     operation: str | None = None  # list | read | create | update | delete
     method: str  # GET | POST | PUT | PATCH | DELETE
-    path: str  # full path, e.g. /api/v1/plugins/rbac/roles or /api/v1/data/widgets
+    path: str  # full path, e.g. /api/v1/plugins/notes/items or /api/v1/data/widgets
     summary: str | None = None  # OpenAPI operation summary
     tags: list[str] = Field(default_factory=list)
     # any-of; [] means any authenticated caller; None means unknown (a

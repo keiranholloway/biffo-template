@@ -51,7 +51,7 @@ describe('PluginsPage', () => {
     await waitFor(() => {
       expect(screen.getByText('No plugins installed yet')).toBeInTheDocument()
     })
-    expect(screen.getByText(/services\/rbac/)).toBeInTheDocument()
+    expect(screen.getByText(/services\/orchestrator/)).toBeInTheDocument()
   })
 
   it('shows an error message when the fetch fails', async () => {

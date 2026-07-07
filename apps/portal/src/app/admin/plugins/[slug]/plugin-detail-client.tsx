@@ -18,8 +18,8 @@ import { InstalledPluginDetail } from '@/components/InstalledPluginDetail'
  * `source` distinguishes two genuinely different data sources sharing this
  * one route: `installed` (this deployment's own services/*, via
  * InstalledPluginDetail) and `marketplace` (the external
- * biffo-plugins-registry, via PluginDetail) — an installed reference plugin
- * like services/rbac is never published to the marketplace registry, so
+ * biffo-plugins-registry, via PluginDetail) — an installed plugin
+ * like services/orchestrator is never published to the marketplace registry, so
  * routing it through the marketplace lookup would incorrectly show
  * "not found".
  */

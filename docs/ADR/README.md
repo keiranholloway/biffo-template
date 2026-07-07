@@ -16,6 +16,9 @@ An ADR captures a significant architectural decision: the context that forced it
 | [ADR-0006](0006-core-upgrade-and-template-sync.md)                    | Core Upgrade and Template Sync                              | Accepted | 2026-07-02 |
 | [ADR-0007](0007-sibling-applications.md)                              | Sibling Applications                                        | Accepted | 2026-07-03 |
 | [ADR-0008](0008-endpoint-control-plane.md)                            | Endpoint Control Plane (enable-via-PR)                      | Proposed | 2026-07-03 |
+| [ADR-0009](0009-internal-service-authentication.md)                   | Internal Service-to-Service Authentication (IAM SigV4)      | Accepted | 2026-07-06 |
+| [ADR-0010](0010-event-registry-and-trigger-consolidation.md)          | Event Registry — one source of truth for triggers           | Accepted | 2026-07-07 |
+| [ADR-0011](0011-authorization-is-a-core-concern.md)                   | Authorization is a core concern, not a plugin               | Accepted | 2026-07-07 |
 
 ## Format
 

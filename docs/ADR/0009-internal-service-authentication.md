@@ -18,8 +18,7 @@ user's request, so they have no ID token to present.
 
 Today there is **no way for such a caller to authenticate to the Core API.** The
 SDK's `BiffoAPIClient` expects a `BIFFO_JWT_TOKEN` bearer token that nothing
-issues or wires (the `modules/plugins/_template` Terraform never sets it, and the
-`rbac` reference plugin ships no Terraform at all). Every protected
+issues or wires (the `modules/plugins/_template` Terraform never sets it). Every protected
 Core route sits behind API Gateway's Cognito **JWT** authorizer, which only
 accepts user pool ID tokens.
 

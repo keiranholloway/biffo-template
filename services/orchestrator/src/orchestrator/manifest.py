@@ -1,7 +1,6 @@
 """Path to this plugin's manifest file, shared by plugin.py and tests.
 
-Mirrors the RBAC reference plugin's ``services/rbac/src/rbac/manifest.py`` — a
-reliable absolute path to ``biffo.plugin.json`` regardless of the current
+A reliable absolute path to ``biffo.plugin.json`` regardless of the current
 working directory the process was started from.
 """
 

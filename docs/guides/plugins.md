@@ -13,7 +13,7 @@ For the design rationale, see [ADR-0003](../ADR/0003-plugin-system-and-marketpla
 
 A plugin repo (or just a directory) has a `biffo.plugin.json` at its root and, optionally, `src/` for its own non-CRUD code and `terraform/` for infra. The **manifest is the only part the Core API needs** — it's what gets bundled into the Lambda and turned into routes.
 
-The best real example to copy is **`services/rbac/biffo.plugin.json`** (4 tables, 13 routes, real permission blocks). A minimal starting point is **`_skeletons/plugin-template/biffo.plugin.json`**.
+The starting point to copy is **`_skeletons/plugin-template/biffo.plugin.json`**. For a live, deployed plugin to study (event runtime, its own Lambda + Terraform), see **`services/orchestrator`**.
 
 ### The manifest
 
@@ -53,11 +53,11 @@ The best real example to copy is **`services/rbac/biffo.plugin.json`** (4 tables
 
 ### Tables
 
-- **`name`** — snake_case (`notes`, `rbac_roles`).
+- **`name`** — snake_case (`notes`, `audit_logs`).
 - **`id`, `tenant_id`, `created_at`, `updated_at` are auto-injected** on every table (ADR-0001) — do **not** declare them; doing so is a hard error.
 - **Columns** use SQLAlchemy **type strings**, and only these base types resolve: `String`, `Integer`, `Text`, `Boolean`, `Float`, `DateTime` — e.g. `String(255)`, `DateTime(timezone=True)`. Anything else is rejected. Per column: `nullable` (**defaults to false / NOT NULL**), `index`, `primary_key`, `default` (a SQL default _string_), `description`.
 - **No foreign keys and no composite primary keys.** Reference another table with a plain `String(36)` column (enforced in your code, not the DB), and use a `unique` index over a column pair instead of a composite PK.
-- **Gotcha: a column `default` is applied by the model, not the generated migration DDL.** If you need a value guaranteed at the DB level, make the column `nullable: true` and set it explicitly in your code (this is what rbac does).
+- **Gotcha: a column `default` is applied by the model, not the generated migration DDL.** If you need a value guaranteed at the DB level, make the column `nullable: true` and set it explicitly in your code.
 
 ### Routes
 

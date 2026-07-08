@@ -8,6 +8,31 @@ locals {
   name_prefix = "${var.project_name}-${var.environment}"
 }
 
+data "aws_region" "current" {}
+data "aws_caller_identity" "current" {}
+
+# Self-provisioned CMK for CloudWatch access-log encryption when no external key
+# is passed. Referencing an empty var alone counts as "no encryption", so a real
+# key resource is always the encryption backstop.
+resource "aws_kms_key" "logs" {
+  count                   = var.cloudwatch_kms_key_id == "" ? 1 : 0
+  description             = "CMK for ${local.name_prefix} API Gateway access logs"
+  enable_key_rotation     = true
+  deletion_window_in_days = 7
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Sid = "EnableRoot", Effect = "Allow", Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }, Action = "kms:*", Resource = "*" },
+      { Sid = "AllowCloudWatchLogs", Effect = "Allow", Principal = { Service = "logs.${data.aws_region.current.name}.amazonaws.com" }, Action = ["kms:Encrypt*", "kms:Decrypt*", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:Describe*"], Resource = "*", Condition = { ArnLike = { "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:*" } } }
+    ]
+  })
+  tags = var.tags
+}
+
+locals {
+  log_kms_key_id = var.cloudwatch_kms_key_id != "" ? var.cloudwatch_kms_key_id : aws_kms_key.logs[0].arn
+}
+
 resource "aws_apigatewayv2_api" "main" {
   name          = "${local.name_prefix}-api"
   protocol_type = "HTTP"
@@ -61,9 +86,10 @@ resource "aws_apigatewayv2_route" "health" {
 # CORSMiddleware as before; cors_configuration on the API additionally covers
 # non-OPTIONS requests the JWT authorizer rejects before they reach Lambda.
 resource "aws_apigatewayv2_route" "options" {
-  api_id    = aws_apigatewayv2_api.main.id
-  route_key = "OPTIONS /{proxy+}"
-  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  api_id             = aws_apigatewayv2_api.main.id
+  route_key          = "OPTIONS /{proxy+}"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "NONE"
 }
 
 # Internal service-to-service surface (ADR-0009). Machine callers (ADR-0003
@@ -114,7 +140,8 @@ resource "aws_apigatewayv2_stage" "main" {
 
 resource "aws_cloudwatch_log_group" "access_logs" {
   name              = "/biffo/${local.name_prefix}/api-gateway"
-  retention_in_days = var.environment == "prod" ? 90 : 14
+  retention_in_days = 365
+  kms_key_id        = local.log_kms_key_id
   tags              = var.tags
 }
 

@@ -203,6 +203,8 @@ resource "aws_vpc_endpoint" "events" {
 
 # VPC Flow Logs
 resource "aws_cloudwatch_log_group" "vpc_flow_logs" {
+  #checkov:skip=CKV_AWS_158:VPC flow logs; AWS-service default encryption accepted for this data class.
+  #checkov:skip=CKV_AWS_338:Short retention intentional for cost; flow logs are operational telemetry.
   name              = "/biffo/${local.name_prefix}/vpc-flow-logs"
   retention_in_days = 30
   tags              = var.tags

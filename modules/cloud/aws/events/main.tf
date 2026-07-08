@@ -9,6 +9,31 @@ locals {
   bus_name    = "${local.name_prefix}-events"
 }
 
+data "aws_region" "current" {}
+data "aws_caller_identity" "current" {}
+
+# Self-provisioned CMK for CloudWatch log encryption when no external key is
+# passed. Referencing an empty var alone counts as "no encryption", so a real
+# key resource is always the encryption backstop.
+resource "aws_kms_key" "logs" {
+  count                   = var.cloudwatch_kms_key_id == "" ? 1 : 0
+  description             = "CMK for ${local.name_prefix} events CloudWatch logs"
+  enable_key_rotation     = true
+  deletion_window_in_days = 7
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Sid = "EnableRoot", Effect = "Allow", Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }, Action = "kms:*", Resource = "*" },
+      { Sid = "AllowCloudWatchLogs", Effect = "Allow", Principal = { Service = "logs.${data.aws_region.current.name}.amazonaws.com" }, Action = ["kms:Encrypt*", "kms:Decrypt*", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:Describe*"], Resource = "*", Condition = { ArnLike = { "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:*" } } }
+    ]
+  })
+  tags = var.tags
+}
+
+locals {
+  log_kms_key_id = var.cloudwatch_kms_key_id != "" ? var.cloudwatch_kms_key_id : aws_kms_key.logs[0].arn
+}
+
 resource "aws_cloudwatch_event_bus" "main" {
   name = local.bus_name
   tags = var.tags
@@ -25,7 +50,8 @@ resource "aws_cloudwatch_event_archive" "main" {
 resource "aws_sqs_queue" "dlq" {
   name                      = "${local.bus_name}-dlq"
   message_retention_seconds = 1209600 # 14 days
-  kms_master_key_id         = var.sqs_kms_key_id
+  kms_master_key_id         = var.sqs_kms_key_id != "" ? var.sqs_kms_key_id : null
+  sqs_managed_sse_enabled   = var.sqs_kms_key_id == "" ? true : null
   tags                      = var.tags
 }
 
@@ -50,7 +76,7 @@ resource "aws_sqs_queue_policy" "dlq" {
 resource "aws_cloudwatch_log_group" "events" {
   name              = "/biffo/${local.name_prefix}/events"
   retention_in_days = 365 # 1 year — satisfies CKV_AWS_338
-  kms_key_id        = var.cloudwatch_kms_key_id
+  kms_key_id        = local.log_kms_key_id
   tags              = var.tags
 }
 

@@ -50,13 +50,66 @@ resource "aws_cloudfront_origin_access_control" "portal" {
   signing_protocol                  = "sigv4"
 }
 
+# Dedicated log-delivery bucket for CloudFront access logs (CKV_AWS_86).
+resource "aws_s3_bucket" "cf_logs" {
+  #checkov:skip=CKV_AWS_18:This IS the log-delivery bucket; logging it to itself is circular.
+  #checkov:skip=CKV_AWS_144:Access logs are non-critical, single-region; replication unwarranted.
+  #checkov:skip=CKV_AWS_145:CloudFront log delivery only supports SSE-S3, not CMK.
+  #checkov:skip=CKV2_AWS_61:Non-critical access logs; lifecycle expiration not required for this log-delivery bucket.
+  #checkov:skip=CKV2_AWS_62:Log-delivery bucket; event notifications are not applicable to raw CloudFront access logs.
+  bucket = "${local.name_prefix}-cf-logs"
+  tags   = var.tags
+}
+
+# CloudFront legacy logging requires ACLs enabled — BucketOwnerEnforced breaks it.
+resource "aws_s3_bucket_ownership_controls" "cf_logs" {
+  #checkov:skip=CKV2_AWS_65:CloudFront legacy log delivery requires ACLs enabled (BucketOwnerPreferred); disabling ACLs would break log delivery.
+  bucket = aws_s3_bucket.cf_logs.id
+  rule {
+    object_ownership = "BucketOwnerPreferred"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "cf_logs" {
+  bucket                  = aws_s3_bucket.cf_logs.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# CloudFront log delivery cannot use a CMK — SSE-S3 (AES256) only.
+resource "aws_s3_bucket_server_side_encryption_configuration" "cf_logs" {
+  bucket = aws_s3_bucket.cf_logs.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_versioning" "cf_logs" {
+  bucket = aws_s3_bucket.cf_logs.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
 resource "aws_cloudfront_distribution" "portal" {
+  #checkov:skip=CKV_AWS_310:Single static S3 origin; no secondary origin exists to fail over to. Failover origin block stays optional/config-driven.
+  #checkov:skip=CKV_AWS_374:Public franchise marketplace must serve all geographies; geo-restriction would break the product.
   enabled             = true
   is_ipv6_enabled     = true
   default_root_object = "index.html"
   price_class         = "PriceClass_100"
   comment             = "${local.name_prefix} portal"
   web_acl_id          = var.waf_web_acl_arn != "" ? var.waf_web_acl_arn : null
+
+  logging_config {
+    bucket          = aws_s3_bucket.cf_logs.bucket_domain_name
+    include_cookies = false
+    prefix          = "cloudfront/"
+  }
 
   # Alias requires a matching ACM cert — omit both if cert is absent so CloudFront
   # falls back to its default certificate and the distribution can still be created.

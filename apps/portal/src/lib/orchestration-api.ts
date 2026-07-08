@@ -38,7 +38,7 @@ export interface CatalogTrigger {
 export interface CatalogActionField {
   name: string
   label: string
-  type: 'email' | 'text' | 'textarea'
+  type: 'email' | 'text' | 'textarea' | 'url' | 'tel'
   required: boolean
 }
 

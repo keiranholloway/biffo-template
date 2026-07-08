@@ -215,6 +215,68 @@ def test_catalog(client: TestClient):
     assert any(a["type"] == "email" for a in body["actions"])
 
 
+# ── chat actions: google_chat + whatsapp ─────────────────────────────────────
+
+
+def test_catalog_offers_chat_actions(client: TestClient):
+    body = client.get(f"{_BASE}/catalog").json()
+    types = {a["type"] for a in body["actions"]}
+    assert {"email", "google_chat", "whatsapp"} <= types
+
+
+def test_create_google_chat_workflow(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="google_chat",
+            action_config={
+                "webhook_url": "https://chat.googleapis.com/v1/spaces/A/messages?key=k",
+                "message": "New demo from {company}",
+            },
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["action_type"] == "google_chat"
+
+
+def test_google_chat_requires_webhook_url(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_valid_body(action_type="google_chat", action_config={"message": "hi"}),
+    )
+    assert resp.status_code == 422
+
+
+def test_google_chat_rejects_non_https_webhook(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="google_chat",
+            action_config={"webhook_url": "http://insecure/x", "message": "hi"},
+        ),
+    )
+    assert resp.status_code == 422
+
+
+def test_create_whatsapp_workflow(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="whatsapp",
+            action_config={"to": "+15551234567", "message": "Hi {company}"},
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+
+
+def test_whatsapp_requires_recipient(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_valid_body(action_type="whatsapp", action_config={"message": "hi"}),
+    )
+    assert resp.status_code == 422
+
+
 def _observe(session_factory, source: str, detail_type: str) -> None:
     async def _run() -> None:
         async with session_factory() as session:

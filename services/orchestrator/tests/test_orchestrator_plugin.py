@@ -7,8 +7,9 @@ from typing import Any
 
 from biffo_plugin_sdk import BiffoEvent
 
+from orchestrator.actions import WhatsAppSettings
 from orchestrator.plugin import OrchestratorPlugin
-from orchestrator_fakes import FakeCore, FakeSes
+from orchestrator_fakes import FakeCore, FakeHttp, FakeSes
 
 
 def _event(payload: dict[str, Any] | None = None) -> BiffoEvent:
@@ -53,6 +54,56 @@ async def test_process_event_executes_created_run():
     assert results[0]["response"] == {"message_id": "ses-message-1"}
     # The event was posted with the explicit idempotency key from the payload.
     assert core.event_posts()[0]["idempotency_key"] == "d1"
+
+
+async def test_process_event_dispatches_google_chat_via_http():
+    run = {
+        "run_id": "run-gc",
+        "definition_id": "def-gc",
+        "action_type": "google_chat",
+        "action_config": {
+            "webhook_url": "https://chat.googleapis.com/v1/spaces/A/messages?key=k",
+            "message": "Demo from {company}",
+        },
+        "created": True,
+    }
+    core = FakeCore([run])
+    http = FakeHttp(status_code=200)
+    plugin = OrchestratorPlugin(
+        api=core.client(), ses_client=FakeSes(), http_client=http
+    )
+
+    await plugin.process_event(_event())
+
+    assert len(http.calls) == 1
+    assert http.calls[0]["json"] == {"text": "Demo from Acme"}
+    results = core.result_posts()
+    assert results[0]["status"] == "succeeded"
+    assert results[0]["response"] == {"status_code": 200}
+
+
+async def test_process_event_dispatches_whatsapp():
+    run = {
+        "run_id": "run-wa",
+        "definition_id": "def-wa",
+        "action_type": "whatsapp",
+        "action_config": {"to": "+15551234567", "message": "Hi {company}"},
+        "created": True,
+    }
+    core = FakeCore([run])
+    http = FakeHttp(status_code=200, json_data={"messages": [{"id": "wamid.X"}]})
+    plugin = OrchestratorPlugin(
+        api=core.client(),
+        ses_client=FakeSes(),
+        http_client=http,
+        whatsapp=WhatsAppSettings(access_token="tok", phone_number_id="pn"),
+    )
+
+    await plugin.process_event(_event())
+
+    assert http.calls[0]["url"].endswith("/pn/messages")
+    assert http.calls[0]["json"]["text"] == {"body": "Hi Acme"}
+    assert core.result_posts()[0]["response"] == {"message_id": "wamid.X"}
 
 
 async def test_process_event_skips_already_claimed_run():

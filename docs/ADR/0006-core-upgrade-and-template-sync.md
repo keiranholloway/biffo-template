@@ -105,6 +105,15 @@ overrides, secrets/config). Only template-owned paths are ever touched by a
 sync. This boundary is the crux of the whole mechanism — it is what lets an
 upgrade avoid clobbering the user's own work.
 
+**`docs/ADR/` is deliberately user-owned.** The template's ADRs are seeded once
+at `biffo init` as a starting point, but an instance's decision record is its
+own: instances legitimately diverge from the Biffo standard over time, and
+force-syncing ADRs on every upgrade collides an instance's own ADR numbers with
+the template's and rewrites its narrative. New template ADRs are surfaced in
+release notes rather than pushed into instances. What matters is that decisions
+stay documented and unambiguous per repo — not that the numbering is uniform
+across every instance.
+
 ### 3. Three-way merge → branch → PR
 
 `biffo core upgrade [--to <version>] [--repo <path>]`:

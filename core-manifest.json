@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "ADR-0006 template-owned path boundary. Ownership is resolved by longest matching prefix; a prefix ending in '/' matches a directory subtree, otherwise it matches an exact file. On a tie, user-owned wins (fail-closed: an upgrade never touches a path it isn't sure the template owns). Conservatively excludes apps/ (portal carries user/plugin pages) and infra/environments/ (per-instance config and secrets) for now; that boundary can widen later. services/api/migrations/versions/ is user-owned even though services/api/ is template-owned: Alembic migration files are an append-only, per-instance chain (each instance accumulates its own, chained by down_revision), so syncing them from the template breaks the instance's revision graph. The migration framework itself (migrations/env.py, script.py.mako) stays template-owned.",
+  "note": "ADR-0006 template-owned path boundary. Ownership is resolved by longest matching prefix; a prefix ending in '/' matches a directory subtree, otherwise it matches an exact file. On a tie, user-owned wins (fail-closed: an upgrade never touches a path it isn't sure the template owns). Conservatively excludes apps/ (portal carries user/plugin pages) and infra/environments/ (per-instance config and secrets) for now; that boundary can widen later. services/api/migrations/versions/ is user-owned even though services/api/ is template-owned: Alembic migration files are an append-only, per-instance chain (each instance accumulates its own, chained by down_revision), so syncing them from the template breaks the instance's revision graph. The migration framework itself (migrations/env.py, script.py.mako) stays template-owned. docs/ADR/ is user-owned: the template's ADRs are seeded once at `biffo init` as a starting point, but an instance's ADRs are its own decision record and legitimately diverge from the Biffo standard over time — force-syncing them on every core upgrade collides an instance's own ADR numbers with the template's and rewrites its history. Excluded from the sync flow for that reason; new template ADRs are announced in release notes rather than pushed into instances.",
   "templateOwned": [
     "services/api/",
     "services/_template/",
@@ -9,7 +9,6 @@
     "cli/",
     ".github/",
     "scripts/",
-    "docs/ADR/",
     "core.version",
     "core-manifest.json",
     "package.json",
@@ -27,6 +26,7 @@
     "infra/",
     "apps/",
     "db/",
+    "docs/ADR/",
     "README.md",
     "biffo.config.json",
     "biffo.core.json",

@@ -455,6 +455,26 @@ export class GitHubAdapter {
   }
 
   /**
+   * Read a repository Actions variable's value, or `undefined` if it isn't set.
+   * A 404 means the variable doesn't exist on the repo (not an error) — used to
+   * probe a source repo for an optional variable before mirroring it elsewhere.
+   */
+  async getRepoVariable(org: string, repo: string, name: string): Promise<string | undefined> {
+    try {
+      const { data } = await this.octokit.request(
+        'GET /repos/{owner}/{repo}/actions/variables/{variable_name}',
+        { owner: org, repo, variable_name: name },
+      )
+      return data.value
+    } catch (err: unknown) {
+      if ((err as { status?: number }).status === 404) {
+        return undefined
+      }
+      throw err
+    }
+  }
+
+  /**
    * Enable GitHub Dependabot alerts (native vulnerability alerts) on a repo.
    * Best-effort: some plans/repos don't support it, so a failure logs a warning
    * rather than aborting provisioning — the repo is already usable without it.

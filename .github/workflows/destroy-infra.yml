@@ -31,7 +31,7 @@ jobs:
       run:
         working-directory: infra/environments/dev
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
@@ -118,7 +118,7 @@ jobs:
       run:
         working-directory: infra/environments/staging
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
@@ -204,7 +204,7 @@ jobs:
       run:
         working-directory: infra/environments/prod
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}

@@ -54,13 +54,13 @@ jobs:
     environment: dev
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/dev') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev'))
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - run: pnpm install --frozen-lockfile
@@ -84,11 +84,11 @@ jobs:
           NEXT_PUBLIC_COGNITO_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
           NEXT_PUBLIC_API_URL: ${{ vars.API_GATEWAY_URL }}
         run: pnpm run build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: portal-build-dev
           path: apps/portal/out/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: api-service-dev
           path: services/api/
@@ -100,12 +100,12 @@ jobs:
     environment: dev
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/dev'
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: portal-build-dev
           path: portal-dist/
@@ -124,11 +124,11 @@ jobs:
           aws cloudfront create-invalidation \
             --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
             --paths "/*"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: api-service-dev
           path: api-service/
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.13'
       - name: Package and deploy Lambda
@@ -276,13 +276,13 @@ jobs:
     environment: staging
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/staging') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging'))
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - run: pnpm install --frozen-lockfile
@@ -306,11 +306,11 @@ jobs:
           NEXT_PUBLIC_COGNITO_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
           NEXT_PUBLIC_API_URL: ${{ vars.API_GATEWAY_URL }}
         run: pnpm run build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: portal-build-staging
           path: apps/portal/out/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: api-service-staging
           path: services/api/
@@ -322,12 +322,12 @@ jobs:
     environment: staging
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/staging'
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: portal-build-staging
           path: portal-dist/
@@ -346,11 +346,11 @@ jobs:
           aws cloudfront create-invalidation \
             --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
             --paths "/*"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: api-service-staging
           path: api-service/
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.13'
       - name: Package and deploy Lambda
@@ -506,13 +506,13 @@ jobs:
     # a prior version of this condition contradicted that comment.
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - run: pnpm install --frozen-lockfile
@@ -536,11 +536,11 @@ jobs:
           NEXT_PUBLIC_COGNITO_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
           NEXT_PUBLIC_API_URL: ${{ vars.API_GATEWAY_URL }}
         run: pnpm run build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: portal-build-prod
           path: apps/portal/out/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: api-service-prod
           path: services/api/
@@ -556,12 +556,12 @@ jobs:
     # means this condition is never misleading on its own.)
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: portal-build-prod
           path: portal-dist/
@@ -580,11 +580,11 @@ jobs:
           aws cloudfront create-invalidation \
             --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
             --paths "/*"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: api-service-prod
           path: api-service/
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.13'
       - name: Package and deploy Lambda

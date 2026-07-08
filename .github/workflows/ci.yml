@@ -28,11 +28,11 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -46,9 +46,9 @@ jobs:
     name: JS (lint, types, test, audit)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -73,8 +73,8 @@ jobs:
     name: Python (lint, types, test, security)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - run: uv sync --all-groups
@@ -101,7 +101,7 @@ jobs:
         run: uv run bandit -r services/ -ll -x services/_template/ --format json -o bandit-report.json
       - name: Upload Bandit report
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: bandit-report
           path: bandit-report.json
@@ -116,7 +116,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 0
       # gitleaks/gitleaks-action@v2 requires a paid GITLEAKS_LICENSE for
@@ -147,7 +147,7 @@ jobs:
     name: Terraform Validate & Security
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: '~> 1.9'

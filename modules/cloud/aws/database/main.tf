@@ -91,12 +91,16 @@ resource "aws_db_parameter_group" "main" {
 # Pre-created so Terraform owns these instead of RDS auto-creating untracked,
 # never-expiring log groups the destroy workflow doesn't know to clean up.
 resource "aws_cloudwatch_log_group" "postgresql" {
+  #checkov:skip=CKV_AWS_158:RDS-managed engine logs; AWS-service default encryption accepted for this data class.
+  #checkov:skip=CKV_AWS_338:Short retention is intentional for cost; RDS logs are operational, not audit records.
   name              = "/aws/rds/instance/${local.name_prefix}-postgres/postgresql"
   retention_in_days = var.environment == "prod" ? 90 : 14
   tags              = var.tags
 }
 
 resource "aws_cloudwatch_log_group" "upgrade" {
+  #checkov:skip=CKV_AWS_158:RDS-managed engine logs; AWS-service default encryption accepted for this data class.
+  #checkov:skip=CKV_AWS_338:Short retention is intentional for cost; RDS logs are operational, not audit records.
   name              = "/aws/rds/instance/${local.name_prefix}-postgres/upgrade"
   retention_in_days = var.environment == "prod" ? 90 : 14
   tags              = var.tags

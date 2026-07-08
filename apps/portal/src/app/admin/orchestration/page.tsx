@@ -22,6 +22,14 @@ function errorMessage(err: unknown): string {
 
 const inputClass = 'mt-1 rounded border px-2 py-1 text-sm'
 
+// Config-field type -> HTML <input type>. Anything else falls back to text.
+function inputType(fieldType: string): string {
+  if (fieldType === 'email') return 'email'
+  if (fieldType === 'url') return 'url'
+  if (fieldType === 'tel') return 'tel'
+  return 'text'
+}
+
 export default function OrchestrationPage() {
   const { getIdToken } = useAuth()
   const client = useMemo(() => createApiClient(getIdToken), [getIdToken])
@@ -237,7 +245,7 @@ export default function OrchestrationPage() {
                     />
                   ) : (
                     <input
-                      type={field.type === 'email' ? 'email' : 'text'}
+                      type={inputType(field.type)}
                       value={config[field.name] ?? ''}
                       required={field.required}
                       onChange={(e) => {

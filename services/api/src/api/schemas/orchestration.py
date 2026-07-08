@@ -82,11 +82,53 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
             {"name": "body", "label": "Body", "type": "textarea", "required": True},
         ],
     },
+    {
+        "type": "google_chat",
+        "label": "Google Chat message",
+        "config_fields": [
+            # A Google Chat space's incoming-webhook URL; it embeds its own token.
+            {
+                "name": "webhook_url",
+                "label": "Webhook URL",
+                "type": "url",
+                "required": True,
+            },
+            {
+                "name": "message",
+                "label": "Message",
+                "type": "textarea",
+                "required": True,
+            },
+        ],
+    },
+    {
+        "type": "whatsapp",
+        "label": "WhatsApp message",
+        "config_fields": [
+            # Account credentials live on the orchestrator, not here — only the
+            # recipient and message are per-workflow.
+            {
+                "name": "to",
+                "label": "To (phone, international format)",
+                "type": "tel",
+                "required": True,
+            },
+            {
+                "name": "message",
+                "label": "Message",
+                "type": "textarea",
+                "required": True,
+            },
+        ],
+    },
 ]
 
 # Deliberately permissive — enough to reject obvious typos in the form, not a
 # full RFC 5322 validator (avoids a new email-validator dependency).
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# A config field of type "url" must be an https URL (webhook endpoints always are;
+# this also blocks http/SSRF-ish typos). Not a full URL validator.
+_URL_RE = re.compile(r"^https://[^\s]+$")
 
 
 class WorkflowCatalog(BaseModel):
@@ -151,6 +193,13 @@ class WorkflowDefinitionBody(BaseModel):
                 raise ValueError(
                     f"action_config.{field['name']} must be a valid email address"
                 )
+            if (
+                field["type"] == "url"
+                and isinstance(value, str)
+                and value
+                and not _URL_RE.match(value)
+            ):
+                raise ValueError(f"action_config.{field['name']} must be an https URL")
         return self
 
 

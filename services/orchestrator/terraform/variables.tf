@@ -77,6 +77,19 @@ variable "environment_variables" {
   default     = {}
 }
 
+variable "whatsapp_access_token" {
+  description = "Meta WhatsApp Cloud API access token for the `whatsapp` workflow action. Empty (default) disables WhatsApp. Prefer sourcing from a secrets store rather than committing it."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "whatsapp_phone_number_id" {
+  description = "Meta WhatsApp Cloud API phone-number id (the sending number) for the `whatsapp` workflow action."
+  type        = string
+  default     = ""
+}
+
 variable "sqs_kms_key_id" {
   type    = string
   default = ""

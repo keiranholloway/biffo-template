@@ -13,13 +13,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from typing import Any
 
 import boto3
+import httpx
 from aws_lambda_powertools import Logger
 from biffo_plugin_sdk import BiffoAPIClient, BiffoEvent, BiffoPluginBase, load_manifest
 
-from .actions import ACTION_HANDLERS
+from .actions import ACTION_HANDLERS, WhatsAppSettings
 from .manifest import MANIFEST_PATH
 from .signed_client import SignedCoreClient
 
@@ -56,10 +58,24 @@ class OrchestratorPlugin(BiffoPluginBase):
         self,
         api: BiffoAPIClient | None = None,
         ses_client: Any | None = None,
+        http_client: Any | None = None,
+        whatsapp: WhatsAppSettings | None = None,
     ) -> None:
         manifest = load_manifest(MANIFEST_PATH)
         super().__init__(manifest, api=api if api is not None else SignedCoreClient())
         self._ses = ses_client if ses_client is not None else boto3.client("ses")
+        # Plain (unsigned) HTTP client for webhook actions — distinct from the
+        # IAM-signed Core client. Reused across warm invocations to pool connections.
+        self._http = (
+            http_client if http_client is not None else httpx.Client(timeout=10)
+        )
+        # Account-level WhatsApp credentials come from the orchestrator's env, never
+        # from a workflow's action_config (which is stored in the DB).
+        self._whatsapp = whatsapp or WhatsAppSettings(
+            access_token=os.environ.get("WHATSAPP_ACCESS_TOKEN", ""),
+            phone_number_id=os.environ.get("WHATSAPP_PHONE_NUMBER_ID", ""),
+            api_version=os.environ.get("WHATSAPP_API_VERSION", "v22.0"),
+        )
 
         # Generic forwarder: react to *every* event and let Core decide what to
         # do (match it against enabled workflow definitions). Adding a new trigger
@@ -116,7 +132,13 @@ class OrchestratorPlugin(BiffoPluginBase):
             return
 
         try:
-            result = handler(config, event.payload, ses_client=self._ses)
+            result = handler(
+                config,
+                event.payload,
+                ses_client=self._ses,
+                http_client=self._http,
+                whatsapp=self._whatsapp,
+            )
         except Exception as exc:  # noqa: BLE001 — any dispatch failure is recorded, not raised
             logger.exception("Action dispatch failed", extra={"run_id": run_id})
             await self._record(

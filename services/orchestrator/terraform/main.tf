@@ -47,6 +47,10 @@ module "function" {
     {
       BIFFO_CORE_API_URL = var.core_api_url
       BIFFO_PLUGIN_NAME  = var.plugin_name
+      # WhatsApp workflow action (empty = disabled). Account-level creds live
+      # here, not in a workflow's action_config (which is stored in the DB).
+      WHATSAPP_ACCESS_TOKEN    = var.whatsapp_access_token
+      WHATSAPP_PHONE_NUMBER_ID = var.whatsapp_phone_number_id
     },
     var.environment_variables,
   )

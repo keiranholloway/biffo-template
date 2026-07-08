@@ -1,8 +1,17 @@
 # Orchestrator plugin
 
 Event-driven orchestration engine (ADR-0003 plugin). It subscribes to platform
-EventBridge events and dispatches actions (email today; SMS/voice/agentic later)
-based on **workflow definitions stored in the Core API**.
+EventBridge events and dispatches actions (email, Google Chat, WhatsApp today;
+more channels later) based on **workflow definitions stored in the Core API**.
+
+Actions are registered in `src/orchestrator/actions.py` (`ACTION_HANDLERS`) and
+must have a matching entry in the Core builder catalog
+(`services/api/.../schemas/orchestration.WORKFLOW_ACTIONS`) so they can be
+configured in the portal. WhatsApp needs account credentials on the Lambda:
+set `WHATSAPP_ACCESS_TOKEN` + `WHATSAPP_PHONE_NUMBER_ID` (Terraform vars
+`whatsapp_access_token` / `whatsapp_phone_number_id`); empty disables it. Text
+messages only deliver inside an open 24-hour session — proactive template
+messages are a follow-up.
 
 ## How it fits together
 

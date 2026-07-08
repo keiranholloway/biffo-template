@@ -73,3 +73,37 @@ class FakeSes:
     def send_email(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
         return {"MessageId": self.message_id}
+
+
+class FakeHttpResponse:
+    def __init__(
+        self, status_code: int = 200, json_data: Any = None, text: str = ""
+    ) -> None:
+        self.status_code = status_code
+        self._json = {} if json_data is None else json_data
+        self.text = text
+
+    def json(self) -> Any:
+        return self._json
+
+
+class FakeHttp:
+    """Records POST calls; returns a canned response (the webhook actions)."""
+
+    def __init__(
+        self, status_code: int = 200, json_data: Any = None, text: str = ""
+    ) -> None:
+        self._status = status_code
+        self._json = json_data
+        self._text = text
+        self.calls: list[dict[str, Any]] = []
+
+    def post(
+        self,
+        url: str,
+        *,
+        json: Any = None,
+        headers: dict[str, str] | None = None,
+    ) -> FakeHttpResponse:
+        self.calls.append({"url": url, "json": json, "headers": headers})
+        return FakeHttpResponse(self._status, self._json, self._text)

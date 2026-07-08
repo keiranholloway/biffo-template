@@ -1,12 +1,16 @@
 import json
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import cast
 
 import httpx
+import jwt
 from aws_lambda_powertools import Logger
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from fastapi import HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
+from jwt import PyJWTError
+from jwt.algorithms import RSAAlgorithm
 
 from ..config import settings
 
@@ -43,8 +47,8 @@ def _get_jwks(user_pool_id: str, region: str) -> dict:
 
 def _verify_token(token: str) -> dict:
     try:
-        unverified_headers = jwt.get_unverified_headers(token)
-    except JWTError as exc:
+        unverified_headers = jwt.get_unverified_header(token)
+    except PyJWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Malformed token",
@@ -70,13 +74,16 @@ def _verify_token(token: str) -> dict:
         )
 
     try:
+        # PyJWT needs a key object, not a raw JWK dict — convert the matched JWK.
+        # A Cognito JWKS only publishes public keys, so this is always public.
+        public_key = cast(RSAPublicKey, RSAAlgorithm.from_jwk(json.dumps(signing_key)))
         claims: dict = jwt.decode(
             token,
-            signing_key,
+            public_key,
             algorithms=["RS256"],
             audience=settings.cognito_client_id,
         )
-    except JWTError as exc:
+    except PyJWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Token invalid: {exc}",

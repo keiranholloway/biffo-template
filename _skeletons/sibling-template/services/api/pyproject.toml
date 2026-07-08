@@ -9,7 +9,7 @@ dependencies = [
   "pydantic>=2.10.4",
   "pydantic-settings>=2.7.1",
   "aws-lambda-powertools[tracer]>=3.4.0",
-  "python-jose[cryptography]>=3.3.0",
+  "pyjwt[crypto]>=2.10.0",
   "httpx>=0.28.1",
 ]
 

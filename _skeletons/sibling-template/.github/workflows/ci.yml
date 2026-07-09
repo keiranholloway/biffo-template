@@ -27,7 +27,7 @@ env:
 jobs:
   js:
     name: JS (lint, types, test, audit)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: apps/frontend
@@ -59,7 +59,7 @@ jobs:
 
   python:
     name: Python (lint, types, test, security)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: services/api
@@ -101,7 +101,7 @@ jobs:
 
   security-secrets:
     name: Secret Scan
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     permissions:
       contents: read
       pull-requests: read
@@ -131,7 +131,7 @@ jobs:
 
   infra-validate:
     name: Terraform Validate & Security
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: hashicorp/setup-terraform@v4

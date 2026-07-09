@@ -61,6 +61,7 @@ function makeGithubMock() {
     createEnvironments: vi.fn().mockResolvedValue(undefined),
     enableVulnerabilityAlerts: vi.fn().mockResolvedValue(undefined),
     setRepoVariable: vi.fn().mockResolvedValue(undefined),
+    getRepoVariable: vi.fn().mockResolvedValue(undefined),
     setEnvVariable: vi.fn().mockResolvedValue(undefined),
     setRepoSecret: vi.fn().mockResolvedValue(undefined),
     createPullRequest: vi
@@ -465,5 +466,61 @@ describe('runSiblingCreate', () => {
         },
       ),
     ).rejects.toThrow(/cognito_user_pool_id not found/)
+  })
+
+  it("mirrors the core project's RUNNER_LABEL onto the sibling when set", async () => {
+    // The skeleton workflows run on `${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}`.
+    // When the core project routes CI to a self-hosted fleet, the sibling must
+    // inherit that label or every job dies at the hosted-Actions billing wall.
+    const github = makeGithubMock()
+    github.getRepoVariable.mockResolvedValue('tabsii')
+    const aws = makeAwsMock()
+    const coreAws = makeAwsMock()
+    coreAws.readTerraformOutputs.mockResolvedValue(CORE_OUTPUTS)
+    const git = makeGitMock()
+    const session = makeSession()
+
+    await runSiblingCreate(
+      github as never,
+      aws as never,
+      coreAws as never,
+      git,
+      SIBLING_CONFIG,
+      session,
+      { coreConfig: CORE_CONFIG, skeletonRoot, githubToken: 'gh-token' },
+    )
+
+    // Reads it from the CORE repo, not the sibling.
+    expect(github.getRepoVariable).toHaveBeenCalledWith('acme', 'core-app', 'RUNNER_LABEL')
+    // Sets the same value on the sibling repo.
+    expect(github.setRepoVariable).toHaveBeenCalledWith('acme', 'reports', 'RUNNER_LABEL', 'tabsii')
+  })
+
+  it('leaves RUNNER_LABEL unset on the sibling when the core project has none', async () => {
+    const github = makeGithubMock()
+    github.getRepoVariable.mockResolvedValue(undefined)
+    const aws = makeAwsMock()
+    const coreAws = makeAwsMock()
+    coreAws.readTerraformOutputs.mockResolvedValue(CORE_OUTPUTS)
+    const git = makeGitMock()
+    const session = makeSession()
+
+    await runSiblingCreate(
+      github as never,
+      aws as never,
+      coreAws as never,
+      git,
+      SIBLING_CONFIG,
+      session,
+      { coreConfig: CORE_CONFIG, skeletonRoot, githubToken: 'gh-token' },
+    )
+
+    expect(github.getRepoVariable).toHaveBeenCalledWith('acme', 'core-app', 'RUNNER_LABEL')
+    expect(github.setRepoVariable).not.toHaveBeenCalledWith(
+      'acme',
+      'reports',
+      'RUNNER_LABEL',
+      expect.anything(),
+    )
   })
 })

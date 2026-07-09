@@ -39,7 +39,7 @@ env:
 jobs:
   resolve-environment:
     name: Resolve target environment
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     outputs:
       environment: ${{ steps.resolve.outputs.environment }}
     steps:
@@ -56,7 +56,7 @@ jobs:
   deploy-infra:
     name: Deploy infra
     needs: resolve-environment
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: ${{ needs.resolve-environment.outputs.environment }}
     if: vars.SIBLING_DEPLOY_ENABLED == 'true'
     defaults:
@@ -114,7 +114,7 @@ jobs:
   deploy-app:
     name: Deploy app
     needs: [resolve-environment, deploy-infra]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: ${{ needs.resolve-environment.outputs.environment }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5

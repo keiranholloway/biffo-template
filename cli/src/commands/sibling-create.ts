@@ -244,7 +244,7 @@ export async function runSiblingCreate(
   // Step 6: Configure GitHub (branches, branch protection, environments, secrets, variables)
   if (!session.completedSteps.includes('github_config')) {
     log.step(6, totalSteps, 'Configuring GitHub repository...')
-    await configureSiblingGithub(github, config, session, coreIdentity)
+    await configureSiblingGithub(github, config, options.coreConfig, session, coreIdentity)
     markSiblingStepComplete(session, 'github_config')
   } else {
     log.step(6, totalSteps, 'GitHub already configured — skipping')
@@ -450,6 +450,7 @@ export function writeSiblingTemplate(
 async function configureSiblingGithub(
   github: GitHubAdapter,
   config: SiblingConfig,
+  coreConfig: BiffoConfig,
   session: SiblingSession,
   coreIdentity: Record<string, CoreIdentity>,
 ): Promise<void> {
@@ -486,6 +487,31 @@ async function configureSiblingGithub(
   )
   await github.setRepoVariable(org, repo, 'AWS_REGION', awsConfig(config).region)
   await github.setRepoVariable(org, repo, 'SIBLING_DEPLOY_ENABLED', 'true')
+
+  // Mirror the core project's RUNNER_LABEL (if any) onto the sibling. The
+  // skeleton workflows run on `${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}`, so
+  // when the core project routes CI to a self-hosted runner fleet (e.g. because
+  // its GitHub plan's hosted-Actions minutes are exhausted), the sibling must do
+  // the same or every one of its jobs fails at the billing wall. This value is
+  // org/project-specific, so it's read from the core repo at create-time rather
+  // than hardcoded. Absent/empty on the core repo → leave it unset so the
+  // sibling keeps the generic `ubuntu-latest` default. Best-effort: a failure to
+  // read the core variable must not abort provisioning.
+  try {
+    const { org: coreOrg, repo: coreRepo } = (
+      coreConfig.source_control as { provider: 'github'; config: { org: string; repo: string } }
+    ).config
+    const runnerLabel = await github.getRepoVariable(coreOrg, coreRepo, 'RUNNER_LABEL')
+    if (runnerLabel && runnerLabel.trim()) {
+      await github.setRepoVariable(org, repo, 'RUNNER_LABEL', runnerLabel)
+    }
+  } catch (err: unknown) {
+    log.warn(
+      `Could not propagate RUNNER_LABEL from the core project to ${org}/${repo}: ` +
+        `${(err as Error).message}. The sibling will default to ubuntu-latest runners.`,
+    )
+  }
+
   if (session.outputs.tfStateBucket) {
     await github.setRepoVariable(org, repo, 'TF_STATE_BUCKET', session.outputs.tfStateBucket)
   }

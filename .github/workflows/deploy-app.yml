@@ -136,6 +136,21 @@ jobs:
         run: |
           uv export --no-dev --output-file requirements.txt
           uv pip install -r requirements.txt --target package/
+          # Trim the package before zipping so the code update fits AWS's direct
+          # update-function-code limit. That API base64-encodes the zip into the
+          # request body (~1.33x), so a ~54MB zip inflates past the ~70MB request
+          # cap — large native deps (numpy/shapely/pandas/pydantic-core/etc.) reach
+          # that easily. boto3/botocore/s3transfer are already provided by the
+          # Lambda Python runtime, so drop them plus build-time dead weight
+          # (dist-info, __pycache__, bundled tests/); the app's `import boto3`
+          # resolves to the runtime's own copy.
+          (
+            cd package
+            rm -rf boto3 botocore s3transfer \
+                   boto3-*.dist-info botocore-*.dist-info s3transfer-*.dist-info
+            find . -type d -name __pycache__ -prune -exec rm -rf {} +
+            find . -type d -name tests -prune -exec rm -rf {} +
+          )
           cp -r src/ package/
           cp -r migrations/ package/
           cp alembic.ini package/
@@ -358,6 +373,21 @@ jobs:
         run: |
           uv export --no-dev --output-file requirements.txt
           uv pip install -r requirements.txt --target package/
+          # Trim the package before zipping so the code update fits AWS's direct
+          # update-function-code limit. That API base64-encodes the zip into the
+          # request body (~1.33x), so a ~54MB zip inflates past the ~70MB request
+          # cap — large native deps (numpy/shapely/pandas/pydantic-core/etc.) reach
+          # that easily. boto3/botocore/s3transfer are already provided by the
+          # Lambda Python runtime, so drop them plus build-time dead weight
+          # (dist-info, __pycache__, bundled tests/); the app's `import boto3`
+          # resolves to the runtime's own copy.
+          (
+            cd package
+            rm -rf boto3 botocore s3transfer \
+                   boto3-*.dist-info botocore-*.dist-info s3transfer-*.dist-info
+            find . -type d -name __pycache__ -prune -exec rm -rf {} +
+            find . -type d -name tests -prune -exec rm -rf {} +
+          )
           cp -r src/ package/
           cp -r migrations/ package/
           cp alembic.ini package/
@@ -592,6 +622,21 @@ jobs:
         run: |
           uv export --no-dev --output-file requirements.txt
           uv pip install -r requirements.txt --target package/
+          # Trim the package before zipping so the code update fits AWS's direct
+          # update-function-code limit. That API base64-encodes the zip into the
+          # request body (~1.33x), so a ~54MB zip inflates past the ~70MB request
+          # cap — large native deps (numpy/shapely/pandas/pydantic-core/etc.) reach
+          # that easily. boto3/botocore/s3transfer are already provided by the
+          # Lambda Python runtime, so drop them plus build-time dead weight
+          # (dist-info, __pycache__, bundled tests/); the app's `import boto3`
+          # resolves to the runtime's own copy.
+          (
+            cd package
+            rm -rf boto3 botocore s3transfer \
+                   boto3-*.dist-info botocore-*.dist-info s3transfer-*.dist-info
+            find . -type d -name __pycache__ -prune -exec rm -rf {} +
+            find . -type d -name tests -prune -exec rm -rf {} +
+          )
           cp -r src/ package/
           cp -r migrations/ package/
           cp alembic.ini package/

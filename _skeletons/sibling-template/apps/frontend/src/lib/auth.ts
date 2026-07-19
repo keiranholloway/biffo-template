@@ -28,14 +28,32 @@ import {
 // deliberately — and decide first whether it must sign the user out of the
 // portal too.
 // ---------------------------------------------------------------------------
-const poolData: ICognitoUserPoolData = {
-  UserPoolId: process.env['NEXT_PUBLIC_CORE_COGNITO_USER_POOL_ID'] ?? '',
-  ClientId: process.env['NEXT_PUBLIC_CORE_COGNITO_CLIENT_ID'] ?? '',
-}
-
 // Module-private on purpose: the pool is an implementation detail of
 // getCurrentSession(), not part of this sibling's auth surface.
-const userPool = new CognitoUserPool(poolData)
+//
+// Constructed LAZILY, on first session read — never at module scope. The
+// CognitoUserPool constructor throws ("Both UserPoolId and ClientId are
+// required") when either value is missing, and `next build` prerenders `/` in
+// Node, which imports this module. Constructing eagerly therefore made the
+// whole app un-buildable without the real Cognito env vars in scope — a build
+// is not a sign-in, and it has no business needing pool credentials. Deferring
+// keeps `pnpm run build` (and any import of this module) working with no env
+// configured, while an actual session read in a misconfigured deployment
+// surfaces as "signed out" rather than a hard crash.
+let userPool: CognitoUserPool | null = null
+
+function getUserPool(): CognitoUserPool | null {
+  if (userPool) return userPool
+
+  const poolData: ICognitoUserPoolData = {
+    UserPoolId: process.env['NEXT_PUBLIC_CORE_COGNITO_USER_POOL_ID'] ?? '',
+    ClientId: process.env['NEXT_PUBLIC_CORE_COGNITO_CLIENT_ID'] ?? '',
+  }
+  if (!poolData.UserPoolId || !poolData.ClientId) return null
+
+  userPool = new CognitoUserPool(poolData)
+  return userPool
+}
 
 /**
  * Read the shared portal session, or null if there isn't a valid one.
@@ -46,7 +64,14 @@ const userPool = new CognitoUserPool(poolData)
  */
 export function getCurrentSession(): Promise<CognitoUserSession | null> {
   return new Promise((resolve) => {
-    const user = userPool.getCurrentUser()
+    // No pool means no core Cognito config, which is indistinguishable from
+    // "not signed in" as far as callers are concerned.
+    const pool = getUserPool()
+    if (!pool) {
+      resolve(null)
+      return
+    }
+    const user = pool.getCurrentUser()
     if (!user) {
       resolve(null)
       return

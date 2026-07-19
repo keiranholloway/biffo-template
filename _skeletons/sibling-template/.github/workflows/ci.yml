@@ -26,6 +26,11 @@ env:
 
 jobs:
   js:
+    # This job also runs a Build step. The name is deliberately NOT extended to
+    # say so: it is a required status check context, matched by string against
+    # DEFAULT_STATUS_CHECKS and against the branch protection already written
+    # onto every sibling repo created so far. Renaming it would leave those
+    # repos waiting forever on a context nothing reports.
     name: JS (lint, types, test, audit)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     defaults:
@@ -53,6 +58,18 @@ jobs:
       - name: Test
         if: ${{ !cancelled() }}
         run: pnpm run test
+      # Deliberately run with NO NEXT_PUBLIC_CORE_COGNITO_* in scope (issue
+      # #286). `next build` prerenders `/`, which imports src/lib/auth.ts; when
+      # that module built its Cognito pool eagerly the build blew up on any
+      # machine without the real pool ids exported, and nothing in CI caught it
+      # — the first person to find out was whoever had just scaffolded the
+      # sibling, debugging template code they did not write. A sibling's build
+      # must not need auth credentials, so this step is the assertion of that.
+      # Provide the real values in deploy.yml, where they are inlined into the
+      # artifact that actually ships.
+      - name: Build
+        if: ${{ !cancelled() }}
+        run: pnpm run build
       - name: Dependency audit
         if: ${{ !cancelled() }}
         run: pnpm audit --audit-level=high

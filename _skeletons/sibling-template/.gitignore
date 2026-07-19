@@ -6,6 +6,8 @@ node_modules
 .next
 dist
 out
+next-env.d.ts
+*.tsbuildinfo
 
 # Python
 __pycache__

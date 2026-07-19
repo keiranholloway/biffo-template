@@ -1,67 +1,49 @@
 import {
-  AuthenticationDetails,
-  CognitoUser,
   CognitoUserPool,
   type CognitoUserSession,
   type ICognitoUserPoolData,
 } from 'amazon-cognito-identity-js'
 
-// Deliberately the SAME User Pool / Client ID as the core portal (ADR-0007) —
-// this sibling and the portal live on the same origin (baseurl.com/ vs
-// baseurl.com/<name>/) and share one Cognito App Client, so
-// amazon-cognito-identity-js's own localStorage keys (keyed only by Client
-// ID, not by path) transparently carry the portal's session over here with
-// zero extra code. Do not point this at a different pool/client — that would
-// silently break single-sign-on between the portal and this sibling.
+// ---------------------------------------------------------------------------
+// SHARED-SESSION INVARIANT — read this before changing anything below.
+//
+// A sibling NEVER signs anyone in. The core portal owns authentication
+// (ADR-0007): a sibling that finds no valid session redirects to the portal's
+// login with `?return_to=/<name>/`. This module therefore only *reads* the
+// session the portal already established.
+//
+// That works because this points at the SAME Cognito User Pool / App Client ID
+// as the core portal. The sibling and the portal live on the same origin
+// (baseurl.com/ vs baseurl.com/<name>/) and share one Cognito App Client, so
+// amazon-cognito-identity-js's own localStorage keys — keyed only by Client
+// ID, not by path — transparently carry the portal's session over here with
+// zero extra code.
+//
+// Do NOT point this at a different pool/client: that would silently break
+// single-sign-on between the portal and this sibling.
+//
+// Do NOT add signIn/signOut/completeNewPassword here either. A second login
+// path in a sibling bypasses the portal and breaks the SSO model ADR-0007
+// depends on. If this sibling ever genuinely needs sign-out, add it
+// deliberately — and decide first whether it must sign the user out of the
+// portal too.
+// ---------------------------------------------------------------------------
 const poolData: ICognitoUserPoolData = {
   UserPoolId: process.env['NEXT_PUBLIC_CORE_COGNITO_USER_POOL_ID'] ?? '',
   ClientId: process.env['NEXT_PUBLIC_CORE_COGNITO_CLIENT_ID'] ?? '',
 }
 
-export const userPool = new CognitoUserPool(poolData)
+// Module-private on purpose: the pool is an implementation detail of
+// getCurrentSession(), not part of this sibling's auth surface.
+const userPool = new CognitoUserPool(poolData)
 
-export type SignInResult =
-  | { kind: 'success'; session: CognitoUserSession }
-  | { kind: 'new_password_required'; user: CognitoUser; userAttributes: Record<string, string> }
-
-export function signIn(username: string, password: string): Promise<SignInResult> {
-  return new Promise((resolve, reject) => {
-    const user = new CognitoUser({ Username: username, Pool: userPool })
-    const authDetails = new AuthenticationDetails({ Username: username, Password: password })
-
-    user.authenticateUser(authDetails, {
-      onSuccess: (session) => {
-        resolve({ kind: 'success', session })
-      },
-      onFailure: reject,
-      newPasswordRequired: (userAttributes: Record<string, string>) => {
-        const { email_verified, email, ...writableAttributes } = userAttributes
-        void email_verified
-        void email
-        resolve({ kind: 'new_password_required', user, userAttributes: writableAttributes })
-      },
-    })
-  })
-}
-
-export function completeNewPassword(
-  user: CognitoUser,
-  newPassword: string,
-  userAttributes: Record<string, string>,
-): Promise<CognitoUserSession> {
-  return new Promise((resolve, reject) => {
-    user.completeNewPasswordChallenge(newPassword, userAttributes, {
-      onSuccess: resolve,
-      onFailure: reject,
-    })
-  })
-}
-
-export function signOut(): void {
-  const user = userPool.getCurrentUser()
-  user?.signOut()
-}
-
+/**
+ * Read the shared portal session, or null if there isn't a valid one.
+ *
+ * Callers pass the returned session's ID token to this sibling's own backend
+ * (see `createApiClient`, which takes a `getIdToken` callback). A null result
+ * means "redirect the user to the portal's login".
+ */
 export function getCurrentSession(): Promise<CognitoUserSession | null> {
   return new Promise((resolve) => {
     const user = userPool.getCurrentUser()

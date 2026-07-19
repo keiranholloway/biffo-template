@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { capturedOutput } from '../test-utils/console.js'
 import { runDataList } from './data-list.js'
 
 vi.mock('../lib/logger.js', () => ({
@@ -36,14 +37,14 @@ describe('runDataList', () => {
 
   it('reports no DDL imports when db/imports/ does not exist', async () => {
     await runDataList({ cwd: projectRoot })
-    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+    const output = capturedOutput(logSpy)
     expect(output).toContain('No DDL imports')
   })
 
   it('reports no DDL imports when db/imports/ is empty', async () => {
     mkdirSync(join(projectRoot, 'db', 'imports'), { recursive: true })
     await runDataList({ cwd: projectRoot })
-    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+    const output = capturedOutput(logSpy)
     expect(output).toContain('No DDL imports')
   })
 
@@ -53,7 +54,7 @@ describe('runDataList', () => {
 
     await runDataList({ cwd: projectRoot })
 
-    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+    const output = capturedOutput(logSpy)
     expect(output).toContain('tabsii')
     expect(output).toContain('analytics')
     // tabsii has 2 files, analytics has 1
@@ -68,7 +69,7 @@ describe('runDataList', () => {
 
     await runDataList({ cwd: projectRoot })
 
-    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+    const output = capturedOutput(logSpy)
     expect(output).toContain('No DDL imports')
     expect(output).not.toContain('empty')
   })
@@ -78,7 +79,7 @@ describe('runDataList', () => {
 
     await runDataList({ cwd: projectRoot })
 
-    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+    const output = capturedOutput(logSpy)
     expect(output).toContain('biffo data apply')
   })
 })

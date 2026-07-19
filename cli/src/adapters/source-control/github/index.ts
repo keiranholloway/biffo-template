@@ -9,15 +9,26 @@ export interface GitHubAdapterOptions {
 }
 
 /**
- * The 11 status checks a fresh `biffo init` scaffold requires — must match
- * job *names* (not ids) in `.github/workflows/ci.yml`. `configureBranchProtection`
- * defaults to this list; a caller with a different repo shape (e.g. `biffo
- * sibling create`, ADR-0007) can pass its own subset/superset instead.
+ * The required status-check contexts a freshly scaffolded repo gets on
+ * `dev`/`staging`/`main`. GitHub matches a context against the job *name* (not
+ * its id), so every entry here must be the `name:` of a job that actually runs
+ * — a context nothing reports leaves every PR permanently BLOCKED even with all
+ * real checks green.
+ *
+ * `configureBranchProtection` defaults to this list, and neither caller
+ * overrides it: `biffo init` ships `.github/workflows/ci.yml` and `biffo
+ * sibling create` (ADR-0007) ships
+ * `_skeletons/sibling-template/.github/workflows/ci.yml`, so *both* workflows
+ * must declare exactly these job names. `status-checks.test.ts` enforces that
+ * coupling in CI (issue #189) — edit a workflow's job names and that test tells
+ * you to update this constant.
+ *
+ * CI consolidates all JS checks into one job and all Python checks into another
+ * (per-job billing + repeated installs make a dozen sub-minute jobs wasteful),
+ * so lint/type/test/audit/SAST are folded into the two toolchain checks below.
+ * The core workflow's template-only `Core Version Guard` job is deliberately
+ * absent: it no-ops in instances (see `status-checks.test.ts`).
  */
-// Must match the job `name:` values in .github/workflows/ci.yml. CI consolidates
-// all JS checks into one job and all Python checks into another (per-job billing
-// + repeated installs make a dozen sub-minute jobs wasteful), so lint/type/test/
-// audit/SAST are folded into the two toolchain checks below.
 export const DEFAULT_STATUS_CHECKS = [
   'JS (lint, types, test, audit)',
   'Python (lint, types, test, security)',

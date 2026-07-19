@@ -60,8 +60,8 @@ describe('runCoreDiff', () => {
     write(instance, 'services/api/main.py', 'v1') // modified
     write(template, 'services/api/added.py', 'x') // added
     write(instance, 'services/api/removed.py', 'y') // removed
-    write(template, 'services/rbac/p.json', 'a') // user-owned, ignored
-    write(instance, 'services/rbac/p.json', 'b')
+    write(template, 'services/acme-crm/p.json', 'a') // user-owned, ignored
+    write(instance, 'services/acme-crm/p.json', 'b')
 
     await runCoreDiff({ cwd: instance, templateRoot: template })
 
@@ -69,7 +69,7 @@ describe('runCoreDiff', () => {
     expect(out).toContain('services/api/main.py')
     expect(out).toContain('services/api/added.py')
     expect(out).toContain('services/api/removed.py')
-    expect(out).not.toContain('services/rbac/p.json')
+    expect(out).not.toContain('services/acme-crm/p.json')
     expect(out).toContain('3 template-owned file(s) would change')
     // read-only preview mentions Phase 3
     expect(out).toContain('biffo core upgrade')

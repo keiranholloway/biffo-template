@@ -38,6 +38,28 @@ class TestDiscoverPluginManifests:
         (tmp_path / "api" / "main.py").write_text("# not a plugin")
         assert discover_plugin_manifests(tmp_path) == []
 
+    def test_finds_first_party_plugin_under_underscore_plugins(self, tmp_path):
+        """services/_plugins/<name>/ is the template-owned channel (issue #243)."""
+        _write_manifest(
+            tmp_path,
+            "_plugins/orchestrator",
+            {"name": "orchestrator", "version": "0.1.0"},
+        )
+        manifests = discover_plugin_manifests(tmp_path)
+        assert [m["name"] for m in manifests] == ["orchestrator"]
+
+    def test_finds_both_channels_without_duplicating(self, tmp_path):
+        """Both locations are scanned; the container dir itself is not a plugin."""
+        _write_manifest(tmp_path, "_plugins/first-party", {"name": "first-party"})
+        _write_manifest(tmp_path, "third-party", {"name": "third-party"})
+        manifests = discover_plugin_manifests(tmp_path)
+        assert [m["name"] for m in manifests] == ["first-party", "third-party"]
+
+    def test_manifest_directly_in_plugins_container_is_not_discovered(self, tmp_path):
+        """_plugins/ is a container, not a plugin — only its children count."""
+        _write_manifest(tmp_path, "_plugins", {"name": "not-a-plugin"})
+        assert discover_plugin_manifests(tmp_path) == []
+
     def test_invalid_json_manifest_is_skipped_not_raised(self, tmp_path):
         plugin_dir = tmp_path / "broken"
         plugin_dir.mkdir()

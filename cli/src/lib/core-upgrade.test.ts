@@ -133,9 +133,9 @@ describe('planCoreUpgrade (classification)', () => {
   })
 
   it('ignores user-owned files entirely', async () => {
-    w(base, 'services/rbac/p.json', '1')
-    w(ours, 'services/rbac/p.json', '2')
-    w(theirs, 'services/rbac/p.json', '3')
+    w(base, 'services/acme-crm/p.json', '1')
+    w(ours, 'services/acme-crm/p.json', '2')
+    w(theirs, 'services/acme-crm/p.json', '3')
     const p = await plan()
     expect(p.entries).toHaveLength(0)
   })

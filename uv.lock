@@ -208,7 +208,7 @@ dev = [
 [[package]]
 name = "biffo-plugin-orchestrator"
 version = "0.1.0"
-source = { virtual = "services/orchestrator" }
+source = { virtual = "services/_plugins/orchestrator" }
 dependencies = [
     { name = "aws-lambda-powertools", extra = ["tracer"] },
     { name = "biffo-plugin-sdk" },

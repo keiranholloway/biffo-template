@@ -5,6 +5,7 @@
 > deployed or a member of biffo-template's pnpm/uv workspace — check
 > `pnpm-workspace.yaml` (only lists `apps/*`, `packages/*`, `cli`) and the
 > root `pyproject.toml`'s `[tool.uv.workspace]` (only lists `services/*`,
+> `services/_plugins/*`,
 > `packages/python-sdk`); neither lists `_skeletons/`. It exists to be
 > copied into a **brand-new, independent GitHub repository** by
 > `biffo sibling create <name>` (ADR-0007), which pushes this content in as

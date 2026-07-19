@@ -62,8 +62,8 @@ used `rbac` as its example plugin) and **ADR-0004** (Option C, and the
   temporary measure. No breaking migration is pending to hand authorization to a
   plugin.
 - **Plugins are for domain features, not authorization** — e.g. the orchestration
-  engine (`services/orchestrator`). The plugin system's reference is now
-  `_skeletons/plugin-template` (to start one) and `services/orchestrator` (a live,
+  engine (`services/_plugins/orchestrator`). The plugin system's reference is now
+  `_skeletons/plugin-template` (to start one) and `services/_plugins/orchestrator` (a live,
   deployed plugin).
 - **Instances harden authz in the core.** The tabsii RLS model
   (`db/imports/tabsii/011_rls_policies.sql`, `services/api/src/api/models/rbac.py`

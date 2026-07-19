@@ -123,7 +123,7 @@ describe('validateManifest — duplicate names', () => {
   it.each(['id', 'tenant_id', 'created_at', 'updated_at'])(
     "accepts an index referencing the auto-injected column '%s' " +
       '(mirrors plugin_table.py merging auto-columns in before index validation; ' +
-      'the real services/rbac/biffo.plugin.json indexes on tenant_id)',
+      'a tenant-scoped plugin table typically indexes on tenant_id)',
     (autoColumn) => {
       const manifest = validManifest()
       manifest.tables[0]!.indexes.push({ name: `ix_auto_${autoColumn}`, columns: [autoColumn] })

@@ -1,5 +1,9 @@
 [tool.uv.workspace]
-members = ["services/*", "packages/python-sdk"]
+members = ["services/*", "services/_plugins/*", "packages/python-sdk"]
+# `services/_plugins/` is a container for first-party plugins (ADR-0003), not a
+# package itself, so `services/*` must not claim it as a member — its children
+# are claimed by `services/_plugins/*` instead.
+exclude = ["services/_plugins"]
 
 [tool.ruff]
 target-version = "py313"
@@ -27,7 +31,7 @@ pythonVersion = "3.13"
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
-extraPaths = ["services/api/src", "packages/python-sdk/src", "services/pr-signer/src", "services/orchestrator/src"]
+extraPaths = ["services/api/src", "packages/python-sdk/src", "services/pr-signer/src", "services/_plugins/orchestrator/src"]
 # _skeletons/ holds standalone-repo skeletons (e.g. plugin-template) that are
 # deliberately not uv/pnpm workspace members — see _skeletons/*/README.md.
 # Their own Python code is type-checked by their own pyright config once

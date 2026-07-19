@@ -8,7 +8,7 @@
 > **Superseded in part by [ADR-0011](0011-authorization-is-a-core-concern.md):**
 > the `rbac` plugin used as this ADR's worked example has been **removed** —
 > authorization is a core concern, not a plugin. The example snippets below are
-> kept for illustration only; for a live plugin see `services/orchestrator`, and
+> kept for illustration only; for a live plugin see `services/_plugins/orchestrator`, and
 > to start one, `_skeletons/plugin-template`.
 
 > Implemented: the `biffo plugin` CLI (install/uninstall/upgrade/list/info), the
@@ -340,6 +340,40 @@ Plugin UI components are cloned into the portal's source tree at install time. N
 #### Option A — Clone into Monorepo _(chosen)_
 
 Plugin source is cloned into `services/<name>/` within the user's monorepo. Terraform modules merged into `modules/plugins/`.
+
+> **Amendment (issue #243) — two distribution channels, split by directory.**
+>
+> The above describes one channel. In practice there are two, and conflating
+> them left first-party plugins with no working distribution at all:
+>
+> | Channel                                                                                                        | Lives at                    | Ownership (`core-manifest.json`) | Distributed by                                          |
+> | -------------------------------------------------------------------------------------------------------------- | --------------------------- | -------------------------------- | ------------------------------------------------------- |
+> | **First-party** — shipped in the template, versioned and CI-tested in lockstep with core (e.g. `orchestrator`) | `services/_plugins/<name>/` | template-owned                   | `biffo core upgrade`, automatically                     |
+> | **Third-party / user** — independently versioned, installed on demand                                          | `services/<name>/`          | user-owned                       | `biffo plugin install <name>@<minor>` from the registry |
+>
+> Before this split, `services/orchestrator/` sat in the user-owned `services/`
+> subtree, so `biffo core upgrade` fail-closed on it (AGENTS.md §9) and the only
+> route into an instance was a manual PR copy-in — not a mechanism, and one that
+> let every instance's copy drift undetectably.
+>
+> `services/_plugins/` is resolved ahead of `services/` by longest-prefix-wins,
+> the same carve-out pattern as `services/api/`. The underscore prefix matches
+> the existing `services/_template/` convention and cannot collide with a plugin
+> name (kebab-case, per `registry-schema.json`).
+>
+> The split is an **ownership** boundary, never a runtime one: discovery
+> (`services/api/src/api/plugins.py`) globs both locations, and both packaging
+> loops in `.github/workflows/deploy-app.yml` bundle from both, flattening to
+> `services/<name>/` in the Lambda zip. Everything downstream — the
+> `modules/plugins/<name>/` Terraform module, the `<prefix>-plugin-<name>`
+> Lambda name, the `enabled_plugins` entry — stays keyed on the plugin **name**,
+> not on its source channel.
+>
+> **Migration for existing instances:** an instance that already has
+> `services/orchestrator/` copied in must apply the same move. Because the
+> widened glob matches both locations, an instance left at the old path keeps
+> working — which is precisely the risk: it silently stays outside
+> `core upgrade`'s reach.
 
 **Pros:**
 

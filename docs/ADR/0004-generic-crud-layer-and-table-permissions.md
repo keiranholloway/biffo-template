@@ -184,7 +184,8 @@ table→operation→rule mapping. **How it is baked:** a Lambda filesystem is
 read-only (and `/tmp` is not shared across execution environments), so rather
 than pre-serialising a JSON file into the deployment zip, the registry is
 derived deterministically **at cold start** from the manifests already baked
-into the package (`/var/task/services/*/biffo.plugin.json`, see `api.plugins`)
+into the package (`/var/task/services/<name>/biffo.plugin.json`, flattened from
+both `services/*/` and `services/_plugins/*/` — see `api.plugins`)
 plus the imported core models, then memoised for the container's lifetime. This
 reads only static declarations — never `information_schema` — which is the
 property this ADR's §2 requires; the phrasing "baked in the same way

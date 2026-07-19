@@ -180,7 +180,7 @@ solved platform-wide. Two claims were false in the code:
 
 - _Consequences → Positive_: "one reusable mechanism every future plugin can
   adopt". The signing implementation was written once, inside
-  `services/orchestrator/src/orchestrator/signed_client.py`, and never promoted.
+  `services/_plugins/orchestrator/src/orchestrator/signed_client.py`, and never promoted.
   `packages/python-sdk/` contained no SigV4 or `botocore` reference at all, so
   "every future plugin" would have had to re-implement request signing.
 - _Related Decisions_: the `BIFFO_JWT_TOKEN` gap "this closes". It closed for the
@@ -195,7 +195,7 @@ code they get does not. Issues #194 and #197 both traced back to it.
 
 **What changed (issue #197).** The claims were made true rather than downgraded:
 
-1. `SignedCoreClient` moved from `services/orchestrator/` into
+1. `SignedCoreClient` moved from `services/_plugins/orchestrator/` into
    `packages/python-sdk/src/biffo_plugin_sdk/signed_client.py` and is exported
    from `biffo_plugin_sdk`. The orchestrator now imports it from the SDK — there
    is exactly one implementation.

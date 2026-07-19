@@ -1,8 +1,9 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
 import { log } from '../lib/logger.js'
+import { findInstalledPlugins } from '../lib/plugin-locations.js'
 import { validateManifest } from '../lib/plugin-manifest.js'
 
 export const pluginListCommand = new Command('list')
@@ -35,9 +36,9 @@ interface InstalledPlugin {
  * or manifest tracked anywhere on the CLI side — "installed" only ever
  * meant "a directory was cloned into services/<name>/ and committed"
  * (plugin-install.ts). So the only things this command can honestly report
- * from a local checkout are: which plugin directories exist under
- * services/*\/biffo.plugin.json, and their declared `version` from that
- * file. It deliberately does NOT show "status" or "last-updated" — those
+ * from a local checkout are: which plugin directories exist (in either
+ * channel — services/*\/ and services/_plugins/*\/, see lib/plugin-locations.ts),
+ * and their declared `version` from that manifest. It deliberately does NOT show "status" or "last-updated" — those
  * fields exist on the *registry* entry shape (RegistryPluginEntry), not on
  * anything recorded locally when a plugin is installed, so showing them
  * here would mean silently making a network call the user didn't ask for
@@ -55,26 +56,18 @@ export async function runPluginList(options: PluginListOptions): Promise<void> {
     )
   }
 
-  const candidates = readdirSync(servicesDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort()
-
   const plugins: InstalledPlugin[] = []
-  for (const dirName of candidates) {
-    const manifestPath = join(servicesDir, dirName, 'biffo.plugin.json')
-    if (!existsSync(manifestPath)) continue
-
+  for (const location of findInstalledPlugins(options.cwd)) {
     try {
-      const manifest = validateManifest(JSON.parse(readFileSync(manifestPath, 'utf8')))
+      const manifest = validateManifest(JSON.parse(readFileSync(location.manifestPath, 'utf8')))
       plugins.push({
         name: manifest.name,
         version: manifest.version,
-        location: `services/${dirName}`,
+        location: location.relDir,
       })
     } catch (err) {
       log.warn(
-        `Skipping services/${dirName}/biffo.plugin.json — invalid manifest: ${(err as Error).message}`,
+        `Skipping ${location.relDir}/biffo.plugin.json — invalid manifest: ${(err as Error).message}`,
       )
     }
   }

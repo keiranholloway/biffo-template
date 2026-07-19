@@ -136,8 +136,8 @@ const TableDefinitionSchema = z
     // merges the four auto-injected columns (id, tenant_id, created_at,
     // updated_at) into `columns` *before* _validate_uniqueness checks index
     // references, so indexing on e.g. tenant_id (a common tenant-scoped
-    // uniqueness pattern — see rbac_roles' idx_rbac_roles_tenant_name in
-    // services/rbac/biffo.plugin.json) is valid there. This must accept the
+    // uniqueness pattern — e.g. a plugin table's idx_<table>_tenant_name in its
+    // biffo.plugin.json) is valid there. This must accept the
     // same auto-column names as valid index targets, or a manifest the real
     // Core API happily accepts gets rejected here first.
     const validColumns = new Set([...table.columns.map((c) => c.name), ...RESERVED_COLUMN_NAMES])

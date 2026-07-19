@@ -68,8 +68,8 @@ current version is simply the `core.version` it carries.
 `biffo.core.json` is **not** a committed seed (that would duplicate the number in
 both the template and every instance). It is written by `biffo core upgrade` to
 record the version an instance was last upgraded to, so the _next_ upgrade knows
-the _from_ version independently of the synced (template-owned) `core.version`
-file. Resolution of an instance's current version therefore prefers
+the _from_ version independently of the inherited `core.version` file.
+Resolution of an instance's current version therefore prefers
 `biffo.core.json` if an upgrade has recorded one, and otherwise falls back to the
 inherited `core.version`. This makes ADR-0003's already-referenced
 `required_core_version` meaningful and gives the upgrade a well-defined _from_
@@ -113,6 +113,21 @@ the template's and rewrites its narrative. New template ADRs are surfaced in
 release notes rather than pushed into instances. What matters is that decisions
 stay documented and unambiguous per repo — not that the numbering is uniform
 across every instance.
+
+**`core.version` is likewise not synced** (amended 2026-07, issue #199). It is
+the version the template _emits_ — its own source of truth — while the version
+an instance _received_ is `biffo.core.json`, which takes precedence on every
+read. An instance's inherited `core.version` is therefore only a fallback, so
+syncing it cannot improve any lookup; it can only overwrite whatever the
+instance keeps in that file. One instance had repurposed it as its own app
+release lineage, which an upgrade regressed. It is omitted from
+`core-manifest.json` (user-owned by the fail-closed default) so an upgrade
+leaves it alone. For the same reason the `Core Version Tag` workflow — which
+ships to instances under `.github/` — skips itself when `biffo.core.json` is
+present, rather than pushing template version tags into an instance's tag
+namespace. The versioning discipline above is unaffected: the CI guard already
+excludes `core.version` itself from the template-owned change set it inspects,
+and runs only in the template.
 
 ### 3. Three-way merge → branch → PR
 

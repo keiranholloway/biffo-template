@@ -113,6 +113,28 @@ non-auth construction sites (tests, dependency overrides) keep working.
 >   recorded below for the base template — it now applies only to deployments that
 >   introduce the split themselves.
 
+> **Confirmed 2026-07-19.** Issue #229 asked whether the template should adopt
+> tabsii's RLS-based RBAC as its default, which would have introduced exactly the
+> app-role/RLS split the amendment above says is absent. **It was decided not
+> to**: RLS stays a deployment's own concern, implemented through this seam.
+>
+> So the amendment stands as written rather than by accident — there is still no
+> privilege split in the base template, and a `get_admin_db` here would still be
+> an alias for `get_db` wearing the costume of a security boundary.
+>
+> The reasoning that settled it is worth keeping next to this decision, because
+> it is the same shape: the template's suite runs on SQLite, which has no RLS, so
+> backporting would have shipped a security mechanism the template cannot test.
+> ADR-0011's `rbac` plugin is the cautionary precedent — present, plausible,
+> verified by nothing, read by nothing.
+>
+> **This reverses if a deployment ever uses the multi-tenant seam for real.**
+> ADR-0001 keeps `tenant_id` at `"default"` today, so API-layer scoping is all
+> that separates tenants and a single scoping bug leaks across them. With two
+> real tenants in one deployment, RLS stops being defence in depth and becomes
+> what makes such a bug survivable. At that point this amendment — and the
+> `get_admin_db` question with it — should be revisited, not before.
+
 ## Options Considered
 
 ### Option A — `IdentityProvider` seam (chosen)

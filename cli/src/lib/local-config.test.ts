@@ -1,15 +1,31 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { isTemplatePlaceholderConfig } from './local-config.js'
 
+/**
+ * Present in the template, deliberately absent in an instance: `biffo init`
+ * deletes the placeholder `biffo.config.json` from the scaffolded repo (#269),
+ * because an instance's real config lives in `~/.biffo/projects/` and
+ * committing it would trip the `biffo-placeholder-config` gitleaks rule.
+ *
+ * `cli/` is template-owned, so this test file ships to every instance. Reading
+ * the file unconditionally made CI fail on all three branches of every freshly
+ * scaffolded repo, from its first push, naming a file that is *supposed* to be
+ * missing — and because the JS job is a required status check, it wedged every
+ * PR in a new instance until someone diagnosed it (#287).
+ */
+const TEMPLATE_CONFIG = resolve(import.meta.dirname, '../../../biffo.config.json')
+const isTemplateRepo = existsSync(TEMPLATE_CONFIG)
+
 describe('isTemplatePlaceholderConfig', () => {
-  it("recognises the template's own committed biffo.config.json", () => {
+  // Skipped in instances. The drift check below only means anything in the
+  // template, where that file is the source of the very tokens being detected;
+  // in an instance there is no placeholder config left to drift.
+  it.skipIf(!isTemplateRepo)("recognises the template's own committed biffo.config.json", () => {
     // The real file, read from the template repo root — so this test fails the
     // day the template's placeholder tokens change shape.
-    const raw = JSON.parse(
-      readFileSync(resolve(import.meta.dirname, '../../../biffo.config.json'), 'utf8'),
-    )
+    const raw = JSON.parse(readFileSync(TEMPLATE_CONFIG, 'utf8'))
     expect(isTemplatePlaceholderConfig(raw)).toBe(true)
   })
 

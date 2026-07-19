@@ -59,27 +59,32 @@ assume it owns the identity table.**
 
    ```python
    class IdentityProvider(Protocol):
-       async def ensure_active(self, db, cognito_sub: str) -> None: ...
-       async def resolve_user_id(self, db, claims: dict) -> str: ...
-       async def sync_platform_admin(self, db, user_id: str, is_member: bool) -> None: ...
-       async def resolve_permissions(self, db, user_id: str) -> frozenset[str]: ...
+       def session(self) -> AsyncGenerator[AsyncSession, None]: ...
+       async def resolve(self, db, claims: dict) -> ResolvedIdentity: ...
+       async def sync_platform_admin(self, db, user_id: str | None, is_member: bool) -> None: ...
+       async def resolve_permissions(self, db, user_id: str | None) -> frozenset[str]: ...
    ```
+
+   `ResolvedIdentity` carries `user_id` and `is_active`. A caller with no record
+   resolves to `is_active=True` with a None `user_id` — absence is not
+   deactivation, or a lazily-provisioning deployment would lock out every user.
 
 3. **The template ships `DefaultIdentityProvider`**, backed by the existing
    `public.users` model. A fresh scaffold keeps working exactly as it does today:
-   `ensure_active` enforces `User.is_active`, `resolve_user_id` resolves/creates
-   the row, `sync_platform_admin` is a no-op (there is no platform-admin table to
-   mirror), and `resolve_permissions` returns an empty set — the default authz
-   model is Cognito groups plus ADR-0004 permission codes, which need no lookup.
+   `resolve` reads the row by `cognito_sub`, `sync_platform_admin` is a no-op
+   (there is no platform-admin table to mirror), and `resolve_permissions`
+   returns an empty set — the default authz model is Cognito groups plus ADR-0004
+   permission codes, which need no lookup.
 
 4. **A deployment overrides the provider, not the auth path.** tabsii ships a
    `TabsiiIdentityProvider` against `tabsii.*` and deletes its `auth.py` fork.
    Retiring `public.users` becomes a supported configuration rather than a patch.
 
-5. **The provider declares its session dependency.** RLS-based providers must run
-   on a master/RLS-bypass session, because identity has to be resolved _before_
-   `app.current_user_id` can be set. The Core therefore gains `get_admin_db`
-   alongside `get_db`, and the provider selects which it needs.
+5. **The provider owns its session.** RLS-based providers must run on a
+   master/RLS-bypass session, because identity has to be resolved _before_
+   `app.current_user_id` can be set. `require_auth` therefore depends on a fixed
+   `identity_session` that dispatches to the provider at request time, rather
+   than binding `get_db` into its signature at import time.
 
 6. **This is an in-core extension point, not a plugin.** It is emphatically not
    the ADR-0003 installable plugin system, and ADR-0011 stands unamended:
@@ -89,6 +94,24 @@ assume it owns the identity table.**
 `AuthenticatedUser` gains `user_id`, `is_platform_admin` and `permissions`,
 populated from the provider. Fields default to fail-closed values so existing
 non-auth construction sites (tests, dependency overrides) keep working.
+
+> **Amended during implementation (2026-07-19).** Two details in points 2, 3 and
+> 5 changed once the code was written. Both are corrections to this ADR, made in
+> the open rather than quietly diverged from:
+>
+> - **`ensure_active` + `resolve_user_id` merged into `resolve`.** As originally
+>   specified they were two lookups keyed on the same `cognito_sub`, returning
+>   columns of the same row — a second database round-trip on every authenticated
+>   request, where the pre-seam code did one. Every implementation answers both
+>   questions from one row, so the interface should ask once.
+> - **The Core does not gain `get_admin_db`.** The base template has no
+>   app-role/RLS split, so a `get_admin_db` here would be an alias for `get_db`
+>   that only _looked_ like a security boundary. The requirement was always that
+>   the provider selects its session; owning `session()` delivers that without
+>   the misleading duplicate, and a deployment supplies whatever session its model
+>   needs. This also retires the "two session helpers is a sharper tool" trade-off
+>   recorded below for the base template — it now applies only to deployments that
+>   introduce the split themselves.
 
 ## Options Considered
 

@@ -48,6 +48,15 @@ class Settings(BaseSettings):
     # cognito:groups claim; matches the baseline "admin" group Terraform seeds.
     admin_group: str = "admin"
 
+    # Cognito group conferring platform-admin (ADR-0012). The group on the
+    # verified token is the source of truth; `AuthenticatedUser.is_platform_admin`
+    # mirrors it. Deployments whose RLS policies read a table rather than the
+    # token reconcile that table in their provider's sync_platform_admin. No
+    # subject is ever hard-coded — add the platform owners to this group in
+    # Cognito and they gain it on their next request, with no code or config
+    # change.
+    platform_admin_group: str = "platform_admin"
+
     # Internal service-to-service auth (ADR-0009) — allowlist of IAM principal
     # ARNs permitted on /api/v1/internal/* routes. The SigV4-verified caller's
     # requestContext.authorizer.iam.userArn is matched (fnmatch glob) against

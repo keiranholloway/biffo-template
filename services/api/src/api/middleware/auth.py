@@ -1,5 +1,5 @@
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from typing import cast
 
@@ -11,12 +11,10 @@ from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWTError
 from jwt.algorithms import RSAAlgorithm
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
-from ..database import get_db
-from ..models.user import User
+from ..identity import get_identity_provider, identity_session
 
 logger = Logger()
 _security = HTTPBearer()
@@ -37,6 +35,22 @@ class AuthenticatedUser:
     # require no role. Defaults to empty so non-auth construction sites (tests,
     # dependency overrides) stay fail-closed without having to opt in.
     roles: list[str] = field(default_factory=list)
+    # Resolved by the ADR-0012 identity provider in require_auth. Defaults are
+    # fail-closed so non-auth construction sites (tests, dependency overrides,
+    # identity_from_token) grant nothing they haven't been given: no identity,
+    # not an admin, no permissions.
+    #
+    # The deployment's canonical id for this caller. None when no record exists
+    # yet, or when the deployment keeps no local identity row at all — so treat
+    # it as "unknown", never as "not authenticated".
+    user_id: str | None = None
+    # Mirrors the platform-admin Cognito group on the verified token.
+    is_platform_admin: bool = False
+    # Effective permission codes from database-held roles, for deployments that
+    # grant permissions that way. Empty under the ADR-0004 default model, which
+    # authorises from `roles` above — empty means "no DB-granted permissions",
+    # not "no access".
+    permissions: frozenset[str] = frozenset()
 
 
 @lru_cache(maxsize=1)
@@ -113,8 +127,13 @@ def identity_from_token(
     verified token (ADR-0004) — no extra round-trip. The claim is absent for a
     caller in no groups; it is a JSON array of group names when present.
     """
-    claims = _verify_token(credentials.credentials)
+    return _user_from_claims(_verify_token(credentials.credentials))
 
+
+def _user_from_claims(claims: dict) -> AuthenticatedUser:
+    """Map verified claims to an identity. No DB — the provider-backed fields
+    (`user_id`, `is_platform_admin`, `permissions`) stay at their fail-closed
+    defaults until `require_auth` fills them in."""
     return AuthenticatedUser(
         sub=claims["sub"],
         email=claims.get("email", ""),
@@ -124,40 +143,47 @@ def identity_from_token(
     )
 
 
-async def _ensure_active(db: AsyncSession, cognito_sub: str) -> None:
-    """Reject a deactivated user (issue #150).
+async def require_auth(
+    credentials: HTTPAuthorizationCredentials = Security(_security),
+    db: AsyncSession = Depends(identity_session),
+) -> AuthenticatedUser:
+    """
+    FastAPI dependency: verify the Cognito JWT, enforce the user isn't
+    deactivated, and return the caller's identity.
+
+    Raises HTTP 401 if the token is missing/expired/invalid, or if the caller's
+    identity record is marked inactive (issue #150). This is the single
+    authorization seam every authenticated route flows through, so the is_active
+    check applies everywhere — at the cost of one indexed lookup per request.
+
+    Where that record lives is the deployment's business, not the Core's: every
+    database-backed question here goes through the ADR-0012 `IdentityProvider`.
+    This function must never name a table.
 
     Cognito's suspend flow (AdminDisableUser + AdminUserGlobalSignOut) revokes
     refresh tokens immediately, but an already-issued access token stays valid
-    until it expires (~1h). Enforcing the DB `users.is_active` flag — set by the
-    admin suspend/reactivate endpoints — on every request closes that window.
-    A user with no row yet (provisioned but never logged in) is treated as
-    active; the row is created on first login.
+    until it expires (~1h). Checking the deactivation flag on every request
+    closes that window.
     """
-    result = await db.execute(
-        select(User.is_active).where(User.cognito_sub == cognito_sub)
-    )
-    if result.scalar_one_or_none() is False:
+    claims = _verify_token(credentials.credentials)
+    user = _user_from_claims(claims)
+    provider = get_identity_provider()
+
+    identity = await provider.resolve(db, claims)
+    if not identity.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Account is deactivated",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    is_platform_admin = settings.platform_admin_group in user.roles
+    await provider.sync_platform_admin(db, identity.user_id, is_platform_admin)
+    permissions = await provider.resolve_permissions(db, identity.user_id)
 
-async def require_auth(
-    credentials: HTTPAuthorizationCredentials = Security(_security),
-    db: AsyncSession = Depends(get_db),
-) -> AuthenticatedUser:
-    """
-    FastAPI dependency: verify the Cognito JWT, enforce the user isn't
-    deactivated, and return the caller's identity.
-
-    Raises HTTP 401 if the token is missing/expired/invalid, or if the user's
-    DB row is marked inactive (issue #150). This is the single authorization
-    seam every authenticated route flows through, so the is_active check applies
-    everywhere — at the cost of one indexed lookup by `cognito_sub` per request.
-    """
-    user = identity_from_token(credentials)
-    await _ensure_active(db, user.sub)
-    return user
+    return replace(
+        user,
+        user_id=identity.user_id,
+        is_platform_admin=is_platform_admin,
+        permissions=permissions,
+    )

@@ -1,6 +1,8 @@
 """issue #150: require_auth enforces the DB `users.is_active` flag, so a
 suspended user can't keep calling the API with an already-issued access token."""
 
+from typing import NamedTuple
+
 import api.middleware.auth as auth_module
 import pytest
 from api.middleware.auth import require_auth
@@ -12,24 +14,31 @@ def _credentials() -> HTTPAuthorizationCredentials:
     return HTTPAuthorizationCredentials(scheme="Bearer", credentials="token")
 
 
-class _FakeResult:
-    def __init__(self, value: object) -> None:
-        self._value = value
+class _FakeRow(NamedTuple):
+    id: str
+    is_active: bool
 
-    def scalar_one_or_none(self) -> object:
-        return self._value
+
+class _FakeResult:
+    def __init__(self, row: _FakeRow | None) -> None:
+        self._row = row
+
+    def one_or_none(self) -> _FakeRow | None:
+        return self._row
 
 
 class _FakeDb:
-    """Minimal AsyncSession stand-in: execute() returns the seeded is_active."""
+    """Minimal AsyncSession stand-in. The default provider selects id and
+    is_active together (ADR-0012), so execute() yields a row, or None for a
+    caller with no record yet."""
 
-    def __init__(self, is_active: object) -> None:
-        self._is_active = is_active
+    def __init__(self, is_active: bool | None) -> None:
+        self._row = None if is_active is None else _FakeRow("user-1", is_active)
         self.executed = False
 
     async def execute(self, _stmt: object) -> _FakeResult:
         self.executed = True
-        return _FakeResult(self._is_active)
+        return _FakeResult(self._row)
 
 
 @pytest.fixture(autouse=True)

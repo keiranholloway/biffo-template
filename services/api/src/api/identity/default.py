@@ -41,7 +41,11 @@ class DefaultIdentityProvider:
         import would make merely *importing* the identity package fail on such a
         deployment, taking the API down at startup over a class it never uses.
         """
-        from ..models.user import User
+        # pyright: ignore[reportMissingImports] — the module is genuinely absent
+        # on a deployment that retired it, which ADR-0012 explicitly supports.
+        # Unsuppressed, type-checking fails there on a provider that deployment
+        # never calls.
+        from ..models.user import User  # pyright: ignore[reportMissingImports]
 
         result = await db.execute(
             select(User.id, User.is_active).where(User.cognito_sub == claims["sub"])

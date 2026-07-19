@@ -10,7 +10,7 @@
 
 Biffo Core ships a `User` SQLAlchemy model (`services/api/src/api/models/user.py`)
 backed by a `public.users` table, and `middleware/auth.py` reads it directly to
-enforce the deactivation check. The Core API therefore *owns* the identity record.
+enforce the deactivation check. The Core API therefore _owns_ the identity record.
 
 That assumption does not survive contact with a real deployment. In the **tabsii**
 instance, users are not a Core concern: identity lives in `tabsii.users`, part of
@@ -38,7 +38,7 @@ a security regression one careless merge away, on every upgrade, forever.
 **ADR-0011** already settled the direction — richer authorization is a core
 capability "owned by the deployment," and it explicitly cites tabsii's RLS
 implementation as the worked example. What it did not do is give deployments a
-*place* to put that ownership. With no seam, "owned by the deployment" degrades in
+_place_ to put that ownership. With no seam, "owned by the deployment" degrades in
 practice to "forked from the template," which is precisely what happened.
 
 The constraint that shapes the answer: a fresh `biffo init` has no business schema
@@ -77,14 +77,14 @@ assume it owns the identity table.**
    Retiring `public.users` becomes a supported configuration rather than a patch.
 
 5. **The provider declares its session dependency.** RLS-based providers must run
-   on a master/RLS-bypass session, because identity has to be resolved *before*
+   on a master/RLS-bypass session, because identity has to be resolved _before_
    `app.current_user_id` can be set. The Core therefore gains `get_admin_db`
    alongside `get_db`, and the provider selects which it needs.
 
 6. **This is an in-core extension point, not a plugin.** It is emphatically not
    the ADR-0003 installable plugin system, and ADR-0011 stands unamended:
    authorization remains a core concern that is always present. The seam governs
-   *where the identity record lives* — never *whether* authorization runs.
+   _where the identity record lives_ — never _whether_ authorization runs.
 
 `AuthenticatedUser` gains `user_id`, `is_platform_admin` and `permissions`,
 populated from the provider. Fields default to fail-closed values so existing
@@ -123,7 +123,7 @@ settings.
 
 - Requires interpolating identifiers into raw SQL, which is injection-prone unless
   quoted with care, on the authentication path.
-- Only parameterises *names*. tabsii's divergence is behavioural — lazy row
+- Only parameterises _names_. tabsii's divergence is behavioural — lazy row
   creation, event emission, platform-admin mirroring, RLS-bypass sessions,
   permission resolution — and none of that is a table name.
 - The conflict does not go away; it just moves.
@@ -174,9 +174,9 @@ because the alternative is a recurring merge conflict whose most natural
 resolution silently re-enables a table the deployment removed — and `auth.py` is
 the file where that class of mistake is least survivable.
 
-Note also what this decision does *not* do: it does not remove `public.users` from
+Note also what this decision does _not_ do: it does not remove `public.users` from
 the template. The model survives as the default provider's backing store. What
-changes is that the Core no longer *assumes* it — identity ownership becomes a
+changes is that the Core no longer _assumes_ it — identity ownership becomes a
 deployment's decision instead of the template's.
 
 ## Consequences

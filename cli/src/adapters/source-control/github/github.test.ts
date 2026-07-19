@@ -500,6 +500,42 @@ describe('createEnvironments', () => {
       environment_name: 'dev',
     })
   })
+
+  /**
+   * Regression guard (issue #267).
+   *
+   * `prod` was created with `reviewers: []`. GitHub rejects a required-reviewers
+   * protection rule with 422 on a private repo whose plan does not include it,
+   * which aborted `biffo init` partway through step 5 — after the repo, OIDC
+   * role, state bucket and branch protection existed, but *before* Actions
+   * secrets and variables were written, leaving a repo whose CI could not
+   * authenticate to AWS. Free plan + private repo is the default solopreneur
+   * setup Biffo targets, so this broke the primary user journey.
+   *
+   * The empty list also gated nothing even when accepted, so it cost the whole
+   * failure in exchange for no protection at all.
+   *
+   * Asserted on `prod` by name rather than "no environment gets reviewers", so
+   * that reintroducing it for prod specifically — the shape the bug had — fails
+   * here. Real approval gating needs configured reviewer ids and must degrade
+   * when the plan lacks support; it does not belong hardcoded in this loop.
+   */
+  it('creates prod with no protection rules, so a free-plan private repo can init', async () => {
+    octokitMock.repos.createOrUpdateEnvironment = vi.fn().mockResolvedValue({})
+    const config = BiffoConfigSchema.parse({ ...CONFIG, environments: ['dev', 'staging', 'prod'] })
+
+    await adapter().createEnvironments(config)
+
+    expect(octokitMock.repos.createOrUpdateEnvironment).toHaveBeenCalledWith({
+      owner: 'acme',
+      repo: 'my-app',
+      environment_name: 'prod',
+    })
+
+    for (const [call] of octokitMock.repos.createOrUpdateEnvironment.mock.calls) {
+      expect(call).not.toHaveProperty('reviewers')
+    }
+  })
 })
 
 // ─── setRepoSecret ────────────────────────────────────────────────────────────

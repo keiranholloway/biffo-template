@@ -30,6 +30,11 @@ plugin-template/
 ├── biffo.plugin.json        # example manifest: one table, four generic-CRUD routes
 ├── registry-schema.json     # vendored copy of the registry's manifest JSON Schema (see below)
 ├── pyproject.toml           # depends on biffo-plugin-sdk
+├── terraform/               # the plugin's own infra — Lambda, EventBridge subscription, Core API IAM
+│   ├── main.tf
+│   ├── variables.tf
+│   ├── outputs.tf
+│   └── README.md
 ├── src/example_plugin/
 │   ├── __init__.py
 │   ├── manifest.py          # path to biffo.plugin.json
@@ -41,19 +46,28 @@ plugin-template/
     └── test_example_plugin.py
 ```
 
-This mirrors the real **RBAC reference plugin** (`services/rbac/` in this
-monorepo, PR #76) — the same base class, the same `src/<name>/{plugin.py,
-main.py}` layout, the same manifest shape, and the same fake-Core-API test
-pattern. RBAC has more moving parts (four tables, an in-process permission
-checker); this template's `example_plugin` is deliberately the smallest
-version of the same shape: one table (`example_widgets`), four routes,
-one `on_install` seed, one `@subscribe` handler.
+This is the canonical plugin shape: the `BiffoPluginBase` subclass, the
+`src/<name>/{plugin.py, main.py}` layout, the manifest, the `terraform/`
+module, and the fake-Core-API test pattern.
+
+The working first-party example to read alongside it is the **orchestration
+engine** (`services/orchestrator/` in the biffo-template monorepo) — same base
+class, same layout, and it ships a real `terraform/` too. It has considerably
+more moving parts (workflow definitions, actions, SigV4 calls into the Core
+API); this template's `example_plugin` is deliberately the smallest version of
+the same shape: one table (`example_widgets`), four routes, one `on_install`
+seed, one `@subscribe` handler.
+
+> Earlier revisions of this README pointed at an RBAC reference plugin at
+> `services/rbac/`. That plugin was removed by
+> [ADR-0011](https://github.com/keiranholloway/biffo-template/blob/main/docs/ADR/0011-authorization-is-a-core-concern.md)
+> (authorization is a Core concern, not a plugin) and no longer exists.
 
 ## Standalone repo, not a monorepo package
 
-Unlike `services/rbac/` (which is a "virtual" uv workspace member of
-biffo-template with no `[build-system]`, per its own `tests/conftest.py`
-comment), this template's `pyproject.toml` **does** declare
+Unlike biffo-template's own in-monorepo plugins (e.g. `services/orchestrator/`,
+a uv workspace member that resolves `biffo-plugin-sdk` from the workspace and
+so needs no `[build-system]` of its own), this template's `pyproject.toml` **does** declare
 `[build-system]` (hatchling) because it's meant to live in its own
 repository with its own independent `uv sync` / `uv.lock`, not inside
 biffo-template's workspace. Once copied out, `uv sync && uv run pytest`
@@ -141,16 +155,28 @@ corrected, remove this note and consider making check 2 blocking too.
   biffo-template's own root `CLAUDE.md` documents. `release.yml`'s
   changelog generation depends on this.
 - **One plugin, one repo.** Don't vendor unrelated code here — this repo
-  should contain exactly the plugin's manifest, source, and tests. Terraform
-  for the plugin's own infra (if any) goes in a `terraform/` directory at
-  the repo root (see ADR-0003 section 2), not built by this template since
-  the example plugin needs none.
+  should contain exactly the plugin's manifest, source, tests, and
+  `terraform/`. The plugin's infrastructure lives in `terraform/` at the repo
+  root (ADR-0003 section 2), and **this template ships one** — see
+  [`terraform/README.md`](terraform/). The example plugin does need it: it
+  declares an `event_subscriptions` entry, so without a Lambda and an
+  EventBridge rule that subscription never fires. `biffo plugin install`
+  copies `terraform/` into the user's monorepo at `modules/plugins/<name>/`,
+  and it does so **silently only if the directory exists** — a plugin that
+  deletes it gets a clean install and dead event handlers. A CI guard in
+  biffo-template (`pnpm --filter @biffo/cli check:plugin-terraform`) fails any
+  manifest that declares `event_subscriptions` without a `terraform/`
+  directory; keep both in step.
 - **Every table gets `tenant_id`.** You never declare it yourself — it's
   auto-injected (ADR-0001). Declaring `id`, `tenant_id`, `created_at`, or
   `updated_at` in a table's `columns` fails manifest validation.
-- **No database client.** Plugins talk to the Core API over HTTP via
-  `BiffoAPIClient` only (ADR-0002) — never `psycopg2`/`asyncpg`/SQLAlchemy
-  against the database directly.
+- **No database client.** Plugins talk to the Core API over HTTP via the SDK's
+  Core client only (ADR-0002) — never `psycopg2`/`asyncpg`/SQLAlchemy against
+  the database directly. `BiffoPluginBase.api` is a SigV4-signing
+  `SignedCoreClient` by default (ADR-0009); `terraform/` grants the Lambda role
+  `execute-api:Invoke` on `/api/v1/internal/*`, and you must add that role to
+  the Core API's `BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST` — see
+  [`terraform/README.md`](terraform/).
 - **Run the full check suite before opening a PR:**
   ```bash
   uv sync --all-groups

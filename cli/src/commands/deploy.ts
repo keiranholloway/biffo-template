@@ -172,6 +172,37 @@ async function confirmDeployTarget(config: BiffoConfig, environment: string): Pr
 
 // ─── Exported for testing ────────────────────────────────────────────────────
 
+/**
+ * When a deploy run failed at `sts:AssumeRoleWithWebIdentity`, say so plainly.
+ *
+ * `configure-aws-credentials` reports only "Not authorized to perform
+ * sts:AssumeRoleWithWebIdentity" and CloudTrail logs "An unknown error
+ * occurred" — neither names the `sub` the token presented, which is the one
+ * fact that identifies a trust-policy mismatch. Issue #271 was exactly this and
+ * cost a long investigation; roles written by an older CLI trust only the
+ * legacy subject format and are repaired by re-running `biffo init`.
+ *
+ * Exported for testing. Never throws — a diagnostic must not mask the real
+ * failure it is annotating.
+ */
+export async function reportOidcHint(
+  github: GitHubAdapter,
+  org: string,
+  repo: string,
+  runId: number,
+): Promise<void> {
+  if (!(await github.hasOidcAssumeRoleFailure(org, repo, runId))) return
+  log.error('')
+  log.error('  This run failed to assume the AWS OIDC role (sts:AssumeRoleWithWebIdentity).')
+  log.error('  The usual cause is a trust policy that does not match the OIDC subject')
+  log.error("  GitHub presents. Compare the role's trusted subjects against the run's:")
+  log.error(`    aws iam get-role --role-name biffo-github-actions-${'${PROJECT_NAME}'}`)
+  log.error('  A role created by an older biffo trusts only repo:<org>/<repo>:*, which')
+  log.error('  cannot match GitHub\'s ID-qualified "repo:<org>@<id>/<repo>@<id>:*" form.')
+  log.error('  Re-run `biffo init` to rewrite the trust policy with both patterns.')
+  log.error('')
+}
+
 export async function runDeploy(
   github: GitHubAdapter,
   aws: AwsAdapter,
@@ -262,6 +293,7 @@ export async function runDeploy(
     if (globalResult.conclusion !== 'success') {
       log.error(`Global infrastructure deploy ${globalResult.conclusion ?? 'failed'}.`)
       log.error(`  Run details: ${actionsUrl}/runs/${globalResult.id}`)
+      await reportOidcHint(github, org, repo, globalResult.id)
       process.exit(1)
     }
     log.success(`Global infrastructure deployed (run #${globalResult.id})`)
@@ -297,6 +329,7 @@ export async function runDeploy(
     if (infraResult.conclusion !== 'success') {
       log.error(`Infrastructure deploy ${infraResult.conclusion ?? 'failed'}.`)
       log.error(`  Run details: ${actionsUrl}/runs/${infraResult.id}`)
+      await reportOidcHint(github, org, repo, infraResult.id)
       log.error(`  Fix the issue and re-run: biffo deploy ${environment} --infra-only`)
       process.exit(1)
     }
@@ -322,6 +355,7 @@ export async function runDeploy(
     if (appResult.conclusion !== 'success') {
       log.error(`Application deploy ${appResult.conclusion ?? 'failed'}.`)
       log.error(`  Run details: ${actionsUrl}/runs/${appResult.id}`)
+      await reportOidcHint(github, org, repo, appResult.id)
       log.error(`  Fix the issue and re-run: biffo deploy ${environment} --app-only`)
       process.exit(1)
     }

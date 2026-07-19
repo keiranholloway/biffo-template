@@ -69,6 +69,7 @@ function makeGithubMock() {
     setRepoSecret: vi.fn().mockResolvedValue(undefined),
     enableVulnerabilityAlerts: vi.fn().mockResolvedValue(undefined),
     commitFiles: vi.fn().mockResolvedValue('commitsha'),
+    getRepoIds: vi.fn().mockResolvedValue({ ownerId: 42, repoId: 99 }),
   }
 }
 
@@ -103,6 +104,29 @@ describe('happy path', () => {
     expect(github.configureBranchProtection).toHaveBeenCalledOnce()
     expect(github.createEnvironments).toHaveBeenCalledOnce()
     expect(github.enableVulnerabilityAlerts).toHaveBeenCalledOnce()
+  })
+
+  // Issue #271: the trust policy must pin GitHub's immutable owner/repo IDs, so
+  // init has to resolve them from the source-control adapter and pass them on.
+  it('threads resolved GitHub repo IDs into setupOidcTrust', async () => {
+    const github = makeGithubMock()
+    const aws = makeAwsMock()
+
+    await runInit(github as never, aws as never, CONFIG, makeSession())
+
+    expect(aws.setupOidcTrust).toHaveBeenCalledWith(CONFIG, { ownerId: 42, repoId: 99 })
+  })
+
+  // A GitHub API blip must not abort provisioning, and must not silently widen
+  // the trust policy — the AWS adapter falls back to the legacy pattern alone.
+  it('still provisions OIDC trust when repo ID lookup fails', async () => {
+    const github = makeGithubMock()
+    github.getRepoIds.mockRejectedValue(new Error('502 Bad Gateway'))
+    const aws = makeAwsMock()
+
+    await runInit(github as never, aws as never, CONFIG, makeSession())
+
+    expect(aws.setupOidcTrust).toHaveBeenCalledWith(CONFIG, undefined)
   })
 
   it('marks each step complete in order', async () => {

@@ -14,6 +14,7 @@ import {
   INSTANCE_CORE_FILE,
 } from '../lib/core-version.js'
 import { log } from '../lib/logger.js'
+import { resolveRepoIds } from '../lib/oidc.js'
 import {
   deleteSession,
   findLatestSession,
@@ -168,7 +169,7 @@ export async function runInit(
   // Step 3: Set up OIDC trust between GitHub Actions and AWS
   if (!session.completedSteps.includes('oidc_trust')) {
     log.step(3, totalSteps, 'Configuring OIDC trust...')
-    const roleArn = await aws.setupOidcTrust(config)
+    const roleArn = await aws.setupOidcTrust(config, await resolveRepoIds(github, config))
     session.outputs.oidcRoleArn = roleArn
     config.cloud.config = {
       ...config.cloud.config,

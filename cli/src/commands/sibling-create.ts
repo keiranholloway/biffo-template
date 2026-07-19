@@ -12,6 +12,7 @@ import { assertBuildIsFresh } from '../lib/build-freshness.js'
 import { parseGitHubRepo } from '../lib/core-upgrade.js'
 import { resolveGithubToken } from '../lib/credentials.js'
 import { log } from '../lib/logger.js'
+import { resolveRepoIds } from '../lib/oidc.js'
 import { loadProjectConfig } from '../lib/session.js'
 import {
   deleteSiblingSession,
@@ -230,7 +231,10 @@ export async function runSiblingCreate(
   // Step 4: Set up OIDC trust between GitHub Actions and AWS
   if (!session.completedSteps.includes('oidc_trust')) {
     log.step(4, totalSteps, 'Configuring OIDC trust...')
-    session.outputs.oidcRoleArn = await aws.setupOidcTrust(config)
+    session.outputs.oidcRoleArn = await aws.setupOidcTrust(
+      config,
+      await resolveRepoIds(github, config),
+    )
     markSiblingStepComplete(session, 'oidc_trust')
   } else {
     log.step(4, totalSteps, 'OIDC trust already configured — skipping')

@@ -58,7 +58,18 @@ resource "aws_s3_bucket" "cf_logs" {
   #checkov:skip=CKV2_AWS_61:Non-critical access logs; lifecycle expiration not required for this log-delivery bucket.
   #checkov:skip=CKV2_AWS_62:Log-delivery bucket; event notifications are not applicable to raw CloudFront access logs.
   bucket = "${local.name_prefix}-cf-logs"
-  tags   = var.tags
+  # CloudFront writes access logs here as soon as the distribution serves a
+  # request, so by teardown time this bucket is never empty and S3 refuses
+  # DeleteBucket with BucketNotEmpty. Without force_destroy, `terraform destroy`
+  # fails, `biffo teardown` aborts before removing the repo, IAM role and state
+  # bucket, and the instance is left half-torn-down with no way forward from the
+  # CLI (issue #280). Safe here specifically: these are ephemeral, non-critical
+  # access logs — the same reasoning as the CKV2_AWS_61 skip above — and it
+  # matches modules/cloud/aws/storage/main.tf, which already sets it on both of
+  # its buckets. It is deliberately NOT set on the Terraform state bucket, which
+  # teardown empties explicitly and separately.
+  force_destroy = true
+  tags          = var.tags
 }
 
 # CloudFront legacy logging requires ACLs enabled — BucketOwnerEnforced breaks it.

@@ -1,12 +1,13 @@
-# Template Terraform module for a Biffo plugin (ADR-0003 chunk 12 / issue #25).
+# Template Terraform module for a Biffo plugin (ADR-0003 chunk 12 / issues #25, #201).
 #
 # Copy this directory to modules/plugins/<name>/ inside a plugin repo (as
 # terraform/, per ADR-0003 section 2's plugin repo layout) and adjust as
 # needed. `biffo plugin install <name>@<minor>` copies that terraform/
-# directory into the user's monorepo at modules/plugins/<name>/; the root
-# config then instantiates it with a `module "plugin_<name>"` block gated on
-# `enabled_plugins` (see infra/environments/dev/main.tf's "Plugin modules"
-# section for the exact block shape to add).
+# directory into the user's monorepo at modules/plugins/<name>/ and then
+# generates the instantiating `module "plugin_<name>"` block — gated on
+# `enabled_plugins` — into infra/environments/<env>/plugins.generated.tf. That
+# file is CLI-owned and regenerated on every install/uninstall; main.tf is
+# never edited. See infra/environments/dev/README.md's "Adding a plugin".
 #
 # This module deliberately wraps two existing modules rather than
 # reimplementing Lambda/IAM/EventBridge from scratch:

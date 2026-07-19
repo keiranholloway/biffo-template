@@ -219,12 +219,33 @@ code they get does not. Issues #194 and #197 both traced back to it.
    `/api/v1/internal/*`, plus a `role_name` output and documentation for the
    `BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST` entry.
 
-**What remains open.** The allowlist side is still **manual**. The Core API's
-`BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST` must be populated by the instance with a
-static assumed-role glob (`arn:aws:sts::<acct>:assumed-role/<project>-<env>-plugin-<name>-role/*`),
-not wired from the plugin module's `role_arn` output. Doing the latter would
-create the Terraform dependency cycle `core_api → api_gateway → plugin →
-core_api` tracked in issue #201. Until #201 resolves that, step 3 of the
-mechanism is a documented human step, and a plugin that skips it gets a `403`
-from `require_service_principal` — failing closed, which is the correct
-direction, but not zero-configuration.
+**What remained open, and how #201 closed it.** As of this amendment the
+allowlist side was still **manual**: the Core API's
+`BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST` had to be populated by the instance with
+a static assumed-role glob
+(`arn:aws:sts::<acct>:assumed-role/<project>-<env>-plugin-<name>-role/*`), and a
+plugin that skipped it got a `403` from `require_service_principal` — failing
+closed, which is the correct direction, but not zero-configuration.
+
+Issue #201 closed it, and did so **without** the feared dependency cycle,
+because the cycle was never intrinsic to the allowlist — only to one way of
+computing it. The glob is fully derivable from the plugin's _name_:
+`modules/cloud/aws/compute` names every function's role
+`<project>-<env>-<function>-role` and `modules/plugins/_template` names the
+function `plugin-<name>`. So the root config now builds the list itself, in
+`local.plugin_service_principal_arns`, by mapping over `var.enabled_plugins` —
+values it already holds, with no reference to any plugin module. Adding a plugin
+to `enabled_plugins` (which `biffo plugin install` now does, via a generated
+`plugins.auto.tfvars.json`) is what allowlists it, so the `execute-api` grant
+and the allowlist cannot drift apart. It still fails closed: no plugins enabled
+means an empty list and no accepted service caller.
+
+Reading the plugin module's `role_arn` output remains the rejected approach. In
+fairness to the record, it does not deadlock on the _current_ module shape —
+Terraform's graph is resource-level and `_template`'s `aws_iam_role` does not
+itself depend on API Gateway, only its separate `aws_iam_role_policy.core_api`
+does — but that is an accident of one module's internals. A plugin attaching its
+Core API policy inline on the role would close
+`core_api → plugin → api_gateway → core_api` immediately, and the error would
+surface for whoever installed that plugin. The static glob has no dependency on
+any plugin module at all, which is the property worth keeping.

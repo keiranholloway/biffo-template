@@ -22,39 +22,48 @@ terraform plan
 
 ## Adding a plugin
 
-Plugins (ADR-0003) are provisioned via the `enabled_plugins` variable (`variables.tf`) and one `module "plugin_<name>"` block per plugin in `main.tf`.
+Plugins (ADR-0003) are wired in **automatically** by `biffo plugin install` (issue #201). You do not hand-edit `main.tf`.
 
-**Why one block per plugin, not a generic loop:** Terraform requires a module's `source` argument to be a static string literal — it cannot be interpolated from `var.enabled_plugins` at runtime. So this config can't dynamically discover `modules/plugins/*` the way, say, `discover_plugin_manifests()` does for `services/*/biffo.plugin.json` in the Core API (`services/api/src/api/plugins.py`). Each plugin needs its own explicit, individually-gated module block.
+```bash
+biffo plugin install <name>@<minor>     # from the registry
+biffo plugin install --local <path>     # from an unpublished local directory
+```
 
-### Steps
+That copies the plugin's `terraform/` into `modules/plugins/<name>/` and then writes two CLI-owned files into **every** `infra/environments/*/` root config:
 
-1. Install the plugin: `biffo plugin install <name>@<minor>` (issue #20) clones the plugin's source into `services/<name>/` and copies its `terraform/` directory into `modules/plugins/<name>/`. If the plugin ships no `terraform/` directory, copy `modules/plugins/_template/` to `modules/plugins/<name>/` and adjust it yourself — see that module's README for what it wraps and why.
-2. Add a module block to `main.tf`'s "Plugin modules" section:
+| File                       | Contents                                                                                              |
+| -------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `plugins.generated.tf`     | one `module "plugin_<name>"` block and one `output "plugin_<name>_function_arn"` per installed plugin |
+| `plugins.auto.tfvars.json` | the matching `enabled_plugins` list                                                                   |
 
-   ```hcl
-   module "plugin_<name>" {
-     source   = "../../../modules/plugins/<name>"
-     for_each = contains(var.enabled_plugins, "<name>") ? { "<name>" = true } : {}
+Both are committed alongside the plugin, so the next `terraform apply` provisions it. `biffo plugin uninstall <name>` regenerates both, removing the block along with the module directory.
 
-     project_name   = var.project_name
-     environment    = local.environment
-     plugin_name    = "<name>"
-     handler        = "src.lambda.main.handler"
-     event_bus_name = module.events.event_bus_name
-     core_api_url   = module.api_gateway.api_endpoint
-     tags           = local.tags
-   }
-   ```
+**Why a generated file and not `main.tf`.** Terraform requires a module's `source` to be a static string literal, so it cannot loop over `var.enabled_plugins` — each plugin needs its own explicit block. But `infra/` is user-owned (`core-manifest.json`) and `main.tf` is hand-authored, so the CLI emits those blocks into a separate file rather than appending to or re-parsing yours. Terraform loads every `*.tf` file in this directory, so the generated blocks are exactly as live as anything written here, and the two never contend. This is the same pattern `biffo sibling create` uses for `siblings.auto.tfvars.json`.
 
-3. Aggregate its outputs alongside the existing `output` blocks, e.g.:
+**Idempotency.** Both files are regenerated in full from the contents of `modules/plugins/` — never appended to. Re-running `install` produces byte-identical output, so a duplicate module block or a duplicated `enabled_plugins` entry cannot occur.
 
-   ```hcl
-   output "plugin_<name>_function_arn" {
-     value = try(module.plugin_<name>["<name>"].function_arn, null)
-   }
-   ```
+**Do not edit `plugins.generated.tf`.** It is overwritten on the next install or uninstall.
 
-4. Add `"<name>"` to `enabled_plugins` in `terraform.tfvars` (or wherever this environment's tfvars live) and `terraform apply`.
+### Disabling a plugin without uninstalling it
+
+`enabled_plugins` comes from the generated `plugins.auto.tfvars.json`. Anything that outranks an auto-tfvars file overrides it:
+
+```bash
+terraform apply -var 'enabled_plugins=[]'
+# or TF_VAR_enabled_plugins='[]', or an explicit -var-file
+```
+
+### Service authentication (ADR-0009)
+
+The `execute-api:Invoke` grant on the plugin's Lambda role is wired by the generated module block (`core_api_execution_arn`). The Core API side — `BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST` — follows automatically from `local.plugin_service_principal_arns` in `main.tf`, which derives a **static** assumed-role glob from `var.enabled_plugins`:
+
+```
+arn:aws:sts::<account>:assumed-role/<project>-<env>-plugin-<name>-role/*
+```
+
+It is deliberately _not_ derived from a plugin module's `role_arn` output. The glob is fully predictable from the plugin's name, and depending on the module's output would make the Core API depend on every installed plugin — coupling that risks the `core_api -> api_gateway -> plugin -> core_api` cycle recorded in issue #201 for any plugin that attaches its Core API policy to the role resource itself. Enabling a plugin is what allowlists it, and the two cannot drift apart.
+
+The allowlist **fails closed**: with no plugins enabled it is `[]` and no service caller is accepted.
 
 ### What a plugin module receives — and does not
 

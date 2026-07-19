@@ -14,7 +14,7 @@ admin_username = "admin"
 # Optional: plugins to provision (ADR-0003). Each name must have a matching
 # module "plugin_<name>" block in main.tf and a module directory at
 # modules/plugins/<name>/ — see infra/environments/dev/README.md.
-# enabled_plugins = ["rbac"]
+# enabled_plugins = ["orchestrator"]
 
 # Optional: endpoint control plane — isolated PR-signer (ADR-0008). Requires a
 # registered GitHub App with contents:write + pull_requests:write on this repo;

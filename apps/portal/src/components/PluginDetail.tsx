@@ -75,7 +75,7 @@ export function PluginDetail({ slug }: PluginDetailProps) {
           registry hasn&apos;t published any plugins yet.
         </p>
         <Link
-          href="/admin/plugins"
+          href="/admin/plugins/"
           className="mt-4 inline-block text-sm font-medium text-blue-600 hover:underline"
         >
           Back to marketplace

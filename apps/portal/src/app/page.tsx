@@ -13,13 +13,13 @@ export default function LandingPage() {
         </p>
         <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
           <Link
-            href="/admin"
+            href="/admin/"
             className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
           >
             Go to dashboard
           </Link>
           <Link
-            href="/login"
+            href="/login/"
             className="rounded-lg border border-gray-300 px-5 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
           >
             Sign in

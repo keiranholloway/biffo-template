@@ -10,7 +10,10 @@ exports[`setupOidcTrust > creates the OIDC trust policy with the correct structu
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
         },
         "StringLike": {
-          "token.actions.githubusercontent.com:sub": "repo:acme/my-app:*",
+          "token.actions.githubusercontent.com:sub": [
+            "repo:acme/my-app:*",
+            "repo:acme@8511402/my-app@1305628980:*",
+          ],
         },
       },
       "Effect": "Allow",

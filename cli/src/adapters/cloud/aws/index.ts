@@ -10,6 +10,7 @@ import {
   IAMClient,
   ListAttachedRolePoliciesCommand,
   ListRolePoliciesCommand,
+  UpdateAssumeRolePolicyCommand,
   UpdateRoleCommand,
 } from '@aws-sdk/client-iam'
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda'
@@ -26,6 +27,58 @@ import {
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts'
 import type { ProvisioningConfig } from '../../../config/schema.js'
 import { log } from '../../../lib/logger.js'
+
+/**
+ * The `token.actions.githubusercontent.com:sub` patterns a Biffo OIDC role
+ * trusts, for workflows in exactly one GitHub repository.
+ *
+ * GitHub emits one of two subject formats depending on the account:
+ *
+ *   legacy:         repo:<org>/<repo>:ref:refs/heads/main
+ *   ID-qualified:   repo:<org>@<ownerId>/<repo>@<repoId>:ref:refs/heads/main
+ *
+ * The ID-qualified ("immutable unique") form appends the numeric owner and
+ * repository IDs so the claim survives org and repo renames. A policy matching
+ * only the legacy form denies every assume-role on an account emitting the
+ * ID-qualified one — the defect in issue #271, which blocked every deploy of a
+ * freshly scaffolded project.
+ *
+ * Both patterns are emitted so the role works whichever format the account
+ * issues, and the IDs are *pinned* rather than wildcarded (`@*`) because they
+ * are knowable at init time and pinning is what the immutable format is for.
+ * The trailing `:*` spans the claim's ref/environment/pull_request suffix — the
+ * same breadth the legacy pattern always had. Neither pattern can match another
+ * repository: the org/repo segment is fully anchored in both.
+ */
+export function oidcSubjectPatterns(
+  org: string,
+  repo: string,
+  repoIds?: { ownerId: number; repoId: number },
+): string[] {
+  const patterns = [`repo:${org}/${repo}:*`]
+  if (repoIds) {
+    patterns.push(`repo:${org}@${repoIds.ownerId}/${repo}@${repoIds.repoId}:*`)
+  }
+  return patterns
+}
+
+/** Assume-role policy document trusting `subjects` via the GitHub OIDC provider. */
+export function buildOidcTrustPolicy(oidcProviderArn: string, subjects: string[]): unknown {
+  return {
+    Version: '2012-10-17',
+    Statement: [
+      {
+        Effect: 'Allow',
+        Principal: { Federated: oidcProviderArn },
+        Action: 'sts:AssumeRoleWithWebIdentity',
+        Condition: {
+          StringEquals: { 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com' },
+          StringLike: { 'token.actions.githubusercontent.com:sub': subjects },
+        },
+      },
+    ],
+  }
+}
 
 export class AwsAdapter {
   private region: string
@@ -258,7 +311,20 @@ export class AwsAdapter {
     log.success(`Terraform state bucket deleted: ${bucketName}`)
   }
 
-  async setupOidcTrust(config: ProvisioningConfig): Promise<string> {
+  /**
+   * Set up OIDC trust between GitHub Actions and AWS.
+   *
+   * `repoIds` are the immutable numeric GitHub owner/repo IDs, resolved by the
+   * source-control adapter (`GitHubAdapter.getRepoIds`) and passed in as plain
+   * numbers so this adapter never talks to GitHub itself. Supply them whenever
+   * they are obtainable: without them the trust policy can only match the
+   * legacy subject format, and on any account where GitHub emits ID-qualified
+   * subjects every deploy fails `AccessDenied` (issue #271).
+   */
+  async setupOidcTrust(
+    config: ProvisioningConfig,
+    repoIds?: { ownerId: number; repoId: number },
+  ): Promise<string> {
     const { org, repo } = (
       config.source_control as { provider: 'github'; config: { org: string; repo: string } }
     ).config
@@ -293,6 +359,16 @@ export class AwsAdapter {
     // MaxSessionDuration must allow at least that (AWS default is 3600s).
     const maxSessionDuration = 7200
 
+    const subjects = oidcSubjectPatterns(org, repo, repoIds)
+    const trustPolicy = JSON.stringify(buildOidcTrustPolicy(oidcProviderArn, subjects))
+    if (!repoIds) {
+      log.warn(
+        'GitHub owner/repo IDs unavailable — trusting only the legacy subject format. ' +
+          'If deploys fail with sts:AssumeRoleWithWebIdentity AccessDenied, re-run `biffo init` ' +
+          'to add the ID-qualified subject (see issue #271).',
+      )
+    }
+
     // Create the role if it doesn't already exist
     let roleArn: string
     try {
@@ -304,24 +380,21 @@ export class AwsAdapter {
           new UpdateRoleCommand({ RoleName: roleName, MaxSessionDuration: maxSessionDuration }),
         )
       }
+      // Re-assert the trust policy on every run. A role provisioned by an older
+      // CLI trusts only `repo:<org>/<repo>:*`, which cannot match GitHub's
+      // ID-qualified subject format — re-running `biffo init` is what repairs it
+      // (issue #271). UpdateAssumeRolePolicy replaces the document wholesale, so
+      // this converges an existing role onto exactly the patterns above.
+      await iam.send(
+        new UpdateAssumeRolePolicyCommand({
+          RoleName: roleName,
+          PolicyDocument: trustPolicy,
+        }),
+      )
     } catch (err: unknown) {
       if ((err as { name?: string }).name !== 'NoSuchEntityException') throw err
 
       log.info(`Creating OIDC trust role: ${roleName}`)
-      const trustPolicy = JSON.stringify({
-        Version: '2012-10-17',
-        Statement: [
-          {
-            Effect: 'Allow',
-            Principal: { Federated: oidcProviderArn },
-            Action: 'sts:AssumeRoleWithWebIdentity',
-            Condition: {
-              StringEquals: { 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com' },
-              StringLike: { 'token.actions.githubusercontent.com:sub': `repo:${org}/${repo}:*` },
-            },
-          },
-        ],
-      })
       const { Role } = await iam.send(
         new CreateRoleCommand({
           RoleName: roleName,
@@ -331,6 +404,11 @@ export class AwsAdapter {
       )
       roleArn = Role!.Arn!
     }
+
+    // Record exactly what the role trusts. When an OIDC assume-role is denied,
+    // neither the action nor CloudTrail names the presented `sub` — having the
+    // trusted patterns in the init output is what makes the mismatch legible.
+    subjects.forEach((s) => log.info(`  Trusted OIDC subject: ${s}`))
 
     // Always ensure AdministratorAccess is attached — AttachRolePolicy is idempotent
     // (no-op if already attached). Terraform needs broad permissions to provision the

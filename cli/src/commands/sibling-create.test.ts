@@ -67,6 +67,7 @@ function makeGithubMock() {
     createPullRequest: vi
       .fn()
       .mockResolvedValue({ url: 'https://github.com/acme/core-app/pull/1', number: 1 }),
+    getRepoIds: vi.fn().mockResolvedValue({ ownerId: 42, repoId: 99 }),
   }
 }
 
@@ -230,7 +231,10 @@ describe('runSiblingCreate', () => {
     expect(github.createEmptyRepo).toHaveBeenCalledWith('acme', 'reports', 'Reports sibling')
     expect(git.init).toHaveBeenCalledWith(expect.any(String), 'main')
     expect(git.push).toHaveBeenCalledWith(expect.any(String), 'main', { token: 'gh-token' })
-    expect(aws.setupOidcTrust).toHaveBeenCalledWith(SIBLING_CONFIG)
+    expect(aws.setupOidcTrust).toHaveBeenCalledWith(SIBLING_CONFIG, {
+      ownerId: 42,
+      repoId: 99,
+    })
     expect(aws.bootstrapTerraformBackend).toHaveBeenCalledWith('reports')
     expect(github.configureBranchProtection).toHaveBeenCalledWith(SIBLING_CONFIG)
     expect(github.enableVulnerabilityAlerts).toHaveBeenCalledOnce()

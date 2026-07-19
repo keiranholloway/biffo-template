@@ -634,6 +634,61 @@ export class GitHubAdapter {
     }
   }
 
+  /**
+   * Resolve the immutable numeric owner and repository IDs for `org/repo`.
+   *
+   * These are what GitHub Actions embeds in the OIDC `sub` claim on accounts
+   * that emit the *unique/immutable* subject format:
+   *
+   *     repo:<org>@<ownerId>/<repo>@<repoId>:ref:refs/heads/main
+   *
+   * The AWS adapter pins these exact IDs into the role's trust policy so the
+   * condition matches that format as tightly as it matches the legacy
+   * `repo:<org>/<repo>:...` one — see `buildOidcTrustPolicy`. Returning IDs
+   * (plain numbers) rather than a policy keeps the cloud/source-control adapter
+   * boundary intact: only this adapter ever talks to GitHub.
+   */
+  async getRepoIds(org: string, repo: string): Promise<{ ownerId: number; repoId: number }> {
+    const { data } = await this.octokit.repos.get({ owner: org, repo })
+    return { ownerId: data.owner.id, repoId: data.id }
+  }
+
+  /**
+   * True when any job in `runId` failed at `sts:AssumeRoleWithWebIdentity`.
+   *
+   * `aws-actions/configure-aws-credentials` reports only "Not authorized to
+   * perform sts:AssumeRoleWithWebIdentity" and CloudTrail logs "An unknown
+   * error occurred" — neither names the `sub` the token actually presented,
+   * which is the one fact that identifies a trust-policy subject mismatch
+   * (issue #271). Detecting the signature lets `biffo deploy` say so directly
+   * instead of leaving the user with a generic red run.
+   *
+   * Best-effort: any failure to read logs returns `false` so a diagnostic
+   * lookup can never itself break a deploy.
+   */
+  async hasOidcAssumeRoleFailure(org: string, repo: string, runId: number): Promise<boolean> {
+    try {
+      const { data } = await this.octokit.actions.listJobsForWorkflowRun({
+        owner: org,
+        repo,
+        run_id: runId,
+        filter: 'latest',
+      })
+      const failed = data.jobs.filter((j) => j.conclusion === 'failure')
+      for (const job of failed) {
+        const { data: logs } = await this.octokit.actions.downloadJobLogsForWorkflowRun({
+          owner: org,
+          repo,
+          job_id: job.id,
+        })
+        if (String(logs).includes('sts:AssumeRoleWithWebIdentity')) return true
+      }
+    } catch {
+      /* diagnostics only — never fail a deploy because logs were unreadable */
+    }
+    return false
+  }
+
   async getLatestWorkflowRunId(
     org: string,
     repo: string,

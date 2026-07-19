@@ -4,7 +4,14 @@ import { checkCoreVersionBump } from './core-version-guard.js'
 
 const manifest: CoreManifest = {
   version: 1,
-  templateOwned: ['services/api/', 'cli/', 'modules/', 'core.version', 'core-manifest.json'],
+  templateOwned: [
+    'services/api/',
+    'services/_plugins/',
+    'cli/',
+    'modules/',
+    'core.version',
+    'core-manifest.json',
+  ],
   userOwned: ['services/', 'apps/', 'infra/'],
 }
 
@@ -69,13 +76,28 @@ describe('checkCoreVersionBump', () => {
     expect(result.skippedAsInstance).toBe(false)
   })
 
-  it('honors the ownership boundary — services/rbac is user-owned, services/api is not', () => {
+  it('honors the ownership boundary — services/acme-crm is user-owned, services/api is not', () => {
     const result = checkCoreVersionBump(
-      ['services/rbac/biffo.plugin.json', 'services/api/src/api/main.py'],
+      ['services/acme-crm/biffo.plugin.json', 'services/api/src/api/main.py'],
       false,
       manifest,
     )
     expect(result.bumpRequired).toBe(true)
     expect(result.templateOwnedChanges).toEqual(['services/api/src/api/main.py'])
+  })
+
+  it('demands a bump for a first-party plugin under services/_plugins/, not for services/<name>/', () => {
+    const result = checkCoreVersionBump(
+      [
+        'services/_plugins/orchestrator/src/orchestrator/actions.py',
+        'services/acme-crm/src/acme/main.py',
+      ],
+      false,
+      manifest,
+    )
+    expect(result.bumpRequired).toBe(true)
+    expect(result.templateOwnedChanges).toEqual([
+      'services/_plugins/orchestrator/src/orchestrator/actions.py',
+    ])
   })
 })

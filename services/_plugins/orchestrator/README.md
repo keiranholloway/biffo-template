@@ -74,6 +74,6 @@ them via a DDL import (ADR-0005) until the editing UI lands.
 
 ## Tests
 
-`uv run pytest services/orchestrator/tests` — signing, the email action, the full
+`uv run pytest services/_plugins/orchestrator/tests` — signing, the email action, the full
 event→claim→act→record flow (Core API and SES faked), idempotent replay skip, and
 failure recording.

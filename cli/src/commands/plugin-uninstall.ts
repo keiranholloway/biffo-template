@@ -5,6 +5,7 @@ import { Command } from 'commander'
 import inquirer from 'inquirer'
 import { GitAdapter } from '../adapters/git/index.js'
 import { log } from '../lib/logger.js'
+import { FIRST_PARTY_PLUGINS_DIR, pluginDir } from '../lib/plugin-locations.js'
 import { validateManifest } from '../lib/plugin-manifest.js'
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]*$/
@@ -102,6 +103,19 @@ export async function runPluginUninstall(
 
   const targetDir = join(servicesDir, name)
   if (!existsSync(targetDir)) {
+    // A first-party plugin lives in the template-owned services/_plugins/
+    // carve-out (#243). Deleting it here would only be undone by the next
+    // `biffo core upgrade`, which re-carries every template-owned path — so
+    // point the user at the supported off-switch instead of half-removing it.
+    const firstParty = join(servicesDir, FIRST_PARTY_PLUGINS_DIR, name)
+    if (existsSync(firstParty)) {
+      throw new Error(
+        `Plugin '${name}' is a first-party plugin at ${pluginDir(name, 'first-party')}/, which is ` +
+          `template-owned — \`biffo core upgrade\` would restore it on the next upgrade. ` +
+          `Disable it instead by removing '${name}' from \`enabled_plugins\` in ` +
+          `infra/environments/<env>/main.tf and re-applying.`,
+      )
+    }
     throw new Error(`Plugin '${name}' is not installed at services/${name}/.`)
   }
 

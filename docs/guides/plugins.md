@@ -4,6 +4,32 @@ A plugin adds tables and API endpoints to a Biffo project without you writing an
 
 For the design rationale, see [ADR-0003](../ADR/0003-plugin-system-and-marketplace.md). Enabling the endpoints a plugin declares is covered by [Exposing CRUD endpoints](generic-crud-endpoints.md).
 
+## Where plugins live, and who owns them
+
+There are two plugin channels, and **the directory is what declares the channel**:
+
+|                                  | First-party                                             | Third-party / your own                                           |
+| -------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------- |
+| Lives at                         | `services/_plugins/<name>/`                             | `services/<name>/`                                               |
+| Ownership (`core-manifest.json`) | template-owned                                          | user-owned                                                       |
+| Reaches your instance via        | `biffo core upgrade` — automatic, in lockstep with core | `biffo plugin install <name>@<minor>`, or you commit it yourself |
+| Safe to edit in your instance?   | **No** — an upgrade three-way-merges it                 | Yes — an upgrade never touches it                                |
+| Example                          | `orchestrator`                                          | yours                                                            |
+
+Put **your** plugin under `services/<name>/`. Putting it under
+`services/_plugins/` would hand it to `biffo core upgrade` to manage, which will
+merge the template's copy over yours.
+
+The split is ownership only. Discovery, packaging, the `modules/plugins/<name>/`
+Terraform module, and the plugin's Lambda name are all keyed on the plugin
+**name**, so a plugin behaves identically either way at runtime. See
+[ADR-0003](../ADR/0003-plugin-system-and-marketplace.md#plugin-distribution).
+
+> **Upgrading an older instance:** if your instance has `services/orchestrator/`
+> (the pre-#243 location), move it to `services/_plugins/orchestrator/`. It will
+> keep working where it is — discovery matches both paths — but it stays outside
+> `biffo core upgrade`'s reach until you move it, and will drift.
+
 ## Two realities today
 
 - **Authoring and shipping your own plugin — works.** Write a manifest, put it under `services/<name>/`, deploy. This is the path most people want and the rest of this guide focuses on it.
@@ -13,7 +39,7 @@ For the design rationale, see [ADR-0003](../ADR/0003-plugin-system-and-marketpla
 
 A plugin repo (or just a directory) has a `biffo.plugin.json` at its root and, optionally, `src/` for its own non-CRUD code and `terraform/` for infra. The **manifest is the only part the Core API needs** — it's what gets bundled into the Lambda and turned into routes.
 
-The starting point to copy is **`_skeletons/plugin-template/biffo.plugin.json`**. For a live, deployed plugin to study (event runtime, its own Lambda + Terraform), see **`services/orchestrator`**.
+The starting point to copy is **`_skeletons/plugin-template/biffo.plugin.json`**. For a live, deployed plugin to study (event runtime, its own Lambda + Terraform), see **`services/_plugins/orchestrator`**.
 
 ### The manifest
 
@@ -97,14 +123,14 @@ Each table's `permissions` block gates its routes (ADR-0004). Default-deny: an o
 
 ## The `biffo plugin` commands
 
-| Command                               | What it does                                                               |
-| ------------------------------------- | -------------------------------------------------------------------------- |
-| `biffo plugin list`                   | Lists plugins in your checkout (`services/*/biffo.plugin.json`)            |
-| `biffo plugin sync-migrations [name]` | Generates missing Alembic migrations for local plugins                     |
-| `biffo plugin info <name>`            | Shows a registry entry (blocked until the registry is populated)           |
-| `biffo plugin install <name>@<minor>` | Clone → copy into `services/<name>/` → migration → commit (registry-gated) |
-| `biffo plugin upgrade <name>@<minor>` | Replace an installed plugin with a newer minor (registry-gated)            |
-| `biffo plugin uninstall <name>`       | Remove `services/<name>/` (and any `modules/plugins/<name>/`) and commit   |
+| Command                               | What it does                                                                   |
+| ------------------------------------- | ------------------------------------------------------------------------------ |
+| `biffo plugin list`                   | Lists plugins in your checkout (both `services/*/` and `services/_plugins/*/`) |
+| `biffo plugin sync-migrations [name]` | Generates missing Alembic migrations for local plugins                         |
+| `biffo plugin info <name>`            | Shows a registry entry (blocked until the registry is populated)               |
+| `biffo plugin install <name>@<minor>` | Clone → copy into `services/<name>/` → migration → commit (registry-gated)     |
+| `biffo plugin upgrade <name>@<minor>` | Replace an installed plugin with a newer minor (registry-gated)                |
+| `biffo plugin uninstall <name>`       | Remove `services/<name>/` (and any `modules/plugins/<name>/`) and commit       |
 
 ## Things the CLI does _not_ do (do these yourself)
 

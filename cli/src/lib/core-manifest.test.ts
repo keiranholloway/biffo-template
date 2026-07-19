@@ -35,7 +35,7 @@ describe('isTemplateOwned (longest-prefix, tie -> user)', () => {
     expect(isTemplateOwned('services/api/src/x.py', MANIFEST)).toBe(true)
   })
   it('a user subtree under no more-specific template prefix is user-owned', () => {
-    expect(isTemplateOwned('services/rbac/biffo.plugin.json', MANIFEST)).toBe(false)
+    expect(isTemplateOwned('services/acme-crm/biffo.plugin.json', MANIFEST)).toBe(false)
     expect(isTemplateOwned('infra/environments/dev/main.tf', MANIFEST)).toBe(false)
     expect(isTemplateOwned('README.md', MANIFEST)).toBe(false)
   })
@@ -49,9 +49,24 @@ describe('real repo core-manifest.json', () => {
     const manifest = readCoreManifest(repoRoot)
     expect(manifest.version).toBe(1)
     expect(isTemplateOwned('services/api/src/api/main.py', manifest)).toBe(true)
-    expect(isTemplateOwned('services/rbac/biffo.plugin.json', manifest)).toBe(false)
+    expect(isTemplateOwned('services/acme-crm/biffo.plugin.json', manifest)).toBe(false)
     expect(isTemplateOwned('infra/environments/dev/main.tf', manifest)).toBe(false)
     expect(isTemplateOwned('biffo.core.json', manifest)).toBe(false)
+  })
+
+  it('carves out services/_plugins/ so first-party plugins are carried by core upgrade', () => {
+    const manifest = readCoreManifest(repoRoot)
+    // A first-party plugin lives in the template-owned carve-out, so
+    // `biffo core upgrade` distributes it instead of fail-closing on it (#243).
+    expect(isTemplateOwned('services/_plugins/orchestrator/biffo.plugin.json', manifest)).toBe(true)
+    expect(
+      isTemplateOwned('services/_plugins/orchestrator/src/orchestrator/plugin.py', manifest),
+    ).toBe(true)
+    expect(isTemplateOwned('services/_plugins/orchestrator/terraform/main.tf', manifest)).toBe(true)
+    // ...while a third-party/user plugin under the user-owned services/ is
+    // never overwritten by an upgrade. Where it lives is what decides.
+    expect(isTemplateOwned('services/foo/biffo.plugin.json', manifest)).toBe(false)
+    expect(isTemplateOwned('services/acme-crm/terraform/main.tf', manifest)).toBe(false)
   })
 
   it('carves out migrations/versions (append-only per-instance chain) but keeps the framework', () => {
@@ -101,7 +116,7 @@ describe('listTemplateOwnedFiles + computeCoreDiff', () => {
 
   it('lists only template-owned files and skips excluded dirs', () => {
     write(template, 'services/api/main.py', 'x')
-    write(template, 'services/rbac/plugin.json', 'y') // user-owned
+    write(template, 'services/acme-crm/plugin.json', 'y') // user-owned
     write(template, 'node_modules/foo/index.js', 'z') // hard-excluded
     const files = listTemplateOwnedFiles(template, MANIFEST)
     expect(files).toEqual(['services/api/main.py'])
@@ -127,8 +142,8 @@ describe('listTemplateOwnedFiles + computeCoreDiff', () => {
     // removed (in instance, not template)
     write(instance, 'services/api/gone.py', 'obsolete')
     // user-owned differences are ignored entirely
-    write(template, 'services/rbac/a.json', '1')
-    write(instance, 'services/rbac/a.json', '2')
+    write(template, 'services/acme-crm/a.json', '1')
+    write(instance, 'services/acme-crm/a.json', '2')
 
     const diff = computeCoreDiff(template, instance, MANIFEST)
     expect(diff.modified).toEqual(['services/api/main.py'])

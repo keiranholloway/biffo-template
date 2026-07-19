@@ -68,7 +68,7 @@ class WorkflowRunResponse(BiffoBaseSchema):
 # Triggers come from the canonical event registry (``events/registry.py``, ADR-0010)
 # — the single source of truth for what a trigger is, shared with the publishers
 # that emit those events. Actions mirror the engine's action registry
-# (services/orchestrator/.../actions.py); extend WORKFLOW_ACTIONS to offer a new
+# (services/_plugins/orchestrator/.../actions.py); extend WORKFLOW_ACTIONS to offer a new
 # action in the UI.
 
 WORKFLOW_ACTIONS: list[dict[str, Any]] = [

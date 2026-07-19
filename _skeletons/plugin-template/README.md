@@ -51,7 +51,7 @@ This is the canonical plugin shape: the `BiffoPluginBase` subclass, the
 module, and the fake-Core-API test pattern.
 
 The working first-party example to read alongside it is the **orchestration
-engine** (`services/orchestrator/` in the biffo-template monorepo) — same base
+engine** (`services/_plugins/orchestrator/` in the biffo-template monorepo) — same base
 class, same layout, and it ships a real `terraform/` too. It has considerably
 more moving parts (workflow definitions, actions, SigV4 calls into the Core
 API); this template's `example_plugin` is deliberately the smallest version of
@@ -65,7 +65,7 @@ seed, one `@subscribe` handler.
 
 ## Standalone repo, not a monorepo package
 
-Unlike biffo-template's own in-monorepo plugins (e.g. `services/orchestrator/`,
+Unlike biffo-template's own in-monorepo plugins (e.g. `services/_plugins/orchestrator/`,
 a uv workspace member that resolves `biffo-plugin-sdk` from the workspace and
 so needs no `[build-system]` of its own), this template's `pyproject.toml` **does** declare
 `[build-system]` (hatchling) because it's meant to live in its own

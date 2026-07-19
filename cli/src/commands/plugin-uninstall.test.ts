@@ -84,6 +84,27 @@ describe('runPluginUninstall', () => {
     ).rejects.toThrow('is not installed at services/not-installed/')
   })
 
+  it('refuses to uninstall a first-party plugin, pointing at enabled_plugins instead', async () => {
+    // services/_plugins/ is template-owned (#243): deleting it here would be
+    // undone by the next `biffo core upgrade`, so the CLI must not pretend.
+    mkdirSync(join(projectRoot, 'services', '_plugins', 'orchestrator'), { recursive: true })
+    writeFileSync(
+      join(projectRoot, 'services', '_plugins', 'orchestrator', 'biffo.plugin.json'),
+      JSON.stringify({ name: 'orchestrator', version: '0.1.0' }),
+    )
+
+    await expect(
+      runPluginUninstall(
+        'orchestrator',
+        { dryRun: false, force: true, keepData: false, cwd: projectRoot },
+        { git: makeGitMock() as never },
+      ),
+    ).rejects.toThrow(/first-party plugin at services\/_plugins\/orchestrator\/.*enabled_plugins/s)
+
+    // ...and it is still there.
+    expect(existsSync(join(projectRoot, 'services', '_plugins', 'orchestrator'))).toBe(true)
+  })
+
   it('rejects when cwd is not a git repository', async () => {
     const git = makeGitMock()
     git.isGitRepo.mockResolvedValue(false)

@@ -154,12 +154,15 @@ jobs:
           cp -r src/ package/
           cp -r migrations/ package/
           cp alembic.ini package/
-          # Bundle every installed plugin's manifest (services/*/biffo.plugin.json,
-          # sibling to services/api/ in the full checkout) so discover_plugin_manifests()
-          # can find them at runtime — the Lambda otherwise only ships services/api/
-          # itself. See api.plugins module docstring for the read side of this.
+          # Bundle every installed plugin's manifest so discover_plugin_manifests()
+          # can find it at runtime — the Lambda otherwise only ships services/api/
+          # itself. Both plugin channels are bundled: services/*/ (third-party,
+          # user-owned) and services/_plugins/*/ (first-party, template-owned).
+          # They flatten to services/<name>/ in the zip, keyed on plugin name, so
+          # the runtime layout is identical either way. See the api.plugins module
+          # docstring for the read side of this.
           mkdir -p package/services
-          for manifest in ../services/*/biffo.plugin.json; do
+          for manifest in ../services/*/biffo.plugin.json ../services/_plugins/*/biffo.plugin.json; do
             [ -f "$manifest" ] || continue
             plugin_name=$(basename "$(dirname "$manifest")")
             mkdir -p "package/services/$plugin_name"
@@ -253,7 +256,10 @@ jobs:
           shopt -s nullglob
           prefix='${{ vars.CORE_API_LAMBDA_NAME }}'
           prefix="${prefix%-core-api}"
-          for manifest in services/*/biffo.plugin.json; do
+          # Both plugin channels (see the manifest-bundling loop above); the
+          # terraform module and Lambda name are resolved by plugin *name*
+          # (basename of the plugin dir), so the source channel is immaterial here.
+          for manifest in services/*/biffo.plugin.json services/_plugins/*/biffo.plugin.json; do
             plugin_dir="$(dirname "$manifest")"
             name="$(basename "$plugin_dir")"
             [ -d "modules/plugins/$name" ] || { echo "skip $name (no installed terraform module)"; continue; }
@@ -391,12 +397,15 @@ jobs:
           cp -r src/ package/
           cp -r migrations/ package/
           cp alembic.ini package/
-          # Bundle every installed plugin's manifest (services/*/biffo.plugin.json,
-          # sibling to services/api/ in the full checkout) so discover_plugin_manifests()
-          # can find them at runtime — the Lambda otherwise only ships services/api/
-          # itself. See api.plugins module docstring for the read side of this.
+          # Bundle every installed plugin's manifest so discover_plugin_manifests()
+          # can find it at runtime — the Lambda otherwise only ships services/api/
+          # itself. Both plugin channels are bundled: services/*/ (third-party,
+          # user-owned) and services/_plugins/*/ (first-party, template-owned).
+          # They flatten to services/<name>/ in the zip, keyed on plugin name, so
+          # the runtime layout is identical either way. See the api.plugins module
+          # docstring for the read side of this.
           mkdir -p package/services
-          for manifest in ../services/*/biffo.plugin.json; do
+          for manifest in ../services/*/biffo.plugin.json ../services/_plugins/*/biffo.plugin.json; do
             [ -f "$manifest" ] || continue
             plugin_name=$(basename "$(dirname "$manifest")")
             mkdir -p "package/services/$plugin_name"
@@ -490,7 +499,10 @@ jobs:
           shopt -s nullglob
           prefix='${{ vars.CORE_API_LAMBDA_NAME }}'
           prefix="${prefix%-core-api}"
-          for manifest in services/*/biffo.plugin.json; do
+          # Both plugin channels (see the manifest-bundling loop above); the
+          # terraform module and Lambda name are resolved by plugin *name*
+          # (basename of the plugin dir), so the source channel is immaterial here.
+          for manifest in services/*/biffo.plugin.json services/_plugins/*/biffo.plugin.json; do
             plugin_dir="$(dirname "$manifest")"
             name="$(basename "$plugin_dir")"
             [ -d "modules/plugins/$name" ] || { echo "skip $name (no installed terraform module)"; continue; }
@@ -640,12 +652,15 @@ jobs:
           cp -r src/ package/
           cp -r migrations/ package/
           cp alembic.ini package/
-          # Bundle every installed plugin's manifest (services/*/biffo.plugin.json,
-          # sibling to services/api/ in the full checkout) so discover_plugin_manifests()
-          # can find them at runtime — the Lambda otherwise only ships services/api/
-          # itself. See api.plugins module docstring for the read side of this.
+          # Bundle every installed plugin's manifest so discover_plugin_manifests()
+          # can find it at runtime — the Lambda otherwise only ships services/api/
+          # itself. Both plugin channels are bundled: services/*/ (third-party,
+          # user-owned) and services/_plugins/*/ (first-party, template-owned).
+          # They flatten to services/<name>/ in the zip, keyed on plugin name, so
+          # the runtime layout is identical either way. See the api.plugins module
+          # docstring for the read side of this.
           mkdir -p package/services
-          for manifest in ../services/*/biffo.plugin.json; do
+          for manifest in ../services/*/biffo.plugin.json ../services/_plugins/*/biffo.plugin.json; do
             [ -f "$manifest" ] || continue
             plugin_name=$(basename "$(dirname "$manifest")")
             mkdir -p "package/services/$plugin_name"
@@ -739,7 +754,10 @@ jobs:
           shopt -s nullglob
           prefix='${{ vars.CORE_API_LAMBDA_NAME }}'
           prefix="${prefix%-core-api}"
-          for manifest in services/*/biffo.plugin.json; do
+          # Both plugin channels (see the manifest-bundling loop above); the
+          # terraform module and Lambda name are resolved by plugin *name*
+          # (basename of the plugin dir), so the source channel is immaterial here.
+          for manifest in services/*/biffo.plugin.json services/_plugins/*/biffo.plugin.json; do
             plugin_dir="$(dirname "$manifest")"
             name="$(basename "$plugin_dir")"
             [ -d "modules/plugins/$name" ] || { echo "skip $name (no installed terraform module)"; continue; }

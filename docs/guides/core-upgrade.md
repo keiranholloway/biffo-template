@@ -34,7 +34,7 @@ An upgrade bumps `biffo.core.json` in the same PR. Instances scaffolded before v
 Ownership is declared in the template's `core-manifest.json`. Only **template-owned** paths are ever changed:
 
 - **Template-owned:** `services/api/`, `services/_template/`, `modules/`, `packages/`, `cli/`, `.github/`, `scripts/`, and root tooling configs.
-- **Left alone (user-owned):** your plugins under `services/<name>/`, `infra/environments/`, `apps/`, `db/`, `docs/ADR/` (your own decision record), `services/api/migrations/versions/` (your Alembic chain), `core.version`, and your config files.
+- **Left alone (user-owned):** your plugins under `services/<name>/` (first-party plugins under `services/_plugins/` _are_ carried — see ADR-0003), `infra/environments/`, `apps/`, `db/`, `docs/ADR/` (your own decision record), `services/api/migrations/versions/` (your Alembic chain), `core.version`, and your config files.
 
 On any ambiguity, user-owned wins — the upgrade is fail-closed and never touches a path it isn't sure the template owns.
 

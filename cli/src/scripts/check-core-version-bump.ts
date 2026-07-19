@@ -6,11 +6,17 @@
  *
  * Ownership is resolved by the same `isTemplateOwned` logic core upgrade uses,
  * so the guard and the sync agree on what "template-owned" means.
+ *
+ * The check is template-only: an instance (detected by `biffo.core.json` at its
+ * root) skips it, because a core upgrade PR there necessarily rewrites
+ * template-owned paths and bumps `biffo.core.json` rather than `core.version`.
  */
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { execa } from 'execa'
 import { readCoreManifest } from '../lib/core-manifest.js'
 import { checkCoreVersionBump } from '../lib/core-version-guard.js'
-import { CORE_VERSION_FILE } from '../lib/core-version.js'
+import { CORE_VERSION_FILE, INSTANCE_CORE_FILE } from '../lib/core-version.js'
 
 async function main(): Promise<void> {
   const base = process.env['GITHUB_BASE_REF'] ?? process.argv[2]
@@ -32,11 +38,21 @@ async function main(): Promise<void> {
 
   const manifest = readCoreManifest(root)
   const coreVersionChanged = changedFiles.includes(CORE_VERSION_FILE)
-  const { bumpRequired, templateOwnedChanges } = checkCoreVersionBump(
+  const isInstance = existsSync(join(root, INSTANCE_CORE_FILE))
+  const { bumpRequired, templateOwnedChanges, skippedAsInstance } = checkCoreVersionBump(
     changedFiles,
     coreVersionChanged,
     manifest,
+    isInstance,
   )
+
+  if (skippedAsInstance) {
+    console.log(
+      `✓ core.version guard: skipped — this is an instance (${INSTANCE_CORE_FILE} present), ` +
+        `not the template. Instances track core via ${INSTANCE_CORE_FILE}.`,
+    )
+    return
+  }
 
   if (bumpRequired) {
     console.error(

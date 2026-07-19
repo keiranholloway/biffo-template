@@ -32,6 +32,25 @@ it, this file wins.
   checked out in a worktree — remove the worktree first (or delete the branch
   after).
 
+### Working alongside other agents
+
+Several agents often run concurrently in this repo. A worktree isolates your
+**files**; it does not isolate everything.
+
+- **`git stash` is shared across all worktrees.** A bare `git stash pop` pops
+  whatever is on top of the _repository's_ stack — which may be another
+  session's uncommitted work, in files you never touched. This has already
+  happened here. Prefer committing to your own branch over stashing; if you
+  must stash, use `git stash push -m "<your branch>"` and pop by name, and
+  never assume `stash@{0}` is yours.
+- **`core.version` will conflict.** Every template-owned change bumps it
+  (ADR-0006), so concurrent PRs collide there by design. Rebase onto the
+  updated default branch and re-bump — do not coordinate with the other agent,
+  and do not assume the number you chose is still free. See §3 for the trap
+  that follows from this.
+- **Do not remove or modify a worktree you did not create.** Pulling the ground
+  out from under a running agent breaks it mid-flight.
+
 ## 2. Branch from, and PR into, the repo's default branch
 
 - Determine the integration branch with `gh repo view --json defaultBranchRef`.
@@ -59,6 +78,38 @@ it, this file wins.
 - Mark a PR **ready** (not draft) when it is meant to merge.
 - Behavior changes ship **with tests**. Don't reduce coverage to make CI pass.
 
+### Fixing a bug: reproduce the actual failure, not a theory of it
+
+A green test suite proves your test passes. It does **not** prove the reported
+bug is fixed, and the two are only the same thing if your test observes the
+failure the reporter saw.
+
+- **Reproduce the failure before fixing it**, by the route the reporter used.
+  If you cannot reproduce it, you do not yet know what you are fixing.
+- **Verify the fix by that same route.** For anything that only manifests in a
+  running deployment — client-side routing, CDN behaviour, auth flows,
+  infrastructure — a passing unit test is not evidence. Say so in the PR rather
+  than implying verification you did not perform.
+- **Do not close an issue you have not seen fixed.** Land the fix, then confirm
+  against reality, then close.
+
+This is not hypothetical. Issue #275 (portal navigation landing on the raw RSC
+payload) was diagnosed from source, "fixed", shipped with a drift guard, and
+closed — on a wrong cause. The suite was green, the reasoning looked sound, and
+the bug was untouched. It survived a full teardown and redeploy before a human
+clicked the link and found it. The issue's own text had said to verify by
+clicking a deployed portal; that instruction was written and then not followed.
+
+The corollary: when a fix cannot be verified locally, batch it into a
+deploy/verification cycle and be explicit about what remains unproven, rather
+than treating merge as completion.
+
+### Checking exit status through a pipe
+
+`cmd | tail` reports `tail`'s status, not `cmd`'s — a failing command reads as
+success. Use `${PIPESTATUS[0]}`. This masked two real failures in one session,
+including a `teardown` that reported success while destroying nothing.
+
 ## 5. Merging — never merge red
 
 - Get CI green yourself and confirm it — run `gh pr checks <N>` and wait for all
@@ -82,12 +133,27 @@ it, this file wins.
 - A red integration branch blocks everyone — treat fixing it as the next task.
 - For **live** instances, a merge may deploy to production immediately. Verify
   the deploy succeeded.
+- **A run is not guaranteed to exist.** GitHub sometimes creates no
+  push-triggered run for a commit at all — on 2026-07-19 two of four
+  consecutive merges here got none, while others arrived ~20 minutes late.
+  Nothing distinguishes "not yet" from "never". If no run appears, re-trigger
+  it via `workflow_dispatch` rather than waiting indefinitely or claiming a
+  verification you did not make. Say plainly that you could not verify.
 
 ## 7. Security
 
 - **Never commit secrets** (keys, tokens, credentials, `.env` values).
 - **Never silently disable a security gate.** If a gate must be removed or
   loosened, do it in the open and raise a tracking issue to restore it.
+- **Use the canonical placeholder values in fixtures.** `.gitleaks.toml`'s
+  `biffo-aws-account-id` rule matches _any_ bare 12-digit number and allowlists
+  only `123456789012` and `999999999999`. A plausible-looking invented account
+  id fails Secret Scan. Two agents hit this in one day.
+- **Secret Scan reads git history, not just your diff.** Fixing the value at
+  your branch tip is not enough — the finding survives in the earlier commit.
+  Rewrite the branch (amend or squash) and force-push. Force-pushing your own
+  topic branch is fine; only the integration branch is protected (§2). Never
+  fix a scan failure by editing the allowlist.
 
 ## 8. Live instances — never teardown
 

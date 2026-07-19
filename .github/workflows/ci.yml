@@ -141,8 +141,23 @@ jobs:
           gitleaks version
       # First pass: scan git history (fetch-depth: 0 above), catching secrets
       # committed then removed within the same history.
+      #
+      # --log-opts is load-bearing (issue #258). gitleaks' default git log
+      # arguments include `--all`, so with fetch-depth: 0 — which fetches every
+      # remote ref, not just the one being built — the scan covers commits that
+      # live only on *unmerged* branches. A single bad commit on anyone's open
+      # branch then reddens `main` and every open PR simultaneously, with
+      # nothing in the built ref's history responsible for it. That happened
+      # live and cost two separate diagnostics.
+      #
+      # Scoping to HEAD restricts the scan to commits reachable from the ref
+      # actually under test, which is exactly the set this job is accountable
+      # for. It does NOT weaken detection: fetch-depth: 0 stays, so the full
+      # reachable history is still walked and a secret committed then removed
+      # within the branch is still caught. On pull_request, HEAD is the
+      # merge commit, so the PR's own new commits are in scope too.
       - name: gitleaks git history scan
-        run: gitleaks detect --redact -v --exit-code=2
+        run: gitleaks detect --redact -v --exit-code=2 --log-opts="--full-history HEAD"
       # Second pass: scan every file in the working tree (no-git mode).
       # This mirrors what generated repos see on their first CI run — the initial
       # commit includes every template file, so secrets in unchanged files would

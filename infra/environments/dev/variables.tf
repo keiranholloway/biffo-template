@@ -61,7 +61,7 @@ variable "enabled_plugins" {
     name here and running `terraform apply` provisions that plugin's compute
     and event infrastructure; removing a name tears it down.
 
-    Example: ["rbac"]
+    Example: ["orchestrator"]
   EOT
   type        = list(string)
   default     = []

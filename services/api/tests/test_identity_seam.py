@@ -2,6 +2,7 @@
 move its identity record out of `public.users` without forking the auth path."""
 
 from collections.abc import AsyncGenerator
+from importlib.util import find_spec
 from pathlib import Path
 from typing import NamedTuple, cast
 
@@ -65,8 +66,16 @@ def _restore_provider():
     set_identity_provider(original)
 
 
+@pytest.mark.skipif(
+    find_spec("api.models.user") is None,
+    reason="deployment has retired the Core users model (ADR-0012)",
+)
 class TestDefaultProvider:
-    """A fresh `biffo init` has no business schema — the default must work."""
+    """A fresh `biffo init` has no business schema — the default must work.
+
+    Skipped wholesale on a deployment that retired `public.users`: the default
+    provider is inert there, and its backing model is deliberately gone.
+    """
 
     async def test_resolves_id_and_active_state(self):
         identity = await DefaultIdentityProvider().resolve(
@@ -220,6 +229,27 @@ class TestCompliance:
     """ADR-0012: the auth path must not name an identity table. Enforced here
     because the failure mode is a silent re-coupling during a merge, which is
     exactly what the ADR exists to prevent."""
+
+    def test_identity_package_imports_without_the_core_user_model(self, monkeypatch):
+        """A deployment that retired `public.users` deletes `models/user.py`.
+
+        Importing the identity package must still work there — it is imported at
+        startup via `middleware/auth.py`, so a module-level dependency on a model
+        the deployment deliberately removed takes the whole API down. Regression
+        test: `identity/default.py` imported `User` at module scope, which would
+        have broken tabsii the moment it took this seam.
+        """
+        import importlib
+        import sys
+
+        # None in sys.modules makes `import api.models.user` raise ImportError,
+        # standing in for the file being absent.
+        monkeypatch.setitem(sys.modules, "api.models.user", None)
+        for module in ("api.identity", "api.identity.default"):
+            monkeypatch.delitem(sys.modules, module, raising=False)
+
+        reloaded = importlib.import_module("api.identity")
+        assert reloaded.DefaultIdentityProvider is not None
 
     def test_auth_module_names_no_identity_table(self):
         source = Path(auth_module.__file__).read_text()

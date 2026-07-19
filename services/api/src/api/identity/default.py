@@ -14,7 +14,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..models.user import User
 from .base import ResolvedIdentity
 
 
@@ -35,7 +34,15 @@ class DefaultIdentityProvider:
         No row means provisioned-but-never-logged-in: active, with no id yet. The
         row is created by the login endpoint (`routers/auth.py`), not here —
         `require_auth` runs on every authenticated request and must not write.
+
+        The `User` model is imported here rather than at module scope because a
+        deployment that overrides this provider may have deleted it outright —
+        retiring `public.users` is the whole point of ADR-0012. A module-level
+        import would make merely *importing* the identity package fail on such a
+        deployment, taking the API down at startup over a class it never uses.
         """
+        from ..models.user import User
+
         result = await db.execute(
             select(User.id, User.is_active).where(User.cognito_sub == claims["sub"])
         )

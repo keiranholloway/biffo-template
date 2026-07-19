@@ -1,6 +1,6 @@
 # ADR-0012: Identity is resolved through a core seam, not an API-owned table
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-19
 **Deciders:** Keiran Holloway (Technical Architect)
 

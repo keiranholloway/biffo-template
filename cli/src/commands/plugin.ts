@@ -1,4 +1,5 @@
 import { Command } from 'commander'
+import { pluginCreateCommand } from './plugin-create.js'
 import { pluginInfoCommand } from './plugin-info.js'
 import { pluginInstallCommand } from './plugin-install.js'
 import { pluginListCommand } from './plugin-list.js'
@@ -8,6 +9,7 @@ import { pluginUpgradeCommand } from './plugin-upgrade.js'
 
 export const pluginCommand = new Command('plugin').description('Manage Biffo plugins')
 
+pluginCommand.addCommand(pluginCreateCommand)
 pluginCommand.addCommand(pluginListCommand)
 pluginCommand.addCommand(pluginInstallCommand)
 pluginCommand.addCommand(pluginUninstallCommand)

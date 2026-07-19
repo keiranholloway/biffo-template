@@ -32,8 +32,34 @@ Terraform module, and the plugin's Lambda name are all keyed on the plugin
 
 ## Two realities today
 
-- **Authoring and shipping your own plugin — works.** Write a manifest, put it under `services/<name>/`, deploy. This is the path most people want and the rest of this guide focuses on it.
-- **Installing a _published_ plugin (`biffo plugin install <name>@<minor>`) — not usable yet.** The command works, but the central registry (`keiranholloway/biffo-plugins-registry`) is currently empty (`plugins: []`), so there's nothing to resolve. `install`/`upgrade`/`info` will fail with "not found in the registry" until it's populated.
+- **Authoring and shipping your own plugin — works.** `biffo plugin create <name>` scaffolds it under `services/<name>/`; `biffo plugin install --local services/<name>` wires it up. This is the path most people want and the rest of this guide focuses on it.
+- **Installing a _published_ plugin (`biffo plugin install <name>@<minor>`) — not usable yet.** The command works, but the central registry (`keiranholloway/biffo-plugins-registry`) is currently empty (`plugins: []`), so there's nothing to resolve. `install`/`upgrade`/`info` will fail with "not found in the registry" until it's populated. Use `--local` in the meantime — it takes the same validation and migration path, minus the registry lookup.
+
+### Scaffolding a plugin
+
+```bash
+biffo plugin create acme-crm          # → services/acme-crm/, committed
+biffo plugin install --local services/acme-crm
+```
+
+`create` copies `_skeletons/plugin-template/` and renames the example plugin
+throughout — manifest name, Python package (`acme_crm`), class prefix
+(`AcmeCrmPlugin`), distribution name, and the example table (`acme_crm_widgets`,
+namespaced so two scaffolded plugins can't collide on one database). It drops
+the skeleton's standalone-repo-only files (`.github/`, `registry-schema.json`)
+because the host monorepo already has CI, and it always carries `terraform/` —
+without it the plugin's event subscriptions would be inert everywhere (#194).
+
+It scaffolds into the **user-owned** `services/<name>/` by default, so
+`biffo core upgrade` never overwrites your plugin. `--first-party` targets the
+template-owned `services/_plugins/<name>/` instead; that's only correct inside
+the `biffo-template` repo itself, and the command refuses it in an instance.
+
+`biffo plugin install --local <path>` accepts either an out-of-tree directory
+(copied into `services/<name>/`) or a path already inside the checkout, in which
+case it installs in place. Either way it validates the manifest, copies
+`terraform/` to `modules/plugins/<name>/`, generates the Alembic migration, and
+commits — the same steps the registry path performs.
 
 ## What a plugin looks like
 
@@ -100,7 +126,7 @@ Each table's `permissions` block gates its routes (ADR-0004). Default-deny: an o
 
 ## Getting your plugin live
 
-1. **Place it at `services/<name>/`** in your project (with the manifest at `services/<name>/biffo.plugin.json`). If your plugin lives in its own git repo, `biffo plugin install <name>@<minor>` would clone+copy it here — but until the registry is populated, just copy the directory in yourself.
+1. **Place it at `services/<name>/`** in your project (with the manifest at `services/<name>/biffo.plugin.json`). `biffo plugin create <name>` does this for you. If your plugin lives in its own git repo, `biffo plugin install --local <path>` copies it in; `biffo plugin install <name>@<minor>` would clone it from the registry, once that's populated.
 2. **Generate its migration:**
 
    ```bash
@@ -126,9 +152,11 @@ Each table's `permissions` block gates its routes (ADR-0004). Default-deny: an o
 | Command                               | What it does                                                                   |
 | ------------------------------------- | ------------------------------------------------------------------------------ |
 | `biffo plugin list`                   | Lists plugins in your checkout (both `services/*/` and `services/_plugins/*/`) |
+| `biffo plugin create <name>`          | Scaffolds `services/<name>/` from `_skeletons/plugin-template/` and commits    |
 | `biffo plugin sync-migrations [name]` | Generates missing Alembic migrations for local plugins                         |
 | `biffo plugin info <name>`            | Shows a registry entry (blocked until the registry is populated)               |
 | `biffo plugin install <name>@<minor>` | Clone → copy into `services/<name>/` → migration → commit (registry-gated)     |
+| `biffo plugin install --local <path>` | Same, from an unpublished local directory — no registry needed                 |
 | `biffo plugin upgrade <name>@<minor>` | Replace an installed plugin with a newer minor (registry-gated)                |
 | `biffo plugin uninstall <name>`       | Remove `services/<name>/` (and any `modules/plugins/<name>/`) and commit       |
 

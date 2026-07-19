@@ -35,7 +35,8 @@ per [ADR-0009](https://github.com/keiranholloway/biffo-template/blob/main/docs/A
 is no bearer token to issue, store, or rotate; the credential is the plugin
 Lambda's own role.
 
-Three things must line up. Two of them this module does for you:
+Three things must line up, and all three are wired for you — this module
+does the first two, and `biffo plugin install` does the third:
 
 1. **Sign the request.** The plugin SDK's `SignedCoreClient` does this, and
    `BiffoPluginBase` builds one by default (`create_core_client()`), so plugin
@@ -47,19 +48,29 @@ Three things must line up. Two of them this module does for you:
    inline policy to the plugin's Lambda role allowing `execute-api:Invoke` on
    `<execution_arn>/*/*/api/v1/internal/*` — that prefix only, never the whole
    API. Leave the variable empty and no grant is created.
-3. **Allowlist the role on the Core API.** _You must do this one._ The Core API
-   independently re-checks the resolved caller ARN against
+3. **Allowlist the role on the Core API.** _Automatic since issue #201._ The
+   Core API independently re-checks the resolved caller ARN against
    `BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST` and **fails closed** on an empty or
-   non-matching allowlist, so step 2 alone gets you a `403`. At runtime the
-   caller ARN is the assumed-role session form, so allowlist a glob:
+   non-matching allowlist, so step 2 alone would get you a `403`. At runtime the
+   caller ARN is the assumed-role session form, so the allowlist entry is a
+   glob:
 
    ```
    arn:aws:sts::<account-id>:assumed-role/<project>-<env>-plugin-<name>-role/*
    ```
 
-   That role name is this module's `role_name` output, and it is deterministic:
+   The root config builds that list itself, in
+   `local.plugin_service_principal_arns`, by mapping over `var.enabled_plugins`
+   — so adding the plugin to `enabled_plugins` (which `biffo plugin install`
+   does for you, via the generated `plugins.auto.tfvars.json`) is what
+   allowlists it. Nothing to copy by hand, and the grant and the allowlist
+   cannot drift apart.
+
+   The role name is deterministic, which is what makes this possible:
    `modules/cloud/aws/compute` names the role `<function_name>-role`, where
-   `function_name` is `<project_name>-<environment>-plugin-<plugin_name>`.
+   `function_name` is `<project_name>-<environment>-plugin-<plugin_name>`. It is
+   also this module's `role_name` output — useful for auditing, but the root
+   config deliberately does not read it (see below).
 
 ### Why the allowlist is a static string, not this module's output
 
@@ -81,8 +92,22 @@ The resolution — the same one the orchestrator uses — is that the arrow only
 ever points **one way**: API Gateway -> plugin. The allowlist entry is written as
 the _predictable_ role-name glob above, interpolated from values the root config
 already knows (`project_name`, `environment`, plugin name) rather than read back
-out of the plugin module. Keep it that way; sourcing it from `role_arn` will
-break `terraform plan` with a cycle error, not at apply time.
+out of the plugin module.
+
+**How close the cycle actually is.** Measured on the current module, wiring
+`role_arn` does _not_ deadlock today: Terraform's dependency graph is
+resource-level, not module-level, and this module's `aws_iam_role` does not
+itself depend on API Gateway — only the separate `aws_iam_role_policy.core_api`
+does. So a `terraform plan` with `role_arn` wired in currently builds. That is
+an accident of this module's internals, not a property you can rely on: a plugin
+that attached its Core API policy to the role resource itself (an inline
+`inline_policy` block rather than a separate `aws_iam_role_policy`) closes the
+loop immediately, and the resulting cycle error lands on whoever _installed_
+that plugin, far from the code that caused it. It would also make the Core API
+un-plannable whenever any installed plugin module is broken.
+
+The static glob has no dependency on the plugin module at all, for any plugin,
+which is the property worth having. Keep it that way.
 
 ## Loose coupling
 
@@ -90,7 +115,15 @@ This module must never reference another plugin's module or resources. Each plug
 
 ## Wiring into the root config
 
-The root config (`infra/environments/<env>/main.tf`) cannot dynamically discover plugin module directories — Terraform requires a module's `source` argument to be a static string literal, so each plugin needs its own explicit block, gated on membership in `enabled_plugins`:
+`biffo plugin install` generates this block for you, into a CLI-owned
+`infra/environments/<env>/plugins.generated.tf` (issue #201) — you should not
+need to write it by hand. It is reproduced here so you know what your module is
+instantiated with.
+
+The root config cannot dynamically discover plugin module directories —
+Terraform requires a module's `source` argument to be a static string literal,
+so each plugin needs its own explicit block, gated on membership in
+`enabled_plugins`:
 
 ```hcl
 module "plugin_<name>" {
@@ -110,4 +143,4 @@ module "plugin_<name>" {
 }
 ```
 
-See `infra/environments/dev/main.tf`'s "Plugin modules" section and `infra/environments/dev/README.md` for the full convention, including how to aggregate plugin outputs.
+The generator emits only the arguments your module actually declares a `variable` block for, so a module predating one of these inputs still wires in cleanly. See `infra/environments/dev/README.md` for the full convention.

@@ -7,6 +7,7 @@ import { GitAdapter } from '../adapters/git/index.js'
 import { log } from '../lib/logger.js'
 import { FIRST_PARTY_PLUGINS_DIR, pluginDir } from '../lib/plugin-locations.js'
 import { validateManifest } from '../lib/plugin-manifest.js'
+import { syncPluginTerraform } from '../lib/plugin-terraform-wiring.js'
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]*$/
 
@@ -152,10 +153,18 @@ export async function runPluginUninstall(
   if (existsSync(modulesDir)) {
     rmSync(modulesDir, { recursive: true, force: true })
     log.success(`Removed modules/plugins/${name}/`)
-    log.warn(
-      'If this module was wired into infra/environments/*/main.tf by hand, remove that block ' +
-        'too — the CLI never edits main.tf (see plugin-install.ts).',
-    )
+
+    // Regenerate the environment wiring now that the module directory is gone
+    // (#201). Leaving the block behind would break `terraform validate` with a
+    // dangling module source, so this is a correctness step, not a tidy-up.
+    const wiring = syncPluginTerraform(options.cwd)
+    stagePaths.push(...wiring.changedPaths)
+    if (wiring.changedPaths.length > 0) {
+      log.success(
+        `Unwired module "plugin_${name}" and its enabled_plugins entry from ` +
+          `${wiring.environments.length} environment(s): ${wiring.environments.join(', ')}`,
+      )
+    }
   }
 
   const label = version ? `${name}@${version}` : name
@@ -221,6 +230,10 @@ function printDryRun(
   console.log(chalk.bold('\n  Dry run — no changes will be made\n'))
   console.log(`  Plugin:        ${label}`)
   console.log(`  Would remove:  ${stagePaths.join(', ')}`)
+  console.log(
+    `  Would unwire:  module "plugin_${name}" + its enabled_plugins entry from ` +
+      `infra/environments/*/plugins.generated.tf`,
+  )
   console.log(`  Would commit:  chore(plugins): uninstall ${label}`)
   console.log(
     `  --keep-data:   ${keepData ? 'no-op — CLI never drops tables either way' : 'not set — no DB action taken either way; see notes'}\n`,

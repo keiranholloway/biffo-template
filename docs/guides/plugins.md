@@ -160,12 +160,26 @@ Each table's `permissions` block gates its routes (ADR-0004). Default-deny: an o
 | `biffo plugin upgrade <name>@<minor>` | Replace an installed plugin with a newer minor (registry-gated)                |
 | `biffo plugin uninstall <name>`       | Remove `services/<name>/` (and any `modules/plugins/<name>/`) and commit       |
 
+## Terraform wiring (automatic)
+
+If a plugin ships a `terraform/` module, `install` copies it to `modules/plugins/<name>/` **and** wires it into every `infra/environments/*/` root config (issue #201), by generating two CLI-owned files there:
+
+| File                       | Contents                                                               |
+| -------------------------- | ---------------------------------------------------------------------- |
+| `plugins.generated.tf`     | one `module "plugin_<name>"` block and one output per installed plugin |
+| `plugins.auto.tfvars.json` | the matching `enabled_plugins` list                                    |
+
+Your hand-authored `main.tf` is never edited — Terraform loads every `*.tf` file in a root module directory, so the generated blocks are just as live while staying out of your file. Both files are regenerated in full from the contents of `modules/plugins/` on every install and uninstall, so re-running `install` cannot produce a duplicate module block or a duplicate `enabled_plugins` entry.
+
+The ADR-0009 service-auth wiring comes along with it: the generated block passes `core_api_execution_arn` (granting the plugin's role `execute-api:Invoke` on `/api/v1/internal/*`), and the Core API's `BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST` follows from `local.plugin_service_principal_arns` in `main.tf`, which derives a static role-name glob from `enabled_plugins`. Enabling a plugin is what allowlists it.
+
+To disable an installed plugin without uninstalling it, override `enabled_plugins` with `-var`/`-var-file`/`TF_VAR_enabled_plugins` — all of which outrank an auto-tfvars file.
+
 ## Things the CLI does _not_ do (do these yourself)
 
-These are deliberate — the CLI never acts on your live deployment or edits infra behind your back:
+These are deliberate — the CLI never acts on your live deployment, and never edits a file you hand-authored:
 
 - **No `git push` and no deploy.** `install`/`upgrade`/`uninstall` commit locally only; you push and `biffo deploy` when ready.
-- **No Terraform wiring.** If a plugin ships a `terraform/` module, the CLI copies it to `modules/plugins/<name>/` but does **not** add a module block to `infra/environments/*/main.tf` — do that by hand (tracked by issue #25).
 - **Uninstall never drops tables.** Per ADR-0002 the CLI has no database client; `uninstall` removes code and commits, but the plugin's tables (and its migration file) remain. Dropping data is a manual Alembic migration. (`--keep-data` is a no-op today.)
 - **`required_core_version` is not enforced** — it's printed as a warning for you to judge, since the Core API exposes no version to check against yet.
 - **No UI install.** `ui_components` in a manifest are not wired into the portal.

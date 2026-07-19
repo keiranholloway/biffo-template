@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -26,6 +26,15 @@ function makeProjectRoot(): string {
   mkdirSync(join(dir, 'services', 'widgets'), { recursive: true })
   writeFileSync(join(dir, 'services', 'widgets', 'biffo.plugin.json'), JSON.stringify(MANIFEST))
   return dir
+}
+
+function makeEnvironment(root: string, env: string): void {
+  const dir = join(root, 'infra', 'environments', env)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(
+    join(dir, 'main.tf'),
+    '# hand-authored root config\n' + 'variable "enabled_plugins" {\n  type = list(string)\n}\n',
+  )
 }
 
 function makeGitMock() {
@@ -198,5 +207,70 @@ describe('runPluginUninstall', () => {
       expect(git.add).not.toHaveBeenCalled()
       expect(git.commit).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('runPluginUninstall — Terraform wiring (#201)', () => {
+  let projectRoot: string
+
+  beforeEach(() => {
+    projectRoot = makeProjectRoot()
+    promptMock.mockReset()
+    promptMock.mockResolvedValue({ confirmed: true })
+  })
+
+  afterEach(() => {
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+
+  it('unwires the module block when the last plugin is removed', async () => {
+    makeEnvironment(projectRoot, 'dev')
+    mkdirSync(join(projectRoot, 'modules', 'plugins', 'widgets'), { recursive: true })
+    writeFileSync(
+      join(projectRoot, 'modules', 'plugins', 'widgets', 'variables.tf'),
+      'variable "project_name" { type = string }\n',
+    )
+    const generatedTf = join(projectRoot, 'infra', 'environments', 'dev', 'plugins.generated.tf')
+    writeFileSync(generatedTf, '# stale generated content\n')
+
+    const git = makeGitMock()
+    await runPluginUninstall(
+      'widgets',
+      { dryRun: false, force: true, keepData: false, cwd: projectRoot },
+      { git: git as never },
+    )
+
+    // Leaving the block behind would point `source` at a directory that no
+    // longer exists, breaking `terraform validate` for the whole environment.
+    expect(existsSync(generatedTf)).toBe(false)
+    expect(git.add).toHaveBeenCalledWith(projectRoot, [
+      'services/widgets',
+      'modules/plugins/widgets',
+      'infra/environments/dev/plugins.generated.tf',
+    ])
+  })
+
+  it('leaves the remaining plugins wired in', async () => {
+    makeEnvironment(projectRoot, 'dev')
+    for (const name of ['widgets', 'keeper']) {
+      mkdirSync(join(projectRoot, 'modules', 'plugins', name), { recursive: true })
+      writeFileSync(
+        join(projectRoot, 'modules', 'plugins', name, 'variables.tf'),
+        'variable "project_name" { type = string }\n',
+      )
+    }
+
+    await runPluginUninstall(
+      'widgets',
+      { dryRun: false, force: true, keepData: false, cwd: projectRoot },
+      { git: makeGitMock() as never },
+    )
+
+    const tf = readFileSync(
+      join(projectRoot, 'infra', 'environments', 'dev', 'plugins.generated.tf'),
+      'utf8',
+    )
+    expect(tf).toContain('module "plugin_keeper"')
+    expect(tf).not.toContain('module "plugin_widgets"')
   })
 })

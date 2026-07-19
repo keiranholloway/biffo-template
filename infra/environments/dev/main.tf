@@ -34,7 +34,32 @@ locals {
     ["https://${module.cdn.distribution_domain}", "http://localhost:3000"],
   )
   cors_origins = jsonencode(local.cors_origins_list)
+
+  # ADR-0009 — which IAM principals may call /api/v1/internal/* on the Core API.
+  #
+  # Derived from var.enabled_plugins as a STATIC role-name glob, deliberately
+  # NOT from a plugin module's role_arn output: reading that output here would
+  # make core_api depend on the plugin, which depends on api_gateway, which
+  # depends on core_api — the dependency cycle recorded in issue #201 and in
+  # modules/plugins/_template/outputs.tf.
+  #
+  # A static glob is sound because the role name is fully predictable from the
+  # plugin's name: modules/cloud/aws/compute names every function's role
+  # "<project>-<env>-<function>-role", and modules/plugins/_template names the
+  # function "plugin-<name>". So enabling a plugin is what allowlists it, and
+  # the two can never drift apart. The trailing /* matches the session name
+  # that STS appends to an assumed-role ARN.
+  #
+  # Fails closed: with no plugins enabled this is [], and
+  # require_service_principal accepts no service caller at all.
+  plugin_service_principal_arns = [
+    for name in var.enabled_plugins :
+    "arn:aws:sts::${data.aws_caller_identity.current.account_id}:assumed-role/${var.project_name}-${local.environment}-plugin-${name}-role/*"
+  ]
 }
+
+# Account ID for the ADR-0009 service-principal allowlist glob below.
+data "aws_caller_identity" "current" {}
 
 module "networking" {
   source = "../../../modules/cloud/aws/networking"
@@ -160,6 +185,11 @@ module "core_api" {
     BIFFO_COGNITO_REGION       = var.aws_region
     BIFFO_EVENT_BUS_NAME       = module.events.event_bus_name
     BIFFO_CORS_ORIGINS         = local.cors_origins
+    # ADR-0009 — IAM principals allowed on /api/v1/internal/*. Maintained
+    # automatically: `biffo plugin install` adds the plugin to enabled_plugins
+    # (plugins.auto.tfvars.json) and the glob above follows. Fails closed when
+    # no plugin is enabled.
+    BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST = jsonencode(local.plugin_service_principal_arns)
     # Set so discover_plugin_manifests() finds bundled plugin manifests at
     # runtime — deploy-app.yml's packaging step copies services/*/biffo.plugin.json
     # into the Lambda zip under services/, which AWS extracts to /var/task/.
@@ -247,46 +277,36 @@ module "pr_signer" {
 }
 
 # ---------------------------------------------------------------------------
-# Plugin modules (ADR-0003 chunk 12 / issue #25)
+# Plugin modules (ADR-0003 chunk 12 / issues #25, #201)
 #
-# Terraform requires a module's `source` argument to be a static string
-# literal — it cannot be built from `var.enabled_plugins` at runtime, so this
-# root config cannot loop over an arbitrary plugin list with one generic
-# module block. Instead, each installed plugin gets its own explicit
-# `module "plugin_<name>"` block below, individually gated on membership in
-# `enabled_plugins` via `for_each`. `biffo plugin install <name>@<minor>`
-# (issue #20/ADR-0003 chunk 7) copies the plugin's own terraform/ directory
-# into modules/plugins/<name>/ — once that directory exists, add a block
-# following this exact shape (copy-paste and replace <name>):
+# There are no `module "plugin_*"` blocks in this file, and there should not
+# be. Terraform requires a module's `source` to be a static string literal, so
+# each installed plugin needs its own explicit block — and `biffo plugin
+# install` generates them, into its own CLI-owned file:
 #
-#   module "plugin_<name>" {
-#     source   = "../../../modules/plugins/<name>"
-#     for_each = contains(var.enabled_plugins, "<name>") ? { "<name>" = true } : {}
+#   plugins.generated.tf       one module block + one output per installed plugin
+#   plugins.auto.tfvars.json   the matching `enabled_plugins` list
 #
-#     project_name   = var.project_name
-#     environment    = local.environment
-#     plugin_name    = "<name>"
-#     handler        = "src.lambda.main.handler"
-#     event_bus_name = module.events.event_bus_name
-#     core_api_url   = module.api_gateway.api_endpoint
-#     tags           = local.tags
-#   }
+# Both are regenerated in full from the contents of modules/plugins/ on every
+# install and uninstall, so they are idempotent by construction. Terraform
+# loads every *.tf file in this directory, so those blocks are exactly as live
+# as anything written here.
 #
-# No block references `vpc_id`/`private_subnet_ids` or
-# `db_credentials_secret_arn` by default — per ADR-0002, plugins reach
-# platform data through the Core API (`core_api_url`) and react to
-# `event_bus_name`, never the database directly. See
-# modules/plugins/_template/README.md for the full variable contract, and
-# infra/environments/dev/README.md for the end-to-end "adding a plugin"
-# walkthrough, including how to aggregate each plugin's outputs (e.g.
-# `module.plugin_<name>[<name>].function_arn`) into the outputs below.
+# The CLI never edits this file. infra/ is user-owned (core-manifest.json), and
+# a generator that appends to or re-emits a hand-authored main.tf owns bytes a
+# human is also editing. Keeping the generated blocks in a separate file means
+# the two never contend.
 #
-# No plugin module directory exists in this checkout yet (no plugin has
-# shipped a terraform/ directory — see modules/plugins/_template/README.md),
-# so there are currently no live `module "plugin_*"` blocks here. Keep the
-# root backend/provider configuration above and the module blocks below
-# untouched when adding one — only append new `module "plugin_<name>"`
-# blocks and their corresponding output entries.
+# What this file DOES own for plugins is the ADR-0009 allowlist — see
+# local.plugin_service_principal_arns above and
+# BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST on module.core_api. It is derived from
+# var.enabled_plugins as a static role-name glob, never from a plugin module's
+# role_arn output, which would create the cycle
+# core_api -> api_gateway -> plugin -> core_api.
+#
+# To disable an installed plugin without uninstalling it, set enabled_plugins
+# explicitly via -var/-var-file/TF_VAR_enabled_plugins — all of which outrank
+# the generated *.auto.tfvars.json.
 # ---------------------------------------------------------------------------
 
 output "api_gateway_url" {

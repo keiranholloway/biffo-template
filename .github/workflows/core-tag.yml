@@ -1,13 +1,19 @@
 name: Core Version Tag
 
-# Keeps a git tag `core-v<version>` in lockstep with core.version on main, so
-# `biffo core upgrade` can resolve the template tree at any core version (the
-# merge base for an instance's upgrade) — ADR-0006.
+# Keeps the git tag `core-v<version>` standing for the template-owned tree at
+# that core version, so `biffo core upgrade` can resolve the template tree an
+# instance merges from — ADR-0006.
 on:
   push:
     branches: [main]
-    paths:
-      - core.version
+    # Deliberately NOT path-filtered on core.version. The failure this workflow
+    # has to catch is precisely a push that does NOT change core.version: two
+    # PRs opened against the same base both bumped to the same number, the
+    # second rebased and kept it, and its template-owned changes landed on main
+    # under a tag that already existed and pointed at the first commit. Those
+    # changes were then reachable at no version at all — invisible to every
+    # instance, forever (issue #294; observed with a2acf15/be4c573 at 0.32.4).
+    # A path filter on core.version cannot see that push, so there is none.
   # Manual re-run, for the same reason as ci.yml. This workflow failing to fire
   # is worse than CI failing to fire: no tag means `biffo core upgrade` cannot
   # resolve the template tree at that version at all (ADR-0006), so the release
@@ -17,6 +23,14 @@ on:
 
 permissions:
   contents: write
+
+# Serialise: two pushes racing here could both decide to move the same tag.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22'
 
 jobs:
   tag:
@@ -31,7 +45,8 @@ jobs:
       # instance's own tag namespace, alongside its release tags. An instance is
       # detected the same way the Core Version Guard detects one
       # (cli/src/scripts/check-core-version-bump.ts): `biffo.core.json` is
-      # present in an instance and absent in the template.
+      # present in an instance and absent in the template. sync-core-tag.ts
+      # re-checks this itself; the step guard only avoids the install cost.
       - name: Skip in instances
         id: guard
         run: |
@@ -42,18 +57,19 @@ jobs:
           else
             echo "is_template=true" >> "$GITHUB_OUTPUT"
           fi
-      - name: Tag core-v<version> if missing
+      - uses: pnpm/action-setup@v4
         if: steps.guard.outputs.is_template == 'true'
-        run: |
-          set -euo pipefail
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          VERSION="$(tr -d '[:space:]' < core.version)"
-          TAG="core-v${VERSION}"
-          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
-            echo "Tag ${TAG} already exists — nothing to do."
-            exit 0
-          fi
-          git tag -a "${TAG}" -m "Biffo core ${VERSION}"
-          git push origin "${TAG}"
-          echo "Created and pushed ${TAG}."
+      - uses: actions/setup-node@v5
+        if: steps.guard.outputs.is_template == 'true'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        if: steps.guard.outputs.is_template == 'true'
+      # Creates core-v<version>, or moves it forward when the template-owned
+      # tree changed while core.version stayed put (logged loudly). Then audits
+      # every version from the baseline up and fails if any tag does not stand
+      # for its version's template tree.
+      - name: Sync and audit core-v<version>
+        if: steps.guard.outputs.is_template == 'true'
+        run: pnpm --filter @biffo/cli sync:core-tag -- --push

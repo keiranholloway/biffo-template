@@ -95,6 +95,21 @@ for every instance. Two guardrails keep version and history in lockstep:
   them, the base tree is unrecoverable and the three-way merge produces spurious
   conflicts.
 
+  The contract a tag must satisfy is about the **tree**, not the commit:
+  `core-v<V>` resolves to the template-owned tree as it stood at version `V`.
+  The Core Version Guard alone cannot guarantee that — it compares a PR against
+  its base at open time, so two PRs opened against the same base can both bump
+  to the same number, and the second one's template changes then land on `main`
+  under a tag that already exists (issue #294; a2acf15/be4c573 at 0.32.4). The
+  workflow therefore runs on **every** push to `main` (a colliding push does not
+  touch `core.version`, so a path filter cannot see it) and moves the tag
+  forward when — and only when — the template-owned tree changed underneath it,
+  leaving it alone for user-owned commits. It then **audits** every version from
+  `AUDIT_BASELINE_VERSION` up, so a regression in the tagging path reddens
+  `main` instead of silently dropping merged changes out of the version lineage.
+  Implemented by `cli/src/lib/core-tags.ts` and
+  `cli/src/scripts/sync-core-tag.ts`.
+
 ### 2. Core-owned path manifest
 
 The template ships a **`core-manifest.json`** declaring which paths are

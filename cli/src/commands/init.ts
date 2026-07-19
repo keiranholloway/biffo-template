@@ -218,14 +218,10 @@ export async function runInit(
     await github.createBranch(org, repo, 'dev', 'main')
     await github.createBranch(org, repo, 'staging', 'main')
 
-    // Write the instance-specific files into every branch, *before* branch
-    // protection is configured (issue #269). Until this lands the repo carries
-    // the template's literal `{{PLACEHOLDER}}` biffo.config.json — which fails
-    // BiffoConfigSchema on the very next command, `biffo deploy dev` — and no
-    // biffo.core.json at all, which is the marker both the Core Version Guard
-    // and .github/workflows/core-tag.yml use to tell an instance from the
-    // template.
-    await writeInstanceFiles(github, config, org, repo)
+    // Establish the repo's instance identity on every branch, *before* branch
+    // protection is configured (issue #269): add biffo.core.json (the instance
+    // marker) and drop the template's placeholder biffo.config.json.
+    await writeInstanceFiles(github, org, repo)
 
     await github.setDefaultBranch(org, repo, 'dev')
 
@@ -278,56 +274,37 @@ export const INSTANCE_CONFIG_FILE = 'biffo.config.json'
 export const INSTANCE_FILE_BRANCHES = ['main', 'dev', 'staging']
 
 /**
- * Serialise the fully-resolved config for committing into the instance repo.
+ * Commit the instance-identity changes onto every branch of the scaffolded repo:
  *
- * Deliberately committed: `cloud.config.account_id` and `admin.email`. Neither
- * is a secret — the account id is already written to the repo's Actions
- * variables/secrets (it is embedded in `BIFFO_OIDC_ROLE_ARN`) and appears in
- * Terraform state and outputs, and the admin email is the Cognito admin user
- * the deploy provisions. The repo is created private. Real secrets stay in
- * Actions secrets and are never written here.
+ *   + `biffo.core.json` — the instance marker, recording the core version this
+ *     CLI shipped with. Its presence is how the Core Version Guard (#242) and
+ *     `.github/workflows/core-tag.yml` (#199) tell an instance from the
+ *     template; without it every fresh repo is misread as the template and both
+ *     of those guards misfire.
+ *   - `biffo.config.json` — the template's own placeholder file, deleted. It is
+ *     a template artifact with no meaning in an instance: the resolved config
+ *     lives in `~/.biffo/projects/<name>.json` (written by `saveProjectConfig`),
+ *     and its literal `{{PLACEHOLDER}}` values otherwise make `biffo deploy`
+ *     hard-fail on schema validation.
  *
- * Deliberately dropped: `cloud.config.profile`, the operator's *local* AWS
- * named profile. It is machine-specific, meaningless to CI and to any other
- * clone, and would make the committed config wrong for everyone but the person
- * who ran `init`.
- */
-export function buildInstanceConfigJson(config: BiffoConfig): string {
-  const cloudConfig = { ...config.cloud.config }
-  delete cloudConfig.profile
-  const instanceConfig: BiffoConfig = {
-    ...config,
-    $schema: config.$schema ?? './cli/schemas/biffo-config.schema.json',
-    cloud: { provider: 'aws', config: cloudConfig },
-  }
-  // Re-validate: this file is what `biffo deploy` reads back, so a config that
-  // would not survive the round-trip must fail here rather than in the user's
-  // next command.
-  const result = BiffoConfigSchema.safeParse(instanceConfig)
-  if (!result.success) {
-    const detail = result.error.issues
-      .map((issue) => `${issue.path.join('.')} — ${issue.message}`)
-      .join('; ')
-    throw new Error(`Refusing to commit an invalid ${INSTANCE_CONFIG_FILE}: ${detail}`)
-  }
-  return `${JSON.stringify(instanceConfig, null, 2)}\n`
-}
-
-/**
- * Commit `biffo.config.json` (resolved) and `biffo.core.json` (the instance
- * marker, recording the core version this CLI shipped with) onto every branch
- * of the scaffolded repo. Idempotent — `commitFiles` no-ops when the content
- * already matches, so a resumed `init` neither fails nor duplicates commits.
+ * The resolved config is deliberately NOT committed here. It carries the AWS
+ * account id and admin email, and the template's own `.gitleaks.toml` forbids
+ * both in the tree — `biffo-aws-account-id` (`\b\d{12}\b`) and
+ * `biffo-placeholder-config` fire on any real value. Committing it would turn
+ * the instance's own Secret Scan red on its first run, which is a worse defect
+ * than the one being fixed.
+ *
+ * Idempotent — `commitFiles` no-ops when the branch head already matches, so a
+ * resumed `init` neither fails nor duplicates commits.
  */
 export async function writeInstanceFiles(
   github: GitHubAdapter,
-  config: BiffoConfig,
   org: string,
   repo: string,
 ): Promise<void> {
   const files = [
-    { path: INSTANCE_CONFIG_FILE, content: buildInstanceConfigJson(config) },
     { path: INSTANCE_CORE_FILE, content: serializeInstanceCoreVersion(getLatestCoreVersion()) },
+    { path: INSTANCE_CONFIG_FILE, content: null },
   ]
   for (const branch of INSTANCE_FILE_BRANCHES) {
     await github.commitFiles(
@@ -335,7 +312,7 @@ export async function writeInstanceFiles(
       repo,
       branch,
       files,
-      `chore: initialise ${INSTANCE_CONFIG_FILE} and ${INSTANCE_CORE_FILE}`,
+      `chore: record core version and drop the template ${INSTANCE_CONFIG_FILE}`,
     )
   }
 }

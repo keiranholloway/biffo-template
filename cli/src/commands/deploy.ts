@@ -7,6 +7,7 @@ import inquirer from 'inquirer'
 import { BiffoConfigSchema, resolveDnsConfig, type BiffoConfig } from '../config/schema.js'
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
+import { isTemplatePlaceholderConfig } from '../lib/local-config.js'
 import { log } from '../lib/logger.js'
 import { listProjectConfigs, loadProjectConfig } from '../lib/session.js'
 
@@ -84,11 +85,22 @@ async function resolveConfig(options: { project?: string; config?: string }): Pr
     const raw = JSON.parse(readFileSync(localConfigPath, 'utf8'))
     const result = BiffoConfigSchema.safeParse(raw)
     if (result.success) return result.data
-    log.error(`Invalid config at ${localConfigPath}:`)
-    result.error.issues.forEach((i) => log.error(`  ${i.path.join('.')} — ${i.message}`))
-    log.error('Refusing to fall back to a saved project while a local config file is present.')
-    log.error('Fix biffo.config.json, or pass --project <name> / --config <path> explicitly.')
-    process.exit(1)
+    // The template's own unsubstituted placeholder file is not a config at all
+    // — it is a template artifact GitHub copied in verbatim. Treat it as absent
+    // and fall through to the saved project, which is where the resolved config
+    // actually lives (issue #269).
+    if (isTemplatePlaceholderConfig(raw)) {
+      log.warn(
+        `Ignoring ${localConfigPath} — it is the unsubstituted Biffo template placeholder, ` +
+          "not this project's config.",
+      )
+    } else {
+      log.error(`Invalid config at ${localConfigPath}:`)
+      result.error.issues.forEach((i) => log.error(`  ${i.path.join('.')} — ${i.message}`))
+      log.error('Refusing to fall back to a saved project while a local config file is present.')
+      log.error('Fix biffo.config.json, or pass --project <name> / --config <path> explicitly.')
+      process.exit(1)
+    }
   }
 
   // Fall back to ~/.biffo/projects/
@@ -98,6 +110,11 @@ async function resolveConfig(options: { project?: string; config?: string }): Pr
       'No biffo.config.json found in the current directory and no projects in ~/.biffo/projects/.',
     )
     log.error('Run biffo init first, or pass --project <name> or --config <path>.')
+    log.error(
+      "A Biffo instance's resolved config is not committed to its repo — it lives in " +
+        '~/.biffo/projects/ on the machine that ran biffo init. On a second machine, copy it ' +
+        'there or pass it with --config <path>.',
+    )
     process.exit(1)
   }
 

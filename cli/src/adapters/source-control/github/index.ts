@@ -326,34 +326,34 @@ export class GitHubAdapter {
 
   /**
    * Commit `files` onto `branch` as a single commit, via the Git Data API
-   * (blobs → tree → commit → ref) so both files land atomically rather than as
-   * one commit each.
+   * (blobs → tree → commit → ref) so every change lands atomically rather than
+   * as one commit each. A `content` of `null` deletes the path.
    *
-   * Idempotent: if every file already has exactly the desired content at the
-   * branch head, nothing is committed and `null` is returned. `biffo init` is
-   * resumable and step-checkpointed, so a re-run must not pile up empty or
-   * duplicate commits.
+   * Idempotent: if the branch head already matches every requested change
+   * (content equal, or path absent for a deletion), nothing is committed and
+   * `null` is returned. `biffo init` is resumable and step-checkpointed, so a
+   * re-run must not pile up empty or duplicate commits.
    *
    * Called by `biffo init` *before* `configureBranchProtection`, so at that
    * point no protection exists to bypass. On a resumed init the branches may
    * already be protected; the init token is the repo's own creator (an admin)
    * and protection is configured with `enforce_admins: false`, so the write
    * still succeeds. If GitHub refuses it anyway, that surfaces as a clear error
-   * telling the user to land the files by PR — protection is never loosened to
+   * telling the user to land the change by PR — protection is never loosened to
    * make this work.
    */
   async commitFiles(
     org: string,
     repo: string,
     branch: string,
-    files: { path: string; content: string }[],
+    files: { path: string; content: string | null }[],
     message: string,
   ): Promise<string | null> {
     const existing = await Promise.all(
       files.map((f) => this.getFileContent(org, repo, f.path, branch)),
     )
-    if (files.every((f, i) => existing[i] === f.content)) {
-      log.info(`${branch}: ${files.map((f) => f.path).join(', ')} already up to date — skipping`)
+    if (files.every((f, i) => existing[i] === (f.content ?? undefined))) {
+      log.info(`${branch}: ${files.map((f) => f.path).join(', ')} already as intended — skipping`)
       return null
     }
 
@@ -365,15 +365,19 @@ export class GitHubAdapter {
       commit_sha: headSha,
     })
 
-    const blobs = await Promise.all(
+    // A tree entry with a null sha deletes the path; anything else needs a blob.
+    const entries = await Promise.all(
       files.map(async (f) => {
+        if (f.content === null) {
+          return { path: f.path, mode: '100644' as const, type: 'blob' as const, sha: null }
+        }
         const { data } = await this.octokit.git.createBlob({
           owner: org,
           repo,
           content: Buffer.from(f.content, 'utf8').toString('base64'),
           encoding: 'base64',
         })
-        return { path: f.path, sha: data.sha }
+        return { path: f.path, mode: '100644' as const, type: 'blob' as const, sha: data.sha }
       }),
     )
 
@@ -381,12 +385,7 @@ export class GitHubAdapter {
       owner: org,
       repo,
       base_tree: headCommit.tree.sha,
-      tree: blobs.map((b) => ({
-        path: b.path,
-        mode: '100644' as const,
-        type: 'blob' as const,
-        sha: b.sha,
-      })),
+      tree: entries,
     })
 
     const { data: commit } = await this.octokit.git.createCommit({

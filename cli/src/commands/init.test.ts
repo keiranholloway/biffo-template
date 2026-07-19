@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { BiffoConfigSchema } from '../config/schema.js'
 import type { InitSession } from '../lib/session.js'
-import { applyResolvedAwsCredentials, runInit } from './init.js'
+import { getLatestCoreVersion } from '../lib/core-version.js'
+import {
+  applyResolvedAwsCredentials,
+  INSTANCE_CONFIG_FILE,
+  INSTANCE_FILE_BRANCHES,
+  runInit,
+} from './init.js'
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────
 
@@ -62,6 +68,7 @@ function makeGithubMock() {
     setEnvVariable: vi.fn().mockResolvedValue(undefined),
     setRepoSecret: vi.fn().mockResolvedValue(undefined),
     enableVulnerabilityAlerts: vi.fn().mockResolvedValue(undefined),
+    commitFiles: vi.fn().mockResolvedValue('commitsha'),
   }
 }
 
@@ -361,5 +368,111 @@ describe('error handling', () => {
     await runInit(github as never, aws as never, CONFIG, makeSession())
 
     expect(github.setRepoSecret).not.toHaveBeenCalled()
+  })
+})
+
+// ─── Instance identity files (issue #269) ────────────────────────────────────
+
+describe('instance identity files', () => {
+  const INSTANCE_CORE_FILE = 'biffo.core.json'
+
+  function changesOn(github: ReturnType<typeof makeGithubMock>, branch: string) {
+    const call = github.commitFiles.mock.calls.find((c) => c[2] === branch)
+    if (!call) throw new Error(`no commitFiles call for branch ${branch}`)
+    return call[3] as { path: string; content: string | null }[]
+  }
+
+  it('commits to main, dev and staging', async () => {
+    const github = makeGithubMock()
+    await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
+
+    expect(github.commitFiles.mock.calls.map((c) => c[2])).toEqual(INSTANCE_FILE_BRANCHES)
+  })
+
+  it('commits before branch protection is configured', async () => {
+    const order: string[] = []
+    const github = makeGithubMock()
+    github.commitFiles.mockImplementation(async () => {
+      order.push('commitFiles')
+      return 'sha'
+    })
+    github.configureBranchProtection.mockImplementation(async () => {
+      order.push('configureBranchProtection')
+    })
+
+    await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
+
+    expect(order.indexOf('commitFiles')).toBeLessThan(order.indexOf('configureBranchProtection'))
+  })
+
+  it('writes a biffo.core.json matching the core.version this CLI ships with', async () => {
+    const github = makeGithubMock()
+    await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
+
+    const core = changesOn(github, 'main').find((f) => f.path === INSTANCE_CORE_FILE)
+    expect(core).toBeDefined()
+    expect(JSON.parse(core!.content!)).toEqual({ version: getLatestCoreVersion() })
+  })
+
+  it("deletes the template's placeholder biffo.config.json", async () => {
+    const github = makeGithubMock()
+    await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
+
+    const config = changesOn(github, 'main').find((f) => f.path === INSTANCE_CONFIG_FILE)
+    expect(config).toBeDefined()
+    // null content is the Git Data API deletion sentinel.
+    expect(config!.content).toBeNull()
+  })
+
+  // The resolved config carries the AWS account id and admin email. The
+  // template's own .gitleaks.toml rejects both anywhere in the tree
+  // (biffo-aws-account-id matches any bare 12-digit number), so committing it
+  // would turn the instance's own Secret Scan red on its first run. It lives in
+  // ~/.biffo/projects/ instead — see writeInstanceFiles.
+  it('never commits the AWS account id or the admin email', async () => {
+    const github = makeGithubMock()
+    await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
+
+    for (const branch of INSTANCE_FILE_BRANCHES) {
+      for (const change of changesOn(github, branch)) {
+        if (change.content === null) continue
+        expect(change.content).not.toContain('123456789012')
+        expect(change.content).not.toContain('admin@example.com')
+        expect(change.content).not.toMatch(/\b\d{12}\b/)
+      }
+    }
+  })
+
+  it('leaves no unresolved {{PLACEHOLDER}} in anything it commits', async () => {
+    const github = makeGithubMock()
+    await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
+
+    for (const branch of INSTANCE_FILE_BRANCHES) {
+      for (const change of changesOn(github, branch)) {
+        if (change.content === null) continue
+        expect(change.content, `${branch}:${change.path}`).not.toMatch(/\{\{[^}]*\}\}/)
+      }
+    }
+  })
+
+  it('commits identical changes to every branch', async () => {
+    const github = makeGithubMock()
+    await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
+
+    const [main, dev, staging] = INSTANCE_FILE_BRANCHES.map((b) => changesOn(github, b))
+    expect(dev).toEqual(main)
+    expect(staging).toEqual(main)
+  })
+
+  it('does not commit when github_config is already checkpointed complete', async () => {
+    const github = makeGithubMock()
+    await runInit(
+      github as never,
+      makeAwsMock() as never,
+      CONFIG,
+      makeSession({ completedSteps: ['github_config'], outputs: {} }),
+    )
+
+    expect(github.commitFiles).not.toHaveBeenCalled()
   })
 })

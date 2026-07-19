@@ -8,6 +8,7 @@ import { RegistryAdapter, type RegistryPluginEntry } from '../adapters/registry/
 import { log } from '../lib/logger.js'
 import { pluginDir } from '../lib/plugin-locations.js'
 import { validateManifest, type PluginManifest } from '../lib/plugin-manifest.js'
+import { syncPluginTerraform } from '../lib/plugin-terraform-wiring.js'
 
 const TARGET_PATTERN = /^([a-z][a-z0-9-]*)@(\d+\.\d+)$/
 
@@ -329,11 +330,27 @@ export async function runPluginInstall(
       cpSync(tfSourceDir, modulesDir, { recursive: true })
       stagePaths.push(`modules/plugins/${pluginName}`)
       log.success(`Copied Terraform module to modules/plugins/${pluginName}/`)
-      log.warn(
-        'Terraform module copied but NOT wired into infra/environments/*/main.tf — ' +
-          'conditional plugin module inclusion is tracked by issue #25. ' +
-          'Add the module block manually once that lands.',
-      )
+
+      // Wire it into every environment root config (#201). Regenerated in full
+      // from modules/plugins/, so re-running install can't duplicate a module
+      // block or an enabled_plugins entry.
+      const wiring = syncPluginTerraform(options.cwd)
+      stagePaths.push(...wiring.changedPaths)
+      if (wiring.environments.length > 0) {
+        log.success(
+          `Wired module "plugin_${pluginName}" and enabled_plugins into ` +
+            `${wiring.environments.length} environment(s): ${wiring.environments.join(', ')}`,
+        )
+        log.info(
+          'The Core API allowlist (ADR-0009) follows automatically — ' +
+            'local.plugin_service_principal_arns in main.tf derives it from enabled_plugins.',
+        )
+      } else {
+        log.warn(
+          'No infra/environments/*/ root config found, so the Terraform module was copied ' +
+            'but not wired into any environment.',
+        )
+      }
     } else if (manifest.event_subscriptions.length > 0) {
       // Don't let this pass silently: the plugin declares events it will never
       // receive, because nothing creates its Lambda or EventBridge rule (#194).
@@ -412,6 +429,10 @@ function printDryRun(
   if (!entry || (entry.infra_modules && entry.infra_modules.length > 0)) {
     console.log(
       `  Would copy Terraform module into: modules/plugins/${name}/ (if the plugin has one)`,
+    )
+    console.log(
+      `  Would wire module "plugin_${name}" + enabled_plugins into ` +
+        `infra/environments/*/plugins.generated.tf and plugins.auto.tfvars.json`,
     )
   }
   if (source && source.manifest.tables.length > 0) {

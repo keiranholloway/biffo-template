@@ -41,6 +41,15 @@ function makeClonedPluginDir(manifest: unknown = VALID_MANIFEST, withTerraform =
   return dir
 }
 
+function makeEnvironment(root: string, env: string): void {
+  const dir = join(root, 'infra', 'environments', env)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(
+    join(dir, 'main.tf'),
+    '# hand-authored root config — the CLI must never edit this\n',
+  )
+}
+
 function makeRegistryMock(entry: RegistryPluginEntry = REGISTRY_ENTRY) {
   return { resolvePlugin: vi.fn().mockResolvedValue(entry) }
 }
@@ -150,8 +159,100 @@ describe('runPluginInstall', () => {
       'services/widgets',
       'modules/plugins/widgets',
     ])
-    // Explicitly out of scope (blocked on #25) — no infra/environments/*/main.tf should be touched.
+    // No environment root config in this fixture, so there is nothing to wire
+    // into — and the CLI must not invent an infra/ tree.
     expect(existsSync(join(projectRoot, 'infra'))).toBe(false)
+  })
+
+  it('wires the copied module into every environment root config (#201)', async () => {
+    makeEnvironment(projectRoot, 'dev')
+    makeEnvironment(projectRoot, 'prod')
+    const registry = makeRegistryMock()
+    const git = makeGitMock(makeClonedPluginDir(VALID_MANIFEST, true))
+    const migrations = makeMigrationsMock()
+
+    await runPluginInstall(
+      'widgets@1.0',
+      { dryRun: false, cwd: projectRoot },
+      { registry: registry as never, git: git as never, migrations: migrations as never },
+    )
+
+    for (const env of ['dev', 'prod']) {
+      const tf = readFileSync(
+        join(projectRoot, 'infra', 'environments', env, 'plugins.generated.tf'),
+        'utf8',
+      )
+      expect(tf).toContain('module "plugin_widgets" {')
+      expect(
+        JSON.parse(
+          readFileSync(
+            join(projectRoot, 'infra', 'environments', env, 'plugins.auto.tfvars.json'),
+            'utf8',
+          ),
+        ),
+      ).toEqual({ enabled_plugins: ['widgets'] })
+    }
+
+    // The generated files are committed alongside the plugin, not left dirty.
+    expect(git.add).toHaveBeenCalledWith(projectRoot, [
+      'services/widgets',
+      'modules/plugins/widgets',
+      'infra/environments/dev/plugins.generated.tf',
+      'infra/environments/dev/plugins.auto.tfvars.json',
+      'infra/environments/prod/plugins.generated.tf',
+      'infra/environments/prod/plugins.auto.tfvars.json',
+    ])
+  })
+
+  it('never edits the user-owned main.tf when wiring a plugin in', async () => {
+    makeEnvironment(projectRoot, 'dev')
+    const mainTf = join(projectRoot, 'infra', 'environments', 'dev', 'main.tf')
+    const before = readFileSync(mainTf, 'utf8')
+
+    const registry = makeRegistryMock()
+    const git = makeGitMock(makeClonedPluginDir(VALID_MANIFEST, true))
+    const migrations = makeMigrationsMock()
+
+    await runPluginInstall(
+      'widgets@1.0',
+      { dryRun: false, cwd: projectRoot },
+      { registry: registry as never, git: git as never, migrations: migrations as never },
+    )
+
+    expect(readFileSync(mainTf, 'utf8')).toBe(before)
+  })
+
+  it('wires a --local plugin in exactly as a registry one, and re-running adds no duplicate', async () => {
+    makeEnvironment(projectRoot, 'dev')
+    const localDir = makeClonedPluginDir(VALID_MANIFEST, true)
+    const git = makeGitMock(localDir)
+    const migrations = makeMigrationsMock()
+
+    await runPluginInstall(
+      undefined,
+      { local: localDir, dryRun: false, cwd: projectRoot },
+      { registry: makeRegistryMock() as never, git: git as never, migrations: migrations as never },
+    )
+
+    const tfPath = join(projectRoot, 'infra', 'environments', 'dev', 'plugins.generated.tf')
+    const first = readFileSync(tfPath, 'utf8')
+    expect(first).toContain('module "plugin_widgets" {')
+
+    // Re-install over the top (the in-tree source path, which is re-runnable by
+    // design) must regenerate identically rather than append a second block.
+    await runPluginInstall(
+      undefined,
+      {
+        local: join(projectRoot, 'services', 'widgets'),
+        dryRun: false,
+        cwd: projectRoot,
+      },
+      { registry: makeRegistryMock() as never, git: git as never, migrations: migrations as never },
+    )
+
+    const second = readFileSync(tfPath, 'utf8')
+    expect(second).toBe(first)
+    expect(second.match(/module "plugin_widgets"/g)).toHaveLength(1)
   })
 
   it('does not copy a terraform/ directory when the plugin repo has none', async () => {

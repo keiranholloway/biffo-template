@@ -40,16 +40,29 @@
  *
  * ADR-0009's `BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST` is set in `main.tf` on
  * `module "core_api"`, and it is derived there from `var.enabled_plugins`
- * through a *static* role-name glob — never from a plugin module's `role_arn`
- * output, which would create the dependency cycle
- * `core_api -> api_gateway -> plugin -> core_api` (see
- * `modules/plugins/_template/outputs.tf`). Because the glob is fully
- * predictable from the plugin's name (`<project>-<env>-plugin-<name>-role`,
- * per `modules/cloud/aws/compute/main.tf`), the allowlist needs nothing from
- * this generator: adding the name to `enabled_plugins` is what allowlists it.
+ * through a *static* role-name glob. Because the glob is fully predictable from
+ * the plugin's name (`<project>-<env>-plugin-<name>-role`, per
+ * `modules/cloud/aws/compute/main.tf`), the allowlist needs nothing from this
+ * generator: adding the name to `enabled_plugins` is what allowlists it. That
+ * is why the allowlist ends up automated *without* this file generating it.
+ *
+ * The rejected alternative is wiring it from a plugin module's `role_arn`
+ * output. Measured honestly, that does not deadlock today — Terraform's graph
+ * is resource-level, not module-level, and the `_template` plugin's role
+ * happens not to depend on `api_gateway` (only its separate
+ * `aws_iam_role_policy.core_api` does), so a `terraform plan` with `role_arn`
+ * wired in currently builds. But it is cycle-free only by accident of the
+ * current module's internals: any plugin that attached its Core API policy to
+ * the role resource itself would close the loop
+ * `core_api -> plugin -> api_gateway -> core_api`, and the failure would land
+ * on whoever installed that plugin rather than on whoever wrote this code. The
+ * static glob has no such dependency at all, for any plugin, which is the
+ * property worth having. See `modules/plugins/_template/outputs.tf`.
+ *
  * The caller side of the grant — `execute-api:Invoke` on the Core API's
  * internal routes — *is* wired here, via `core_api_execution_arn`, which is
- * cycle-free (`plugin -> api_gateway`, not the reverse).
+ * cycle-free in the same unconditional sense (`plugin -> api_gateway`, never
+ * the reverse).
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -109,9 +122,7 @@ export function listPluginModules(cwd: string): string[] {
     return []
   }
   return entries
-    .filter(
-      (e) => e.isDirectory() && e.name !== TEMPLATE_MODULE_DIR && !e.name.startsWith('.'),
-    )
+    .filter((e) => e.isDirectory() && e.name !== TEMPLATE_MODULE_DIR && !e.name.startsWith('.'))
     .map((e) => e.name)
     .sort()
 }

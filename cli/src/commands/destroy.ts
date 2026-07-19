@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
-import inquirer from 'inquirer'
 import { BiffoConfigSchema, type BiffoConfig } from '../config/schema.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
+import { promptOr } from '../lib/interactive.js'
 import { log } from '../lib/logger.js'
 import { listProjectConfigs, loadProjectConfig } from '../lib/session.js'
 
@@ -36,26 +36,38 @@ export const destroyCommand = new Command('destroy')
     console.log(chalk.red(`    EventBridge bus, CloudWatch log groups\n`))
 
     if (environment === 'prod') {
-      const { typed } = await inquirer.prompt<{ typed: string }>([
+      const { typed } = await promptOr<{ typed: string }>(
         {
-          type: 'input',
-          name: 'typed',
-          message: `Type ${chalk.bold(repo)} to confirm destruction of PRODUCTION:`,
+          question: `Type ${repo} to confirm destruction of PRODUCTION`,
+          remedy: 'Destroying prod always requires an interactive typed confirmation.',
         },
-      ])
+        [
+          {
+            type: 'input',
+            name: 'typed',
+            message: `Type ${chalk.bold(repo)} to confirm destruction of PRODUCTION:`,
+          },
+        ],
+      )
       if (typed !== repo) {
         log.warn('Destroy cancelled — repo name did not match')
         return
       }
     } else {
-      const { confirmed } = await inquirer.prompt<{ confirmed: boolean }>([
+      const { confirmed } = await promptOr<{ confirmed: boolean }>(
         {
-          type: 'confirm',
-          name: 'confirmed',
-          message: `Destroy ${chalk.bold(environment)} in ${chalk.bold(`${org}/${repo}`)}?`,
-          default: false,
+          question: `Destroy ${environment} in ${org}/${repo}?`,
+          remedy: 'biffo destroy has no pre-confirm flag; run it interactively.',
         },
-      ])
+        [
+          {
+            type: 'confirm',
+            name: 'confirmed',
+            message: `Destroy ${chalk.bold(environment)} in ${chalk.bold(`${org}/${repo}`)}?`,
+            default: false,
+          },
+        ],
+      )
       if (!confirmed) {
         log.warn('Destroy cancelled')
         return
@@ -140,17 +152,25 @@ async function resolveConfig(options: { project?: string; config?: string }): Pr
     return projects[0]!
   }
 
-  const { chosen } = await inquirer.prompt<{ chosen: string }>([
+  const { chosen } = await promptOr<{ chosen: string }>(
     {
-      type: 'list',
-      name: 'chosen',
-      message: 'Which project do you want to destroy?',
-      choices: projects.map((p) => ({
-        name: `${p.project.name} (${(p.source_control as { config: { org: string; repo: string } }).config.org}/${(p.source_control as { config: { org: string; repo: string } }).config.repo})`,
-        value: p.project.name,
-      })),
+      question: 'Which project do you want to destroy?',
+      remedy:
+        'Pass --project <name> to choose one. Available:\n' +
+        projects.map((p) => `    ${p.project.name}`).join('\n'),
     },
-  ])
+    [
+      {
+        type: 'list',
+        name: 'chosen',
+        message: 'Which project do you want to destroy?',
+        choices: projects.map((p) => ({
+          name: `${p.project.name} (${(p.source_control as { config: { org: string; repo: string } }).config.org}/${(p.source_control as { config: { org: string; repo: string } }).config.repo})`,
+          value: p.project.name,
+        })),
+      },
+    ],
+  )
 
   return projects.find((p) => p.project.name === chosen)!
 }

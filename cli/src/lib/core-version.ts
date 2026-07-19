@@ -132,9 +132,19 @@ export function readInstanceCoreVersion(cwd: string): string | null {
   return result.data.version
 }
 
+/**
+ * Serialise a `biffo.core.json` body recording `version`, validating the semver
+ * first. Shared by `writeInstanceCoreVersion` (local filesystem write, used by
+ * `biffo core upgrade`) and `biffo init`, which commits the same bytes into the
+ * freshly scaffolded repo over the GitHub API rather than to disk.
+ */
+export function serializeInstanceCoreVersion(version: string): string {
+  parseCoreVersion(version) // validate
+  return `${JSON.stringify({ version }, null, 2)}\n`
+}
+
 /** Write `<cwd>/biffo.core.json` recording `version` — used by an upgrade to
  * bump the instance's recorded core version in the same commit. */
 export function writeInstanceCoreVersion(cwd: string, version: string): void {
-  parseCoreVersion(version) // validate
-  writeFileSync(join(cwd, INSTANCE_CORE_FILE), `${JSON.stringify({ version }, null, 2)}\n`)
+  writeFileSync(join(cwd, INSTANCE_CORE_FILE), serializeInstanceCoreVersion(version))
 }

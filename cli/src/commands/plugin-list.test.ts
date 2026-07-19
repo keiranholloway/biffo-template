@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { capturedLines, capturedOutput } from '../test-utils/console.js'
 import { runPluginList } from './plugin-list.js'
 
 vi.mock('../lib/logger.js', () => ({
@@ -54,7 +55,7 @@ describe('runPluginList', () => {
   it('reports no plugins installed when services/ is empty', async () => {
     mkdirSync(join(projectRoot, 'services'), { recursive: true })
     await runPluginList({ cwd: projectRoot })
-    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+    const output = capturedOutput(logSpy)
     expect(output).toContain('No plugins installed')
   })
 
@@ -64,7 +65,7 @@ describe('runPluginList', () => {
 
     await runPluginList({ cwd: projectRoot })
 
-    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+    const output = capturedOutput(logSpy)
     expect(output).toContain('widgets')
     expect(output).toContain('1.0.0')
     expect(output).toContain('rbac')
@@ -77,7 +78,7 @@ describe('runPluginList', () => {
 
     await runPluginList({ cwd: projectRoot })
 
-    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+    const output = capturedOutput(logSpy)
     expect(output).toContain('No plugins installed')
     expect(output).not.toContain('services/api')
   })
@@ -88,7 +89,7 @@ describe('runPluginList', () => {
 
     await runPluginList({ cwd: projectRoot })
 
-    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+    const output = capturedOutput(logSpy)
     expect(output).toContain('widgets')
     expect(output).toContain('1.0.0')
   })
@@ -98,7 +99,7 @@ describe('runPluginList', () => {
 
     await runPluginList({ cwd: projectRoot })
 
-    const header = logSpy.mock.calls.map((c) => c.join(' ')).find((line) => line.includes('NAME'))
+    const header = capturedLines(logSpy).find((line) => line.includes('NAME'))
     expect(header).toBeDefined()
     expect(header).not.toMatch(/\bSTATUS\b/)
     expect(header).not.toMatch(/LAST-UPDATED|LAST UPDATED/)

@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { capturedOutput } from '../test-utils/console.js'
 import { runCoreStatus } from './core-status.js'
 
 vi.mock('../lib/logger.js', () => ({
@@ -30,7 +31,7 @@ describe('runCoreStatus', () => {
   })
 
   function output(): string {
-    return logSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+    return capturedOutput(logSpy)
   }
 
   it('warns and hints when no biffo.core.json is present', async () => {

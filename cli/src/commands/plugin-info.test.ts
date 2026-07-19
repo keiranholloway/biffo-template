@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RegistryPluginEntry } from '../adapters/registry/index.js'
+import { capturedOutput } from '../test-utils/console.js'
 import { runPluginInfo } from './plugin-info.js'
 
 vi.mock('../lib/logger.js', () => ({
@@ -53,7 +54,7 @@ describe('runPluginInfo', () => {
 
     await runPluginInfo('rbac', { registry: registry as never })
 
-    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+    const output = capturedOutput(logSpy)
     expect(output).toContain('rbac@1.2.3')
     expect(output).toContain('active')
     expect(output).toContain('1.2')
@@ -70,7 +71,7 @@ describe('runPluginInfo', () => {
 
     await runPluginInfo('rbac', { registry: registry as never })
 
-    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+    const output = capturedOutput(logSpy)
     expect(output).toContain('disabled')
   })
 
@@ -82,7 +83,7 @@ describe('runPluginInfo', () => {
 
     await runPluginInfo('rbac', { registry: registry as never })
 
-    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+    const output = capturedOutput(logSpy)
     expect(output).toContain('rbac@1.2.3')
     expect(output).toContain('rbac@2.0.0')
   })

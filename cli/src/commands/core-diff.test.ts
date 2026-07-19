@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { capturedOutput } from '../test-utils/console.js'
 import { runCoreDiff } from './core-diff.js'
 
 vi.mock('../lib/logger.js', () => ({
@@ -44,8 +45,13 @@ describe('runCoreDiff', () => {
     mkdirSync(dirname(p), { recursive: true })
     writeFileSync(p, content)
   }
+  // `runCoreDiff` formats its summary with chalk, which emits ANSI escapes when
+  // stdout is a TTY and nothing when it is not. Strip them here so every
+  // assertion below is about content, not presentation — otherwise a literal
+  // like '3 template-owned file(s) would change' passes in CI and fails on a
+  // developer's machine, where chalk.bold wraps the count.
   function output(): string {
-    return logSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+    return capturedOutput(logSpy)
   }
 
   it('reports no changes when instance matches the template', async () => {

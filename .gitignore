@@ -10,6 +10,11 @@ node_modules
 dist
 .turbo
 out
+# TypeScript incremental-compile cache. Regenerated from source on every build,
+# so committing it only produces churn in unrelated diffs — it turned up in a PR
+# about core version tags purely because something ran a build. The sibling
+# skeleton already ignores it; this matches.
+*.tsbuildinfo
 
 # Python
 __pycache__

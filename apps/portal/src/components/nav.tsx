@@ -12,22 +12,22 @@ export function Nav() {
     <nav className="flex items-center justify-between border-b px-6 py-4">
       <div className="flex items-center gap-6">
         <span className="text-lg font-semibold">Biffo Portal</span>
-        <Link href="/admin/microservices" className="text-sm text-gray-600 hover:text-gray-900">
+        <Link href="/admin/microservices/" className="text-sm text-gray-600 hover:text-gray-900">
           Microservices
         </Link>
-        <Link href="/admin/marketplace" className="text-sm text-gray-600 hover:text-gray-900">
+        <Link href="/admin/marketplace/" className="text-sm text-gray-600 hover:text-gray-900">
           Marketplace
         </Link>
-        <Link href="/admin/plugins" className="text-sm text-gray-600 hover:text-gray-900">
+        <Link href="/admin/plugins/" className="text-sm text-gray-600 hover:text-gray-900">
           Plugins
         </Link>
-        <Link href="/admin/endpoints" className="text-sm text-gray-600 hover:text-gray-900">
+        <Link href="/admin/endpoints/" className="text-sm text-gray-600 hover:text-gray-900">
           Endpoints
         </Link>
-        <Link href="/admin/users" className="text-sm text-gray-600 hover:text-gray-900">
+        <Link href="/admin/users/" className="text-sm text-gray-600 hover:text-gray-900">
           Users
         </Link>
-        <Link href="/admin/orchestration" className="text-sm text-gray-600 hover:text-gray-900">
+        <Link href="/admin/orchestration/" className="text-sm text-gray-600 hover:text-gray-900">
           Workflows
         </Link>
       </div>

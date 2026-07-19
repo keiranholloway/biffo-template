@@ -117,7 +117,7 @@ export function InstalledPluginDetail({ name }: InstalledPluginDetailProps) {
           this list was loaded.
         </p>
         <Link
-          href="/admin/plugins"
+          href="/admin/plugins/"
           className="mt-4 inline-block text-sm font-medium text-blue-600 hover:underline"
         >
           Back to installed plugins

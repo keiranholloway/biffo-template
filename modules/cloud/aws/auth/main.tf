@@ -12,6 +12,23 @@ locals {
 resource "aws_cognito_user_pool" "main" {
   name = local.name_prefix
 
+  # Sign in with the username OR the email address (issue #276).
+  #
+  # `auto_verified_attributes` below only causes the email to be *verified*; it
+  # does not make it a login identifier. Without this, the only accepted
+  # identifier is the literal username — so an admin created as `admin` with
+  # keiran@example.com attached could not sign in with their email address, and
+  # Cognito reported it as "Incorrect username or password" rather than as an
+  # unsupported identifier. The portal's login field offers "Username or email",
+  # which was a promise the pool could not keep.
+  #
+  # WARNING — changing this on an existing pool forces REPLACEMENT of the pool
+  # and destroys every user in it. Cognito cannot migrate users between pools
+  # with their passwords intact, so every user must re-register or be re-invited.
+  # Any table keyed on `cognito_sub` (see ADR-0012) is orphaned by the change.
+  # Deliberately accepted here while instances have only a handful of users.
+  alias_attributes = ["email"]
+
   # Password policy
   password_policy {
     minimum_length                   = 12

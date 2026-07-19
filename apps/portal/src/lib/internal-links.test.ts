@@ -46,14 +46,25 @@ function sourceFiles(dir: string): string[] {
  */
 function internalTargets(source: string): string[] {
   const targets: string[] = []
-  for (const m of source.matchAll(/href="(\/[^"]*)"/g)) targets.push(m[1]!)
-  for (const m of source.matchAll(/router\.push\('(\/[^']*)'\)/g)) targets.push(m[1]!)
+  for (const m of source.matchAll(/href="(\/[^"]*)"/g)) {
+    const target = m[1]
+    if (target !== undefined) targets.push(target)
+  }
+  for (const m of source.matchAll(/router\.push\('(\/[^']*)'\)/g)) {
+    const target = m[1]
+    if (target !== undefined) targets.push(target)
+  }
   return targets
+}
+
+/** The path portion of a target, with any query string or hash removed. */
+function pathnameOf(target: string): string {
+  return target.split(/[?#]/)[0] ?? target
 }
 
 /** A route needs a trailing slash; a file (final segment has a dot) must not gain one. */
 function isRoute(target: string): boolean {
-  const pathname = target.split(/[?#]/)[0]!
+  const pathname = pathnameOf(target)
   const lastSegment = pathname.slice(pathname.lastIndexOf('/') + 1)
   return !lastSegment.includes('.')
 }
@@ -71,8 +82,7 @@ describe('internal navigation targets', () => {
     for (const file of sourceFiles(SRC)) {
       for (const target of internalTargets(readFileSync(file, 'utf8'))) {
         if (!isRoute(target)) continue
-        const pathname = target.split(/[?#]/)[0]!
-        if (!pathname.endsWith('/')) {
+        if (!pathnameOf(target).endsWith('/')) {
           offenders.push(`${file.slice(SRC.length + 1)} -> ${target}`)
         }
       }

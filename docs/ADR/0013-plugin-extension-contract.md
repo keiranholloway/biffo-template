@@ -14,11 +14,11 @@ ADR-0003 introduced plugins as installable units with declared tables, CRUD rout
 
 Biffo has converged on three tiers with genuinely different coupling:
 
-| Tier | Tracks the version of | Ownership | Analogy |
-|---|---|---|---|
-| **Core** | itself | template-owned, upgradable via `biffo core upgrade` | the crown jewels — centrally managed, well protected |
-| **Plugin** | its own release | installed and reviewed per instance, upgraded by its maintainer | the DMZ — you can do more here, but you build it and you run it |
-| **Sibling** | nothing | scaffolded once, diverges intentionally | the user's own product |
+| Tier        | Tracks the version of | Ownership                                                       | Analogy                                                         |
+| ----------- | --------------------- | --------------------------------------------------------------- | --------------------------------------------------------------- |
+| **Core**    | itself                | template-owned, upgradable via `biffo core upgrade`             | the crown jewels — centrally managed, well protected            |
+| **Plugin**  | its own release       | installed and reviewed per instance, upgraded by its maintainer | the DMZ — you can do more here, but you build it and you run it |
+| **Sibling** | nothing               | scaffolded once, diverges intentionally                         | the user's own product                                          |
 
 The distinction that matters is **which version something must track**, not where its code runs. The core admin UI belongs to core because it is a client of the core API's admin surface. A sibling belongs to nobody because it shares almost nothing — its frontend never calls the core API (ADR-0007), and its backend reaches core server-side through a documented HTTP contract.
 

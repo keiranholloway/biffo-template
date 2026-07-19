@@ -111,14 +111,46 @@ jobs:
           path: portal-dist/
       - name: Sync portal to S3
         run: |
+          # Three passes, split by mutability and content type.
+          #
+          # Next's App Router emits its RSC flight payloads as *.txt. They were
+          # previously caught by the first pass, which gave them two wrong
+          # properties and broke every client-side navigation (issue #275):
+          #
+          #   - `aws s3 sync` guesses content type from the extension, so they
+          #     were served as text/plain rather than text/x-component. The
+          #     router does not recognise that as an RSC response and falls
+          #     back to a hard MPA navigation TO THE URL IT WAS FETCHING — so
+          #     clicking a link landed the browser on /admin/index.txt showing
+          #     raw serialised React. Typing the URL worked, because a full
+          #     page load never fetches the payload.
+          #
+          #   - they were cached immutable for a year, but they change on every
+          #     deploy exactly like the HTML does.
+          #
+          # Hashed assets under _next/static are genuinely immutable and keep
+          # the long cache; HTML and RSC payloads must not.
           aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
             --delete \
             --cache-control "public, max-age=31536000, immutable" \
-            --exclude "*.html"
+            --exclude "*.html" \
+            --exclude "*.txt"
+          # `--include` only re-includes from an excluded set; on its own it is a
+          # no-op, since everything is included by default. Without the explicit
+          # `--exclude "*"` this pass would upload the .txt payloads too — as
+          # text/plain — and the pass below, being a sync, would then skip them
+          # as unchanged and the wrong content type would survive.
           aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
             --delete \
             --cache-control "no-cache" \
+            --exclude "*" \
             --include "*.html"
+          aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
+            --delete \
+            --cache-control "no-cache" \
+            --content-type "text/x-component" \
+            --exclude "*" \
+            --include "*.txt"
       - name: Invalidate CloudFront
         run: |
           aws cloudfront create-invalidation \
@@ -354,14 +386,46 @@ jobs:
           path: portal-dist/
       - name: Sync portal to S3
         run: |
+          # Three passes, split by mutability and content type.
+          #
+          # Next's App Router emits its RSC flight payloads as *.txt. They were
+          # previously caught by the first pass, which gave them two wrong
+          # properties and broke every client-side navigation (issue #275):
+          #
+          #   - `aws s3 sync` guesses content type from the extension, so they
+          #     were served as text/plain rather than text/x-component. The
+          #     router does not recognise that as an RSC response and falls
+          #     back to a hard MPA navigation TO THE URL IT WAS FETCHING — so
+          #     clicking a link landed the browser on /admin/index.txt showing
+          #     raw serialised React. Typing the URL worked, because a full
+          #     page load never fetches the payload.
+          #
+          #   - they were cached immutable for a year, but they change on every
+          #     deploy exactly like the HTML does.
+          #
+          # Hashed assets under _next/static are genuinely immutable and keep
+          # the long cache; HTML and RSC payloads must not.
           aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
             --delete \
             --cache-control "public, max-age=31536000, immutable" \
-            --exclude "*.html"
+            --exclude "*.html" \
+            --exclude "*.txt"
+          # `--include` only re-includes from an excluded set; on its own it is a
+          # no-op, since everything is included by default. Without the explicit
+          # `--exclude "*"` this pass would upload the .txt payloads too — as
+          # text/plain — and the pass below, being a sync, would then skip them
+          # as unchanged and the wrong content type would survive.
           aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
             --delete \
             --cache-control "no-cache" \
+            --exclude "*" \
             --include "*.html"
+          aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
+            --delete \
+            --cache-control "no-cache" \
+            --content-type "text/x-component" \
+            --exclude "*" \
+            --include "*.txt"
       - name: Invalidate CloudFront
         run: |
           aws cloudfront create-invalidation \
@@ -609,14 +673,46 @@ jobs:
           path: portal-dist/
       - name: Sync portal to S3
         run: |
+          # Three passes, split by mutability and content type.
+          #
+          # Next's App Router emits its RSC flight payloads as *.txt. They were
+          # previously caught by the first pass, which gave them two wrong
+          # properties and broke every client-side navigation (issue #275):
+          #
+          #   - `aws s3 sync` guesses content type from the extension, so they
+          #     were served as text/plain rather than text/x-component. The
+          #     router does not recognise that as an RSC response and falls
+          #     back to a hard MPA navigation TO THE URL IT WAS FETCHING — so
+          #     clicking a link landed the browser on /admin/index.txt showing
+          #     raw serialised React. Typing the URL worked, because a full
+          #     page load never fetches the payload.
+          #
+          #   - they were cached immutable for a year, but they change on every
+          #     deploy exactly like the HTML does.
+          #
+          # Hashed assets under _next/static are genuinely immutable and keep
+          # the long cache; HTML and RSC payloads must not.
           aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
             --delete \
             --cache-control "public, max-age=31536000, immutable" \
-            --exclude "*.html"
+            --exclude "*.html" \
+            --exclude "*.txt"
+          # `--include` only re-includes from an excluded set; on its own it is a
+          # no-op, since everything is included by default. Without the explicit
+          # `--exclude "*"` this pass would upload the .txt payloads too — as
+          # text/plain — and the pass below, being a sync, would then skip them
+          # as unchanged and the wrong content type would survive.
           aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
             --delete \
             --cache-control "no-cache" \
+            --exclude "*" \
             --include "*.html"
+          aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
+            --delete \
+            --cache-control "no-cache" \
+            --content-type "text/x-component" \
+            --exclude "*" \
+            --include "*.txt"
       - name: Invalidate CloudFront
         run: |
           aws cloudfront create-invalidation \

@@ -387,11 +387,25 @@ export class GitHubAdapter {
     for (const env of config.environments) {
       log.info(`Creating GitHub Environment: ${env}...`)
 
+      // No protection rules are set here. `prod` used to be created with
+      // `reviewers: []`, which was doubly wrong: an empty required-reviewers
+      // list gates nothing even when it is accepted, and GitHub rejects the
+      // rule outright with 422 on private repos whose plan does not include
+      // required reviewers ("Please ensure the billing plan supports the
+      // required reviewers protection rule"). That 422 aborted `biffo init`
+      // partway through step 5 — after the repo, OIDC role, state bucket,
+      // branches and branch protection existed, but before Actions secrets and
+      // variables were written, leaving a repo whose CI could not authenticate
+      // to AWS. A free plan with a private repo is the default solopreneur
+      // setup Biffo targets, so this failed for the primary user.
+      //
+      // Real prod approval gating needs actual reviewer ids, so it belongs in
+      // config rather than hardcoded here, and must degrade with a warning when
+      // the plan does not support it. Tracked separately; see the PR for #267.
       await this.octokit.repos.createOrUpdateEnvironment({
         owner: org,
         repo,
         environment_name: env,
-        ...(env === 'prod' ? { reviewers: [] } : {}),
       })
     }
 

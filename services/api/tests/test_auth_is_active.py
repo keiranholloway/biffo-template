@@ -1,13 +1,44 @@
 """issue #150: require_auth enforces the DB `users.is_active` flag, so a
-suspended user can't keep calling the API with an already-issued access token."""
+suspended user can't keep calling the API with an already-issued access token.
 
+Specifically about the *default* provider, whose store is the Core's own
+`public.users`. A deployment that retired that table (ADR-0012) has its own
+equivalent coverage against its own provider, so this module skips there.
+"""
+
+from importlib.util import find_spec
 from typing import NamedTuple
 
 import api.middleware.auth as auth_module
 import pytest
+from api.identity import (
+    DefaultIdentityProvider,
+    get_identity_provider,
+    set_identity_provider,
+)
 from api.middleware.auth import require_auth
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
+
+pytestmark = pytest.mark.skipif(
+    find_spec("api.models.user") is None,
+    reason="deployment has retired the Core users model (ADR-0012)",
+)
+
+
+@pytest.fixture(autouse=True)
+def _use_default_provider():
+    """Pin the provider under test.
+
+    The installed provider is process-global, so importing anything that calls
+    set_identity_provider() (a deployment's main.py does exactly that at import
+    time) would otherwise leave these assertions running against whichever
+    provider happened to load first — passing or failing on test order.
+    """
+    original = get_identity_provider()
+    set_identity_provider(DefaultIdentityProvider())
+    yield
+    set_identity_provider(original)
 
 
 def _credentials() -> HTTPAuthorizationCredentials:

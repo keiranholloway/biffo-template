@@ -13,6 +13,7 @@ import {
   serializeInstanceCoreVersion,
   INSTANCE_CORE_FILE,
 } from '../lib/core-version.js'
+import { assertInteractive, promptOr } from '../lib/interactive.js'
 import { log } from '../lib/logger.js'
 import { resolveRepoIds } from '../lib/oidc.js'
 import {
@@ -71,16 +72,23 @@ export const initCommand = new Command('init')
           // Offer to resume a saved session
           const saved = findLatestSession()
           if (saved) {
-            const { resume } = await inquirer.prompt<{ resume: boolean }>([
+            const { resume } = await promptOr<{ resume: boolean }>(
               {
-                type: 'confirm',
-                name: 'resume',
-                message:
-                  `Resume previous init for ${chalk.bold(saved.config.project?.name ?? '?')}` +
-                  ` (completed: ${saved.completedSteps.join(', ') || 'none'})?`,
-                default: true,
+                question: 'Resume previous init?',
+                remedy:
+                  'Pass --fresh to ignore the saved session, or --config <path> to init from a file.',
               },
-            ])
+              [
+                {
+                  type: 'confirm',
+                  name: 'resume',
+                  message:
+                    `Resume previous init for ${chalk.bold(saved.config.project?.name ?? '?')}` +
+                    ` (completed: ${saved.completedSteps.join(', ') || 'none'})?`,
+                  default: true,
+                },
+              ],
+            )
             if (resume) {
               session = saved
               session.awsAccountId = accountId
@@ -355,6 +363,11 @@ async function promptForConfig(
   awsRegion: string,
   awsProfile?: string,
 ): Promise<Partial<BiffoConfig>> {
+  assertInteractive(
+    'Project configuration',
+    'Pass --config <path> with a pre-filled biffo.config.json (it implies -y).',
+  )
+
   const answers = await inquirer.prompt([
     {
       type: 'input',

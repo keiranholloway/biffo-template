@@ -3,10 +3,10 @@ import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
-import inquirer from 'inquirer'
 import { BiffoConfigSchema, resolveDnsConfig, type BiffoConfig } from '../config/schema.js'
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
+import { promptOr } from '../lib/interactive.js'
 import { isTemplatePlaceholderConfig } from '../lib/local-config.js'
 import { log } from '../lib/logger.js'
 import { listProjectConfigs, loadProjectConfig } from '../lib/session.js'
@@ -123,18 +123,45 @@ async function resolveConfig(options: { project?: string; config?: string }): Pr
     return projects[0]!
   }
 
-  // Multiple projects — ask which one
-  const { chosen } = await inquirer.prompt<{ chosen: string }>([
+  // Multiple projects — ask which one (or, non-interactively, refuse and list them)
+  return chooseProject(projects)
+}
+
+/** `<name> (<org>/<repo>)` — the label used in both the picker and the refusal. */
+export function describeProject(config: BiffoConfig): string {
+  const { org, repo } = (
+    config.source_control as { provider: 'github'; config: { org: string; repo: string } }
+  ).config
+  return `${config.project.name} (${org}/${repo})`
+}
+
+/**
+ * Disambiguate between saved projects.
+ *
+ * With `--non-interactive` this throws with the candidate list rather than
+ * prompting (issue #274). The old behaviour was a latent trap: with exactly one
+ * saved project it auto-selects, so a script that worked on a one-project
+ * machine hung on a two-project machine, at deploy time.
+ *
+ * Exported for testing.
+ */
+export async function chooseProject(projects: BiffoConfig[]): Promise<BiffoConfig> {
+  const { chosen } = await promptOr<{ chosen: string }>(
     {
-      type: 'list',
-      name: 'chosen',
-      message: 'Which project do you want to deploy?',
-      choices: projects.map((p) => ({
-        name: `${p.project.name} (${(p.source_control as { config: { org: string; repo: string } }).config.org}/${(p.source_control as { config: { org: string; repo: string } }).config.repo})`,
-        value: p.project.name,
-      })),
+      question: 'Which project do you want to deploy?',
+      remedy:
+        'Pass --project <name> to choose one. Available:\n' +
+        projects.map((p) => `    ${describeProject(p)}`).join('\n'),
     },
-  ])
+    [
+      {
+        type: 'list',
+        name: 'chosen',
+        message: 'Which project do you want to deploy?',
+        choices: projects.map((p) => ({ name: describeProject(p), value: p.project.name })),
+      },
+    ],
+  )
 
   return projects.find((p) => p.project.name === chosen)!
 }
@@ -158,14 +185,20 @@ async function confirmDeployTarget(config: BiffoConfig, environment: string): Pr
   if (dns.domain) console.log(`  Domain:      ${chalk.cyan(dns.domain)}`)
   console.log()
 
-  const { confirmed } = await inquirer.prompt<{ confirmed: boolean }>([
+  const { confirmed } = await promptOr<{ confirmed: boolean }>(
     {
-      type: 'confirm',
-      name: 'confirmed',
-      message: 'Deploy to this target?',
-      default: false,
+      question: 'Deploy to this target?',
+      remedy: 'Pass -y / --yes to pre-confirm the deployment target.',
     },
-  ])
+    [
+      {
+        type: 'confirm',
+        name: 'confirmed',
+        message: 'Deploy to this target?',
+        default: false,
+      },
+    ],
+  )
 
   return confirmed
 }

@@ -8,6 +8,8 @@ import { initCommand } from './commands/init.js'
 import { pluginCommand } from './commands/plugin.js'
 import { siblingCommand } from './commands/sibling.js'
 import { teardownCommand } from './commands/teardown.js'
+import { NonInteractiveError, registerNonInteractive } from './lib/interactive.js'
+import { log } from './lib/logger.js'
 
 const program = new Command()
 
@@ -25,4 +27,15 @@ program.addCommand(dataCommand)
 program.addCommand(coreCommand)
 program.addCommand(siblingCommand)
 
-program.parse()
+// `--non-interactive` is global: registered on the root program and on every
+// subcommand (Commander rejects unknown options on subcommands), so it may be
+// given on either side of the command name.
+registerNonInteractive(program)
+
+program.parseAsync().catch((err: unknown) => {
+  if (err instanceof NonInteractiveError) {
+    log.error(err.message)
+    process.exit(1)
+  }
+  throw err
+})

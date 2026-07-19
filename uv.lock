@@ -250,8 +250,14 @@ dependencies = [
     { name = "pydantic" },
 ]
 
+[package.optional-dependencies]
+sigv4 = [
+    { name = "botocore" },
+]
+
 [package.dev-dependencies]
 dev = [
+    { name = "botocore" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -261,12 +267,15 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aws-lambda-powertools", specifier = ">=3.4.0" },
+    { name = "botocore", marker = "extra == 'sigv4'", specifier = ">=1.35.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pydantic", specifier = ">=2.10.4" },
 ]
+provides-extras = ["sigv4"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "botocore", specifier = ">=1.35.0" },
     { name = "pyright", specifier = ">=1.1.0" },
     { name = "pytest", specifier = ">=8.3.4" },
     { name = "pytest-asyncio", specifier = ">=0.25.2" },

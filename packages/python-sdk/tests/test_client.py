@@ -28,22 +28,34 @@ def make_client(
 
 
 class TestInit:
-    def test_reads_base_url_and_token_from_env(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_reads_base_url_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("BIFFO_CORE_API_URL", "https://core.biffo.dev")
-        monkeypatch.setenv("BIFFO_JWT_TOKEN", "env-token")
 
         client = BiffoAPIClient()
 
         assert client.base_url == "https://core.biffo.dev"
-        assert client.token == "env-token"
+
+    def test_ignores_biffo_jwt_token_env_var(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``BIFFO_JWT_TOKEN`` is no longer read — nothing ever issued it.
+
+        The env fallback made the default client look authenticated while
+        sending ``{}`` for ``Authorization`` (ADR-0009 / issue #197). SigV4 via
+        ``create_core_client`` is the machine-caller path now; ``token=`` stays
+        an explicit constructor argument only.
+        """
+        monkeypatch.setenv("BIFFO_JWT_TOKEN", "env-token")
+
+        client = BiffoAPIClient(base_url="https://core.biffo.dev")
+
+        assert client.token is None
+        assert client._auth_headers() == {}
 
     def test_missing_env_vars_handled_gracefully(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("BIFFO_CORE_API_URL", raising=False)
-        monkeypatch.delenv("BIFFO_JWT_TOKEN", raising=False)
 
         client = BiffoAPIClient()
 
@@ -52,7 +64,6 @@ class TestInit:
 
     def test_explicit_args_override_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("BIFFO_CORE_API_URL", "https://core.biffo.dev")
-        monkeypatch.setenv("BIFFO_JWT_TOKEN", "env-token")
 
         client = BiffoAPIClient(
             base_url="https://override.example.com", token="override-token"

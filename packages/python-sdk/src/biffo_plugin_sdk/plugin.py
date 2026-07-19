@@ -29,6 +29,7 @@ from typing import Any, Callable, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .client import BiffoAPIClient
+from .signed_client import create_core_client
 from .events import EventHandler, EventSubscriber
 
 
@@ -387,7 +388,7 @@ class BiffoPluginBase(ABC):
         self, manifest: PluginManifest, api: BiffoAPIClient | None = None
     ) -> None:
         self.manifest = manifest
-        self.api = api if api is not None else BiffoAPIClient()
+        self.api = api if api is not None else create_core_client()
         self.events = EventSubscriber()
 
     @abstractmethod

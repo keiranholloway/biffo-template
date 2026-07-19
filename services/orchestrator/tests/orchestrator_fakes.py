@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 from botocore.credentials import Credentials
 
-from orchestrator.signed_client import SignedCoreClient
+from biffo_plugin_sdk import SignedCoreClient
 
 
 class FakeCore:

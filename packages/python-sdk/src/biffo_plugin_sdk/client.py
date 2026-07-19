@@ -1,11 +1,24 @@
 """Typed async HTTP client plugins use to talk to the Core API.
 
 ``BiffoAPIClient`` centralises the two things every plugin otherwise has to
-reinvent: reading the Core API's base URL and the plugin's JWT from the
-environment (set by the CLI during ``biffo plugin install``, see
-``docs/ADR/0003``), and turning non-2xx responses into a single exception
-type (``BiffoAPIError``) instead of leaking ``httpx`` internals into plugin
-code.
+reinvent: reading the Core API's base URL from the environment
+(``BIFFO_CORE_API_URL``, injected by ``modules/plugins/_template``), and turning
+non-2xx responses into a single exception type (``BiffoAPIError``) instead of
+leaking ``httpx`` internals into plugin code.
+
+**This class does not authenticate.** It is the plain transport. The
+plugin->Core auth mechanism is IAM SigV4 (ADR-0009), implemented by
+:class:`~biffo_plugin_sdk.signed_client.SignedCoreClient`, which subclasses this
+one — and it is what :func:`~biffo_plugin_sdk.signed_client.create_core_client`
+(and therefore ``BiffoPluginBase.api``) builds by default. Use
+``BiffoAPIClient`` directly only for an unprotected endpoint or in tests.
+
+Historically this class read a ``BIFFO_JWT_TOKEN`` environment variable and
+claimed the CLI set it during ``biffo plugin install``. Nothing ever set it — not
+Terraform, not CI, not the CLI — so the documented default silently produced
+unauthenticated calls against a protected API. The env fallback was removed in
+favour of SigV4; ``token=`` remains for the narrow case of calling a
+*user-facing*, Cognito-protected route with a JWT the caller already holds.
 
 This module deliberately has no retry logic — that is a later chunk, per
 issue #15's notes.
@@ -30,12 +43,17 @@ class BiffoAPIError(Exception):
 
 
 class BiffoAPIClient:
-    """Async HTTP client for plugins to call the Core API.
+    """Async HTTP client for plugins to call the Core API — no authentication.
 
-    By default the base URL and JWT come from the ``BIFFO_CORE_API_URL`` and
-    ``BIFFO_JWT_TOKEN`` environment variables, which the CLI sets during
-    ``biffo plugin install``. They can also be passed explicitly, which is
-    mainly useful for tests.
+    The base URL defaults to the ``BIFFO_CORE_API_URL`` environment variable,
+    which ``modules/plugins/_template`` injects into the plugin's Lambda. It can
+    also be passed explicitly, which is mainly useful for tests.
+
+    ``token`` is **not** read from the environment. Pass it explicitly to attach
+    a ``Bearer`` header when calling a Cognito-protected user-facing route on
+    behalf of a user. For the internal machine-to-machine path
+    (``/api/v1/internal/*``) use ``SignedCoreClient`` / ``create_core_client``
+    instead — see ADR-0009.
     """
 
     def __init__(
@@ -51,7 +69,7 @@ class BiffoAPIClient:
             else os.environ.get("BIFFO_CORE_API_URL", "")
         )
         self.base_url = resolved_base_url.rstrip("/")
-        self.token = token if token is not None else os.environ.get("BIFFO_JWT_TOKEN")
+        self.token = token
         self._client = (
             client if client is not None else httpx.AsyncClient(timeout=timeout)
         )

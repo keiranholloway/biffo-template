@@ -14,6 +14,7 @@ from .plugin import (
     load_manifest,
     register_plugin,
 )
+from .signed_client import SignedCoreClient, create_core_client
 
 __all__ = [
     "BiffoAPIClient",
@@ -26,8 +27,10 @@ __all__ = [
     "PermissionRule",
     "PluginManifest",
     "RouteDef",
+    "SignedCoreClient",
     "TableDefinition",
     "TablePermissions",
+    "create_core_client",
     "create_event_handler",
     "load_manifest",
     "register_plugin",

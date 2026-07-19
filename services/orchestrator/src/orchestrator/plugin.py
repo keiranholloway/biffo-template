@@ -19,11 +19,16 @@ from typing import Any
 import boto3
 import httpx
 from aws_lambda_powertools import Logger
-from biffo_plugin_sdk import BiffoAPIClient, BiffoEvent, BiffoPluginBase, load_manifest
+from biffo_plugin_sdk import (
+    BiffoAPIClient,
+    BiffoEvent,
+    BiffoPluginBase,
+    SignedCoreClient,
+    load_manifest,
+)
 
 from .actions import ACTION_HANDLERS, WhatsAppSettings
 from .manifest import MANIFEST_PATH
-from .signed_client import SignedCoreClient
 
 logger = Logger()
 

@@ -46,6 +46,9 @@ locals {
   # A rule is created when the plugin subscribes to specific events, or when it
   # is a generic forwarder that reacts to every event (subscribe_all).
   has_subscriptions = var.subscribe_all || length(var.event_subscriptions) > 0
+  # Grant Core API access only when the root config told us which API to scope
+  # it to. Empty (the default) => the plugin never calls Core, so no grant.
+  grants_core_api_access = var.core_api_execution_arn != ""
 }
 
 # Compute — the plugin's Lambda function.
@@ -130,4 +133,34 @@ resource "aws_lambda_permission" "subscription" {
   function_name = module.function.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.subscription[0].arn
+}
+
+# Core API access (ADR-0009) — the plugin->Core auth path.
+#
+# ADR-0002 forbids this Lambda from touching the database, so anything it needs
+# from the platform it gets over HTTPS from the Core API. The Core API's
+# internal routes (/api/v1/internal/*) are IAM-authorized, not Cognito-JWT, so
+# the plugin authenticates by SigV4-signing with this Lambda role — see
+# biffo_plugin_sdk.SignedCoreClient, which BiffoPluginBase uses by default. No
+# bearer token, no shared secret, nothing to rotate.
+#
+# Scoped to the /api/v1/internal/* prefix on one API, never the whole API.
+data "aws_iam_policy_document" "core_api" {
+  count = local.grants_core_api_access ? 1 : 0
+
+  statement {
+    sid       = "InvokeCoreInternalApi"
+    effect    = "Allow"
+    actions   = ["execute-api:Invoke"]
+    resources = ["${var.core_api_execution_arn}/*/*/api/v1/internal/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "core_api" {
+  count = local.grants_core_api_access ? 1 : 0
+  name  = "${local.function_name}-core-api"
+  # compute exposes the role via its ARN; derive the role name (last ARN
+  # segment) since aws_iam_role_policy wants the name, not the ARN.
+  role   = element(split("/", module.function.role_arn), length(split("/", module.function.role_arn)) - 1)
+  policy = data.aws_iam_policy_document.core_api[0].json
 }

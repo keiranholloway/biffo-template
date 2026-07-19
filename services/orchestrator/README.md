@@ -39,7 +39,7 @@ EventBridge (biffo.core)  ──►  Orchestrator Lambda (this plugin)
 
 - `src/orchestrator/main.py` — Lambda entrypoint (EventBridge → `BiffoEvent` → dispatch).
 - `src/orchestrator/plugin.py` — `OrchestratorPlugin`: the event→claim→act→record flow.
-- `src/orchestrator/signed_client.py` — `SignedCoreClient`, a `BiffoAPIClient` that SigV4-signs.
+- SigV4 signing lives in the shared plugin SDK (`biffo_plugin_sdk.SignedCoreClient`), not here — see ADR-0009 and `packages/python-sdk/`.
 - `src/orchestrator/actions.py` — action handler registry; `send_email` (SES) is the wedge.
 - `terraform/` — the plugin's infra (copied to `modules/plugins/orchestrator/` on install).
 

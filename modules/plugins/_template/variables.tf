@@ -71,6 +71,24 @@ variable "core_api_url" {
   default     = ""
 }
 
+variable "core_api_execution_arn" {
+  description = <<-EOT
+    The Core API Gateway's execution ARN (module.api_gateway.execution_arn from
+    the root config, i.e. arn:aws:execute-api:<region>:<acct>:<api-id>). When
+    set, this plugin's Lambda role is granted execute-api:Invoke scoped to that
+    API's /api/v1/internal/* routes only — the plugin->Core auth mechanism from
+    ADR-0009 (IAM SigV4), which the plugin SDK's SignedCoreClient speaks.
+
+    Leave empty (the default) only if the plugin never calls the Core API. It
+    is not enough on its own: the Core API independently re-checks the caller
+    against BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST, so the plugin's role must
+    also be allowlisted there — see this module's README for the exact glob and
+    why it is a static string rather than this module's role_arn output.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "event_bus_name" {
   description = "Name of the shared EventBridge bus (module.events.event_bus_name from the root config). This module subscribes to it — it never creates its own bus, keeping every plugin's events on one platform-wide bus per ADR-0002."
   type        = string

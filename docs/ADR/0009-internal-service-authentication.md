@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-07-06
+**Amended:** 2026-07-19 — see [Amendment history](#amendment-history)
 **Deciders:** Keiran Holloway (Technical Architect)
 
 ---
@@ -112,7 +113,9 @@ misconfigured IAM grant is bounded.
 ### Positive
 
 - Resolves the platform's missing plugin→Core auth with one reusable
-  mechanism every future plugin can adopt.
+  mechanism every future plugin can adopt. _(As originally accepted this was
+  aspirational — the signing code existed only inside the orchestrator. It
+  became true on 2026-07-19; see [Amendment history](#amendment-history).)_
 - No secret to manage; identity is the caller's IAM role. Works identically on
   dev, staging, and prod.
 - Internal surface is explicitly separated (`/api/v1/internal/*`) from the
@@ -163,6 +166,65 @@ misconfigured IAM grant is bounded.
   as a machine caller.
 - [ADR-0003](0003-plugin-system-and-marketplace.md) — plugins whose background
   Lambda needs to call the Core API; the `BiffoAPIClient` `BIFFO_JWT_TOKEN` gap
-  this closes.
+  this closes. `BIFFO_JWT_TOKEN` was removed from the SDK on 2026-07-19 rather
+  than left as a never-issued fallback; see [Amendment history](#amendment-history).
 - [ADR-0001](0001-single-tenant-architecture-with-multi-tenant-seam.md) — the
   `ServicePrincipal` is tenant-scoped to `"default"` like every other identity.
+
+## Amendment history
+
+### 2026-07-19 — the "reusable mechanism" is now actually reusable
+
+**What was wrong.** As accepted, this ADR read as though plugin→Core auth was
+solved platform-wide. Two claims were false in the code:
+
+- _Consequences → Positive_: "one reusable mechanism every future plugin can
+  adopt". The signing implementation was written once, inside
+  `services/orchestrator/src/orchestrator/signed_client.py`, and never promoted.
+  `packages/python-sdk/` contained no SigV4 or `botocore` reference at all, so
+  "every future plugin" would have had to re-implement request signing.
+- _Related Decisions_: the `BIFFO_JWT_TOKEN` gap "this closes". It closed for the
+  orchestrator only. Every other SDK consumer still got `self.token = None`,
+  `_auth_headers()` returning `{}`, and unauthenticated calls against a
+  protected API — while `client.py`'s own docstring claimed the CLI set that
+  token during `biffo plugin install`, which no CLI code has ever done.
+
+An Accepted ADR asserting a security mechanism the code contradicts is the worst
+form of this drift: a reader concludes machine callers have working auth, and the
+code they get does not. Issues #194 and #197 both traced back to it.
+
+**What changed (issue #197).** The claims were made true rather than downgraded:
+
+1. `SignedCoreClient` moved from `services/orchestrator/` into
+   `packages/python-sdk/src/biffo_plugin_sdk/signed_client.py` and is exported
+   from `biffo_plugin_sdk`. The orchestrator now imports it from the SDK — there
+   is exactly one implementation.
+2. `botocore` is an optional extra (`biffo-plugin-sdk[sigv4]`), imported lazily.
+   It is preinstalled in the AWS Lambda Python runtime, so deployed plugins gain
+   no runtime dependency and `import biffo_plugin_sdk` still works without it.
+3. **SigV4 is the default, not an opt-in.** `create_core_client()` builds a
+   `SignedCoreClient` unless `BIFFO_CORE_AUTH_MODE=none`, and
+   `BiffoPluginBase.__init__` uses it for `self.api`. A plugin author who does
+   nothing now gets a signing client. An opt-in class would have left the
+   default path silently unauthenticated — the exact trap this amendment exists
+   to remove.
+4. `BIFFO_JWT_TOKEN` is **no longer read from the environment**. A bearer token
+   nothing issues is not a fallback, it is a trap on the SDK's public surface:
+   it made an unauthenticated client look authenticated. `token=` survives as an
+   explicit constructor argument for the distinct case of calling a _user-facing_
+   Cognito-protected route with a JWT the caller already holds. The false
+   docstring at `client.py:35-38` is gone.
+5. `modules/plugins/_template` gained an optional `core_api_execution_arn` input
+   that grants the plugin's Lambda role `execute-api:Invoke` scoped to
+   `/api/v1/internal/*`, plus a `role_name` output and documentation for the
+   `BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST` entry.
+
+**What remains open.** The allowlist side is still **manual**. The Core API's
+`BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST` must be populated by the instance with a
+static assumed-role glob (`arn:aws:sts::<acct>:assumed-role/<project>-<env>-plugin-<name>-role/*`),
+not wired from the plugin module's `role_arn` output. Doing the latter would
+create the Terraform dependency cycle `core_api → api_gateway → plugin →
+core_api` tracked in issue #201. Until #201 resolves that, step 3 of the
+mechanism is a documented human step, and a plugin that skips it gets a `403`
+from `require_service_principal` — failing closed, which is the correct
+direction, but not zero-configuration.

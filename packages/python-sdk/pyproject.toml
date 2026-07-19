@@ -9,10 +9,19 @@ dependencies = [
   "aws-lambda-powertools>=3.4.0",
 ]
 
+# SigV4 signing (SignedCoreClient / create_core_client, ADR-0009) needs botocore.
+# It is an optional extra, not a hard dependency: botocore is preinstalled in the
+# AWS Lambda Python runtime, so a deployed plugin already has it, and the SDK's
+# imports of it are lazy so `import biffo_plugin_sdk` works without it. Install
+# `biffo-plugin-sdk[sigv4]` when running outside Lambda.
+[project.optional-dependencies]
+sigv4 = ["botocore>=1.35.0"]
+
 [dependency-groups]
 dev = [
   "pytest>=8.3.4",
   "pytest-asyncio>=0.25.2",
+  "botocore>=1.35.0",
   "ruff>=0.8.0",
   "pyright>=1.1.0",
 ]

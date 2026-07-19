@@ -1,39 +1,54 @@
-import { cpSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { join, relative, resolve } from 'node:path'
+import { cpSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
+import { basename, join, relative, resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
 import { GitAdapter } from '../adapters/git/index.js'
 import { PluginMigrationsAdapter } from '../adapters/plugin-migrations/index.js'
 import { RegistryAdapter, type RegistryPluginEntry } from '../adapters/registry/index.js'
 import { log } from '../lib/logger.js'
+import { pluginDir } from '../lib/plugin-locations.js'
 import { validateManifest, type PluginManifest } from '../lib/plugin-manifest.js'
 
 const TARGET_PATTERN = /^([a-z][a-z0-9-]*)@(\d+\.\d+)$/
 
 export const pluginInstallCommand = new Command('install')
   .description(
-    'Install a plugin from the Biffo plugin registry: biffo plugin install <name>@<minor>',
+    'Install a plugin from the Biffo plugin registry (biffo plugin install <name>@<minor>) ' +
+      'or from a local directory (biffo plugin install --local <path>)',
   )
-  .argument('<target>', 'Plugin name and minor version, e.g. rbac@1.0')
+  .argument('[target]', 'Plugin name and minor version, e.g. rbac@1.0 (omit when using --local)')
+  .option(
+    '--local <path>',
+    'Install from a local, unpublished plugin directory instead of the registry',
+  )
   .option('--dry-run', 'Resolve the plugin and print planned changes without modifying the repo')
   .option('--cwd <path>', 'Project root to install into (defaults to the current directory)')
-  .action(async (target: string, options: { dryRun?: boolean; cwd?: string }) => {
-    const cwd = options.cwd ? resolve(options.cwd) : process.cwd()
-    try {
-      await runPluginInstall(
-        target,
-        { dryRun: options.dryRun ?? false, cwd },
-        {
-          registry: new RegistryAdapter(),
-          git: new GitAdapter(),
-          migrations: new PluginMigrationsAdapter(),
-        },
-      )
-    } catch (err) {
-      log.error((err as Error).message)
-      process.exit(1)
-    }
-  })
+  .action(
+    async (
+      target: string | undefined,
+      options: { local?: string; dryRun?: boolean; cwd?: string },
+    ) => {
+      const cwd = options.cwd ? resolve(options.cwd) : process.cwd()
+      try {
+        await runPluginInstall(
+          target,
+          {
+            ...(options.local ? { local: resolve(options.local) } : {}),
+            dryRun: options.dryRun ?? false,
+            cwd,
+          },
+          {
+            registry: new RegistryAdapter(),
+            git: new GitAdapter(),
+            migrations: new PluginMigrationsAdapter(),
+          },
+        )
+      } catch (err) {
+        log.error((err as Error).message)
+        process.exit(1)
+      }
+    },
+  )
 
 export interface PluginInstallDeps {
   registry: RegistryAdapter
@@ -42,8 +57,79 @@ export interface PluginInstallDeps {
 }
 
 export interface PluginInstallOptions {
+  /** Absolute path to a local plugin directory; mutually exclusive with `target`. */
+  local?: string
   dryRun: boolean
   cwd: string
+}
+
+/**
+ * A plugin resolved and validated, ready to be copied into the checkout —
+ * whatever it was resolved *from*. The two sources (registry clone, local
+ * directory) differ only in how this is produced; everything after it is
+ * identical, which is the point: `--local` must not become a second, weaker
+ * install path that skips validation or the migration.
+ */
+export interface ResolvedPluginSource {
+  name: string
+  version: string
+  manifest: PluginManifest
+  /** Directory holding the plugin's files, ready to copy from. */
+  sourceDir: string
+  /** Human-readable provenance, for logs and the commit message. */
+  origin: string
+  /** Release any temp resources. No-op for a local source. */
+  cleanup: () => void
+}
+
+/** Build/VCS detritus never copied out of a local plugin directory. */
+const LOCAL_COPY_EXCLUDES = new Set([
+  '.git',
+  '.venv',
+  'node_modules',
+  '__pycache__',
+  '.ruff_cache',
+  '.pytest_cache',
+  '.mypy_cache',
+  'dist',
+  '.terraform',
+])
+
+/**
+ * Resolve a local, unpublished plugin directory into the same shape a registry
+ * clone produces.
+ *
+ * There is no registry entry to cross-check the manifest against here, so the
+ * manifest is the sole authority for the plugin's name and version — and it is
+ * validated with exactly the same `validateManifest` the registry path uses. A
+ * local install trades away the *registry* check (name matches the catalogue
+ * entry), not the *manifest* check.
+ */
+export function resolveLocalPlugin(localPath: string): ResolvedPluginSource {
+  if (!existsSync(localPath)) {
+    throw new Error(`--local path does not exist: ${localPath}`)
+  }
+  if (!statSync(localPath).isDirectory()) {
+    throw new Error(`--local path is not a directory: ${localPath}`)
+  }
+
+  const manifestPath = join(localPath, 'biffo.plugin.json')
+  if (!existsSync(manifestPath)) {
+    throw new Error(
+      `${localPath} does not contain a biffo.plugin.json manifest at its root — ` +
+        `is it a plugin directory? (Scaffold one with \`biffo plugin create <name>\`.)`,
+    )
+  }
+
+  const manifest = validateManifest(parseManifestFile(manifestPath))
+  return {
+    name: manifest.name,
+    version: manifest.version,
+    manifest,
+    sourceDir: localPath,
+    origin: localPath,
+    cleanup: () => {},
+  }
 }
 
 /**
@@ -123,35 +209,76 @@ export async function cloneAndValidatePlugin(
  * *requests* to GitHub Actions but never call `git push` themselves).
  */
 export async function runPluginInstall(
-  target: string,
+  target: string | undefined,
   options: PluginInstallOptions,
   deps: PluginInstallDeps,
 ): Promise<void> {
-  const { name, minor } = parsePluginTarget(target)
-
-  log.info(`Resolving ${name}@${minor} from the plugin registry...`)
-  const entry = await deps.registry.resolvePlugin(name, minor)
-  log.success(`Resolved ${entry.name}@${entry.version} — ${entry.repo}`)
+  if (options.local && target) {
+    throw new Error(
+      `Pass either a registry target (<name>@<minor>) or --local <path>, not both. ` +
+        `--local installs an unpublished plugin from disk and has no registry entry to resolve.`,
+    )
+  }
+  if (!options.local && !target) {
+    throw new Error(
+      `Nothing to install. Pass a registry target (e.g. \`biffo plugin install acme-crm@1.0\`) ` +
+        `or a local plugin directory (\`biffo plugin install --local services/acme-crm\`).`,
+    )
+  }
 
   const servicesDir = join(options.cwd, 'services')
-  const targetDir = join(servicesDir, entry.name)
-  const modulesDir = join(options.cwd, 'modules', 'plugins', entry.name)
-
   if (!existsSync(servicesDir)) {
     throw new Error(
       `${servicesDir} does not exist — is ${options.cwd} the root of a Biffo project checkout?`,
     )
   }
 
-  if (existsSync(targetDir)) {
+  // --- Resolve the source, without touching the target checkout -------------
+  // Both branches must produce a *validated* manifest before anything is
+  // written, so a local install is never a weaker install.
+  let source: ResolvedPluginSource
+  let entry: RegistryPluginEntry | null = null
+
+  if (options.local) {
+    source = resolveLocalPlugin(options.local)
+    log.success(`Resolved ${source.name}@${source.version} from ${source.origin}`)
+  } else {
+    const { name, minor } = parsePluginTarget(target!)
+    log.info(`Resolving ${name}@${minor} from the plugin registry...`)
+    entry = await deps.registry.resolvePlugin(name, minor)
+    log.success(`Resolved ${entry.name}@${entry.version} — ${entry.repo}`)
+  }
+
+  // A plugin installed by the CLI always lands in the *user-owned*
+  // services/<name>/ channel — never in the template-owned
+  // services/_plugins/ carve-out (#243). Installing into _plugins/ would hand
+  // the user's plugin to `biffo core upgrade`, which three-way-merges every
+  // template-owned path against a template that has never heard of it.
+  // First-party plugins get there by being authored in biffo-template, not by
+  // being installed.
+  const pluginName = entry ? entry.name : source!.name
+  const relTargetDir = pluginDir(pluginName, 'third-party')
+  const targetDir = join(options.cwd, relTargetDir)
+  const modulesDir = join(options.cwd, 'modules', 'plugins', pluginName)
+
+  // `--local` pointed at a directory that is already in this checkout (the
+  // common case after `biffo plugin create`, and the only sane reading of
+  // "install the plugin I already have in-tree"). There is nothing to copy —
+  // the source *is* the installed location — so the copy step is skipped and
+  // install means "wire up its terraform and migration". This is also what
+  // makes an in-tree install re-runnable: it does not trip the
+  // already-installed guard against itself.
+  const inTreeSource = options.local !== undefined && resolve(options.local) === resolve(targetDir)
+
+  if (existsSync(targetDir) && !inTreeSource) {
     throw new Error(
-      `Plugin '${entry.name}' is already installed at services/${entry.name}/. ` +
+      `Plugin '${pluginName}' is already installed at ${relTargetDir}/. ` +
         `Remove it first, or wait for a future 'biffo plugin upgrade' command.`,
     )
   }
 
   if (options.dryRun) {
-    printDryRun(entry)
+    printDryRun(entry, source!, relTargetDir, inTreeSource)
     return
   }
 
@@ -162,8 +289,20 @@ export async function runPluginInstall(
     )
   }
 
-  log.info(`Cloning ${entry.repo}...`)
-  const { tmpDir, manifest } = await cloneAndValidatePlugin(entry, deps.git)
+  if (entry) {
+    log.info(`Cloning ${entry.repo}...`)
+    const cloned = await cloneAndValidatePlugin(entry, deps.git)
+    source = {
+      name: entry.name,
+      version: entry.version,
+      manifest: cloned.manifest,
+      sourceDir: cloned.tmpDir,
+      origin: entry.repo,
+      cleanup: () => deps.git.cleanup(cloned.tmpDir),
+    }
+  }
+
+  const { manifest } = source!
 
   try {
     log.success(
@@ -171,18 +310,25 @@ export async function runPluginInstall(
     )
 
     // Only now — after the manifest has validated — do we touch the target repo.
-    mkdirSync(targetDir, { recursive: true })
-    cpSync(tmpDir, targetDir, { recursive: true })
-    log.success(`Installed plugin source at services/${entry.name}/`)
+    if (inTreeSource) {
+      log.info(`${relTargetDir}/ is already in this checkout — installing in place.`)
+    } else {
+      mkdirSync(targetDir, { recursive: true })
+      cpSync(source!.sourceDir, targetDir, {
+        recursive: true,
+        filter: (src) => !LOCAL_COPY_EXCLUDES.has(basename(src)),
+      })
+      log.success(`Installed plugin source at ${relTargetDir}/`)
+    }
 
-    const stagePaths = [`services/${entry.name}`]
+    const stagePaths = [relTargetDir]
 
     const tfSourceDir = join(targetDir, 'terraform')
     if (existsSync(tfSourceDir)) {
       mkdirSync(modulesDir, { recursive: true })
       cpSync(tfSourceDir, modulesDir, { recursive: true })
-      stagePaths.push(`modules/plugins/${entry.name}`)
-      log.success(`Copied Terraform module to modules/plugins/${entry.name}/`)
+      stagePaths.push(`modules/plugins/${pluginName}`)
+      log.success(`Copied Terraform module to modules/plugins/${pluginName}/`)
       log.warn(
         'Terraform module copied but NOT wired into infra/environments/*/main.tf — ' +
           'conditional plugin module inclusion is tracked by issue #25. ' +
@@ -192,7 +338,7 @@ export async function runPluginInstall(
       // Don't let this pass silently: the plugin declares events it will never
       // receive, because nothing creates its Lambda or EventBridge rule (#194).
       log.warn(
-        `Plugin "${entry.name}" declares ${manifest.event_subscriptions.length} event ` +
+        `Plugin "${pluginName}" declares ${manifest.event_subscriptions.length} event ` +
           'subscription(s) but ships no terraform/ directory, so no Lambda or EventBridge ' +
           'rule was created — those events will never reach it. Add a terraform/ module ' +
           '(start from modules/plugins/_template/) and reinstall.',
@@ -200,16 +346,14 @@ export async function runPluginInstall(
     }
 
     if (manifest.tables.length > 0) {
-      // If this throws (e.g. `uv` missing), services/<name>/ is left
+      // If this throws (e.g. `uv` missing), the plugin directory is left
       // copied-but-uncommitted on disk — no rollback happens anywhere else
       // in this function either. Recovery is a two-step manual process:
       // fix `uv`, then `biffo plugin sync-migrations <name>` (re-running
       // `install` will fail with "already installed" now that targetDir
       // exists) followed by `git add`/`git commit` yourself.
-      log.info(
-        `Generating migration for services/${entry.name}/'s ${manifest.tables.length} table(s)...`,
-      )
-      const generatedPaths = await deps.migrations.generate(options.cwd, [entry.name])
+      log.info(`Generating migration for ${relTargetDir}/'s ${manifest.tables.length} table(s)...`)
+      const generatedPaths = await deps.migrations.generate(options.cwd, [pluginName])
       for (const absPath of generatedPaths) {
         stagePaths.push(relative(options.cwd, absPath))
       }
@@ -217,21 +361,21 @@ export async function runPluginInstall(
         log.success(`Generated migration: ${relative(options.cwd, generatedPaths[0]!)}`)
       }
     } else {
-      log.info(`${entry.name} declares no tables — nothing to migrate.`)
+      log.info(`${pluginName} declares no tables — nothing to migrate.`)
     }
 
-    const commitMessage = `feat(plugins): install ${entry.name}@${entry.version}`
+    const commitMessage = `feat(plugins): install ${pluginName}@${source!.version}`
     await deps.git.add(options.cwd, stagePaths)
     await deps.git.commit(options.cwd, commitMessage)
     log.success(`Committed: ${commitMessage}`)
 
     console.log(chalk.bold('\n  Plugin installed!\n'))
-    console.log(`  ${entry.name}@${entry.version} is committed at services/${entry.name}/`)
+    console.log(`  ${pluginName}@${source!.version} is committed at ${relTargetDir}/`)
     console.log('  Push and redeploy to apply its migration and register its routes:')
     console.log(chalk.dim(`    git push`))
     console.log(chalk.dim(`    biffo deploy <environment> --app-only\n`))
   } finally {
-    deps.git.cleanup(tmpDir)
+    source!.cleanup()
   }
 }
 
@@ -243,15 +387,37 @@ function parseManifestFile(path: string): unknown {
   }
 }
 
-function printDryRun(entry: RegistryPluginEntry): void {
+function printDryRun(
+  entry: RegistryPluginEntry | null,
+  source: ResolvedPluginSource | undefined,
+  relTargetDir: string,
+  inTreeSource: boolean,
+): void {
+  const name = entry ? entry.name : source!.name
+  const version = entry ? entry.version : source!.version
+
   console.log(chalk.bold('\n  Dry run — no changes will be made\n'))
-  console.log(`  Plugin:        ${entry.name}@${entry.version}`)
-  console.log(`  Source repo:   ${entry.repo}`)
-  console.log(`  Would clone into:   services/${entry.name}/`)
-  if (entry.infra_modules && entry.infra_modules.length > 0) {
+  console.log(`  Plugin:        ${name}@${version}`)
+  if (entry) {
+    console.log(`  Source repo:   ${entry.repo}`)
+    console.log(`  Would clone into:   ${relTargetDir}/`)
+  } else {
+    console.log(`  Local source:  ${source!.origin}`)
     console.log(
-      `  Would copy Terraform module into: modules/plugins/${entry.name}/ (if the repo has one)`,
+      inTreeSource
+        ? `  Already in tree at ${relTargetDir}/ — would install in place (no copy)`
+        : `  Would copy into:    ${relTargetDir}/`,
     )
   }
-  console.log(`  Would commit:  feat(plugins): install ${entry.name}@${entry.version}\n`)
+  if (!entry || (entry.infra_modules && entry.infra_modules.length > 0)) {
+    console.log(
+      `  Would copy Terraform module into: modules/plugins/${name}/ (if the plugin has one)`,
+    )
+  }
+  if (source && source.manifest.tables.length > 0) {
+    console.log(
+      `  Would generate a migration for ${source.manifest.tables.length} table(s) into services/api/migrations/versions/`,
+    )
+  }
+  console.log(`  Would commit:  feat(plugins): install ${name}@${version}\n`)
 }

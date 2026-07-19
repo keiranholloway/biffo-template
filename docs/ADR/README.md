@@ -19,6 +19,7 @@ An ADR captures a significant architectural decision: the context that forced it
 | [ADR-0009](0009-internal-service-authentication.md)                   | Internal Service-to-Service Authentication (IAM SigV4)      | Accepted | 2026-07-06 |
 | [ADR-0010](0010-event-registry-and-trigger-consolidation.md)          | Event Registry — one source of truth for triggers           | Accepted | 2026-07-07 |
 | [ADR-0011](0011-authorization-is-a-core-concern.md)                   | Authorization is a core concern, not a plugin               | Accepted | 2026-07-07 |
+| [ADR-0012](0012-identity-provider-seam.md)                            | Identity resolved through a core seam, not an owned table   | Proposed | 2026-07-19 |
 
 ## Format
 

@@ -16,10 +16,16 @@ For the design rationale (why a PR-based sync rather than a package or a submodu
 
 ## Core versioning
 
-Two files track versions:
+Two files track versions, and they mean different things:
 
-- **`core.version`** (template repo) — the template's current core version.
-- **`biffo.core.json`** (your instance) — the core version your instance was scaffolded from / last upgraded to.
+| File              | Meaning                                                                 | Who owns it                                                         |
+| ----------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `core.version`    | the version the **template emits** — the template's own source of truth | the template; **never synced into an instance**                     |
+| `biffo.core.json` | the version your instance **received** (scaffolded from / upgraded to)  | your instance; also the marker that says "this repo is an instance" |
+
+Your instance inherits a copy of `core.version` from template generation, but it is only a **fallback**: whenever `biffo.core.json` is present it wins on every read. So the number in your `core.version` has no effect on `status`, `diff`, or `upgrade`, and **`biffo core upgrade` deliberately leaves that file alone** — it is not listed as template-owned in `core-manifest.json`. If your project uses `core.version` for its own release lineage, an upgrade will not touch or regress it.
+
+For the same reason, the `Core Version Tag` workflow (which tags `core-v<version>` on the template) skips itself in an instance, detected by the presence of `biffo.core.json` — it will not push template version tags into your tag namespace.
 
 An upgrade bumps `biffo.core.json` in the same PR. Instances scaffolded before versioning existed won't have `biffo.core.json` yet — the first `upgrade` creates it (see the note at the end).
 
@@ -27,8 +33,8 @@ An upgrade bumps `biffo.core.json` in the same PR. Instances scaffolded before v
 
 Ownership is declared in the template's `core-manifest.json`. Only **template-owned** paths are ever changed:
 
-- **Template-owned:** `services/api/`, `services/_template/`, `modules/`, `packages/`, `cli/`, `.github/`, `scripts/`, `docs/ADR/`, and root tooling configs.
-- **Left alone (user-owned):** your plugins under `services/<name>/`, `infra/environments/`, `apps/`, `db/`, `services/api/migrations/versions/` (your Alembic chain), and your config files.
+- **Template-owned:** `services/api/`, `services/_template/`, `modules/`, `packages/`, `cli/`, `.github/`, `scripts/`, and root tooling configs.
+- **Left alone (user-owned):** your plugins under `services/<name>/`, `infra/environments/`, `apps/`, `db/`, `docs/ADR/` (your own decision record), `services/api/migrations/versions/` (your Alembic chain), `core.version`, and your config files.
 
 On any ambiguity, user-owned wins — the upgrade is fail-closed and never touches a path it isn't sure the template owns.
 

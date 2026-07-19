@@ -65,6 +65,16 @@ describe('real repo core-manifest.json', () => {
     expect(isTemplateOwned('services/api/migrations/script.py.mako', manifest)).toBe(true)
   })
 
+  it('does not own core.version, so an upgrade never overwrites an instance copy', () => {
+    const manifest = readCoreManifest(repoRoot)
+    // core.version is the version the *template emits*; the version an instance
+    // *received* lives in biffo.core.json, which wins on every read. Syncing
+    // core.version into an instance can only overwrite (an instance may keep its
+    // own release lineage there) — so it is neither template-owned nor synced.
+    expect(isTemplateOwned('core.version', manifest)).toBe(false)
+    expect(manifest.templateOwned).not.toContain('core.version')
+  })
+
   it('findTemplateRoot locates the repo root from a nested dir', () => {
     expect(findTemplateRoot(here)).toBe(repoRoot)
   })

@@ -1,9 +1,12 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { CoreManifest } from './core-manifest.js'
+import { type CoreManifest, readCoreManifest } from './core-manifest.js'
 import { type MergeFileFn, gitMergeFile, planCoreUpgrade } from './core-upgrade.js'
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 
 const MANIFEST: CoreManifest = {
   version: 1,
@@ -135,6 +138,28 @@ describe('planCoreUpgrade (classification)', () => {
     w(theirs, 'services/rbac/p.json', '3')
     const p = await plan()
     expect(p.entries).toHaveLength(0)
+  })
+
+  it('never carries core.version, so an upgrade cannot regress an instance lineage', async () => {
+    // Uses the *real* manifest: core.version is not template-owned, so even
+    // though all three trees differ on it, the plan must not mention it. An
+    // instance may keep its own release lineage in that file; the version it
+    // received is recorded in biffo.core.json instead.
+    w(base, 'core.version', '0.4.2\n')
+    w(ours, 'core.version', '0.29.1\n')
+    w(theirs, 'core.version', '0.7.0\n')
+    w(base, 'services/api/a.py', 'v1')
+    w(theirs, 'services/api/a.py', 'v2')
+    w(ours, 'services/api/a.py', 'v1')
+    const p = await planCoreUpgrade({
+      baseDir: base,
+      oursDir: ours,
+      theirsDir: theirs,
+      manifest: readCoreManifest(repoRoot),
+      mergeFile: fakeMerge,
+    })
+    expect(p.entries.map((e) => e.path)).not.toContain('core.version')
+    expect(p.changes.map((e) => e.path)).toEqual(['services/api/a.py'])
   })
 })
 

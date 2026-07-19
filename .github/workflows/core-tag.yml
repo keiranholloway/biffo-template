@@ -8,6 +8,12 @@ on:
     branches: [main]
     paths:
       - core.version
+  # Manual re-run, for the same reason as ci.yml. This workflow failing to fire
+  # is worse than CI failing to fire: no tag means `biffo core upgrade` cannot
+  # resolve the template tree at that version at all (ADR-0006), so the release
+  # is invisible to every instance. On 2026-07-19 three versions shipped with no
+  # tag and had to be backfilled by hand (#293).
+  workflow_dispatch:
 
 permissions:
   contents: write

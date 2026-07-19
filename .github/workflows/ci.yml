@@ -5,6 +5,12 @@ on:
     branches: [main, dev, staging]
   pull_request:
     branches: [main, dev, staging]
+  # Manual re-run. Without this there is no way to trigger CI on an integration
+  # branch: AGENTS.md forbids pushing directly to one, so the only recourse is
+  # an otherwise-pointless PR. On 2026-07-19 GitHub stopped dispatching
+  # push-triggered runs on main for four consecutive merges (#293) and there was
+  # no way to recover — this makes that one click.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

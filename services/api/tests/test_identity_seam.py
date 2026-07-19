@@ -3,7 +3,7 @@ move its identity record out of `public.users` without forking the auth path."""
 
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 import api.middleware.auth as auth_module
 import pytest
@@ -173,7 +173,9 @@ class TestThroughFastAPI:
                     finally:
                         opened.append("close")
 
-                return _gen()
+                # _Db is a stand-in, not a real AsyncSession — the point of the
+                # test is the generator lifecycle, not the session type.
+                return cast(AsyncGenerator[AsyncSession, None], _gen())
 
             async def resolve(self, db, claims) -> ResolvedIdentity:
                 # Proves the session the dependency yielded reached the provider.

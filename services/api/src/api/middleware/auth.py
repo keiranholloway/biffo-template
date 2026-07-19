@@ -51,6 +51,13 @@ class AuthenticatedUser:
     # authorises from `roles` above — empty means "no DB-granted permissions",
     # not "no access".
     permissions: frozenset[str] = frozenset()
+    # True when the verified token's `amr` claim evidences an MFA factor
+    # (TOTP/SMS). Derived from the token alone — no provider, no database.
+    # Intended for gates that require step-up authentication rather than mere
+    # group membership: a recovery or break-glass endpoint can demand that an
+    # admin actually completed a second factor. Fail-closed — defaults to False,
+    # so a token with no MFA marker simply cannot pass such a gate.
+    mfa_authenticated: bool = False
 
 
 @lru_cache(maxsize=1)
@@ -130,6 +137,27 @@ def identity_from_token(
     return _user_from_claims(_verify_token(credentials.credentials))
 
 
+# Cognito surfaces the factors used during authentication in the token's `amr`
+# claim (an array). Treat any of these as proof a second factor was completed.
+# Kept liberal but fail-closed: an unrecognised or absent marker just means no
+# MFA. Lower-cased before matching.
+_MFA_AMR_MARKERS = frozenset(
+    {"mfa", "otp", "sms_mfa", "software_token_mfa", "sms", "totp", "swk", "hwk"}
+)
+
+
+def _amr_indicates_mfa(amr: object) -> bool:
+    """True if the token's `amr` claim evidences an MFA factor. Accepts a list
+    (Cognito's shape) or a space-delimited string; anything else → False."""
+    if isinstance(amr, str):
+        values = amr.split()
+    elif isinstance(amr, (list, tuple)):
+        values = [str(v) for v in amr]
+    else:
+        return False
+    return any(v.lower() in _MFA_AMR_MARKERS for v in values)
+
+
 def _user_from_claims(claims: dict) -> AuthenticatedUser:
     """Map verified claims to an identity. No DB — the provider-backed fields
     (`user_id`, `is_platform_admin`, `permissions`) stay at their fail-closed
@@ -140,6 +168,7 @@ def _user_from_claims(claims: dict) -> AuthenticatedUser:
         username=claims.get("cognito:username", claims.get("username", "")),
         tenant_id="default",
         roles=list(claims.get("cognito:groups") or []),
+        mfa_authenticated=_amr_indicates_mfa(claims.get("amr")),
     )
 
 

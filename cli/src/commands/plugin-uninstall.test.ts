@@ -31,7 +31,10 @@ function makeProjectRoot(): string {
 function makeEnvironment(root: string, env: string): void {
   const dir = join(root, 'infra', 'environments', env)
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, 'main.tf'), '# hand-authored root config\n')
+  writeFileSync(
+    join(dir, 'main.tf'),
+    '# hand-authored root config\n' + 'variable "enabled_plugins" {\n  type = list(string)\n}\n',
+  )
 }
 
 function makeGitMock() {

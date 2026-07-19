@@ -105,6 +105,12 @@ export interface PluginTerraformSyncResult {
   plugins: string[]
   /** Environment directory names under `infra/environments/`, sorted. */
   environments: string[]
+  /**
+   * Root configs skipped because they declare no `enabled_plugins` variable —
+   * an instance whose user-owned `infra/` predates it. Surfaced so the user can
+   * copy the variable in rather than wonder why nothing happened.
+   */
+  skippedEnvironments: string[]
   /** Repo-relative paths written or removed, for `git add`. */
   changedPaths: string[]
 }
@@ -128,9 +134,24 @@ export function listPluginModules(cwd: string): string[] {
 }
 
 /**
- * Root-module environment directories under `infra/environments/`, sorted.
- * Only directories containing a `main.tf` count — anything else is not a root
- * config and writing a `plugins.generated.tf` beside it would be noise.
+ * Root-module environment directories under `infra/environments/` that this
+ * generator can safely write into, sorted.
+ *
+ * Two conditions, both load-bearing:
+ *
+ * 1. The directory contains a `main.tf` — otherwise it is not a root config and
+ *    a `plugins.generated.tf` beside it would be noise.
+ * 2. The root config declares an `enabled_plugins` variable, which the
+ *    generated `for_each` gate references.
+ *
+ * The second is a fail-safe for the ownership boundary. `cli/` is
+ * template-owned and reaches instances via `biffo core upgrade`, but `infra/`
+ * is **user-owned** and does not (`core-manifest.json`) — so an instance can
+ * upgrade to a CLI that has this generator while its own environments still
+ * predate the `enabled_plugins` variable. Emitting a block that references an
+ * undeclared variable would break `terraform validate` for that whole
+ * environment, turning a plugin install into an infrastructure outage. Skipping
+ * it instead degrades to "not wired here", which the caller reports.
  */
 export function listEnvironments(cwd: string): string[] {
   const dir = join(cwd, 'infra', 'environments')
@@ -141,7 +162,34 @@ export function listEnvironments(cwd: string): string[] {
     return []
   }
   return entries
-    .filter((e) => e.isDirectory() && existsSync(join(dir, e.name, 'main.tf')))
+    .filter((e) => {
+      if (!e.isDirectory() || !existsSync(join(dir, e.name, 'main.tf'))) return false
+      return declaredVariables(join(dir, e.name)).has('enabled_plugins')
+    })
+    .map((e) => e.name)
+    .sort()
+}
+
+/**
+ * Environment directories that look like root configs but cannot be wired,
+ * because they declare no `enabled_plugins` variable. Reported to the user so
+ * a skipped environment is visible rather than silent.
+ */
+export function listUnwirableEnvironments(cwd: string): string[] {
+  const dir = join(cwd, 'infra', 'environments')
+  let entries
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  return entries
+    .filter(
+      (e) =>
+        e.isDirectory() &&
+        existsSync(join(dir, e.name, 'main.tf')) &&
+        !declaredVariables(join(dir, e.name)).has('enabled_plugins'),
+    )
     .map((e) => e.name)
     .sort()
 }
@@ -250,6 +298,7 @@ export function renderGeneratedTfvars(pluginNames: string[]): string {
 export function syncPluginTerraform(cwd: string): PluginTerraformSyncResult {
   const plugins = listPluginModules(cwd)
   const environments = listEnvironments(cwd)
+  const skippedEnvironments = listUnwirableEnvironments(cwd)
   const changedPaths: string[] = []
 
   const rendered = plugins.map((name) => ({
@@ -282,5 +331,5 @@ export function syncPluginTerraform(cwd: string): PluginTerraformSyncResult {
     changedPaths.push(`${relBase}/${GENERATED_TF_FILE}`, `${relBase}/${GENERATED_TFVARS_FILE}`)
   }
 
-  return { plugins, environments, changedPaths }
+  return { plugins, environments, skippedEnvironments, changedPaths }
 }

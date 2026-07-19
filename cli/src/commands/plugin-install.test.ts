@@ -46,7 +46,8 @@ function makeEnvironment(root: string, env: string): void {
   mkdirSync(dir, { recursive: true })
   writeFileSync(
     join(dir, 'main.tf'),
-    '# hand-authored root config — the CLI must never edit this\n',
+    '# hand-authored root config — the CLI must never edit this\n' +
+      'variable "enabled_plugins" {\n  type = list(string)\n}\n',
   )
 }
 

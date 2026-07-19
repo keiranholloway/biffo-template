@@ -8,6 +8,7 @@ import {
   GENERATED_TFVARS_FILE,
   listEnvironments,
   listPluginModules,
+  listUnwirableEnvironments,
   syncPluginTerraform,
 } from './plugin-terraform-wiring.js'
 
@@ -35,10 +36,14 @@ function makePluginModule(name: string, variables: string[] = STANDARD_VARIABLES
   )
 }
 
-function makeEnvironment(name: string): void {
+function makeEnvironment(name: string, withEnabledPlugins = true): void {
   const dir = join(cwd, 'infra', 'environments', name)
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, 'main.tf'), '# root config\n')
+  writeFileSync(
+    join(dir, 'main.tf'),
+    '# root config\n' +
+      (withEnabledPlugins ? 'variable "enabled_plugins" {\n  type = list(string)\n}\n' : ''),
+  )
 }
 
 function generatedTf(env: string): string {
@@ -80,6 +85,16 @@ describe('listEnvironments', () => {
     mkdirSync(join(cwd, 'infra', 'environments', 'notes'), { recursive: true })
 
     expect(listEnvironments(cwd)).toEqual(['dev', 'prod'])
+  })
+
+  it('skips a root config that declares no enabled_plugins variable', () => {
+    makeEnvironment('dev')
+    makeEnvironment('legacy', false)
+
+    // infra/ is user-owned, so an instance can have the CLI without the
+    // variable. Wiring "legacy" anyway would break its terraform validate.
+    expect(listEnvironments(cwd)).toEqual(['dev'])
+    expect(listUnwirableEnvironments(cwd)).toEqual(['legacy'])
   })
 })
 
@@ -221,7 +236,25 @@ describe('syncPluginTerraform', () => {
 
   it('is a no-op on a checkout with no environments and no plugins', () => {
     const result = syncPluginTerraform(cwd)
-    expect(result).toEqual({ plugins: [], environments: [], changedPaths: [] })
+    expect(result).toEqual({
+      plugins: [],
+      environments: [],
+      skippedEnvironments: [],
+      changedPaths: [],
+    })
+  })
+
+  it('writes nothing into an environment it cannot wire', () => {
+    makeEnvironment('dev')
+    makeEnvironment('legacy', false)
+    makePluginModule('widgets')
+
+    const result = syncPluginTerraform(cwd)
+
+    expect(result.environments).toEqual(['dev'])
+    expect(result.skippedEnvironments).toEqual(['legacy'])
+    expect(existsSync(join(cwd, 'infra', 'environments', 'legacy', GENERATED_TF_FILE))).toBe(false)
+    expect(existsSync(join(cwd, 'infra', 'environments', 'dev', GENERATED_TF_FILE))).toBe(true)
   })
 
   it('aligns the = signs so the generated file survives terraform fmt -check', () => {

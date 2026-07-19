@@ -347,8 +347,19 @@ export async function runPluginInstall(
         )
       } else {
         log.warn(
-          'No infra/environments/*/ root config found, so the Terraform module was copied ' +
-            'but not wired into any environment.',
+          'No wirable infra/environments/*/ root config found, so the Terraform module was ' +
+            'copied but not wired into any environment.',
+        )
+      }
+      if (wiring.skippedEnvironments.length > 0) {
+        // infra/ is user-owned, so an instance can upgrade the CLI without its
+        // environments gaining the enabled_plugins variable the generated block
+        // needs. Say so loudly rather than emit Terraform that won't validate.
+        log.warn(
+          `Skipped ${wiring.skippedEnvironments.join(', ')} — no \`enabled_plugins\` variable ` +
+            'declared there. infra/ is user-owned, so `biffo core upgrade` cannot add it: copy ' +
+            'the variable (and local.plugin_service_principal_arns) from the template’s ' +
+            'infra/environments/dev/ and re-run this install to wire those environments.',
         )
       }
     } else if (manifest.event_subscriptions.length > 0) {

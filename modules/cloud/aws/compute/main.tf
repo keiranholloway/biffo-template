@@ -20,6 +20,26 @@ data "archive_file" "placeholder" {
 locals {
   name_prefix   = "${var.project_name}-${var.environment}"
   function_name = "${local.name_prefix}-${var.function_name}"
+
+  # AWS Signer profile names allow [0-9A-Za-z_] only and cap name_prefix at 38
+  # characters. `<project>-<environment>-<function>` clears that easily once a
+  # project name is more than a few characters — e.g. a 39-char function name
+  # yields a 40-char prefix and terraform fails the whole apply on validation,
+  # before touching any resource.
+  #
+  # Truncate when it doesn't fit, appending a short digest of the full function
+  # name so two functions whose names share a prefix can't collide onto the same
+  # profile. 29 + 1 + 8 = 38.
+  _signer_name_prefix = replace("${local.function_name}_", "-", "_")
+  signer_name_prefix = (
+    length(local._signer_name_prefix) <= 38
+    ? local._signer_name_prefix
+    : format(
+      "%s_%s",
+      substr(local._signer_name_prefix, 0, 29),
+      substr(sha256(local.function_name), 0, 8),
+    )
+  )
 }
 
 data "aws_region" "current" {}
@@ -204,7 +224,7 @@ resource "aws_iam_role_policy" "lambda" {
 # the code-signing check.
 resource "aws_signer_signing_profile" "lambda" {
   platform_id = "AWSLambda-SHA384-ECDSA"
-  name_prefix = replace("${local.function_name}_", "-", "_") # Signer names: [0-9A-Za-z_] only
+  name_prefix = local.signer_name_prefix
 }
 
 resource "aws_lambda_code_signing_config" "main" {

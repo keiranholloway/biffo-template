@@ -38,6 +38,19 @@ Ownership is declared in the template's `core-manifest.json`. Only **template-ow
 
 On any ambiguity, user-owned wins — the upgrade is fail-closed and never touches a path it isn't sure the template owns.
 
+### Core migrations are appended, never merged
+
+`services/api/migrations/versions/` is user-owned, so the three-way merge never rewrites a migration you have already applied. But a core feature that adds tables needs its migration to reach you, or it arrives as models and routers with no schema and 500s on deploy. So the upgrade runs a separate, strictly **additive** carry for that directory:
+
+- A migration you already have (matched by filename) is **skipped** — applied history is immutable.
+- A new core migration is **appended**: its `down_revision` is rewritten to your chain's current head, so it extends your chain rather than forking a second one.
+- If the template's revision id is already used in your repo (the classic `0003` collision), the carried migration gets a deterministic `core_<hash>` id instead. Your migration keeps its id.
+- The resulting chain is validated — every parent resolves, one base, exactly one head — **before** the PR is opened. If your chain is already broken or branched, the upgrade aborts with the reason and writes nothing.
+
+All of this happens once, at CLI time, and lands as a reviewable file in the PR. Nothing is generated or re-chained at deploy time (see ADR-0003's Implementation Note for the incident that rule exists to prevent). Re-running an upgrade is idempotent.
+
+Review the carried DDL like any other migration before merging: merging runs it against your database on the next deploy.
+
 ## 1. Check where you stand
 
 ```bash
@@ -102,4 +115,4 @@ The PR is an ordinary change on your instance repo. Review it, resolve any confl
 
 If your instance predates `biffo.core.json`, there's no recorded version to use as the merge base. Pick the `biffo-template` commit that best matches your instance's core (e.g. just before the feature you're pulling in) and pass it as `--from-template`; the upgrade bumps you to a real version so every subsequent upgrade has a precise base. Review that first PR's diff carefully — the base is a best guess until versioning is established.
 
-Two things the walker deliberately ignores so an upgrade stays sane: `.terraform/` provider caches, and `services/api/migrations/versions/` (your migrations are per-instance and must not be synced).
+Two things the merge walker deliberately ignores so an upgrade stays sane: `.terraform/` provider caches, and `services/api/migrations/versions/` (your migrations are per-instance and must never be merged — new core migrations reach you through the additive carry described above instead).

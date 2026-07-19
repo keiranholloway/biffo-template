@@ -129,6 +129,23 @@ namespace. The versioning discipline above is unaffected: the CI guard already
 excludes `core.version` itself from the template-owned change set it inspects,
 and runs only in the template.
 
+**Core migrations are carried additively, not merged** (amended 2026-07, issue
+#198). `services/api/migrations/versions/` stays user-owned — an applied
+migration is immutable history and a three-way merge would rewrite an instance's
+revision graph. But leaving it at that shipped a real bug: a core feature that
+adds tables reached an instance as models and routers with **no migration**, dead
+on arrival and 500ing on deploy (the orchestration tables were never carried, and
+their revision id `0003` collided with a different `0003` already in the
+instance, whose head was `0006`). So the upgrade runs a second, strictly
+**additive** pass over that directory alongside the merge: migrations already
+present are skipped, new ones are appended with their `down_revision` rewritten
+to the instance's current head, and a colliding revision id is re-issued as a
+deterministic `core_<hash>`. The post-carry chain is validated (every parent
+resolves, one base, exactly one head) before a PR exists; any anomaly aborts the
+upgrade and writes nothing. Crucially this happens **at CLI time**, producing a
+reviewable file in the PR — never at deploy time, which is the failure mode
+ADR-0003's Implementation Note records.
+
 ### 3. Three-way merge → branch → PR
 
 `biffo core upgrade [--to <version>] [--repo <path>]`:

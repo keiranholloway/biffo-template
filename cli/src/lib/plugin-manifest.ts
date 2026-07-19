@@ -205,6 +205,14 @@ export const PluginManifestSchema = z
     tags: z.array(z.string()).default([]),
     tables: z.array(TableDefinitionSchema).default([]),
     api_routes: z.array(RouteDefSchema).default([]),
+    // Events the plugin reacts to. Parsed (rather than dropped as an unknown
+    // key) so `biffo plugin install` can warn when a plugin declares
+    // subscriptions but ships no terraform/ to route them — see #194 and
+    // lib/plugin-terraform-guard.ts. Kept loose deliberately: the authoritative
+    // schema is the registry's, and this consumer only needs to count them.
+    event_subscriptions: z
+      .array(z.object({ source: z.string(), detail_type: z.string() }).passthrough())
+      .default([]),
     required_core_version: z.string().default('>=0.0.0'),
   })
   .superRefine((manifest, ctx) => {

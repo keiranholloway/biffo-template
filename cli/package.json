@@ -19,7 +19,8 @@
     "lint:fix": "eslint src/ --fix",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check:core-bump": "tsx src/scripts/check-core-version-bump.ts"
+    "check:core-bump": "tsx src/scripts/check-core-version-bump.ts",
+    "check:plugin-terraform": "tsx src/scripts/check-plugin-terraform.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cloudformation": "^3.726.1",

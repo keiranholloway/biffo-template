@@ -188,6 +188,15 @@ export async function runPluginInstall(
           'conditional plugin module inclusion is tracked by issue #25. ' +
           'Add the module block manually once that lands.',
       )
+    } else if (manifest.event_subscriptions.length > 0) {
+      // Don't let this pass silently: the plugin declares events it will never
+      // receive, because nothing creates its Lambda or EventBridge rule (#194).
+      log.warn(
+        `Plugin "${entry.name}" declares ${manifest.event_subscriptions.length} event ` +
+          'subscription(s) but ships no terraform/ directory, so no Lambda or EventBridge ' +
+          'rule was created — those events will never reach it. Add a terraform/ module ' +
+          '(start from modules/plugins/_template/) and reinstall.',
+      )
     }
 
     if (manifest.tables.length > 0) {

@@ -15,6 +15,10 @@ on:
     branches: [main, dev, staging]
   pull_request:
     branches: [main, dev, staging]
+  # Manual re-run, matching the core project's CI. Without this there is no way
+  # to trigger CI on a protected branch without pushing to it — and a sibling
+  # repo has the same branch protection, so the same recovery gap. See #293.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

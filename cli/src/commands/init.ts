@@ -6,6 +6,7 @@ import inquirer from 'inquirer'
 import { BiffoConfigSchema, resolveDnsConfig, type BiffoConfig } from '../config/schema.js'
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
+import { assertBuildIsFresh } from '../lib/build-freshness.js'
 import { resolveAwsCredentials, resolveGithubToken } from '../lib/credentials.js'
 import { log } from '../lib/logger.js'
 import {
@@ -25,6 +26,15 @@ export const initCommand = new Command('init')
   .option('-y, --yes', 'Auto-accept detected credentials without prompting (implied by --config)')
   .action(
     async (options: { config?: string; dryRun?: boolean; fresh?: boolean; yes?: boolean }) => {
+      // This command creates real GitHub repos and AWS resources; never let it
+      // run from a stale cli/dist (issue #190).
+      try {
+        assertBuildIsFresh()
+      } catch (err) {
+        log.error((err as Error).message)
+        process.exit(1)
+      }
+
       console.log(chalk.bold('\n  Biffo — Project Initialiser\n'))
 
       let session: InitSession | null = null

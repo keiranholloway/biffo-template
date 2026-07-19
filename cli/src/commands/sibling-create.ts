@@ -8,6 +8,7 @@ import { GitAdapter } from '../adapters/git/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
 import { BiffoConfigSchema, type BiffoConfig } from '../config/schema.js'
 import { SiblingConfigSchema, type SiblingConfig } from '../config/sibling-schema.js'
+import { assertBuildIsFresh } from '../lib/build-freshness.js'
 import { parseGitHubRepo } from '../lib/core-upgrade.js'
 import { resolveGithubToken } from '../lib/credentials.js'
 import { log } from '../lib/logger.js'
@@ -36,6 +37,9 @@ export const siblingCreateCommand = new Command('create')
       options: { config: string; template?: string; dryRun?: boolean; fresh?: boolean },
     ) => {
       try {
+        // This command creates real GitHub repos and AWS resources; never let it
+        // run from a stale cli/dist (issue #190).
+        assertBuildIsFresh()
         await runSiblingCreateCommand(name, {
           configPath: resolve(options.config),
           templateRoot: options.template ? resolve(options.template) : defaultSiblingTemplateRoot(),

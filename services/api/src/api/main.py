@@ -60,6 +60,35 @@ app.include_router(build_core_crud_router(), prefix="/api/v1")
 
 handler = Mangum(app, lifespan="off")
 
+# One event loop per warm container, reused across invocations. Mangum calls
+# asyncio.get_event_loop(), which raises RuntimeError in Python 3.12+ when no
+# loop is installed on the current thread -- and _run_db_init/_run_ddl_import's
+# asyncio.run() (also used internally by alembic/asyncpg) leaves exactly that
+# state behind, since asyncio.run() closes its loop and sets the thread's
+# current loop to None on exit.
+#
+# This used to be an unconditional `asyncio.set_event_loop(new_event_loop())` on
+# every HTTP invocation, which fixed the RuntimeError but built a fresh loop
+# each time: the previous loop was never closed, so its selector fd (plus
+# whatever it still referenced) leaked for the container's lifetime, and
+# anything cached against the old loop became unusable. Instead, keep one loop
+# and only *re-install* it when something cleared the thread's current loop.
+_event_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _ensure_event_loop() -> asyncio.AbstractEventLoop:
+    """Return this container's event loop, installing it as the current loop.
+
+    Creates the loop on first use, and again only if it has been closed.
+    set_event_loop() is idempotent, so re-installing an already-current loop is
+    a no-op -- it just repairs the None left behind by an asyncio.run().
+    """
+    global _event_loop
+    if _event_loop is None or _event_loop.is_closed():
+        _event_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_event_loop)
+    return _event_loop
+
 
 @logger.inject_lambda_context
 @tracer.capture_lambda_handler
@@ -68,10 +97,7 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
         return _run_db_init()
     if event.get("source") == "biffo:ddl-import":
         return _run_ddl_import(event.get("directory"))
-    # asyncio.run() used internally by alembic/asyncpg sets the current event loop
-    # to None when it exits, causing asyncio.get_event_loop() (used by Mangum) to
-    # raise RuntimeError in Python 3.12+. Recreate the loop before each HTTP call.
-    asyncio.set_event_loop(asyncio.new_event_loop())
+    _ensure_event_loop()
     return handler(event, context)  # type: ignore[reportArgumentType]
 
 

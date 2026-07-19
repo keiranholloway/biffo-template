@@ -58,6 +58,7 @@ const server = setupServer()
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
 afterEach(() => {
   server.resetHandlers()
+  committedTrees = []
   stsMock.reset()
   iamMock.reset()
   s3Mock.reset()
@@ -124,8 +125,51 @@ function setupStep5GithubHandlers() {
       HttpResponse.json({ message: 'Not Found' }, { status: 404 }),
     ),
     http.post(`${GH}/repos/acme/my-app/environments/dev/variables`, () => HttpResponse.json({})),
+    ...instanceIdentityHandlers(),
   )
 }
+
+/**
+ * Handlers for the instance-identity commit (issue #269): the content probe
+ * plus the Git Data API chain used to add biffo.core.json and delete the
+ * template's placeholder biffo.config.json.
+ */
+function instanceIdentityHandlers() {
+  return [
+    // biffo.core.json is absent (fresh instance) → must be added
+    http.get(`${GH}/repos/acme/my-app/contents/biffo.core.json`, () =>
+      HttpResponse.json({ message: 'Not Found' }, { status: 404 }),
+    ),
+    // biffo.config.json is present with the template's placeholders → must be deleted
+    http.get(`${GH}/repos/acme/my-app/contents/biffo.config.json`, () =>
+      HttpResponse.json({
+        type: 'file',
+        content: Buffer.from('{"project":{"name":"{{PROJECT_NAME}}"}}', 'utf8').toString('base64'),
+      }),
+    ),
+    http.get(`${GH}/repos/acme/my-app/git/ref/*`, () =>
+      HttpResponse.json({ object: { sha: 'headsha' } }),
+    ),
+    http.get(`${GH}/repos/acme/my-app/git/commits/:sha`, () =>
+      HttpResponse.json({ tree: { sha: 'treesha' } }),
+    ),
+    http.post(`${GH}/repos/acme/my-app/git/blobs`, () => HttpResponse.json({ sha: 'blobsha' })),
+    http.post(`${GH}/repos/acme/my-app/git/trees`, async ({ request }) => {
+      committedTrees.push((await request.json()) as TreeRequest)
+      return HttpResponse.json({ sha: 'newtreesha' })
+    }),
+    http.post(`${GH}/repos/acme/my-app/git/commits`, () =>
+      HttpResponse.json({ sha: 'newcommitsha' }),
+    ),
+    http.patch(`${GH}/repos/acme/my-app/git/refs/*`, () => HttpResponse.json({})),
+  ]
+}
+
+interface TreeRequest {
+  tree: { path: string; sha: string | null }[]
+}
+
+let committedTrees: TreeRequest[] = []
 
 function setupGithubHandlers() {
   server.use(
@@ -228,5 +272,21 @@ describe('runInit (integration — real adapters + HTTP mocks)', () => {
     ).rejects.toThrow('expected 123456789012')
 
     expect(deleteSession).not.toHaveBeenCalled()
+  })
+
+  it('adds biffo.core.json and deletes the placeholder biffo.config.json on all three branches', async () => {
+    setupGithubHandlers()
+    setupAwsMocks()
+
+    await runInit(new GitHubAdapter('test-token'), new AwsAdapter(CONFIG), CONFIG, makeSession())
+
+    // One tree per branch: main, dev, staging.
+    expect(committedTrees).toHaveLength(3)
+    for (const tree of committedTrees) {
+      const byPath = Object.fromEntries(tree.tree.map((e) => [e.path, e.sha]))
+      expect(byPath['biffo.core.json']).toBe('blobsha')
+      // null sha = deletion
+      expect(byPath['biffo.config.json']).toBeNull()
+    }
   })
 })

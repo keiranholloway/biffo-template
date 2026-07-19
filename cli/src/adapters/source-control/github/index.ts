@@ -302,6 +302,124 @@ export class GitHubAdapter {
     log.info(`Created branch ${branch} from ${from}`)
   }
 
+  /**
+   * Read a file's decoded UTF-8 content at `ref`, or `undefined` if it is absent
+   * (404) or is not a regular file (a directory or submodule).
+   */
+  private async getFileContent(
+    org: string,
+    repo: string,
+    path: string,
+    ref: string,
+  ): Promise<string | undefined> {
+    try {
+      const { data } = await this.octokit.repos.getContent({ owner: org, repo, path, ref })
+      if (Array.isArray(data) || data.type !== 'file' || typeof data.content !== 'string') {
+        return undefined
+      }
+      return Buffer.from(data.content, 'base64').toString('utf8')
+    } catch (err: unknown) {
+      if ((err as { status?: number }).status === 404) return undefined
+      throw err
+    }
+  }
+
+  /**
+   * Commit `files` onto `branch` as a single commit, via the Git Data API
+   * (blobs → tree → commit → ref) so every change lands atomically rather than
+   * as one commit each. A `content` of `null` deletes the path.
+   *
+   * Idempotent: if the branch head already matches every requested change
+   * (content equal, or path absent for a deletion), nothing is committed and
+   * `null` is returned. `biffo init` is resumable and step-checkpointed, so a
+   * re-run must not pile up empty or duplicate commits.
+   *
+   * Called by `biffo init` *before* `configureBranchProtection`, so at that
+   * point no protection exists to bypass. On a resumed init the branches may
+   * already be protected; the init token is the repo's own creator (an admin)
+   * and protection is configured with `enforce_admins: false`, so the write
+   * still succeeds. If GitHub refuses it anyway, that surfaces as a clear error
+   * telling the user to land the change by PR — protection is never loosened to
+   * make this work.
+   */
+  async commitFiles(
+    org: string,
+    repo: string,
+    branch: string,
+    files: { path: string; content: string | null }[],
+    message: string,
+  ): Promise<string | null> {
+    const existing = await Promise.all(
+      files.map((f) => this.getFileContent(org, repo, f.path, branch)),
+    )
+    if (files.every((f, i) => existing[i] === (f.content ?? undefined))) {
+      log.info(`${branch}: ${files.map((f) => f.path).join(', ')} already as intended — skipping`)
+      return null
+    }
+
+    const ref = await this.waitForRef(org, repo, `heads/${branch}`, 120_000, 3_000)
+    const headSha = ref.object.sha
+    const { data: headCommit } = await this.octokit.git.getCommit({
+      owner: org,
+      repo,
+      commit_sha: headSha,
+    })
+
+    // A tree entry with a null sha deletes the path; anything else needs a blob.
+    const entries = await Promise.all(
+      files.map(async (f) => {
+        if (f.content === null) {
+          return { path: f.path, mode: '100644' as const, type: 'blob' as const, sha: null }
+        }
+        const { data } = await this.octokit.git.createBlob({
+          owner: org,
+          repo,
+          content: Buffer.from(f.content, 'utf8').toString('base64'),
+          encoding: 'base64',
+        })
+        return { path: f.path, mode: '100644' as const, type: 'blob' as const, sha: data.sha }
+      }),
+    )
+
+    const { data: tree } = await this.octokit.git.createTree({
+      owner: org,
+      repo,
+      base_tree: headCommit.tree.sha,
+      tree: entries,
+    })
+
+    const { data: commit } = await this.octokit.git.createCommit({
+      owner: org,
+      repo,
+      message,
+      tree: tree.sha,
+      parents: [headSha],
+    })
+
+    try {
+      await this.octokit.git.updateRef({
+        owner: org,
+        repo,
+        ref: `heads/${branch}`,
+        sha: commit.sha,
+      })
+    } catch (err: unknown) {
+      const status = (err as { status?: number }).status
+      if (status === 403 || status === 422) {
+        throw new Error(
+          `Could not commit ${files.map((f) => f.path).join(' and ')} to ${org}/${repo}@${branch}: ` +
+            `${(err as Error).message}\n` +
+            `  Branch protection on "${branch}" rejected the write. Add these files via a pull ` +
+            `request instead — do not disable branch protection to work around this.`,
+        )
+      }
+      throw err
+    }
+
+    log.info(`Committed ${files.map((f) => f.path).join(', ')} to ${branch}`)
+    return commit.sha
+  }
+
   async setDefaultBranch(org: string, repo: string, branch: string): Promise<void> {
     await this.octokit.repos.update({ owner: org, repo, default_branch: branch })
     log.info(`Default branch set to ${branch}`)

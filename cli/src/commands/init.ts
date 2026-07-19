@@ -8,6 +8,11 @@ import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
 import { assertBuildIsFresh } from '../lib/build-freshness.js'
 import { resolveAwsCredentials, resolveGithubToken } from '../lib/credentials.js'
+import {
+  getLatestCoreVersion,
+  serializeInstanceCoreVersion,
+  INSTANCE_CORE_FILE,
+} from '../lib/core-version.js'
 import { log } from '../lib/logger.js'
 import {
   deleteSession,
@@ -212,6 +217,12 @@ export async function runInit(
     // Create dev and staging branches from main, then set dev as the default
     await github.createBranch(org, repo, 'dev', 'main')
     await github.createBranch(org, repo, 'staging', 'main')
+
+    // Establish the repo's instance identity on every branch, *before* branch
+    // protection is configured (issue #269): add biffo.core.json (the instance
+    // marker) and drop the template's placeholder biffo.config.json.
+    await writeInstanceFiles(github, org, repo)
+
     await github.setDefaultBranch(org, repo, 'dev')
 
     // Branch protection must come after all three branches exist
@@ -253,6 +264,57 @@ export async function runInit(
 
   deleteSession(config.project.name)
   saveProjectConfig(config)
+}
+
+export const INSTANCE_CONFIG_FILE = 'biffo.config.json'
+
+/** The branches every scaffolded repo has, and which therefore all need the
+ * instance files — `dev` (default) and `staging`/`main` (promotion targets),
+ * each of which is protected and can only be updated by PR afterwards. */
+export const INSTANCE_FILE_BRANCHES = ['main', 'dev', 'staging']
+
+/**
+ * Commit the instance-identity changes onto every branch of the scaffolded repo:
+ *
+ *   + `biffo.core.json` — the instance marker, recording the core version this
+ *     CLI shipped with. Its presence is how the Core Version Guard (#242) and
+ *     `.github/workflows/core-tag.yml` (#199) tell an instance from the
+ *     template; without it every fresh repo is misread as the template and both
+ *     of those guards misfire.
+ *   - `biffo.config.json` — the template's own placeholder file, deleted. It is
+ *     a template artifact with no meaning in an instance: the resolved config
+ *     lives in `~/.biffo/projects/<name>.json` (written by `saveProjectConfig`),
+ *     and its literal `{{PLACEHOLDER}}` values otherwise make `biffo deploy`
+ *     hard-fail on schema validation.
+ *
+ * The resolved config is deliberately NOT committed here. It carries the AWS
+ * account id and admin email, and the template's own `.gitleaks.toml` forbids
+ * both in the tree — `biffo-aws-account-id` (`\b\d{12}\b`) and
+ * `biffo-placeholder-config` fire on any real value. Committing it would turn
+ * the instance's own Secret Scan red on its first run, which is a worse defect
+ * than the one being fixed.
+ *
+ * Idempotent — `commitFiles` no-ops when the branch head already matches, so a
+ * resumed `init` neither fails nor duplicates commits.
+ */
+export async function writeInstanceFiles(
+  github: GitHubAdapter,
+  org: string,
+  repo: string,
+): Promise<void> {
+  const files = [
+    { path: INSTANCE_CORE_FILE, content: serializeInstanceCoreVersion(getLatestCoreVersion()) },
+    { path: INSTANCE_CONFIG_FILE, content: null },
+  ]
+  for (const branch of INSTANCE_FILE_BRANCHES) {
+    await github.commitFiles(
+      org,
+      repo,
+      branch,
+      files,
+      `chore: record core version and drop the template ${INSTANCE_CONFIG_FILE}`,
+    )
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

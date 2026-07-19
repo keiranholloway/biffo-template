@@ -28,10 +28,16 @@ function makeOctokitMock() {
       getBranch: vi.fn(),
       updateBranchProtection: vi.fn(),
       createOrUpdateEnvironment: vi.fn(),
+      getContent: vi.fn(),
     },
     git: {
       getRef: vi.fn(),
       createRef: vi.fn(),
+      getCommit: vi.fn(),
+      createBlob: vi.fn(),
+      createTree: vi.fn(),
+      createCommit: vi.fn(),
+      updateRef: vi.fn(),
     },
     pulls: {
       create: vi.fn(),
@@ -687,5 +693,213 @@ describe('createPullRequest (ADR-0006 Phase 3b)', () => {
       }),
     )
     expect(result).toEqual({ url: 'https://github.com/acme/app/pull/12', number: 12 })
+  })
+})
+
+// ─── commitFiles (issue #269) ────────────────────────────────────────────────
+
+describe('commitFiles', () => {
+  const FILES = [
+    { path: 'biffo.config.json', content: '{"a":1}\n' },
+    { path: 'biffo.core.json', content: '{"version":"0.28.1"}\n' },
+  ]
+
+  /** Wire the happy-path Git Data API chain: ref → commit → blobs → tree → commit → ref. */
+  function stubCommitChain() {
+    octokitMock.git.getRef.mockResolvedValue({ data: { object: { sha: 'headsha' } } })
+    octokitMock.git.getCommit.mockResolvedValue({ data: { tree: { sha: 'treesha' } } })
+    octokitMock.git.createBlob
+      .mockResolvedValueOnce({ data: { sha: 'blob1' } })
+      .mockResolvedValueOnce({ data: { sha: 'blob2' } })
+    octokitMock.git.createTree.mockResolvedValue({ data: { sha: 'newtree' } })
+    octokitMock.git.createCommit.mockResolvedValue({ data: { sha: 'newcommit' } })
+    octokitMock.git.updateRef.mockResolvedValue({ data: {} })
+  }
+
+  function contentResponse(text: string) {
+    return { data: { type: 'file', content: Buffer.from(text, 'utf8').toString('base64') } }
+  }
+
+  it('commits both files as a single commit and moves the branch ref', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { status: 404 })
+    octokitMock.repos.getContent.mockRejectedValue(notFound)
+    stubCommitChain()
+
+    const sha = await adapter().commitFiles('acme', 'my-app', 'main', FILES, 'chore: init')
+
+    expect(sha).toBe('newcommit')
+    expect(octokitMock.git.createBlob).toHaveBeenCalledTimes(2)
+    // One tree and one commit for both files — not a commit each.
+    expect(octokitMock.git.createTree).toHaveBeenCalledOnce()
+    expect(octokitMock.git.createCommit).toHaveBeenCalledOnce()
+    expect(octokitMock.git.createTree).toHaveBeenCalledWith(
+      expect.objectContaining({
+        base_tree: 'treesha',
+        tree: [
+          { path: 'biffo.config.json', mode: '100644', type: 'blob', sha: 'blob1' },
+          { path: 'biffo.core.json', mode: '100644', type: 'blob', sha: 'blob2' },
+        ],
+      }),
+    )
+    expect(octokitMock.git.createCommit).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'chore: init', tree: 'newtree', parents: ['headsha'] }),
+    )
+    expect(octokitMock.git.updateRef).toHaveBeenCalledWith(
+      expect.objectContaining({ ref: 'heads/main', sha: 'newcommit' }),
+    )
+  })
+
+  it('base64-encodes each file body', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { status: 404 })
+    octokitMock.repos.getContent.mockRejectedValue(notFound)
+    stubCommitChain()
+
+    await adapter().commitFiles('acme', 'my-app', 'main', FILES, 'chore: init')
+
+    const bodies = octokitMock.git.createBlob.mock.calls.map((c) =>
+      Buffer.from(c[0].content, 'base64').toString('utf8'),
+    )
+    expect(bodies).toEqual(['{"a":1}\n', '{"version":"0.28.1"}\n'])
+  })
+
+  it('is a no-op when every file already has the desired content (resumed init)', async () => {
+    octokitMock.repos.getContent
+      .mockResolvedValueOnce(contentResponse(FILES[0]!.content))
+      .mockResolvedValueOnce(contentResponse(FILES[1]!.content))
+
+    const sha = await adapter().commitFiles('acme', 'my-app', 'main', FILES, 'chore: init')
+
+    expect(sha).toBeNull()
+    expect(octokitMock.git.createCommit).not.toHaveBeenCalled()
+    expect(octokitMock.git.updateRef).not.toHaveBeenCalled()
+  })
+
+  it('commits when only one of the files is already up to date', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { status: 404 })
+    octokitMock.repos.getContent
+      .mockResolvedValueOnce(contentResponse(FILES[0]!.content))
+      .mockRejectedValueOnce(notFound)
+    stubCommitChain()
+
+    const sha = await adapter().commitFiles('acme', 'my-app', 'main', FILES, 'chore: init')
+
+    expect(sha).toBe('newcommit')
+  })
+
+  it('commits when an existing file has different content', async () => {
+    octokitMock.repos.getContent
+      .mockResolvedValueOnce(contentResponse('{"a":2}\n'))
+      .mockResolvedValueOnce(contentResponse(FILES[1]!.content))
+    stubCommitChain()
+
+    expect(await adapter().commitFiles('acme', 'my-app', 'main', FILES, 'chore: init')).toBe(
+      'newcommit',
+    )
+  })
+
+  it('reports branch protection clearly instead of weakening it when the ref update is rejected', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { status: 404 })
+    octokitMock.repos.getContent.mockRejectedValue(notFound)
+    stubCommitChain()
+    octokitMock.git.updateRef.mockRejectedValue(
+      Object.assign(new Error('protected branch hook declined'), { status: 422 }),
+    )
+
+    await expect(
+      adapter().commitFiles('acme', 'my-app', 'main', FILES, 'chore: init'),
+    ).rejects.toThrow(/Branch protection on "main" rejected the write/)
+  })
+
+  it('propagates a non-404 error from the content probe', async () => {
+    octokitMock.repos.getContent.mockRejectedValue(
+      Object.assign(new Error('Server Error'), { status: 500 }),
+    )
+
+    await expect(
+      adapter().commitFiles('acme', 'my-app', 'main', FILES, 'chore: init'),
+    ).rejects.toThrow('Server Error')
+  })
+})
+
+// ─── commitFiles: deletions (issue #269) ─────────────────────────────────────
+
+describe('commitFiles deletions', () => {
+  function contentResponse(text: string) {
+    return { data: { type: 'file', content: Buffer.from(text, 'utf8').toString('base64') } }
+  }
+
+  it('deletes a path with a null-sha tree entry and creates no blob for it', async () => {
+    octokitMock.repos.getContent.mockResolvedValueOnce(contentResponse('{{PLACEHOLDER}}'))
+    octokitMock.git.getRef.mockResolvedValue({ data: { object: { sha: 'headsha' } } })
+    octokitMock.git.getCommit.mockResolvedValue({ data: { tree: { sha: 'treesha' } } })
+    octokitMock.git.createTree.mockResolvedValue({ data: { sha: 'newtree' } })
+    octokitMock.git.createCommit.mockResolvedValue({ data: { sha: 'newcommit' } })
+    octokitMock.git.updateRef.mockResolvedValue({ data: {} })
+
+    const sha = await adapter().commitFiles(
+      'acme',
+      'my-app',
+      'main',
+      [{ path: 'biffo.config.json', content: null }],
+      'chore: drop placeholder',
+    )
+
+    expect(sha).toBe('newcommit')
+    expect(octokitMock.git.createBlob).not.toHaveBeenCalled()
+    expect(octokitMock.git.createTree).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tree: [{ path: 'biffo.config.json', mode: '100644', type: 'blob', sha: null }],
+      }),
+    )
+  })
+
+  it('is a no-op when the path to delete is already absent (resumed init)', async () => {
+    octokitMock.repos.getContent.mockRejectedValue(
+      Object.assign(new Error('Not Found'), { status: 404 }),
+    )
+
+    const sha = await adapter().commitFiles(
+      'acme',
+      'my-app',
+      'main',
+      [{ path: 'biffo.config.json', content: null }],
+      'chore: drop placeholder',
+    )
+
+    expect(sha).toBeNull()
+    expect(octokitMock.git.createCommit).not.toHaveBeenCalled()
+  })
+
+  it('mixes an add and a delete into one commit', async () => {
+    octokitMock.repos.getContent
+      .mockRejectedValueOnce(Object.assign(new Error('Not Found'), { status: 404 })) // core file absent
+      .mockResolvedValueOnce(contentResponse('placeholder')) // config file present
+    octokitMock.git.getRef.mockResolvedValue({ data: { object: { sha: 'headsha' } } })
+    octokitMock.git.getCommit.mockResolvedValue({ data: { tree: { sha: 'treesha' } } })
+    octokitMock.git.createBlob.mockResolvedValue({ data: { sha: 'blob1' } })
+    octokitMock.git.createTree.mockResolvedValue({ data: { sha: 'newtree' } })
+    octokitMock.git.createCommit.mockResolvedValue({ data: { sha: 'newcommit' } })
+    octokitMock.git.updateRef.mockResolvedValue({ data: {} })
+
+    await adapter().commitFiles(
+      'acme',
+      'my-app',
+      'main',
+      [
+        { path: 'biffo.core.json', content: '{"version":"0.28.2"}\n' },
+        { path: 'biffo.config.json', content: null },
+      ],
+      'chore: instance identity',
+    )
+
+    expect(octokitMock.git.createCommit).toHaveBeenCalledOnce()
+    expect(octokitMock.git.createTree).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tree: [
+          { path: 'biffo.core.json', mode: '100644', type: 'blob', sha: 'blob1' },
+          { path: 'biffo.config.json', mode: '100644', type: 'blob', sha: null },
+        ],
+      }),
+    )
   })
 })

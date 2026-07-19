@@ -69,6 +69,30 @@ the core project's shared packages would otherwise centralise — an
 intentional, small amount of duplication in exchange for this repo never
 needing anything from `biffo-template` at runtime or build time.
 
+`apps/frontend/pnpm-workspace.yaml` exists for the same reason, and is worth
+understanding before you delete it as redundant. `pnpm install` walks _up_ the
+directory tree looking for a workspace root. In a scaffolded sibling repo there
+is nothing above `apps/frontend` to find, so the file is inert. But while this
+skeleton still lives inside `biffo-template` — under `_skeletons/`, excluded
+from that repo's own workspace globs — `pnpm install` run from here would
+otherwise walk all the way up and install **biffo-template's root workspace**
+instead: it prints success against `../../../..`, leaves no `node_modules` here
+at all, and the next command fails for a reason that looks entirely unrelated.
+Declaring this directory a workspace root of its own terminates that walk.
+(A `preinstall` guard cannot help: pnpm never treats an excluded package as
+part of the install, so its lifecycle scripts never run.)
+
+## The build must not need Cognito credentials
+
+`pnpm run build` has to succeed with **no** `NEXT_PUBLIC_CORE_COGNITO_*` set,
+and `.github/workflows/ci.yml` runs it that way on every PR to keep it that
+way. `next build` prerenders `/` in Node, which imports `src/lib/auth.ts`; that
+module therefore constructs its Cognito user pool lazily, on first session
+read, never at module scope (the `CognitoUserPool` constructor throws outright
+when either id is missing). If you add module-scope code that requires real
+core config, the build breaks for everyone who has not exported the pool ids —
+starting with CI. Read config inside the function that needs it.
+
 ## The two-phase CDN registration
 
 Registering this sibling on the core project's CloudFront distribution is
@@ -104,7 +128,7 @@ core project's CloudFront will get an origin it isn't allowed to read from.
   no database client of any kind belongs in `services/api/`.
 - Before opening a PR:
   ```bash
-  cd apps/frontend && pnpm install && pnpm run lint && pnpm run typecheck && pnpm run test
+  cd apps/frontend && pnpm install && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build
   cd services/api && uv sync --all-groups && uv run ruff check . && uv run ruff format --check . && uv run pyright && uv run pytest
   terraform fmt -check -recursive infra/ modules/
   ```

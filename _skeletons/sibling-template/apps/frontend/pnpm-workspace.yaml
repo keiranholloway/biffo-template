@@ -1,0 +1,19 @@
+# This file exists to STOP pnpm, not to configure a workspace.
+#
+# `pnpm install` walks up the directory tree looking for a workspace root. In a
+# scaffolded sibling repo there is nothing above this directory to find, so this
+# file changes nothing there. Inside biffo-template, however, this skeleton sits
+# under `_skeletons/` — deliberately outside the root `pnpm-workspace.yaml`'s
+# package globs — and without this file `pnpm install` run from here walks all
+# the way up and installs *biffo-template's own root workspace* instead. It
+# reports success, leaves no `node_modules` here at all, and the next command
+# then fails for a reason that looks unrelated.
+#
+# A `preinstall` guard cannot fix this: because `_skeletons/` is excluded from
+# the root workspace globs, pnpm never treats this package as part of that
+# install and so never runs its lifecycle scripts. Declaring this directory a
+# workspace root of its own is what actually terminates the upward walk.
+#
+# `packages: []` is intentional — this app has no sub-packages. pnpm always
+# installs the workspace root package itself, which is this one.
+packages: []

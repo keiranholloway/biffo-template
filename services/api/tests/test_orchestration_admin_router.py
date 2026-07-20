@@ -277,6 +277,96 @@ def test_whatsapp_requires_recipient(client: TestClient):
     assert resp.status_code == 422
 
 
+def test_create_whatsapp_template_workflow(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="whatsapp",
+            action_config={
+                "to": "+15551234567",
+                "message_type": "template",
+                "template_name": "demo_booked",
+                "language_code": "en_US",
+                "template_params": "{company}",
+            },
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["action_config"]["message_type"] == "template"
+
+
+def test_whatsapp_template_requires_template_name(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="whatsapp",
+            action_config={"to": "+1", "message_type": "template"},
+        ),
+    )
+    assert resp.status_code == 422
+
+
+def test_whatsapp_template_does_not_require_the_text_message(client: TestClient):
+    """`message` only applies to the text branch — a template send omits it."""
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="whatsapp",
+            action_config={
+                "to": "+1",
+                "message_type": "template",
+                "template_name": "demo_booked",
+            },
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+
+
+def test_whatsapp_template_language_defaults_when_omitted(client: TestClient):
+    """`language_code` is required but carries a catalog default, so omitting
+    it is accepted — the handler sends en_US."""
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="whatsapp",
+            action_config={
+                "to": "+1",
+                "message_type": "template",
+                "template_name": "demo_booked",
+            },
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+
+
+def test_whatsapp_rejects_unknown_message_type(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="whatsapp",
+            action_config={"to": "+1", "message_type": "image", "message": "hi"},
+        ),
+    )
+    assert resp.status_code == 422
+
+
+def test_whatsapp_defaults_to_the_text_branch(client: TestClient):
+    """A definition saved before message_type existed still validates as text —
+    i.e. `message` is still required when the toggle is absent."""
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="whatsapp", action_config={"to": "+1", "message": "hi"}
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+
+    resp = client.post(
+        _BASE, json=_valid_body(action_type="whatsapp", action_config={"to": "+1"})
+    )
+    assert resp.status_code == 422
+
+
 def _observe(session_factory, source: str, detail_type: str) -> None:
     async def _run() -> None:
         async with session_factory() as session:

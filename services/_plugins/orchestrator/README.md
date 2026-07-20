@@ -9,9 +9,29 @@ must have a matching entry in the Core builder catalog
 (`services/api/.../schemas/orchestration.WORKFLOW_ACTIONS`) so they can be
 configured in the portal. WhatsApp needs account credentials on the Lambda:
 set `WHATSAPP_ACCESS_TOKEN` + `WHATSAPP_PHONE_NUMBER_ID` (Terraform vars
-`whatsapp_access_token` / `whatsapp_phone_number_id`); empty disables it. Text
-messages only deliver inside an open 24-hour session — proactive template
-messages are a follow-up.
+`whatsapp_access_token` / `whatsapp_phone_number_id`); empty disables it.
+
+### WhatsApp: text vs template
+
+The `whatsapp` action's `message_type` picks the shape Meta receives:
+
+| `message_type`   | Config                                                                | When it delivers                                                             |
+| ---------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `text` (default) | `message` (a `{field}` template)                                      | Only inside an **open 24-hour customer service window** — i.e. replies only. |
+| `template`       | `template_name`, `language_code` (default `en_US`), `template_params` | Any time, including **proactive/business-initiated** sends.                  |
+
+`template_params` is the template's ordered body variables — a comma-separated
+list (or a JSON array via the API), each entry a `{field}` template filled from
+the event payload. They map positionally onto the template's `{{1}}`, `{{2}}`, …
+placeholders, so **order matters** and the count must match what the approved
+template declares; Meta rejects a mismatch.
+
+**Prerequisite: the template must already be approved in Meta.** Create it in
+WhatsApp Manager (Account tools → Message templates) and wait for approval
+before pointing a workflow at it — this action only _sends_ templates, it cannot
+create or submit one. A `template_name` that does not exist, is not approved, or
+is approved in a different language than `language_code` comes back as a 400 from
+the Cloud API and is recorded as a failed run.
 
 ## How it fits together
 

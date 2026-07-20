@@ -67,6 +67,53 @@ const catalog: WorkflowCatalog = {
         { name: 'body', label: 'Body', type: 'textarea', required: true },
       ],
     },
+    {
+      type: 'whatsapp',
+      label: 'WhatsApp message',
+      config_fields: [
+        { name: 'to', label: 'To', type: 'tel', required: true },
+        {
+          name: 'message_type',
+          label: 'Message type',
+          type: 'select',
+          required: false,
+          default: 'text',
+          options: [
+            { value: 'text', label: 'Text (reply, within 24h window)' },
+            { value: 'template', label: 'Template (proactive)' },
+          ],
+        },
+        {
+          name: 'message',
+          label: 'Message',
+          type: 'textarea',
+          required: true,
+          visible_when: { field: 'message_type', equals: 'text' },
+        },
+        {
+          name: 'template_name',
+          label: 'Template name',
+          type: 'text',
+          required: true,
+          visible_when: { field: 'message_type', equals: 'template' },
+        },
+        {
+          name: 'language_code',
+          label: 'Language code',
+          type: 'text',
+          required: true,
+          default: 'en_US',
+          visible_when: { field: 'message_type', equals: 'template' },
+        },
+        {
+          name: 'template_params',
+          label: 'Body parameters',
+          type: 'text',
+          required: false,
+          visible_when: { field: 'message_type', equals: 'template' },
+        },
+      ],
+    },
   ],
 }
 
@@ -192,6 +239,61 @@ describe('OrchestrationPage', () => {
 
     await waitFor(() => {
       expect(deleteWorkflow).toHaveBeenCalledWith(expect.anything(), 'wf1')
+    })
+  })
+
+  it('shows only the text fields for a WhatsApp text message', async () => {
+    fetchWorkflows.mockResolvedValue([])
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'whatsapp' } })
+
+    // `text` is the default message type, so the template fields stay hidden.
+    expect(screen.getByLabelText('Message')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Template name')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Language code')).not.toBeInTheDocument()
+  })
+
+  it('swaps in the template fields when the message type is template', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    createWorkflow.mockResolvedValue(notify)
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByPlaceholderText('Notify the sales team'), {
+      target: { value: 'Demo booked' },
+    })
+    fireEvent.change(screen.getByLabelText('Action'), { target: { value: 'whatsapp' } })
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: '+15551234567' } })
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'stale draft' } })
+    fireEvent.change(screen.getByLabelText('Message type'), { target: { value: 'template' } })
+
+    expect(screen.queryByLabelText('Message')).not.toBeInTheDocument()
+    // The catalog default prefills the language.
+    expect(screen.getByLabelText('Language code')).toHaveValue('en_US')
+
+    fireEvent.change(screen.getByLabelText('Template name'), {
+      target: { value: 'demo_booked' },
+    })
+    fireEvent.change(screen.getByLabelText('Body parameters'), {
+      target: { value: '{company}' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add workflow' }))
+
+    await waitFor(() => {
+      expect(createWorkflow).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action_type: 'whatsapp',
+          // The abandoned text branch's draft is not saved.
+          action_config: {
+            to: '+15551234567',
+            message_type: 'template',
+            template_name: 'demo_booked',
+            language_code: 'en_US',
+            template_params: '{company}',
+          },
+        }),
+      )
     })
   })
 

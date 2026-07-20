@@ -28,6 +28,7 @@ import {
   type ResolvedSibling,
   type SiblingOriginEntry,
 } from '../lib/sibling-teardown.js'
+import { ROOT_SIBLING_NAME } from '../lib/root-sibling.js'
 
 export const teardownCommand = new Command('teardown')
   .description(
@@ -590,7 +591,9 @@ export function formatSiblingPlan(siblings: ResolvedSibling[], skipDestroy: bool
     }
     lines.push(
       `    ${chalk.red('✗')} GitHub repository  ${chalk.bold(`${s.org}/${s.repo}`)} ` +
-        `(routed at /${s.pathPrefix})`,
+        (s.pathPrefix === ROOT_SIBLING_NAME
+          ? '(the application, routed at /)'
+          : `(routed at /${s.pathPrefix})`),
     )
     lines.push(
       `      ${chalk.red('✗')} ${skipDestroy ? 'infrastructure NOT destroyed (--skip-destroy)' : `${envs} infrastructure — S3 site bucket, Lambda, API Gateway`}`,

@@ -57,6 +57,8 @@
  * deleting the wrong repo is irreversible and far worse than stopping.
  */
 
+import { ROOT_SIBLING_NAME } from './root-sibling.js'
+
 /** One entry as written into `siblings.auto.tfvars.json` by the registration PR. */
 export interface SiblingOriginEntry {
   name: string
@@ -255,7 +257,16 @@ export function markerMatches(
 ): boolean {
   if (!marker) return false
   if (marker.core_project !== coreProjectName) return false
-  return marker.path_prefix === sibling.pathPrefix || marker.name === sibling.projectName
+  if (marker.path_prefix === sibling.pathPrefix) return true
+  // The ROOT application sibling (issue #306): registered under the reserved
+  // name "app" but carrying an EMPTY path_prefix in its marker, because those
+  // are two different things — the registry name is the routing key, the
+  // prefix is the URL segment, and only the prefix is empty. Recognised
+  // explicitly rather than left to fall through to the project-name clause
+  // below, so that a root sibling whose repo was renamed still fails closed
+  // for the right reason instead of matching by accident.
+  if (marker.path_prefix === '' && sibling.pathPrefix === ROOT_SIBLING_NAME) return true
+  return marker.name === sibling.projectName
 }
 
 /** Minimal GitHub surface `resolveSiblingRepos` needs — keeps it unit-testable. */

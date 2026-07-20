@@ -147,6 +147,16 @@ function instanceIdentityHandlers() {
         content: Buffer.from('{"project":{"name":"{{PROJECT_NAME}}"}}', 'utf8').toString('base64'),
       }),
     ),
+    // The app sibling's CDN registration (issue #306) rides in the same commit
+    // — absent on a fresh instance, so commitFiles' content probe 404s and it
+    // gets added.
+    // Octokit sends `path` as a single, percent-encoded path segment
+    // (`infra%2Fenvironments%2Fdev%2F…`) — GitHub accepts that form, verified
+    // against the live API, but MSW matches the raw URL, so the handler has to
+    // be written encoded too. A `:env`-style pattern silently never matches.
+    http.get(`${GH}/repos/acme/my-app/contents/:path`, () =>
+      HttpResponse.json({ message: 'Not Found' }, { status: 404 }),
+    ),
     http.get(`${GH}/repos/acme/my-app/git/ref/*`, () =>
       HttpResponse.json({ object: { sha: 'headsha' } }),
     ),

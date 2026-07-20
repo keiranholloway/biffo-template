@@ -223,6 +223,37 @@ describe('markerMatches', () => {
   it('rejects a missing marker', () => {
     expect(markerMatches(null, 'core-app', sibling)).toBe(false)
   })
+
+  // The root application sibling (issue #306). Its marker records the real
+  // path prefix — empty — while the registry keys it under the reserved name
+  // "app", so the two do NOT literally agree and the naive comparison fails.
+  const rootSibling: DiscoveredSibling = {
+    pathPrefix: 'app',
+    projectName: 'core-app-app',
+    environments: ['dev'],
+    accountId: ACCOUNT,
+    registered: true,
+  }
+
+  it('accepts the root sibling, whose marker prefix is empty', () => {
+    expect(
+      markerMatches(
+        { name: 'core-app-app', core_project: 'core-app', path_prefix: '' },
+        'core-app',
+        rootSibling,
+      ),
+    ).toBe(true)
+  })
+
+  it('still rejects a root-looking marker belonging to another core', () => {
+    expect(
+      markerMatches(
+        { name: 'core-app-app', core_project: 'someone-elses-app', path_prefix: '' },
+        'core-app',
+        rootSibling,
+      ),
+    ).toBe(false)
+  })
 })
 
 // ─── resolveSiblingRepos ─────────────────────────────────────────────────────

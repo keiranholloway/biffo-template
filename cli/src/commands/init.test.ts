@@ -3,6 +3,8 @@ import { BiffoConfigSchema } from '../config/schema.js'
 import type { InitSession } from '../lib/session.js'
 import { getLatestCoreVersion } from '../lib/core-version.js'
 import {
+  appSiblingConfig,
+  appSiblingRegistryFiles,
   applyResolvedAwsCredentials,
   INSTANCE_CONFIG_FILE,
   INSTANCE_FILE_BRANCHES,
@@ -453,6 +455,14 @@ describe('instance identity files', () => {
   // (biffo-aws-account-id matches any bare 12-digit number), so committing it
   // would turn the instance's own Secret Scan red on its first run. It lives in
   // ~/.biffo/projects/ instead — see writeInstanceFiles.
+  //
+  // The ONE exception is the sibling registry (issue #306), whose S3
+  // bucket_regional_domain contains the account id by construction and which
+  // .gitleaks.toml allowlists by path for exactly that reason. It is named
+  // here rather than skipped generically, so that a future file quietly
+  // starting to carry the account id still fails this test.
+  const REGISTRY_FILE = /^infra\/environments\/[a-z]+\/siblings\.auto\.tfvars\.json$/
+
   it('never commits the AWS account id or the admin email', async () => {
     const github = makeGithubMock()
     await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
@@ -460,10 +470,34 @@ describe('instance identity files', () => {
     for (const branch of INSTANCE_FILE_BRANCHES) {
       for (const change of changesOn(github, branch)) {
         if (change.content === null) continue
-        expect(change.content).not.toContain('123456789012')
         expect(change.content).not.toContain('admin@example.com')
+        if (REGISTRY_FILE.test(change.path)) continue
+        expect(change.content).not.toContain('123456789012')
         expect(change.content).not.toMatch(/\b\d{12}\b/)
       }
+    }
+  })
+
+  // The account id only ever appears inside the S3 host name — never as a bare
+  // field of its own. If that stopped being true the gitleaks path allowlist
+  // would be covering more than it was scoped for.
+  it('confines the account id in the registry to the S3 bucket host name', async () => {
+    const github = makeGithubMock()
+    await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
+
+    const registry = changesOn(github, 'dev').filter((c) => REGISTRY_FILE.test(c.path))
+    expect(registry).toHaveLength(CONFIG.environments.length)
+    for (const file of registry) {
+      const parsed = JSON.parse(file.content!) as {
+        sibling_origins: { name: string; bucket_regional_domain: string }[]
+      }
+      for (const origin of parsed.sibling_origins) {
+        expect(origin.bucket_regional_domain).toMatch(
+          /^my-app-app-(dev|staging|prod)-site-123456789012\.s3\.eu-west-1\.amazonaws\.com$/,
+        )
+      }
+      const withoutHost = file.content!.replace(/"bucket_regional_domain":\s*"[^"]*"/g, '""')
+      expect(withoutHost).not.toMatch(/\b\d{12}\b/)
     }
   })
 
@@ -498,5 +532,136 @@ describe('instance identity files', () => {
     )
 
     expect(github.commitFiles).not.toHaveBeenCalled()
+  })
+})
+
+// ─── The root application sibling (issue #306) ───────────────────────────────
+
+describe('the app sibling', () => {
+  function changesOn(github: ReturnType<typeof makeGithubMock>, branch: string) {
+    const call = github.commitFiles.mock.calls.find((c) => c[2] === branch)
+    if (!call) throw new Error(`no commitFiles call for branch ${branch}`)
+    return call[3] as { path: string; content: string | null }[]
+  }
+
+  it('names the repo <core>-app, matching the project name teardown resolves by', () => {
+    const sibling = appSiblingConfig(CONFIG)
+    expect(sibling.project.name).toBe('my-app-app')
+    expect((sibling.source_control as { config: { org: string; repo: string } }).config).toEqual({
+      org: 'acme',
+      repo: 'my-app-app',
+    })
+    // Empty prefix — this is what makes it the ROOT sibling.
+    expect(sibling.core.path_prefix).toBe('')
+    expect(sibling.core.project_name).toBe('my-app')
+  })
+
+  // The core's own OIDC role and state bucket are added to config.cloud.config
+  // partway through runInit. Inheriting them would be wrong, and an empty
+  // oidc_role_arn mid-run fails schema validation outright.
+  it("does not inherit the core project's OIDC role or state bucket", () => {
+    const withCoreCreds = BiffoConfigSchema.parse({
+      ...CONFIG,
+      cloud: {
+        provider: 'aws',
+        config: {
+          account_id: '123456789012',
+          region: 'eu-west-1',
+          oidc_role_arn: 'arn:aws:iam::123456789012:role/biffo-github-actions-my-app',
+          tf_state_bucket: 'my-app-terraform-state-123456789012',
+        },
+      },
+    })
+
+    const cloud = appSiblingConfig(withCoreCreds).cloud as {
+      config: { oidc_role_arn?: string; tf_state_bucket?: string; account_id: string }
+    }
+    expect(cloud.config.oidc_role_arn).toBeUndefined()
+    expect(cloud.config.tf_state_bucket).toBeUndefined()
+    expect(cloud.config.account_id).toBe('123456789012')
+  })
+
+  it('registers itself under the reserved name "app", one file per environment', () => {
+    const files = appSiblingRegistryFiles(CONFIG)
+
+    expect(files.map((f) => f.path)).toEqual([
+      'infra/environments/dev/siblings.auto.tfvars.json',
+      'infra/environments/staging/siblings.auto.tfvars.json',
+      'infra/environments/prod/siblings.auto.tfvars.json',
+    ])
+    const dev = JSON.parse(files[0]!.content) as {
+      sibling_origins: { name: string; bucket_regional_domain: string }[]
+    }
+    expect(dev.sibling_origins[0]!.name).toBe('app')
+    expect(dev.sibling_origins[0]!.bucket_regional_domain).toBe(
+      'my-app-app-dev-site-123456789012.s3.eu-west-1.amazonaws.com',
+    )
+  })
+
+  // The safety property: registration is derived and lands in step 5, BEFORE
+  // the sibling's repo is created in step 6. A crash between the two leaves a
+  // registration teardown can still act on, never an unregistered repo.
+  it('commits the registration onto every branch even without the sibling deps', async () => {
+    const github = makeGithubMock()
+    await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
+
+    for (const branch of INSTANCE_FILE_BRANCHES) {
+      const paths = changesOn(github, branch).map((c) => c.path)
+      expect(paths).toContain('infra/environments/dev/siblings.auto.tfvars.json')
+    }
+  })
+
+  it('creates the sibling repo only after the registration has been committed', async () => {
+    const github = makeGithubMock()
+    const session = makeSession()
+    const reached = new Error('reached the sibling step')
+
+    await expect(
+      runInit(github as never, makeAwsMock() as never, CONFIG, session, {
+        git: {} as never,
+        awsFor: () => {
+          throw reached
+        },
+        skeletonRoot: '/skeleton',
+        githubToken: 'gh-token',
+      }),
+    ).rejects.toBe(reached)
+
+    // Failing at step 6 leaves the registration already committed — the
+    // recoverable state, not the leaking one.
+    const steps = vi.mocked(markStepComplete).mock.calls.map((c) => c[1])
+    expect(steps).toContain('github_config')
+    expect(steps).not.toContain('app_sibling')
+    for (const branch of INSTANCE_FILE_BRANCHES) {
+      expect(changesOn(github, branch).map((c) => c.path)).toContain(
+        'infra/environments/dev/siblings.auto.tfvars.json',
+      )
+    }
+  })
+
+  it('skips the sibling step when it is already checkpointed', async () => {
+    const github = makeGithubMock()
+    const session = makeSession({
+      completedSteps: [
+        'verify_credentials',
+        'create_repo',
+        'oidc_trust',
+        'terraform_backend',
+        'github_config',
+        'app_sibling',
+      ],
+    })
+
+    await runInit(github as never, makeAwsMock() as never, CONFIG, session, {
+      git: {} as never,
+      // Would throw if called — proving the step really is skipped.
+      awsFor: () => {
+        throw new Error('should not build an AwsAdapter for an already-created sibling')
+      },
+      skeletonRoot: '/skeleton',
+      githubToken: 'gh-token',
+    })
+
+    expect(session.completedSteps).toContain('app_sibling')
   })
 })

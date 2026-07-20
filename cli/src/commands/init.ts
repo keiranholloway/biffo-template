@@ -17,6 +17,13 @@ import { assertInteractive, promptOr } from '../lib/interactive.js'
 import { log } from '../lib/logger.js'
 import { resolveRepoIds } from '../lib/oidc.js'
 import {
+  bucketRegionalDomain,
+  rootSiblingProjectName,
+  ROOT_SIBLING_NAME,
+  serializeRegistry,
+  siteBucketName,
+} from '../lib/root-sibling.js'
+import {
   deleteSession,
   findLatestSession,
   markStepComplete,
@@ -24,6 +31,13 @@ import {
   saveSession,
   type InitSession,
 } from '../lib/session.js'
+import { SiblingConfigSchema, type SiblingConfig } from '../config/sibling-schema.js'
+import { GitAdapter } from '../adapters/git/index.js'
+import {
+  defaultSiblingTemplateRoot,
+  runSiblingCreate,
+  type SiblingCreateGit,
+} from './sibling-create.js'
 
 export const initCommand = new Command('init')
   .description('Scaffold a new project from the Biffo template')
@@ -124,6 +138,13 @@ export const initCommand = new Command('init')
 
       log.success('Configuration valid')
 
+      // Printed BEFORE anything is created, not summarised afterwards: `init`
+      // now creates two GitHub repositories, and a second repo is a second
+      // thing to leak if the run is abandoned partway. Purely informational —
+      // no new prompt, so `--config`/`-y`/non-interactive runs (#274) are
+      // unaffected.
+      printPlan(config)
+
       if (options.dryRun) {
         console.log('\n', JSON.stringify(config, null, 2))
         return
@@ -133,15 +154,27 @@ export const initCommand = new Command('init')
       const github = new GitHubAdapter(githubToken)
       const aws = new AwsAdapter(config)
 
-      await runInit(github, aws, config, session)
+      await runInit(github, aws, config, session, {
+        git: new GitAdapter(),
+        awsFor: (siblingConfig) => new AwsAdapter(siblingConfig),
+        skeletonRoot: defaultSiblingTemplateRoot(),
+        githubToken,
+      })
 
       const { org, repo } = (
         config.source_control as { provider: 'github'; config: { org: string; repo: string } }
       ).config
+      const appRepo = rootSiblingProjectName(config.project.name)
 
       log.success('\nProject initialised successfully!')
-      console.log(`\n  Repository: https://github.com/${org}/${repo}`)
-      console.log('  Next: clone your repo and run the first deploy\n')
+      console.log(`\n  Platform:    https://github.com/${org}/${repo}`)
+      console.log(`  Application: https://github.com/${org}/${appRepo}   (serves /)`)
+      console.log(
+        '\n  Next:\n' +
+          '  1. Clone the platform repo and run its first deploy — /admin and /login come up with it.\n' +
+          `  2. Then deploy the application repo. Until it deploys, / has no content and 404s;\n` +
+          `     that window is expected.\n`,
+      )
     },
   )
 
@@ -152,8 +185,16 @@ export async function runInit(
   aws: AwsAdapter,
   config: BiffoConfig,
   session: InitSession,
+  /**
+   * Supplied by the `init` command itself. Optional only so that unit tests
+   * can exercise the five core steps in isolation without a git adapter and a
+   * skeleton on disk — note that step 5 registers the app sibling on the CDN
+   * either way, because registration is derived from config alone. Omitting
+   * these skips creating the sibling's *repo*, never its registration.
+   */
+  appSibling?: AppSiblingDeps,
 ): Promise<void> {
-  const totalSteps = 5
+  const totalSteps = appSibling ? 6 : 5
 
   // Step 1: Verify AWS credentials
   if (!session.completedSteps.includes('verify_credentials')) {
@@ -230,7 +271,7 @@ export async function runInit(
     // Establish the repo's instance identity on every branch, *before* branch
     // protection is configured (issue #269): add biffo.core.json (the instance
     // marker) and drop the template's placeholder biffo.config.json.
-    await writeInstanceFiles(github, org, repo)
+    await writeInstanceFiles(github, org, repo, config)
 
     await github.setDefaultBranch(org, repo, 'dev')
 
@@ -271,8 +312,178 @@ export async function runInit(
     log.step(5, totalSteps, 'GitHub already configured — skipping')
   }
 
+  // Step 6: Create the root application sibling's own repo (issue #306).
+  //
+  // Deliberately AFTER step 5, which already registered it on the core's CDN.
+  // That ordering is the safety property:
+  //
+  //   registration without a repo → harmless and self-correcting. The CDN
+  //     names an origin whose bucket does not exist yet, so `/` errors until
+  //     the first deploy — the accepted window (decision 3) — and teardown
+  //     still discovers the entry, finds no repo (`repoState: 'gone'`), and
+  //     reclaims the IAM role and state bucket. Re-running `init` resumes and
+  //     creates the repo.
+  //   a repo without registration → a repo nothing points at and nothing knows
+  //     about. `biffo teardown` reads the registry to find siblings, so an
+  //     unregistered repo is exactly the silent leak this issue exists to
+  //     prevent.
+  //
+  // So the cheap, reversible, derived half goes first, and the half that
+  // creates real resources goes second. A crash anywhere in between leaves the
+  // recoverable state, never the leaking one.
+  if (appSibling) {
+    if (!session.completedSteps.includes('app_sibling')) {
+      log.step(6, totalSteps, 'Creating the application sibling repository...')
+      await createAppSibling(github, config, session, appSibling)
+      markStepComplete(session, 'app_sibling')
+    } else {
+      log.step(6, totalSteps, 'Application sibling already created — skipping')
+    }
+  }
+
   deleteSession(config.project.name)
   saveProjectConfig(config)
+}
+
+/**
+ * Provision the app sibling's repo through the same `runSiblingCreate` path
+ * `biffo sibling create` uses — one code path, not a parallel reimplementation
+ * that can drift.
+ *
+ * Two steps of that flow are skipped, and only these two:
+ *
+ *   - **core identity** — read from the core's *deployed* Terraform outputs,
+ *     which do not exist during `init`. Deferred, not faked.
+ *   - **registration** — already done, in step 5, directly in the core repo.
+ *
+ * The sibling's own step checkpoints live inside `session.outputs.appSibling`,
+ * so an `init` interrupted midway through this resumes at the sibling step it
+ * reached rather than trying to re-create a repo that already exists.
+ */
+async function createAppSibling(
+  github: GitHubAdapter,
+  config: BiffoConfig,
+  session: InitSession,
+  deps: AppSiblingDeps,
+): Promise<void> {
+  const siblingConfig = appSiblingConfig(config)
+  const cloud = config.cloud as { provider: 'aws'; config: { account_id: string; region: string } }
+
+  session.outputs.appSibling ??= {
+    version: 1,
+    config: siblingConfig,
+    awsAccountId: cloud.config.account_id,
+    awsRegion: cloud.config.region,
+    completedSteps: [],
+    outputs: {},
+  }
+  const siblingSession = session.outputs.appSibling
+  const siblingAws = deps.awsFor(siblingConfig)
+
+  await runSiblingCreate(github, siblingAws, siblingAws, deps.git, siblingConfig, siblingSession, {
+    coreConfig: config,
+    skeletonRoot: deps.skeletonRoot,
+    githubToken: deps.githubToken,
+    skipCoreIdentity: true,
+    skipRegistration: true,
+  })
+}
+
+// ─── The root application sibling (issue #306) ───────────────────────────────
+
+/**
+ * `biffo init` always creates TWO GitHub repos: the platform, and the user's
+ * application. Not a flag — if you are scaffolding an application you want an
+ * application, and making it opt-in would mean the default first run produces
+ * a platform with nothing at its front door.
+ *
+ * The application is an ADR-0007 sibling with an empty path prefix: it serves
+ * `/` and takes the core distribution's `default_cache_behavior`. The portal
+ * keeps `/admin` and `/login` (phase 1).
+ */
+export function appSiblingConfig(config: BiffoConfig): SiblingConfig {
+  const { org } = (
+    config.source_control as { provider: 'github'; config: { org: string; repo: string } }
+  ).config
+  const cloud = config.cloud as {
+    provider: 'aws'
+    config: { account_id: string; region: string; profile?: string }
+  }
+  const name = rootSiblingProjectName(config.project.name)
+
+  return SiblingConfigSchema.parse({
+    project: {
+      name,
+      description: `${config.project.description || config.project.name} — the user-facing application, served at /`,
+    },
+    // Repo name === project name, deliberately and not incidentally:
+    // `resolveSiblingRepos()` (lib/sibling-teardown.ts) resolves a sibling's
+    // repo as `<coreOrg>/<projectName>`, recovering the project name from the
+    // S3 bucket in the registry. Let the two diverge and `biffo teardown`
+    // cannot find the repo it is meant to delete.
+    source_control: { provider: 'github', config: { org, repo: name } },
+    // Identity only — account, region, profile. Deliberately NOT spread from
+    // the core's cloud config, which by this point in `runInit` also carries
+    // the CORE's `oidc_role_arn` and `tf_state_bucket`. The sibling gets its
+    // own of both (steps 4 and 5 of runSiblingCreate); inheriting the core's
+    // would either be silently wrong or, as an empty string mid-run, fail
+    // schema validation here and take the whole init down with it.
+    cloud: {
+      provider: 'aws',
+      config: {
+        account_id: cloud.config.account_id,
+        region: cloud.config.region,
+        ...(cloud.config.profile ? { profile: cloud.config.profile } : {}),
+      },
+    },
+    environments: config.environments,
+    core: {
+      project_name: config.project.name,
+      // The empty prefix IS the root mode. It registers under the reserved,
+      // non-empty name "app" — see lib/root-sibling.ts on why those two must
+      // not be conflated.
+      path_prefix: '',
+    },
+  })
+}
+
+/**
+ * The registry files that register the app sibling on the core project's CDN,
+ * one per environment, ready to commit into the core repo.
+ *
+ * Every value here is DERIVED, not observed: the sibling's S3 site bucket name
+ * is `<project>-<env>-site-<account>` by construction, so registration needs
+ * nothing to exist yet. That is what makes it safe to register the sibling
+ * *before* creating it (see runInit) rather than after.
+ */
+export function appSiblingRegistryFiles(config: BiffoConfig): { path: string; content: string }[] {
+  const sibling = appSiblingConfig(config)
+  const { account_id: accountId, region } = (
+    config.cloud as { provider: 'aws'; config: { account_id: string; region: string } }
+  ).config
+
+  return config.environments.map((env) => ({
+    path: `infra/environments/${env}/siblings.auto.tfvars.json`,
+    content: serializeRegistry([
+      {
+        name: ROOT_SIBLING_NAME,
+        bucket_regional_domain: bucketRegionalDomain(
+          siteBucketName(sibling.project.name, env, accountId),
+          region,
+        ),
+        description: sibling.project.description,
+      },
+    ]),
+  }))
+}
+
+/** What `runInit` needs in order to create the app sibling's own repo. */
+export interface AppSiblingDeps {
+  git: SiblingCreateGit
+  /** Builds an AwsAdapter for the sibling's own (identical) AWS account. */
+  awsFor: (config: SiblingConfig) => AwsAdapter
+  skeletonRoot: string
+  githubToken: string
 }
 
 export const INSTANCE_CONFIG_FILE = 'biffo.config.json'
@@ -310,23 +521,53 @@ export async function writeInstanceFiles(
   github: GitHubAdapter,
   org: string,
   repo: string,
+  /**
+   * When given, the app sibling's CDN registration
+   * (`infra/environments/<env>/siblings.auto.tfvars.json`) rides along in the
+   * same commit — see the ordering note in the doc comment above.
+   */
+  config?: BiffoConfig,
 ): Promise<void> {
-  const files = [
+  const files: { path: string; content: string | null }[] = [
     { path: INSTANCE_CORE_FILE, content: serializeInstanceCoreVersion(getLatestCoreVersion()) },
     { path: INSTANCE_CONFIG_FILE, content: null },
+    ...(config ? appSiblingRegistryFiles(config) : []),
   ]
+  const message = config
+    ? `chore: record core version, register the ${ROOT_SIBLING_NAME} sibling, and drop the template ${INSTANCE_CONFIG_FILE}`
+    : `chore: record core version and drop the template ${INSTANCE_CONFIG_FILE}`
   for (const branch of INSTANCE_FILE_BRANCHES) {
-    await github.commitFiles(
-      org,
-      repo,
-      branch,
-      files,
-      `chore: record core version and drop the template ${INSTANCE_CONFIG_FILE}`,
-    )
+    await github.commitFiles(org, repo, branch, files, message)
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * What this run will create, printed before it creates any of it.
+ *
+ * The important line is the second repository. Everything else here the user
+ * typed themselves; the application sibling is the one thing `init` decides on
+ * their behalf, and they should see it named before it exists rather than
+ * discover it in their org afterwards.
+ */
+export function printPlan(config: BiffoConfig): void {
+  const { org, repo } = (
+    config.source_control as { provider: 'github'; config: { org: string; repo: string } }
+  ).config
+  const appRepo = rootSiblingProjectName(config.project.name)
+
+  console.log(chalk.bold('\n  This will create TWO GitHub repositories:\n'))
+  console.log(`    1. ${chalk.bold(`${org}/${repo}`)}`)
+  console.log('       The platform — Core API, admin portal (/admin, /login), infrastructure.')
+  console.log(`    2. ${chalk.bold(`${org}/${appRepo}`)}`)
+  console.log('       Your application — served at / (ADR-0007 sibling, issue #306).')
+  console.log(
+    '\n  Plus, in your AWS account: an OIDC role and a Terraform state bucket for each,\n' +
+      `  across ${config.environments.join(', ')}. \`biffo teardown\` removes both repositories\n` +
+      '  and everything they provision.\n',
+  )
+}
 
 function parseConfig(raw: unknown): BiffoConfig {
   const result = BiffoConfigSchema.safeParse(raw)

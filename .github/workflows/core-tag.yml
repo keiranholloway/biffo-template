@@ -72,4 +72,4 @@ jobs:
       # for its version's template tree.
       - name: Sync and audit core-v<version>
         if: steps.guard.outputs.is_template == 'true'
-        run: pnpm --filter @biffo/cli sync:core-tag -- --push
+        run: pnpm --filter biffo sync:core-tag -- --push

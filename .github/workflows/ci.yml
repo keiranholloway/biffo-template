@@ -44,7 +44,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # Fail if a template-owned path changed without a core.version bump (ADR-0006).
-      - run: pnpm --filter @biffo/cli check:core-bump
+      - run: pnpm --filter biffo check:core-bump
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
 
@@ -80,7 +80,7 @@ jobs:
       # other job in this workflow touches.
       - name: Plugin Terraform guard
         if: ${{ !cancelled() }}
-        run: pnpm --filter @biffo/cli check:plugin-terraform
+        run: pnpm --filter biffo check:plugin-terraform
 
   python:
     name: Python (lint, types, test, security)

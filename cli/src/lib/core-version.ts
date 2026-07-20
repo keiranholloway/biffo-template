@@ -77,11 +77,16 @@ export function findCoreVersionUpward(startDir: string): string | null {
  * instance can upgrade to).
  *
  * Resolved by walking up from this module's location to the nearest
- * `core.version`. In the monorepo that is the template repo root, which is how
- * the CLI is distributed today. NOTE: if the CLI is ever published as a
- * standalone package, the build must ship `core.version` alongside `dist/` (add
- * it to package.json `files`) so this resolution still succeeds outside the
- * monorepo.
+ * `core.version`. Two arrangements both satisfy that single walk:
+ *
+ *  - **Template checkout** (development): `cli/dist/` or `cli/src/` walks up to
+ *    the repo root's `core.version`.
+ *  - **Published `biffo` package** (npm): nothing exists above
+ *    `node_modules/biffo/`, so the package ships its own copy of `core.version`
+ *    beside `dist/`. It is produced by `cli/scripts/sync-core-version.mjs` from
+ *    the `prepack` hook and listed in package.json `files`; the walk finds it
+ *    one level up from `dist/`. See `core-version-packaging.test.ts`, which
+ *    guards both the `files` entry and the hook.
  */
 export function getLatestCoreVersion(fromDir?: string): string {
   const start = fromDir ?? dirname(fileURLToPath(import.meta.url))

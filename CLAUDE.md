@@ -24,7 +24,7 @@ Before touching data models, APIs, or service boundaries, read the ADRs in `docs
 
 ```
 biffo/
-├── cli/                    # @biffo/cli — Node.js/TypeScript scaffolding CLI
+├── cli/                    # biffo — Node.js/TypeScript scaffolding CLI (published to npm)
 ├── apps/portal/            # @biffo/portal — Next.js 15 base portal (React 19)
 ├── services/api/           # biffo-api — FastAPI + Mangum core API (Python 3.13)
 ├── services/_template/     # Template for new microservices — copy and rename
@@ -73,8 +73,11 @@ pnpm run format
 # Start portal dev server
 pnpm --filter @biffo/portal dev
 
-# CLI (after build)
-pnpm --filter @biffo/cli build
+# CLI — released usage (published to npm as `biffo`; version == core.version)
+npx biffo --help
+
+# CLI — local development (contributors working ON the CLI, from this checkout)
+pnpm --filter biffo build
 ./cli/dist/index.js --help
 
 # Terraform (dev)
@@ -82,6 +85,28 @@ cd infra/environments/dev
 terraform init -backend-config=backend.hcl
 terraform plan
 ```
+
+## CLI distribution
+
+The CLI ships to npm as the **unscoped package `biffo`** (`cli/`). Two paths, and
+it matters which one you are on:
+
+- **Released** — `npx biffo <cmd>`. An immutable, resolved version; nothing is
+  built locally on the path that creates real GitHub repos and AWS resources.
+- **Local development** — `pnpm --filter biffo build && ./cli/dist/index.js`.
+  Still supported and still guarded: `cli/src/lib/build-freshness.ts` refuses to
+  scaffold from a `dist` older than `src` (issue #190).
+
+**The CLI's version _is_ `core.version`.** One number, no mapping table:
+`biffo@0.32.9` is the CLI shipping core 0.32.9. `.github/workflows/publish-cli.yml`
+fires on the `core-v*` tags that `core-tag.yml` maintains, checks the tag and
+`core.version` agree, stamps the package version, and publishes with provenance.
+
+Because `getLatestCoreVersion()` finds `core.version` by walking _up_ from the
+running module, the published tarball must carry its own copy beside `dist/` —
+written by `cli/scripts/sync-core-version.mjs` from `prepack`, listed in
+package.json `files`, and guarded by `cli/src/lib/core-version-packaging.test.ts`.
+The copy is git-ignored; the repo-root `core.version` stays the only committed one.
 
 ## Key invariants to preserve
 

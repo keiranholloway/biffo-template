@@ -1,7 +1,7 @@
 /**
  * CI guard (ADR-0006 versioning discipline): fail a pull request that changes
  * any template-owned path without bumping `core.version`. Run from CI via
- * `pnpm --filter @biffo/cli check:core-bump`; the base branch comes from
+ * `pnpm --filter biffo check:core-bump`; the base branch comes from
  * `GITHUB_BASE_REF` (or the first CLI arg).
  *
  * Ownership is resolved by the same `isTemplateOwned` logic core upgrade uses,

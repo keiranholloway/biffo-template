@@ -1,0 +1,167 @@
+name: Publish CLI
+
+# Publishes the scaffolding CLI to npm as the unscoped package `biffo` (#259).
+#
+# The published version IS the core version. There is no independent CLI
+# version and no mapping table: `biffo@0.32.9` is the CLI shipping core 0.32.9,
+# so any scaffolded repo is traceable to the exact build that made it — the
+# "no version identity" gap #259 names.
+#
+# Trigger: the `core-v*` tags that core-tag.yml already maintains. Since #294
+# those tags stand for the template-owned tree at that core version (with an
+# audit), so a tag is exactly the right release point.
+on:
+  push:
+    tags: ['core-v*']
+  # Manual re-run, against a tag ref. Publishing is the step most likely to fail
+  # for reasons unrelated to the code (missing/expired NPM_TOKEN, npm outage,
+  # a GitHub dispatch that never fired — see #293). A release you cannot
+  # re-trigger is a trap.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'core-v<version> tag to publish (defaults to the ref this was dispatched on)'
+        required: false
+        type: string
+      dry_run:
+        description: 'Pack and validate only — do not publish to npm'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Required for `npm publish --provenance` to mint a Sigstore attestation.
+  id-token: write
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  publish:
+    name: Publish biffo to npm
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      # This workflow lives in a template-owned path, so it ships to every
+      # scaffolded instance — which must never publish the template's CLI to
+      # npm under its own tags. Detected the same way core-tag.yml does it:
+      # biffo.core.json exists in an instance and never in the template.
+      - name: Skip in instances
+        id: guard
+        run: |
+          set -euo pipefail
+          if [ -f biffo.core.json ]; then
+            echo "biffo.core.json present — this is an instance, not the template. Skipping."
+            echo "is_template=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_template=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The tag name and core.version must agree, or the artifact would be
+      # published under a version that does not describe the tree inside it.
+      # Fail loudly; never guess which of the two is right.
+      - name: Resolve and verify version
+        id: version
+        if: steps.guard.outputs.is_template == 'true'
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < core.version)"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::core.version is not a semver: '$version'"
+            exit 1
+          fi
+          tag="${{ inputs.tag || github.ref_name }}"
+          case "$tag" in
+            core-v*)
+              if [ "${tag#core-v}" != "$version" ]; then
+                echo "::error::Tag '$tag' does not match core.version '$version' at that ref."
+                echo "::error::Refusing to publish biffo@$version from a mismatched tag."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::'$tag' is not a core-v* tag. Publish only from a core version tag."
+              exit 1
+              ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing biffo@$version from $tag"
+
+      - uses: pnpm/action-setup@v4
+        if: steps.guard.outputs.is_template == 'true'
+      - uses: actions/setup-node@v5
+        if: steps.guard.outputs.is_template == 'true'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: pnpm install --frozen-lockfile
+        if: steps.guard.outputs.is_template == 'true'
+
+      - name: Build
+        if: steps.guard.outputs.is_template == 'true'
+        run: pnpm --filter biffo build
+
+      # package.json carries a 0.0.0 placeholder: the version lives in
+      # core.version and is stamped here, so there is exactly one number to bump.
+      - name: Stamp package version
+        if: steps.guard.outputs.is_template == 'true'
+        working-directory: cli
+        run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version --allow-same-version
+
+      # `npm pack` runs prepack, which copies core.version into the package.
+      # Verify it actually landed in the tarball: without it `biffo core status`
+      # fails on every npm install while every in-repo test still passes (#259).
+      - name: Verify tarball carries core.version
+        if: steps.guard.outputs.is_template == 'true'
+        working-directory: cli
+        run: |
+          set -euo pipefail
+          tarball="$(npm pack --silent)"
+          if ! tar -tzf "$tarball" | grep -qx 'package/core.version'; then
+            echo "::error::Packed tarball is missing core.version — refusing to publish."
+            tar -tzf "$tarball"
+            exit 1
+          fi
+          packed="$(tar -xzOf "$tarball" package/core.version | tr -d '[:space:]')"
+          if [ "$packed" != "${{ steps.version.outputs.version }}" ]; then
+            echo "::error::Tarball core.version '$packed' != published version '${{ steps.version.outputs.version }}'."
+            exit 1
+          fi
+          echo "OK: tarball ships core.version $packed"
+          rm -f "$tarball"
+
+      # Fails loudly (not silently) when NPM_TOKEN is absent, so a release that
+      # cannot authenticate is a red run rather than a green no-op.
+      - name: Require NPM_TOKEN
+        if: steps.guard.outputs.is_template == 'true' && !inputs.dry_run
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NPM_TOKEN:-}" ]; then
+            echo "::error::Secret NPM_TOKEN is not set on this repository."
+            echo "::error::Create an npm automation token with publish rights to 'biffo' and add it as the NPM_TOKEN repository secret."
+            exit 1
+          fi
+
+      - name: Publish
+        if: steps.guard.outputs.is_template == 'true' && !inputs.dry_run
+        working-directory: cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'
+        run: npm publish --provenance --access public
+
+      - name: Dry run summary
+        if: steps.guard.outputs.is_template == 'true' && inputs.dry_run
+        run: echo "Dry run — biffo@${{ steps.version.outputs.version }} packed and verified, not published."

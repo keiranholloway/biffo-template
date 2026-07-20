@@ -14,6 +14,12 @@ permissions:
 
 env:
   TERRAFORM_VERSION: '~> 1.9'
+  # Defence in depth for the class of bug in #322: an interactive Terraform
+  # prompt on a CI runner has no stdin to read and blocks until the job is
+  # killed (61 minutes, no output, generic timeout). Every invocation below
+  # also passes -input=false explicitly and a drift guard enforces that; this
+  # is the backstop for one added later without it.
+  TF_INPUT: '0'
 
 # Provisions shared certificate/DNS infrastructure for custom domains:
 #   - managed-route53: Route 53 hosted zone + wildcard ACM certificate
@@ -53,9 +59,19 @@ jobs:
           key    = "global/terraform.tfstate"
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
-      - run: terraform init -backend-config=backend.hcl
+      - run: terraform init -input=false -backend-config=backend.hcl
+        timeout-minutes: 10
       - name: Adopt existing hosted zone instead of recreating it
         if: vars.DNS_MODE == '' || vars.DNS_MODE == 'managed-route53'
+        timeout-minutes: 10
+        # terraform import evaluates the configuration, so it needs the same
+        # required variables the applies below pass. Without them it prompted
+        # on stdin and hung the job forever (#322); -input=false alone would
+        # only downgrade that to a hard "No value for required variable".
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}
+          TF_VAR_dns_mode: ${{ vars.DNS_MODE || 'managed-route53' }}
         run: |
           DOMAIN="${{ vars.DOMAIN }}"
           # `terraform state list` errors (rather than printing nothing) when the
@@ -85,9 +101,15 @@ jobs:
             ZONE_ID="$ZONE_IDS"
             echo "Found untracked existing zone $ZONE_ID for $DOMAIN — importing it instead of deleting and recreating."
             echo "Deleting and recreating would incur a duplicate Route 53 monthly zone charge and open a DNS resolution gap until the new NS records propagate to the registrar."
-            terraform import 'aws_route53_zone.main[0]' "$ZONE_ID"
+            terraform import -input=false 'aws_route53_zone.main[0]' "$ZONE_ID"
           fi
       - name: Adopt existing ACM certificate instead of recreating it
+        timeout-minutes: 10
+        # See the hosted-zone step above for why TF_VAR_* is required here.
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_domain: ${{ vars.DOMAIN }}
+          TF_VAR_dns_mode: ${{ vars.DNS_MODE || 'managed-route53' }}
         run: |
           DOMAIN="${{ vars.DOMAIN }}"
           # See the hosted-zone step above: terraform state list errors rather
@@ -112,11 +134,12 @@ jobs:
           else
             CERT_ARN="$CERT_ARNS"
             echo "Found untracked existing ACM certificate $CERT_ARN for $DOMAIN — importing it instead of creating a new one."
-            terraform import aws_acm_certificate.wildcard "$CERT_ARN"
+            terraform import -input=false aws_acm_certificate.wildcard "$CERT_ARN"
           fi
       - name: Apply hosted zone
         if: vars.DNS_MODE == '' || vars.DNS_MODE == 'managed-route53'
-        run: terraform apply -auto-approve -target='aws_route53_zone.main[0]'
+        timeout-minutes: 20
+        run: terraform apply -input=false -auto-approve -target='aws_route53_zone.main[0]'
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_domain: ${{ vars.DOMAIN }}
@@ -173,7 +196,12 @@ jobs:
           echo "::error::Nameserver update for $DOMAIN (operation $OPERATION_ID) did not reach a terminal status within 60s."
           exit 1
       - name: Apply certificate
-        run: terraform apply -auto-approve
+        # aws_acm_certificate_validation waits out DNS delegation propagation,
+        # which is legitimately tens of minutes — hence the 2h STS session
+        # above. Generous, but bounded: a stuck step must not run to the job
+        # limit with no signal.
+        timeout-minutes: 60
+        run: terraform apply -input=false -auto-approve
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_domain: ${{ vars.DOMAIN }}

@@ -23,6 +23,11 @@ on:
 
 permissions:
   contents: write
+  # Dispatching the release workflow below. A tag pushed by this job's
+  # GITHUB_TOKEN does NOT trigger `on: push: tags:` anywhere — GitHub suppresses
+  # that to prevent workflows recursing. So the release has to be asked for
+  # explicitly, and asking requires actions:write.
+  actions: write
 
 # Serialise: two pushes racing here could both decide to move the same tag.
 concurrency:
@@ -71,5 +76,33 @@ jobs:
       # every version from the baseline up and fails if any tag does not stand
       # for its version's template tree.
       - name: Sync and audit core-v<version>
+        id: sync
         if: steps.guard.outputs.is_template == 'true'
         run: pnpm --filter @biffo/cli sync:core-tag -- --push
+
+      # Release the CLI for the tag just written.
+      #
+      # This exists because of a gap that is easy to miss and silent when hit:
+      # the tag above is pushed with this job's GITHUB_TOKEN, and GitHub does not
+      # trigger workflows from GITHUB_TOKEN-created events. So publish-cli.yml's
+      # `on: push: tags: [core-v*]` never fired — every release to date was a
+      # manual dispatch, with nothing to indicate one was needed.
+      #
+      # Dispatching explicitly keeps the causal chain visible in the Actions log
+      # and needs no new credential: a PAT purely to defeat the recursion guard
+      # would be a long-lived secret bought for nothing.
+      #
+      # Only fires when a tag was actually created or moved — `steps.sync.outputs.tag`
+      # is unset when the tag already stood for this tree, so an ordinary push to
+      # the default branch releases nothing.
+      - name: Dispatch CLI release
+        if: steps.sync.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.sync.outputs.tag }}
+          ACTION: ${{ steps.sync.outputs.action }}
+        run: |
+          set -euo pipefail
+          echo "::notice::Tag $TAG was ${ACTION}d — dispatching publish-cli.yml against it."
+          gh workflow run publish-cli.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
+          echo "Dispatched publish-cli.yml for $TAG." >> "$GITHUB_STEP_SUMMARY"

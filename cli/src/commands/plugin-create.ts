@@ -125,7 +125,7 @@ export async function runPluginCreate(
   // this module (works from both `src/` in development and the built `dist/`,
   // and inside a project checkout where `cli/` sits beside `_skeletons/`), then
   // fall back to the project root — which is what covers a globally installed
-  // `@biffo/cli`, whose package does not ship `_skeletons/`.
+  // `biffo`, whose package does not ship `_skeletons/`.
   const here = dirname(fileURLToPath(import.meta.url))
   const skeletonRoot =
     options.skeletonRoot ??

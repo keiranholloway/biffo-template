@@ -50,7 +50,7 @@ Unlike `biffo init`, there's no interactive prompt flow — you hand-write (or s
 ## 2. Run it
 
 ```bash
-npx @biffo/cli sibling create reports --config biffo.sibling.json
+npx biffo sibling create reports --config biffo.sibling.json
 ```
 
 (`reports` must match `project.name` in the config — this is a safety check, not a second place to set the name.)

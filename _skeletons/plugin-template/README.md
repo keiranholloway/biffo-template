@@ -171,7 +171,7 @@ corrected, remove this note and consider making check 2 blocking too.
   copies `terraform/` into the user's monorepo at `modules/plugins/<name>/`,
   and it does so **silently only if the directory exists** — a plugin that
   deletes it gets a clean install and dead event handlers. A CI guard in
-  biffo-template (`pnpm --filter @biffo/cli check:plugin-terraform`) fails any
+  biffo-template (`pnpm --filter biffo check:plugin-terraform`) fails any
   manifest that declares `event_subscriptions` without a `terraform/`
   directory; keep both in step.
 - **Every table gets `tenant_id`.** You never declare it yourself — it's

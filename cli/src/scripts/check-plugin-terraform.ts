@@ -3,7 +3,7 @@
  * plugin manifest in this repo declares `event_subscriptions` but ships no
  * `terraform/` directory.
  *
- * Run from CI via `pnpm --filter @biffo/cli check:plugin-terraform`.
+ * Run from CI via `pnpm --filter biffo check:plugin-terraform`.
  *
  * Scope note: this walks the whole repo from the git root, which is what makes
  * it cover `_skeletons/plugin-template/`. That directory is a member of no

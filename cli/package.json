@@ -1,5 +1,5 @@
 {
-  "name": "@biffo/cli",
+  "name": "biffo",
   "version": "0.0.0",
   "description": "Biffo project scaffolding CLI",
   "license": "MIT",
@@ -8,12 +8,27 @@
     "biffo": "./dist/index.js"
   },
   "main": "./dist/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/keiranholloway/biffo-template.git",
+    "directory": "cli"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "files": [
     "dist",
-    "schemas"
+    "schemas",
+    "core.version"
   ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
+    "prepack": "node scripts/sync-core-version.mjs",
+    "postpack": "node -e \"require('node:fs').rmSync('core.version',{force:true})\"",
     "dev": "tsx watch src/index.ts",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",

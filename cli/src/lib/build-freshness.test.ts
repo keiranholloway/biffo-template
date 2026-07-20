@@ -26,10 +26,10 @@ function writeFile(path: string, offsetSeconds: number, content = '// x\n'): voi
   touch(path, offsetSeconds)
 }
 
-/** A fake @biffo/cli package tree; the check runs as if invoked from dist/. */
+/** A fake biffo package tree; the check runs as if invoked from dist/. */
 function scaffoldPackage(options: { withSrc?: boolean; withDist?: boolean } = {}): void {
   const { withSrc = true, withDist = true } = options
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@biffo/cli' }))
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'biffo' }))
   if (withDist) writeFile(join(root, 'dist', 'index.js'), 100)
   if (withSrc) writeFile(join(root, 'src', 'index.ts'), 50)
 }
@@ -169,7 +169,7 @@ describe('assertBuildIsFresh', () => {
       })
 
     expect(call).toThrow(/Refusing to run/)
-    expect(call).toThrow(/pnpm --filter @biffo\/cli build/)
+    expect(call).toThrow(/pnpm --filter biffo build/)
     expect(call).toThrow(/src[/\\]commands[/\\]init\.ts/)
   })
 

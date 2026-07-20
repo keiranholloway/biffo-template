@@ -4,7 +4,7 @@
  *
  * Run from `.github/workflows/core-tag.yml` on every push to `main`:
  *
- *     pnpm --filter @biffo/cli sync:core-tag -- --push
+ *     pnpm --filter biffo sync:core-tag -- --push
  *
  * Two phases, in order:
  *

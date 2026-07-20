@@ -33,13 +33,22 @@ runs:
             VPCS=$(aws ec2 describe-vpcs \
               --filters "Name=tag:Name,Values=${PREFIX}-vpc" \
               --query "Vpcs[].VpcId" --output text)
-            if [ -n "$POOLS" ] || [ -n "$VPCS" ]; then
-              echo "::error::Orphaned resources remain after destroy — Cognito pool names and VPC name tags have no AWS-side uniqueness constraint, so terraform will silently create duplicates on the next apply instead of erroring."
+            # The VPC flow-logs group is recreated by a straggler log delivery
+            # after its flow log is destroyed (#332). It carries a fixed name
+            # with no AWS-side uniqueness constraint, so a leftover collides with
+            # the next apply (ResourceAlreadyExistsException) ~13 min in. The
+            # post-destroy sweep should have removed it; assert loudly if not.
+            FLOW_LOGS_GROUP="/biffo/${PREFIX}/vpc-flow-logs"
+            LOG_GROUPS=$(aws logs describe-log-groups --log-group-name-prefix "$FLOW_LOGS_GROUP" \
+              --query "logGroups[?logGroupName=='$FLOW_LOGS_GROUP'].logGroupName" --output text)
+            if [ -n "$POOLS" ] || [ -n "$VPCS" ] || [ -n "$LOG_GROUPS" ]; then
+              echo "::error::Orphaned resources remain after destroy — these names have no AWS-side uniqueness constraint, so terraform will silently create duplicates (or hard-fail ResourceAlreadyExistsException) on the next apply instead of erroring."
               [ -n "$POOLS" ] && echo "::error::Orphaned Cognito pool(s): $POOLS"
               [ -n "$VPCS" ] && echo "::error::Orphaned VPC(s): $VPCS"
+              [ -n "$LOG_GROUPS" ] && echo "::error::Orphaned CloudWatch log group(s): $LOG_GROUPS"
               exit 1
             fi
-            echo "No orphaned Cognito pools or VPCs found."
+            echo "No orphaned Cognito pools, VPCs, or flow-logs groups found."
             ;;
           route53-acm)
             ZONES=$(aws route53 list-hosted-zones-by-name \

@@ -248,4 +248,21 @@ resource "aws_flow_log" "main" {
   iam_role_arn    = aws_iam_role.vpc_flow_logs.arn
   log_destination = aws_cloudwatch_log_group.vpc_flow_logs.arn
   tags            = var.tags
+
+  # The `log_destination` reference above already makes Terraform destroy this
+  # flow log BEFORE its log group (reverse dependency order). This explicit
+  # depends_on documents that ordering and preserves it if a future refactor
+  # ever stops referencing the group's ARN directly.
+  #
+  # Ordering alone does NOT fully close the orphan race in #332, though: a live
+  # VPC flow log re-materialises its destination CloudWatch group whenever it
+  # delivers a log event, and the delivery pipeline keeps writing for a short
+  # window AFTER `DeleteFlowLogs` returns. If that straggler delivery lands
+  # between Terraform deleting the flow log and deleting the group, the group is
+  # recreated after Terraform has already dropped it from state — an orphan the
+  # next apply collides with (ResourceAlreadyExistsException). The destroy
+  # workflow's post-destroy log-group sweep is the backstop that closes that
+  # residual window; do NOT use `skip_destroy`, which would orphan the group by
+  # design and make it permanent.
+  depends_on = [aws_cloudwatch_log_group.vpc_flow_logs]
 }

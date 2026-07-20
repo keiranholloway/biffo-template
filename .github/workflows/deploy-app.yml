@@ -67,10 +67,16 @@ jobs:
       # Generate the Microservices tab's data (ADR-0007) from this env's sibling
       # registry so the static portal can list siblings without a server. Link is
       # /<name> (no trailing slash — CloudFront path routing is exact).
+      #
+      # It lives under public/admin/ so it publishes at /admin/siblings.json:
+      # the portal owns the /admin prefix and only that prefix (issue #306), so
+      # a manifest at the root would be served by whatever owns `/` — the
+      # user-application sibling — and the tab would 404.
       - name: Generate siblings manifest
         run: |
           SRC=infra/environments/dev/siblings.auto.tfvars.json
-          OUT=apps/portal/public/siblings.json
+          OUT=apps/portal/public/admin/siblings.json
+          mkdir -p "$(dirname "$OUT")"
           if [ -f "$SRC" ]; then
             jq '{ siblings: [.sibling_origins[] | { name, description: (.description // ""), routes: (.routes // []) }] }' "$SRC" > "$OUT"
           else
@@ -109,6 +115,26 @@ jobs:
         with:
           name: portal-build-dev
           path: portal-dist/
+      - name: Place portal assets under /admin
+        run: |
+          # apps/portal/next.config.ts sets `assetPrefix: '/admin'` (issue #306)
+          # so the exported HTML references /admin/_next/*, freeing /_next/* for
+          # the user-application sibling, which has an empty basePath and would
+          # otherwise claim the identical URL prefix from a different origin.
+          #
+          # assetPrefix rewrites URLs ONLY — Next still EMITS the files at
+          # out/_next/*. Nothing in the build moves them, so without this step
+          # every asset the portal asks for 404s. Move them to the key the HTML
+          # references. The three sync passes below are unchanged: the same
+          # extension filters apply, and their `--delete` removes the now-stale
+          # objects under the old s3://<bucket>/_next/ prefix.
+          if [ -d portal-dist/_next ]; then
+            mkdir -p portal-dist/admin
+            rm -rf portal-dist/admin/_next
+            mv portal-dist/_next portal-dist/admin/_next
+          fi
+          # Fail loudly rather than shipping a portal with no assets at all.
+          test -d portal-dist/admin/_next
       - name: Sync portal to S3
         run: |
           # Three passes, split by mutability and content type.
@@ -342,10 +368,16 @@ jobs:
       # Generate the Microservices tab's data (ADR-0007) from this env's sibling
       # registry so the static portal can list siblings without a server. Link is
       # /<name> (no trailing slash — CloudFront path routing is exact).
+      #
+      # It lives under public/admin/ so it publishes at /admin/siblings.json:
+      # the portal owns the /admin prefix and only that prefix (issue #306), so
+      # a manifest at the root would be served by whatever owns `/` — the
+      # user-application sibling — and the tab would 404.
       - name: Generate siblings manifest
         run: |
           SRC=infra/environments/staging/siblings.auto.tfvars.json
-          OUT=apps/portal/public/siblings.json
+          OUT=apps/portal/public/admin/siblings.json
+          mkdir -p "$(dirname "$OUT")"
           if [ -f "$SRC" ]; then
             jq '{ siblings: [.sibling_origins[] | { name, description: (.description // ""), routes: (.routes // []) }] }' "$SRC" > "$OUT"
           else
@@ -384,6 +416,26 @@ jobs:
         with:
           name: portal-build-staging
           path: portal-dist/
+      - name: Place portal assets under /admin
+        run: |
+          # apps/portal/next.config.ts sets `assetPrefix: '/admin'` (issue #306)
+          # so the exported HTML references /admin/_next/*, freeing /_next/* for
+          # the user-application sibling, which has an empty basePath and would
+          # otherwise claim the identical URL prefix from a different origin.
+          #
+          # assetPrefix rewrites URLs ONLY — Next still EMITS the files at
+          # out/_next/*. Nothing in the build moves them, so without this step
+          # every asset the portal asks for 404s. Move them to the key the HTML
+          # references. The three sync passes below are unchanged: the same
+          # extension filters apply, and their `--delete` removes the now-stale
+          # objects under the old s3://<bucket>/_next/ prefix.
+          if [ -d portal-dist/_next ]; then
+            mkdir -p portal-dist/admin
+            rm -rf portal-dist/admin/_next
+            mv portal-dist/_next portal-dist/admin/_next
+          fi
+          # Fail loudly rather than shipping a portal with no assets at all.
+          test -d portal-dist/admin/_next
       - name: Sync portal to S3
         run: |
           # Three passes, split by mutability and content type.
@@ -625,10 +677,16 @@ jobs:
       # Generate the Microservices tab's data (ADR-0007) from this env's sibling
       # registry so the static portal can list siblings without a server. Link is
       # /<name> (no trailing slash — CloudFront path routing is exact).
+      #
+      # It lives under public/admin/ so it publishes at /admin/siblings.json:
+      # the portal owns the /admin prefix and only that prefix (issue #306), so
+      # a manifest at the root would be served by whatever owns `/` — the
+      # user-application sibling — and the tab would 404.
       - name: Generate siblings manifest
         run: |
           SRC=infra/environments/prod/siblings.auto.tfvars.json
-          OUT=apps/portal/public/siblings.json
+          OUT=apps/portal/public/admin/siblings.json
+          mkdir -p "$(dirname "$OUT")"
           if [ -f "$SRC" ]; then
             jq '{ siblings: [.sibling_origins[] | { name, description: (.description // ""), routes: (.routes // []) }] }' "$SRC" > "$OUT"
           else
@@ -671,6 +729,26 @@ jobs:
         with:
           name: portal-build-prod
           path: portal-dist/
+      - name: Place portal assets under /admin
+        run: |
+          # apps/portal/next.config.ts sets `assetPrefix: '/admin'` (issue #306)
+          # so the exported HTML references /admin/_next/*, freeing /_next/* for
+          # the user-application sibling, which has an empty basePath and would
+          # otherwise claim the identical URL prefix from a different origin.
+          #
+          # assetPrefix rewrites URLs ONLY — Next still EMITS the files at
+          # out/_next/*. Nothing in the build moves them, so without this step
+          # every asset the portal asks for 404s. Move them to the key the HTML
+          # references. The three sync passes below are unchanged: the same
+          # extension filters apply, and their `--delete` removes the now-stale
+          # objects under the old s3://<bucket>/_next/ prefix.
+          if [ -d portal-dist/_next ]; then
+            mkdir -p portal-dist/admin
+            rm -rf portal-dist/admin/_next
+            mv portal-dist/_next portal-dist/admin/_next
+          fi
+          # Fail loudly rather than shipping a portal with no assets at all.
+          test -d portal-dist/admin/_next
       - name: Sync portal to S3
         run: |
           # Three passes, split by mutability and content type.

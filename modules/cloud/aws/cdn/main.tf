@@ -22,6 +22,49 @@ locals {
       { name = s.name, path_pattern = "${s.name}/*" },
     ]
   ])
+
+  # ROUTING INVERSION (issue #306). The portal is strictly the admin console: it
+  # serves /admin and /login, and the root path is reserved for the user's
+  # application sibling. So the portal moves from default_cache_behavior to
+  # explicit ordered behaviors, and default_cache_behavior becomes the root's.
+  #
+  # Two patterns per prefix, for exactly the reason spelled out above the
+  # siblings: "admin/*" does NOT match the bare "/admin", which is how a human
+  # types it.
+  #
+  # These four are the complete set the portal needs:
+  #
+  #   admin    — the bare /admin entry point
+  #   admin/*  — every admin route, its RSC payloads, AND every static asset.
+  #              apps/portal/next.config.ts sets `assetPrefix: '/admin'`, so the
+  #              exported HTML references /admin/_next/* rather than /_next/*.
+  #              That is the entire point of the assetPrefix: it vacates
+  #              /_next/* for the root sibling, which has an empty basePath and
+  #              would otherwise claim the identical URL prefix from a
+  #              *different* S3 origin — one path, two origins, which CloudFront
+  #              cannot disambiguate.
+  #   login    — the bare /login entry point
+  #   login/*  — /login/ and its RSC payload
+  #
+  # There is deliberately NO "_next/*" behavior here. That prefix now belongs to
+  # whoever serves the root, and adding it back would re-create the collision.
+  portal_cache_behaviors = ["admin", "admin/*", "login", "login/*"]
+
+  # Portal behaviors first so they are evaluated ahead of any sibling's. In
+  # practice the patterns are disjoint — `sibling_origins` forbids the reserved
+  # names "admin" and "login" (see variables.tf), and a duplicate path_pattern
+  # would fail the for_each below with a duplicate-key error rather than
+  # silently shadowing a route.
+  ordered_cache_behaviors = concat(
+    [for p in local.portal_cache_behaviors : {
+      path_pattern     = p
+      target_origin_id = "S3-${var.portal_bucket_name}"
+    }],
+    [for b in local.sibling_cache_behaviors : {
+      path_pattern     = b.path_pattern
+      target_origin_id = "sibling-${b.name}"
+    }],
+  )
 }
 
 # Rewrites clean URLs to their index.html equivalents so Next.js static export
@@ -163,6 +206,21 @@ resource "aws_cloudfront_distribution" "portal" {
     }
   }
 
+  # The ROOT behavior — reserved for the user-application sibling (issue #306).
+  #
+  # CloudFront requires exactly one default_cache_behavior and it must name an
+  # origin that exists, so until the root sibling is created and registered
+  # there is nothing else to point it at: it stays on the portal bucket. That is
+  # a placeholder target, not the portal serving root. The portal's landing page
+  # is gone, so `/` rewrites to /index.html, S3 has no such object, and the
+  # request 404s — which is the accepted outcome (issue #306, decision 3: "`/`
+  # may 404 between init and the sibling's first deploy; the window is short and
+  # a 404 is honest"). A 404 at `/` is fine; a distribution that fails to apply
+  # because its default behavior names a non-existent origin is not.
+  #
+  # When the root sibling lands, this target_origin_id becomes its
+  # "sibling-<name>" origin and nothing else in this file needs to change — the
+  # portal already has its own explicit behaviors above.
   default_cache_behavior {
     allowed_methods        = ["GET", "HEAD", "OPTIONS"]
     cached_methods         = ["GET", "HEAD"]
@@ -185,22 +243,26 @@ resource "aws_cloudfront_distribution" "portal" {
     }
   }
 
-  # Two ordered_cache_behaviors per sibling (see local.sibling_cache_behaviors)
-  # — the exact bare name and the "<name>/*" wildcard — so both
-  # baseurl.com/<name> and baseurl.com/<name>/* route to that sibling's own
-  # origin instead of falling through to default_cache_behavior (the
-  # portal). CloudFront evaluates ordered_cache_behavior blocks in list
-  # order before default_cache_behavior, most-specific-first — for_each's
-  # stable per-key ordering here is fine since path_pattern values are
-  # disjoint (no two siblings share a name), so behavior evaluation order
-  # between siblings never matters, only that each is more specific than "*".
+  # Two ordered_cache_behaviors per routed prefix (see
+  # local.ordered_cache_behaviors) — the exact bare name and the "<name>/*"
+  # wildcard — so both baseurl.com/<name> and baseurl.com/<name>/* reach that
+  # prefix's own origin instead of falling through to default_cache_behavior
+  # (the root). This now covers the PORTAL's own admin/login prefixes as well as
+  # every sibling's; the portal is no longer the default.
+  #
+  # CloudFront evaluates ordered_cache_behavior blocks in list order before
+  # default_cache_behavior, most-specific-first — for_each's stable per-key
+  # ordering here is fine since path_pattern values are disjoint (no two
+  # siblings share a name, and "admin"/"login" are reserved against siblings),
+  # so evaluation order between them never matters, only that each is more
+  # specific than "*".
   dynamic "ordered_cache_behavior" {
-    for_each = { for b in local.sibling_cache_behaviors : b.path_pattern => b }
+    for_each = { for b in local.ordered_cache_behaviors : b.path_pattern => b }
     content {
       path_pattern           = ordered_cache_behavior.value.path_pattern
       allowed_methods        = ["GET", "HEAD", "OPTIONS"]
       cached_methods         = ["GET", "HEAD"]
-      target_origin_id       = "sibling-${ordered_cache_behavior.value.name}"
+      target_origin_id       = ordered_cache_behavior.value.target_origin_id
       viewer_protocol_policy = "redirect-to-https"
       compress               = true
 

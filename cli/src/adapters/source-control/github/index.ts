@@ -598,6 +598,73 @@ export class GitHubAdapter {
   }
 
   /**
+   * Does this repository exist (and is it visible to our token)?
+   *
+   * Used by `biffo teardown` to tell "sibling registered, repo since deleted"
+   * apart from "sibling repo still live", which decide different teardown paths.
+   */
+  async repoExists(org: string, repo: string): Promise<boolean> {
+    try {
+      await this.octokit.repos.get({ owner: org, repo })
+      return true
+    } catch (err: unknown) {
+      if ((err as { status?: number }).status === 404) return false
+      throw err
+    }
+  }
+
+  /**
+   * Read a file's contents from a repo at `ref` (default branch when omitted),
+   * or `null` if it isn't there. Reads from GitHub rather than a local checkout
+   * deliberately: teardown must work from any machine, including one that never
+   * cloned the project.
+   */
+  async getFileContent(
+    org: string,
+    repo: string,
+    path: string,
+    ref?: string,
+  ): Promise<string | null> {
+    try {
+      const { data } = await this.octokit.repos.getContent({
+        owner: org,
+        repo,
+        path,
+        ...(ref ? { ref } : {}),
+      })
+      // A directory comes back as an array, and a file over 1 MB comes back with
+      // an empty `content`; neither is a file we can read here.
+      if (Array.isArray(data) || !('content' in data) || typeof data.content !== 'string') {
+        return null
+      }
+      return Buffer.from(data.content, 'base64').toString('utf8')
+    } catch (err: unknown) {
+      if ((err as { status?: number }).status === 404) return null
+      throw err
+    }
+  }
+
+  /**
+   * Head branch names of the repo's open pull requests.
+   *
+   * Teardown uses this to spot siblings whose registration PR has not merged
+   * yet (branch `biffo/register-sibling-<name>`) — they exist as real repos and
+   * real AWS resources, but nothing has landed in the merged registry.
+   */
+  async listOpenPullRequests(
+    org: string,
+    repo: string,
+  ): Promise<Array<{ number: number; headRef: string }>> {
+    const prs = await this.octokit.paginate(this.octokit.pulls.list, {
+      owner: org,
+      repo,
+      state: 'open',
+      per_page: 100,
+    })
+    return prs.map((pr) => ({ number: pr.number, headRef: pr.head.ref }))
+  }
+
+  /**
    * Read a repository Actions variable's value, or `undefined` if it isn't set.
    * A 404 means the variable doesn't exist on the repo (not an error) — used to
    * probe a source repo for an optional variable before mirroring it elsewhere.

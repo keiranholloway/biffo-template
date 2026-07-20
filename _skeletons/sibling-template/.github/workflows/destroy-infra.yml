@@ -1,0 +1,74 @@
+# Counterpart to deploy.yml, and the mechanism `biffo teardown` drives when the
+# core project it belongs to is torn down (issue #306).
+#
+# Without this workflow a sibling's own AWS resources — its S3 site bucket, its
+# Lambda, its API Gateway, its log groups — survive the core project's teardown
+# and keep billing, silently. `biffo teardown` pre-flights every registered
+# sibling for this file and refuses to start if one is missing, rather than
+# discovering it half way through and leaving a partially destroyed instance.
+#
+# Same single-dynamic-environment shape as deploy.yml (one job per phase, not
+# one job per environment), and the TF_VARs below must stay in step with
+# deploy.yml's `terraform apply` — a destroy run with different variables can
+# fail to resolve the very resources it is meant to remove.
+name: Destroy Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to destroy
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+
+permissions:
+  id-token: write
+  contents: read
+
+# Never cancel in flight: a half-run `terraform destroy` is worse than a slow one.
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  TERRAFORM_VERSION: '~> 1.9'
+
+jobs:
+  destroy:
+    name: Destroy (${{ inputs.environment }})
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    environment: ${{ inputs.environment }}
+    if: vars.SIBLING_DEPLOY_ENABLED == 'true'
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.SIBLING_OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Generate backend config
+        run: |
+          cat > backend.hcl << 'EOF'
+          bucket = "${{ vars.TF_STATE_BUCKET }}"
+          key    = "${{ inputs.environment }}/terraform.tfstate"
+          region = "${{ vars.AWS_REGION || 'us-east-1' }}"
+          EOF
+      - run: terraform init -backend-config=backend.hcl
+      - run: terraform destroy -auto-approve
+        env:
+          TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
+          TF_VAR_environment: ${{ inputs.environment }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          TF_VAR_core_cognito_user_pool_id: ${{ vars.CORE_COGNITO_USER_POOL_ID }}
+          TF_VAR_core_cognito_client_id: ${{ vars.CORE_COGNITO_CLIENT_ID }}
+          TF_VAR_core_api_url: ${{ vars.CORE_API_URL }}
+          TF_VAR_core_portal_url: ${{ vars.CORE_PORTAL_URL }}
+          TF_VAR_cors_origins: ${{ vars.CORS_ORIGINS_JSON || '["http://localhost:3000"]' }}
+          TF_VAR_parent_cloudfront_distribution_arn:
+            ${{ vars.PARENT_CLOUDFRONT_DISTRIBUTION_ARN || '' }}

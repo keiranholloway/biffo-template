@@ -16,6 +16,18 @@ import {
   loadProjectConfig,
   loadSession,
 } from '../lib/session.js'
+import {
+  collectSiblings,
+  parseRegistry,
+  registryPath,
+  resolveSiblingRepos,
+  REGISTRATION_BRANCH_PREFIX,
+  REGISTRY_ENVIRONMENTS,
+  SiblingResolutionError,
+  type DiscoveredSibling,
+  type ResolvedSibling,
+  type SiblingOriginEntry,
+} from '../lib/sibling-teardown.js'
 
 export const teardownCommand = new Command('teardown')
   .description(
@@ -156,6 +168,26 @@ export const teardownCommand = new Command('teardown')
       const deployedEnvs = allDeployed.filter((e) => e !== 'global')
       const hasGlobal = allDeployed.includes('global')
 
+      // Discover siblings (ADR-0007, issue #306) BEFORE the confirmation, so the
+      // list below is the whole blast radius. Discovery reads the core repo, so
+      // it must happen while that repo still exists. A resolution failure aborts
+      // here, with nothing yet deleted.
+      let siblings: ResolvedSibling[] = []
+      if (org && repo) {
+        try {
+          siblings = await discoverSiblings(github, org, repo, projectName)
+          if (!options.skipDestroy) {
+            await assertSiblingsAreDestroyable(github, siblings)
+          }
+        } catch (err) {
+          if (err instanceof SiblingResolutionError) {
+            log.error(err.message)
+            process.exit(1)
+          }
+          throw err
+        }
+      }
+
       // Show everything that will be deleted in one confirmation
       console.log(chalk.red.bold('  This will permanently delete:\n'))
       if (deployedEnvs.length > 0 || hasGlobal) {
@@ -170,6 +202,9 @@ export const teardownCommand = new Command('teardown')
         }
         console.log()
       }
+      for (const line of formatSiblingPlan(siblings, options.skipDestroy === true)) {
+        console.log(line)
+      }
       console.log(chalk.red('  Biffo resources:'))
       console.log(`    ${chalk.red('✗')} GitHub repository  ${chalk.bold(`${org}/${repo}`)}`)
       console.log(
@@ -179,11 +214,48 @@ export const teardownCommand = new Command('teardown')
         `    ${chalk.red('✗')} S3 bucket          ${chalk.bold(stateBucket)} (all versions)`,
       )
       console.log(`    ${chalk.red('✗')} Local session file`)
+      if (options.skipDestroy) {
+        console.log()
+        console.log(
+          chalk.yellow(
+            '  --skip-destroy: NO terraform destroy runs, for this project or any sibling.\n' +
+              '  Everything above is deleted, but any infrastructure still standing is left\n' +
+              '  standing — and, with the state buckets gone, orphaned.',
+          ),
+        )
+      }
       console.log()
 
       if (!(await confirmTeardown(projectName, options))) {
         log.warn('Teardown cancelled — project name did not match')
         return
+      }
+
+      // ── Destroy order ──────────────────────────────────────────────────────
+      //
+      //   1. sibling infrastructure   (here)
+      //   2. core per-env infrastructure
+      //   3. core global infrastructure
+      //   4. sibling repos + their IAM roles + their state buckets
+      //   5. core repo + IAM role + state bucket
+      //
+      // Siblings are destroyed FIRST because the dependency runs sibling → core,
+      // not the other way round: a sibling's S3 bucket policy grants read to the
+      // core's CloudFront distribution ARN, and the core's distribution carries
+      // an origin and two ordered cache behaviours per sibling. Destroying the
+      // core first would delete the distribution out from under every sibling
+      // bucket policy that references it, and take the registry (which lives in
+      // the core repo) with it — leaving siblings that nothing can any longer
+      // enumerate.
+      //
+      // It also fails in the safer direction. Sibling destroys are the more
+      // likely to fail, and failing while the core is still intact leaves a
+      // recoverable instance rather than the half-destroyed one #280 produced.
+      //
+      // Repos are deleted only after every destroy has succeeded (steps 4-5),
+      // because the repo is what runs its own destroy workflow.
+      if (!options.skipDestroy && siblings.length > 0) {
+        await destroySiblingInfrastructure(github, siblings)
       }
 
       // Trigger destroy workflows before deleting the repo — the repo must still exist
@@ -263,7 +335,46 @@ export const teardownCommand = new Command('teardown')
         }
       }
 
-      // All infrastructure gone — now safe to delete the repo and supporting resources
+      // All infrastructure gone — now safe to delete repos and supporting resources.
+      // Siblings before the core, mirroring the destroy order above.
+      for (const sibling of siblings) {
+        if (sibling.repoState === 'gone') {
+          // No repo means no way to have run its destroy workflow, so its AWS
+          // resources are still live. Its Terraform state is the only remaining
+          // map of what those resources are — deleting the state bucket here
+          // would turn a recoverable orphan into an unrecoverable one, so both
+          // it and the IAM role are deliberately left in place.
+          log.warn(
+            `Sibling "${sibling.pathPrefix}" (${sibling.org}/${sibling.repo}) no longer has a ` +
+              'repo — leaving its IAM role and Terraform state bucket in place so its ' +
+              'infrastructure can still be reclaimed:\n' +
+              `    IAM role   biffo-github-actions-${sibling.projectName}\n` +
+              `    S3 bucket  ${sibling.projectName}-terraform-state-${sibling.accountId}`,
+          )
+          continue
+        }
+
+        await github.deleteRepo(sibling.org, sibling.repo).catch((err) => {
+          log.warn(
+            `Could not delete sibling repo ${sibling.org}/${sibling.repo} (skipping): ` +
+              `${(err as Error).message}`,
+          )
+        })
+        await aws.teardownOidcRole(sibling.projectName).catch((err) => {
+          log.warn(
+            `Could not delete sibling IAM role for ${sibling.projectName} (skipping): ` +
+              `${(err as Error).message}`,
+          )
+        })
+        await aws.teardownTerraformBackend(sibling.projectName).catch((err) => {
+          log.warn(
+            `Could not delete sibling state bucket for ${sibling.projectName} (skipping): ` +
+              `${(err as Error).message}`,
+          )
+        })
+        log.success(`Sibling ${sibling.org}/${sibling.repo} removed`)
+      }
+
       await github.deleteRepo(org, repo).catch((err) => {
         log.warn(`Could not delete repo (skipping): ${(err as Error).message}`)
       })
@@ -283,6 +394,229 @@ export const teardownCommand = new Command('teardown')
       console.log('  All biffo resources have been removed.\n')
     },
   )
+
+// ─── Siblings (issue #306) ───────────────────────────────────────────────────
+
+/**
+ * Run each live sibling's own `destroy-infra.yml`, one environment at a time.
+ *
+ * A sibling deploys and destroys through its own repo's workflow and its own
+ * OIDC role (ADR-0007) — the core project has no credentials for the sibling's
+ * resources, so this is the only route. `assertSiblingsAreDestroyable` has
+ * already proved the workflow exists on every repo reached here.
+ *
+ * A failure aborts the whole teardown while the core is still intact, rather
+ * than pressing on and orphaning the sibling behind a distribution that is
+ * about to be deleted.
+ */
+async function destroySiblingInfrastructure(
+  github: GitHubAdapter,
+  siblings: ResolvedSibling[],
+): Promise<void> {
+  for (const sibling of siblings) {
+    if (sibling.repoState !== 'present') continue
+    const actionsUrl = `https://github.com/${sibling.org}/${sibling.repo}/actions`
+
+    for (const env of sibling.environments) {
+      const envBranch: Record<string, string> = { dev: 'dev', staging: 'staging', prod: 'main' }
+      const branch = envBranch[env] ?? 'dev'
+
+      log.info(`\nDestroying sibling ${sibling.org}/${sibling.repo} (${env})...`)
+      log.info(`  Watch live: ${actionsUrl}`)
+
+      const baselineId = await github.getLatestWorkflowRunId(
+        sibling.org,
+        sibling.repo,
+        SIBLING_DESTROY_WORKFLOW,
+      )
+      await github.triggerWorkflow(
+        sibling.org,
+        sibling.repo,
+        SIBLING_DESTROY_WORKFLOW,
+        { environment: env },
+        branch,
+      )
+      const result = await github.waitForWorkflowRun(
+        sibling.org,
+        sibling.repo,
+        SIBLING_DESTROY_WORKFLOW,
+        baselineId,
+        3_600_000,
+        30_000,
+        branch,
+      )
+
+      if (result.conclusion !== 'success') {
+        log.error(
+          `Sibling destroy ${result.conclusion ?? 'failed'} for ` +
+            `${sibling.org}/${sibling.repo} (${env}).`,
+        )
+        log.error(`  Run details: ${actionsUrl}/runs/${result.id}`)
+        log.error(
+          '  Nothing else has been destroyed or deleted — this project and every other sibling ' +
+            'are still intact.\n' +
+            '  Fix the sibling and re-run biffo teardown, or use --skip-destroy.',
+        )
+        process.exit(1)
+      }
+
+      log.success(`Sibling ${sibling.org}/${sibling.repo} (${env}) infrastructure destroyed`)
+    }
+  }
+}
+
+/** The workflow a sibling repo must ship for teardown to be able to destroy it. */
+export const SIBLING_DESTROY_WORKFLOW = 'destroy-infra.yml'
+const SIBLING_DESTROY_WORKFLOW_PATH = `.github/workflows/${SIBLING_DESTROY_WORKFLOW}`
+
+/** The GitHub surface sibling discovery needs. Narrow, so tests can fake it. */
+export interface SiblingDiscoveryGithub {
+  repoExists(org: string, repo: string): Promise<boolean>
+  getFileContent(org: string, repo: string, path: string, ref?: string): Promise<string | null>
+  listOpenPullRequests(
+    org: string,
+    repo: string,
+  ): Promise<Array<{ number: number; headRef: string }>>
+}
+
+/**
+ * Find every sibling of this core project, from the core repo on GitHub.
+ *
+ * Two sources, because neither alone is complete (see lib/sibling-teardown.ts
+ * for why the registry is the source of truth in the first place):
+ *
+ *   1. `infra/environments/<env>/siblings.auto.tfvars.json` on the core repo's
+ *      default branch — every sibling whose registration PR has **merged**.
+ *   2. the same files on the head ref of any open `biffo/register-sibling-*`
+ *      PR — siblings that were created (real repo, real AWS resources) but
+ *      whose registration never landed. Without this, `biffo sibling create`
+ *      followed by `biffo teardown` before merging the registration PR would
+ *      leak the entire sibling.
+ *
+ * Exported for testing.
+ */
+export async function discoverSiblings(
+  github: SiblingDiscoveryGithub,
+  coreOrg: string,
+  coreRepo: string,
+  coreProjectName: string,
+): Promise<ResolvedSibling[]> {
+  const sources: Array<{
+    environment: string
+    entries: SiblingOriginEntry[]
+    pendingRegistrationPr?: number
+  }> = []
+
+  for (const env of REGISTRY_ENVIRONMENTS) {
+    const contents = await github.getFileContent(coreOrg, coreRepo, registryPath(env))
+    sources.push({ environment: env, entries: parseRegistry(contents) })
+  }
+
+  const openPrs = await github.listOpenPullRequests(coreOrg, coreRepo)
+  for (const pr of openPrs) {
+    if (!pr.headRef.startsWith(REGISTRATION_BRANCH_PREFIX)) continue
+    for (const env of REGISTRY_ENVIRONMENTS) {
+      const contents = await github.getFileContent(
+        coreOrg,
+        coreRepo,
+        registryPath(env),
+        pr.headRef,
+      )
+      sources.push({
+        environment: env,
+        entries: parseRegistry(contents),
+        pendingRegistrationPr: pr.number,
+      })
+    }
+  }
+
+  const discovered: DiscoveredSibling[] = collectSiblings(sources)
+  return resolveSiblingRepos(github, coreOrg, coreProjectName, discovered)
+}
+
+/**
+ * Pre-flight, run **before** the confirmation and before anything is destroyed.
+ *
+ * A sibling can only be destroyed by its own repo's `destroy-infra.yml`, and
+ * siblings created before that workflow shipped don't have one. Discovering
+ * that half way through — after the core's CloudFront distribution is already
+ * gone — is exactly the half-destroyed-instance failure of #280. So check every
+ * live sibling up front and refuse to start, naming what to do.
+ *
+ * Exported for testing.
+ */
+export async function assertSiblingsAreDestroyable(
+  github: SiblingDiscoveryGithub,
+  siblings: ResolvedSibling[],
+): Promise<void> {
+  const missing: string[] = []
+  for (const sibling of siblings) {
+    if (sibling.repoState !== 'present') continue
+    const workflow = await github.getFileContent(
+      sibling.org,
+      sibling.repo,
+      SIBLING_DESTROY_WORKFLOW_PATH,
+    )
+    if (workflow === null) missing.push(`${sibling.org}/${sibling.repo}`)
+  }
+
+  if (missing.length > 0) {
+    throw new SiblingResolutionError(
+      `These sibling repos have no ${SIBLING_DESTROY_WORKFLOW_PATH}, so their AWS resources ` +
+        'cannot be destroyed:\n' +
+        missing.map((r) => `    ${r}`).join('\n') +
+        '\n  Nothing has been deleted. Either add that workflow to each repo (copy it from ' +
+        "biffo's sibling skeleton), destroy those siblings by hand, or re-run with " +
+        '--skip-destroy to delete the repos and leave their infrastructure standing.',
+    )
+  }
+}
+
+/**
+ * The sibling section of the single confirmation prompt.
+ *
+ * Every repo that is about to be deleted is named here, explicitly — a user
+ * must be able to read the full blast radius before typing anything.
+ *
+ * Exported for testing.
+ */
+export function formatSiblingPlan(siblings: ResolvedSibling[], skipDestroy: boolean): string[] {
+  if (siblings.length === 0) return []
+
+  const lines = [chalk.red(`  Sibling apps (${siblings.length}) — ADR-0007:`)]
+  for (const s of siblings) {
+    const envs = s.environments.join(', ')
+    if (s.repoState === 'gone') {
+      lines.push(
+        `    ${chalk.yellow('!')} ${chalk.bold(`${s.org}/${s.repo}`)} — repo already deleted; ` +
+          `its ${envs} infrastructure CANNOT be destroyed and will be left standing`,
+      )
+      continue
+    }
+    lines.push(
+      `    ${chalk.red('✗')} GitHub repository  ${chalk.bold(`${s.org}/${s.repo}`)} ` +
+        `(routed at /${s.pathPrefix})`,
+    )
+    lines.push(
+      `      ${chalk.red('✗')} ${skipDestroy ? 'infrastructure NOT destroyed (--skip-destroy)' : `${envs} infrastructure — S3 site bucket, Lambda, API Gateway`}`,
+    )
+    lines.push(
+      `      ${chalk.red('✗')} IAM role           ${chalk.bold(`biffo-github-actions-${s.projectName}`)}`,
+    )
+    lines.push(
+      `      ${chalk.red('✗')} S3 bucket          ${chalk.bold(`${s.projectName}-terraform-state-${s.accountId}`)}`,
+    )
+    if (s.pendingRegistrationPr !== undefined) {
+      lines.push(
+        chalk.dim(
+          `      registration PR #${s.pendingRegistrationPr} is still open — never routed`,
+        ),
+      )
+    }
+  }
+  lines.push('')
+  return lines
+}
 
 /**
  * Pick the saved project config when no `--project` was given.

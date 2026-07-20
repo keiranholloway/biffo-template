@@ -136,9 +136,23 @@ jobs:
           # stdout precedes it. --silent only quiets npm itself, not the hooks it
           # runs. Belt and braces with sync-core-version.mjs now logging to stderr.
           tarball="$(npm pack --silent | tail -n1)"
-          if ! tar -tzf "$tarball" | grep -qx 'package/core.version'; then
+
+          # List the tarball ONCE into a file, then grep the file.
+          #
+          # Not a style preference — `tar -tzf … | grep -q …` is a live trap
+          # under `set -o pipefail`. `grep -q` exits the moment it matches,
+          # closing the pipe; tar then dies of SIGPIPE (141) and pipefail
+          # promotes that to the pipeline's status. The result is a check that
+          # reports "missing" for a file that is *present*, and it fires only
+          # once the listing outgrows the pipe buffer — so it stayed dormant
+          # while the tarball was small and broke the 0.40.0 publish the moment
+          # _skeletons/ (70 files) landed. See AGENTS.md §4 on pipe exit status.
+          listing="$(mktemp)"
+          tar -tzf "$tarball" > "$listing"
+
+          if ! grep -qx 'package/core.version' "$listing"; then
             echo "::error::Packed tarball is missing core.version — refusing to publish."
-            tar -tzf "$tarball"
+            cat "$listing"
             exit 1
           fi
           packed="$(tar -xzOf "$tarball" package/core.version | tr -d '[:space:]')"
@@ -157,15 +171,17 @@ jobs:
             'package/_skeletons/plugin-template/biffo.plugin.json' \
             'package/_skeletons/sibling-template/_gitignore'
           do
-            if ! tar -tzf "$tarball" | grep -qx "$required"; then
+            if ! grep -qx "$required" "$listing"; then
               echo "::error::Packed tarball is missing $required — refusing to publish."
-              tar -tzf "$tarball" | grep '_skeletons' || echo "(no _skeletons entries at all)"
+              grep '_skeletons' "$listing" || echo "(no _skeletons entries at all)"
               exit 1
             fi
           done
-          skeleton_files="$(tar -tzf "$tarball" | grep -c '^package/_skeletons/')"
+          # grep -c exits 1 on zero matches, which `set -e` would treat as fatal
+          # before the count could be reported; `|| true` keeps the message.
+          skeleton_files="$(grep -c '^package/_skeletons/' "$listing" || true)"
           echo "OK: tarball ships _skeletons ($skeleton_files entries)"
-          rm -f "$tarball"
+          rm -f "$tarball" "$listing"
 
       # Fails loudly (not silently) when NPM_TOKEN is absent, so a release that
       # cannot authenticate is a red run rather than a green no-op.

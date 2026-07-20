@@ -13,6 +13,19 @@ import { parseGitHubRepo } from '../lib/core-upgrade.js'
 import { resolveGithubToken } from '../lib/credentials.js'
 import { log } from '../lib/logger.js'
 import { resolveRepoIds } from '../lib/oidc.js'
+import {
+  basePathFor,
+  bucketRegionalDomain,
+  displayPath,
+  isRootPathPrefix,
+  registryNameFor,
+  RESERVED_SIBLING_NAMES,
+  ROOT_SIBLING_NAME,
+  serializeRegistry,
+  siteBucketName,
+  upsertSiblingOrigin,
+  type SiblingOrigin,
+} from '../lib/root-sibling.js'
 import { loadProjectConfig } from '../lib/session.js'
 import {
   deleteSiblingSession,
@@ -30,12 +43,24 @@ export const siblingCreateCommand = new Command('create')
   .argument('<name>', 'Sibling name; must match config.project.name')
   .requiredOption('-c, --config <path>', 'Path to a pre-filled biffo.sibling.json')
   .option('--template <path>', 'Path to sibling template (defaults to the bundled skeleton)')
+  .option(
+    '--root',
+    `Create this sibling as the ROOT application: it serves "/" (empty path prefix) and takes the ` +
+      `core distribution's default cache behaviour. Registered under the reserved name "${ROOT_SIBLING_NAME}". ` +
+      '`biffo init` does this for you; use this flag only to re-create a root sibling by hand.',
+  )
   .option('--dry-run', 'Validate config and print planned changes without creating anything')
   .option('--fresh', 'Ignore any saved session and start from scratch')
   .action(
     async (
       name: string,
-      options: { config: string; template?: string; dryRun?: boolean; fresh?: boolean },
+      options: {
+        config: string
+        template?: string
+        root?: boolean
+        dryRun?: boolean
+        fresh?: boolean
+      },
     ) => {
       try {
         // This command creates real GitHub repos and AWS resources; never let it
@@ -44,6 +69,7 @@ export const siblingCreateCommand = new Command('create')
         await runSiblingCreateCommand(name, {
           configPath: resolve(options.config),
           templateRoot: options.template ? resolve(options.template) : defaultSiblingTemplateRoot(),
+          root: options.root === true,
           dryRun: options.dryRun === true,
           fresh: options.fresh === true,
         })
@@ -57,6 +83,7 @@ export const siblingCreateCommand = new Command('create')
 interface CommandOptions {
   configPath: string
   templateRoot: string
+  root: boolean
   dryRun: boolean
   fresh: boolean
 }
@@ -64,12 +91,13 @@ interface CommandOptions {
 async function runSiblingCreateCommand(name: string, options: CommandOptions): Promise<void> {
   console.log(chalk.bold('\n  Biffo — Sibling App Creator\n'))
 
-  const config = readSiblingConfig(options.configPath)
+  const config = readSiblingConfig(options.configPath, options.root)
   if (config.project.name !== name) {
     throw new Error(
       `Sibling name '${name}' does not match config project.name '${config.project.name}'.`,
     )
   }
+  assertPathPrefixIsAllowed(resolvePathPrefix(config))
 
   const coreConfig = resolveCoreConfig(config, options.configPath)
 
@@ -120,11 +148,11 @@ async function runSiblingCreateCommand(name: string, options: CommandOptions): P
   })
 
   const { org, repo } = githubRepo(config)
-  const pathPrefix = config.core.path_prefix ?? config.project.name
+  const pathPrefix = resolvePathPrefix(config)
 
   log.success('\nSibling repo created successfully!')
   console.log(`\n  Repository: https://github.com/${org}/${repo}`)
-  console.log(`  Path:       /${pathPrefix}`)
+  console.log(`  Path:       ${displayPath(pathPrefix)}`)
   if (session.outputs.registrationPrUrl) {
     console.log(
       `  Registration PR (against ${coreConfig.project.name}): ${session.outputs.registrationPrUrl}`,
@@ -132,7 +160,7 @@ async function runSiblingCreateCommand(name: string, options: CommandOptions): P
   }
   console.log(
     '\n  Next steps:\n' +
-      `  1. Merge the registration PR above — until it merges, baseurl.com/${pathPrefix} won't route anywhere.\n` +
+      `  1. Merge the registration PR above — until it merges, baseurl.com${displayPath(pathPrefix)} won't route anywhere.\n` +
       '  2. Add a SIBLING_GITHUB_TOKEN secret to this new repo (a PAT with repo scope) — needed by its\n' +
       '     deploy workflow to export Terraform outputs as environment variables, same as the core project.\n' +
       "  3. Push to `dev` (or run the Deploy workflow manually) to provision this sibling's own AWS resources.\n" +
@@ -174,7 +202,7 @@ export async function runSiblingCreate(
 ): Promise<void> {
   const totalSteps = 7
   const { org, repo } = githubRepo(config)
-  const pathPrefix = config.core.path_prefix ?? config.project.name
+  const pathPrefix = resolvePathPrefix(config)
 
   // Step 1: Verify AWS credentials
   if (!session.completedSteps.includes('verify_credentials')) {
@@ -279,7 +307,41 @@ export async function runSiblingCreate(
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-function readSiblingConfig(path: string): SiblingConfig {
+/**
+ * The routing prefix this sibling serves under. `''` means the root sibling
+ * (issue #306) — note `??`, not `||`: an empty prefix is a real, deliberate
+ * value and must not fall back to the project name.
+ */
+export function resolvePathPrefix(config: SiblingConfig): string {
+  return config.core.path_prefix ?? config.project.name
+}
+
+/**
+ * Reject a non-root sibling trying to claim a reserved prefix.
+ *
+ * `admin` and `login` are the portal's own CloudFront path patterns and `app`
+ * is the root sibling's reserved registry name. Claiming any of them produces
+ * a duplicate `path_pattern` (or a duplicate `sibling_origins` key) and the
+ * apply fails with an opaque duplicate-key error a long way from the cause —
+ * `modules/cloud/aws/cdn/variables.tf` rejects it too, but by then a repo and
+ * an IAM role already exist. Fail here, before anything is created.
+ */
+export function assertPathPrefixIsAllowed(pathPrefix: string): void {
+  if (isRootPathPrefix(pathPrefix)) return
+  if ((RESERVED_SIBLING_NAMES as readonly string[]).includes(pathPrefix)) {
+    const extra =
+      pathPrefix === ROOT_SIBLING_NAME
+        ? ` "${ROOT_SIBLING_NAME}" is the root application sibling, which \`biffo init\` creates; ` +
+          'pass --root to create one by hand.'
+        : ` "${pathPrefix}" is one of the portal's own routes.`
+    throw new Error(
+      `Sibling path prefix "${pathPrefix}" is reserved (${RESERVED_SIBLING_NAMES.join(', ')}).` +
+        extra,
+    )
+  }
+}
+
+function readSiblingConfig(path: string, root = false): SiblingConfig {
   const raw = JSON.parse(readFileSync(path, 'utf8'))
   const withDefaults =
     raw && typeof raw === 'object' && 'project' in raw && 'core' in raw
@@ -287,9 +349,13 @@ function readSiblingConfig(path: string): SiblingConfig {
           ...raw,
           core: {
             ...(raw as { core: Record<string, unknown> }).core,
-            path_prefix:
-              (raw as { core: { path_prefix?: unknown } }).core.path_prefix ??
-              (raw as { project: { name?: unknown } }).project.name,
+            // --root wins over whatever the file says: it is the whole point of
+            // the flag, and a config carrying a stale non-empty prefix would
+            // otherwise silently produce a path-routed sibling instead.
+            path_prefix: root
+              ? ''
+              : ((raw as { core: { path_prefix?: unknown } }).core.path_prefix ??
+                (raw as { project: { name?: unknown } }).project.name),
           },
         }
       : raw
@@ -393,7 +459,7 @@ async function pushSkeleton(
   try {
     writeSiblingTemplate(skeletonRoot, workDir, config, {
       coreProjectName: coreConfig.project.name,
-      pathPrefix: config.core.path_prefix ?? config.project.name,
+      pathPrefix: resolvePathPrefix(config),
     })
     await git.init(workDir, 'main')
     await git.addRemote(workDir, 'origin', cloneUrl)
@@ -444,7 +510,9 @@ export function writeSiblingTemplate(
 
   const envPath = join(targetDir, 'apps', 'frontend', '.env.example')
   try {
-    const path = `/${context.pathPrefix}`
+    // `basePathFor`, not `/${prefix}` — the root sibling's basePath is the
+    // empty string, and Next.js refuses to build with a basePath of "/".
+    const path = basePathFor(context.pathPrefix)
     const content = readFileSync(envPath, 'utf8')
       .replace(/^NEXT_PUBLIC_SIBLING_NAME=.*$/m, `NEXT_PUBLIC_SIBLING_NAME=${config.project.name}`)
       .replace(/^NEXT_PUBLIC_SIBLING_PATH_PREFIX=.*$/m, `NEXT_PUBLIC_SIBLING_PATH_PREFIX=${path}`)
@@ -487,12 +555,11 @@ async function configureSiblingGithub(
   // invalidation paths must all use this, not PROJECT_NAME, or the built
   // site ends up uploaded/rewritten under a prefix CloudFront never
   // routes to.
-  await github.setRepoVariable(
-    org,
-    repo,
-    'PATH_PREFIX',
-    config.core.path_prefix ?? config.project.name,
-  )
+  // Empty for the root sibling. The skeleton's deploy.yml treats an empty
+  // PATH_PREFIX as "serve from the bucket root" throughout (basePath, S3 sync
+  // destination, CloudFront invalidation) rather than producing "/", "//" and
+  // "//*", each of which is wrong in its own way.
+  await github.setRepoVariable(org, repo, 'PATH_PREFIX', resolvePathPrefix(config))
   await github.setRepoVariable(org, repo, 'AWS_REGION', awsConfig(config).region)
   await github.setRepoVariable(org, repo, 'SIBLING_DEPLOY_ENABLED', 'true')
 
@@ -559,19 +626,6 @@ async function configureSiblingGithub(
   }
 }
 
-/** AWS's S3 virtual-hosted-style regional domain — us-east-1 uses the legacy
- * global endpoint form, every other region includes the region in the host. */
-function bucketRegionalDomain(bucketName: string, region: string): string {
-  return region === 'us-east-1'
-    ? `${bucketName}.s3.amazonaws.com`
-    : `${bucketName}.s3.${region}.amazonaws.com`
-}
-
-/** Matches modules/cloud/aws/storage/main.tf's local.site_bucket naming. */
-function siteBucketName(projectName: string, environment: string, accountId: string): string {
-  return `${projectName}-${environment}-site-${accountId}`
-}
-
 /**
  * Reads siblings.auto.tfvars.json if present. Reads directly and catches
  * ENOENT rather than checking existsSync first — an existence check
@@ -579,23 +633,9 @@ function siteBucketName(projectName: string, environment: string, accountId: str
  * in between), even though in practice nothing else touches this freshly
  * cloned temp directory.
  */
-function readExistingSiblingOrigins(filePath: string): {
-  sibling_origins?: Array<{
-    name: string
-    bucket_regional_domain: string
-    description?: string
-    routes?: Array<{ path: string; label: string }>
-  }>
-} {
+function readExistingSiblingOrigins(filePath: string): { sibling_origins?: SiblingOrigin[] } {
   try {
-    return JSON.parse(readFileSync(filePath, 'utf8')) as {
-      sibling_origins?: Array<{
-        name: string
-        bucket_regional_domain: string
-        description?: string
-        routes?: Array<{ path: string; label: string }>
-      }>
-    }
+    return JSON.parse(readFileSync(filePath, 'utf8')) as { sibling_origins?: SiblingOrigin[] }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {}
     throw err
@@ -612,7 +652,11 @@ function readExistingSiblingOrigins(filePath: string): {
  * capability directly (rather than inferring from a version number that can
  * drift) and fail with an actionable message before writing anything.
  */
-function assertCoreSupportsSiblingRouting(cloneDir: string, coreRepo: string): void {
+export function assertCoreSupportsSiblingRouting(
+  cloneDir: string,
+  coreRepo: string,
+  pathPrefix = 'x',
+): void {
   const cdnVarsPath = join(cloneDir, 'modules', 'cloud', 'aws', 'cdn', 'variables.tf')
   let declaresSiblingOrigins = false
   try {
@@ -625,6 +669,28 @@ function assertCoreSupportsSiblingRouting(cloneDir: string, coreRepo: string): v
       `The core project "${coreRepo}" doesn't support sibling CDN routing yet ` +
         `(its modules/cloud/aws/cdn predates ADR-0007). Run \`biffo core upgrade\` ` +
         `against it first, then re-run \`biffo sibling create\`.`,
+    )
+  }
+
+  // The root sibling needs strictly more than sibling routing: it needs a core
+  // whose default_cache_behavior follows the "app" origin (issue #306). An
+  // older core would merge the registration cleanly, gain the origin, and
+  // route nothing to it — the same silent failure this function already exists
+  // to prevent, one layer up.
+  if (!isRootPathPrefix(pathPrefix)) return
+  const cdnMainPath = join(cloneDir, 'modules', 'cloud', 'aws', 'cdn', 'main.tf')
+  let supportsRoot = false
+  try {
+    supportsRoot = /root_sibling_registered/.test(readFileSync(cdnMainPath, 'utf8'))
+  } catch {
+    supportsRoot = false
+  }
+  if (!supportsRoot) {
+    throw new Error(
+      `The core project "${coreRepo}" doesn't support a ROOT application sibling yet ` +
+        `(its modules/cloud/aws/cdn default_cache_behavior still can't follow the ` +
+        `"${ROOT_SIBLING_NAME}" origin — issue #306). Run \`biffo core upgrade\` against it ` +
+        `first, then re-run with --root.`,
     )
   }
 }
@@ -650,8 +716,14 @@ async function registerWithCore(
     `biffo-sibling-register-${config.project.name}`,
     githubToken,
   )
+  // The registry key. NEVER the path prefix directly: the root sibling's
+  // prefix is "" and an empty `sibling_origins[].name` would make it
+  // undiscoverable to teardown's collectSiblings() — a leaked repo, a leaked
+  // bucket, and a bill (lib/root-sibling.ts).
+  const name = registryNameFor(pathPrefix)
+
   try {
-    assertCoreSupportsSiblingRouting(cloneDir, coreRepo)
+    assertCoreSupportsSiblingRouting(cloneDir, coreRepo, pathPrefix)
 
     const base = await git.currentBranch(cloneDir)
     const branch = `biffo/register-sibling-${config.project.name}`.replace(/[^a-zA-Z0-9._/-]/g, '-')
@@ -665,27 +737,28 @@ async function registerWithCore(
       const filePath = join(cloneDir, relativePath)
 
       const existing = readExistingSiblingOrigins(filePath)
-      const siblings = (existing.sibling_origins ?? []).filter((s) => s.name !== pathPrefix)
       // description and routes feed the portal's Microservices tab (built into
       // siblings.json at deploy time). Both omitted when empty, to keep entries
       // lean; Terraform silently drops these extra attributes (the sibling_origins
       // variable is typed to name + bucket only), so they're display-only.
-      siblings.push({
-        name: pathPrefix,
+      const siblings = upsertSiblingOrigin(existing.sibling_origins ?? [], {
+        name,
         bucket_regional_domain: domain,
         ...(config.project.description ? { description: config.project.description } : {}),
         ...(config.project.routes.length > 0 ? { routes: config.project.routes } : {}),
       })
 
       mkdirSync(dirname(filePath), { recursive: true })
-      writeFileSync(filePath, JSON.stringify({ sibling_origins: siblings }, null, 2) + '\n')
+      writeFileSync(filePath, serializeRegistry(siblings))
       touchedFiles.push(relativePath)
     }
 
     await git.add(cloneDir, touchedFiles)
     await git.commit(
       cloneDir,
-      `infra(cdn): register sibling "${pathPrefix}" for path-based routing (ADR-0007)`,
+      isRootPathPrefix(pathPrefix)
+        ? `infra(cdn): register root application sibling "${name}" at / (ADR-0007)`
+        : `infra(cdn): register sibling "${name}" for path-based routing (ADR-0007)`,
     )
     await git.push(cloneDir, branch, { token: githubToken })
 
@@ -696,7 +769,9 @@ async function registerWithCore(
       repo,
       head: branch,
       base,
-      title: `Register sibling "${pathPrefix}" for CDN routing (ADR-0007)`,
+      title: isRootPathPrefix(pathPrefix)
+        ? `Register root application sibling "${name}" at / (ADR-0007)`
+        : `Register sibling "${name}" for CDN routing (ADR-0007)`,
       body: buildRegistrationPrBody(config, pathPrefix, touchedFiles),
     })
     return pr.url
@@ -714,8 +789,14 @@ function buildRegistrationPrBody(
   return [
     'Automated sibling registration generated by `biffo sibling create` (ADR-0007).',
     '',
-    `Adds **${org}/${repo}** to this project's CloudFront distribution as a new path-routed origin — ` +
-      `once merged and redeployed, \`baseurl.com/${pathPrefix}/*\` routes to that sibling's own S3 bucket.`,
+    isRootPathPrefix(pathPrefix)
+      ? `Adds **${org}/${repo}** to this project's CloudFront distribution as the ROOT application origin ` +
+        `(reserved name \`${ROOT_SIBLING_NAME}\`, empty path prefix) — once merged and redeployed, the ` +
+        `distribution's \`default_cache_behavior\` targets that sibling's own S3 bucket, so \`baseurl.com/\` ` +
+        'and everything not claimed by an explicit behaviour (`/admin*`, `/login*`, other siblings) routes ' +
+        "there. That includes `/_next/*`, which the portal vacated by setting `assetPrefix: '/admin'`."
+      : `Adds **${org}/${repo}** to this project's CloudFront distribution as a new path-routed origin — ` +
+        `once merged and redeployed, \`baseurl.com/${pathPrefix}/*\` routes to that sibling's own S3 bucket.`,
     '',
     `## Files changed (${touchedFiles.length})`,
     '',
@@ -732,12 +813,17 @@ function buildRegistrationPrBody(
 
 function printDryRun(config: SiblingConfig, coreConfig: BiffoConfig, templateRoot: string): void {
   const { org, repo } = githubRepo(config)
-  const pathPrefix = config.core.path_prefix ?? config.project.name
+  const pathPrefix = resolvePathPrefix(config)
   console.log(chalk.bold('\n  Dry run — no changes will be made\n'))
   console.log(`  Sibling:       ${config.project.name}`)
   console.log(`  Repository:    ${org}/${repo}`)
   console.log(`  Core project:  ${coreConfig.project.name}`)
-  console.log(`  Path prefix:   /${pathPrefix}`)
+  console.log(
+    `  Path prefix:   ${displayPath(pathPrefix)}` +
+      (isRootPathPrefix(pathPrefix)
+        ? ` (ROOT application — registered as "${ROOT_SIBLING_NAME}", takes the CDN default behaviour)`
+        : ''),
+  )
   console.log(`  Environments:  ${config.environments.join(', ')}`)
   console.log(`  Template:      ${templateRoot}`)
   console.log('\n  Would:')

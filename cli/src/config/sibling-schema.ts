@@ -69,10 +69,18 @@ export const SiblingConfigSchema = z
       // not here — z.object() has no access to sibling fields from within core's
       // own schema without restructuring the whole object, and the caller
       // already has both values in hand when it validates.
+      //
+      // The EMPTY string is meaningful and deliberately allowed: it is the
+      // root application sibling (issue #306), which serves `/` and takes the
+      // CDN's default_cache_behavior instead of a pair of ordered behaviours.
+      // It still registers under a non-empty reserved name ("app") — see
+      // lib/root-sibling.ts for why the two must not be conflated.
       path_prefix: z
         .string()
-        .min(1)
-        .regex(/^[a-z][a-z0-9-]*$/, 'Must be lowercase kebab-case')
+        .regex(
+          /^$|^[a-z][a-z0-9-]*$/,
+          'Must be lowercase kebab-case, or empty for the root sibling',
+        )
         .optional(),
     }),
   })

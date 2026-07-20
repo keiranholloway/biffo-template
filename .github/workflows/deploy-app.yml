@@ -111,6 +111,22 @@ jobs:
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Register Core API secret env values as log masks
+        # Belt-and-braces for #334. The primary fix suppresses update-function-code
+        # output, but if any *future* step accidentally echoes the function config,
+        # these masks redact the two known DB credentials. The values are never
+        # printed: each is scoped by --query to a single variable, captured into a
+        # shell var, and piped only into ::add-mask:: (whose own argument GitHub
+        # redacts). Best-effort — it must never fail the deploy, hence the guards.
+        run: |
+          for v in DATABASE_URL BIFFO_APP_DATABASE_URL; do
+            val=$(aws lambda get-function-configuration \
+              --function-name "${{ vars.CORE_API_LAMBDA_NAME }}" \
+              --query "Environment.Variables.$v" --output text 2>/dev/null || true)
+            if [ -n "$val" ] && [ "$val" != "None" ]; then
+              echo "::add-mask::$val"
+            fi
+          done
       - uses: actions/download-artifact@v5
         with:
           name: portal-build-dev
@@ -238,9 +254,17 @@ jobs:
             cp "$import_dir"*.sql "package/db/imports/$import_name/" 2>/dev/null || true
           done
           cd package && zip -r ../lambda.zip .
+          # --output text --query 'LastUpdateStatus' suppresses the CLI's default
+          # output, which is the *entire* function configuration as JSON —
+          # including Environment.Variables (the master DATABASE_URL and, since
+          # #253, BIFFO_APP_DATABASE_URL) in plaintext. Printing that leaked live
+          # DB credentials into the Actions log (#334). The response is unused —
+          # the wait below is what gates progress — so narrowing it to the status
+          # string loses nothing.
           aws lambda update-function-code \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
-            --zip-file fileb://../lambda.zip
+            --zip-file fileb://../lambda.zip \
+            --output text --query 'LastUpdateStatus'
       - name: Initialise database schema
         run: |
           aws lambda wait function-updated \
@@ -302,9 +326,12 @@ jobs:
           cp -r services/pr-signer/src pr-signer-package/
           cd pr-signer-package && zip -r ../pr-signer-lambda.zip .
           cd ..
+          # --output text --query 'LastUpdateStatus' suppresses the default full
+          # function-config JSON (env vars in plaintext) — see #334.
           aws lambda update-function-code \
             --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }} \
-            --zip-file fileb://pr-signer-lambda.zip
+            --zip-file fileb://pr-signer-lambda.zip \
+            --output text --query 'LastUpdateStatus'
           aws lambda wait function-updated \
             --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }}
       # Package and deploy each enabled plugin's own Lambda (ADR-0003, #196).
@@ -348,9 +375,13 @@ jobs:
             cp -r "$plugin_dir"/src/. "plugin-$name-package/"
             cp "$manifest" "plugin-$name-package/biffo.plugin.json"
             (cd "plugin-$name-package" && zip -rq "../plugin-$name.zip" .)
+            # --output text --query 'LastUpdateStatus' suppresses the default full
+            # function-config JSON (a plugin Lambda's own secret env vars in
+            # plaintext) — see #334.
             aws lambda update-function-code \
               --function-name "$fn" \
-              --zip-file "fileb://plugin-$name.zip"
+              --zip-file "fileb://plugin-$name.zip" \
+              --output text --query 'LastUpdateStatus'
             aws lambda wait function-updated --function-name "$fn"
             echo "::endgroup::"
           done
@@ -421,6 +452,22 @@ jobs:
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Register Core API secret env values as log masks
+        # Belt-and-braces for #334. The primary fix suppresses update-function-code
+        # output, but if any *future* step accidentally echoes the function config,
+        # these masks redact the two known DB credentials. The values are never
+        # printed: each is scoped by --query to a single variable, captured into a
+        # shell var, and piped only into ::add-mask:: (whose own argument GitHub
+        # redacts). Best-effort — it must never fail the deploy, hence the guards.
+        run: |
+          for v in DATABASE_URL BIFFO_APP_DATABASE_URL; do
+            val=$(aws lambda get-function-configuration \
+              --function-name "${{ vars.CORE_API_LAMBDA_NAME }}" \
+              --query "Environment.Variables.$v" --output text 2>/dev/null || true)
+            if [ -n "$val" ] && [ "$val" != "None" ]; then
+              echo "::add-mask::$val"
+            fi
+          done
       - uses: actions/download-artifact@v5
         with:
           name: portal-build-staging
@@ -548,9 +595,17 @@ jobs:
             cp "$import_dir"*.sql "package/db/imports/$import_name/" 2>/dev/null || true
           done
           cd package && zip -r ../lambda.zip .
+          # --output text --query 'LastUpdateStatus' suppresses the CLI's default
+          # output, which is the *entire* function configuration as JSON —
+          # including Environment.Variables (the master DATABASE_URL and, since
+          # #253, BIFFO_APP_DATABASE_URL) in plaintext. Printing that leaked live
+          # DB credentials into the Actions log (#334). The response is unused —
+          # the wait below is what gates progress — so narrowing it to the status
+          # string loses nothing.
           aws lambda update-function-code \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
-            --zip-file fileb://../lambda.zip
+            --zip-file fileb://../lambda.zip \
+            --output text --query 'LastUpdateStatus'
       - name: Initialise database schema
         run: |
           aws lambda wait function-updated \
@@ -612,9 +667,12 @@ jobs:
           cp -r services/pr-signer/src pr-signer-package/
           cd pr-signer-package && zip -r ../pr-signer-lambda.zip .
           cd ..
+          # --output text --query 'LastUpdateStatus' suppresses the default full
+          # function-config JSON (env vars in plaintext) — see #334.
           aws lambda update-function-code \
             --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }} \
-            --zip-file fileb://pr-signer-lambda.zip
+            --zip-file fileb://pr-signer-lambda.zip \
+            --output text --query 'LastUpdateStatus'
           aws lambda wait function-updated \
             --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }}
       # Package and deploy each enabled plugin's own Lambda (ADR-0003, #196).
@@ -658,9 +716,13 @@ jobs:
             cp -r "$plugin_dir"/src/. "plugin-$name-package/"
             cp "$manifest" "plugin-$name-package/biffo.plugin.json"
             (cd "plugin-$name-package" && zip -rq "../plugin-$name.zip" .)
+            # --output text --query 'LastUpdateStatus' suppresses the default full
+            # function-config JSON (a plugin Lambda's own secret env vars in
+            # plaintext) — see #334.
             aws lambda update-function-code \
               --function-name "$fn" \
-              --zip-file "fileb://plugin-$name.zip"
+              --zip-file "fileb://plugin-$name.zip" \
+              --output text --query 'LastUpdateStatus'
             aws lambda wait function-updated --function-name "$fn"
             echo "::endgroup::"
           done
@@ -743,6 +805,22 @@ jobs:
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Register Core API secret env values as log masks
+        # Belt-and-braces for #334. The primary fix suppresses update-function-code
+        # output, but if any *future* step accidentally echoes the function config,
+        # these masks redact the two known DB credentials. The values are never
+        # printed: each is scoped by --query to a single variable, captured into a
+        # shell var, and piped only into ::add-mask:: (whose own argument GitHub
+        # redacts). Best-effort — it must never fail the deploy, hence the guards.
+        run: |
+          for v in DATABASE_URL BIFFO_APP_DATABASE_URL; do
+            val=$(aws lambda get-function-configuration \
+              --function-name "${{ vars.CORE_API_LAMBDA_NAME }}" \
+              --query "Environment.Variables.$v" --output text 2>/dev/null || true)
+            if [ -n "$val" ] && [ "$val" != "None" ]; then
+              echo "::add-mask::$val"
+            fi
+          done
       - uses: actions/download-artifact@v5
         with:
           name: portal-build-prod
@@ -870,9 +948,17 @@ jobs:
             cp "$import_dir"*.sql "package/db/imports/$import_name/" 2>/dev/null || true
           done
           cd package && zip -r ../lambda.zip .
+          # --output text --query 'LastUpdateStatus' suppresses the CLI's default
+          # output, which is the *entire* function configuration as JSON —
+          # including Environment.Variables (the master DATABASE_URL and, since
+          # #253, BIFFO_APP_DATABASE_URL) in plaintext. Printing that leaked live
+          # DB credentials into the Actions log (#334). The response is unused —
+          # the wait below is what gates progress — so narrowing it to the status
+          # string loses nothing.
           aws lambda update-function-code \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
-            --zip-file fileb://../lambda.zip
+            --zip-file fileb://../lambda.zip \
+            --output text --query 'LastUpdateStatus'
       - name: Initialise database schema
         run: |
           aws lambda wait function-updated \
@@ -934,9 +1020,12 @@ jobs:
           cp -r services/pr-signer/src pr-signer-package/
           cd pr-signer-package && zip -r ../pr-signer-lambda.zip .
           cd ..
+          # --output text --query 'LastUpdateStatus' suppresses the default full
+          # function-config JSON (env vars in plaintext) — see #334.
           aws lambda update-function-code \
             --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }} \
-            --zip-file fileb://pr-signer-lambda.zip
+            --zip-file fileb://pr-signer-lambda.zip \
+            --output text --query 'LastUpdateStatus'
           aws lambda wait function-updated \
             --function-name ${{ vars.PR_SIGNER_LAMBDA_NAME }}
       # Package and deploy each enabled plugin's own Lambda (ADR-0003, #196).
@@ -980,9 +1069,13 @@ jobs:
             cp -r "$plugin_dir"/src/. "plugin-$name-package/"
             cp "$manifest" "plugin-$name-package/biffo.plugin.json"
             (cd "plugin-$name-package" && zip -rq "../plugin-$name.zip" .)
+            # --output text --query 'LastUpdateStatus' suppresses the default full
+            # function-config JSON (a plugin Lambda's own secret env vars in
+            # plaintext) — see #334.
             aws lambda update-function-code \
               --function-name "$fn" \
-              --zip-file "fileb://plugin-$name.zip"
+              --zip-file "fileb://plugin-$name.zip" \
+              --output text --query 'LastUpdateStatus'
             aws lambda wait function-updated --function-name "$fn"
             echo "::endgroup::"
           done

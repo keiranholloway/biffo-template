@@ -161,6 +161,19 @@ jobs:
         with:
           role-to-assume: ${{ secrets.SIBLING_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Register Lambda secret env values as log masks
+        # Belt-and-braces for #334. The primary fix suppresses update-function-code
+        # output, but if any *future* step accidentally echoes the function config,
+        # this mask redacts the DB credential. The value is never printed: it is
+        # scoped by --query to a single variable, captured, and piped only into
+        # ::add-mask::. Best-effort — it must never fail the deploy.
+        run: |
+          val=$(aws lambda get-function-configuration \
+            --function-name "${{ vars.LAMBDA_FUNCTION_NAME }}" \
+            --query "Environment.Variables.DATABASE_URL" --output text 2>/dev/null || true)
+          if [ -n "$val" ] && [ "$val" != "None" ]; then
+            echo "::add-mask::$val"
+          fi
       - name: Sync frontend to S3
         env:
           PATH_PREFIX: ${{ vars.PATH_PREFIX }}
@@ -205,9 +218,15 @@ jobs:
           uv pip install -r requirements.txt --target package/
           cp -r src/ package/
           cd package && zip -r ../lambda.zip .
+          # --output text --query 'LastUpdateStatus' suppresses the CLI's default
+          # output — the entire function configuration as JSON, including
+          # Environment.Variables (e.g. DATABASE_URL) in plaintext, which would
+          # leak into the Actions log (#334). The response is unused; the wait
+          # below gates progress.
           aws lambda update-function-code \
             --function-name "${{ vars.LAMBDA_FUNCTION_NAME }}" \
-            --zip-file fileb://../lambda.zip
+            --zip-file fileb://../lambda.zip \
+            --output text --query 'LastUpdateStatus'
       - name: Smoke test the deployed Lambda
         run: |
           # Deploy succeeding just means the zip uploaded — it says nothing

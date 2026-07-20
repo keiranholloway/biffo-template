@@ -547,9 +547,10 @@ describe('the app sibling', () => {
   it('names the repo <core>-app, matching the project name teardown resolves by', () => {
     const sibling = appSiblingConfig(CONFIG)
     expect(sibling.project.name).toBe('my-app-app')
-    expect(
-      (sibling.source_control as { config: { org: string; repo: string } }).config,
-    ).toEqual({ org: 'acme', repo: 'my-app-app' })
+    expect((sibling.source_control as { config: { org: string; repo: string } }).config).toEqual({
+      org: 'acme',
+      repo: 'my-app-app',
+    })
     // Empty prefix — this is what makes it the ROOT sibling.
     expect(sibling.core.path_prefix).toBe('')
     expect(sibling.core.project_name).toBe('my-app')
@@ -558,7 +559,7 @@ describe('the app sibling', () => {
   // The core's own OIDC role and state bucket are added to config.cloud.config
   // partway through runInit. Inheriting them would be wrong, and an empty
   // oidc_role_arn mid-run fails schema validation outright.
-  it('does not inherit the core project\'s OIDC role or state bucket', () => {
+  it("does not inherit the core project's OIDC role or state bucket", () => {
     const withCoreCreds = BiffoConfigSchema.parse({
       ...CONFIG,
       cloud: {

@@ -380,21 +380,13 @@ async function createAppSibling(
   const siblingSession = session.outputs.appSibling
   const siblingAws = deps.awsFor(siblingConfig)
 
-  await runSiblingCreate(
-    github,
-    siblingAws,
-    siblingAws,
-    deps.git,
-    siblingConfig,
-    siblingSession,
-    {
-      coreConfig: config,
-      skeletonRoot: deps.skeletonRoot,
-      githubToken: deps.githubToken,
-      skipCoreIdentity: true,
-      skipRegistration: true,
-    },
-  )
+  await runSiblingCreate(github, siblingAws, siblingAws, deps.git, siblingConfig, siblingSession, {
+    coreConfig: config,
+    skeletonRoot: deps.skeletonRoot,
+    githubToken: deps.githubToken,
+    skipCoreIdentity: true,
+    skipRegistration: true,
+  })
 }
 
 // ─── The root application sibling (issue #306) ───────────────────────────────
@@ -464,9 +456,7 @@ export function appSiblingConfig(config: BiffoConfig): SiblingConfig {
  * nothing to exist yet. That is what makes it safe to register the sibling
  * *before* creating it (see runInit) rather than after.
  */
-export function appSiblingRegistryFiles(
-  config: BiffoConfig,
-): { path: string; content: string }[] {
+export function appSiblingRegistryFiles(config: BiffoConfig): { path: string; content: string }[] {
   const sibling = appSiblingConfig(config)
   const { account_id: accountId, region } = (
     config.cloud as { provider: 'aws'; config: { account_id: string; region: string } }

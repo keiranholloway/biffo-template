@@ -379,15 +379,15 @@ create`'s session-resumability shape (decision 6) mirrors `biffo init`'s
 
 ### Why
 
-This ADR assumed every sibling is an *additional* thing hung off a product
+This ADR assumed every sibling is an _additional_ thing hung off a product
 that already exists at the root — hence `baseurl.com/<name>`, always with a
 name. The tiering in #306 corrects that assumption:
 
-| Tier | What | Where it lives | Serves |
-|---|---|---|---|
-| Core | data layer, API, **admin console** | the platform repo | `/admin`, `/login` |
-| Plugins | optional capability | installed into core | — |
-| **User application** | their product | **its own sibling repo** | **`/`** |
+| Tier                 | What                               | Where it lives           | Serves             |
+| -------------------- | ---------------------------------- | ------------------------ | ------------------ |
+| Core                 | data layer, API, **admin console** | the platform repo        | `/admin`, `/login` |
+| Plugins              | optional capability                | installed into core      | —                  |
+| **User application** | their product                      | **its own sibling repo** | **`/`**            |
 
 `apps/portal` is strictly the admin console. The user's product is a sibling
 like any other — it just happens to be the one at the front door. Rather
@@ -397,7 +397,7 @@ one degree of freedom: the path prefix may be empty.
 ### What changes
 
 1. **An empty path prefix is legal.** A sibling whose prefix is `''` serves
-   `/`. `NEXT_PUBLIC_BASE_PATH` is the empty string for it, *not* `/` —
+   `/`. `NEXT_PUBLIC_BASE_PATH` is the empty string for it, _not_ `/` —
    Next.js refuses to build with a `basePath` of `/`. Its deploy syncs to the
    bucket root rather than `s3://<bucket>/<name>/`, and invalidates `/*`.
 
@@ -416,7 +416,7 @@ one degree of freedom: the path prefix may be empty.
    the exact failure #306 was filed about.
 
 3. **`app` joins `admin` and `login` as a reserved name.** Unlike those two
-   it legitimately *appears* in `sibling_origins`, so it cannot simply be
+   it legitimately _appears_ in `sibling_origins`, so it cannot simply be
    rejected; `modules/cloud/aws/cdn/variables.tf` enforces it by requiring
    sibling names to be unique, so a second sibling cannot claim it.
 
@@ -447,7 +447,7 @@ one degree of freedom: the path prefix may be empty.
    must keep working non-interactively (#274).
 
 6. **Registration precedes creation.** `init` writes the registry entry into
-   the core repo *before* creating the sibling's repo. Every value in that
+   the core repo _before_ creating the sibling's repo. Every value in that
    entry is derived from config, so nothing needs to exist first. The
    ordering is the safety property: a registration without a repo is
    self-correcting (teardown sees the entry, finds no repo, reclaims the AWS

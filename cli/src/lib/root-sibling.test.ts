@@ -52,12 +52,12 @@ describe('registry entries', () => {
 
   it('leaves other siblings alone', () => {
     const existing = [{ name: 'crm', bucket_regional_domain: 'crm-host' }]
-    expect(upsertSiblingOrigin(existing, { name: 'app', bucket_regional_domain: 'app-host' })).toEqual(
-      [
-        { name: 'crm', bucket_regional_domain: 'crm-host' },
-        { name: 'app', bucket_regional_domain: 'app-host' },
-      ],
-    )
+    expect(
+      upsertSiblingOrigin(existing, { name: 'app', bucket_regional_domain: 'app-host' }),
+    ).toEqual([
+      { name: 'crm', bucket_regional_domain: 'crm-host' },
+      { name: 'app', bucket_regional_domain: 'app-host' },
+    ])
   })
 
   it('serializes with a trailing newline', () => {

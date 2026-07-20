@@ -631,7 +631,10 @@ describe('root sibling mode', () => {
     )
 
     const registry = JSON.parse(
-      readFileSync(join(cloneDir, 'infra', 'environments', 'dev', 'siblings.auto.tfvars.json'), 'utf8'),
+      readFileSync(
+        join(cloneDir, 'infra', 'environments', 'dev', 'siblings.auto.tfvars.json'),
+        'utf8',
+      ),
     ) as { sibling_origins: { name: string; bucket_regional_domain: string }[] }
 
     expect(registry.sibling_origins).toHaveLength(1)
@@ -700,11 +703,7 @@ describe('root sibling mode', () => {
     expect(github.createPullRequest).not.toHaveBeenCalled()
     // But the repo itself is fully provisioned, and every step is checkpointed
     // so a resumed init does not try to create it twice.
-    expect(github.createEmptyRepo).toHaveBeenCalledWith(
-      'acme',
-      'core-app-app',
-      'The application',
-    )
+    expect(github.createEmptyRepo).toHaveBeenCalledWith('acme', 'core-app-app', 'The application')
     expect(session.completedSteps).toEqual([
       'verify_credentials',
       'resolve_core_identity',

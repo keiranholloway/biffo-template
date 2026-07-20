@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { isTemplateOwned, readCoreManifest } from './core-manifest.js'
 import {
   checkTerraformInput,
   checkWorkflowSource,
@@ -120,5 +121,41 @@ describe('findWorkflowFiles', () => {
 describe('the repository itself', () => {
   it('has no Terraform invocation that can hang on stdin', () => {
     expect(checkTerraformInput(repoRoot)).toEqual([])
+  })
+})
+
+/**
+ * Issue #325. This guard lives under the template-owned `cli/`, so `biffo core
+ * upgrade` distributes it to every instance. Anything it *scans* must therefore
+ * be template-owned too — otherwise the upgrade ships an instance an assertion
+ * whose subject it has no mechanism to receive, and the instance's CI goes red
+ * on files it neither wrote nor can fix. That is exactly what 0.41.3 did: the
+ * guard reached into `_skeletons/`, which was owned by neither list and so
+ * user-owned by the manifest's fail-closed default.
+ *
+ * The general rule, of which this is one instance: a template-owned check must
+ * not assert over paths the template does not own.
+ */
+describe('scan scope stays inside the template-owned boundary (#325)', () => {
+  const manifest = readCoreManifest(repoRoot)
+
+  it('scans at least the root and skeleton workflow trees', () => {
+    const files = findWorkflowFiles(repoRoot)
+    expect(files.some((f) => f.startsWith('.github/workflows/'))).toBe(true)
+    expect(files.some((f) => f.startsWith('_skeletons/'))).toBe(true)
+  })
+
+  it('scans only template-owned paths, so every instance can receive the fix', () => {
+    const unowned = findWorkflowFiles(repoRoot).filter((f) => !isTemplateOwned(f, manifest))
+    expect(unowned).toEqual([])
+  })
+
+  it('keeps _skeletons/ template-owned', () => {
+    expect(
+      isTemplateOwned('_skeletons/sibling-template/.github/workflows/deploy.yml', manifest),
+    ).toBe(true)
+    expect(isTemplateOwned('_skeletons/plugin-template/.github/workflows/ci.yml', manifest)).toBe(
+      true,
+    )
   })
 })

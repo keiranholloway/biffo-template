@@ -14,8 +14,16 @@ import {
   type CatalogActionField,
   type WorkflowCatalog,
   type WorkflowDefinition,
+  type CatalogTrigger,
   type WorkflowInput,
 } from '@/lib/orchestration-api'
+import {
+  filterTriggers,
+  groupTriggersBySource,
+  optionLabel,
+  originOf,
+  triggerKeyOf,
+} from '@/lib/trigger-catalog'
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error'
@@ -76,6 +84,7 @@ export default function OrchestrationPage() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [triggerKey, setTriggerKey] = useState('')
+  const [triggerQuery, setTriggerQuery] = useState('')
   const [actionType, setActionType] = useState('')
   const [config, setConfig] = useState<Record<string, string>>({})
   const [enabled, setEnabled] = useState(true)
@@ -85,7 +94,8 @@ export default function OrchestrationPage() {
     setEditingId(null)
     setName('')
     const t = cat?.triggers[0]
-    setTriggerKey(t ? `${t.source}|${t.detail_type}` : '')
+    setTriggerKey(t ? triggerKeyOf(t) : '')
+    setTriggerQuery('')
     setActionType(cat?.actions[0]?.type ?? '')
     setConfig(defaultConfig(cat?.actions[0]))
     setEnabled(true)
@@ -129,10 +139,27 @@ export default function OrchestrationPage() {
     (a) => a.type === actionType,
   )
 
+  const selectedTrigger: CatalogTrigger | undefined = catalog?.triggers.find(
+    (t) => triggerKeyOf(t) === triggerKey,
+  )
+
+  // The filter narrows the dropdown but never drops the current selection —
+  // otherwise the browser would silently reassign the select's value.
+  const triggerGroups = useMemo(
+    () => groupTriggersBySource(filterTriggers(catalog?.triggers ?? [], triggerQuery, triggerKey)),
+    [catalog, triggerQuery, triggerKey],
+  )
+
+  const matchCount = useMemo(
+    () => filterTriggers(catalog?.triggers ?? [], triggerQuery).length,
+    [catalog, triggerQuery],
+  )
+
   function loadForEdit(w: WorkflowDefinition) {
     setEditingId(w.id)
     setName(w.name)
     setTriggerKey(`${w.trigger_source}|${w.trigger_detail_type}`)
+    setTriggerQuery('')
     setActionType(w.action_type)
     setConfig({ ...w.action_config })
     setEnabled(w.enabled)
@@ -174,7 +201,7 @@ export default function OrchestrationPage() {
 
   function triggerLabel(w: WorkflowDefinition): string {
     const match = catalog?.triggers.find(
-      (t) => t.source === w.trigger_source && t.detail_type === w.trigger_detail_type,
+      (t) => triggerKeyOf(t) === `${w.trigger_source}|${w.trigger_detail_type}`,
     )
     return match?.label ?? `${w.trigger_source} / ${w.trigger_detail_type}`
   }
@@ -215,26 +242,67 @@ export default function OrchestrationPage() {
                 className={inputClass}
               />
             </label>
-            <label className="flex flex-col text-xs text-gray-600">
-              When this happens (trigger)
-              <select
-                aria-label="Trigger"
-                value={triggerKey}
-                onChange={(e) => {
-                  setTriggerKey(e.target.value)
-                }}
-                className={inputClass}
-              >
-                {catalog.triggers.map((t) => (
-                  <option
-                    key={`${t.source}|${t.detail_type}`}
-                    value={`${t.source}|${t.detail_type}`}
-                  >
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="flex flex-col text-xs text-gray-600">
+              <label className="flex flex-col">
+                Filter triggers
+                <input
+                  type="search"
+                  aria-label="Filter triggers"
+                  value={triggerQuery}
+                  onChange={(e) => {
+                    setTriggerQuery(e.target.value)
+                  }}
+                  placeholder="Search by name, source or event"
+                  className={inputClass}
+                />
+              </label>
+              <label className="mt-2 flex flex-col">
+                When this happens (trigger)
+                <select
+                  aria-label="Trigger"
+                  value={triggerKey}
+                  onChange={(e) => {
+                    setTriggerKey(e.target.value)
+                  }}
+                  className={inputClass}
+                >
+                  {triggerGroups.map((group) => (
+                    <optgroup key={group.source} label={group.source}>
+                      {group.triggers.map((t) => (
+                        <option key={triggerKeyOf(t)} value={triggerKeyOf(t)} title={t.description}>
+                          {optionLabel(t)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </label>
+              {triggerQuery.trim() !== '' && matchCount === 0 && (
+                <p className="mt-1 text-xs text-gray-500">
+                  No triggers match “{triggerQuery.trim()}”. Showing the current selection only.
+                </p>
+              )}
+              {selectedTrigger != null && (
+                <div className="mt-1.5 flex items-start gap-2">
+                  {originOf(selectedTrigger) === 'declared' ? (
+                    <span
+                      title="Declared in the Core event registry."
+                      className="shrink-0 rounded bg-sky-100 px-1.5 py-0.5 text-xs text-sky-700"
+                    >
+                      declared
+                    </span>
+                  ) : (
+                    <span
+                      title="Not declared anywhere — seen on the event bus."
+                      className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700"
+                    >
+                      observed
+                    </span>
+                  )}
+                  <span className="text-xs text-gray-500">{selectedTrigger.description}</span>
+                </div>
+              )}
+            </div>
             <label className="flex flex-col text-xs text-gray-600">
               Do this (action)
               <select

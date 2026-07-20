@@ -33,6 +33,13 @@ export interface CatalogTrigger {
   detail_type: string
   label: string
   description: string
+  /**
+   * Where the catalog learned about this trigger: `declared` from the Core
+   * event registry, `observed` from having actually seen it on the event bus.
+   * Optional so this portal still renders against a Core API predating the
+   * field; treat a missing value as `declared` (see `originOf`).
+   */
+  origin?: 'declared' | 'observed'
 }
 
 export interface CatalogActionField {

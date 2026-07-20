@@ -35,6 +35,11 @@ permissions:
 env:
   NODE_VERSION: '22'
   TERRAFORM_VERSION: '~> 1.9'
+  # Defence in depth for the class of bug in #322: an interactive Terraform
+  # prompt on a CI runner has no stdin to read and blocks until the job is
+  # killed. Every invocation also passes -input=false explicitly and a drift
+  # guard enforces that; this is the backstop for one added without it.
+  TF_INPUT: '0'
 
 jobs:
   resolve-environment:
@@ -78,8 +83,10 @@ jobs:
           key    = "${{ needs.resolve-environment.outputs.environment }}/terraform.tfstate"
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
-      - run: terraform init -backend-config=backend.hcl
-      - run: terraform apply -auto-approve
+      - run: terraform init -input=false -backend-config=backend.hcl
+        timeout-minutes: 10
+      - run: terraform apply -input=false -auto-approve
+        timeout-minutes: 45
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_environment: ${{ needs.resolve-environment.outputs.environment }}

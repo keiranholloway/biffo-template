@@ -31,6 +31,11 @@ concurrency:
 
 env:
   TERRAFORM_VERSION: '~> 1.9'
+  # Defence in depth for the class of bug in #322: an interactive Terraform
+  # prompt on a CI runner has no stdin to read and blocks until the job is
+  # killed. Every invocation also passes -input=false explicitly and a drift
+  # guard enforces that; this is the backstop for one added without it.
+  TF_INPUT: '0'
 
 permissions:
   id-token: write
@@ -74,8 +79,10 @@ jobs:
           key    = "dev/terraform.tfstate"
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
-      - run: terraform init -backend-config=backend.hcl
-      - run: terraform plan -no-color 2>&1 | tee plan.txt
+      - run: terraform init -input=false -backend-config=backend.hcl
+        timeout-minutes: 10
+      - run: terraform plan -input=false -no-color 2>&1 | tee plan.txt
+        timeout-minutes: 20
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -111,8 +118,10 @@ jobs:
           key    = "dev/terraform.tfstate"
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
-      - run: terraform init -backend-config=backend.hcl
-      - run: terraform apply -auto-approve
+      - run: terraform init -input=false -backend-config=backend.hcl
+        timeout-minutes: 10
+      - run: terraform apply -input=false -auto-approve
+        timeout-minutes: 45
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -176,8 +185,10 @@ jobs:
           key    = "staging/terraform.tfstate"
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
-      - run: terraform init -backend-config=backend.hcl
-      - run: terraform plan -no-color 2>&1 | tee plan.txt
+      - run: terraform init -input=false -backend-config=backend.hcl
+        timeout-minutes: 10
+      - run: terraform plan -input=false -no-color 2>&1 | tee plan.txt
+        timeout-minutes: 20
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -213,8 +224,10 @@ jobs:
           key    = "staging/terraform.tfstate"
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
-      - run: terraform init -backend-config=backend.hcl
-      - run: terraform apply -auto-approve
+      - run: terraform init -input=false -backend-config=backend.hcl
+        timeout-minutes: 10
+      - run: terraform apply -input=false -auto-approve
+        timeout-minutes: 45
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -285,8 +298,10 @@ jobs:
           key    = "prod/terraform.tfstate"
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
-      - run: terraform init -backend-config=backend.hcl
-      - run: terraform plan -no-color 2>&1 | tee plan.txt
+      - run: terraform init -input=false -backend-config=backend.hcl
+        timeout-minutes: 10
+      - run: terraform plan -input=false -no-color 2>&1 | tee plan.txt
+        timeout-minutes: 20
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -323,8 +338,10 @@ jobs:
           key    = "prod/terraform.tfstate"
           region = "${{ vars.AWS_REGION || 'us-east-1' }}"
           EOF
-      - run: terraform init -backend-config=backend.hcl
-      - run: terraform apply -auto-approve
+      - run: terraform init -input=false -backend-config=backend.hcl
+        timeout-minutes: 10
+      - run: terraform apply -input=false -auto-approve
+        timeout-minutes: 45
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}

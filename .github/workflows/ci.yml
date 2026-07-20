@@ -19,6 +19,11 @@ concurrency:
 env:
   NODE_VERSION: '22'
   PYTHON_VERSION: '3.13'
+  # Defence in depth for the class of bug in #322: an interactive Terraform
+  # prompt on a CI runner has no stdin to read and blocks until the job is
+  # killed. Every invocation also passes -input=false explicitly and a drift
+  # guard enforces that; this is the backstop for one added without it.
+  TF_INPUT: '0'
 
 # Jobs are consolidated by toolchain (one JS job, one Python job) rather than one
 # job per check. GitHub bills every job's wall time rounded UP to a full minute
@@ -184,7 +189,7 @@ jobs:
       - name: Validate dev environment
         working-directory: infra/environments/dev
         run: |
-          terraform init -backend=false
+          terraform init -input=false -backend=false
           terraform validate
       - name: Checkov (Terraform SAST)
         uses: bridgecrewio/checkov-action@v12

@@ -1,6 +1,7 @@
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import chalk from 'chalk'
 import { Command } from 'commander'
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
@@ -27,6 +28,7 @@ import {
   type SiblingOrigin,
 } from '../lib/root-sibling.js'
 import { loadProjectConfig } from '../lib/session.js'
+import { restorePackagedDotfiles } from '../lib/skeleton-dotfiles.js'
 import {
   deleteSiblingSession,
   findLatestSiblingSession,
@@ -522,6 +524,10 @@ export function writeSiblingTemplate(
     throw new Error(`Sibling template not found at ${templateRoot}`)
   }
   cpSync(templateRoot, targetDir, { recursive: true })
+  // npm strips .gitignore from published tarballs, so the packaged skeleton
+  // carries it as `_gitignore`. Without this the scaffolded repo's first commit
+  // could include node_modules/, .terraform/ and .env — see skeleton-dotfiles.ts.
+  restorePackagedDotfiles(targetDir)
 
   writeFileSync(
     join(targetDir, 'biffo.sibling.json'),
@@ -878,8 +884,25 @@ function awsConfig(config: SiblingConfig | BiffoConfig): { region: string } {
   return (config.cloud as { provider: 'aws'; config: { region: string } }).config
 }
 
+/**
+ * Locate `_skeletons/sibling-template` by walking up from this module.
+ *
+ * Two arrangements satisfy the single walk: a template checkout (`cli/dist/` or
+ * `cli/src/` walks up to the repo root) and an installed package (prepack copies
+ * `_skeletons/` in beside `dist/` — see `cli/scripts/packaged-root-assets.mjs`).
+ *
+ * There is deliberately no `process.cwd()` fallback. It used to return
+ * `<cwd>/_skeletons/sibling-template` unconditionally, so when the package
+ * shipped without the skeleton at all — which it did, up to 0.39.0 — `biffo
+ * init` created both repos and then failed at step 6/6 naming a path under the
+ * user's working directory. That pointed every reader at their own cwd instead
+ * of the packaging defect, and cost a full teardown/recreate validation cycle to
+ * diagnose (#315). A missing asset is a broken build, not a wrong cwd, and it
+ * says so.
+ */
 export function defaultSiblingTemplateRoot(): string {
-  let dir = dirname(new URL(import.meta.url).pathname)
+  const start = dirname(fileURLToPath(import.meta.url))
+  let dir = start
   for (;;) {
     const candidate = join(dir, '_skeletons', 'sibling-template')
     if (existsSync(candidate)) return candidate
@@ -887,5 +910,11 @@ export function defaultSiblingTemplateRoot(): string {
     if (parent === dir) break
     dir = parent
   }
-  return resolve(process.cwd(), '_skeletons', 'sibling-template')
+  throw new Error(
+    `Could not locate _skeletons/sibling-template above ${start}. ` +
+      'This CLI build is missing its sibling skeleton: the published package must ship ' +
+      '_skeletons/ beside dist/ (written by prepack, listed in package.json "files"). ' +
+      'Reinstall the CLI (npm i -g @biffo/cli@latest), or pass --template <path> to a ' +
+      'biffo-template checkout.',
+  )
 }

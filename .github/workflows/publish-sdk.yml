@@ -86,14 +86,23 @@ jobs:
         with:
           enable-cache: true
 
+      # A publish must be traceable to a tag whose name states the version being
+      # released, and that name must agree with what is about to be built — so a
+      # mistyped tag cannot publish a mislabelled artifact. Runs on tag pushes
+      # and on a workflow_dispatch whose `ref` is a tag (the documented way to
+      # re-trigger a release, #293). A dispatch from a *branch* has no version
+      # to check against, so it is build-and-verify only — the publish job below
+      # refuses to upload from a non-tag ref.
       - name: Verify tag matches pyproject version
+        id: version
         if: steps.guard.outputs.is_template == 'true' && startsWith(github.ref, 'refs/tags/')
         run: |
           set -euo pipefail
           tag_version="${GITHUB_REF_NAME#sdk-v}"
+          # tomllib is in the stdlib from 3.11; no extra dependency needed.
           project_version="$(
-            uv run --no-project --with tomli python -c \
-              'import tomli,sys; print(tomli.load(open(sys.argv[1],"rb"))["project"]["version"])' \
+            python3 -c \
+              'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["project"]["version"])' \
               packages/python-sdk/pyproject.toml
           )"
           echo "tag=${tag_version} pyproject=${project_version}"
@@ -158,8 +167,11 @@ jobs:
   publish:
     name: Publish to PyPI
     needs: build
-    # Skipped in instances (the build job's guard) and on a dry run.
-    if: ${{ needs.build.outputs.is_template == 'true' && !inputs.dry_run }}
+    # Skipped in instances (the build job's guard), on a dry run, and on any
+    # non-tag ref. The last is what makes the build job's version check
+    # unskippable: a workflow_dispatch from a branch has no tag to verify the
+    # version against, so it must not be able to upload one.
+    if: ${{ needs.build.outputs.is_template == 'true' && !inputs.dry_run && startsWith(github.ref, 'refs/tags/') }}
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     # PyPI Trusted Publishing (OIDC), not a long-lived PYPI_API_TOKEN.
     #

@@ -87,4 +87,29 @@ variable "sibling_origins" {
     condition     = length([for s in var.sibling_origins : s.name if contains(["admin", "login"], s.name)]) == 0
     error_message = "Sibling names \"admin\" and \"login\" are reserved for the portal's own CloudFront routes."
   }
+
+  # "app" is the third reserved name, and it is reserved differently from the
+  # other two: unlike "admin"/"login" it legitimately APPEARS in this list —
+  # it is the root application sibling's own entry, the one main.tf's
+  # default_cache_behavior follows. So it cannot be rejected outright; what
+  # must be rejected is a SECOND entry claiming it.
+  #
+  # Uniqueness is therefore the check, and it is the right check for every
+  # name, not just "app": two entries sharing a name would collapse to one
+  # origin id ("sibling-<name>") and one pair of path patterns, silently
+  # dropping a registered sibling from the distribution while Terraform
+  # reported success.
+  validation {
+    condition     = length(distinct([for s in var.sibling_origins : s.name])) == length(var.sibling_origins)
+    error_message = "Sibling names must be unique. Note \"app\" is reserved for the root application sibling (the one served at /, whose entry the distribution's default_cache_behavior follows) — no other sibling may claim it."
+  }
+
+  # A sibling name becomes a CloudFront origin id and, for every sibling but
+  # the root, a path_pattern — so it must be a URL-safe segment. Caught here
+  # rather than at apply time, where the error names neither the sibling nor
+  # the file it came from.
+  validation {
+    condition     = length([for s in var.sibling_origins : s.name if !can(regex("^[a-z][a-z0-9-]*$", s.name))]) == 0
+    error_message = "Sibling names must be lowercase kebab-case starting with a letter — they become URL path segments and CloudFront origin ids."
+  }
 }

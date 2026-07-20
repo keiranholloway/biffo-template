@@ -16,11 +16,30 @@ locals {
   # merely start with the same characters (e.g. "crm-billing" matching
   # "crm*") — two precise patterns per sibling is the correct fix, not a
   # broader wildcard.
+  # The ROOT application sibling (issue #306). It is an ordinary sibling in
+  # every respect except routing: its path prefix is EMPTY, so it serves "/"
+  # and takes default_cache_behavior rather than a pair of ordered behaviours.
+  #
+  # It still carries a real, non-empty registry name — the reserved word "app"
+  # — because `sibling_origins[].name` is the key everything else hangs off:
+  # the origin id here, and `collectSiblings()` in the CLI's teardown. An empty
+  # name would produce an origin id of "sibling-" and a sibling teardown cannot
+  # find, i.e. a repo and a bucket left behind, still billing. Name and path
+  # prefix are two different things; only the prefix is empty.
+  root_sibling_name = "app"
+
+  root_sibling_registered = contains([for s in var.sibling_origins : s.name], local.root_sibling_name)
+
+  # Every sibling EXCEPT the root gets the two ordered behaviours below. The
+  # root is excluded deliberately: giving it "app" and "app/*" patterns would
+  # route the literal URL /app to the application that is already serving /,
+  # which is a route nobody asked for and one that would shadow a future
+  # sibling legitimately named "app" in some other project's mind.
   sibling_cache_behaviors = flatten([
     for s in var.sibling_origins : [
       { name = s.name, path_pattern = s.name },
       { name = s.name, path_pattern = "${s.name}/*" },
-    ]
+    ] if s.name != local.root_sibling_name
   ])
 
   # ROUTING INVERSION (issue #306). The portal is strictly the admin console: it
@@ -55,6 +74,37 @@ locals {
   # names "admin" and "login" (see variables.tf), and a duplicate path_pattern
   # would fail the for_each below with a duplicate-key error rather than
   # silently shadowing a route.
+  # Which origin `/` (and everything not claimed by an explicit ordered
+  # behaviour, including `/_next/*`) is served from.
+  #
+  # CloudFront requires EXACTLY ONE default_cache_behavior and it must name an
+  # origin that exists in this distribution. There is no "absent" state and no
+  # count/for_each on the block, so this cannot be expressed as a dynamic block
+  # — it has to be a conditional on the target, evaluated at plan time from the
+  # registry itself:
+  #
+  #   root sibling registered  → "sibling-app", the origin created for it by
+  #                              the dynamic "origin" block below.
+  #   not registered           → the portal bucket, as a PLACEHOLDER only.
+  #
+  # The placeholder is not the portal serving root. The portal's landing page
+  # was deleted in phase 1, so `/` rewrites to /index.html, S3 has no such
+  # object, and the request 404s — the accepted outcome for the window between
+  # `biffo init` and the root sibling's first deploy (issue #306, decision 3:
+  # the window is short and a 404 is honest). What matters is that the
+  # distribution stays *valid* in that window; a default behaviour naming a
+  # non-existent origin fails the apply outright and takes the whole
+  # distribution — portal included — down with it.
+  #
+  # Note this follows the registry, not a separate flag, so there is exactly
+  # one source of truth for "is there a root application?" and it is the same
+  # file teardown reads.
+  default_target_origin_id = (
+    local.root_sibling_registered
+    ? "sibling-${local.root_sibling_name}"
+    : "S3-${var.portal_bucket_name}"
+  )
+
   ordered_cache_behaviors = concat(
     [for p in local.portal_cache_behaviors : {
       path_pattern     = p
@@ -206,25 +256,14 @@ resource "aws_cloudfront_distribution" "portal" {
     }
   }
 
-  # The ROOT behavior — reserved for the user-application sibling (issue #306).
-  #
-  # CloudFront requires exactly one default_cache_behavior and it must name an
-  # origin that exists, so until the root sibling is created and registered
-  # there is nothing else to point it at: it stays on the portal bucket. That is
-  # a placeholder target, not the portal serving root. The portal's landing page
-  # is gone, so `/` rewrites to /index.html, S3 has no such object, and the
-  # request 404s — which is the accepted outcome (issue #306, decision 3: "`/`
-  # may 404 between init and the sibling's first deploy; the window is short and
-  # a 404 is honest"). A 404 at `/` is fine; a distribution that fails to apply
-  # because its default behavior names a non-existent origin is not.
-  #
-  # When the root sibling lands, this target_origin_id becomes its
-  # "sibling-<name>" origin and nothing else in this file needs to change — the
-  # portal already has its own explicit behaviors above.
+  # The ROOT behavior — the user-application sibling's, when one is registered,
+  # and the portal bucket as a placeholder when none is. See
+  # local.default_target_origin_id for why this is a conditional rather than a
+  # dynamic block, and what a request to `/` does in each case.
   default_cache_behavior {
     allowed_methods        = ["GET", "HEAD", "OPTIONS"]
     cached_methods         = ["GET", "HEAD"]
-    target_origin_id       = "S3-${var.portal_bucket_name}"
+    target_origin_id       = local.default_target_origin_id
     viewer_protocol_policy = "redirect-to-https"
     compress               = true
 

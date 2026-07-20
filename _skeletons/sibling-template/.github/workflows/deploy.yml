@@ -136,8 +136,15 @@ jobs:
         working-directory: apps/frontend
         env:
           NEXT_PUBLIC_SIBLING_NAME: ${{ vars.PROJECT_NAME }}
-          NEXT_PUBLIC_SIBLING_PATH_PREFIX: /${{ vars.PATH_PREFIX }}
-          NEXT_PUBLIC_BASE_PATH: /${{ vars.PATH_PREFIX }}
+          # The ROOT application sibling has an EMPTY PATH_PREFIX (issue #306):
+          # it serves "/" and takes the core distribution's default cache
+          # behaviour. `/${{ vars.PATH_PREFIX }}` would yield "/" for it, and
+          # Next.js refuses to build with a basePath of "/" ("has to be a path
+          # starting with /, but not ending with one"). Empty string is the
+          # correct value there, so the prefix is only prepended when there is
+          # one.
+          NEXT_PUBLIC_SIBLING_PATH_PREFIX: ${{ vars.PATH_PREFIX && format('/{0}', vars.PATH_PREFIX) || '' }}
+          NEXT_PUBLIC_BASE_PATH: ${{ vars.PATH_PREFIX && format('/{0}', vars.PATH_PREFIX) || '' }}
           NEXT_PUBLIC_CORE_PORTAL_URL: ${{ vars.CORE_PORTAL_URL }}
           NEXT_PUBLIC_CORE_COGNITO_USER_POOL_ID: ${{ vars.CORE_COGNITO_USER_POOL_ID }}
           NEXT_PUBLIC_CORE_COGNITO_CLIENT_ID: ${{ vars.CORE_COGNITO_CLIENT_ID }}
@@ -148,25 +155,39 @@ jobs:
           role-to-assume: ${{ secrets.SIBLING_OIDC_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
       - name: Sync frontend to S3
+        env:
+          PATH_PREFIX: ${{ vars.PATH_PREFIX }}
+          SITE_BUCKET_NAME: ${{ vars.SITE_BUCKET_NAME }}
         run: |
           # Uploaded under a key prefix matching this sibling's own path
           # segment (basePath), because the core project's CloudFront
           # forwards the full request URI (e.g. /<name>/foo.html) straight
           # through to this bucket with no prefix stripping.
-          aws s3 sync apps/frontend/out/ "s3://${{ vars.SITE_BUCKET_NAME }}/${{ vars.PATH_PREFIX }}/" \
+          #
+          # ${VAR:+...} — expand to "<prefix>/" only when the prefix is
+          # non-empty. The ROOT application sibling (issue #306) has an empty
+          # prefix and syncs to the bucket root; the naive "$BUCKET/$PREFIX/"
+          # would give "s3://bucket//", whose keys all begin with a literal
+          # slash and match no request CloudFront ever forwards.
+          DEST="s3://${SITE_BUCKET_NAME}/${PATH_PREFIX:+${PATH_PREFIX}/}"
+          aws s3 sync apps/frontend/out/ "$DEST" \
             --delete \
             --cache-control "public, max-age=31536000, immutable" \
             --exclude "*.html"
-          aws s3 sync apps/frontend/out/ "s3://${{ vars.SITE_BUCKET_NAME }}/${{ vars.PATH_PREFIX }}/" \
+          aws s3 sync apps/frontend/out/ "$DEST" \
             --delete \
             --cache-control "no-cache" \
             --include "*.html"
       - name: Invalidate the core project's CloudFront path
         if: vars.PARENT_CLOUDFRONT_DISTRIBUTION_ID != ''
+        env:
+          PATH_PREFIX: ${{ vars.PATH_PREFIX }}
+          DISTRIBUTION_ID: ${{ vars.PARENT_CLOUDFRONT_DISTRIBUTION_ID }}
         run: |
+          # "/*" for the root sibling, "/<prefix>/*" otherwise.
           aws cloudfront create-invalidation \
-            --distribution-id "${{ vars.PARENT_CLOUDFRONT_DISTRIBUTION_ID }}" \
-            --paths "/${{ vars.PATH_PREFIX }}/*"
+            --distribution-id "$DISTRIBUTION_ID" \
+            --paths "/${PATH_PREFIX:+${PATH_PREFIX}/}*"
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: '3.13'

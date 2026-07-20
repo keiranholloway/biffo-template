@@ -70,5 +70,4 @@ jobs:
           TF_VAR_core_api_url: ${{ vars.CORE_API_URL }}
           TF_VAR_core_portal_url: ${{ vars.CORE_PORTAL_URL }}
           TF_VAR_cors_origins: ${{ vars.CORS_ORIGINS_JSON || '["http://localhost:3000"]' }}
-          TF_VAR_parent_cloudfront_distribution_arn:
-            ${{ vars.PARENT_CLOUDFRONT_DISTRIBUTION_ARN || '' }}
+          TF_VAR_parent_cloudfront_distribution_arn: ${{ vars.PARENT_CLOUDFRONT_DISTRIBUTION_ARN || '' }}

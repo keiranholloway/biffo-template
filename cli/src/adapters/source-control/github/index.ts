@@ -303,17 +303,27 @@ export class GitHubAdapter {
   }
 
   /**
-   * Read a file's decoded UTF-8 content at `ref`, or `undefined` if it is absent
-   * (404) or is not a regular file (a directory or submodule).
+   * Read a file's decoded UTF-8 content at `ref` (the repo's default branch when
+   * omitted), or `undefined` if it is absent (404) or is not a regular file (a
+   * directory or submodule).
+   *
+   * Public because `biffo teardown` reads the sibling registry and the sibling
+   * marker file straight from GitHub (issue #306) — teardown must work from a
+   * machine that never cloned the project.
    */
-  private async getFileContent(
+  async getFileContent(
     org: string,
     repo: string,
     path: string,
-    ref: string,
+    ref?: string,
   ): Promise<string | undefined> {
     try {
-      const { data } = await this.octokit.repos.getContent({ owner: org, repo, path, ref })
+      const { data } = await this.octokit.repos.getContent({
+        owner: org,
+        repo,
+        path,
+        ...(ref ? { ref } : {}),
+      })
       if (Array.isArray(data) || data.type !== 'file' || typeof data.content !== 'string') {
         return undefined
       }
@@ -609,37 +619,6 @@ export class GitHubAdapter {
       return true
     } catch (err: unknown) {
       if ((err as { status?: number }).status === 404) return false
-      throw err
-    }
-  }
-
-  /**
-   * Read a file's contents from a repo at `ref` (default branch when omitted),
-   * or `null` if it isn't there. Reads from GitHub rather than a local checkout
-   * deliberately: teardown must work from any machine, including one that never
-   * cloned the project.
-   */
-  async getFileContent(
-    org: string,
-    repo: string,
-    path: string,
-    ref?: string,
-  ): Promise<string | null> {
-    try {
-      const { data } = await this.octokit.repos.getContent({
-        owner: org,
-        repo,
-        path,
-        ...(ref ? { ref } : {}),
-      })
-      // A directory comes back as an array, and a file over 1 MB comes back with
-      // an empty `content`; neither is a file we can read here.
-      if (Array.isArray(data) || !('content' in data) || typeof data.content !== 'string') {
-        return null
-      }
-      return Buffer.from(data.content, 'base64').toString('utf8')
-    } catch (err: unknown) {
-      if ((err as { status?: number }).status === 404) return null
       throw err
     }
   }

@@ -134,8 +134,8 @@ export function parseSiblingBucketDomain(
 }
 
 /** Parse a registry file's contents, tolerating an absent or empty file. */
-export function parseRegistry(contents: string | null): SiblingOriginEntry[] {
-  if (contents === null || contents.trim() === '') return []
+export function parseRegistry(contents: string | undefined): SiblingOriginEntry[] {
+  if (contents === undefined || contents.trim() === '') return []
   let parsed: unknown
   try {
     parsed = JSON.parse(contents)
@@ -261,7 +261,7 @@ export function markerMatches(
 /** Minimal GitHub surface `resolveSiblingRepos` needs — keeps it unit-testable. */
 export interface SiblingRepoLookup {
   repoExists(org: string, repo: string): Promise<boolean>
-  getFileContent(org: string, repo: string, path: string, ref?: string): Promise<string | null>
+  getFileContent(org: string, repo: string, path: string, ref?: string): Promise<string | undefined>
 }
 
 /**
@@ -292,7 +292,7 @@ export async function resolveSiblingRepos(
 
     const raw = await github.getFileContent(coreOrg, repo, SIBLING_MARKER_FILE)
     let marker: SiblingMarker | null = null
-    if (raw !== null) {
+    if (raw !== undefined) {
       try {
         marker = JSON.parse(raw) as SiblingMarker
       } catch {
@@ -308,7 +308,7 @@ export async function resolveSiblingRepos(
           '  It may be an unrelated repo that happens to share the name. Deleting a repo cannot ' +
           'be undone, so nothing has been deleted.\n' +
           `  Delete ${coreOrg}/${repo} by hand if it really is the sibling, remove its entry from ` +
-          'the core repo\'s siblings.auto.tfvars.json, then re-run biffo teardown.',
+          "the core repo's siblings.auto.tfvars.json, then re-run biffo teardown.",
       )
     }
 

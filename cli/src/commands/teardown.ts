@@ -472,7 +472,7 @@ const SIBLING_DESTROY_WORKFLOW_PATH = `.github/workflows/${SIBLING_DESTROY_WORKF
 /** The GitHub surface sibling discovery needs. Narrow, so tests can fake it. */
 export interface SiblingDiscoveryGithub {
   repoExists(org: string, repo: string): Promise<boolean>
-  getFileContent(org: string, repo: string, path: string, ref?: string): Promise<string | null>
+  getFileContent(org: string, repo: string, path: string, ref?: string): Promise<string | undefined>
   listOpenPullRequests(
     org: string,
     repo: string,
@@ -516,12 +516,7 @@ export async function discoverSiblings(
   for (const pr of openPrs) {
     if (!pr.headRef.startsWith(REGISTRATION_BRANCH_PREFIX)) continue
     for (const env of REGISTRY_ENVIRONMENTS) {
-      const contents = await github.getFileContent(
-        coreOrg,
-        coreRepo,
-        registryPath(env),
-        pr.headRef,
-      )
+      const contents = await github.getFileContent(coreOrg, coreRepo, registryPath(env), pr.headRef)
       sources.push({
         environment: env,
         entries: parseRegistry(contents),
@@ -557,7 +552,7 @@ export async function assertSiblingsAreDestroyable(
       sibling.repo,
       SIBLING_DESTROY_WORKFLOW_PATH,
     )
-    if (workflow === null) missing.push(`${sibling.org}/${sibling.repo}`)
+    if (workflow === undefined) missing.push(`${sibling.org}/${sibling.repo}`)
   }
 
   if (missing.length > 0) {
@@ -608,9 +603,7 @@ export function formatSiblingPlan(siblings: ResolvedSibling[], skipDestroy: bool
     )
     if (s.pendingRegistrationPr !== undefined) {
       lines.push(
-        chalk.dim(
-          `      registration PR #${s.pendingRegistrationPr} is still open — never routed`,
-        ),
+        chalk.dim(`      registration PR #${s.pendingRegistrationPr} is still open — never routed`),
       )
     }
   }

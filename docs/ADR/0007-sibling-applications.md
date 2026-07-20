@@ -11,6 +11,17 @@
 > redirect support + this document). See
 > [the sibling-apps guide](../guides/sibling-apps.md) for how to use it.
 
+> **Amended 2026-07-20 (issue #306) — the root application sibling.** See
+> [Amendment: the root application sibling](#amendment-2026-07-20--the-root-application-sibling)
+> at the end of this document. In short: the mechanism below is unchanged,
+> but the path prefix may now be **empty**. A sibling with an empty prefix
+> serves `/`, takes the distribution's `default_cache_behavior` rather than a
+> pair of `ordered_cache_behavior` patterns, registers under the reserved
+> name `app`, and is created by `biffo init` rather than on demand. Where
+> this document says a sibling is routed at `baseurl.com/<name>` with
+> `basePath` set to that segment, read it as describing every sibling except
+> that one.
+
 ---
 
 ## Context
@@ -356,3 +367,112 @@ create`'s session-resumability shape (decision 6) mirrors `biffo init`'s
   confirmation (a standing constraint on this work, not specific to this
   ADR). Proving this live is a distinct follow-up requiring a disposable
   test instance or deliberate use of a live one.
+
+---
+
+## Amendment 2026-07-20 — the root application sibling
+
+**Status:** Accepted
+**Date:** 2026-07-20
+**Issue:** [#306](https://github.com/keiranholloway/biffo-template/issues/306)
+**Deciders:** Keiran Holloway (Technical Architect)
+
+### Why
+
+This ADR assumed every sibling is an *additional* thing hung off a product
+that already exists at the root — hence `baseurl.com/<name>`, always with a
+name. The tiering in #306 corrects that assumption:
+
+| Tier | What | Where it lives | Serves |
+|---|---|---|---|
+| Core | data layer, API, **admin console** | the platform repo | `/admin`, `/login` |
+| Plugins | optional capability | installed into core | — |
+| **User application** | their product | **its own sibling repo** | **`/`** |
+
+`apps/portal` is strictly the admin console. The user's product is a sibling
+like any other — it just happens to be the one at the front door. Rather
+than invent a second mechanism for it, the sibling mechanism is extended by
+one degree of freedom: the path prefix may be empty.
+
+### What changes
+
+1. **An empty path prefix is legal.** A sibling whose prefix is `''` serves
+   `/`. `NEXT_PUBLIC_BASE_PATH` is the empty string for it, *not* `/` —
+   Next.js refuses to build with a `basePath` of `/`. Its deploy syncs to the
+   bucket root rather than `s3://<bucket>/<name>/`, and invalidates `/*`.
+
+2. **Name and path prefix become distinct concepts.** They were the same
+   string for every sibling before this, which made them easy to conflate.
+   They are not the same thing:
+
+   - the **path prefix** is the URL segment, and is empty for the root;
+   - the **registry name** (`sibling_origins[].name`) is the key everything
+     hangs off — the CloudFront origin id `sibling-<name>`, and the key
+     `collectSiblings()` uses to discover siblings during `biffo teardown`.
+
+   The root sibling's registry name is the reserved word **`app`**. It is
+   never empty. An empty key would make the sibling undiscoverable to
+   teardown, which means a leaked repo, a leaked bucket and an ongoing bill —
+   the exact failure #306 was filed about.
+
+3. **`app` joins `admin` and `login` as a reserved name.** Unlike those two
+   it legitimately *appears* in `sibling_origins`, so it cannot simply be
+   rejected; `modules/cloud/aws/cdn/variables.tf` enforces it by requiring
+   sibling names to be unique, so a second sibling cannot claim it.
+
+4. **The root sibling takes `default_cache_behavior`.** CloudFront allows
+   exactly one default behaviour, it must name an origin that exists, and
+   there is no dynamic-block form of it — so the target is a plan-time
+   conditional on the registry: `sibling-app` when an `app` entry is
+   registered, the portal bucket as a placeholder when not. The placeholder
+   is not the portal serving root (its landing page was deleted in phase 1);
+   `/` simply 404s, which is the accepted state between `init` and the
+   sibling's first deploy. What the placeholder buys is a distribution that
+   stays valid in that window instead of failing to apply.
+
+   `/_next/*` belongs to the root sibling as a consequence. The portal
+   vacated it in phase 1 by setting `assetPrefix: '/admin'`; without that,
+   two S3 origins would claim one URL prefix and CloudFront could not
+   disambiguate them.
+
+5. **`biffo init` creates it, always.** Not a flag. Scaffolding an
+   application and getting no application would be the wrong default. `init`
+   therefore creates **two** GitHub repositories — the platform, and
+   `<project>-app` — and says so before it creates either.
+
+   The repo name is derived, not asked for, because three things must agree
+   on it: teardown resolves a sibling's repo as `<coreOrg>/<projectName>`,
+   the S3 site bucket is `<projectName>-<env>-site-<account>` (which is how
+   teardown recovers the project name back out of the registry), and `init`
+   must keep working non-interactively (#274).
+
+6. **Registration precedes creation.** `init` writes the registry entry into
+   the core repo *before* creating the sibling's repo. Every value in that
+   entry is derived from config, so nothing needs to exist first. The
+   ordering is the safety property: a registration without a repo is
+   self-correcting (teardown sees the entry, finds no repo, reclaims the AWS
+   side; a resumed `init` creates it), whereas a repo without a registration
+   is invisible to teardown and leaks silently.
+
+### What does not change
+
+The mechanism itself. Same skeleton, same shared-origin SSO, same Cognito
+app client, same two-phase bucket-policy handshake, same governance. The
+root sibling is discovered, destroyed and reasoned about exactly like any
+other — it is a sibling with one field set to the empty string.
+
+### Consequences
+
+- `biffo sibling create --root` exists for re-creating a root sibling by
+  hand, and pre-flights that the core's CDN can actually follow the `app`
+  origin before opening a registration PR. An older core would otherwise
+  merge the registration, gain the origin, and route nothing to it.
+- `siblings.auto.tfvars.json` now lands in every instance on day one. Its S3
+  host names contain the AWS account id by construction, so `.gitleaks.toml`
+  scopes its bare-12-digit rule away from that filename. This was already
+  latent — `biffo sibling create`'s registration PR has always written the
+  file — and is called out rather than left to surface as a red Secret Scan
+  on someone's first run.
+- The window between `biffo init` and the application's first deploy serves
+  a 404 at `/`. Accepted deliberately: the window is short and a 404 is
+  honest. No placeholder page is shipped to paper over it.

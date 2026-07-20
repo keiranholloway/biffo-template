@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BiffoConfigSchema } from '../config/schema.js'
 import { SiblingConfigSchema } from '../config/sibling-schema.js'
 import type { SiblingSession } from '../lib/sibling-session.js'
-import { runSiblingCreate, writeSiblingTemplate, type SiblingCreateGit } from './sibling-create.js'
+import {
+  assertCoreSupportsSiblingRouting,
+  assertPathPrefixIsAllowed,
+  runSiblingCreate,
+  writeSiblingTemplate,
+  type SiblingCreateGit,
+} from './sibling-create.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -87,7 +93,7 @@ function makeAwsMock() {
 // realistic modules/cloud/aws/cdn. Cleaned up after each test.
 const coreClones: string[] = []
 
-function seedCoreClone(withSiblingSupport = true): string {
+function seedCoreClone(withSiblingSupport = true, withRootSupport = true): string {
   const dir = mkdtempSync(join(tmpdir(), 'sibling-core-clone-'))
   coreClones.push(dir)
   const cdnDir = join(dir, 'modules', 'cloud', 'aws', 'cdn')
@@ -97,6 +103,12 @@ function seedCoreClone(withSiblingSupport = true): string {
     withSiblingSupport
       ? 'variable "sibling_origins" {\n  type = any\n}\n'
       : 'variable "aliases" {}\n',
+  )
+  // The capability marker the ROOT pre-flight looks for (issue #306): a core
+  // whose default_cache_behavior can follow the "app" origin.
+  writeFileSync(
+    join(cdnDir, 'main.tf'),
+    withRootSupport ? 'locals {\n  root_sibling_registered = true\n}\n' : 'locals {}\n',
   )
   return dir
 }
@@ -526,5 +538,181 @@ describe('runSiblingCreate', () => {
       'RUNNER_LABEL',
       expect.anything(),
     )
+  })
+})
+
+// ─── The root application sibling (issue #306) ───────────────────────────────
+
+const ROOT_CONFIG = SiblingConfigSchema.parse({
+  project: { name: 'core-app-app', description: 'The application' },
+  source_control: { provider: 'github', config: { org: 'acme', repo: 'core-app-app' } },
+  cloud: { provider: 'aws', config: { account_id: '123456789012', region: 'eu-west-1' } },
+  environments: ['dev'],
+  // The empty prefix IS root mode.
+  core: { config_path: './biffo.config.json', path_prefix: '' },
+})
+
+function makeRootSession(): SiblingSession {
+  return {
+    version: 1,
+    config: ROOT_CONFIG,
+    awsAccountId: '123456789012',
+    awsRegion: 'eu-west-1',
+    completedSteps: [],
+    outputs: {},
+  }
+}
+
+describe('root sibling mode', () => {
+  let skeletonRoot: string
+
+  beforeEach(() => {
+    skeletonRoot = mkdtempSync(join(tmpdir(), 'sibling-skeleton-'))
+    writeFileSync(join(skeletonRoot, 'biffo.sibling.json'), '{}')
+  })
+
+  afterEach(() => {
+    rmSync(skeletonRoot, { recursive: true, force: true })
+  })
+
+  it('rejects a non-root sibling claiming a reserved prefix', () => {
+    expect(() => assertPathPrefixIsAllowed('app')).toThrow(/reserved/)
+    expect(() => assertPathPrefixIsAllowed('admin')).toThrow(/reserved/)
+    expect(() => assertPathPrefixIsAllowed('login')).toThrow(/reserved/)
+    expect(() => assertPathPrefixIsAllowed('crm')).not.toThrow()
+    // The root itself is allowed — it is the one thing "app" is reserved FOR.
+    expect(() => assertPathPrefixIsAllowed('')).not.toThrow()
+  })
+
+  it('gives the sibling an EMPTY basePath, not "/"', () => {
+    const template = mkdtempSync(join(tmpdir(), 'root-tmpl-'))
+    const target = mkdtempSync(join(tmpdir(), 'root-tgt-'))
+    coreClones.push(template, target)
+    mkdirSync(join(template, 'apps', 'frontend'), { recursive: true })
+    writeFileSync(join(template, 'biffo.sibling.json'), '{}')
+    writeFileSync(
+      join(template, 'apps', 'frontend', '.env.example'),
+      ['NEXT_PUBLIC_SIBLING_PATH_PREFIX=/x', 'NEXT_PUBLIC_BASE_PATH=/x'].join('\n'),
+    )
+
+    writeSiblingTemplate(template, target, ROOT_CONFIG, {
+      coreProjectName: 'core-app',
+      pathPrefix: '',
+    })
+
+    const env = readFileSync(join(target, 'apps', 'frontend', '.env.example'), 'utf8')
+    expect(env.split('\n')).toContain('NEXT_PUBLIC_BASE_PATH=')
+    expect(env.split('\n')).toContain('NEXT_PUBLIC_SIBLING_PATH_PREFIX=')
+    expect(env).not.toContain('NEXT_PUBLIC_BASE_PATH=/')
+    // The marker teardown reads records the real (empty) prefix.
+    expect(JSON.parse(readFileSync(join(target, 'biffo.sibling.json'), 'utf8'))).toMatchObject({
+      name: 'core-app-app',
+      path_prefix: '',
+    })
+  })
+
+  it('registers under the reserved name "app", never an empty name', async () => {
+    const github = makeGithubMock()
+    const aws = makeAwsMock()
+    const coreAws = makeAwsMock()
+    coreAws.readTerraformOutputs.mockResolvedValue(CORE_OUTPUTS)
+    const git = makeGitMock()
+    const cloneDir = seedCoreClone()
+    git.cloneForEditing.mockResolvedValue(cloneDir)
+
+    await runSiblingCreate(
+      github as never,
+      aws as never,
+      coreAws as never,
+      git,
+      ROOT_CONFIG,
+      makeRootSession(),
+      { coreConfig: CORE_CONFIG, skeletonRoot, githubToken: 'gh-token' },
+    )
+
+    const registry = JSON.parse(
+      readFileSync(join(cloneDir, 'infra', 'environments', 'dev', 'siblings.auto.tfvars.json'), 'utf8'),
+    ) as { sibling_origins: { name: string; bucket_regional_domain: string }[] }
+
+    expect(registry.sibling_origins).toHaveLength(1)
+    expect(registry.sibling_origins[0]!.name).toBe('app')
+    expect(registry.sibling_origins[0]!.bucket_regional_domain).toBe(
+      'core-app-app-dev-site-123456789012.s3.eu-west-1.amazonaws.com',
+    )
+  })
+
+  it('sets an empty PATH_PREFIX repo variable', async () => {
+    const github = makeGithubMock()
+    const git = makeGitMock()
+    git.cloneForEditing.mockResolvedValue(seedCoreClone())
+    const coreAws = makeAwsMock()
+    coreAws.readTerraformOutputs.mockResolvedValue(CORE_OUTPUTS)
+
+    await runSiblingCreate(
+      github as never,
+      makeAwsMock() as never,
+      coreAws as never,
+      git,
+      ROOT_CONFIG,
+      makeRootSession(),
+      { coreConfig: CORE_CONFIG, skeletonRoot, githubToken: 'gh-token' },
+    )
+
+    expect(github.setRepoVariable).toHaveBeenCalledWith('acme', 'core-app-app', 'PATH_PREFIX', '')
+  })
+
+  // The silent-failure guard: an older core would merge the registration and
+  // gain the origin, but route nothing to it.
+  it('refuses a core whose CDN cannot follow the app origin', () => {
+    const withoutRoot = seedCoreClone(true, false)
+    expect(() => assertCoreSupportsSiblingRouting(withoutRoot, 'core-app', '')).toThrow(
+      /ROOT application sibling/,
+    )
+    // ...but an ordinary sibling is still fine against that same core.
+    expect(() => assertCoreSupportsSiblingRouting(withoutRoot, 'core-app', 'crm')).not.toThrow()
+  })
+
+  it('can skip core identity and registration, for biffo init', async () => {
+    const github = makeGithubMock()
+    const coreAws = makeAwsMock()
+    const git = makeGitMock()
+    const session = makeRootSession()
+
+    await runSiblingCreate(
+      github as never,
+      makeAwsMock() as never,
+      coreAws as never,
+      git,
+      ROOT_CONFIG,
+      session,
+      {
+        coreConfig: CORE_CONFIG,
+        skeletonRoot,
+        githubToken: 'gh-token',
+        skipCoreIdentity: true,
+        skipRegistration: true,
+      },
+    )
+
+    // The core is not deployed yet, so its outputs are never read...
+    expect(coreAws.readTerraformOutputs).not.toHaveBeenCalled()
+    // ...and no registration PR is opened against a repo init just created.
+    expect(github.createPullRequest).not.toHaveBeenCalled()
+    // But the repo itself is fully provisioned, and every step is checkpointed
+    // so a resumed init does not try to create it twice.
+    expect(github.createEmptyRepo).toHaveBeenCalledWith(
+      'acme',
+      'core-app-app',
+      'The application',
+    )
+    expect(session.completedSteps).toEqual([
+      'verify_credentials',
+      'resolve_core_identity',
+      'create_repo',
+      'oidc_trust',
+      'terraform_backend',
+      'github_config',
+      'register_with_core',
+    ])
   })
 })

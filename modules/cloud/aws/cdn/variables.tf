@@ -78,4 +78,13 @@ variable "sibling_origins" {
     description = optional(string)
   }))
   default = []
+
+  # "admin" and "login" are the portal's own CloudFront path patterns (issue
+  # #306). A sibling claiming either would produce a duplicate path_pattern and
+  # fail the apply with an opaque duplicate-key error — reject it here, where
+  # the message can say why.
+  validation {
+    condition     = length([for s in var.sibling_origins : s.name if contains(["admin", "login"], s.name)]) == 0
+    error_message = "Sibling names \"admin\" and \"login\" are reserved for the portal's own CloudFront routes."
+  }
 }

@@ -303,17 +303,27 @@ export class GitHubAdapter {
   }
 
   /**
-   * Read a file's decoded UTF-8 content at `ref`, or `undefined` if it is absent
-   * (404) or is not a regular file (a directory or submodule).
+   * Read a file's decoded UTF-8 content at `ref` (the repo's default branch when
+   * omitted), or `undefined` if it is absent (404) or is not a regular file (a
+   * directory or submodule).
+   *
+   * Public because `biffo teardown` reads the sibling registry and the sibling
+   * marker file straight from GitHub (issue #306) — teardown must work from a
+   * machine that never cloned the project.
    */
-  private async getFileContent(
+  async getFileContent(
     org: string,
     repo: string,
     path: string,
-    ref: string,
+    ref?: string,
   ): Promise<string | undefined> {
     try {
-      const { data } = await this.octokit.repos.getContent({ owner: org, repo, path, ref })
+      const { data } = await this.octokit.repos.getContent({
+        owner: org,
+        repo,
+        path,
+        ...(ref ? { ref } : {}),
+      })
       if (Array.isArray(data) || data.type !== 'file' || typeof data.content !== 'string') {
         return undefined
       }
@@ -595,6 +605,42 @@ export class GitHubAdapter {
         throw err
       }
     }
+  }
+
+  /**
+   * Does this repository exist (and is it visible to our token)?
+   *
+   * Used by `biffo teardown` to tell "sibling registered, repo since deleted"
+   * apart from "sibling repo still live", which decide different teardown paths.
+   */
+  async repoExists(org: string, repo: string): Promise<boolean> {
+    try {
+      await this.octokit.repos.get({ owner: org, repo })
+      return true
+    } catch (err: unknown) {
+      if ((err as { status?: number }).status === 404) return false
+      throw err
+    }
+  }
+
+  /**
+   * Head branch names of the repo's open pull requests.
+   *
+   * Teardown uses this to spot siblings whose registration PR has not merged
+   * yet (branch `biffo/register-sibling-<name>`) — they exist as real repos and
+   * real AWS resources, but nothing has landed in the merged registry.
+   */
+  async listOpenPullRequests(
+    org: string,
+    repo: string,
+  ): Promise<Array<{ number: number; headRef: string }>> {
+    const prs = await this.octokit.paginate(this.octokit.pulls.list, {
+      owner: org,
+      repo,
+      state: 'open',
+      per_page: 100,
+    })
+    return prs.map((pr) => ({ number: pr.number, headRef: pr.head.ref }))
   }
 
   /**

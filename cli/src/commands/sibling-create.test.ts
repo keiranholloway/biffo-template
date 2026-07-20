@@ -644,7 +644,13 @@ describe('root sibling mode', () => {
     )
   })
 
-  it('sets an empty PATH_PREFIX repo variable', async () => {
+  // Issue #319: GitHub's Actions variables API rejects an empty value with a
+  // 422, so the root sibling's empty prefix must be left UNSET rather than
+  // stored. An unset `vars.PATH_PREFIX` evaluates to '' in every consumer
+  // (skeleton deploy.yml's basePath, S3 sync destination and CloudFront
+  // invalidation all use `${VAR:+...}` / `vars.X && ... || ''`), so this is
+  // behaviourally identical — and it is the only representable option.
+  it('does not set a PATH_PREFIX repo variable for the root sibling', async () => {
     const github = makeGithubMock()
     const git = makeGitMock()
     git.cloneForEditing.mockResolvedValue(seedCoreClone())
@@ -661,7 +667,20 @@ describe('root sibling mode', () => {
       { coreConfig: CORE_CONFIG, skeletonRoot, githubToken: 'gh-token' },
     )
 
-    expect(github.setRepoVariable).toHaveBeenCalledWith('acme', 'core-app-app', 'PATH_PREFIX', '')
+    expect(github.setRepoVariable).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'PATH_PREFIX',
+      expect.anything(),
+    )
+    // The rest of the repo configuration must still happen — the skip is
+    // scoped to this one variable, not to the step.
+    expect(github.setRepoVariable).toHaveBeenCalledWith(
+      'acme',
+      'core-app-app',
+      'PROJECT_NAME',
+      'core-app-app',
+    )
   })
 
   // The silent-failure guard: an older core would merge the registration and

@@ -598,7 +598,18 @@ async function configureSiblingGithub(
   // PATH_PREFIX as "serve from the bucket root" throughout (basePath, S3 sync
   // destination, CloudFront invalidation) rather than producing "/", "//" and
   // "//*", each of which is wrong in its own way.
-  await github.setRepoVariable(org, repo, 'PATH_PREFIX', resolvePathPrefix(config))
+  //
+  // GitHub's Actions variables API rejects an empty value with a 422
+  // ("Variable value cannot be empty"), so the root sibling's prefix cannot be
+  // *stored* — only left unset (issue #319). That is exactly equivalent for
+  // every consumer: GitHub evaluates an unset `vars.X` to the empty string, so
+  // `${{ vars.PATH_PREFIX }}` yields '' either way. Do NOT substitute a
+  // sentinel like '/' or 'root' — see the note above for why '/' is wrong, and
+  // a sentinel would have to be decoded in every consumer.
+  const pathPrefix = resolvePathPrefix(config)
+  if (pathPrefix !== '') {
+    await github.setRepoVariable(org, repo, 'PATH_PREFIX', pathPrefix)
+  }
   await github.setRepoVariable(org, repo, 'AWS_REGION', awsConfig(config).region)
   await github.setRepoVariable(org, repo, 'SIBLING_DEPLOY_ENABLED', 'true')
 

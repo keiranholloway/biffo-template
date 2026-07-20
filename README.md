@@ -5,7 +5,7 @@ Opinionated repo template and scaffolding CLI for solopreneurs. One command prov
 ## Quick start
 
 ```bash
-npx biffo init
+npx @biffo/cli init
 ```
 
 The CLI will prompt for your project name, DNS mode, AWS account, and GitHub org, then:

@@ -110,7 +110,7 @@ jobs:
 
       - name: Build
         if: steps.guard.outputs.is_template == 'true'
-        run: pnpm --filter biffo build
+        run: pnpm --filter @biffo/cli build
 
       # package.json carries a 0.0.0 placeholder: the version lives in
       # core.version and is stamped here, so there is exactly one number to bump.

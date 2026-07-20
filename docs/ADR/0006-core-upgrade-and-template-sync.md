@@ -87,7 +87,7 @@ for every instance. Two guardrails keep version and history in lockstep:
   `core.version`. Patch for fixes, minor for features, major for breaking core
   changes. Implemented by `cli/src/lib/core-version-guard.ts` (reusing the same
   `isTemplateOwned` logic as the sync) and run via
-  `pnpm --filter biffo check:core-bump`.
+  `pnpm --filter @biffo/cli check:core-bump`.
 - **Auto-tagging (`Core Version Tag`).** On merge to `main`, a git tag
   `core-v<version>` is created for the new `core.version`. These tags are the
   recoverable template trees `biffo core upgrade` uses as its merge **base** (the

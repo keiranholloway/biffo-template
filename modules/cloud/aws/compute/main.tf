@@ -21,6 +21,13 @@ locals {
   name_prefix   = "${var.project_name}-${var.environment}"
   function_name = "${local.name_prefix}-${var.function_name}"
 
+  # Database credential secrets this function may read — the master, and the
+  # least-privilege application role when the environment provisions one (#253).
+  db_secret_arns = compact([
+    var.db_credentials_secret_arn,
+    var.app_db_credentials_secret_arn,
+  ])
+
   # AWS Signer profile names allow [0-9A-Za-z_] only and cap name_prefix at 38
   # characters. `<project>-<environment>-<function>` clears that easily once a
   # project name is more than a few characters — e.g. a 39-char function name
@@ -143,13 +150,18 @@ data "aws_iam_policy_document" "lambda_permissions" {
     resources = [aws_sqs_queue.dlq.arn]
   }
 
+  # The Core API reads two DB credentials: the master (migrations, db-init,
+  # ddl-import — they create and alter objects) and the least-privilege
+  # application role the request path connects as (#253). Scoped to the exact
+  # ARNs supplied; app_db_credentials_secret_arn is optional so a deployment
+  # that has not yet re-applied the database module still gets the master.
   dynamic "statement" {
-    for_each = var.db_credentials_secret_arn != "" ? [1] : []
+    for_each = length(local.db_secret_arns) > 0 ? [1] : []
     content {
       sid       = "DBSecretsAccess"
       effect    = "Allow"
       actions   = ["secretsmanager:GetSecretValue"]
-      resources = [var.db_credentials_secret_arn]
+      resources = local.db_secret_arns
     }
   }
 

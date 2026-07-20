@@ -68,7 +68,14 @@ class TestRunDbInitAppliesOnlyCommittedMigrations:
 
         result = _run_db_init()
 
-        assert result == {"ok": True}
+        # app_role: _run_db_init now also bootstraps the least-privilege
+        # biffo_app role (#253). That is a Postgres-only concern -- roles,
+        # schemas and GRANT do not exist in the SQLite this suite runs on --
+        # so it reports itself as a deliberate no-op here.
+        assert result == {
+            "ok": True,
+            "app_role": {"bootstrapped": False, "reason": "not-postgres"},
+        }
         # 0001_create_users_table.py, 0002_create_ddl_import_history_table.py --
         # both already committed in this repo; no plugin fixture needed since
         # _run_db_init no longer discovers or generates anything.
@@ -81,8 +88,12 @@ class TestRunDbInitAppliesOnlyCommittedMigrations:
     ) -> None:
         from src.api.main import _run_db_init
 
-        assert _run_db_init() == {"ok": True}
-        assert _run_db_init() == {"ok": True}
+        noop = {
+            "ok": True,
+            "app_role": {"bootstrapped": False, "reason": "not-postgres"},
+        }
+        assert _run_db_init() == noop
+        assert _run_db_init() == noop
         assert "users" in _table_names(db_init_env["db_path"])
 
     def test_never_writes_a_migrations_versions_copy_under_tmp(
@@ -144,5 +155,12 @@ class TestRunDbInitAppliesOnlyCommittedMigrations:
 
         result = _run_db_init()
 
-        assert result == {"ok": True}
+        # app_role: _run_db_init now also bootstraps the least-privilege
+        # biffo_app role (#253). That is a Postgres-only concern -- roles,
+        # schemas and GRANT do not exist in the SQLite this suite runs on --
+        # so it reports itself as a deliberate no-op here.
+        assert result == {
+            "ok": True,
+            "app_role": {"bootstrapped": False, "reason": "not-postgres"},
+        }
         assert "widgets" not in _table_names(db_init_env["db_path"])

@@ -9,12 +9,59 @@ locals {
   name_prefix = "${var.project_name}-${var.environment}"
   db_name     = replace(var.project_name, "-", "_")
   db_user     = "biffo_${replace(var.environment, "-", "_")}"
+  db_address  = var.enable_rds_proxy ? aws_db_proxy.main[0].endpoint : aws_db_instance.main.address
 }
 
 resource "random_password" "db_password" {
   length           = 32
   special          = true
   override_special = "!#$%&*()-_=+[]{}<>:?"
+}
+
+# ---------------------------------------------------------------------------
+# Least-privilege application role (#253)
+#
+# db_user above is the RDS master: table owner, rds_superuser, BYPASSRLS. It
+# stays the credential for migrations, biffo:db-init and biffo:ddl-import,
+# which create and alter objects. var.app_db_user is the non-owner role the
+# Core API's *request path* connects as instead, so an injection or a
+# compromised dependency on a query path cannot drop or read beyond the rows
+# the API already serves.
+#
+# Terraform only mints the credential; the Postgres role itself is created and
+# granted by biffo:db-init (services/api/src/api/db_app_role.py), because role
+# creation is in-database work Terraform has no connection to perform.
+# ---------------------------------------------------------------------------
+resource "random_password" "app_password" {
+  # Deliberately excludes '%' (and '/', '@', which were never in the set):
+  # this password is interpolated into the asyncpg URL below, and '%' makes a
+  # literal password ambiguous with percent-encoding when the URL is parsed
+  # back apart to bootstrap the role. Length 40 more than compensates for the
+  # two dropped symbols.
+  length           = 40
+  special          = true
+  override_special = "!#$&*()-_=+[]{}<>:?"
+}
+
+resource "aws_secretsmanager_secret" "app_credentials" {
+  name                    = "/${var.project_name}/${var.environment}/db/app-credentials"
+  description             = "Least-privilege PostgreSQL application role for ${local.name_prefix} (#253)"
+  recovery_window_in_days = var.environment == "prod" ? 30 : 0
+  tags                    = var.tags
+}
+
+resource "aws_secretsmanager_secret_version" "app_credentials" {
+  secret_id = aws_secretsmanager_secret.app_credentials.id
+  # Same key shape as db_credentials — services/api/src/api/database.py reads
+  # both through one _url_from_secret().
+  secret_string = jsonencode({
+    username = var.app_db_user
+    password = random_password.app_password.result
+    dbname   = local.db_name
+    engine   = "postgres"
+    port     = 5432
+    host     = aws_db_instance.main.address
+  })
 }
 
 resource "aws_secretsmanager_secret" "db_credentials" {
@@ -165,9 +212,15 @@ resource "aws_iam_role_policy" "rds_proxy_secrets" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
-      Action   = ["secretsmanager:GetSecretValue"]
-      Resource = [aws_secretsmanager_secret.db_credentials.arn]
+      Effect = "Allow"
+      Action = ["secretsmanager:GetSecretValue"]
+      Resource = [
+        aws_secretsmanager_secret.db_credentials.arn,
+        # The proxy authenticates each client credential it accepts against a
+        # secret. Without this the app role's connections are rejected at the
+        # proxy, before Postgres ever sees them (#253).
+        aws_secretsmanager_secret.app_credentials.arn,
+      ]
     }]
   })
 }
@@ -183,10 +236,20 @@ resource "aws_db_proxy" "main" {
   vpc_security_group_ids = [aws_security_group.db.id]
   vpc_subnet_ids         = var.private_subnet_ids
 
+  # One auth block per credential the proxy will accept. The master is what
+  # migrations/db-init present; the app role is what the request path presents
+  # (#253) — omitting the second block makes every API request fail
+  # authentication at the proxy on any proxy-enabled environment.
   auth {
     auth_scheme = "SECRETS"
     iam_auth    = "DISABLED"
     secret_arn  = aws_secretsmanager_secret.db_credentials.arn
+  }
+
+  auth {
+    auth_scheme = "SECRETS"
+    iam_auth    = "DISABLED"
+    secret_arn  = aws_secretsmanager_secret.app_credentials.arn
   }
 
   tags = var.tags

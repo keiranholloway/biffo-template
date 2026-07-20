@@ -253,6 +253,15 @@ jobs:
           if echo "$RESULT" | grep -q FunctionError; then
             echo "Schema init failed:" && cat db-init-response.json && exit 1
           fi
+          # Echo the response on success too. It carries the app_role result
+          # (#253): {"bootstrapped": true, "role": "biffo_app", "schemas": [...]}
+          # when the least-privilege role was created and granted. A
+          # "bootstrapped": false with reason "no-app-credential" means the
+          # environment has not been re-applied and the request path is still
+          # falling back to the owner/master role -- which is serving traffic,
+          # so it is not a deploy failure, but it is not the intended posture
+          # either. This is the only place that distinction is visible.
+          echo "db-init response:" && cat db-init-response.json && echo
       # Apply every vendored DDL import (ADR-0005) after the Alembic schema init.
       # Like db-init runs the Core's own migrations, this runs biffo:ddl-import for
       # each db/imports/<name>/ dir — new .sql files (schema additions, seeds) apply
@@ -554,6 +563,15 @@ jobs:
           if echo "$RESULT" | grep -q FunctionError; then
             echo "Schema init failed:" && cat db-init-response.json && exit 1
           fi
+          # Echo the response on success too. It carries the app_role result
+          # (#253): {"bootstrapped": true, "role": "biffo_app", "schemas": [...]}
+          # when the least-privilege role was created and granted. A
+          # "bootstrapped": false with reason "no-app-credential" means the
+          # environment has not been re-applied and the request path is still
+          # falling back to the owner/master role -- which is serving traffic,
+          # so it is not a deploy failure, but it is not the intended posture
+          # either. This is the only place that distinction is visible.
+          echo "db-init response:" && cat db-init-response.json && echo
       # Apply every vendored DDL import (ADR-0005) after the Alembic schema init.
       # Like db-init runs the Core's own migrations, this runs biffo:ddl-import for
       # each db/imports/<name>/ dir — new .sql files (schema additions, seeds) apply
@@ -867,6 +885,15 @@ jobs:
           if echo "$RESULT" | grep -q FunctionError; then
             echo "Schema init failed:" && cat db-init-response.json && exit 1
           fi
+          # Echo the response on success too. It carries the app_role result
+          # (#253): {"bootstrapped": true, "role": "biffo_app", "schemas": [...]}
+          # when the least-privilege role was created and granted. A
+          # "bootstrapped": false with reason "no-app-credential" means the
+          # environment has not been re-applied and the request path is still
+          # falling back to the owner/master role -- which is serving traffic,
+          # so it is not a deploy failure, but it is not the intended posture
+          # either. This is the only place that distinction is visible.
+          echo "db-init response:" && cat db-init-response.json && echo
       # Apply every vendored DDL import (ADR-0005) after the Alembic schema init.
       # Like db-init runs the Core's own migrations, this runs biffo:ddl-import for
       # each db/imports/<name>/ dir — new .sql files (schema additions, seeds) apply

@@ -7,6 +7,19 @@ variable "compute_security_group_id" {
   type        = string
 }
 
+variable "app_db_user" {
+  description = "Name of the least-privilege, non-owner Postgres role the Core API's request path connects as (#253). Created and granted by biffo:db-init, not by Terraform. Must match BIFFO_APP_ROLE_NAME on the Lambda; db-init fails loudly if they disagree."
+  type        = string
+  default     = "biffo_app"
+
+  validation {
+    # db_app_role.py validates the same shape before using it as a SQL
+    # identifier and refuses to bootstrap anything else.
+    condition     = can(regex("^[a-z_][a-z0-9_$]{0,62}$", var.app_db_user))
+    error_message = "app_db_user must be a lowercase Postgres identifier: ^[a-z_][a-z0-9_$]{0,62}$."
+  }
+}
+
 variable "instance_class" {
   type    = string
   default = "db.t3.micro"

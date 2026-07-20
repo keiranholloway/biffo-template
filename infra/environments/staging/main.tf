@@ -124,11 +124,20 @@ module "core_api" {
   vpc_id                    = module.networking.vpc_id
   private_subnet_ids        = module.networking.private_subnet_ids
   db_credentials_secret_arn = module.database.credentials_secret_arn
-  event_bus_name            = module.events.event_bus_name
+  # Least-privilege application role the request path connects as (#253).
+  app_db_credentials_secret_arn = module.database.app_credentials_secret_arn
+  event_bus_name                = module.events.event_bus_name
   environment_variables = {
-    BIFFO_ENVIRONMENT          = local.environment
-    BIFFO_DB_SECRET_ARN        = module.database.credentials_secret_arn
-    BIFFO_DB_HOST              = module.database.db_endpoint
+    BIFFO_ENVIRONMENT = local.environment
+    # Owner/master credential — migrations, biffo:db-init and
+    # biffo:ddl-import use this because they create and alter objects.
+    BIFFO_DB_SECRET_ARN = module.database.credentials_secret_arn
+    BIFFO_DB_HOST       = module.database.db_endpoint
+    # Least-privilege, non-owner role the HTTP request path connects as
+    # instead (#253). db-init creates and grants it inside Postgres; Terraform
+    # only mints the credential.
+    BIFFO_APP_DB_SECRET_ARN    = module.database.app_credentials_secret_arn
+    BIFFO_APP_ROLE_NAME        = module.database.app_db_user
     BIFFO_EVENT_BUS_NAME       = module.events.event_bus_name
     BIFFO_COGNITO_USER_POOL_ID = module.auth.user_pool_id
     BIFFO_COGNITO_CLIENT_ID    = module.auth.client_id

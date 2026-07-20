@@ -136,7 +136,17 @@ def _run_db_init() -> dict:
         f"Permissions registry: {len(registry)} table(s) declare CRUD permissions",
         extra={"crud_permissions": serialize_registry(registry)},
     )
-    return {"ok": True}
+
+    # Create/refresh the least-privilege `biffo_app` role the request path
+    # connects as (#253). Runs *after* the upgrade, so the grants cover every
+    # table the migrations just created. This connection is the master user —
+    # administering privileges is exactly what the app role must not be able to
+    # do. Idempotent, and a no-op on non-Postgres deployments.
+    from .db_app_role import bootstrap_app_role
+
+    app_role = bootstrap_app_role()
+
+    return {"ok": True, "app_role": app_role}
 
 
 def _run_ddl_import(directory: str | None) -> dict:
@@ -191,9 +201,20 @@ def _run_ddl_import(directory: str | None) -> dict:
         engine = create_async_engine(settings.database_url)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         try:
-            return await _apply_batch(engine, session_factory)
+            result = await _apply_batch(engine, session_factory)
         finally:
             await engine.dispose()
+
+        # Re-run the app-role grants (#253). A DDL import creates schemas and
+        # tables the master user owns (ADR-0005), and db_app_role's ALTER
+        # DEFAULT PRIVILEGES only covers schemas that already existed when it
+        # last ran — so without this, an import's new schema would be
+        # unreadable by the request path until the next deploy, which surfaces
+        # as a 5xx rather than a test failure. Idempotent; no-op off Postgres.
+        from .db_app_role import bootstrap_app_role_async
+
+        result["app_role"] = await bootstrap_app_role_async()
+        return result
 
     async def _apply_batch(
         engine: AsyncEngine, session_factory: async_sessionmaker

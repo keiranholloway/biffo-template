@@ -12,6 +12,26 @@ class Settings(BaseSettings):
     db_secret_arn: str = ""
     db_host: str = ""
 
+    # Least-privilege application role (#253). The settings above resolve the
+    # RDS *master* user — table owner, rds_superuser — which migrations,
+    # biffo:db-init and biffo:ddl-import need because they create and alter
+    # objects. These resolve the non-owner `biffo_app` role that the HTTP
+    # request path connects as instead. Same two modes as above:
+    #   AWS staging/prod: app_db_secret_arn (a second Secrets Manager secret).
+    #   AWS dev (no-NAT) / local: app_database_url, the full URL.
+    # Both unset means no privilege split on this deployment and the request
+    # path falls back to the master URL — see database.resolve_app_database_url
+    # for why that fallback exists and how it is surfaced.
+    app_database_url: str = ""
+    app_db_secret_arn: str = ""
+    # Must match the `username` in the app credential; db-init cross-checks.
+    app_role_name: str = "biffo_app"
+    # Comma-separated schemas to grant the app role. Empty (the default) grants
+    # every non-system schema found at bootstrap time, which is what an
+    # ADR-0005 deployment with its own business schema needs. See
+    # api.db_app_role's module docstring.
+    app_role_schemas: str = ""
+
     # Cognito
     cognito_user_pool_id: str = ""
     cognito_client_id: str = ""

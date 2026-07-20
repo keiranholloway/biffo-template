@@ -77,22 +77,22 @@ Lambda's role, which is the plugin→Core auth mechanism (ADR-0009). Set
 
 ## Public API
 
-| Export | What it is |
-| --- | --- |
-| `BiffoPluginBase` | Base class for a plugin; owns `self.api` and the `subscribe`/`subscribe_all` decorators |
-| `PluginManifest`, `load_manifest`, `register_plugin` | Manifest model and loaders — the authoritative validator for `biffo.plugin.json` |
-| `TableDefinition`, `ColumnDefinition`, `IndexDefinition`, `TablePermissions`, `PermissionRule`, `RouteDef` | Manifest sub-models |
-| `BiffoAPIClient`, `BiffoAPIError` | Unauthenticated async Core API transport, and its single error type |
-| `SignedCoreClient`, `create_core_client` | SigV4-signing client (ADR-0009) and the factory that picks it by default |
-| `BiffoEvent`, `EventSubscriber`, `create_event_handler` | Event model, dispatch registry, and the raw-EventBridge-payload parser |
+| Export                                                                                                     | What it is                                                                              |
+| ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `BiffoPluginBase`                                                                                          | Base class for a plugin; owns `self.api` and the `subscribe`/`subscribe_all` decorators |
+| `PluginManifest`, `load_manifest`, `register_plugin`                                                       | Manifest model and loaders — the authoritative validator for `biffo.plugin.json`        |
+| `TableDefinition`, `ColumnDefinition`, `IndexDefinition`, `TablePermissions`, `PermissionRule`, `RouteDef` | Manifest sub-models                                                                     |
+| `BiffoAPIClient`, `BiffoAPIError`                                                                          | Unauthenticated async Core API transport, and its single error type                     |
+| `SignedCoreClient`, `create_core_client`                                                                   | SigV4-signing client (ADR-0009) and the factory that picks it by default                |
+| `BiffoEvent`, `EventSubscriber`, `create_event_handler`                                                    | Event model, dispatch registry, and the raw-EventBridge-payload parser                  |
 
 ## Environment
 
-| Variable | Read by | Purpose |
-| --- | --- | --- |
-| `BIFFO_CORE_API_URL` | `BiffoAPIClient` | Core API base URL; injected into the plugin Lambda by `modules/plugins/_template` |
-| `AWS_REGION` | `SignedCoreClient` | Region to sign for |
-| `BIFFO_CORE_AUTH_MODE` | `create_core_client` | `sigv4` (default) or `none` |
+| Variable               | Read by              | Purpose                                                                           |
+| ---------------------- | -------------------- | --------------------------------------------------------------------------------- |
+| `BIFFO_CORE_API_URL`   | `BiffoAPIClient`     | Core API base URL; injected into the plugin Lambda by `modules/plugins/_template` |
+| `AWS_REGION`           | `SignedCoreClient`   | Region to sign for                                                                |
+| `BIFFO_CORE_AUTH_MODE` | `create_core_client` | `sigv4` (default) or `none`                                                       |
 
 ## Documentation
 

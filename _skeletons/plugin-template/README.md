@@ -93,7 +93,7 @@ builds and publishes it to PyPI (via Trusted Publishing) on a pushed
 semver — it is **not** tied to the template's `core.version`, so a major
 bump here means the plugin API broke and nothing else.
 
-**Ordering caveat.** The release *pipeline* exists; the *release* does not
+**Ordering caveat.** The release _pipeline_ exists; the _release_ does not
 yet. `biffo-plugin-sdk` has never been uploaded — the PyPI project is
 unregistered until the owner configures the Trusted Publisher and pushes
 `sdk-v1.0.0`. Until that happens, `uv sync` in a freshly-copied plugin repo

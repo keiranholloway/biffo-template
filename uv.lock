@@ -242,7 +242,7 @@ dev = [
 
 [[package]]
 name = "biffo-plugin-sdk"
-version = "0.1.0"
+version = "1.0.0"
 source = { editable = "packages/python-sdk" }
 dependencies = [
     { name = "aws-lambda-powertools" },

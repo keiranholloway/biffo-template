@@ -4,14 +4,22 @@ version = "0.1.0"
 description = "Example Biffo plugin — replace this with your own plugin's name and description"
 requires-python = ">=3.13"
 dependencies = [
-  # biffo-plugin-sdk is not yet published to PyPI (it currently ships only
-  # as packages/python-sdk/ inside the biffo-template monorepo — see #14/#66
-  # and this repo's README "PyPI dependency" note). This pin is written as
-  # if publishing were real, matching release.yml's aspirational PyPI
-  # publish job (see that file's header comment): once the SDK is actually
-  # released, `uv sync` here starts working immediately with no further
-  # changes. Until then, point this at a path/git dependency instead — see
-  # the README for both options and how to switch between them locally.
+  # biffo-plugin-sdk has a real release path as of biffo-template's
+  # .github/workflows/publish-sdk.yml: the package is versioned 1.0.0 and
+  # publishes to PyPI (via Trusted Publishing) when an `sdk-v*` tag is
+  # pushed. This pin is therefore the *correct end state* and is left as-is.
+  #
+  # ORDERING: the pin only resolves once the owner has actually pushed
+  # `sdk-v1.0.0` and PyPI has the release. Until that first publish,
+  # `uv sync` in a freshly-copied plugin repo cannot resolve it — the same
+  # as before this comment was written, so nothing regressed here; what
+  # changed is that the fix is now one tag push away rather than unbuilt.
+  # Deliberately NOT worked around with a git/path source in the committed
+  # file: baking one in would mean every plugin repo forked from this
+  # skeleton silently keeps building against a moving git ref long after
+  # the real release exists. Use a local `[tool.uv.sources]` override until
+  # then — see the README's "biffo-plugin-sdk dependency" section, which
+  # documents both options and says which to delete once 1.0.0 is live.
   "biffo-plugin-sdk>=1.0,<2.0",
   "aws-lambda-powertools[tracer]>=3.4.0",
   "httpx>=0.28.1",

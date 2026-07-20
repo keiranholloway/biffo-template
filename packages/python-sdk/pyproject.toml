@@ -1,13 +1,49 @@
 [project]
 name = "biffo-plugin-sdk"
-version = "0.1.0"
-description = "Biffo Plugin SDK — manifest validation, client, and event system"
+# 1.0.0, deliberately NOT tied to core.version (currently 0.3x.y).
+#
+# This package is a third-party API contract: every plugin manifest the
+# ecosystem ships already declares `"biffo-plugin-sdk": "^1.0"` (see
+# _skeletons/plugin-template/biffo.plugin.json and ADR-0003), and the plugin
+# skeleton's pyproject.toml already pins `>=1.0,<2.0`. Publishing the first
+# release as 1.0.0 makes those existing declarations true. Publishing it as
+# 0.32.x — the template's core.version — would break every one of them, and
+# would couple a public, semver-bound plugin API to the template's own internal
+# release lineage, which moves on every template-owned change (ADR-0006) and
+# has nothing to do with whether this API broke.
+#
+# The CLI is unified with core.version (issue #259's other half) because the
+# CLI *is* the template. The SDK is not: it is consumed by repos the template
+# does not own, so it keeps its own independent semver and its own release tag
+# (`sdk-v*`, see .github/workflows/publish-sdk.yml).
+version = "1.0.0"
+description = "Biffo Plugin SDK — manifest validation, Core API client, and event system for Biffo plugins"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.13"
+authors = [{ name = "Keiran Holloway", email = "keiran@tabsii.com" }]
+keywords = ["biffo", "plugin", "sdk", "aws", "lambda", "serverless"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Libraries :: Application Frameworks",
+  "Typing :: Typed",
+]
 dependencies = [
   "pydantic>=2.10.4",
   "httpx>=0.28.1",
   "aws-lambda-powertools>=3.4.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/keiranholloway/biffo-template"
+Repository = "https://github.com/keiranholloway/biffo-template"
+Issues = "https://github.com/keiranholloway/biffo-template/issues"
+Documentation = "https://github.com/keiranholloway/biffo-template/blob/main/docs/ADR/0003-plugin-system-and-marketplace.md"
 
 # SigV4 signing (SignedCoreClient / create_core_client, ADR-0009) needs botocore.
 # It is an optional extra, not a hard dependency: botocore is preinstalled in the
@@ -29,3 +65,17 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# Explicit rather than relying on hatchling's name-matching heuristic: the
+# distribution name (`biffo-plugin-sdk`) and the import name
+# (`biffo_plugin_sdk`) differ, and being explicit is what keeps the wheel from
+# silently acquiring or dropping a top-level package.
+[tool.hatch.build.targets.wheel]
+packages = ["src/biffo_plugin_sdk"]
+
+# The sdist should carry what is needed to rebuild and verify this package —
+# not the monorepo path it happens to live in. Tests are included so a
+# downstream packager (distro, mirror, audit) can run them; nothing else from
+# the repo is.
+[tool.hatch.build.targets.sdist]
+include = ["src/biffo_plugin_sdk", "tests", "README.md", "LICENSE", "pyproject.toml"]

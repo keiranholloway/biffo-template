@@ -73,7 +73,7 @@ repository with its own independent `uv sync` / `uv.lock`, not inside
 biffo-template's workspace. Once copied out, `uv sync && uv run pytest`
 works standalone with no dependency on the rest of biffo-template.
 
-## The `biffo-plugin-sdk` dependency: PyPI pin, with today's reality documented
+## The `biffo-plugin-sdk` dependency: PyPI pin, pending the first release
 
 `pyproject.toml` declares:
 
@@ -84,15 +84,22 @@ dependencies = [
 ]
 ```
 
-This is a **PyPI-style version pin**, chosen deliberately to match
-`release.yml`'s aspirational PyPI-publish design (see that file's header
-comment and decision 2 in the issue #26 implementation): the template is
-built as if the whole plugin ecosystem — this repo's own package _and_ the
-SDK it depends on — will eventually be published to PyPI. Today,
-`biffo-plugin-sdk` is **not** on PyPI; it ships only as
-`packages/python-sdk/` inside the biffo-template monorepo (confirmed via
-issues #14/#66). `uv sync` in a freshly-copied plugin repo will therefore
-fail to resolve this dependency until the SDK is actually published.
+This is a **PyPI-style version pin**, and it is the correct end state: the
+SDK is versioned `1.0.0` and biffo-template's
+[`.github/workflows/publish-sdk.yml`](https://github.com/keiranholloway/biffo-template/blob/main/.github/workflows/publish-sdk.yml)
+builds and publishes it to PyPI (via Trusted Publishing) on a pushed
+`sdk-v*` tag. `>=1.0,<2.0` matches the `"biffo-plugin-sdk": "^1.0"` that
+`biffo.plugin.json` declares, and the SDK carries its own independent
+semver — it is **not** tied to the template's `core.version`, so a major
+bump here means the plugin API broke and nothing else.
+
+**Ordering caveat.** The release _pipeline_ exists; the _release_ does not
+yet. `biffo-plugin-sdk` has never been uploaded — the PyPI project is
+unregistered until the owner configures the Trusted Publisher and pushes
+`sdk-v1.0.0`. Until that happens, `uv sync` in a freshly-copied plugin repo
+still cannot resolve this dependency, and you need one of the two local
+overrides below. Once 1.0.0 is live, **delete the override** — the
+`dependencies` entry above already points at the real thing.
 
 Two ways to make local development work before that happens:
 

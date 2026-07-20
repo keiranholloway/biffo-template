@@ -4,16 +4,24 @@ name: Release
 # python-semantic-release, builds the sdist/wheel, and publishes to PyPI.
 #
 # ASPIRATIONAL PYPI PUBLISH: this repo (and every plugin repo forked from
-# this template) has no real PyPI project or PYPI_API_TOKEN yet — the
-# plugin ecosystem's own SDK dependency, biffo-plugin-sdk, isn't published
-# either; it currently ships only as packages/python-sdk/ inside the
-# biffo-template monorepo (see #14/#66). This workflow is written as if
-# publishing were already real: once a PyPI project exists for this plugin
-# and PYPI_API_TOKEN is added as a repo secret, this workflow starts
-# publishing on the next tag push with no further changes. Until then, the
-# publish job below runs and fails at the `pypa/gh-action-pypi-publish` step
-# for lack of a token — that's expected, not a bug in this template. See
+# this template) has no real PyPI project or publishing credential yet, so
+# the publish job below runs and fails at the
+# `pypa/gh-action-pypi-publish` step — that's expected, not a bug in this
+# template. Configure a publisher for *your* plugin's own PyPI project and
+# it starts publishing on the next tag push with no further changes. See
 # README.md's "PyPI publishing" section.
+#
+# Note this is about *this plugin's* own distribution. The SDK it depends
+# on, biffo-plugin-sdk, has its own release path upstream —
+# biffo-template's .github/workflows/publish-sdk.yml, triggered by an
+# `sdk-v*` tag — and its own independent semver. See README.md's
+# "biffo-plugin-sdk dependency" section for what that means for `uv sync`
+# before the SDK's first release lands.
+#
+# Prefer PyPI Trusted Publishing (OIDC) over a long-lived PYPI_API_TOKEN
+# when you set this up: it needs no stored secret to rotate or leak. The
+# `id-token: write` permission below is already in place for it, and
+# publish-sdk.yml upstream is a worked example.
 #
 # biffo-template does not use semantic-release anywhere else in the
 # monorepo (its own root has no release.yml — checked before writing this;

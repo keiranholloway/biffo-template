@@ -10,9 +10,15 @@ import {
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { BiffoConfigSchema, type BiffoConfig } from '../config/schema.js'
+import type { SiblingSession } from './sibling-session.js'
 
 export type CompletedStep =
-  'verify_credentials' | 'create_repo' | 'oidc_trust' | 'terraform_backend' | 'github_config'
+  | 'verify_credentials'
+  | 'create_repo'
+  | 'oidc_trust'
+  | 'terraform_backend'
+  | 'github_config'
+  | 'app_sibling'
 
 export interface InitSession {
   version: 1
@@ -24,6 +30,15 @@ export interface InitSession {
     cloneUrl?: string
     oidcRoleArn?: string
     tfStateBucket?: string
+    /**
+     * The nested session for the root application sibling `biffo init` creates
+     * (issue #306). Held here rather than in ~/.biffo/sibling-sessions so that
+     * resuming an interrupted `init` resumes the sibling at the same
+     * granularity as everything else: the sibling's own steps are checkpointed
+     * inside it, so a re-run does not try to re-create a repo that already
+     * exists.
+     */
+    appSibling?: SiblingSession
   }
 }
 

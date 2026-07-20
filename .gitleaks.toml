@@ -18,6 +18,23 @@ paths = [
   "docs/",
   "README.md",
   "\\.example$",
+  # The sibling CDN registry (ADR-0007). Its `bucket_regional_domain` values
+  # are S3 virtual-hosted DNS names — `<project>-<env>-site-<account>.s3...` —
+  # so they contain the account id BY CONSTRUCTION and cannot not. They are
+  # also not secret: the same names appear in Terraform state, in CloudFront's
+  # origin config, and in the sibling's own deploy logs.
+  #
+  # This narrows a heuristic ("any bare 12-digit number") away from one file it
+  # structurally must match, in the same spirit as the .example and docs/
+  # entries above. It is not a general loosening: the rule still fires on every
+  # other path, including biffo.config.json, which is what it exists to guard.
+  #
+  # Scoped to this rule only, deliberately, not the global [allowlist].
+  #
+  # This was already latent: `biffo sibling create`'s registration PR has always
+  # written this file into the core repo. Issue #306 makes `biffo init` write it
+  # for every instance on day one, which is what surfaced it.
+  "siblings\\.auto\\.tfvars\\.json$",
 ]
 
 [[rules]]

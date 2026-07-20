@@ -189,6 +189,28 @@ export interface SiblingCreateOptions {
   coreConfig: BiffoConfig
   skeletonRoot: string
   githubToken: string
+  /**
+   * Skip step 2 (resolving the core's Cognito/API identity from its deployed
+   * Terraform outputs).
+   *
+   * Set only by `biffo init`, which creates the root application sibling in
+   * the same run that creates the core repo — before the core has ever been
+   * deployed, so those outputs do not exist yet and resolving them can only
+   * fail. The sibling's per-environment CORE_* variables are left unset; its
+   * own deploy would in any case be blocked until the core is up, and
+   * `biffo sibling create` (without this option) fills them in on a re-run.
+   */
+  skipCoreIdentity?: boolean
+  /**
+   * Skip step 7 (opening a registration PR against the core project).
+   *
+   * Set only by `biffo init`, which has already written the registry entry
+   * directly into the core repo it just created — a PR against a repo the
+   * same command created moments earlier would be pure ceremony, and leaving
+   * it unmerged is exactly the "created but never registered" hole teardown
+   * has to paper over.
+   */
+  skipRegistration?: boolean
 }
 
 export async function runSiblingCreate(
@@ -216,7 +238,15 @@ export async function runSiblingCreate(
   // Step 2: Resolve the core project's identity (Cognito pool/client, API URL,
   // portal URL) — once per environment this sibling provisions, since each
   // environment has its own Cognito pool (see infra/environments/<env>/main.tf).
-  if (!session.completedSteps.includes('resolve_core_identity')) {
+  if (options.skipCoreIdentity && !session.completedSteps.includes('resolve_core_identity')) {
+    log.step(
+      2,
+      totalSteps,
+      "Core project isn't deployed yet — deferring its identity (CORE_COGNITO_*, CORE_API_URL)",
+    )
+    session.outputs.coreIdentity = {}
+    markSiblingStepComplete(session, 'resolve_core_identity')
+  } else if (!session.completedSteps.includes('resolve_core_identity')) {
     log.step(2, totalSteps, "Resolving core project's identity...")
     session.outputs.coreIdentity = await resolveCoreIdentity(
       coreAws,
@@ -287,7 +317,10 @@ export async function runSiblingCreate(
   }
 
   // Step 7: Register this sibling with the core project for CDN path routing
-  if (!session.completedSteps.includes('register_with_core')) {
+  if (options.skipRegistration && !session.completedSteps.includes('register_with_core')) {
+    log.step(7, totalSteps, 'Already registered with the core project by `biffo init` — skipping')
+    markSiblingStepComplete(session, 'register_with_core')
+  } else if (!session.completedSteps.includes('register_with_core')) {
     log.step(7, totalSteps, 'Opening a registration PR against the core project...')
     session.outputs.registrationPrUrl = await registerWithCore(
       git,
@@ -845,7 +878,7 @@ function awsConfig(config: SiblingConfig | BiffoConfig): { region: string } {
   return (config.cloud as { provider: 'aws'; config: { region: string } }).config
 }
 
-function defaultSiblingTemplateRoot(): string {
+export function defaultSiblingTemplateRoot(): string {
   let dir = dirname(new URL(import.meta.url).pathname)
   for (;;) {
     const candidate = join(dir, '_skeletons', 'sibling-template')

@@ -453,6 +453,14 @@ describe('instance identity files', () => {
   // (biffo-aws-account-id matches any bare 12-digit number), so committing it
   // would turn the instance's own Secret Scan red on its first run. It lives in
   // ~/.biffo/projects/ instead — see writeInstanceFiles.
+  //
+  // The ONE exception is the sibling registry (issue #306), whose S3
+  // bucket_regional_domain contains the account id by construction and which
+  // .gitleaks.toml allowlists by path for exactly that reason. It is named
+  // here rather than skipped generically, so that a future file quietly
+  // starting to carry the account id still fails this test.
+  const REGISTRY_FILE = /^infra\/environments\/[a-z]+\/siblings\.auto\.tfvars\.json$/
+
   it('never commits the AWS account id or the admin email', async () => {
     const github = makeGithubMock()
     await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
@@ -460,10 +468,34 @@ describe('instance identity files', () => {
     for (const branch of INSTANCE_FILE_BRANCHES) {
       for (const change of changesOn(github, branch)) {
         if (change.content === null) continue
-        expect(change.content).not.toContain('123456789012')
         expect(change.content).not.toContain('admin@example.com')
+        if (REGISTRY_FILE.test(change.path)) continue
+        expect(change.content).not.toContain('123456789012')
         expect(change.content).not.toMatch(/\b\d{12}\b/)
       }
+    }
+  })
+
+  // The account id only ever appears inside the S3 host name — never as a bare
+  // field of its own. If that stopped being true the gitleaks path allowlist
+  // would be covering more than it was scoped for.
+  it('confines the account id in the registry to the S3 bucket host name', async () => {
+    const github = makeGithubMock()
+    await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
+
+    const registry = changesOn(github, 'dev').filter((c) => REGISTRY_FILE.test(c.path))
+    expect(registry).toHaveLength(CONFIG.environments.length)
+    for (const file of registry) {
+      const parsed = JSON.parse(file.content!) as {
+        sibling_origins: { name: string; bucket_regional_domain: string }[]
+      }
+      for (const origin of parsed.sibling_origins) {
+        expect(origin.bucket_regional_domain).toMatch(
+          /^my-app-app-(dev|staging|prod)-site-123456789012\.s3\.eu-west-1\.amazonaws\.com$/,
+        )
+      }
+      const withoutHost = file.content!.replace(/"bucket_regional_domain":\s*"[^"]*"/g, '""')
+      expect(withoutHost).not.toMatch(/\b\d{12}\b/)
     }
   })
 

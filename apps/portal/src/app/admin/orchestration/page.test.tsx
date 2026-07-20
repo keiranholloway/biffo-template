@@ -48,12 +48,21 @@ const catalog: WorkflowCatalog = {
       detail_type: 'demo.requested',
       label: 'Demo requested',
       description: 'Someone submits the "Book a demo" form.',
+      origin: 'declared',
     },
     {
       source: 'biffo.core',
       detail_type: 'lead.captured',
       label: 'Lead captured',
       description: 'A lead comes in from the website or marketplace.',
+      origin: 'declared',
+    },
+    {
+      source: 'tabsii.billing',
+      detail_type: 'invoice.paid',
+      label: 'invoice.paid',
+      description: 'Seen on the event bus.',
+      origin: 'observed',
     },
   ],
   actions: [
@@ -193,6 +202,81 @@ describe('OrchestrationPage', () => {
     await waitFor(() => {
       expect(deleteWorkflow).toHaveBeenCalledWith(expect.anything(), 'wf1')
     })
+  })
+
+  it('groups the trigger options by source', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    render(<OrchestrationPage />)
+
+    const select = await screen.findByLabelText('Trigger')
+    const groups = Array.from(select.querySelectorAll('optgroup'))
+    expect(groups.map((g) => g.label)).toEqual(['biffo.core', 'tabsii.billing'])
+    const coreOptions = groups[0]?.querySelectorAll('option') ?? []
+    expect(Array.from(coreOptions).map((o) => o.textContent)).toEqual([
+      'Demo requested',
+      'Lead captured',
+    ])
+  })
+
+  it('marks an observed trigger in its option text and exposes descriptions', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    render(<OrchestrationPage />)
+
+    const select = await screen.findByLabelText('Trigger')
+    const observed = Array.from(select.querySelectorAll('option')).find(
+      (o) => o.value === 'tabsii.billing|invoice.paid',
+    )
+    expect(observed?.textContent).toBe('invoice.paid (observed)')
+    expect(observed?.title).toBe('Seen on the event bus.')
+  })
+
+  it('badges the selected trigger declared or observed and shows its description', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    render(<OrchestrationPage />)
+
+    // Defaults to the first catalog trigger, which is declared.
+    expect(await screen.findByText('declared')).toBeInTheDocument()
+    expect(screen.getByText('Someone submits the "Book a demo" form.')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Trigger'), {
+      target: { value: 'tabsii.billing|invoice.paid' },
+    })
+
+    expect(screen.getByText('observed')).toBeInTheDocument()
+    expect(screen.queryByText('declared')).not.toBeInTheDocument()
+    expect(screen.getByText('Seen on the event bus.')).toBeInTheDocument()
+  })
+
+  it('filters the trigger options, always keeping the current selection', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    render(<OrchestrationPage />)
+
+    fireEvent.change(await screen.findByLabelText('Filter triggers'), {
+      target: { value: 'invoice' },
+    })
+
+    const select = screen.getByLabelText('Trigger')
+    // The match, plus the still-selected default so the select's value stays valid.
+    expect(Array.from(select.querySelectorAll('option')).map((o) => o.value)).toEqual([
+      'biffo.core|demo.requested',
+      'tabsii.billing|invoice.paid',
+    ])
+    expect(select).toHaveValue('biffo.core|demo.requested')
+  })
+
+  it('explains when the filter matches nothing', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    render(<OrchestrationPage />)
+
+    fireEvent.change(await screen.findByLabelText('Filter triggers'), {
+      target: { value: 'nothing-matches-this' },
+    })
+
+    expect(screen.getByText(/No triggers match/)).toBeInTheDocument()
+    const select = screen.getByLabelText('Trigger')
+    expect(Array.from(select.querySelectorAll('option')).map((o) => o.value)).toEqual([
+      'biffo.core|demo.requested',
+    ])
   })
 
   it('surfaces an error when the fetch fails', async () => {

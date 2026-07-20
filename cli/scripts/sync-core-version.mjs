@@ -47,4 +47,9 @@ if (!SEMVER.test(version)) {
 }
 
 copyFileSync(source, dest)
-console.log(`sync-core-version: ${dest} <- ${version}`)
+// stderr, not stdout: this runs as `prepack`, so anything it writes to stdout is
+// captured by `npm pack`'s caller as part of the tarball filename. That broke the
+// publish workflow's verification step — tar was handed
+// "sync-core-version: /path/core.version <- 0.33.1\nbiffo-0.33.1.tgz" as a
+// filename and failed. Progress output is diagnostics, not data.
+console.error(`sync-core-version: ${dest} <- ${version}`)

@@ -127,7 +127,10 @@ jobs:
         working-directory: cli
         run: |
           set -euo pipefail
-          tarball="$(npm pack --silent)"
+          # tail -n1: `npm pack` prints the filename last, but any prepack hook's
+          # stdout precedes it. --silent only quiets npm itself, not the hooks it
+          # runs. Belt and braces with sync-core-version.mjs now logging to stderr.
+          tarball="$(npm pack --silent | tail -n1)"
           if ! tar -tzf "$tarball" | grep -qx 'package/core.version'; then
             echo "::error::Packed tarball is missing core.version — refusing to publish."
             tar -tzf "$tarball"

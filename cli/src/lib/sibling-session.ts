@@ -23,7 +23,15 @@ import type { SiblingConfig } from '../config/sibling-schema.js'
 export type CompletedSiblingStep =
   | 'verify_credentials'
   | 'resolve_core_identity'
+  /**
+   * `create_repo` and `push_skeleton` were one checkpoint guarding two side
+   * effects until issue #316. `createEmptyRepo` succeeded, `pushSkeleton`
+   * threw (#315), nothing was recorded, and the resume re-ran repo creation
+   * against a repo that now existed. Each side effect gets its own checkpoint,
+   * recorded the moment it succeeds.
+   */
   | 'create_repo'
+  | 'push_skeleton'
   | 'oidc_trust'
   | 'terraform_backend'
   | 'github_config'
@@ -91,11 +99,30 @@ export function findLatestSiblingSession(): SiblingSession | null {
   }
 }
 
+/**
+ * Persist `session` monotonically — see the note on `saveSession` in
+ * lib/session.ts (issue #316). A save can only move `completedSteps` forwards;
+ * starting over means calling `deleteSiblingSession` first.
+ */
 export function saveSiblingSession(session: SiblingSession): void {
   const dir = sessionsDir()
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   const name = session.config.project?.name ?? 'unknown'
+
+  const prior = loadSiblingSession(name)
+  if (prior) {
+    for (const step of prior.completedSteps) {
+      if (!session.completedSteps.includes(step)) session.completedSteps.push(step)
+    }
+    session.outputs = { ...prior.outputs, ...definedOnly(session.outputs) }
+  }
+
   writeFileSync(sessionPath(name), JSON.stringify(session, null, 2))
+}
+
+/** Spreading `{ a: undefined }` over a prior value erases it; this stops that. */
+function definedOnly<T extends object>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T
 }
 
 export function markSiblingStepComplete(session: SiblingSession, step: CompletedSiblingStep): void {

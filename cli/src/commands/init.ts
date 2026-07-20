@@ -26,6 +26,8 @@ import {
 import {
   deleteSession,
   findLatestSession,
+  hasCompleted,
+  loadSession,
   markStepComplete,
   saveProjectConfig,
   saveSession,
@@ -33,6 +35,7 @@ import {
 } from '../lib/session.js'
 import { SiblingConfigSchema, type SiblingConfig } from '../config/sibling-schema.js'
 import { GitAdapter } from '../adapters/git/index.js'
+import { deleteSiblingSession } from '../lib/sibling-session.js'
 import {
   defaultSiblingTemplateRoot,
   runSiblingCreate,
@@ -68,14 +71,8 @@ export const initCommand = new Command('init')
         const { account_id: accountId, region } = (
           config.cloud as { provider: 'aws'; config: { account_id: string; region: string } }
         ).config
-        session = {
-          version: 1,
-          config,
-          awsAccountId: accountId,
-          awsRegion: region,
-          completedSteps: [],
-          outputs: {},
-        }
+
+        session = resolveConfigFileSession(config, accountId, region, options.fresh === true)
       } else {
         // Resolve credentials up-front — before asking any project questions —
         // so the user never fills in a long form only to hit a missing-token error.
@@ -122,6 +119,9 @@ export const initCommand = new Command('init')
         if (!session) {
           const rawConfig = await promptForConfig(accountId, region, profile)
           config = parseConfig(rawConfig)
+          // See the note on the --config branch: monotonic saves mean a fresh
+          // start has to discard the old file explicitly.
+          deleteSession(config.project.name)
           session = {
             version: 1,
             config,
@@ -179,6 +179,54 @@ export const initCommand = new Command('init')
   )
 
 // ─── Exported for testing ────────────────────────────────────────────────────
+
+/**
+ * The session a `biffo init --config <path>` run should operate on.
+ *
+ * `--config` used to build a brand-new zero-step session unconditionally and
+ * then save it over whatever was on disk (issue #316). A resume therefore
+ * restarted from step 2 and rewrote a five-step session file as a four-step
+ * one, losing `github_config` even though that work had demonstrably happened
+ * in the repo — then re-attempted it against git state that had moved on,
+ * which is what produced `GitRPC::BadObjectState`.
+ *
+ * `--config` says where the CONFIG comes from. It has never said anything
+ * about the session, and non-interactive runs are precisely the ones that most
+ * need to resume rather than redo. So it resumes like every other path, and
+ * `--fresh` is the one and only way to discard a session.
+ *
+ * The config file still wins on config: a resumed session takes its `config`,
+ * account and region from the file, not from the saved copy. Only the
+ * checkpoints and outputs are inherited.
+ */
+export function resolveConfigFileSession(
+  config: BiffoConfig,
+  awsAccountId: string,
+  awsRegion: string,
+  fresh: boolean,
+): InitSession {
+  const saved = fresh ? null : loadSession(config.project.name)
+
+  const session: InitSession = saved
+    ? { ...saved, config, awsAccountId, awsRegion }
+    : { version: 1, config, awsAccountId, awsRegion, completedSteps: [], outputs: {} }
+
+  if (saved) {
+    console.log(
+      chalk.dim(
+        `  Resuming previous init for ${config.project.name} ` +
+          `(completed: ${saved.completedSteps.join(', ') || 'none'})\n`,
+      ),
+    )
+  } else {
+    // Saves are monotonic (see `saveSession`), so a stale file would otherwise
+    // merge its old steps into this run. Starting over means saying so on disk.
+    deleteSession(config.project.name)
+  }
+
+  saveSession(session)
+  return session
+}
 
 export async function runInit(
   github: GitHubAdapter,
@@ -255,23 +303,53 @@ export async function runInit(
     }
   }
 
-  // Step 5: Configure GitHub (branches, branch protection, environments, secrets, variables)
-  if (!session.completedSteps.includes('github_config')) {
-    log.step(5, totalSteps, 'Configuring GitHub repository...')
-    const { org, repo } = (
-      config.source_control as { provider: 'github'; config: { org: string; repo: string } }
-    ).config
-    const dns = resolveDnsConfig(config)
-    const domain = dns.domain
+  // Step 5: Configure GitHub (branches, instance files, protection, environments,
+  // secrets, variables).
+  //
+  // Three checkpoints, not one (issue #316). This step used to guard ~15 side
+  // effects behind a single `github_config` marker, so any failure within it
+  // replayed all of them on the next run — including the git-object writes,
+  // which is how a resume ended up asking GitHub to build a tree on a base it
+  // no longer agreed with (GitRPC::BadObjectState). The split is at the two
+  // boundaries that matter: branch creation, git writes, and everything else.
+  const { org, repo } = (
+    config.source_control as { provider: 'github'; config: { org: string; repo: string } }
+  ).config
 
-    // Create dev and staging branches from main, then set dev as the default
+  // Step 5a: branches. `createBranch` already returns early when the branch
+  // exists, so the two calls share one checkpoint safely.
+  if (!hasCompleted(session, 'github_branches')) {
+    log.step(5, totalSteps, 'Creating dev and staging branches...')
     await github.createBranch(org, repo, 'dev', 'main')
     await github.createBranch(org, repo, 'staging', 'main')
+    markStepComplete(session, 'github_branches')
+  } else {
+    log.step(5, totalSteps, 'Branches already created — skipping')
+  }
 
-    // Establish the repo's instance identity on every branch, *before* branch
-    // protection is configured (issue #269): add biffo.core.json (the instance
-    // marker) and drop the template's placeholder biffo.config.json.
+  // Step 5b: the repo's instance identity, on every branch, *before* branch
+  // protection is configured (issue #269): add biffo.core.json (the instance
+  // marker) and drop the template's placeholder biffo.config.json.
+  //
+  // Its own checkpoint because it is the only part of step 5 that writes git
+  // objects, and therefore the only part whose replay depends on the repo's
+  // git state not having moved underneath it.
+  if (!hasCompleted(session, 'github_instance_files')) {
+    log.step(5, totalSteps, 'Writing instance identity files...')
     await writeInstanceFiles(github, org, repo, config)
+    markStepComplete(session, 'github_instance_files')
+  } else {
+    log.step(5, totalSteps, 'Instance identity files already written — skipping')
+  }
+
+  // Step 5c: everything else. One checkpoint, deliberately: every call below is
+  // an idempotent upsert (repos.update, PUT protection/environments/alerts,
+  // PATCH-then-POST variables, `gh secret set`), so replaying a partial run
+  // costs a few API calls and changes nothing.
+  if (!hasCompleted(session, 'github_settings')) {
+    log.step(5, totalSteps, 'Configuring GitHub repository...')
+    const dns = resolveDnsConfig(config)
+    const domain = dns.domain
 
     await github.setDefaultBranch(org, repo, 'dev')
 
@@ -307,7 +385,7 @@ export async function runInit(
     if (session.outputs.oidcRoleArn) {
       await github.setRepoSecret(org, repo, 'BIFFO_OIDC_ROLE_ARN', session.outputs.oidcRoleArn)
     }
-    markStepComplete(session, 'github_config')
+    markStepComplete(session, 'github_settings')
   } else {
     log.step(5, totalSteps, 'GitHub already configured — skipping')
   }
@@ -369,6 +447,13 @@ async function createAppSibling(
   const siblingConfig = appSiblingConfig(config)
   const cloud = config.cloud as { provider: 'aws'; config: { account_id: string; region: string } }
 
+  if (!session.outputs.appSibling) {
+    // `runSiblingCreate` also checkpoints to ~/.biffo/sibling-sessions/<name>.json,
+    // and those saves are monotonic (issue #316). A leftover file from an
+    // earlier, unrelated run of this sibling name would otherwise merge its
+    // steps into this brand-new one and skip work that has not happened.
+    deleteSiblingSession(siblingConfig.project.name)
+  }
   session.outputs.appSibling ??= {
     version: 1,
     config: siblingConfig,

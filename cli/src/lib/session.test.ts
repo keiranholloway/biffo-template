@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   deleteSession,
   findLatestSession,
+  hasCompleted,
   loadSession,
   markStepComplete,
   saveSession,
@@ -96,5 +97,142 @@ describe('session persistence', () => {
     saveSession(makeSession('new-app'))
     const found = findLatestSession()
     expect(found?.config.project?.name).toBe('new-app')
+  })
+})
+
+// Issue #316, defect B2. A `biffo init --config` resume built a fresh in-memory
+// session and saved it over a five-step session file, leaving four steps on
+// disk: `github_config` was un-recorded despite its work being visibly complete
+// in the repo (right commit on dev, all three branches, protection configured).
+// The next run then re-attempted it against git state that had moved on and
+// died with GitRPC::BadObjectState.
+//
+// These pin the rule that makes that impossible: a save can only ever move
+// `completedSteps` forwards.
+describe('saveSession is monotonic (issue #316)', () => {
+  it('never un-records a step that is already on disk', () => {
+    const onDisk = makeSession('my-app')
+    onDisk.completedSteps = [
+      'verify_credentials',
+      'create_repo',
+      'oidc_trust',
+      'terraform_backend',
+      'github_settings',
+    ]
+    saveSession(onDisk)
+
+    // A second run of the same project that started from scratch in memory —
+    // exactly what --config used to do.
+    const behind = makeSession('my-app')
+    behind.completedSteps = ['verify_credentials', 'create_repo']
+    saveSession(behind)
+
+    expect(loadSession('my-app')?.completedSteps).toEqual(
+      expect.arrayContaining([
+        'verify_credentials',
+        'create_repo',
+        'oidc_trust',
+        'terraform_backend',
+        'github_settings',
+      ]),
+    )
+  })
+
+  it('merges the recovered steps back into the in-memory session too', () => {
+    const onDisk = makeSession('my-app')
+    onDisk.completedSteps = ['verify_credentials', 'oidc_trust']
+    saveSession(onDisk)
+
+    const behind = makeSession('my-app')
+    behind.completedSteps = ['verify_credentials']
+    saveSession(behind)
+
+    // Not just the file: the live object must agree, or this run still redoes
+    // the work the file says is done.
+    expect(behind.completedSteps).toContain('oidc_trust')
+  })
+
+  it('never drops an output recorded on disk', () => {
+    const onDisk = makeSession('my-app')
+    onDisk.outputs = { cloneUrl: 'https://github.com/acme/my-app.git', oidcRoleArn: 'arn:role' }
+    saveSession(onDisk)
+
+    const behind = makeSession('my-app')
+    behind.outputs = { tfStateBucket: 'my-app-terraform-state-123456789012' }
+    saveSession(behind)
+
+    expect(loadSession('my-app')?.outputs).toEqual({
+      cloneUrl: 'https://github.com/acme/my-app.git',
+      oidcRoleArn: 'arn:role',
+      tfStateBucket: 'my-app-terraform-state-123456789012',
+    })
+  })
+
+  it('lets a newer value win over an older one for the same output', () => {
+    const onDisk = makeSession('my-app')
+    onDisk.outputs = { oidcRoleArn: 'arn:old' }
+    saveSession(onDisk)
+
+    const next = makeSession('my-app')
+    next.outputs = { oidcRoleArn: 'arn:new' }
+    saveSession(next)
+
+    expect(loadSession('my-app')?.outputs.oidcRoleArn).toBe('arn:new')
+  })
+
+  it('gives --fresh a way out: deleteSession, then save, starts genuinely empty', () => {
+    const onDisk = makeSession('my-app')
+    onDisk.completedSteps = ['verify_credentials', 'create_repo']
+    saveSession(onDisk)
+
+    deleteSession('my-app')
+    saveSession(makeSession('my-app'))
+
+    expect(loadSession('my-app')?.completedSteps).toEqual([])
+  })
+
+  it('markStepComplete on a stale object still preserves the disk state', () => {
+    const onDisk = makeSession('my-app')
+    onDisk.completedSteps = ['verify_credentials', 'create_repo', 'oidc_trust']
+    saveSession(onDisk)
+
+    const stale = makeSession('my-app')
+    markStepComplete(stale, 'terraform_backend')
+
+    expect(loadSession('my-app')?.completedSteps).toEqual(
+      expect.arrayContaining([
+        'verify_credentials',
+        'create_repo',
+        'oidc_trust',
+        'terraform_backend',
+      ]),
+    )
+  })
+})
+
+describe('hasCompleted', () => {
+  it('reports a step recorded verbatim', () => {
+    const session = makeSession('my-app')
+    session.completedSteps = ['github_branches']
+    expect(hasCompleted(session, 'github_branches')).toBe(true)
+    expect(hasCompleted(session, 'github_settings')).toBe(false)
+  })
+
+  // Step 5 was one checkpoint (`github_config`) before #316 split it into three.
+  // A session written by an older CLI must not cause a newer one to replay
+  // work that is already done — including the git writes that fail loudly when
+  // replayed against moved-on state.
+  it('treats a legacy github_config checkpoint as all three successors', () => {
+    const session = makeSession('my-app')
+    session.completedSteps = ['github_config']
+    expect(hasCompleted(session, 'github_branches')).toBe(true)
+    expect(hasCompleted(session, 'github_instance_files')).toBe(true)
+    expect(hasCompleted(session, 'github_settings')).toBe(true)
+  })
+
+  it('does not treat a legacy checkpoint as unrelated steps', () => {
+    const session = makeSession('my-app')
+    session.completedSteps = ['github_config']
+    expect(hasCompleted(session, 'app_sibling')).toBe(false)
   })
 })

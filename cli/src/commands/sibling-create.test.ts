@@ -61,6 +61,8 @@ function makeSession(): SiblingSession {
 function makeGithubMock() {
   return {
     createEmptyRepo: vi.fn().mockResolvedValue('https://github.com/acme/reports.git'),
+    // Default: a repo the skeleton has not been pushed to yet.
+    repoHasCommits: vi.fn().mockResolvedValue(false),
     createBranch: vi.fn().mockResolvedValue(undefined),
     setDefaultBranch: vi.fn().mockResolvedValue(undefined),
     configureBranchProtection: vi.fn().mockResolvedValue(undefined),
@@ -217,7 +219,7 @@ describe('runSiblingCreate', () => {
     rmSync(skeletonRoot, { recursive: true, force: true })
   })
 
-  it('runs all 7 steps in order on a fresh session', async () => {
+  it('runs all 8 steps in order on a fresh session', async () => {
     const github = makeGithubMock()
     const aws = makeAwsMock()
     const coreAws = makeAwsMock()
@@ -289,7 +291,10 @@ describe('runSiblingCreate', () => {
     expect(session.completedSteps).toEqual([
       'verify_credentials',
       'resolve_core_identity',
+      // Two checkpoints, not one (issue #316): the repo existing and the
+      // skeleton being in it are separate facts, and a run can end between them.
       'create_repo',
+      'push_skeleton',
       'oidc_trust',
       'terraform_backend',
       'github_config',
@@ -539,6 +544,212 @@ describe('runSiblingCreate', () => {
       expect.anything(),
     )
   })
+
+  // ─── Issue #316, defect A: resume after a PARTIAL step ─────────────────────
+  //
+  // The reported failure exactly: `createEmptyRepo` succeeded, `pushSkeleton`
+  // threw (#315), and because both lived behind one `create_repo` checkpoint
+  // NOTHING was recorded — so the resume called `createEmptyRepo` again on a
+  // repo that already existed. These pin the intended behaviour (the repo's
+  // existence survives the crash), not the behaviour the code happened to have.
+  describe('resume after a partially-completed step (issue #316)', () => {
+    async function runWithFailingPush(
+      session: SiblingSession,
+      github: ReturnType<typeof makeGithubMock>,
+    ) {
+      const aws = makeAwsMock()
+      const coreAws = makeAwsMock()
+      coreAws.readTerraformOutputs.mockResolvedValue(CORE_OUTPUTS)
+      const git = makeGitMock()
+      git.push.mockRejectedValueOnce(new Error('Sibling template not found'))
+
+      await expect(
+        runSiblingCreate(
+          github as never,
+          aws as never,
+          coreAws as never,
+          git,
+          SIBLING_CONFIG,
+          session,
+          {
+            coreConfig: CORE_CONFIG,
+            skeletonRoot,
+            githubToken: 'gh-token',
+          },
+        ),
+      ).rejects.toThrow('Sibling template not found')
+      return git
+    }
+
+    it('records create_repo when the skeleton push then fails', async () => {
+      const github = makeGithubMock()
+      const session = makeSession()
+
+      await runWithFailingPush(session, github)
+
+      // The repo EXISTS. Anything that does not say so leaves the run stuck.
+      expect(github.createEmptyRepo).toHaveBeenCalledTimes(1)
+      expect(session.completedSteps).toContain('create_repo')
+      expect(session.completedSteps).not.toContain('push_skeleton')
+      // The clone url is what the retry pushes to, so it has to survive too.
+      expect(session.outputs.cloneUrl).toBe('https://github.com/acme/reports.git')
+    })
+
+    it('does not re-create the repo on the resume, and retries only the push', async () => {
+      const failing = makeGithubMock()
+      const session = makeSession()
+      await runWithFailingPush(session, failing)
+
+      // Second run, same session — the state a real `biffo sibling create`
+      // re-run would load off disk.
+      const github = makeGithubMock()
+      const aws = makeAwsMock()
+      const coreAws = makeAwsMock()
+      coreAws.readTerraformOutputs.mockResolvedValue(CORE_OUTPUTS)
+      const git = makeGitMock()
+
+      await runSiblingCreate(
+        github as never,
+        aws as never,
+        coreAws as never,
+        git,
+        SIBLING_CONFIG,
+        session,
+        {
+          coreConfig: CORE_CONFIG,
+          skeletonRoot,
+          githubToken: 'gh-token',
+        },
+      )
+
+      expect(github.createEmptyRepo).not.toHaveBeenCalled()
+      // `git.init` is unique to pushSkeleton — `git.push` is also used by the
+      // registration step, so asserting on it would prove nothing here.
+      expect(git.init).toHaveBeenCalledTimes(1)
+      expect(git.push).toHaveBeenCalledWith(expect.any(String), 'main', { token: 'gh-token' })
+      expect(session.completedSteps).toContain('push_skeleton')
+    })
+
+    it('skips the push when the repo already has commits, rather than forcing a rejected push', async () => {
+      // The narrow window the other way round: the push landed but the process
+      // died before the checkpoint was written. Re-pushing an initial commit
+      // onto a repo that has one is a non-fast-forward, so it must be skipped.
+      const github = makeGithubMock()
+      github.repoHasCommits.mockResolvedValue(true)
+      const aws = makeAwsMock()
+      const coreAws = makeAwsMock()
+      coreAws.readTerraformOutputs.mockResolvedValue(CORE_OUTPUTS)
+      const git = makeGitMock()
+      const session = makeSession()
+      session.completedSteps = ['verify_credentials', 'resolve_core_identity', 'create_repo']
+      session.outputs.coreIdentity = {
+        dev: {
+          cognitoUserPoolId: 'us-east-1_abc123',
+          cognitoClientId: 'client-abc',
+          apiUrl: 'https://api.example.com',
+          portalUrl: 'https://baseurl.com',
+        },
+      }
+      session.outputs.cloneUrl = 'https://github.com/acme/reports.git'
+
+      await runSiblingCreate(
+        github as never,
+        aws as never,
+        coreAws as never,
+        git,
+        SIBLING_CONFIG,
+        session,
+        {
+          coreConfig: CORE_CONFIG,
+          skeletonRoot,
+          githubToken: 'gh-token',
+        },
+      )
+
+      expect(git.init).not.toHaveBeenCalled()
+      expect(session.completedSteps).toContain('push_skeleton')
+    })
+
+    it('resumes straight past a repo whose skeleton is already pushed', async () => {
+      const github = makeGithubMock()
+      const aws = makeAwsMock()
+      const coreAws = makeAwsMock()
+      coreAws.readTerraformOutputs.mockResolvedValue(CORE_OUTPUTS)
+      const git = makeGitMock()
+      const session = makeSession()
+      session.completedSteps = [
+        'verify_credentials',
+        'resolve_core_identity',
+        'create_repo',
+        'push_skeleton',
+      ]
+      session.outputs.coreIdentity = {
+        dev: {
+          cognitoUserPoolId: 'us-east-1_abc123',
+          cognitoClientId: 'client-abc',
+          apiUrl: 'https://api.example.com',
+          portalUrl: 'https://baseurl.com',
+        },
+      }
+      session.outputs.cloneUrl = 'https://github.com/acme/reports.git'
+
+      await runSiblingCreate(
+        github as never,
+        aws as never,
+        coreAws as never,
+        git,
+        SIBLING_CONFIG,
+        session,
+        {
+          coreConfig: CORE_CONFIG,
+          skeletonRoot,
+          githubToken: 'gh-token',
+        },
+      )
+
+      expect(github.createEmptyRepo).not.toHaveBeenCalled()
+      expect(git.init).not.toHaveBeenCalled()
+      // GitHub is not even asked — the checkpoint is authoritative.
+      expect(github.repoHasCommits).not.toHaveBeenCalled()
+      expect(aws.setupOidcTrust).toHaveBeenCalled()
+    })
+
+    it('fails loudly if create_repo is recorded without a clone url', async () => {
+      // A session in this shape cannot be pushed to. Better a clear internal
+      // error here than a confusing git failure three calls later.
+      const github = makeGithubMock()
+      const aws = makeAwsMock()
+      const coreAws = makeAwsMock()
+      coreAws.readTerraformOutputs.mockResolvedValue(CORE_OUTPUTS)
+      const git = makeGitMock()
+      const session = makeSession()
+      session.completedSteps = ['verify_credentials', 'resolve_core_identity', 'create_repo']
+      session.outputs.coreIdentity = {
+        dev: {
+          cognitoUserPoolId: 'us-east-1_abc123',
+          cognitoClientId: 'client-abc',
+          apiUrl: 'https://api.example.com',
+          portalUrl: 'https://baseurl.com',
+        },
+      }
+
+      await expect(
+        runSiblingCreate(
+          github as never,
+          aws as never,
+          coreAws as never,
+          git,
+          SIBLING_CONFIG,
+          session,
+          {
+            coreConfig: CORE_CONFIG,
+            skeletonRoot,
+            githubToken: 'gh-token',
+          },
+        ),
+      ).rejects.toThrow(/cloneUrl/)
+    })
+  })
 })
 
 // ─── The root application sibling (issue #306) ───────────────────────────────
@@ -726,7 +937,10 @@ describe('root sibling mode', () => {
     expect(session.completedSteps).toEqual([
       'verify_credentials',
       'resolve_core_identity',
+      // Two checkpoints, not one (issue #316): the repo existing and the
+      // skeleton being in it are separate facts, and a run can end between them.
       'create_repo',
+      'push_skeleton',
       'oidc_trust',
       'terraform_backend',
       'github_config',

@@ -8,15 +8,42 @@ import { initCommand } from './commands/init.js'
 import { pluginCommand } from './commands/plugin.js'
 import { siblingCommand } from './commands/sibling.js'
 import { teardownCommand } from './commands/teardown.js'
+import { getLatestCoreVersion } from './lib/core-version.js'
 import { NonInteractiveError, registerNonInteractive } from './lib/interactive.js'
 import { log } from './lib/logger.js'
 
 const program = new Command()
 
+/**
+ * The CLI's version IS `core.version` (ADR-0006) — one number, no mapping table.
+ *
+ * Read at runtime rather than hardcoded. `.version(cliVersion())` was a literal, so
+ * the first published build reported 0.0.0 despite the registry correctly
+ * showing 0.33.3 — the publish workflow stamps `package.json`, which the
+ * hardcoded string ignored. That defeats the point of publishing: a scaffolded
+ * repo could not be traced to the build that made it (#259).
+ *
+ * `getLatestCoreVersion()` walks up from this module and finds the copy the
+ * package ships beside `dist/` (prepack writes it; `files` includes it). In a
+ * template checkout it finds the repo-root one, so local runs report the
+ * working version rather than a stale literal.
+ *
+ * It throws if no `core.version` is reachable, which would mean a malformed
+ * package. `--version` should not be the place that fails, so fall back to
+ * 'unknown' — a wrong-looking version is more useful than a crash on --help.
+ */
+function cliVersion(): string {
+  try {
+    return getLatestCoreVersion()
+  } catch {
+    return 'unknown'
+  }
+}
+
 program
   .name('biffo')
   .description('Biffo — opinionated project scaffolding and deployment CLI')
-  .version('0.0.0')
+  .version(cliVersion())
 
 program.addCommand(initCommand)
 program.addCommand(deployCommand)

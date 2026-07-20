@@ -343,7 +343,7 @@ export async function runPluginInstall(
         )
         log.info(
           'The Core API allowlist (ADR-0009) follows automatically — ' +
-            'local.plugin_service_principal_arns in main.tf derives it from enabled_plugins.',
+            'module.plugin_allowlist in main.tf derives it from enabled_plugins.',
         )
       } else {
         log.warn(
@@ -358,7 +358,7 @@ export async function runPluginInstall(
         log.warn(
           `Skipped ${wiring.skippedEnvironments.join(', ')} — no \`enabled_plugins\` variable ` +
             'declared there. infra/ is user-owned, so `biffo core upgrade` cannot add it: copy ' +
-            'the variable (and local.plugin_service_principal_arns) from the template’s ' +
+            'the variable (and the module "plugin_allowlist" block) from the template’s ' +
             'infra/environments/dev/ and re-run this install to wire those environments.',
         )
       }

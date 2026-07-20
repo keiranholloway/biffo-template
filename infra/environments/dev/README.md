@@ -55,13 +55,13 @@ terraform apply -var 'enabled_plugins=[]'
 
 ### Service authentication (ADR-0009)
 
-The `execute-api:Invoke` grant on the plugin's Lambda role is wired by the generated module block (`core_api_execution_arn`). The Core API side — `BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST` — follows automatically from `local.plugin_service_principal_arns` in `main.tf`, which derives a **static** assumed-role glob from `var.enabled_plugins`:
+The `execute-api:Invoke` grant on the plugin's Lambda role is wired by the generated module block (`core_api_execution_arn`). The Core API side — `BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST` — follows automatically from `module.plugin_allowlist.arns` in `main.tf`. That module (`modules/cloud/aws/plugin-allowlist`) is template-owned, so it rides `biffo core upgrade` and stays in step with the modules whose naming it encodes; it derives a **static** assumed-role glob from `var.enabled_plugins`:
 
 ```
 arn:aws:sts::<account>:assumed-role/<project>-<env>-plugin-<name>-role/*
 ```
 
-It is deliberately _not_ derived from a plugin module's `role_arn` output. The glob is fully predictable from the plugin's name, and depending on the module's output would make the Core API depend on every installed plugin — coupling that risks the `core_api -> api_gateway -> plugin -> core_api` cycle recorded in issue #201 for any plugin that attaches its Core API policy to the role resource itself. Enabling a plugin is what allowlists it, and the two cannot drift apart.
+It is deliberately _not_ derived from a plugin module's `role_arn` output. The glob is fully predictable from the plugin's name, and depending on the module's output would make the Core API depend on every installed plugin — coupling that would make the Core API un-plannable whenever any installed plugin module is broken, and that closes a genuine `core_api -> api_gateway -> plugin -> core_api` cycle for any plugin attaching its Core API policy inline on the role. (ADR-0009's 2026-07-19 amendment corrected the earlier, overstated claim that it deadlocks outright — tested, it does not.) Enabling a plugin is what allowlists it, and the two cannot drift apart.
 
 The allowlist **fails closed**: with no plugins enabled it is `[]` and no service caller is accepted.
 

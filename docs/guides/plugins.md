@@ -171,7 +171,7 @@ If a plugin ships a `terraform/` module, `install` copies it to `modules/plugins
 
 Your hand-authored `main.tf` is never edited — Terraform loads every `*.tf` file in a root module directory, so the generated blocks are just as live while staying out of your file. Both files are regenerated in full from the contents of `modules/plugins/` on every install and uninstall, so re-running `install` cannot produce a duplicate module block or a duplicate `enabled_plugins` entry.
 
-The ADR-0009 service-auth wiring comes along with it: the generated block passes `core_api_execution_arn` (granting the plugin's role `execute-api:Invoke` on `/api/v1/internal/*`), and the Core API's `BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST` follows from `local.plugin_service_principal_arns` in `main.tf`, which derives a static role-name glob from `enabled_plugins`. Enabling a plugin is what allowlists it.
+The ADR-0009 service-auth wiring comes along with it: the generated block passes `core_api_execution_arn` (granting the plugin's role `execute-api:Invoke` on `/api/v1/internal/*`), and the Core API's `BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST` follows from `module.plugin_allowlist.arns` in `main.tf` — the template-owned `modules/cloud/aws/plugin-allowlist` module, which derives a static role-name glob from `enabled_plugins`. Enabling a plugin is what allowlists it.
 
 To disable an installed plugin without uninstalling it, override `enabled_plugins` with `-var`/`-var-file`/`TF_VAR_enabled_plugins` — all of which outrank an auto-tfvars file.
 

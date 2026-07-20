@@ -173,7 +173,14 @@ class TestRunDdlImportSkipsAlreadyApplied:
         from src.api.main import _run_ddl_import
 
         result = _run_ddl_import("widgets")
-        assert result == {"ok": True, "applied": [], "skipped": ["000_widgets.sql"]}
+        # app_role: a DDL import can create new schemas/tables, so it re-runs
+        # the biffo_app grants afterwards (#253). Postgres-only; a no-op here.
+        assert result == {
+            "ok": True,
+            "applied": [],
+            "skipped": ["000_widgets.sql"],
+            "app_role": {"bootstrapped": False, "reason": "not-postgres"},
+        }
 
     def test_changed_already_applied_file_raises_and_halts(
         self, ddl_import_env: dict[str, Any]

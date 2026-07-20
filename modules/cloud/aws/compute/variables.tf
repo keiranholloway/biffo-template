@@ -58,6 +58,12 @@ variable "db_credentials_secret_arn" {
   default     = ""
 }
 
+variable "app_db_credentials_secret_arn" {
+  description = "ARN of the least-privilege application-role DB secret (#253) — the credential the Core API's request path connects with, as opposed to the owner/master credential in db_credentials_secret_arn that migrations and db-init use. Optional: empty means this deployment has no privilege split yet and the request path falls back to the master role."
+  type        = string
+  default     = ""
+}
+
 variable "readable_secret_arns" {
   description = "Additional Secrets Manager secret ARNs this function may read (secretsmanager:GetSecretValue). Kept separate from db_credentials_secret_arn so a non-DB function (e.g. the PR-signer reading its GitHub App key, ADR-0008) gets least-privilege access to just its own secret without the database seam."
   type        = list(string)

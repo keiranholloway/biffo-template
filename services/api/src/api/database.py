@@ -3,23 +3,19 @@ from collections.abc import AsyncGenerator
 from functools import lru_cache
 
 import boto3
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from .config import settings
 
 
-@lru_cache(maxsize=1)
-def _resolve_database_url() -> str:
-    """Build the SQLAlchemy URL from Secrets Manager when running in AWS,
-    or fall back to the env var for local development."""
-    if not settings.db_secret_arn:
-        return settings.database_url
-
+def _fetch_secret(secret_arn: str) -> dict:
     client = boto3.client("secretsmanager")
-    secret = json.loads(
-        client.get_secret_value(SecretId=settings.db_secret_arn)["SecretString"]
-    )
+    return json.loads(client.get_secret_value(SecretId=secret_arn)["SecretString"])
+
+
+def _url_from_secret(secret: dict) -> str:
     # db_host overrides the secret's host field — used to point at the RDS Proxy
     # endpoint instead of the direct RDS address when the proxy is enabled.
     host = settings.db_host or secret["host"]
@@ -27,6 +23,69 @@ def _resolve_database_url() -> str:
         f"postgresql+asyncpg://{secret['username']}:{secret['password']}"
         f"@{host}:{secret['port']}/{secret['dbname']}"
     )
+
+
+@lru_cache(maxsize=1)
+def resolve_master_database_url() -> str:
+    """The owner/master connection URL.
+
+    This is the RDS master user: table owner, `rds_superuser`. It creates and
+    alters objects, so it is what Alembic migrations, `biffo:db-init` and
+    `biffo:ddl-import` (ADR-0005) connect as. The request path must NOT use it
+    — see `resolve_app_database_url`.
+
+    Built from Secrets Manager when running in AWS, or from the env var for
+    local development and no-NAT dev environments where Terraform bakes the
+    full URL in (the Lambda there has no route to Secrets Manager).
+    """
+    if not settings.db_secret_arn:
+        return settings.database_url
+    return _url_from_secret(_fetch_secret(settings.db_secret_arn))
+
+
+@lru_cache(maxsize=1)
+def resolve_app_database_url() -> str:
+    """The least-privilege connection URL used by the HTTP request path (#253).
+
+    Resolves to the `biffo_app` role — `NOSUPERUSER`, non-owner, holding only
+    `USAGE` on the schemas it reads plus `SELECT/INSERT/UPDATE/DELETE` on their
+    tables. It cannot create, drop or alter anything, so a SQL injection or a
+    compromised dependency on a query path can no longer reach beyond the rows
+    the API already serves.
+
+    **Falls back to the master URL when no app credential is configured.** That
+    is deliberate: this seam ships ahead of the Terraform that provisions the
+    second secret, and an instance that upgrades its core before re-applying
+    its infrastructure must keep serving traffic rather than fail closed on
+    every request. The fallback is logged loudly as a warning by
+    `log_effective_db_identity()`, which `db-init` calls on every deploy, so a
+    deployment sitting on it is visible rather than silent.
+    """
+    if settings.app_db_secret_arn:
+        return _url_from_secret(_fetch_secret(settings.app_db_secret_arn))
+    if settings.app_database_url:
+        return settings.app_database_url
+    return resolve_master_database_url()
+
+
+def app_role_credentials() -> tuple[str, str] | None:
+    """The `(username, password)` `db-init` should bootstrap into Postgres, or
+    None when this deployment has no app credential provisioned yet.
+
+    Parsed with SQLAlchemy's own `make_url` rather than `urllib.parse` so the
+    username/password read here are byte-identical to the ones the engine will
+    later connect with — a generic URL parser disagrees with SQLAlchemy about
+    `#` and `?` in a password, and silently bootstrapping a different password
+    than the request path uses would authenticate-fail every request.
+    """
+    if settings.app_db_secret_arn:
+        secret = _fetch_secret(settings.app_db_secret_arn)
+        return secret["username"], secret["password"]
+    if settings.app_database_url:
+        url = make_url(settings.app_database_url)
+        if url.username and url.password:
+            return url.username, url.password
+    return None
 
 
 # NullPool — no application-side connection pooling. Two independent reasons,
@@ -47,7 +106,7 @@ def _resolve_database_url() -> str:
 #    anything — the proxy already absorbs the per-connection setup cost that an
 #    application pool exists to amortise.
 engine = create_async_engine(
-    _resolve_database_url(),
+    resolve_app_database_url(),
     echo=settings.environment == "dev",
     poolclass=NullPool,
 )

@@ -166,7 +166,11 @@ module "core_api" {
   vpc_id                    = module.networking.vpc_id
   private_subnet_ids        = module.networking.private_subnet_ids
   db_credentials_secret_arn = module.database.credentials_secret_arn
-  event_bus_name            = module.events.event_bus_name
+  # Least-privilege application role (#253). Granted for IAM completeness; this
+  # NAT-less environment reaches Secrets Manager only via the interface VPC
+  # endpoint, and the URL is baked in below regardless.
+  app_db_credentials_secret_arn = module.database.app_credentials_secret_arn
+  event_bus_name                = module.events.event_bus_name
   # Lets the Core API administer Cognito users (add/assign-group/suspend/remove).
   # Runtime reachability is provided by the cognito-idp interface VPC endpoint
   # the networking module creates in this NAT-less environment.
@@ -181,9 +185,17 @@ module "core_api" {
     # (ADR-0008). Empty when the signer isn't provisioned; the Core API treats
     # an empty value as "endpoint control plane not configured".
     BIFFO_PR_SIGNER_FUNCTION_NAME = var.enable_pr_signer ? module.pr_signer[0].function_name : ""
-    # Full DB URL baked in — Lambda has no outbound internet so it can't call
-    # Secrets Manager. db_url is sensitive and stored in Terraform state.
+    # Full DB URLs baked in — Lambda has no outbound internet so it can't call
+    # Secrets Manager. Both are sensitive and stored in Terraform state.
+    #
+    # BIFFO_DATABASE_URL is the MASTER/owner credential: migrations,
+    # biffo:db-init and biffo:ddl-import connect with it because they create
+    # and alter objects. BIFFO_APP_DATABASE_URL is the non-owner biffo_app role
+    # the HTTP request path connects with instead (#253) — db-init creates that
+    # role in Postgres and grants it, since Terraform has no DB connection.
     BIFFO_DATABASE_URL         = module.database.db_url
+    BIFFO_APP_DATABASE_URL     = module.database.app_db_url
+    BIFFO_APP_ROLE_NAME        = module.database.app_db_user
     BIFFO_COGNITO_JWKS_JSON    = data.http.cognito_jwks.response_body
     BIFFO_COGNITO_USER_POOL_ID = module.auth.user_pool_id
     BIFFO_COGNITO_CLIENT_ID    = module.auth.client_id

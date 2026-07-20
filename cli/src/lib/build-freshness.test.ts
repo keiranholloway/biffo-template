@@ -169,7 +169,7 @@ describe('assertBuildIsFresh', () => {
       })
 
     expect(call).toThrow(/Refusing to run/)
-    expect(call).toThrow(/pnpm --filter biffo build/)
+    expect(call).toThrow(/pnpm --filter @biffo\/cli build/)
     expect(call).toThrow(/src[/\\]commands[/\\]init\.ts/)
   })
 

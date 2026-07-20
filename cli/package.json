@@ -1,5 +1,5 @@
 {
-  "name": "biffo",
+  "name": "@biffo/cli",
   "version": "0.0.0",
   "description": "Biffo project scaffolding CLI",
   "license": "MIT",

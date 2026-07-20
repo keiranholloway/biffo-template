@@ -74,10 +74,10 @@ pnpm run format
 pnpm --filter @biffo/portal dev
 
 # CLI — released usage (published to npm as `biffo`; version == core.version)
-npx biffo --help
+npx @biffo/cli --help
 
 # CLI — local development (contributors working ON the CLI, from this checkout)
-pnpm --filter biffo build
+pnpm --filter @biffo/cli build
 ./cli/dist/index.js --help
 
 # Terraform (dev)
@@ -88,12 +88,20 @@ terraform plan
 
 ## CLI distribution
 
-The CLI ships to npm as the **unscoped package `biffo`** (`cli/`). Two paths, and
-it matters which one you are on:
+The CLI ships to npm as **`@biffo/cli`** under the `biffo` org (`cli/`). The
+binary it installs is still `biffo`, so `npx @biffo/cli init` gives you `biffo`.
 
-- **Released** — `npx biffo <cmd>`. An immutable, resolved version; nothing is
+It is scoped deliberately: npm rejects the unscoped name `biffo` as _"too similar
+to existing package diff"_ under its typosquatting protection. A registry 404
+means only that nobody has published a name — not that npm will accept it. Scoped
+names bypass that check, and the `@biffo` scope also gives the plugin SDK and any
+future packages somewhere to live.
+
+Two paths, and it matters which one you are on:
+
+- **Released** — `npx @biffo/cli <cmd>`. An immutable, resolved version; nothing is
   built locally on the path that creates real GitHub repos and AWS resources.
-- **Local development** — `pnpm --filter biffo build && ./cli/dist/index.js`.
+- **Local development** — `pnpm --filter @biffo/cli build && ./cli/dist/index.js`.
   Still supported and still guarded: `cli/src/lib/build-freshness.ts` refuses to
   scaffold from a `dist` older than `src` (issue #190).
 

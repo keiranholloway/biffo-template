@@ -133,7 +133,7 @@ export function formatStaleBuildError(result: BuildFreshnessResult): string {
     'subtly broken projects (see issue #190).',
     '',
     'Rebuild first:',
-    '  pnpm --filter biffo build',
+    '  pnpm --filter @biffo/cli build',
     '',
     `To override anyway (you should not need to), set ${SKIP_ENV_VAR}=1.`,
   ]

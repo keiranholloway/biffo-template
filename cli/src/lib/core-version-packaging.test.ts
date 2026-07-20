@@ -33,9 +33,19 @@ interface PackageJson {
 const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as PackageJson
 
 describe('published package manifest', () => {
-  it('is the unscoped `biffo` package with a `biffo` bin', () => {
-    expect(pkg.name).toBe('biffo')
+  /**
+   * Scoped, not bare `biffo`: npm rejects the unscoped name as "too similar to
+   * existing package diff" under its typosquatting protection, which a registry
+   * 404 does not reveal — only an actual publish attempt does. The bin stays
+   * `biffo`, so `npx @biffo/cli init` still gives the user `biffo`.
+   */
+  it('is the scoped `@biffo/cli` package with a `biffo` bin', () => {
+    expect(pkg.name).toBe('@biffo/cli')
     expect(pkg.bin.biffo).toBe('./dist/index.js')
+  })
+
+  it('publishes the scope publicly, or a scoped package defaults to private', () => {
+    expect(pkg.publishConfig?.access).toBe('public')
   })
 
   it('ships core.version, so the upward walk resolves outside a template checkout', () => {

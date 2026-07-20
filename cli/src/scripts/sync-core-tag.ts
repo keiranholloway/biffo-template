@@ -70,6 +70,18 @@ function summary(markdown: string): void {
 }
 
 /**
+ * Step output, so the workflow can act on what happened here.
+ *
+ * Specifically: whether a tag was actually created or moved. A release must
+ * only be dispatched when there is a new tag to release — not on every push to
+ * the default branch, and not when the tag already stood for this tree.
+ */
+function output(key: string, value: string): void {
+  const path = process.env['GITHUB_OUTPUT']
+  if (path) appendFileSync(path, `${key}=${value}\n`)
+}
+
+/**
  * Every core version on `main` at or above `baseline`, with the newest commit
  * carrying it.
  *
@@ -190,6 +202,10 @@ async function main(): Promise<void> {
         console.log(
           `${action === 'move' ? 'Moved' : 'Created'} and pushed ${tag} at ${head.slice(0, 8)}.`,
         )
+        // Consumed by core-tag.yml to dispatch the release. Only set when a tag
+        // was really pushed, so `keep` and dry runs release nothing.
+        output('tag', tag)
+        output('action', action)
       } else {
         console.log(`[dry run] would ${action} ${tag} to ${head.slice(0, 8)} (no --push).`)
       }

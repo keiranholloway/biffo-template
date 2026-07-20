@@ -29,6 +29,7 @@ function makeOctokitMock() {
       updateBranchProtection: vi.fn(),
       createOrUpdateEnvironment: vi.fn(),
       getContent: vi.fn(),
+      listCommits: vi.fn(),
     },
     git: {
       getRef: vi.fn(),
@@ -156,14 +157,36 @@ describe('ensureTemplateFlag', () => {
 // ─── createEmptyRepo ───────────────────────────────────────────────────────────
 
 describe('createEmptyRepo', () => {
-  it('skips creation and returns clone_url when the repo already exists', async () => {
+  // Issue #316: the resume case. A previous run created the repo and then died
+  // before pushing the skeleton, so the repo exists and is empty. Adopting it is
+  // the whole point — the alternative is a run that can never move forward.
+  it('adopts an existing EMPTY repo and returns its clone_url', async () => {
     octokitMock.repos.get.mockResolvedValueOnce({
       data: { clone_url: 'https://github.com/acme/my-sibling.git' },
     })
+    // GitHub answers "no commits" with 409 Git Repository is empty.
+    octokitMock.repos.listCommits.mockRejectedValueOnce(
+      Object.assign(new Error('Git Repository is empty.'), { status: 409 }),
+    )
 
     const url = await adapter().createEmptyRepo('acme', 'my-sibling')
 
     expect(url).toBe('https://github.com/acme/my-sibling.git')
+    expect(octokitMock.repos.createInOrg).not.toHaveBeenCalled()
+    expect(octokitMock.repos.createForAuthenticatedUser).not.toHaveBeenCalled()
+  })
+
+  // The other half of #316: adoption must not become "push the skeleton over
+  // whatever was there". A repo with commits is somebody's work.
+  it('refuses an existing repo that has content, rather than clobbering it', async () => {
+    octokitMock.repos.get.mockResolvedValueOnce({
+      data: { clone_url: 'https://github.com/acme/my-sibling.git' },
+    })
+    octokitMock.repos.listCommits.mockResolvedValueOnce({ data: [{ sha: 'abc123' }] })
+
+    await expect(adapter().createEmptyRepo('acme', 'my-sibling')).rejects.toThrow(
+      /already exists and is not empty/,
+    )
     expect(octokitMock.repos.createInOrg).not.toHaveBeenCalled()
     expect(octokitMock.repos.createForAuthenticatedUser).not.toHaveBeenCalled()
   })

@@ -33,16 +33,22 @@ import { runInit } from './init.js'
 
 vi.mock('node:child_process', () => ({ execSync: vi.fn() }))
 
-vi.mock('../lib/session.js', () => ({
-  markStepComplete: vi.fn((session: InitSession, step: string) => {
-    session.completedSteps.push(step)
-  }),
-  deleteSession: vi.fn(),
-  saveSession: vi.fn(),
-  saveProjectConfig: vi.fn(),
-  findLatestSession: vi.fn(),
-  loadSession: vi.fn(),
-}))
+vi.mock('../lib/session.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/session.js')>()
+  return {
+    // Pure predicate over completedSteps — use the real one, or the test stops
+    // testing the resume logic and starts testing a copy of it.
+    hasCompleted: actual.hasCompleted,
+    markStepComplete: vi.fn((session: InitSession, step: string) => {
+      session.completedSteps.push(step)
+    }),
+    deleteSession: vi.fn(),
+    saveSession: vi.fn(),
+    saveProjectConfig: vi.fn(),
+    findLatestSession: vi.fn(),
+    loadSession: vi.fn(),
+  }
+})
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -230,7 +236,9 @@ describe('runInit (integration — real adapters + HTTP mocks)', () => {
       'create_repo',
       'oidc_trust',
       'terraform_backend',
-      'github_config',
+      'github_branches',
+      'github_instance_files',
+      'github_settings',
     ])
     expect(session.outputs.cloneUrl).toBe('https://github.com/acme/my-app.git')
     expect(session.outputs.oidcRoleArn).toBe(
@@ -268,7 +276,9 @@ describe('runInit (integration — real adapters + HTTP mocks)', () => {
       'create_repo',
       'oidc_trust',
       'terraform_backend',
-      'github_config',
+      'github_branches',
+      'github_instance_files',
+      'github_settings',
     ])
   })
 

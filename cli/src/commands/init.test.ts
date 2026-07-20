@@ -8,18 +8,40 @@ import {
   applyResolvedAwsCredentials,
   INSTANCE_CONFIG_FILE,
   INSTANCE_FILE_BRANCHES,
+  resolveConfigFileSession,
   runInit,
 } from './init.js'
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────
 
-vi.mock('../lib/session.js', () => ({
-  markStepComplete: vi.fn(),
-  deleteSession: vi.fn(),
-  saveSession: vi.fn(),
-  saveProjectConfig: vi.fn(),
-  findLatestSession: vi.fn(),
-  loadSession: vi.fn(),
+vi.mock('../lib/session.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/session.js')>()
+  return {
+    // `hasCompleted` is a pure predicate over `completedSteps` (it also decodes
+    // legacy checkpoint names) — stubbing it would mean re-implementing the
+    // thing under test in the test.
+    hasCompleted: actual.hasCompleted,
+    // Mirrors the real implementation's *observable* effect: the step lands in
+    // `completedSteps` immediately, so a test that makes a later call throw
+    // sees exactly the session a resume would load (issue #316).
+    markStepComplete: vi.fn((session: { completedSteps: string[] }, step: string) => {
+      if (!session.completedSteps.includes(step)) session.completedSteps.push(step)
+    }),
+    deleteSession: vi.fn(),
+    saveSession: vi.fn(),
+    saveProjectConfig: vi.fn(),
+    findLatestSession: vi.fn(),
+    loadSession: vi.fn(),
+  }
+})
+
+vi.mock('../lib/sibling-session.js', () => ({
+  markSiblingStepComplete: vi.fn((session: { completedSteps: string[] }, step: string) => {
+    if (!session.completedSteps.includes(step)) session.completedSteps.push(step)
+  }),
+  deleteSiblingSession: vi.fn(),
+  saveSiblingSession: vi.fn(),
+  loadSiblingSession: vi.fn(),
 }))
 
 vi.mock('../lib/logger.js', () => ({
@@ -28,7 +50,7 @@ vi.mock('../lib/logger.js', () => ({
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const { markStepComplete, deleteSession } = await import('../lib/session.js')
+const { markStepComplete, deleteSession, loadSession } = await import('../lib/session.js')
 
 const CONFIG = BiffoConfigSchema.parse({
   project: { name: 'my-app', description: 'Test app', domain: 'example.com' },
@@ -143,7 +165,12 @@ describe('happy path', () => {
       'create_repo',
       'oidc_trust',
       'terraform_backend',
-      'github_config',
+      // Step 5 is three checkpoints, not one (issue #316) — the git-object
+      // writes are recorded separately from the branch creation before them and
+      // the idempotent settings upserts after them.
+      'github_branches',
+      'github_instance_files',
+      'github_settings',
     ])
   })
 
@@ -299,7 +326,9 @@ describe('step resumption', () => {
     expect(aws.bootstrapTerraformBackend).not.toHaveBeenCalled()
   })
 
-  it('skips github_config when already complete', async () => {
+  // A session written by a pre-#316 CLI. It must still skip the whole of step
+  // 5 — replaying the git writes is the failure mode #316 exists to stop.
+  it('skips all of step 5 for a legacy github_config checkpoint', async () => {
     const github = makeGithubMock()
     const session = makeSession({
       completedSteps: [
@@ -313,6 +342,8 @@ describe('step resumption', () => {
 
     await runInit(github as never, makeAwsMock() as never, CONFIG, session)
 
+    expect(github.createBranch).not.toHaveBeenCalled()
+    expect(github.commitFiles).not.toHaveBeenCalled()
     expect(github.configureBranchProtection).not.toHaveBeenCalled()
     expect(github.createEnvironments).not.toHaveBeenCalled()
     expect(github.setRepoSecret).not.toHaveBeenCalled()
@@ -630,7 +661,7 @@ describe('the app sibling', () => {
     // Failing at step 6 leaves the registration already committed — the
     // recoverable state, not the leaking one.
     const steps = vi.mocked(markStepComplete).mock.calls.map((c) => c[1])
-    expect(steps).toContain('github_config')
+    expect(steps).toContain('github_instance_files')
     expect(steps).not.toContain('app_sibling')
     for (const branch of INSTANCE_FILE_BRANCHES) {
       expect(changesOn(github, branch).map((c) => c.path)).toContain(
@@ -663,5 +694,166 @@ describe('the app sibling', () => {
     })
 
     expect(session.completedSteps).toContain('app_sibling')
+  })
+})
+
+// ─── Issue #316: resume after a PARTIAL step ─────────────────────────────────
+//
+// Step 5 used to be one `github_config` checkpoint guarding ~15 side effects,
+// so any failure inside it replayed all of them — including the commits that
+// write biffo.core.json and the sibling registration. Replaying those against a
+// repo whose git state has moved on is what produced GitRPC::BadObjectState.
+//
+// These tests fail a call in the MIDDLE of step 5 and assert on what survives.
+describe('resume after a partially-completed step 5 (issue #316)', () => {
+  it('keeps the branch checkpoint when the instance-file commit then fails', async () => {
+    const github = makeGithubMock()
+    github.commitFiles.mockRejectedValue(new Error('GitRPC::BadObjectState'))
+    const session = makeSession({
+      completedSteps: ['verify_credentials', 'create_repo', 'oidc_trust', 'terraform_backend'],
+    })
+
+    await expect(runInit(github as never, makeAwsMock() as never, CONFIG, session)).rejects.toThrow(
+      'GitRPC::BadObjectState',
+    )
+
+    // The branches exist. Recording that is the whole point.
+    expect(session.completedSteps).toContain('github_branches')
+    expect(session.completedSteps).not.toContain('github_instance_files')
+    expect(session.completedSteps).not.toContain('github_settings')
+  })
+
+  it('does not re-create branches on the resume, and retries only the commit', async () => {
+    const failing = makeGithubMock()
+    failing.commitFiles.mockRejectedValue(new Error('GitRPC::BadObjectState'))
+    const session = makeSession({
+      completedSteps: ['verify_credentials', 'create_repo', 'oidc_trust', 'terraform_backend'],
+    })
+    await expect(
+      runInit(failing as never, makeAwsMock() as never, CONFIG, session),
+    ).rejects.toThrow()
+
+    const github = makeGithubMock()
+    await runInit(github as never, makeAwsMock() as never, CONFIG, session)
+
+    expect(github.createBranch).not.toHaveBeenCalled()
+    expect(github.commitFiles).toHaveBeenCalled()
+    expect(github.configureBranchProtection).toHaveBeenCalled()
+    expect(session.completedSteps).toContain('github_settings')
+  })
+
+  it('keeps the git writes checkpointed when a settings call then fails', async () => {
+    // The reverse boundary: the commits landed, branch protection blew up.
+    // A resume must not go near commitFiles again.
+    const github = makeGithubMock()
+    github.configureBranchProtection.mockRejectedValue(new Error('422 plan does not support it'))
+    const session = makeSession({
+      completedSteps: ['verify_credentials', 'create_repo', 'oidc_trust', 'terraform_backend'],
+    })
+
+    await expect(runInit(github as never, makeAwsMock() as never, CONFIG, session)).rejects.toThrow(
+      '422 plan does not support it',
+    )
+
+    expect(session.completedSteps).toContain('github_branches')
+    expect(session.completedSteps).toContain('github_instance_files')
+    expect(session.completedSteps).not.toContain('github_settings')
+
+    const retry = makeGithubMock()
+    await runInit(retry as never, makeAwsMock() as never, CONFIG, session)
+    expect(retry.commitFiles).not.toHaveBeenCalled()
+    expect(retry.createBranch).not.toHaveBeenCalled()
+    expect(retry.configureBranchProtection).toHaveBeenCalled()
+  })
+
+  it('does not delete the session when a step fails partway', async () => {
+    const github = makeGithubMock()
+    github.commitFiles.mockRejectedValue(new Error('GitRPC::BadObjectState'))
+    const session = makeSession({
+      completedSteps: ['verify_credentials', 'create_repo', 'oidc_trust', 'terraform_backend'],
+    })
+
+    await expect(
+      runInit(github as never, makeAwsMock() as never, CONFIG, session),
+    ).rejects.toThrow()
+
+    expect(deleteSession).not.toHaveBeenCalled()
+  })
+})
+
+// ─── Issue #316, defect B1: --config must resume, not restart ────────────────
+describe('resolveConfigFileSession', () => {
+  beforeEach(() => {
+    vi.mocked(loadSession).mockReset()
+  })
+
+  // The reported failure: resuming `biffo init --config <path>` restarted from
+  // step 2 despite five recorded steps, then rewrote the session with four.
+  it('adopts the saved session rather than starting from zero steps', () => {
+    vi.mocked(loadSession).mockReturnValue(
+      makeSession({
+        completedSteps: [
+          'verify_credentials',
+          'create_repo',
+          'oidc_trust',
+          'terraform_backend',
+          'github_settings',
+        ],
+        outputs: { cloneUrl: 'https://github.com/acme/my-app.git', oidcRoleArn: 'arn:role' },
+      }),
+    )
+
+    const session = resolveConfigFileSession(CONFIG, '123456789012', 'eu-west-1', false)
+
+    expect(session.completedSteps).toEqual([
+      'verify_credentials',
+      'create_repo',
+      'oidc_trust',
+      'terraform_backend',
+      'github_settings',
+    ])
+    // The outputs a resume needs to avoid redoing work must come along too.
+    expect(session.outputs.oidcRoleArn).toBe('arn:role')
+    expect(deleteSession).not.toHaveBeenCalled()
+  })
+
+  it('takes config, account and region from the FILE, not the saved session', () => {
+    vi.mocked(loadSession).mockReturnValue(
+      makeSession({
+        config: { ...CONFIG, project: { ...CONFIG.project, description: 'stale' } },
+        awsAccountId: '999999999999',
+        awsRegion: 'us-east-1',
+        completedSteps: ['verify_credentials'],
+      }),
+    )
+
+    const session = resolveConfigFileSession(CONFIG, '123456789012', 'eu-west-1', false)
+
+    expect(session.config).toBe(CONFIG)
+    expect(session.awsAccountId).toBe('123456789012')
+    expect(session.awsRegion).toBe('eu-west-1')
+    // …while still resuming.
+    expect(session.completedSteps).toEqual(['verify_credentials'])
+  })
+
+  it('starts empty and discards the stale file when --fresh is passed', () => {
+    vi.mocked(loadSession).mockReturnValue(
+      makeSession({ completedSteps: ['verify_credentials', 'create_repo'] }),
+    )
+
+    const session = resolveConfigFileSession(CONFIG, '123456789012', 'eu-west-1', true)
+
+    expect(session.completedSteps).toEqual([])
+    // Saves are monotonic, so --fresh MUST delete or the old steps merge back in.
+    expect(deleteSession).toHaveBeenCalledWith('my-app')
+  })
+
+  it('starts empty when there is no saved session', () => {
+    vi.mocked(loadSession).mockReturnValue(null)
+
+    const session = resolveConfigFileSession(CONFIG, '123456789012', 'eu-west-1', false)
+
+    expect(session.completedSteps).toEqual([])
+    expect(deleteSession).toHaveBeenCalledWith('my-app')
   })
 })

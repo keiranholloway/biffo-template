@@ -159,12 +159,27 @@ export class GitHubAdapter {
    * user's own account instead.
    */
   async createEmptyRepo(org: string, repo: string, description?: string): Promise<string> {
-    // If the repo already exists (e.g. a previous failed sibling create), skip creation.
+    // If the repo already exists, this is almost certainly a resume after a
+    // previous run created it and then failed before pushing (issue #316).
+    // Adopting it is right — but only if it is still EMPTY. A repo with commits
+    // is somebody's work: the skeleton push that follows would either be
+    // rejected as a non-fast-forward or, worse, land on top of it. Refuse, and
+    // say what to do about it, rather than guessing.
     try {
       const { data: existing } = await this.octokit.repos.get({ owner: org, repo })
-      log.info(`Repository ${org}/${repo} already exists — skipping creation`)
+      if (await this.repoHasCommits(org, repo)) {
+        throw new Error(
+          `Repository ${org}/${repo} already exists and is not empty.\n` +
+            `  Biffo will not push the sibling skeleton over a repo that has content.\n` +
+            `  If this repo is a half-finished Biffo sibling you want to redo, delete it\n` +
+            `  (gh repo delete ${org}/${repo}) and re-run. If it is unrelated, choose a\n` +
+            `  different sibling name.`,
+        )
+      }
+      log.info(`Repository ${org}/${repo} already exists and is empty — adopting it`)
       return existing.clone_url
     } catch (err: unknown) {
+      if (err instanceof Error && !('status' in err)) throw err
       if ((err as { status?: number }).status !== 404) throw err
       // 404 = doesn't exist yet, proceed with creation
     }
@@ -193,6 +208,28 @@ export class GitHubAdapter {
     })
     log.success(`Repository created: ${data.html_url}`)
     return data.clone_url
+  }
+
+  /**
+   * Does `org/repo` have any commits on any branch?
+   *
+   * `repos.get`'s `size` is unreliable for this — it is in KB and reports 0 for
+   * a freshly-pushed small repo. GitHub answers the question directly instead:
+   * listing commits on a repo with no commits returns 409 ("Git Repository is
+   * empty"). A 404 means the repo itself is gone, which is also "no commits".
+   *
+   * Used to decide whether an existing repo is safe to adopt (issue #316) and
+   * whether a skeleton push has already happened.
+   */
+  async repoHasCommits(org: string, repo: string): Promise<boolean> {
+    try {
+      const { data } = await this.octokit.repos.listCommits({ owner: org, repo, per_page: 1 })
+      return data.length > 0
+    } catch (err: unknown) {
+      const status = (err as { status?: number }).status
+      if (status === 409 || status === 404) return false
+      throw err
+    }
   }
 
   async deleteRepo(org: string, repo: string): Promise<void> {

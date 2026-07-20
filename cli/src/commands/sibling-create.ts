@@ -31,7 +31,7 @@ import { loadProjectConfig } from '../lib/session.js'
 import { restorePackagedDotfiles } from '../lib/skeleton-dotfiles.js'
 import {
   deleteSiblingSession,
-  findLatestSiblingSession,
+  loadSiblingSession,
   markSiblingStepComplete,
   saveSiblingSession,
   type CoreIdentity,
@@ -114,8 +114,11 @@ async function runSiblingCreateCommand(name: string, options: CommandOptions): P
 
   let session: SiblingSession | null = null
   if (!options.fresh) {
-    const saved = findLatestSiblingSession()
-    if (saved && saved.config.project?.name === name) {
+    // By name, not `findLatestSiblingSession()`: the session for THIS sibling
+    // is the one to resume, whether or not it happens to be the most recently
+    // touched file in the directory.
+    const saved = loadSiblingSession(name)
+    if (saved) {
       session = saved
       console.log(
         chalk.dim(
@@ -126,6 +129,10 @@ async function runSiblingCreateCommand(name: string, options: CommandOptions): P
     }
   }
   if (!session) {
+    // Saves are monotonic (issue #316), so a stale session file for this name
+    // would otherwise merge its old steps into this brand-new run. Starting
+    // over means explicitly discarding what was there.
+    deleteSiblingSession(name)
     session = {
       version: 1,
       config,
@@ -224,7 +231,7 @@ export async function runSiblingCreate(
   session: SiblingSession,
   options: SiblingCreateOptions,
 ): Promise<void> {
-  const totalSteps = 7
+  const totalSteps = 8
   const { org, repo } = githubRepo(config)
   const pathPrefix = resolvePathPrefix(config)
 
@@ -266,64 +273,93 @@ export async function runSiblingCreate(
     )
   }
 
-  // Step 3: Create the GitHub repo and push the sibling skeleton as its first commit
+  // Step 3: Create the GitHub repo.
+  //
+  // Its own checkpoint, recorded the instant the repo exists — NOT shared with
+  // the skeleton push below (issue #316). Sharing one checkpoint across both
+  // meant a push failure (#315) left the repo created but unrecorded, so the
+  // resume re-ran creation against a repo that already existed.
   if (!session.completedSteps.includes('create_repo')) {
-    log.step(3, totalSteps, 'Creating GitHub repository and pushing sibling skeleton...')
-    const cloneUrl = await github.createEmptyRepo(
+    log.step(3, totalSteps, 'Creating GitHub repository...')
+    session.outputs.cloneUrl = await github.createEmptyRepo(
       org,
       repo,
       config.project.description || undefined,
-    )
-    session.outputs.cloneUrl = cloneUrl
-    await pushSkeleton(
-      git,
-      options.skeletonRoot,
-      cloneUrl,
-      config,
-      options.coreConfig,
-      options.githubToken,
     )
     markSiblingStepComplete(session, 'create_repo')
   } else {
     log.step(3, totalSteps, 'GitHub repository already created — skipping')
   }
 
-  // Step 4: Set up OIDC trust between GitHub Actions and AWS
+  // Step 4: Push the sibling skeleton as the repo's first commit.
+  const cloneUrl = session.outputs.cloneUrl
+  if (!cloneUrl) {
+    throw new Error('internal error: create_repo did not populate session.outputs.cloneUrl')
+  }
+  if (!session.completedSteps.includes('push_skeleton')) {
+    // A push that landed but whose checkpoint never got written would otherwise
+    // come back as a non-fast-forward rejection on the retry. Commits on the
+    // repo mean the skeleton is already there.
+    if (await github.repoHasCommits(org, repo)) {
+      log.step(4, totalSteps, 'Sibling skeleton already pushed — skipping')
+    } else {
+      log.step(4, totalSteps, 'Pushing sibling skeleton...')
+      await pushSkeleton(
+        git,
+        options.skeletonRoot,
+        cloneUrl,
+        config,
+        options.coreConfig,
+        options.githubToken,
+      )
+    }
+    markSiblingStepComplete(session, 'push_skeleton')
+  } else {
+    log.step(4, totalSteps, 'Sibling skeleton already pushed — skipping')
+  }
+
+  // Step 5: Set up OIDC trust between GitHub Actions and AWS
   if (!session.completedSteps.includes('oidc_trust')) {
-    log.step(4, totalSteps, 'Configuring OIDC trust...')
+    log.step(5, totalSteps, 'Configuring OIDC trust...')
     session.outputs.oidcRoleArn = await aws.setupOidcTrust(
       config,
       await resolveRepoIds(github, config),
     )
     markSiblingStepComplete(session, 'oidc_trust')
   } else {
-    log.step(4, totalSteps, 'OIDC trust already configured — skipping')
+    log.step(5, totalSteps, 'OIDC trust already configured — skipping')
   }
 
-  // Step 5: Bootstrap Terraform backend
+  // Step 6: Bootstrap Terraform backend
   if (!session.completedSteps.includes('terraform_backend')) {
-    log.step(5, totalSteps, 'Bootstrapping Terraform state backend...')
+    log.step(6, totalSteps, 'Bootstrapping Terraform state backend...')
     session.outputs.tfStateBucket = await aws.bootstrapTerraformBackend(config.project.name)
     markSiblingStepComplete(session, 'terraform_backend')
   } else {
-    log.step(5, totalSteps, 'Terraform backend already bootstrapped — skipping')
+    log.step(6, totalSteps, 'Terraform backend already bootstrapped — skipping')
   }
 
-  // Step 6: Configure GitHub (branches, branch protection, environments, secrets, variables)
+  // Step 7: Configure GitHub (branches, branch protection, environments, secrets, variables)
+  //
+  // Deliberately still ONE checkpoint after the #316 audit: every call it makes
+  // is an idempotent upsert — createBranch returns early if the branch exists,
+  // configureBranchProtection/createEnvironments/enableVulnerabilityAlerts are
+  // PUTs, and setRepoVariable/setEnvVariable are PATCH-then-POST upserts. None
+  // writes git objects, so replaying a partial run is safe and cheap.
   if (!session.completedSteps.includes('github_config')) {
-    log.step(6, totalSteps, 'Configuring GitHub repository...')
+    log.step(7, totalSteps, 'Configuring GitHub repository...')
     await configureSiblingGithub(github, config, options.coreConfig, session, coreIdentity)
     markSiblingStepComplete(session, 'github_config')
   } else {
-    log.step(6, totalSteps, 'GitHub already configured — skipping')
+    log.step(7, totalSteps, 'GitHub already configured — skipping')
   }
 
-  // Step 7: Register this sibling with the core project for CDN path routing
+  // Step 8: Register this sibling with the core project for CDN path routing
   if (options.skipRegistration && !session.completedSteps.includes('register_with_core')) {
-    log.step(7, totalSteps, 'Already registered with the core project by `biffo init` — skipping')
+    log.step(8, totalSteps, 'Already registered with the core project by `biffo init` — skipping')
     markSiblingStepComplete(session, 'register_with_core')
   } else if (!session.completedSteps.includes('register_with_core')) {
-    log.step(7, totalSteps, 'Opening a registration PR against the core project...')
+    log.step(8, totalSteps, 'Opening a registration PR against the core project...')
     session.outputs.registrationPrUrl = await registerWithCore(
       git,
       github,
@@ -334,7 +370,7 @@ export async function runSiblingCreate(
     )
     markSiblingStepComplete(session, 'register_with_core')
   } else {
-    log.step(7, totalSteps, 'Already registered with the core project — skipping')
+    log.step(8, totalSteps, 'Already registered with the core project — skipping')
   }
 
   deleteSiblingSession(config.project.name)

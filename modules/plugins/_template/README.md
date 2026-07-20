@@ -51,8 +51,8 @@ does the first two, and `biffo plugin install` does the third:
    arn:aws:sts::<account-id>:assumed-role/<project>-<env>-plugin-<name>-role/*
    ```
 
-   The root config builds that list itself, in
-   `local.plugin_service_principal_arns`, by mapping over `var.enabled_plugins`
+   The template-owned `modules/cloud/aws/plugin-allowlist` module builds that
+   list, mapping over the root config's `var.enabled_plugins`
    — so adding the plugin to `enabled_plugins` (which `biffo plugin install`
    does for you, via the generated `plugins.auto.tfvars.json`) is what
    allowlists it. Nothing to copy by hand, and the grant and the allowlist

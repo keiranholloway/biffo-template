@@ -34,32 +34,37 @@ locals {
     ["https://${module.cdn.distribution_domain}", "http://localhost:3000"],
   )
   cors_origins = jsonencode(local.cors_origins_list)
-
-  # ADR-0009 — which IAM principals may call /api/v1/internal/* on the Core API.
-  #
-  # Derived from var.enabled_plugins as a STATIC role-name glob, deliberately
-  # NOT from a plugin module's role_arn output: reading that output here would
-  # make core_api depend on the plugin, which depends on api_gateway, which
-  # depends on core_api — the dependency cycle recorded in issue #201 and in
-  # modules/plugins/_template/outputs.tf.
-  #
-  # A static glob is sound because the role name is fully predictable from the
-  # plugin's name: modules/cloud/aws/compute names every function's role
-  # "<project>-<env>-<function>-role", and modules/plugins/_template names the
-  # function "plugin-<name>". So enabling a plugin is what allowlists it, and
-  # the two can never drift apart. The trailing /* matches the session name
-  # that STS appends to an assumed-role ARN.
-  #
-  # Fails closed: with no plugins enabled this is [], and
-  # require_service_principal accepts no service caller at all.
-  plugin_service_principal_arns = [
-    for name in var.enabled_plugins :
-    "arn:aws:sts::${data.aws_caller_identity.current.account_id}:assumed-role/${var.project_name}-${local.environment}-plugin-${name}-role/*"
-  ]
 }
 
-# Account ID for the ADR-0009 service-principal allowlist glob below.
-data "aws_caller_identity" "current" {}
+# ADR-0009 — which IAM principals may call /api/v1/internal/* on the Core API.
+#
+# The glob format, the aws_caller_identity lookup and the fail-closed empty-list
+# behaviour all live in the module. That is deliberate: the glob encodes a
+# convention owned by modules/cloud/aws/compute (every function's role is
+# "<project>-<env>-<function>-role") and modules/plugins/_template (a plugin's
+# function is "plugin-<name>"). Those are template-owned and ride `biffo core
+# upgrade`; this file is user-owned and does not. Keeping the derivation beside
+# the convention is what stops a rename in either module from updating every
+# instance while the allowlist silently stays behind. Keep this block thin —
+# a module call plus the one line on module.core_api below.
+#
+# The input is plugin NAMES, never a plugin module's role_arn output. Per
+# ADR-0009's 2026-07-19 amendment, the reason is NOT that role_arn deadlocks:
+# that wording was overstated and was corrected after testing — it plans fine on
+# today's module shape, because Terraform's graph is resource-level and
+# _template's aws_iam_role does not itself depend on API Gateway. The real
+# reasons are that this is an accident of one module's internals (a plugin
+# attaching its Core API policy inline on the role closes a genuine
+# core_api -> api_gateway -> plugin -> core_api cycle), and that depending on a
+# plugin module would make the Core API un-plannable whenever any installed
+# plugin module is broken.
+module "plugin_allowlist" {
+  source = "../../../modules/cloud/aws/plugin-allowlist"
+
+  project_name    = var.project_name
+  environment     = local.environment
+  enabled_plugins = var.enabled_plugins
+}
 
 module "networking" {
   source = "../../../modules/cloud/aws/networking"
@@ -189,7 +194,7 @@ module "core_api" {
     # automatically: `biffo plugin install` adds the plugin to enabled_plugins
     # (plugins.auto.tfvars.json) and the glob above follows. Fails closed when
     # no plugin is enabled.
-    BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST = jsonencode(local.plugin_service_principal_arns)
+    BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST = jsonencode(module.plugin_allowlist.arns)
     # Set so discover_plugin_manifests() finds bundled plugin manifests at
     # runtime — deploy-app.yml's packaging step copies services/*/biffo.plugin.json
     # into the Lambda zip under services/, which AWS extracts to /var/task/.
@@ -297,12 +302,12 @@ module "pr_signer" {
 # human is also editing. Keeping the generated blocks in a separate file means
 # the two never contend.
 #
-# What this file DOES own for plugins is the ADR-0009 allowlist — see
-# local.plugin_service_principal_arns above and
-# BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST on module.core_api. It is derived from
-# var.enabled_plugins as a static role-name glob, never from a plugin module's
-# role_arn output, which would create the cycle
-# core_api -> api_gateway -> plugin -> core_api.
+# What this file DOES own for plugins is the ADR-0009 allowlist HOOK — the
+# module "plugin_allowlist" block above and BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST
+# on module.core_api. The derivation itself lives in
+# modules/cloud/aws/plugin-allowlist (template-owned, so it rides `biffo core
+# upgrade`): a static role-name glob over var.enabled_plugins, never a plugin
+# module's role_arn output. See that module's main.tf for the full rationale.
 #
 # To disable an installed plugin without uninstalling it, set enabled_plugins
 # explicitly via -var/-var-file/TF_VAR_enabled_plugins — all of which outrank

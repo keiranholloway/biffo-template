@@ -268,3 +268,30 @@ of `modules/plugins/` on every install and uninstall. Because `cli/` is
 template-owned and `infra/` is not, the generator skips any root config that does
 not declare `enabled_plugins` rather than emitting Terraform that would fail to
 validate there.
+
+### 2026-07-20 — the allowlist glob became template-owned (issue #266)
+
+**What changed.** The derivation moved out of `infra/environments/*/main.tf` and
+into `modules/cloud/aws/plugin-allowlist/`. Behaviour is unchanged — same ARNs
+for the same inputs, still fail-closed on an empty `enabled_plugins` — but the
+logic now lives on a template-owned path, so it rides `biffo core upgrade`.
+
+**Why it mattered.** The previous entry's glob depends on naming owned by two
+template-owned modules (`modules/cloud/aws/compute` names every role
+`<project>-<env>-<function>-role`; `modules/plugins/_template` names the function
+`plugin-<name>`). `infra/` is user-owned, so those modules could be renamed and
+distributed to every instance while the glob stayed behind — failing closed, but
+silently and per-instance, on the control gating `/api/v1/internal/*`.
+
+**What stays in the root config.** A `module "plugin_allowlist"` block and the
+one line assigning `BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST` on `module.core_api`.
+Terraform requires a static `source` and an explicit assignment, so some hook is
+unavoidable; the point is that it never changes again. Existing instances need
+those lines copied in by hand once (AGENTS.md §9) — this change reduces future
+copy-ins to zero, it does not retroactively distribute itself.
+
+**The drift guard.** `cli/src/lib/plugin-allowlist-convention.ts` reads all three
+module sources, symbolically composes the role name the naming modules build, and
+fails the build if the allowlist's glob is not exactly that. The independence
+that makes the glob safe is also what makes the coupling invisible to Terraform;
+the guard is where that coupling is now written down and enforced.

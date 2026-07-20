@@ -1,0 +1,197 @@
+name: Publish biffo-plugin-sdk
+
+# Builds and publishes packages/python-sdk/ (the `biffo-plugin-sdk` PyPI
+# distribution) on a tag push.
+#
+# WHY A SEPARATE TAG PATTERN (`sdk-v*`, not `core-v*` or `v*`)
+#
+# core-tag.yml owns `core-v<core.version>`, which stands for the template-owned
+# tree at a given core version (ADR-0006). The SDK deliberately does NOT share
+# that lineage: it is a public API contract for third-party plugin authors, so
+# it carries its own independent semver (see packages/python-sdk/pyproject.toml's
+# header comment for the full reasoning). Reusing `core-v*` would publish a new
+# SDK release on every template change — including changes that never touched
+# the SDK — and would force the SDK's major version to track the template's,
+# breaking the `^1.0` pin already written into every plugin manifest.
+#
+# A bare `v*` is also avoided: it is the pattern the *plugin* skeleton's own
+# release.yml uses (_skeletons/plugin-template/.github/workflows/release.yml),
+# and this repo may later want `v*` for its own product releases. `sdk-v*` says
+# exactly which artifact the tag releases.
+#
+# To cut a release: bump `version` in packages/python-sdk/pyproject.toml via PR,
+# then after merge tag the merge commit `sdk-v<that same version>` and push it.
+# The verify job below fails the run if the two disagree, so a mistyped tag
+# cannot publish a mislabelled artifact.
+#
+# CREDENTIALS: this repo has no PyPI project for `biffo-plugin-sdk` yet — the
+# name is unregistered and nothing has ever been published. Until the owner
+# configures Trusted Publishing (see the publish job), this workflow will build
+# and verify successfully and then fail loudly at the publish step. That is the
+# intended behaviour: a release path that fails visibly is strictly better than
+# one that silently does nothing.
+
+on:
+  push:
+    tags: ['sdk-v*']
+  # Manual re-trigger. A tag-triggered release that fails transiently (or whose
+  # push-triggered run GitHub simply never creates — observed here on
+  # 2026-07-19) is otherwise unrecoverable without deleting and re-pushing the
+  # tag, which is a bad thing to have to do to a published version number
+  # (#293). `ref` selects the tag to publish.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and verify only — skip the PyPI upload'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: '3.13'
+
+jobs:
+  build:
+    name: Build & verify artifacts
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    outputs:
+      is_template: ${{ steps.guard.outputs.is_template }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      # This workflow lives in a template-owned path (.github/), so it ships to
+      # every scaffolded instance. Only the template publishes the SDK — an
+      # instance pushing an `sdk-v*` tag must not try to upload to the
+      # template's PyPI project. Detected the same way core-tag.yml detects an
+      # instance: biffo.core.json is present in an instance, absent here.
+      - name: Skip in instances
+        id: guard
+        run: |
+          set -euo pipefail
+          if [ -f biffo.core.json ]; then
+            echo "biffo.core.json present — this is an instance, not the template. Skipping."
+            echo "is_template=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_template=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: astral-sh/setup-uv@v5
+        if: steps.guard.outputs.is_template == 'true'
+        with:
+          enable-cache: true
+
+      - name: Verify tag matches pyproject version
+        if: steps.guard.outputs.is_template == 'true' && startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#sdk-v}"
+          project_version="$(
+            uv run --no-project --with tomli python -c \
+              'import tomli,sys; print(tomli.load(open(sys.argv[1],"rb"))["project"]["version"])' \
+              packages/python-sdk/pyproject.toml
+          )"
+          echo "tag=${tag_version} pyproject=${project_version}"
+          if [ "${tag_version}" != "${project_version}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match packages/python-sdk/pyproject.toml version ${project_version}."
+            exit 1
+          fi
+
+      - name: Build sdist and wheel
+        if: steps.guard.outputs.is_template == 'true'
+        run: uv build --package biffo-plugin-sdk --out-dir dist
+
+      # Fails on the metadata problems that PyPI rejects at upload time — long
+      # description rendering, missing classifiers, malformed fields — before
+      # a version number is spent on a broken artifact.
+      - name: Check artifact metadata
+        if: steps.guard.outputs.is_template == 'true'
+        run: uv run --no-project --with twine twine check --strict dist/*
+
+      # Guards the artifact's *contents*, not just its metadata: the wheel must
+      # carry the importable package and nothing else from the monorepo (no
+      # sibling packages, no repo-root config, no tests).
+      - name: Verify artifact contents
+        if: steps.guard.outputs.is_template == 'true'
+        run: |
+          set -euo pipefail
+          wheel="$(ls dist/*.whl)"
+          echo "--- wheel: ${wheel}"
+          python -m zipfile -l "${wheel}"
+          if python -m zipfile -l "${wheel}" | grep -qE '(^|/)(tests|services|apps|infra|cli)/'; then
+            echo "::error::Wheel contains paths it should not."
+            exit 1
+          fi
+          if ! python -m zipfile -l "${wheel}" | grep -q 'biffo_plugin_sdk/__init__.py'; then
+            echo "::error::Wheel is missing biffo_plugin_sdk/__init__.py."
+            exit 1
+          fi
+          echo "--- sdist"
+          tar -tzf dist/*.tar.gz
+
+      # Proves the wheel is installable and importable standalone — outside the
+      # uv workspace, without the sigv4 extra (botocore must stay lazy).
+      - name: Smoke-test the wheel in a clean environment
+        if: steps.guard.outputs.is_template == 'true'
+        run: |
+          set -euo pipefail
+          uv venv /tmp/smoke
+          VIRTUAL_ENV=/tmp/smoke uv pip install --no-cache dist/*.whl
+          VIRTUAL_ENV=/tmp/smoke uv run --no-project python -c "
+          import biffo_plugin_sdk as sdk
+          from importlib.metadata import version
+          print('import OK, version', version('biffo-plugin-sdk'))
+          assert sdk.SignedCoreClient and sdk.create_core_client
+          "
+
+      - uses: actions/upload-artifact@v4
+        if: steps.guard.outputs.is_template == 'true'
+        with:
+          name: sdk-dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    # Skipped in instances (the build job's guard) and on a dry run.
+    if: ${{ needs.build.outputs.is_template == 'true' && !inputs.dry_run }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    # PyPI Trusted Publishing (OIDC), not a long-lived PYPI_API_TOKEN.
+    #
+    # This repo already authenticates to AWS by OIDC rather than stored keys,
+    # and the same argument applies here: a Trusted Publisher mints a
+    # short-lived, single-upload credential scoped to this repository, this
+    # workflow file, and this environment — so there is no token to leak,
+    # rotate, or accidentally grant to a fork. gh-action-pypi-publish reads it
+    # from the `id-token: write` permission below; no secret is referenced
+    # anywhere in this file, by design.
+    #
+    # OWNER SETUP (one-off, before the first release can succeed):
+    #   1. Register the project on PyPI, or add a *pending* publisher at
+    #      https://pypi.org/manage/account/publishing/ for a name that does not
+    #      exist yet (which is this case — `biffo-plugin-sdk` is unregistered).
+    #   2. Publisher values: owner `keiranholloway`, repository
+    #      `biffo-template`, workflow `publish-sdk.yml`, environment `pypi`.
+    #   3. Create a GitHub environment named `pypi` and, recommended, gate it on
+    #      a required reviewer — publishing a version is irreversible on PyPI.
+    # Until step 1-2 exist, this job fails at the upload with an OIDC error.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/biffo-plugin-sdk
+    permissions:
+      id-token: write # mints the OIDC token Trusted Publishing exchanges
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdk-dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # A re-run of an already-published version should be a no-op, not a
+          # hard failure — see the workflow_dispatch rationale above.
+          skip-existing: true

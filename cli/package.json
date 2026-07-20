@@ -23,12 +23,13 @@
   "files": [
     "dist",
     "schemas",
-    "core.version"
+    "core.version",
+    "_skeletons"
   ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
-    "prepack": "node scripts/sync-core-version.mjs",
-    "postpack": "node -e \"require('node:fs').rmSync('core.version',{force:true})\"",
+    "prepack": "node scripts/sync-packaged-assets.mjs",
+    "postpack": "node scripts/sync-packaged-assets.mjs --clean",
     "dev": "tsx watch src/index.ts",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",

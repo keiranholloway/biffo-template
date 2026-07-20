@@ -10,11 +10,13 @@ node_modules
 dist
 .turbo
 out
-# Packaging-time copy of the root core.version, written by cli/prepack so the
-# published `biffo` package carries its own core version (see
-# cli/scripts/sync-core-version.mjs). Never committed — the repo root file is
-# the single source of truth.
+# Packaging-time copies of repo-root assets, written by cli/prepack so the
+# published `@biffo/cli` package carries its own copies — nothing exists above
+# node_modules/@biffo/cli/dist/ for the CLI's upward walk to find. See
+# cli/scripts/packaged-root-assets.mjs. Never committed — the repo root copies
+# are the single source of truth.
 cli/core.version
+cli/_skeletons/
 # TypeScript incremental-compile cache. Regenerated from source on every build,
 # so committing it only produces churn in unrelated diffs — it turned up in a PR
 # about core version tags purely because something ran a build. The sibling

@@ -110,11 +110,20 @@ Two paths, and it matters which one you are on:
 fires on the `core-v*` tags that `core-tag.yml` maintains, checks the tag and
 `core.version` agree, stamps the package version, and publishes with provenance.
 
-Because `getLatestCoreVersion()` finds `core.version` by walking _up_ from the
-running module, the published tarball must carry its own copy beside `dist/` —
-written by `cli/scripts/sync-core-version.mjs` from `prepack`, listed in
-package.json `files`, and guarded by `cli/src/lib/core-version-packaging.test.ts`.
-The copy is git-ignored; the repo-root `core.version` stays the only committed one.
+Several CLI modules find a companion asset by walking _up_ from the running
+module — `core.version` for `getLatestCoreVersion()`, `_skeletons/` for `biffo
+init` / `sibling create` / `plugin create`. Nothing exists above
+`node_modules/@biffo/cli/dist/`, so the published tarball must carry its own copy
+of each, beside `dist/`. They are written by `cli/scripts/sync-packaged-assets.mjs`
+from `prepack` (undone by `postpack`), listed in package.json `files`, and guarded
+by `cli/src/lib/root-asset-packaging.test.ts`. The copies are git-ignored; the
+repo-root originals stay the only committed ones.
+
+**Adding a new root-level asset the CLI resolves this way?** Register it in
+`cli/scripts/packaged-root-assets.mjs` — that inventory drives both the prepack
+copy and the guard. Skipping it is invisible in CI (the upward walk still reaches
+the repo root in a checkout) and breaks only on a real npm install: that is
+exactly how #259 and #315 shipped.
 
 ## Key invariants to preserve
 

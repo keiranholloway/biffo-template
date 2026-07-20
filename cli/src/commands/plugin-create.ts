@@ -9,6 +9,7 @@ import { log } from '../lib/logger.js'
 import { pluginDir, type PluginChannel } from '../lib/plugin-locations.js'
 import { validateManifest } from '../lib/plugin-manifest.js'
 import { deriveNames, findSkeletonRoot, scaffoldPlugin } from '../lib/plugin-scaffold.js'
+import { restorePackagedDotfiles } from '../lib/skeleton-dotfiles.js'
 
 export const pluginCreateCommand = new Command('create')
   .description('Scaffold a new plugin from the Biffo plugin skeleton: biffo plugin create <name>')
@@ -122,10 +123,17 @@ export async function runPluginCreate(
   }
 
   // Resolve the skeleton the same way `sibling-create.ts` does: walk up from
-  // this module (works from both `src/` in development and the built `dist/`,
-  // and inside a project checkout where `cli/` sits beside `_skeletons/`), then
-  // fall back to the project root — which is what covers a globally installed
-  // `biffo`, whose package does not ship `_skeletons/`.
+  // this module. That covers development from `src/`, the built `dist/`, a
+  // project checkout where `cli/` sits beside `_skeletons/`, and an installed
+  // package (prepack copies `_skeletons/` in beside `dist/` — see
+  // `cli/scripts/packaged-root-assets.mjs`; before #315 it did not, and this
+  // command depended on the cwd fallback below to work at all).
+  //
+  // The fallback to `<cwd>/_skeletons/` remains, because unlike `biffo init`
+  // this command only ever runs from inside a Biffo project checkout, where that
+  // path is a legitimate source. The explicit existsSync check below means a
+  // miss is still reported as a missing skeleton rather than silently scaffolding
+  // from nothing.
   const here = dirname(fileURLToPath(import.meta.url))
   const skeletonRoot =
     options.skeletonRoot ??
@@ -144,6 +152,9 @@ export async function runPluginCreate(
   }
 
   const { files, skipped } = scaffoldPlugin(skeletonRoot, destDir, names)
+  // See skeleton-dotfiles.ts — npm strips .gitignore from the tarball, so the
+  // packaged skeleton carries `_gitignore`. No-op from a template checkout.
+  restorePackagedDotfiles(destDir)
   log.success(`Scaffolded ${files.length} file(s) into ${relDir}/`)
   for (const { entry, reason } of skipped) {
     log.info(`Skipped ${entry} — ${reason}`)

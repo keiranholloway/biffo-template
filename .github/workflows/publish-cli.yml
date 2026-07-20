@@ -119,10 +119,15 @@ jobs:
         working-directory: cli
         run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version --allow-same-version
 
-      # `npm pack` runs prepack, which copies core.version into the package.
-      # Verify it actually landed in the tarball: without it `biffo core status`
-      # fails on every npm install while every in-repo test still passes (#259).
-      - name: Verify tarball carries core.version
+      # `npm pack` runs prepack, which copies the repo-root assets listed in
+      # cli/scripts/packaged-root-assets.mjs into the package. Verify they
+      # actually landed in the tarball: without core.version `biffo core status`
+      # fails on every npm install (#259); without _skeletons/ `biffo init`
+      # creates both repos and then dies at step 6/6 leaving the app sibling
+      # empty (#315). Both shipped green — every in-repo test still passes,
+      # because the upward walk finds the repo root in a checkout. The tarball is
+      # the only honest evidence, so it is checked here, at the gate.
+      - name: Verify tarball carries its packaged root assets
         if: steps.guard.outputs.is_template == 'true'
         working-directory: cli
         run: |
@@ -142,6 +147,24 @@ jobs:
             exit 1
           fi
           echo "OK: tarball ships core.version $packed"
+
+          # _skeletons/ must be present AND complete. Checking only that the
+          # directory prefix appears would pass on an empty tree, which would
+          # ship and still fail at `biffo init` step 6/6 — so assert on real
+          # files the scaffolder reads.
+          for required in \
+            'package/_skeletons/sibling-template/biffo.sibling.json' \
+            'package/_skeletons/plugin-template/biffo.plugin.json' \
+            'package/_skeletons/sibling-template/_gitignore'
+          do
+            if ! tar -tzf "$tarball" | grep -qx "$required"; then
+              echo "::error::Packed tarball is missing $required — refusing to publish."
+              tar -tzf "$tarball" | grep '_skeletons' || echo "(no _skeletons entries at all)"
+              exit 1
+            fi
+          done
+          skeleton_files="$(tar -tzf "$tarball" | grep -c '^package/_skeletons/')"
+          echo "OK: tarball ships _skeletons ($skeleton_files entries)"
           rm -f "$tarball"
 
       # Fails loudly (not silently) when NPM_TOKEN is absent, so a release that

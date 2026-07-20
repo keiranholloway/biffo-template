@@ -137,6 +137,67 @@ def send_google_chat(
     return {"status_code": response.status_code}
 
 
+def _template_params(config: dict[str, Any], payload: dict[str, Any]) -> list[str]:
+    """The ordered body parameters of a template message, rendered.
+
+    Accepts either a list (from an API caller) or a comma-separated string (what
+    the portal's single-line input produces). Each entry is a ``{field}``
+    template filled from the event payload; blank entries are dropped, because a
+    trailing comma should not add an empty positional parameter Meta would
+    reject.
+    """
+    raw = config.get("template_params") or []
+    items = raw.split(",") if isinstance(raw, str) else list(raw)
+    rendered = [_render(str(item).strip(), payload) for item in items]
+    return [value for value in rendered if value]
+
+
+def _whatsapp_body(
+    config: dict[str, Any], payload: dict[str, Any], to: str
+) -> dict[str, Any]:
+    """Build the Cloud API message body for the configured ``message_type``."""
+    message_type = config.get("message_type") or "text"
+
+    if message_type == "text":
+        return {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "text",
+            "text": {"body": _render(config.get("message", ""), payload)},
+        }
+
+    if message_type == "template":
+        name = _require(config, "whatsapp", "template_name")
+        language = config.get("language_code") or "en_US"
+        template: dict[str, Any] = {
+            "name": name,
+            "language": {"code": language},
+        }
+        # Omit `components` entirely for a template with no body variables —
+        # Meta rejects an empty parameter list.
+        parameters = _template_params(config, payload)
+        if parameters:
+            template["components"] = [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": value} for value in parameters
+                    ],
+                }
+            ]
+        return {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "template",
+            "template": template,
+        }
+
+    raise ActionError(
+        f"whatsapp action_config has unsupported message_type: {message_type!r} "
+        "(expected 'text' or 'template')"
+    )
+
+
 def send_whatsapp(
     config: dict[str, Any],
     payload: dict[str, Any],
@@ -145,15 +206,21 @@ def send_whatsapp(
     whatsapp: WhatsAppSettings | None,
     **_: Any,
 ) -> dict[str, Any]:
-    """Send a WhatsApp text message via the Meta Cloud API.
+    """Send a WhatsApp message via the Meta Cloud API.
 
     Account credentials (access token + phone-number id) are injected from the
-    orchestrator environment, so ``config`` only carries ``to`` (recipient in
-    international format, required) and ``message`` (a ``{field}`` template).
+    orchestrator environment, so ``config`` never carries them. Per-workflow
+    keys: ``to`` (recipient in international format, required) and
+    ``message_type`` — ``"text"`` (default) or ``"template"``.
 
-    Note: a plain text message only delivers inside an open 24-hour customer
-    session; proactive business-initiated notifications need an approved template
-    message (a follow-up to this text-only v1).
+    - ``text``: ``message`` is a ``{field}`` template filled from the payload.
+      A text message only delivers inside an **open 24-hour customer service
+      window**, so it suits replies, not proactive notifications.
+    - ``template``: ``template_name`` (required) plus ``language_code``
+      (default ``en_US``) and ``template_params`` — the ordered body variables,
+      each a ``{field}`` template. This is the only shape Meta accepts for a
+      proactive, business-initiated message, and the template must already be
+      **approved in WhatsApp Manager**; this action cannot create one.
     """
     if whatsapp is None or not whatsapp.configured:
         raise ActionError(
@@ -161,7 +228,7 @@ def send_whatsapp(
             "WHATSAPP_PHONE_NUMBER_ID on the orchestrator."
         )
     to = _require(config, "whatsapp", "to")
-    message = _render(config.get("message", ""), payload)
+    body = _whatsapp_body(config, payload, to)
 
     url = (
         f"https://graph.facebook.com/{whatsapp.api_version}"
@@ -169,12 +236,7 @@ def send_whatsapp(
     )
     response = http_client.post(
         url,
-        json={
-            "messaging_product": "whatsapp",
-            "to": to,
-            "type": "text",
-            "text": {"body": message},
-        },
+        json=body,
         headers={"Authorization": f"Bearer {whatsapp.access_token}"},
     )
     if response.status_code >= 400:

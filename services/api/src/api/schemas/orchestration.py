@@ -70,6 +70,15 @@ class WorkflowRunResponse(BiffoBaseSchema):
 # that emit those events. Actions mirror the engine's action registry
 # (services/_plugins/orchestrator/.../actions.py); extend WORKFLOW_ACTIONS to offer a new
 # action in the UI.
+#
+# A config field may carry two optional keys beyond name/label/type/required:
+#   ``default``      — value assumed when the field is absent from action_config.
+#   ``visible_when`` — ``{"field": ..., "equals": ...}``; the field only applies
+#                      when that sibling's effective value matches. A field that
+#                      does not apply is neither shown by the portal nor
+#                      required/format-checked here (see ``_field_applies``).
+# ``type: "select"`` fields carry ``options`` (value/label pairs) and accept only
+# those values.
 
 WORKFLOW_ACTIONS: list[dict[str, Any]] = [
     {
@@ -113,11 +122,49 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 "type": "tel",
                 "required": True,
             },
+            # Text only delivers inside an open 24-hour customer service window;
+            # proactive/business-initiated sends need an approved template.
+            {
+                "name": "message_type",
+                "label": "Message type",
+                "type": "select",
+                "required": False,
+                "default": "text",
+                "options": [
+                    {"value": "text", "label": "Text (reply, within 24h window)"},
+                    {"value": "template", "label": "Template (proactive)"},
+                ],
+            },
             {
                 "name": "message",
                 "label": "Message",
                 "type": "textarea",
                 "required": True,
+                "visible_when": {"field": "message_type", "equals": "text"},
+            },
+            # The template must already exist and be approved in WhatsApp
+            # Manager — this action cannot create one.
+            {
+                "name": "template_name",
+                "label": "Template name (approved in WhatsApp Manager)",
+                "type": "text",
+                "required": True,
+                "visible_when": {"field": "message_type", "equals": "template"},
+            },
+            {
+                "name": "language_code",
+                "label": "Language code",
+                "type": "text",
+                "required": True,
+                "default": "en_US",
+                "visible_when": {"field": "message_type", "equals": "template"},
+            },
+            {
+                "name": "template_params",
+                "label": "Body parameters, in order (comma-separated, {field} allowed)",
+                "type": "text",
+                "required": False,
+                "visible_when": {"field": "message_type", "equals": "template"},
             },
         ],
     },
@@ -129,6 +176,31 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 # A config field of type "url" must be an https URL (webhook endpoints always are;
 # this also blocks http/SSRF-ish typos). Not a full URL validator.
 _URL_RE = re.compile(r"^https://[^\s]+$")
+
+
+def _effective(
+    config_fields: list[dict[str, Any]], config: dict[str, Any], name: str
+) -> Any:
+    """A field's value, falling back to its catalog ``default`` when unset.
+
+    Definitions saved before a field existed carry no value for it, so the
+    default is what conditional visibility must be judged against.
+    """
+    value = config.get(name)
+    if value not in (None, ""):
+        return value
+    field = next((f for f in config_fields if f["name"] == name), None)
+    return field.get("default") if field else None
+
+
+def _field_applies(
+    config_fields: list[dict[str, Any]], config: dict[str, Any], field: dict[str, Any]
+) -> bool:
+    """Whether a conditional field is in play for this config."""
+    condition = field.get("visible_when")
+    if condition is None:
+        return True
+    return _effective(config_fields, config, condition["field"]) == condition["equals"]
 
 
 class WorkflowCatalog(BaseModel):
@@ -177,9 +249,27 @@ class WorkflowDefinitionBody(BaseModel):
         if action is None:
             raise ValueError(f"Unknown action_type: {self.action_type}")
 
-        for field in action["config_fields"]:
+        config_fields = action["config_fields"]
+        for field in config_fields:
+            if not _field_applies(config_fields, self.action_config, field):
+                continue
             value = self.action_config.get(field["name"])
-            if field["required"] and not (isinstance(value, str) and value.strip()):
+            if (
+                field["type"] == "select"
+                and isinstance(value, str)
+                and value
+                and value not in {o["value"] for o in field["options"]}
+            ):
+                raise ValueError(
+                    f"action_config.{field['name']} must be one of: "
+                    + ", ".join(o["value"] for o in field["options"])
+                )
+            # "Required" means the value must *resolve* to something — a field
+            # with a catalog default therefore always satisfies it.
+            resolved = _effective(config_fields, self.action_config, field["name"])
+            if field["required"] and not (
+                isinstance(resolved, str) and resolved.strip()
+            ):
                 raise ValueError(
                     f"action_config.{field['name']} is required "
                     f"for the {self.action_type} action"

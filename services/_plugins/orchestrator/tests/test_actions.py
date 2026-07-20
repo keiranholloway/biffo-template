@@ -141,3 +141,163 @@ def test_send_whatsapp_api_error_is_action_error():
     http = FakeHttp(status_code=401, text="invalid token")
     with pytest.raises(ActionError, match="WhatsApp send failed: 401"):
         send_whatsapp({"to": "+1", "message": "hi"}, {}, http_client=http, whatsapp=_WA)
+
+
+def test_explicit_text_message_type_matches_the_default():
+    http = FakeHttp(status_code=200, json_data={"messages": [{"id": "wamid.A"}]})
+
+    send_whatsapp(
+        {"to": "+1", "message_type": "text", "message": "hi"},
+        {},
+        http_client=http,
+        whatsapp=_WA,
+    )
+
+    assert http.calls[0]["json"]["type"] == "text"
+
+
+# ── WhatsApp templates (proactive / business-initiated) ──────────────────────
+
+
+def test_send_whatsapp_template_builds_the_cloud_api_body():
+    http = FakeHttp(status_code=200, json_data={"messages": [{"id": "wamid.TPL"}]})
+
+    result = send_whatsapp(
+        {
+            "to": "+15551234567",
+            "message_type": "template",
+            "template_name": "demo_booked",
+            "language_code": "en_GB",
+            "template_params": "{company}, {slot}",
+        },
+        {"company": "Acme", "slot": "Tuesday 10:00"},
+        http_client=http,
+        whatsapp=_WA,
+    )
+
+    assert result == {"message_id": "wamid.TPL"}
+    call = http.calls[0]
+    assert call["url"] == "https://graph.facebook.com/v22.0/pn-456/messages"
+    assert call["headers"]["Authorization"] == "Bearer tok-123"
+    assert call["json"] == {
+        "messaging_product": "whatsapp",
+        "to": "+15551234567",
+        "type": "template",
+        "template": {
+            "name": "demo_booked",
+            "language": {"code": "en_GB"},
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": "Acme"},
+                        {"type": "text", "text": "Tuesday 10:00"},
+                    ],
+                }
+            ],
+        },
+    }
+
+
+def test_template_language_defaults_to_en_us():
+    http = FakeHttp(status_code=200, json_data={"messages": [{"id": "x"}]})
+
+    send_whatsapp(
+        {"to": "+1", "message_type": "template", "template_name": "hello"},
+        {},
+        http_client=http,
+        whatsapp=_WA,
+    )
+
+    assert http.calls[0]["json"]["template"]["language"] == {"code": "en_US"}
+
+
+def test_template_without_params_omits_components():
+    http = FakeHttp(status_code=200, json_data={"messages": [{"id": "x"}]})
+
+    send_whatsapp(
+        {
+            "to": "+1",
+            "message_type": "template",
+            "template_name": "hello",
+            "template_params": "",
+        },
+        {},
+        http_client=http,
+        whatsapp=_WA,
+    )
+
+    assert "components" not in http.calls[0]["json"]["template"]
+
+
+def test_template_params_accepts_a_list():
+    http = FakeHttp(status_code=200, json_data={"messages": [{"id": "x"}]})
+
+    send_whatsapp(
+        {
+            "to": "+1",
+            "message_type": "template",
+            "template_name": "hello",
+            "template_params": ["{company}", "static"],
+        },
+        {"company": "Acme"},
+        http_client=http,
+        whatsapp=_WA,
+    )
+
+    assert http.calls[0]["json"]["template"]["components"][0]["parameters"] == [
+        {"type": "text", "text": "Acme"},
+        {"type": "text", "text": "static"},
+    ]
+
+
+def test_blank_template_params_are_dropped():
+    """A trailing comma must not add an empty positional parameter."""
+    http = FakeHttp(status_code=200, json_data={"messages": [{"id": "x"}]})
+
+    send_whatsapp(
+        {
+            "to": "+1",
+            "message_type": "template",
+            "template_name": "hello",
+            "template_params": "{company},,{missing},",
+        },
+        {"company": "Acme"},
+        http_client=http,
+        whatsapp=_WA,
+    )
+
+    assert http.calls[0]["json"]["template"]["components"][0]["parameters"] == [
+        {"type": "text", "text": "Acme"}
+    ]
+
+
+def test_template_requires_a_template_name():
+    with pytest.raises(ActionError, match="missing required key"):
+        send_whatsapp(
+            {"to": "+1", "message_type": "template"},
+            {},
+            http_client=FakeHttp(),
+            whatsapp=_WA,
+        )
+
+
+def test_unknown_message_type_is_action_error():
+    with pytest.raises(ActionError, match="unsupported message_type"):
+        send_whatsapp(
+            {"to": "+1", "message_type": "image"},
+            {},
+            http_client=FakeHttp(),
+            whatsapp=_WA,
+        )
+
+
+def test_template_send_error_is_action_error():
+    http = FakeHttp(status_code=400, text="template not approved")
+    with pytest.raises(ActionError, match="WhatsApp send failed: 400"):
+        send_whatsapp(
+            {"to": "+1", "message_type": "template", "template_name": "nope"},
+            {},
+            http_client=http,
+            whatsapp=_WA,
+        )

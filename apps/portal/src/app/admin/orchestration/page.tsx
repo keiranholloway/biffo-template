@@ -11,6 +11,7 @@ import {
   setWorkflowEnabled,
   updateWorkflow,
   type CatalogAction,
+  type CatalogActionField,
   type WorkflowCatalog,
   type WorkflowDefinition,
   type WorkflowInput,
@@ -28,6 +29,39 @@ function inputType(fieldType: string): string {
   if (fieldType === 'url') return 'url'
   if (fieldType === 'tel') return 'tel'
   return 'text'
+}
+
+// A field's effective value: what's configured, else the catalog default.
+function effectiveValue(
+  fields: CatalogActionField[],
+  config: Record<string, string>,
+  name: string,
+): string {
+  const value = config[name]
+  if (value != null && value !== '') return value
+  return fields.find((f) => f.name === name)?.default ?? ''
+}
+
+// Conditional fields (e.g. WhatsApp's template config) only render when the
+// field they depend on holds the matching value.
+function fieldApplies(
+  fields: CatalogActionField[],
+  config: Record<string, string>,
+  field: CatalogActionField,
+): boolean {
+  const condition = field.visible_when
+  if (condition == null) return true
+  return effectiveValue(fields, config, condition.field) === condition.equals
+}
+
+// Seed a freshly-chosen action's config with its catalog defaults, so what the
+// form shows is what gets saved.
+function defaultConfig(action: CatalogAction | undefined): Record<string, string> {
+  const config: Record<string, string> = {}
+  for (const field of action?.config_fields ?? []) {
+    if (field.default != null) config[field.name] = field.default
+  }
+  return config
 }
 
 export default function OrchestrationPage() {
@@ -53,7 +87,7 @@ export default function OrchestrationPage() {
     const t = cat?.triggers[0]
     setTriggerKey(t ? `${t.source}|${t.detail_type}` : '')
     setActionType(cat?.actions[0]?.type ?? '')
-    setConfig({})
+    setConfig(defaultConfig(cat?.actions[0]))
     setEnabled(true)
   }, [])
 
@@ -107,12 +141,20 @@ export default function OrchestrationPage() {
   async function submitForm() {
     if (busy) return
     const [trigger_source, trigger_detail_type] = triggerKey.split('|')
+    // Save only the fields that apply, so switching e.g. WhatsApp text →
+    // template doesn't leave the abandoned branch's values in action_config.
+    const fields = selectedAction?.config_fields ?? []
+    const applicable = Object.fromEntries(
+      Object.entries(config).filter((entry) =>
+        fields.some((f) => f.name === entry[0] && fieldApplies(fields, config, f)),
+      ),
+    )
     const body: WorkflowInput = {
       name: name.trim(),
       trigger_source: trigger_source ?? '',
       trigger_detail_type: trigger_detail_type ?? '',
       action_type: actionType,
-      action_config: config,
+      action_config: applicable,
       enabled,
     }
     setBusy(true)
@@ -200,7 +242,7 @@ export default function OrchestrationPage() {
                 value={actionType}
                 onChange={(e) => {
                   setActionType(e.target.value)
-                  setConfig({})
+                  setConfig(defaultConfig(catalog.actions.find((a) => a.type === e.target.value)))
                 }}
                 className={inputClass}
               >
@@ -225,37 +267,54 @@ export default function OrchestrationPage() {
 
           {selectedAction != null && (
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              {selectedAction.config_fields.map((field) => (
-                <label
-                  key={field.name}
-                  className={`flex flex-col text-xs text-gray-600 ${
-                    field.type === 'textarea' ? 'sm:col-span-2' : ''
-                  }`}
-                >
-                  {field.label}
-                  {field.type === 'textarea' ? (
-                    <textarea
-                      value={config[field.name] ?? ''}
-                      required={field.required}
-                      onChange={(e) => {
-                        setConfig((c) => ({ ...c, [field.name]: e.target.value }))
-                      }}
-                      rows={3}
-                      className={inputClass}
-                    />
-                  ) : (
-                    <input
-                      type={inputType(field.type)}
-                      value={config[field.name] ?? ''}
-                      required={field.required}
-                      onChange={(e) => {
-                        setConfig((c) => ({ ...c, [field.name]: e.target.value }))
-                      }}
-                      className={inputClass}
-                    />
-                  )}
-                </label>
-              ))}
+              {selectedAction.config_fields
+                .filter((field) => fieldApplies(selectedAction.config_fields, config, field))
+                .map((field) => (
+                  <label
+                    key={field.name}
+                    className={`flex flex-col text-xs text-gray-600 ${
+                      field.type === 'textarea' ? 'sm:col-span-2' : ''
+                    }`}
+                  >
+                    {field.label}
+                    {field.type === 'textarea' ? (
+                      <textarea
+                        value={config[field.name] ?? ''}
+                        required={field.required}
+                        onChange={(e) => {
+                          setConfig((c) => ({ ...c, [field.name]: e.target.value }))
+                        }}
+                        rows={3}
+                        className={inputClass}
+                      />
+                    ) : field.type === 'select' ? (
+                      <select
+                        aria-label={field.label}
+                        value={effectiveValue(selectedAction.config_fields, config, field.name)}
+                        onChange={(e) => {
+                          setConfig((c) => ({ ...c, [field.name]: e.target.value }))
+                        }}
+                        className={inputClass}
+                      >
+                        {(field.options ?? []).map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type={inputType(field.type)}
+                        value={config[field.name] ?? ''}
+                        required={field.required}
+                        onChange={(e) => {
+                          setConfig((c) => ({ ...c, [field.name]: e.target.value }))
+                        }}
+                        className={inputClass}
+                      />
+                    )}
+                  </label>
+                ))}
             </div>
           )}
 

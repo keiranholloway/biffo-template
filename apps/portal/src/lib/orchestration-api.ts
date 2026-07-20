@@ -38,8 +38,14 @@ export interface CatalogTrigger {
 export interface CatalogActionField {
   name: string
   label: string
-  type: 'email' | 'text' | 'textarea' | 'url' | 'tel'
+  type: 'email' | 'text' | 'textarea' | 'url' | 'tel' | 'select'
   required: boolean
+  /** Value assumed when the field is absent from action_config. */
+  default?: string
+  /** Choices for a `select` field. */
+  options?: { value: string; label: string }[]
+  /** The field only applies while this sibling's effective value matches. */
+  visible_when?: { field: string; equals: string }
 }
 
 export interface CatalogAction {

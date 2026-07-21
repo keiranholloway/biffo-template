@@ -41,8 +41,12 @@ class _RecordingPublisher:
         self.events.append(event)
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def publisher(monkeypatch) -> _RecordingPublisher:
+    """Capture what reaches the bus — and keep the real EventBridge client out
+    of every test in this module. ``publish_pending`` runs on each successful
+    request here, so a test that never inspects events would still construct a
+    boto3 client and fail where no AWS region is configured (CI)."""
     rec = _RecordingPublisher()
     monkeypatch.setattr(dependencies, "get_event_publisher", lambda: rec)
     return rec

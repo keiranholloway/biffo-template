@@ -124,10 +124,35 @@ A run writes its result to **its own run record** and emits `agent.run.completed
 
 - The event carries a **reference**, not the payload: `{run_id, agent, subject_ref, status, causation_id, depth}`. Consumers fetch the result through the API.
 - One statically registered event type, with `agent_name` in the detail; subscribers discriminate via `trigger_filter`. Per-agent event types would require dynamic registration and break ADR-0010's one-place rule.
-- **Core emits, not the runtime.** The runtime posts its result to Core; Core persists the run and emits through the existing post-commit buffer, so a run and its event cannot diverge.
+- **Core emits, not the runtime.** The runtime posts its result to Core; Core persists the run and emits through the existing post-commit buffer (#223).
 - Terminal failures emit too, with status in the payload. A subscriber must be able to distinguish "failed" from "still running."
 
 The security consequence is the point: **consumers act on their own authority.** An LLM-driven process never needs write access to business data, and chaining composes through the bus rather than through agent configuration.
+
+#### What the post-commit buffer does and does not guarantee
+
+Verified against the implementation rather than assumed, because §5 leans on it:
+
+`emit_event` buffers onto the session's `.info` dict and never publishes inline (`events/emit.py`). `get_db` calls `publish_pending` **only** in the `else` branch after `await session.commit()` returns; the `except` path rolls back and re-raises without touching the buffer, which is discarded with the session (`database.py`). Both directions are tested.
+
+So **an event cannot be published for a transaction that rolled back.** That is the phantom-event guarantee #223 was built for, and it holds.
+
+**The converse does not hold, and an earlier draft of this ADR wrongly claimed it did.** `EventPublisher.publish` is best-effort by design (`events/base.py`): it logs and returns on both an exception and a non-zero `FailedEntryCount`, never raising into the request, so that API calls succeed in environments where EventBridge is unreachable. `publish_pending` also pops the buffer before publishing, so no in-memory copy survives. There is no retry, no outbox and no dead-letter, and no test covers the publish-failure path.
+
+**A commit without an event is therefore possible; an event without a commit is not.**
+
+That asymmetry matters more here than for the CRUD events the mechanism was built for. A lost `user.updated` is largely cosmetic. A lost `agent.run.completed` means the run record reads complete, no subscriber ever fires, nothing detects it, and the LLM work is already paid for — so re-running has a real cost. It is invisible until someone asks why a lead was never routed.
+
+**Exposure in v1 is nil** — output goes to screen and nothing subscribes. It becomes real on the day the first subscriber exists, which is exactly when §5's composition argument starts being used.
+
+Two consequences, deliberately unequal in urgency:
+
+- **Deferred:** a transactional outbox — persist the event in the same transaction as the run, publish from a separate reader, mark delivered. This is the known fix and it closes the gap properly. It is not warranted while nothing subscribes, and it should land before the first subscriber does.
+- **Do now:** alarm on the publish-failure log lines. A dropped event should be noisy rather than silent, and this costs almost nothing.
+
+#### A second divergence point, at the other boundary
+
+The runtime posts its result to Core. If that POST fails after the model work has completed, Core holds no result and the run is stranded in `running` — also paid for, and not addressed by anything above. It is a different boundary (runtime ↔ Core, rather than Core ↔ bus) with the same cost profile, and it needs a completion retry or a reaper for stale `running` runs. Recorded here so it is not mistaken for covered by the buffer discussion.
 
 ### 6. The run model is invocation-agnostic from the first commit
 
@@ -250,6 +275,7 @@ The first intended worker enriches inbound demo requests, and it demonstrates th
 - **User-delegated authority is designed but unexercised** in v1 (§7). Two of the three permission layers are live from the first run; the third stays unvalidated until a worker runs under a user's authority.
 - **The ceiling is deliberately inconvenient to widen.** Granting agents a new table means a PR and a deploy, not an admin screen. That is the point, and it will still be irritating the first time a worker needs a table nobody anticipated.
 - **Async-only** rules out conversational agents until the sync edges are built.
+- **Event delivery is best-effort, not guaranteed** (§5). A committed run whose event fails to publish is lost silently. Harmless while nothing subscribes; an outbox is required before anything does.
 
 ### Neutral
 

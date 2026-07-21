@@ -21,6 +21,7 @@ An ADR captures a significant architectural decision: the context that forced it
 | [ADR-0011](0011-authorization-is-a-core-concern.md)                   | Authorization is a core concern, not a plugin               | Accepted | 2026-07-07 |
 | [ADR-0012](0012-identity-provider-seam.md)                            | Identity resolved through a core seam, not an owned table   | Accepted | 2026-07-19 |
 | [ADR-0013](0013-plugin-extension-contract.md)                         | Plugin extension contract — declare, review, enforce        | Proposed | 2026-07-19 |
+| [ADR-0014](0014-agentic-worker-framework.md)                          | Agentic workers — framework is code, workers are data       | Proposed | 2026-07-21 |
 
 ## Format
 

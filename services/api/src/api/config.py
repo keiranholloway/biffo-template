@@ -85,6 +85,14 @@ class Settings(BaseSettings):
     # ["arn:aws:sts::123456789012:assumed-role/acme-dev-plugin-orchestrator-*/*"].
     service_principal_arn_allowlist: list[str] = []
 
+    # Agentic workers (ADR-0014 §8) — the maximum chain depth an agent run may
+    # be requested at. Agent runs emit events and events start agent runs, so
+    # the cycle is real and every iteration has an LLM invoice attached; the
+    # internal create route refuses a request past this depth rather than
+    # clamping it. A direct (event → agent) run is depth 0, so the default
+    # permits two further generations of agent-triggered-by-agent.
+    agent_max_run_depth: int = 2
+
     # Application
     environment: str = "dev"
     log_level: str = "INFO"

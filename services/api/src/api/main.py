@@ -7,7 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 
 from .config import settings
-from .routers import auth, health, internal_orchestration, orchestration, users
+from .routers import (
+    auth,
+    health,
+    internal_agents,
+    internal_orchestration,
+    orchestration,
+    users,
+)
 from .routers.admin import endpoints as admin_endpoints
 from .routers.admin import groups as admin_groups
 from .routers.admin import plugins as admin_plugins
@@ -43,6 +50,9 @@ app.include_router(admin_users.router, prefix="/api/v1")
 # Internal service-only orchestration API (ADR-0009): reachable only by an
 # allowlisted IAM principal (the engine plugin), under /api/v1/internal/*.
 app.include_router(internal_orchestration.router, prefix="/api/v1")
+# Internal service-only agent-run API (ADR-0009 / ADR-0014): the agent runtime
+# requests, reads and completes runs here, under /api/v1/internal/*.
+app.include_router(internal_agents.router, prefix="/api/v1")
 # User-facing orchestration workflow CRUD (the portal builder): Cognito-authed,
 # admin-gated, under /api/v1/orchestration/workflows.
 app.include_router(orchestration.router, prefix="/api/v1")

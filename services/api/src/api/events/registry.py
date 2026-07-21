@@ -173,3 +173,29 @@ WORKFLOW_DEFINITION_DELETED = register_event(
         description="An admin deletes a workflow definition.",
     )
 )
+
+# Agentic workers (ADR-0014). One statically registered event per side of a run,
+# with ``agent`` in the detail so subscribers discriminate via ``trigger_filter``
+# — per-agent event types would need dynamic registration and break the
+# one-place rule above. Both payloads carry a **reference**, never the result:
+# ``{run_id, agent, status, causation_id, depth}``. The transcript and the
+# enrichment output are LLM content derived from attacker-influenceable input,
+# so they stay behind an authenticated fetch (ADR-0014 §5, security model).
+AGENT_RUN_REQUESTED = register_event(
+    EventType(
+        source="biffo.core",
+        detail_type="agent.run.requested",
+        label="Agent run requested",
+        description="An agent run is created and waiting for the runtime to execute it.",
+    )
+)
+
+AGENT_RUN_COMPLETED = register_event(
+    EventType(
+        source="biffo.core",
+        detail_type="agent.run.completed",
+        label="Agent run completed",
+        description="An agent run reaches a terminal state; the payload's "
+        "``status`` distinguishes completed from failed.",
+    )
+)

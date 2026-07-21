@@ -163,6 +163,15 @@ In v1 every run is `run_as: system`, so user-delegated authority is **designed f
 
 Per-worker `max_turns`, token ceilings and wall-clock timeouts are enforced with hard stops. Events carry `causation_id` and `depth`, and dispatch refuses past a maximum depth — because event-triggered processes that emit events can cycle, and here each iteration has an invoice attached.
 
+### 9. Memory is deferred, with two guardrails
+
+Three distinct things get called memory. **Thread history** — a run's message array, grouped by `thread_id` — is the only one v1 has, and §6 already provides it. **Working memory** (key/value an agent carries across runs) and **semantic recall** (vector search) are both deferred: each is purely additive, and no early worker needs either. Enrichment is stateless per subject.
+
+Two constraints apply when they do arrive:
+
+- **Memory is not retrieval.** Memory is what an agent remembers; retrieval is what it can look up. Vector search over business data is RAG — it belongs in the tool registry as a declared read tool subject to §7's ceiling, not in a memory subsystem. Blurring the two means building an embedding pipeline to serve a need the tool registry already covers.
+- **Working memory is a write, and §7 forbids writes.** It would be the first exception to "writes are not reachable through this path at all", so it arrives as a deliberate amendment to §7 rather than a quiet addition — and namespaced per agent, not by opening the write path generally.
+
 ---
 
 ## Options Considered
@@ -202,7 +211,7 @@ The first intended worker enriches inbound demo requests, and it demonstrates th
 ## Open questions for review
 
 1. ~~**Trigger binding UX.**~~ **Resolved.** Split into three decisions with different deferability: agents reuse `WorkflowDefinition` rather than carrying trigger fields (decided, §4 — the only non-deferrable part); which table holds a worker definition is left to implementation (§2); the authoring UX is deferred entirely as a UI concern. One agent, one trigger.
-2. **Memory.** Deliberately unspecified. Is per-thread message history sufficient for v1, or is cross-run semantic recall (pgvector in Core) needed early? It affects the schema.
+2. ~~**Memory.**~~ **Resolved.** All three kinds deferred (§9); thread history from §6 is the only memory v1 has. Deferral locks nothing in — each is additive. Two guardrails recorded because both are free now and each prevents a wrong turn later: memory is not retrieval, and working memory collides with §7's no-writes stance.
 3. **Catalog location and format.** A git repo of versioned JSON is the obvious start. Does it want a CLI verb (`biffo agent import`), or is portal-side import enough?
 4. **Definition versioning.** Do edits to a live worker version it, or mutate in place? Run reproducibility argues for versioning; authoring ergonomics argue against.
 5. **Where the first worker's read scope actually points.** The demo/lead table is instance-owned (tabsii), not template. Worker definitions are therefore instance-scoped in what they read, and a shared catalog needs table references parameterised.

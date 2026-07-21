@@ -1,13 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NON_INTERACTIVE_FLAG, NonInteractiveError } from '../lib/interactive.js'
-import { SiblingResolutionError, type ResolvedSibling } from '../lib/sibling-teardown.js'
 import {
-  assertSiblingsAreDestroyable,
-  confirmTeardown,
   discoverSiblings,
-  formatSiblingPlan,
+  SiblingResolutionError,
+  type ResolvedSibling,
   type SiblingDiscoveryGithub,
-} from './teardown.js'
+} from '../lib/sibling-teardown.js'
+import { assertSiblingsAreDestroyable, confirmTeardown, formatSiblingPlan } from './teardown.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },

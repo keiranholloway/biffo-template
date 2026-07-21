@@ -10,6 +10,12 @@ import { promptOr } from '../lib/interactive.js'
 import { isTemplatePlaceholderConfig } from '../lib/local-config.js'
 import { log } from '../lib/logger.js'
 import { listProjectConfigs, loadProjectConfig } from '../lib/session.js'
+import {
+  coreWiringFromOutputs,
+  formatWiringResult,
+  SiblingResolutionError,
+  wireSiblingsAfterCoreDeploy,
+} from '../lib/sibling-wiring.js'
 
 export const deployCommand = new Command('deploy')
   .description('Deploy infrastructure and application to an environment')
@@ -398,8 +404,9 @@ export async function runDeploy(
   // Final step: Report outputs
   const reportStep = totalSteps
   log.step(reportStep, totalSteps, 'Reading deployment outputs...')
+  let outputs: Record<string, string> | undefined
   try {
-    const outputs = await aws.readTerraformOutputs(stateBucket, stateKey)
+    outputs = await aws.readTerraformOutputs(stateBucket, stateKey)
     console.log(chalk.bold('\n  Deploy complete!\n'))
     if (outputs.portal_url) console.log(`  Portal:      ${chalk.cyan(outputs.portal_url)}`)
     if (outputs.api_gateway_url)
@@ -435,6 +442,81 @@ export async function runDeploy(
     // State may not be readable if --app-only was used (infra wasn't applied this run)
     console.log(chalk.bold('\n  Deploy complete!'))
     console.log(`  Actions: ${actionsUrl}\n`)
+  }
+
+  // Wire every registered sibling to this freshly-deployed core (issue #337).
+  //
+  // This is the claiming step the old init deferral never had: `biffo init`
+  // creates the app sibling BEFORE any deploy, leaving its CORE_* /
+  // PARENT_CLOUDFRONT_* unset, and nothing came back to fill them in — so `/`
+  // shipped a frontend wired to nothing and a bucket with no policy (403).
+  // Done here, outside the outputs try/catch above, so a wiring failure is
+  // loud (non-zero exit) rather than swallowed as "state not readable".
+  await wireSiblingsIfAny(github, config, environment, awsConfig.account_id, outputs, options.token)
+}
+
+/**
+ * Resolve this environment's core identity + CDN wiring and push it to every
+ * sibling registered against the core (issue #337). No-op when there are no
+ * siblings. Exits non-zero — never silently — when it cannot (missing outputs,
+ * an unidentifiable registry entry, or a GitHub write failure), because a
+ * sibling left unwired is precisely the silent gap this closes.
+ */
+async function wireSiblingsIfAny(
+  github: GitHubAdapter,
+  config: BiffoConfig,
+  environment: string,
+  coreAccountId: string,
+  outputs: Record<string, string> | undefined,
+  token: string | undefined,
+): Promise<void> {
+  const { org, repo } = (
+    config.source_control as { provider: 'github'; config: { org: string; repo: string } }
+  ).config
+
+  if (!outputs) {
+    log.warn(
+      'Skipped wiring siblings: this run produced no readable Terraform outputs ' +
+        `(e.g. --app-only without a prior infra apply). Re-run \`biffo deploy ${environment}\` ` +
+        'once the core infrastructure is applied so its siblings can be wired.',
+    )
+    return
+  }
+  if (!token) {
+    log.warn(
+      'Skipped wiring siblings: no GitHub token available to set the SIBLING_GITHUB_TOKEN secret.',
+    )
+    return
+  }
+
+  try {
+    const wiring = coreWiringFromOutputs(outputs, coreAccountId, environment)
+    const result = await wireSiblingsAfterCoreDeploy(
+      github,
+      org,
+      repo,
+      config.project.name,
+      environment,
+      wiring,
+      token,
+    )
+    const lines = formatWiringResult(environment, result)
+    if (lines.length > 0) {
+      console.log(chalk.dim('\n  Siblings:'))
+      for (const line of lines) console.log(chalk.dim(line))
+      console.log()
+    }
+  } catch (err) {
+    if (err instanceof SiblingResolutionError) {
+      log.error(`Could not wire siblings: ${err.message}`)
+    } else {
+      log.error(`Failed to wire siblings to the deployed core: ${(err as Error).message}`)
+    }
+    log.error(
+      `  The core deployed, but at least one sibling was not wired. Fix the cause and re-run ` +
+        `\`biffo deploy ${environment}\` — wiring is idempotent.`,
+    )
+    process.exit(1)
   }
 }
 

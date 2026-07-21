@@ -171,9 +171,11 @@ export const initCommand = new Command('init')
       console.log(`  Application: https://github.com/${org}/${appRepo}   (serves /)`)
       console.log(
         '\n  Next:\n' +
-          '  1. Clone the platform repo and run its first deploy — /admin and /login come up with it.\n' +
-          `  2. Then deploy the application repo. Until it deploys, / has no content and 404s;\n` +
-          `     that window is expected.\n`,
+          '  1. Clone the platform repo and run `biffo deploy dev` — /admin and /login come up, and\n' +
+          '     the same deploy wires the application repo (its CORE_* identity, the parent CloudFront\n' +
+          '     ARN, and the SIBLING_GITHUB_TOKEN secret) automatically.\n' +
+          "  2. Then run the application repo's Deploy workflow — no manual variable/secret setup is\n" +
+          '     needed. Until it deploys, / has no content and 404s; that window is expected.\n',
       )
     },
   )

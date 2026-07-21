@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CoreUpgradeDeps } from './core-upgrade.js'
-import { runCoreUpgrade } from './core-upgrade.js'
+import { buildPrBody, runCoreUpgrade } from './core-upgrade.js'
+import type { MergeEntry, MergeStatus, UpgradePlan } from '../lib/core-upgrade.js'
+import type { MigrationCarryPlan } from '../lib/core-migrations.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -182,5 +184,60 @@ describe('runCoreUpgrade --apply', () => {
     expect(readFileSync(join(instance, 'services/api/main.py'), 'utf8')).toBe('v1') // unchanged
     expect(git.createBranch).not.toHaveBeenCalled()
     expect(createPullRequest).not.toHaveBeenCalled()
+  })
+})
+
+describe('buildPrBody — global workflow promotion note (issue #328)', () => {
+  function emptySummary(): Record<MergeStatus, number> {
+    return {
+      unchanged: 0,
+      'take-theirs': 0,
+      'keep-ours': 0,
+      merged: 0,
+      conflict: 0,
+      added: 0,
+      'add-conflict': 0,
+      removed: 0,
+      'remove-conflict': 0,
+    }
+  }
+
+  function planWith(changes: MergeEntry[]): UpgradePlan {
+    const summary = emptySummary()
+    for (const c of changes) summary[c.status]++
+    return { entries: changes, changes, conflicts: [], summary }
+  }
+
+  const noMigrations: MigrationCarryPlan = { entries: [], instanceHead: null, skipped: [] }
+
+  const globalChange: MergeEntry = {
+    path: '.github/workflows/deploy-global.yml',
+    status: 'merged',
+    conflicted: false,
+    content: 'x',
+  }
+
+  it('adds a promotion note when a global workflow changes and the PR targets a non-main branch', () => {
+    const body = buildPrBody('0.1.0', '0.2.0', planWith([globalChange]), noMigrations, 'dev')
+    expect(body).toContain('Promotion required')
+    expect(body).toContain('.github/workflows/deploy-global.yml')
+    expect(body).toContain('`dev` → `main`')
+    expect(body).toContain('#328')
+  })
+
+  it('omits the note when the PR already targets main (nothing to promote)', () => {
+    const body = buildPrBody('0.1.0', '0.2.0', planWith([globalChange]), noMigrations, 'main')
+    expect(body).not.toContain('Promotion required')
+  })
+
+  it('omits the note when no global workflow is touched', () => {
+    const ordinary: MergeEntry = {
+      path: 'services/api/main.py',
+      status: 'merged',
+      conflicted: false,
+      content: 'x',
+    }
+    const body = buildPrBody('0.1.0', '0.2.0', planWith([ordinary]), noMigrations, 'dev')
+    expect(body).not.toContain('Promotion required')
   })
 })

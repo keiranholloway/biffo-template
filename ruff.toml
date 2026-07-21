@@ -1,2 +1,42 @@
-# Ruff config is in pyproject.toml — this file exists to satisfy pre-commit
-# which looks for ruff.toml or pyproject.toml in the repo root.
+# ACTIVE Ruff config.
+#
+# Ruff resolves `ruff.toml` ahead of `pyproject.toml` in the same directory, so
+# THIS file — not the [tool.ruff] section in pyproject.toml — is what `ruff check`
+# uses. pyproject.toml's richer select (E,F,I,N,W,B,S,UP,ANN) is consequently
+# dormant; CI has always run Ruff's default E/F rules. Activating that stricter
+# ruleset and fixing the violations it surfaces is a separate cleanup (tracked
+# in issue #345) — it is deliberately NOT bundled into issue #327.
+#
+# On top of Ruff's default E/F rules this file enforces one thing:
+#   TID251 (flake8-tidy-imports banned-api) — ADR-0002 / CLAUDE.md invariant 4:
+#   no database client (psycopg2/psycopg/asyncpg/sqlalchemy) may be imported
+#   outside the Core API (services/api/). All other services and packages call
+#   the API over HTTP. `services/api/` is exempted below. The whole `TID` family
+#   is NOT selected — TID252 would ban every relative import — only the specific
+#   banned-api rule is added.
+#
+# `extend-exclude` (not `exclude`) keeps Ruff's built-in excludes (.venv,
+# node_modules, .git, …). The added paths are scoped so this template-owned gate
+# does not assert over paths it should not (issue #327): `_skeletons/` is
+# standalone-repo scaffold source linted by its own CI once copied out (matching
+# [tool.pyright] in pyproject.toml); `db/` is user-owned; `services/_template`
+# is a placeholder stub; `migrations` are generated.
+#
+# `line-length`/`target-version` are deliberately NOT set here: they would change
+# `ruff format` output (the codebase is currently formatted at Ruff's default
+# width, since this active config never set 100), and reformatting the tree is
+# part of the separate config-consolidation cleanup, not this change.
+extend-exclude = [".worktrees", "services/_template", "_skeletons", "db", "migrations"]
+
+[lint]
+extend-select = ["TID251"]
+
+[lint.flake8-tidy-imports.banned-api]
+"psycopg2".msg = "No DB client outside services/api/ (ADR-0002). Call the Core API over HTTP."
+"psycopg".msg = "No DB client outside services/api/ (ADR-0002). Call the Core API over HTTP."
+"asyncpg".msg = "No DB client outside services/api/ (ADR-0002). Call the Core API over HTTP."
+"sqlalchemy".msg = "No DB client outside services/api/ (ADR-0002). Call the Core API over HTTP."
+
+[lint.per-file-ignores]
+# services/api/ IS the data-access layer — the one place DB clients are allowed.
+"services/api/**/*.py" = ["TID251"]

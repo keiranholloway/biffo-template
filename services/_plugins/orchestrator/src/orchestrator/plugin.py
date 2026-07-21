@@ -12,6 +12,7 @@ IAM-signed internal API (ADR-0009) via ``SignedCoreClient``.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 from typing import Any
@@ -138,8 +139,15 @@ class OrchestratorPlugin(BiffoPluginBase):
                 event.payload,
                 ses_client=self._ses,
                 http_client=self._http,
+                core_client=self.api,
                 whatsapp=self._whatsapp,
             )
+            # Handlers whose side effect is an await-only call (the agent action
+            # POSTs to Core through the async signed client) are `async def`.
+            # Awaiting here rather than in every handler keeps registration and
+            # the sync handlers unchanged.
+            if inspect.isawaitable(result):
+                result = await result
         except Exception as exc:  # noqa: BLE001 — any dispatch failure is recorded, not raised
             logger.exception("Action dispatch failed", extra={"run_id": run_id})
             await self._record(run_id, action_type, "failed", request=config, error=str(exc))

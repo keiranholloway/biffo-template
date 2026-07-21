@@ -54,19 +54,36 @@ export function findTemplateRoot(startDir: string): string | null {
   }
 }
 
+export interface ResolveTemplateRootOptions {
+  /** Directory to start the upward search from. Defaults to this module's dir. */
+  fromDir?: string
+  /**
+   * Command-specific guidance appended to the not-found error, telling the user
+   * how to point *this* command at a template checkout. Different commands
+   * expose different flags for it (`core diff` uses `--template`, `core upgrade`
+   * uses `--template-repo`), so the caller supplies the exact remedy — naming a
+   * flag the command does not have sends the user down a dead end (issue #324).
+   */
+  guidance?: string
+}
+
 /**
  * Locate the Biffo template root this CLI can compare against. In the monorepo
  * that is the template checkout the CLI lives in. A real instance (CLI installed
- * from npm) should pass `--template <path>` to a biffo-template checkout at the
- * target version instead; automating that fetch is ADR-0006 Phase 3.
+ * from npm) cannot self-locate one — `core-manifest.json` is excluded from the
+ * published package (issue #315) — so the caller must point it at a checkout and
+ * pass command-specific `guidance` on how to do so; automating that fetch is
+ * ADR-0006 Phase 3.
  */
-export function resolveTemplateRoot(fromDir?: string): string {
-  const start = fromDir ?? dirname(fileURLToPath(import.meta.url))
+export function resolveTemplateRoot(options: ResolveTemplateRootOptions = {}): string {
+  const start = options.fromDir ?? dirname(fileURLToPath(import.meta.url))
   const root = findTemplateRoot(start)
   if (!root) {
+    const guidance =
+      options.guidance ?? 'Point this command at a biffo-template checkout at the target version.'
     throw new Error(
       `Could not locate a Biffo template root (a directory with ${CORE_MANIFEST_FILE} and core.version) above ${start}. ` +
-        'Pass --template <path> to a biffo-template checkout at the target version.',
+        guidance,
     )
   }
   return root

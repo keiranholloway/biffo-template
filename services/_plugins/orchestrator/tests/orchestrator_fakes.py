@@ -19,10 +19,25 @@ from botocore.credentials import Credentials
 
 
 class FakeCore:
-    """Backing store for the internal orchestration routes."""
+    """Backing store for the internal orchestration routes.
 
-    def __init__(self, runs: list[dict[str, Any]]) -> None:
+    Also serves the internal **agent-run** route the ``agent`` action calls
+    (``POST /api/v1/internal/agent-runs``): ``agent_run_status`` switches it to a
+    refusal, which is how the ADR-0014 §8 depth ceiling (409) reaches the plugin.
+    """
+
+    def __init__(
+        self,
+        runs: list[dict[str, Any]],
+        *,
+        agent_run_id: str = "agent-run-1",
+        agent_run_status: int = 201,
+        agent_run_detail: str = "Agent run refused",
+    ) -> None:
         self._runs = runs
+        self._agent_run_id = agent_run_id
+        self._agent_run_status = agent_run_status
+        self._agent_run_detail = agent_run_detail
         self.requests: list[tuple[str, str, dict[str, Any]]] = []
 
     def client(self) -> SignedCoreClient:
@@ -40,10 +55,29 @@ class FakeCore:
     def event_posts(self) -> list[dict[str, Any]]:
         return [body for method, path, body in self.requests if path.endswith("/events")]
 
+    def agent_run_posts(self) -> list[dict[str, Any]]:
+        return [body for method, path, body in self.requests if path.endswith("/agent-runs")]
+
     def _handle(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content or b"{}")
         self.requests.append((request.method, request.url.path, body))
 
+        if request.url.path.endswith("/agent-runs"):
+            if self._agent_run_status >= 400:
+                return httpx.Response(
+                    self._agent_run_status, json={"detail": self._agent_run_detail}
+                )
+            return httpx.Response(
+                self._agent_run_status,
+                json={
+                    "id": self._agent_run_id,
+                    "tenant_id": "default",
+                    "agent_name": body.get("agent_name"),
+                    "status": "pending",
+                    "causation_id": body.get("causation_id"),
+                    "depth": body.get("depth"),
+                },
+            )
         if request.url.path.endswith("/events"):
             return httpx.Response(200, json={"runs": self._runs})
         if request.url.path.endswith("/result"):

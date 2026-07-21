@@ -519,3 +519,40 @@ def test_create_accepts_a_declared_crud_trigger(client: TestClient, monkeypatch)
 
     resp = client.post(_BASE, json=_valid_body(trigger_detail_type="widgets.created"))
     assert resp.status_code == 201, resp.text
+
+
+# ── agent action (ADR-0014 §4): a worker is bound by a workflow definition ───
+
+
+def test_catalog_offers_the_agent_action_with_its_m1_fields(client: TestClient):
+    body = client.get(f"{_BASE}/catalog").json()
+    action = next(a for a in body["actions"] if a["type"] == "agent")
+    fields = {f["name"]: f for f in action["config_fields"]}
+    # Deliberately minimal in M1 — tools and read scope are M2/M3.
+    assert set(fields) == {"agent_name", "instructions", "model", "max_turns"}
+    assert fields["agent_name"]["required"] and fields["instructions"]["required"]
+    assert fields["model"]["default"]
+    assert fields["max_turns"]["default"] == 1
+
+
+def test_create_agent_workflow(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="agent",
+            action_config={
+                "agent_name": "demo-enricher",
+                "instructions": "Enrich the inbound demo request for {company}.",
+            },
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["action_type"] == "agent"
+
+
+def test_agent_workflow_requires_instructions(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_valid_body(action_type="agent", action_config={"agent_name": "demo-enricher"}),
+    )
+    assert resp.status_code == 422

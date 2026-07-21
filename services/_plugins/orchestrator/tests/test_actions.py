@@ -1,16 +1,18 @@
-"""Tests for the action handlers (email, Google Chat, WhatsApp)."""
+"""Tests for the action handlers (email, Google Chat, WhatsApp, agent)."""
 
 from __future__ import annotations
 
 import pytest
 from orchestrator.actions import (
+    ACTION_HANDLERS,
     ActionError,
     WhatsAppSettings,
+    request_agent_run,
     send_email,
     send_google_chat,
     send_whatsapp,
 )
-from orchestrator_fakes import FakeHttp, FakeSes
+from orchestrator_fakes import FakeCore, FakeHttp, FakeSes
 
 
 def test_send_email_renders_templates_and_sends():
@@ -298,3 +300,128 @@ def test_template_send_error_is_action_error():
             http_client=http,
             whatsapp=_WA,
         )
+
+
+# ── agent (ADR-0014): requests a run in Core, never executes one ─────────────
+
+_AGENT_CONFIG = {
+    "agent_name": "demo-enricher",
+    "instructions": "Enrich the inbound demo request.",
+    "model": "anthropic/claude-opus-4-8",
+    "max_turns": 3,
+}
+
+
+# The reference payload Core emits on `agent.run.completed` (§5) — what a
+# chained agent's trigger looks like.
+def _completed_event(depth: int, causation_id: str | None = None) -> dict:
+    return {
+        "run_id": "parent-run",
+        "agent": "demo-enricher",
+        "status": "completed",
+        "causation_id": causation_id,
+        "depth": depth,
+    }
+
+
+async def test_agent_action_creates_a_run_in_core():
+    core = FakeCore([])
+
+    result = await request_agent_run(
+        _AGENT_CONFIG,
+        {"demo_request_id": "d1", "company": "Acme"},
+        core_client=core.client(),
+    )
+
+    assert result == {"run_id": "agent-run-1", "status": "requested", "depth": 0}
+    posted = core.agent_run_posts()
+    assert len(posted) == 1
+    assert core.requests[0][1] == "/api/v1/internal/agent-runs"
+    assert posted[0]["agent_name"] == "demo-enricher"
+    # §10: the resolved config is captured verbatim, and the triggering payload
+    # is the run's input.
+    assert posted[0]["definition_snapshot"] == _AGENT_CONFIG
+    assert posted[0]["input_payload"] == {"demo_request_id": "d1", "company": "Acme"}
+
+
+async def test_snapshot_fills_catalog_defaults_for_absent_fields():
+    core = FakeCore([])
+
+    await request_agent_run(
+        {"agent_name": "a", "instructions": "do the thing"},
+        {},
+        core_client=core.client(),
+    )
+
+    snapshot = core.agent_run_posts()[0]["definition_snapshot"]
+    assert snapshot["model"] == "anthropic/claude-opus-4-8"
+    assert snapshot["max_turns"] == 1
+
+
+async def test_non_agent_trigger_starts_a_fresh_chain_at_depth_zero():
+    core = FakeCore([])
+
+    await request_agent_run(_AGENT_CONFIG, {"demo_request_id": "d1"}, core_client=core.client())
+
+    posted = core.agent_run_posts()[0]
+    assert posted["depth"] == 0
+    assert posted["causation_id"] is None
+
+
+async def test_agent_trigger_propagates_causation_and_increments_depth():
+    core = FakeCore([])
+
+    result = await request_agent_run(
+        _AGENT_CONFIG,
+        _completed_event(depth=1, causation_id="chain-root"),
+        core_client=core.client(),
+    )
+
+    posted = core.agent_run_posts()[0]
+    assert posted["depth"] == 2
+    assert posted["causation_id"] == "chain-root"
+    assert result["depth"] == 2
+
+
+async def test_root_agent_trigger_becomes_the_chain_id():
+    """A depth-0 parent carries no causation_id, so its run id roots the chain."""
+    core = FakeCore([])
+
+    await request_agent_run(_AGENT_CONFIG, _completed_event(depth=0), core_client=core.client())
+
+    posted = core.agent_run_posts()[0]
+    assert posted["depth"] == 1
+    assert posted["causation_id"] == "parent-run"
+
+
+async def test_payload_with_a_run_id_but_no_depth_is_not_an_agent_chain():
+    core = FakeCore([])
+
+    await request_agent_run(_AGENT_CONFIG, {"run_id": "wf-run-9"}, core_client=core.client())
+
+    posted = core.agent_run_posts()[0]
+    assert posted["depth"] == 0
+    assert posted["causation_id"] is None
+
+
+async def test_depth_ceiling_refusal_surfaces_as_an_action_error():
+    core = FakeCore([], agent_run_status=409, agent_run_detail="exceeds the maximum chain depth")
+
+    with pytest.raises(ActionError, match="Core refused the agent run"):
+        await request_agent_run(
+            _AGENT_CONFIG, _completed_event(depth=2, causation_id="c"), core_client=core.client()
+        )
+
+
+async def test_agent_action_requires_name_and_instructions():
+    core = FakeCore([])
+
+    with pytest.raises(ActionError, match="missing required key"):
+        await request_agent_run({"instructions": "x"}, {}, core_client=core.client())
+    with pytest.raises(ActionError, match="missing required key"):
+        await request_agent_run({"agent_name": "a"}, {}, core_client=core.client())
+
+
+def test_every_catalog_action_type_has_a_handler():
+    """The engine registry and the Core builder catalog must stay in step."""
+    assert "agent" in ACTION_HANDLERS

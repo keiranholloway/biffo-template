@@ -170,3 +170,55 @@ async def test_forwards_any_event_via_catch_all_subscription():
     assert posted[0]["source"] == "biffo.core"
     assert posted[0]["detail_type"] == "brand.approved"
     assert posted[0]["idempotency_key"] == "b1"
+
+
+async def test_process_event_dispatches_the_agent_action_to_core():
+    """An `agent` workflow creates a run in Core and records it — the async
+    handler is awaited by the dispatcher, and no agent is executed here."""
+    run = {
+        "run_id": "run-agent",
+        "definition_id": "def-agent",
+        "action_type": "agent",
+        "action_config": {
+            "agent_name": "demo-enricher",
+            "instructions": "Enrich {company}.",
+            "model": "anthropic/claude-opus-4-8",
+        },
+        "created": True,
+    }
+    core = FakeCore([run])
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes(), http_client=FakeHttp())
+
+    await plugin.process_event(_event())
+
+    posted = core.agent_run_posts()
+    assert len(posted) == 1
+    assert posted[0]["agent_name"] == "demo-enricher"
+    assert posted[0]["input_payload"]["company"] == "Acme"
+    assert posted[0]["depth"] == 0
+
+    results = core.result_posts()
+    assert results[0]["status"] == "succeeded"
+    assert results[0]["response"] == {
+        "run_id": "agent-run-1",
+        "status": "requested",
+        "depth": 0,
+    }
+
+
+async def test_agent_run_refused_by_core_is_recorded_as_a_failed_run():
+    run = {
+        "run_id": "run-agent",
+        "definition_id": "def-agent",
+        "action_type": "agent",
+        "action_config": {"agent_name": "looper", "instructions": "go"},
+        "created": True,
+    }
+    core = FakeCore([run], agent_run_status=409, agent_run_detail="exceeds the maximum chain depth")
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes(), http_client=FakeHttp())
+
+    await plugin.process_event(_event())
+
+    results = core.result_posts()
+    assert results[0]["status"] == "failed"
+    assert "Core refused the agent run" in results[0]["error"]

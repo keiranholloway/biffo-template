@@ -8,9 +8,14 @@ definition's ``action_type`` (and must add a matching entry to the Core builder
 catalog, ``schemas/orchestration.WORKFLOW_ACTIONS``, so it can be configured).
 
 The dispatcher passes every handler the same keyword clients (``ses_client``,
-``http_client``, ``whatsapp``); each handler keeps the ones it needs and ignores
-the rest via ``**_``. That keeps adding a channel to a single new function here
-without touching the dispatch signature.
+``http_client``, ``core_client``, ``whatsapp``); each handler keeps the ones it
+needs and ignores the rest via ``**_``. That keeps adding a channel to a single
+new function here without touching the dispatch signature.
+
+A handler may be ``async def`` when its side effect is an ``await``-only call —
+the Core API client is async, so the ``agent`` action is. The dispatcher awaits
+whatever a handler returns if it is awaitable, so sync and async handlers are
+registered identically.
 """
 
 from __future__ import annotations
@@ -18,6 +23,8 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Protocol
+
+from biffo_plugin_sdk import BiffoAPIError
 
 
 class SesClient(Protocol):
@@ -45,6 +52,17 @@ class HttpClient(Protocol):
         json: Any = None,
         headers: dict[str, str] | None = None,
     ) -> HttpResponse: ...
+
+
+class CoreClient(Protocol):
+    """The slice of the IAM-signed Core API client the agent action uses.
+
+    Satisfied by ``SignedCoreClient`` from the plugin SDK — the same client the
+    plugin already uses to claim runs and post results (ADR-0009). The agent
+    action never builds its own.
+    """
+
+    async def post(self, path: str, json: dict[str, Any] | None = None) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -236,6 +254,95 @@ def send_whatsapp(
     return {"message_id": message_id}
 
 
+_AGENT_RUNS_PATH = "/api/v1/internal/agent-runs"
+
+# Catalog defaults for the agent action, applied to the snapshot when a stored
+# definition predates a field or leaves it blank. Mirrors the ``default`` values
+# in the Core builder catalog (schemas/orchestration.WORKFLOW_ACTIONS) — a run
+# must record what it actually executed, not what the config happened to spell
+# out (ADR-0014 §10).
+AGENT_CONFIG_DEFAULTS: dict[str, Any] = {
+    "model": "anthropic/claude-opus-4-8",
+    "max_turns": 1,
+}
+
+
+def _agent_chain(payload: dict[str, Any]) -> tuple[str | None, int]:
+    """The ``(causation_id, depth)`` this run inherits from its trigger (§8).
+
+    An agent triggered by another agent's ``agent.run.completed`` sees that
+    event's reference payload — ``{run_id, agent, status, causation_id, depth}``
+    — so the chain is read straight off it: keep the parent's ``causation_id``
+    (falling back to the parent's ``run_id`` when the parent is itself the root)
+    and increment ``depth``. Anything else is a fresh chain at depth 0.
+
+    This is the whole of the loop guard's input. Core refuses past the ceiling
+    on ``depth`` alone, so a run that reports 0 forever makes the ceiling
+    unreachable — hence deriving it here rather than defaulting it.
+    """
+    depth = payload.get("depth")
+    run_id = payload.get("run_id")
+    if not isinstance(depth, int) or isinstance(depth, bool) or not run_id:
+        return None, 0
+    causation_id = payload.get("causation_id") or run_id
+    return str(causation_id), max(depth, 0) + 1
+
+
+async def request_agent_run(
+    config: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    core_client: CoreClient,
+    **_: Any,
+) -> dict[str, Any]:
+    """Ask Core to create an agent run — and stop there (ADR-0014 §4).
+
+    This action **does not execute an agent**. It POSTs to Core's internal
+    agent-run API; Core persists the run and emits ``agent.run.requested``, and
+    a separate runtime subscribes to that event and does the model work. The
+    orchestrator's Lambda has a 30-second timeout, so a turn loop could not run
+    here even if the architecture allowed it.
+
+    ``config`` keys: ``agent_name`` and ``instructions`` (required), ``model``
+    and ``max_turns`` (defaulted from the catalog). The whole resolved config
+    travels as ``definition_snapshot`` — the run's record of what it ran, which
+    nothing can backfill once the definition is edited (§10).
+    """
+    agent_name = _require(config, "agent", "agent_name")
+    _require(config, "agent", "instructions")
+
+    snapshot: dict[str, Any] = {
+        **AGENT_CONFIG_DEFAULTS,
+        **{key: value for key, value in config.items() if value not in (None, "")},
+    }
+    causation_id, depth = _agent_chain(payload)
+
+    try:
+        run = await core_client.post(
+            _AGENT_RUNS_PATH,
+            json={
+                "agent_name": agent_name,
+                "definition_snapshot": snapshot,
+                "input_payload": payload,
+                "causation_id": causation_id,
+                "depth": depth,
+            },
+        )
+    except BiffoAPIError as exc:
+        # 409 is the §8 depth ceiling refusing a runaway chain. It must land as
+        # a failed run in the audit log, not a silent success — a loop guard
+        # nobody can see tripping is not a loop guard.
+        raise ActionError(
+            f"Core refused the agent run for {agent_name!r} at depth {depth}: "
+            f"{exc.status_code} {exc.detail}"
+        ) from exc
+
+    run_id = (run or {}).get("id")
+    if not run_id:
+        raise ActionError("Core accepted the agent run but returned no run id")
+    return {"run_id": run_id, "status": "requested", "depth": depth}
+
+
 # action_type -> handler. The engine dispatches by this key (ADR-0003 plugin).
 # Keep in step with the Core builder catalog (WORKFLOW_ACTIONS) so every
 # offered action has a handler and vice versa.
@@ -243,4 +350,5 @@ ACTION_HANDLERS: dict[str, Any] = {
     "email": send_email,
     "google_chat": send_google_chat,
     "whatsapp": send_whatsapp,
+    "agent": request_agent_run,
 }

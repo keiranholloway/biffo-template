@@ -168,6 +168,43 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
             },
         ],
     },
+    {
+        # ADR-0014 §4: binding an agentic worker to a trigger is a workflow
+        # definition, not a new trigger surface. The action creates a run in
+        # Core and returns; the runtime executes it off `agent.run.requested`.
+        # The whole resolved config is snapshotted onto the run (§10), so every
+        # field here is part of what explains a run after the fact.
+        "type": "agent",
+        "label": "Run an agent",
+        "config_fields": [
+            {"name": "agent_name", "label": "Agent name", "type": "text", "required": True},
+            {
+                "name": "instructions",
+                "label": "Instructions",
+                "type": "textarea",
+                "required": True,
+            },
+            # Per-worker model choice, so alternatives can be compared without a
+            # code change (§1). The value is an OpenRouter model slug.
+            {
+                "name": "model",
+                "label": "Model",
+                "type": "text",
+                "required": True,
+                "default": "anthropic/claude-opus-4-8",
+            },
+            # A hard stop on the turn loop — §8 bounds cost in the framework
+            # rather than by convention. Tools and read scope are deliberately
+            # absent in M1.
+            {
+                "name": "max_turns",
+                "label": "Maximum turns",
+                "type": "number",
+                "required": False,
+                "default": 1,
+            },
+        ],
+    },
 ]
 
 # Deliberately permissive — enough to reject obvious typos in the form, not a

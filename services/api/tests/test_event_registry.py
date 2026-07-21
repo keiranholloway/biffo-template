@@ -4,6 +4,8 @@ import dataclasses
 
 import pytest
 from api.events.registry import (
+    AGENT_RUN_COMPLETED,
+    AGENT_RUN_REQUESTED,
     DEMO_REQUESTED,
     LEAD_CAPTURED,
     EventType,
@@ -20,6 +22,14 @@ def test_core_events_are_registered():
     # find_event resolves by identity
     assert find_event("biffo.core", "demo.requested") is DEMO_REQUESTED
     assert find_event("biffo.core", "lead.captured") is LEAD_CAPTURED
+
+
+def test_agent_run_events_are_registered():
+    """ADR-0014 §4/§5: both sides of a run are declared here, the one place."""
+    assert find_event("biffo.core", "agent.run.requested") is AGENT_RUN_REQUESTED
+    assert find_event("biffo.core", "agent.run.completed") is AGENT_RUN_COMPLETED
+    assert AGENT_RUN_REQUESTED in registered_events()
+    assert AGENT_RUN_COMPLETED in registered_events()
 
 
 def test_find_event_unknown_returns_none():

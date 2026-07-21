@@ -33,9 +33,10 @@ anywhere in `services/api/`, on purpose.
 ## What's here
 
 ```
-apps/frontend/            # Next.js 15 static export — the ONLY page is "<name> - Hello <username>",
-                           #   proving the shared-session SSO works. Copy the portal's own
-                           #   src/lib/auth.ts pattern here almost verbatim (see that file's comments).
+apps/frontend/            # Next.js 15 static export. `/` is the SSO demo ("<name> - Hello <username>",
+                           #   proving the shared-session SSO works); src/lib/auth-gate.tsx + the
+                           #   src/app/example/ routes show the public-default / opt-in-auth pattern
+                           #   ("Your app goes here" below). src/lib/auth.ts reads the shared session.
 services/api/              # FastAPI + Mangum backend. Verifies the core project's Cognito JWT itself
                            #   (defense in depth — API Gateway's own JWT authorizer is the first layer).
                            #   core_client.py is the ONLY sanctioned way to reach core-owned data.
@@ -56,6 +57,119 @@ biffo.sibling.json          # This sibling's name, its paired core project's nam
                            #   Written by `biffo sibling create`; do not hand-edit path_prefix
                            #   without also updating the core project's siblings.auto.tfvars.json.
 ```
+
+## Your app goes here — from the SSO demo to a public go-live
+
+This skeleton is a **blank canvas**. Everything below is additive: the app
+ships with one demo page and a thin auth helper, and your job is to build on
+top, not to unpick anything.
+
+### What the `/` demo is (and that it's replaceable)
+
+`apps/frontend/src/app/page.tsx` is an **SSO demonstration**, not the app you
+ship. It proves the shared-Cognito round-trip (ADR-0007) works end to end: a
+signed-out visitor is bounced to the core portal's login and returned here; a
+signed-in visitor's session ID token is sent to **this sibling's own backend**
+(`/api/v1/whoami`), which re-verifies the JWT and echoes the username back.
+
+Keep it as a working reference, or replace its contents with your own home
+page once you've seen it work — it's your route to do with as you like. Nothing
+else depends on it.
+
+### Where your content goes, and how routing works
+
+This is a Next.js **App Router** app with `output: 'export'` (a static site).
+A route is just a folder with a `page.tsx` under `apps/frontend/src/app/`:
+
+| File                            | URL served                          |
+| ------------------------------- | ----------------------------------- |
+| `src/app/page.tsx`              | `/` (the demo — replace or keep)    |
+| `src/app/pricing/page.tsx`      | `/pricing/`                         |
+| `src/app/example/page.tsx`      | `/example/` (public example, below) |
+| `src/app/example/members/page.tsx` | `/example/members/` (gated example) |
+
+**The `basePath` / `PATH_PREFIX` wiring is automatic — don't hand-write it.**
+The core project's CloudFront routes `baseurl.com/<name>/*` to this sibling and
+forwards the full URI with no prefix stripping, so the static export's own asset
+and link URLs must already carry `/<name>`. `next.config.ts` reads
+`NEXT_PUBLIC_BASE_PATH` (set by `deploy.yml` from your `path_prefix`) and Next
+prepends it to every asset and every `next/link` href for you. Two rules follow:
+
+- **Always link with `next/link`** (`<Link href="/pricing/">`), never a bare
+  `<a href>` — `Link` adds the base path; a raw anchor doesn't and 404s in the
+  deployed sibling.
+- The **root application sibling** created by `biffo init` serves `/` itself, so
+  its `path_prefix` is empty and `NEXT_PUBLIC_BASE_PATH` is `""` — the same code
+  works unchanged, prefix or no prefix.
+
+### Reaching your backend (never the core API directly)
+
+The frontend talks **only to this sibling's own backend** (`services/api/`),
+never to the core project's API — ADR-0002/ADR-0007. Use `createApiClient` from
+`src/lib/api-client.ts`, pass it the session's ID token, and call your own
+routes (`NEXT_PUBLIC_API_URL` points at this sibling's API Gateway). If you need
+core-owned data, your backend calls the core API server-side
+(`services/api/src/api/core_client.py`) and re-verifies the JWT itself — the
+browser never holds a core credential.
+
+### Public is the default; auth is opt-in per page
+
+The go-live state for most products is a **public** app. That is the easy path
+here: any `page.tsx` you add is served **unauthenticated** the moment it
+deploys — no auth code, no bounce. `src/app/example/page.tsx` is a one-screen
+demonstration of exactly that; copy it or delete it.
+
+When a page _does_ need a signed-in user, opt in with the `<AuthGate>` helper
+(`src/lib/auth-gate.tsx`) — one wrapper, and only that page becomes private:
+
+```tsx
+'use client'
+import { AuthGate } from '@/lib/auth-gate'
+
+export default function Dashboard() {
+  return (
+    <AuthGate>
+      {(session) => {
+        const token = session.getIdToken().getJwtToken()
+        // pass `token` to createApiClient to call this sibling's backend
+        return <h1>Members only</h1>
+      }}
+    </AuthGate>
+  )
+}
+```
+
+A signed-out visitor is redirected to the core portal's login and returned to
+that exact route afterwards; a signed-in visitor sees the content. `AuthGate`
+builds on `getCurrentSession`/`auth.ts` and never signs anyone in itself
+(ADR-0007). `src/app/example/members/page.tsx` is the runnable version of the
+snippet above. Wrap only what must be private — never gate the whole app.
+
+### The path a founder actually walks
+
+1. Run locally (`pnpm dev`, below) and open `/` — watch the SSO demo work.
+2. Replace `src/app/page.tsx` with your own public home page (or add
+   `src/app/<something>/page.tsx`). It's public by default — that's your
+   go-live state. Delete the `example/` routes once you've read them.
+3. For any area that needs a login, wrap its `page.tsx` in `<AuthGate>`.
+4. Push to `main`; `deploy.yml` builds the static export with the right
+   `NEXT_PUBLIC_BASE_PATH` and syncs it to S3 behind the core CloudFront —
+   your public page is live at `baseurl.com/<name>/`.
+
+### Running the frontend locally
+
+```bash
+cd apps/frontend
+cp .env.example .env.local   # fill in your core project's Cognito/API values
+pnpm install
+pnpm dev                     # http://localhost:3000
+```
+
+Public pages render with no configuration. The SSO demo and any `<AuthGate>`
+page need the real `NEXT_PUBLIC_CORE_*` values in `.env.local` to complete the
+portal round-trip; without them they resolve as "signed out" rather than
+crashing (the Cognito pool is constructed lazily — see "The build must not need
+Cognito credentials" below).
 
 ## Standalone repo, not a monorepo package
 

@@ -111,6 +111,48 @@ instead.
 
 Nothing else in the batch is touched when this happens — the whole `apply` run stops cleanly at that point. If you genuinely need to change already-applied DDL, write a new file that alters what the old one created (e.g. `013_fix_permission_catalog.sql` with an `ALTER TABLE`/`UPDATE`), rather than editing the original.
 
+### Write every file so it can run twice
+
+The checksum-skip above protects the normal path, but it is not the whole story. A database can have the objects while its `ddl_import_history` does not agree — a schema-only restore, a truncated history table, a chain applied by hand. Then the whole import re-runs, and any file that can't tolerate that aborts it.
+
+So every file should be idempotent:
+
+```sql
+CREATE TABLE IF NOT EXISTS tabsii.thing (...);
+CREATE INDEX IF NOT EXISTS ix_thing ON tabsii.thing(id);
+ALTER TABLE tabsii.thing ADD COLUMN IF NOT EXISTS note text;
+INSERT INTO tabsii.thing (...) VALUES (...) ON CONFLICT DO NOTHING;
+```
+
+Policies are the trap, because **Postgres has no `CREATE POLICY IF NOT EXISTS`**. Drop first:
+
+```sql
+DROP POLICY IF EXISTS thing_read ON tabsii.thing;
+CREATE POLICY thing_read ON tabsii.thing FOR SELECT USING (...);
+```
+
+**Get this right before the file is first applied anywhere.** Once applied, its checksum is recorded and the importer refuses any edit to it — so a non-idempotent file cannot be corrected afterwards, and no later file can rescue it. Only the file's own text decides whether re-running it errors.
+
+`services/api/tests/test_ddl_import_conventions.py` enforces this in CI, checking `CREATE POLICY`, `CREATE TABLE`, `CREATE INDEX` and `ADD COLUMN` across every vendored import. It has nothing to check until you vendor a chain, so it is inert in a fresh repo.
+
+#### Exempting what you can't fix: `.ddl-guard.json`
+
+Two situations legitimately need an exemption. Both are declared in an optional `db/imports/<name>/.ddl-guard.json`, which lives beside your SQL in user-owned space and so survives `biffo core upgrade`:
+
+```json
+{
+  "first_guarded_module": "015",
+  "grandfathered_bare_policies": {
+    "029_marketplace_brand_profiles.sql": ["bmp_create", "bmp_read"]
+  }
+}
+```
+
+- **`first_guarded_module`** — if you vendored a chain from a pre-existing schema, its early files are typically one-shot `CREATE TABLE`s that were never meant to re-run. Set this to the first file you actually want held to the convention; anything sorting before it is skipped.
+- **`grandfathered_bare_policies`** — for a file that is already applied somewhere and so can no longer be corrected. Policy names are pinned individually, so a *new* bare policy in that same file still fails, and an entry that stops matching is reported as stale.
+
+Both keys are optional; with no file at all, everything is checked and nothing is exempt. Malformed JSON and unknown keys are hard errors rather than being ignored — an exemption you believe is in force but silently isn't would be worse than no guard.
+
 ## `biffo data list`
 
 Shows what's been imported into the **local checkout** — it does not check any deployed environment:

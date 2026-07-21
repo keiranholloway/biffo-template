@@ -42,10 +42,10 @@ resource "github_branch_protection" "main" {
     require_code_owner_reviews      = true
   }
 
-  enforce_admins         = true
-  require_linear_history = true
-  allows_force_pushes    = false
-  allows_deletions       = false
+  enforce_admins          = true
+  required_linear_history = true
+  allows_force_pushes     = false
+  allows_deletions        = false
 }
 
 resource "github_repository_environment" "envs" {

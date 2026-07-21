@@ -98,11 +98,13 @@ A worker is a **row**, created and edited through the admin UI by an authenticat
 
 Whether that row lives in its own `agent_definitions` table or inside the binding workflow's `action_config` is **left to implementation**. The thesis is that workers are data; which table holds them is not load-bearing, and the extraction migration is trivial while worker counts are small. §4 explains why the usual reason to separate them — reuse across triggers — is not expected here.
 
-### 3. Cross-instance sharing is a definition catalog, not a code registry
+### 3. Sharing is definition-based, not code-based — and nothing is built for it yet
 
-Workers travel between Biffo implementations as **versioned JSON definitions** — a catalog imported into an instance as new rows, with an alias. Upgrading is re-importing a newer version, with conflict handling when the local copy has been edited.
+Workers travel between Biffo implementations as **serializable definitions**, never as installable code. This is the answer to "is an agentic worker a plugin?" and it is load-bearing: the plugin registry distributes code, and almost everything worth sharing here is configuration.
 
-This is deliberately *not* the plugin registry. That registry distributes code and has shipped `plugins: []` since it was built; almost everything worth sharing here is configuration.
+**No catalog mechanism is built.** No registry repo, no `biffo agent import`, no import UI. With one instance and zero workers, building distribution before there is anything to distribute is exactly how the plugin registry came to ship `plugins: []` — the same failure mode one tier up. Copying JSON by hand is sufficient for now, and more informative: it reveals what genuinely needs parameterising instead of guessing.
+
+**One guardrail:** a definition must remain **fully serializable**, with no hidden dependency on instance state beyond its explicit table references (§7). That is free while definitions are JSON, and it is the only property that would be expensive to retrofit. Everything else a catalog needs can be built when a second instance actually wants a worker.
 
 ### 4. Invocation is EventBridge, and only EventBridge
 
@@ -212,7 +214,7 @@ The first intended worker enriches inbound demo requests, and it demonstrates th
 
 1. ~~**Trigger binding UX.**~~ **Resolved.** Split into three decisions with different deferability: agents reuse `WorkflowDefinition` rather than carrying trigger fields (decided, §4 — the only non-deferrable part); which table holds a worker definition is left to implementation (§2); the authoring UX is deferred entirely as a UI concern. One agent, one trigger.
 2. ~~**Memory.**~~ **Resolved.** All three kinds deferred (§9); thread history from §6 is the only memory v1 has. Deferral locks nothing in — each is additive. Two guardrails recorded because both are free now and each prevents a wrong turn later: memory is not retrieval, and working memory collides with §7's no-writes stance.
-3. **Catalog location and format.** A git repo of versioned JSON is the obvious start. Does it want a CLI verb (`biffo agent import`), or is portal-side import enough?
+3. ~~**Catalog location and format.**~~ **Resolved.** The stance stays (sharing is definition-based, §3) because it is load-bearing; the mechanism is deferred entirely — no registry, no CLI verb, no import UI. One guardrail: definitions stay fully serializable, the only property expensive to retrofit. Deferring this also simplifies Q4: with nothing distributing definitions, versioning is an internal explainability concern rather than a compatibility contract.
 4. **Definition versioning.** Do edits to a live worker version it, or mutate in place? Run reproducibility argues for versioning; authoring ergonomics argue against.
 5. **Where the first worker's read scope actually points.** The demo/lead table is instance-owned (tabsii), not template. Worker definitions are therefore instance-scoped in what they read, and a shared catalog needs table references parameterised.
 

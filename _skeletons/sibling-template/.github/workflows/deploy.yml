@@ -190,14 +190,47 @@ jobs:
           # would give "s3://bucket//", whose keys all begin with a literal
           # slash and match no request CloudFront ever forwards.
           DEST="s3://${SITE_BUCKET_NAME}/${PATH_PREFIX:+${PATH_PREFIX}/}"
+          # Three passes, split by mutability and content type — kept in lockstep
+          # with the core portal's deploy-app.yml (issue #275, ported in #351).
+          #
+          # Next's App Router emits its RSC flight payloads as *.txt. Left in the
+          # first pass they get two wrong properties that break every client-side
+          # navigation — and, across the portal↔sibling SSO boundary, strand a
+          # returning user on /index.txt showing raw serialised React (#351):
+          #
+          #   - `aws s3 sync` guesses content type from the extension, so they
+          #     serve as text/plain rather than text/x-component. The router does
+          #     not recognise that as an RSC response and falls back to a hard MPA
+          #     navigation TO THE URL IT WAS FETCHING — landing the browser on the
+          #     .txt payload. Typing the URL works, because a full page load never
+          #     fetches the payload.
+          #
+          #   - they get cached immutable for a year, but they change on every
+          #     deploy exactly like the HTML does.
+          #
+          # Hashed assets under _next/static are genuinely immutable and keep the
+          # long cache; HTML and RSC payloads must not.
           aws s3 sync apps/frontend/out/ "$DEST" \
             --delete \
             --cache-control "public, max-age=31536000, immutable" \
-            --exclude "*.html"
+            --exclude "*.html" \
+            --exclude "*.txt"
+          # `--include` only re-includes from an excluded set; on its own it is a
+          # no-op, since everything is included by default. Without the explicit
+          # `--exclude "*"` this pass would upload the .txt payloads too — as
+          # text/plain — and the pass below, being a sync, would then skip them
+          # as unchanged and the wrong content type would survive.
           aws s3 sync apps/frontend/out/ "$DEST" \
             --delete \
             --cache-control "no-cache" \
+            --exclude "*" \
             --include "*.html"
+          aws s3 sync apps/frontend/out/ "$DEST" \
+            --delete \
+            --cache-control "no-cache" \
+            --content-type "text/x-component" \
+            --exclude "*" \
+            --include "*.txt"
       - name: Invalidate the core project's CloudFront path
         if: vars.PARENT_CLOUDFRONT_DISTRIBUTION_ID != ''
         env:

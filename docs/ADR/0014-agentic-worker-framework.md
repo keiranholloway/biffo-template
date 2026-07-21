@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-07-21
+**Amended:** 2026-07-21 — see *Amendment: UI distribution and the plugin question*
 **Deciders:** Keiran Holloway (Technical Architect)
 
 ---
@@ -73,6 +74,28 @@ ADR-0013 characterises the orchestration engine precisely: *"core platform capab
 The agent framework is the same shape, and one of ADR-0013's own stated constraints settles it. Under that contract, plugins **do not ship React**; they declare UI capabilities (`head_scripts`, `nav_items`, `admin_pages`) that the portal renders generically, and ADR-0013 accepts the cost: *"a plugin wanting a genuinely novel UI … cannot have it."*
 
 Agent authoring is a genuinely novel UI — a prompt editor, a read-scope picker, a test-run panel, a threaded run inspector. It is not a config form over a CRUD table. Building it inside the declarative UI contract would be fighting that contract; building it as core portal code is what the orchestration builder already does.
+
+### Amendment: UI distribution and the plugin question (2026-07-21)
+
+The argument above was re-examined the day this ADR was accepted, and it had a hole worth recording rather than quietly patching.
+
+**The hole.** §1 places the authoring and run-inspection UI in `apps/portal/`. `apps/` is **user-owned** in `core-manifest.json`, so that half does **not** travel with `biffo core upgrade` — it reaches an instance by manual PR copy-in (AGENTS.md §9). The original reasoning leaned implicitly on core solving distribution. It does not, and the choice needed re-deriving rather than defending.
+
+**Two of the three stated blockers were overstated.** Honestly assessed against ADR-0013's contract:
+
+- *JSON columns* — the manifest's six scalar types are a `_TYPE_MAP` dict in `plugin_table.py`. Adding JSON is close to trivial, not a blocker.
+- *A non-CRUD completion route* — completing a run **is** updating a row. It fits declarative CRUD, and #224's generic-CRUD emission would fire on it.
+- *Novel UI* — this one survives. A threaded message view with tool calls and token accounting is not a config form over a CRUD table.
+
+So the plugin path is materially more viable than this ADR originally implied, and ADR-0013's own trigger to implement — *"the first genuine plugin: optional, reusable across instances, extends the core data model"* — describes this framework at least as well as it describes payments.
+
+**What actually decides it is optionality, not UI.** Plugins exist for capability a deployment may reasonably decline. Core exists for capability that is always present. Agentic AI is expected to be pervasive across Biffo products rather than an occasional add-on, so an install step would be machinery in service of a choice nobody makes. That is the same reasoning **ADR-0011** used to pull `rbac` out of the plugin tier: an optional, installable version of something every deployment needs is backwards.
+
+The UI-expressiveness argument stands, but it is now the secondary reason, not the load-bearing one.
+
+**The distribution gap is real and is being closed separately.** Carving `apps/portal/src/app/admin/` as a template-owned subtree — structurally identical to what #243 did for `services/_plugins/` — makes core admin UI distribute with the core it belongs to. This is not special pleading for agents: six core-capability admin surfaces already sit in that user-owned tree (`orchestration`, `marketplace`, `endpoints`, `users`, `microservices`, `plugins`), each needing manual copy-in and each able to drift per instance undetected. `core-manifest.json`'s own note anticipates it: the exclusion of `apps/` is *"conservative … for now; that boundary can widen later."*
+
+Until that lands, the agent UI reaches instances by copy-in, like the orchestration builder it sits beside.
 
 ---
 
@@ -244,7 +267,7 @@ This is the model CI systems use: the run keeps the workflow file it ran. It del
 
 ### Option C — one plugin as the framework, workers as its rows
 
-**Rejected, but the closest alternative.** Structurally reasonable and it becomes more plausible once ADR-0013 is implemented. It fails today on the UI constraint: ADR-0013 explicitly accepts that plugins cannot have novel UI, and agent authoring needs it. Worth revisiting if the UI capability contract ever grows to cover bespoke pages.
+**Rejected, and re-examined after acceptance — see the amendment above.** Structurally reasonable, and more viable than first stated: of the three obstacles originally cited, JSON columns and the completion route both dissolve on inspection, leaving only run-inspection UI. It is rejected on **optionality** rather than expressiveness — agents are expected to be pervasive, so an installable framework would add an install decision nobody meaningfully makes (the ADR-0011 argument). Worth revisiting if that premise turns out to be wrong, or if the UI capability contract grows to cover bespoke pages.
 
 ### Option D — async now, a separate mechanism for sync chat later
 
@@ -288,6 +311,7 @@ The first intended worker enriches inbound demo requests, and it demonstrates th
 - **Core carries the framework unconditionally**, used or not.
 - **Two-step authoring** (§4), pending the resolution of open question 1.
 - **User-delegated authority is designed but unexercised** in v1 (§7). Two of the three permission layers are live from the first run; the third stays unvalidated until a worker runs under a user's authority.
+- **The portal half does not distribute with core upgrade** until `apps/portal/src/app/admin/` is carved template-owned. Until then the agent UI reaches instances by manual copy-in and can drift per instance, exactly as the six admin surfaces already there can.
 - **The ceiling is deliberately inconvenient to widen.** Granting agents a new table means a PR and a deploy, not an admin screen. That is the point, and it will still be irritating the first time a worker needs a table nobody anticipated.
 - **Async-only** rules out conversational agents until the sync edges are built.
 - **Event delivery is best-effort, not guaranteed** (§5). A committed run whose event fails to publish is lost silently. Harmless while nothing subscribes; an outbox is required before anything does.

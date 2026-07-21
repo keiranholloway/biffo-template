@@ -159,6 +159,10 @@ A worker cannot grant itself anything outside the ceiling, so editing a definiti
 
 **Authoring-time validation** still applies: saving a worker verifies both that its declared scope sits inside the ceiling, and that the *author* holds the permissions it declares. Failing at save beats failing at run.
 
+**A table is only reachable if it has a Core model.** The ceiling lives on the model class, and an instance's business tables arrive as SQL via ADR-0005 DDL import, not as models. A DDL-imported table is therefore invisible to agents until the instance deliberately writes a model for it *and* names `agent-runtime` in its permissions — two steps, both reviewed. This is default-deny falling out of an existing boundary rather than a new rule, and it settles ownership: an instance owns its tables and therefore owns the decision to expose them. The template cannot pre-grant access to tables it has never heard of.
+
+**Tools are not tables, and the registry is their ceiling.** §7 governs Core reads; the first worker's primary source is web search, which is no table at all. Tools are registered functions in the framework — as orchestrator's actions already are — so adding one is inherently a reviewed code change and needs no separate allowlist. A worker **declares which registered tools it uses, defaulting to none**, mirroring the default-deny posture above. This matters beyond tidiness: web search is the untrusted-content channel the security model identifies as the injection vector, and enabling it should be no less deliberate than exposing a table. Per-deployment tool gating (available in dev, off in prod) is deferred — it is configuration over an existing registry, addable with no lock-in.
+
 In v1 every run is `run_as: system`, so user-delegated authority is **designed for but not exercised**. Note what is and is not deferred: the ceiling and the declared scope are both live from the first run, and only the third term is missing. When `run_as: user` arrives it composes as `ceiling ∩ declared scope ∩ the user's own permissions`, with no change to the first two.
 
 ### 8. Cost and recursion are bounded by the framework, not by convention
@@ -220,13 +224,13 @@ The first intended worker enriches inbound demo requests, and it demonstrates th
 
 ---
 
-## Open questions for review
+## Open questions — all resolved 2026-07-21
 
 1. ~~**Trigger binding UX.**~~ **Resolved.** Split into three decisions with different deferability: agents reuse `WorkflowDefinition` rather than carrying trigger fields (decided, §4 — the only non-deferrable part); which table holds a worker definition is left to implementation (§2); the authoring UX is deferred entirely as a UI concern. One agent, one trigger.
 2. ~~**Memory.**~~ **Resolved.** All three kinds deferred (§9); thread history from §6 is the only memory v1 has. Deferral locks nothing in — each is additive. Two guardrails recorded because both are free now and each prevents a wrong turn later: memory is not retrieval, and working memory collides with §7's no-writes stance.
 3. ~~**Catalog location and format.**~~ **Resolved.** The stance stays (sharing is definition-based, §3) because it is load-bearing; the mechanism is deferred entirely — no registry, no CLI verb, no import UI. One guardrail: definitions stay fully serializable, the only property expensive to retrofit. Deferring this also simplifies Q4: with nothing distributing definitions, versioning is an internal explainability concern rather than a compatibility contract.
 4. ~~**Definition versioning.**~~ **Resolved.** Definitions mutate in place; runs snapshot the resolved definition plus a revision counter (§10). A versions table, rollback and diff are deferred. This is the one question that resisted the deferral bias, and the reason is an asymmetry worth remembering: most deferrals here can be added later at full value, but unrecorded run provenance is lost permanently.
-5. **Where the first worker's read scope actually points.** The demo/lead table is instance-owned (tabsii), not template. Worker definitions are therefore instance-scoped in what they read, and a shared catalog needs table references parameterised.
+5. ~~**Where the first worker's read scope actually points.**~~ **Resolved.** The parameterisation half dissolved with the catalog (Q3) and the addressing half was answered by §7. Two residues surfaced and are recorded there: a table is unreachable until an instance gives it a Core model *and* grants the role (default-deny, instance owns the decision); and tools — the first worker's primary source — are scoped by the registry plus per-worker declaration defaulting to none. Per-deployment tool gating deferred.
 
 ---
 

@@ -28,6 +28,7 @@ import {
   type SiblingOrigin,
 } from '../lib/root-sibling.js'
 import { loadProjectConfig } from '../lib/session.js'
+import { setSiblingCoreIdentity } from '../lib/sibling-wiring.js'
 import { restorePackagedDotfiles } from '../lib/skeleton-dotfiles.js'
 import {
   deleteSiblingSession,
@@ -170,12 +171,11 @@ async function runSiblingCreateCommand(name: string, options: CommandOptions): P
   console.log(
     '\n  Next steps:\n' +
       `  1. Merge the registration PR above — until it merges, baseurl.com${displayPath(pathPrefix)} won't route anywhere.\n` +
-      '  2. Add a SIBLING_GITHUB_TOKEN secret to this new repo (a PAT with repo scope) — needed by its\n' +
-      '     deploy workflow to export Terraform outputs as environment variables, same as the core project.\n' +
-      "  3. Push to `dev` (or run the Deploy workflow manually) to provision this sibling's own AWS resources.\n" +
-      '  4. Once the registration PR has ALSO merged and the core project has redeployed, set\n' +
-      '     PARENT_CLOUDFRONT_DISTRIBUTION_ARN on this repo and re-run its Deploy workflow — see this\n' +
-      '     repo\'s README, "The two-phase CDN registration".\n',
+      '  2. Run `biffo deploy <env>` on the CORE project (or re-run it if already deployed). That wires\n' +
+      '     this sibling automatically: the SIBLING_GITHUB_TOKEN secret, the CORE_* identity variables,\n' +
+      '     and — once the registration PR has merged and the core has redeployed —\n' +
+      '     PARENT_CLOUDFRONT_DISTRIBUTION_ARN. No manual variable/secret setup is needed (issue #337).\n' +
+      "  3. Push to `dev` (or run the Deploy workflow manually) to provision this sibling's own AWS resources.\n",
   )
 }
 
@@ -253,8 +253,13 @@ export async function runSiblingCreate(
       totalSteps,
       "Core project isn't deployed yet — deferring its identity (CORE_COGNITO_*, CORE_API_URL)",
     )
+    // Deliberately NOT marked complete (issue #337). Marking it done here made
+    // the deferral a permanent dead-end: a later `biffo sibling create` re-run
+    // took the already-complete branch and never re-resolved. The authoritative
+    // fix is the core's own `biffo deploy` wiring these once it is up; leaving
+    // this step unrecorded ALSO lets a manual re-run resolve them for real. The
+    // empty map still satisfies the invariant that the step populates it.
     session.outputs.coreIdentity = {}
-    markSiblingStepComplete(session, 'resolve_core_identity')
   } else if (!session.completedSteps.includes('resolve_core_identity')) {
     log.step(2, totalSteps, "Resolving core project's identity...")
     session.outputs.coreIdentity = await resolveCoreIdentity(
@@ -677,34 +682,15 @@ async function configureSiblingGithub(
     await github.setRepoVariable(org, repo, 'TF_STATE_BUCKET', session.outputs.tfStateBucket)
   }
 
+  // When the core is already deployed (the manual `biffo sibling create` path),
+  // set each environment's CORE_* identity + CORS. On the `biffo init` deferred
+  // path coreIdentity is empty and nothing is set here — the core's own
+  // `biffo deploy` fills these in (plus PARENT_CLOUDFRONT_*) once it is up,
+  // via wireSiblingsAfterCoreDeploy (issue #337).
   for (const env of config.environments) {
     const identity = coreIdentity[env]
     if (!identity) continue
-    await github.setEnvVariable(
-      org,
-      repo,
-      env,
-      'CORE_COGNITO_USER_POOL_ID',
-      identity.cognitoUserPoolId,
-    )
-    await github.setEnvVariable(org, repo, env, 'CORE_COGNITO_CLIENT_ID', identity.cognitoClientId)
-    await github.setEnvVariable(org, repo, env, 'CORE_API_URL', identity.apiUrl)
-    await github.setEnvVariable(org, repo, env, 'CORE_PORTAL_URL', identity.portalUrl)
-    // The sibling's frontend is served from the SAME origin as the core
-    // portal (baseurl.com/<name>, shared-origin SSO — ADR-0007), so the
-    // portal's own origin is the only one that will ever call this
-    // sibling's own API. Without this, the deploy workflow's
-    // TF_VAR_cors_origins falls back to its template default
-    // (["http://localhost:3000"]), and every real browser call to
-    // /api/v1/whoami is silently blocked by CORS — the frontend gets a
-    // session but can never independently verify it.
-    await github.setEnvVariable(
-      org,
-      repo,
-      env,
-      'CORS_ORIGINS_JSON',
-      JSON.stringify([identity.portalUrl]),
-    )
+    await setSiblingCoreIdentity(github, org, repo, env, identity)
   }
 
   if (session.outputs.oidcRoleArn) {

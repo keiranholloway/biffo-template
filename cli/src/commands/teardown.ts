@@ -17,16 +17,10 @@ import {
   loadSession,
 } from '../lib/session.js'
 import {
-  collectSiblings,
-  parseRegistry,
-  registryPath,
-  resolveSiblingRepos,
-  REGISTRATION_BRANCH_PREFIX,
-  REGISTRY_ENVIRONMENTS,
+  discoverSiblings,
   SiblingResolutionError,
-  type DiscoveredSibling,
   type ResolvedSibling,
-  type SiblingOriginEntry,
+  type SiblingDiscoveryGithub,
 } from '../lib/sibling-teardown.js'
 import { ROOT_SIBLING_NAME } from '../lib/root-sibling.js'
 
@@ -469,66 +463,6 @@ async function destroySiblingInfrastructure(
 /** The workflow a sibling repo must ship for teardown to be able to destroy it. */
 export const SIBLING_DESTROY_WORKFLOW = 'destroy-infra.yml'
 const SIBLING_DESTROY_WORKFLOW_PATH = `.github/workflows/${SIBLING_DESTROY_WORKFLOW}`
-
-/** The GitHub surface sibling discovery needs. Narrow, so tests can fake it. */
-export interface SiblingDiscoveryGithub {
-  repoExists(org: string, repo: string): Promise<boolean>
-  getFileContent(org: string, repo: string, path: string, ref?: string): Promise<string | undefined>
-  listOpenPullRequests(
-    org: string,
-    repo: string,
-  ): Promise<Array<{ number: number; headRef: string }>>
-}
-
-/**
- * Find every sibling of this core project, from the core repo on GitHub.
- *
- * Two sources, because neither alone is complete (see lib/sibling-teardown.ts
- * for why the registry is the source of truth in the first place):
- *
- *   1. `infra/environments/<env>/siblings.auto.tfvars.json` on the core repo's
- *      default branch — every sibling whose registration PR has **merged**.
- *   2. the same files on the head ref of any open `biffo/register-sibling-*`
- *      PR — siblings that were created (real repo, real AWS resources) but
- *      whose registration never landed. Without this, `biffo sibling create`
- *      followed by `biffo teardown` before merging the registration PR would
- *      leak the entire sibling.
- *
- * Exported for testing.
- */
-export async function discoverSiblings(
-  github: SiblingDiscoveryGithub,
-  coreOrg: string,
-  coreRepo: string,
-  coreProjectName: string,
-): Promise<ResolvedSibling[]> {
-  const sources: Array<{
-    environment: string
-    entries: SiblingOriginEntry[]
-    pendingRegistrationPr?: number
-  }> = []
-
-  for (const env of REGISTRY_ENVIRONMENTS) {
-    const contents = await github.getFileContent(coreOrg, coreRepo, registryPath(env))
-    sources.push({ environment: env, entries: parseRegistry(contents) })
-  }
-
-  const openPrs = await github.listOpenPullRequests(coreOrg, coreRepo)
-  for (const pr of openPrs) {
-    if (!pr.headRef.startsWith(REGISTRATION_BRANCH_PREFIX)) continue
-    for (const env of REGISTRY_ENVIRONMENTS) {
-      const contents = await github.getFileContent(coreOrg, coreRepo, registryPath(env), pr.headRef)
-      sources.push({
-        environment: env,
-        entries: parseRegistry(contents),
-        pendingRegistrationPr: pr.number,
-      })
-    }
-  }
-
-  const discovered: DiscoveredSibling[] = collectSiblings(sources)
-  return resolveSiblingRepos(github, coreOrg, coreProjectName, discovered)
-}
 
 /**
  * Pre-flight, run **before** the confirmation and before anything is destroyed.

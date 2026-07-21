@@ -328,3 +328,63 @@ export async function resolveSiblingRepos(
 
   return resolved
 }
+
+/** The GitHub surface sibling discovery needs. Narrow, so tests can fake it. */
+export interface SiblingDiscoveryGithub extends SiblingRepoLookup {
+  listOpenPullRequests(
+    org: string,
+    repo: string,
+  ): Promise<Array<{ number: number; headRef: string }>>
+}
+
+/**
+ * Find every sibling of this core project, from the core repo on GitHub.
+ *
+ * Two sources, because neither alone is complete (see the file header for why
+ * the registry is the source of truth in the first place):
+ *
+ *   1. `infra/environments/<env>/siblings.auto.tfvars.json` on the core repo's
+ *      default branch — every sibling whose registration PR has **merged**.
+ *   2. the same files on the head ref of any open `biffo/register-sibling-*`
+ *      PR — siblings that were created (real repo, real AWS resources) but
+ *      whose registration never landed. Without this, `biffo sibling create`
+ *      followed by `biffo teardown` before merging the registration PR would
+ *      leak the entire sibling.
+ *
+ * Shared by `biffo teardown` (the whole blast radius it must reclaim) and
+ * `biffo deploy` (every sibling it must wire to the freshly-deployed core —
+ * issue #337). Exported for testing.
+ */
+export async function discoverSiblings(
+  github: SiblingDiscoveryGithub,
+  coreOrg: string,
+  coreRepo: string,
+  coreProjectName: string,
+): Promise<ResolvedSibling[]> {
+  const sources: Array<{
+    environment: string
+    entries: SiblingOriginEntry[]
+    pendingRegistrationPr?: number
+  }> = []
+
+  for (const env of REGISTRY_ENVIRONMENTS) {
+    const contents = await github.getFileContent(coreOrg, coreRepo, registryPath(env))
+    sources.push({ environment: env, entries: parseRegistry(contents) })
+  }
+
+  const openPrs = await github.listOpenPullRequests(coreOrg, coreRepo)
+  for (const pr of openPrs) {
+    if (!pr.headRef.startsWith(REGISTRATION_BRANCH_PREFIX)) continue
+    for (const env of REGISTRY_ENVIRONMENTS) {
+      const contents = await github.getFileContent(coreOrg, coreRepo, registryPath(env), pr.headRef)
+      sources.push({
+        environment: env,
+        entries: parseRegistry(contents),
+        pendingRegistrationPr: pr.number,
+      })
+    }
+  }
+
+  const discovered: DiscoveredSibling[] = collectSiblings(sources)
+  return resolveSiblingRepos(github, coreOrg, coreProjectName, discovered)
+}

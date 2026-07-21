@@ -934,9 +934,14 @@ describe('root sibling mode', () => {
     // But the repo itself is fully provisioned, and every step is checkpointed
     // so a resumed init does not try to create it twice.
     expect(github.createEmptyRepo).toHaveBeenCalledWith('acme', 'core-app-app', 'The application')
+    // `resolve_core_identity` is deliberately NOT checkpointed on the deferred
+    // init path (issue #337). Marking it done made the deferral a permanent
+    // dead-end — a later `biffo sibling create` re-run skipped resolution and
+    // the sibling's CORE_* stayed empty forever. Leaving it unrecorded lets the
+    // core's own `biffo deploy` (or a manual re-run) resolve it once the core
+    // is up.
     expect(session.completedSteps).toEqual([
       'verify_credentials',
-      'resolve_core_identity',
       // Two checkpoints, not one (issue #316): the repo existing and the
       // skeleton being in it are separate facts, and a run can end between them.
       'create_repo',
@@ -946,5 +951,8 @@ describe('root sibling mode', () => {
       'github_config',
       'register_with_core',
     ])
+    // The empty identity map is still populated, so the invariant that step 2
+    // fills session.outputs.coreIdentity holds and step 7 sets no CORE_* vars.
+    expect(session.outputs.coreIdentity).toEqual({})
   })
 })

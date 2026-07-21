@@ -174,6 +174,16 @@ Two constraints apply when they do arrive:
 - **Memory is not retrieval.** Memory is what an agent remembers; retrieval is what it can look up. Vector search over business data is RAG — it belongs in the tool registry as a declared read tool subject to §7's ceiling, not in a memory subsystem. Blurring the two means building an embedding pipeline to serve a need the tool registry already covers.
 - **Working memory is a write, and §7 forbids writes.** It would be the first exception to "writes are not reachable through this path at all", so it arrives as a deliberate amendment to §7 rather than a quiet addition — and namespaced per agent, not by opening the write path generally.
 
+### 10. Runs are self-explaining; definitions mutate in place
+
+A definition is edited in place. There is no versions table, no rollback and no diff — all deferrable, because all are reconstructible later.
+
+What is **not** deferrable is capture. Every run records the **resolved definition it executed** — instructions, model, tool list, read scope, `max_turns`, budget — alongside a revision number from a counter the definition increments on save.
+
+The asymmetry that forces this: memory (§9) and a catalog (§3) can be added later at full value, but **unrecorded data cannot be recovered**. A run that did not capture what it ran becomes permanently unexplainable the moment its definition moves on, and no later change can backfill it. The message transcript captures some of this incidentally — a rendered system prompt usually lands in the messages array — but not the model, tools or scope, which are exactly what explains a change in behaviour.
+
+This is the model CI systems use: the run keeps the workflow file it ran. It delivers what versioning was wanted for — explaining a run after the fact — for roughly the cost of one column, and a versions table can be added later without invalidating anything already captured.
+
 ---
 
 ## Options Considered
@@ -215,7 +225,7 @@ The first intended worker enriches inbound demo requests, and it demonstrates th
 1. ~~**Trigger binding UX.**~~ **Resolved.** Split into three decisions with different deferability: agents reuse `WorkflowDefinition` rather than carrying trigger fields (decided, §4 — the only non-deferrable part); which table holds a worker definition is left to implementation (§2); the authoring UX is deferred entirely as a UI concern. One agent, one trigger.
 2. ~~**Memory.**~~ **Resolved.** All three kinds deferred (§9); thread history from §6 is the only memory v1 has. Deferral locks nothing in — each is additive. Two guardrails recorded because both are free now and each prevents a wrong turn later: memory is not retrieval, and working memory collides with §7's no-writes stance.
 3. ~~**Catalog location and format.**~~ **Resolved.** The stance stays (sharing is definition-based, §3) because it is load-bearing; the mechanism is deferred entirely — no registry, no CLI verb, no import UI. One guardrail: definitions stay fully serializable, the only property expensive to retrofit. Deferring this also simplifies Q4: with nothing distributing definitions, versioning is an internal explainability concern rather than a compatibility contract.
-4. **Definition versioning.** Do edits to a live worker version it, or mutate in place? Run reproducibility argues for versioning; authoring ergonomics argue against.
+4. ~~**Definition versioning.**~~ **Resolved.** Definitions mutate in place; runs snapshot the resolved definition plus a revision counter (§10). A versions table, rollback and diff are deferred. This is the one question that resisted the deferral bias, and the reason is an asymmetry worth remembering: most deferrals here can be added later at full value, but unrecorded run provenance is lost permanently.
 5. **Where the first worker's read scope actually points.** The demo/lead table is instance-owned (tabsii), not template. Worker definitions are therefore instance-scoped in what they read, and a shared catalog needs table references parameterised.
 
 ---

@@ -92,9 +92,11 @@ Distribution is `biffo core upgrade`, not the plugin registry. This is the chann
 
 JSON columns are available here because these are core SQLAlchemy models, not manifest-declared plugin tables — which is a further reason the framework cannot be an ADR-0003 plugin.
 
-### 2. Workers are rows, authored in the portal
+### 2. Workers are data, authored in the portal
 
-A worker is a row in `agent_definitions`, created and edited through the admin UI by an authenticated platform user. It is not an installed artifact. "Installed more than once" is "create another row."
+A worker is a **row**, created and edited through the admin UI by an authenticated platform user — not an installed artifact. "Installed more than once" is "create another row."
+
+Whether that row lives in its own `agent_definitions` table or inside the binding workflow's `action_config` is **left to implementation**. The thesis is that workers are data; which table holds them is not load-bearing, and the extraction migration is trivial while worker counts are small. §4 explains why the usual reason to separate them — reuse across triggers — is not expected here.
 
 ### 3. Cross-instance sharing is a definition catalog, not a code registry
 
@@ -107,6 +109,10 @@ This is deliberately *not* the plugin registry. That registry distributes code a
 An agent run is started by an event on the bus. There is no synchronous invocation path.
 
 Binding is a `WorkflowDefinition` with `action_type: "agent"` — reusing the trigger catalog (ADR-0010), payload filtering, idempotent claiming and run audit that already exist. Orchestrator dispatches; the agent runtime executes.
+
+**Agents do not carry their own trigger fields.** Doing so would duplicate the trigger catalog, the payload-filter matching and the idempotent claim flow, and unwinding two such code paths after both exist is expensive. This is the one part of the binding question that is not deferrable.
+
+**Nor is one agent bound to several triggers a goal.** Where a superficially similar task fires from different events, the assessment each needs is genuinely different — enriching a demo request is not the same judgement as enriching an inbound lead. Those are separate agents that happen to share a shape, not one agent reused. No cross-trigger reuse machinery exists, deliberately, and the maintenance cost of two similar prompts is accepted in exchange.
 
 Accepted consequences: re-running a worker from the portal must **emit an event** rather than call the runtime; and all agent output is eventually consistent.
 
@@ -195,7 +201,7 @@ The first intended worker enriches inbound demo requests, and it demonstrates th
 
 ## Open questions for review
 
-1. **Trigger binding UX.** §4 makes creating a worker two steps — define the agent, then create a workflow to trigger it. Architecturally sound and composable, but is the friction acceptable, or should the authoring UI create both together?
+1. ~~**Trigger binding UX.**~~ **Resolved.** Split into three decisions with different deferability: agents reuse `WorkflowDefinition` rather than carrying trigger fields (decided, §4 — the only non-deferrable part); which table holds a worker definition is left to implementation (§2); the authoring UX is deferred entirely as a UI concern. One agent, one trigger.
 2. **Memory.** Deliberately unspecified. Is per-thread message history sufficient for v1, or is cross-run semantic recall (pgvector in Core) needed early? It affects the schema.
 3. **Catalog location and format.** A git repo of versioned JSON is the obvious start. Does it want a CLI verb (`biffo agent import`), or is portal-side import enough?
 4. **Definition versioning.** Do edits to a live worker version it, or mutate in place? Run reproducibility argues for versioning; authoring ergonomics argue against.

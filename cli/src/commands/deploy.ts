@@ -10,6 +10,13 @@ import { promptOr } from '../lib/interactive.js'
 import { isTemplatePlaceholderConfig } from '../lib/local-config.js'
 import { log } from '../lib/logger.js'
 import { listProjectConfigs, loadProjectConfig } from '../lib/session.js'
+import { GLOBAL_DISPATCH_REF } from '../lib/global-workflows.js'
+import {
+  CORE_VERSION_FILE,
+  INSTANCE_CORE_FILE,
+  compareCoreVersions,
+  parseCoreVersion,
+} from '../lib/core-version.js'
 import {
   coreWiringFromOutputs,
   formatWiringResult,
@@ -242,6 +249,109 @@ export async function reportOidcHint(
   log.error('')
 }
 
+/**
+ * The core version an instance repo records at a git `ref`, read over the API.
+ *
+ * Mirrors `readInstanceCoreVersion` (the local-filesystem reader) but sources
+ * the bytes from GitHub at a specific ref, so `biffo deploy` can compare the
+ * version on the branch it dispatches from against the branch it deploys.
+ * Prefers the upgrade record (`biffo.core.json`) and falls back to the inherited
+ * `core.version`. Returns null when neither is present or parseable at that ref
+ * — a missing/garbled version must never fabricate a mismatch.
+ *
+ * Exported for testing.
+ */
+export async function readRemoteCoreVersion(
+  github: GitHubAdapter,
+  org: string,
+  repo: string,
+  ref: string,
+): Promise<string | null> {
+  const record = await github.getFileContent(org, repo, INSTANCE_CORE_FILE, ref)
+  if (record) {
+    try {
+      const parsed = JSON.parse(record) as { version?: unknown }
+      if (typeof parsed.version === 'string') {
+        parseCoreVersion(parsed.version) // validate
+        return parsed.version
+      }
+    } catch {
+      /* malformed record — fall through to the inherited core.version */
+    }
+  }
+  const inherited = await github.getFileContent(org, repo, CORE_VERSION_FILE, ref)
+  if (inherited) {
+    try {
+      const version = inherited.trim()
+      parseCoreVersion(version) // validate
+      return version
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+/**
+ * Guard for issue #328.
+ *
+ * `biffo deploy` dispatches some workflows (`deploy-global.yml`) from a FIXED
+ * branch (`GLOBAL_DISPATCH_REF`, i.e. `main`) regardless of the environment,
+ * while `biffo core upgrade` lands its PR on the instance's default branch
+ * (often `dev`). A template fix to such a workflow therefore reaches `dev` but
+ * is executed from `main`, so the OLD workflow keeps running — silently,
+ * because the upgrade PR was green and merged clean. This bit the #322
+ * terraform-hang validation: the fix was on `dev`, the deploy ran the unfixed
+ * copy from `main`, and it looked like the fix hadn't worked.
+ *
+ * The mismatch is mechanically detectable at dispatch time: compare the core
+ * version recorded on the fixed dispatch ref against the branch being deployed.
+ * If the dispatch ref is behind, an upgrade has not been promoted and this
+ * deploy will run stale code — say so, loudly, before dispatching.
+ *
+ * Never throws: a diagnostic must not abort or mask the deploy it annotates.
+ * Exported for testing.
+ */
+export async function warnIfDispatchRefStale(
+  github: GitHubAdapter,
+  org: string,
+  repo: string,
+  workflowFile: string,
+  dispatchRef: string,
+  deployBranch: string,
+): Promise<void> {
+  if (dispatchRef === deployBranch) return
+  let refVersion: string | null
+  let branchVersion: string | null
+  try {
+    ;[refVersion, branchVersion] = await Promise.all([
+      readRemoteCoreVersion(github, org, repo, dispatchRef),
+      readRemoteCoreVersion(github, org, repo, deployBranch),
+    ])
+  } catch {
+    return // can't compare — never block or mislead the deploy over a diagnostic
+  }
+  if (!refVersion || !branchVersion) return
+  if (compareCoreVersions(refVersion, branchVersion) >= 0) return
+
+  log.warn('')
+  log.warn(
+    `  ${workflowFile} is dispatched from '${dispatchRef}', but '${dispatchRef}' is on core ` +
+      `${refVersion} while '${deployBranch}' (deploying now) is on core ${branchVersion}.`,
+  )
+  log.warn(
+    `  A core upgrade landed on '${deployBranch}' that has not reached '${dispatchRef}'. This deploy`,
+  )
+  log.warn(
+    `  will run the OLDER ${workflowFile} from '${dispatchRef}', so template fixes to it will NOT`,
+  )
+  log.warn(
+    `  take effect. Promote '${deployBranch}' → '${dispatchRef}' (open a PR from '${deployBranch}'`,
+  )
+  log.warn(`  into '${dispatchRef}' and merge it), then re-run this deploy. (issue #328)`)
+  log.warn('')
+}
+
 export async function runDeploy(
   github: GitHubAdapter,
   aws: AwsAdapter,
@@ -311,8 +421,20 @@ export async function runDeploy(
         ? 'Requesting SSL certificate for external DNS...'
         : 'Deploying global infrastructure (DNS + SSL certificate)...'
     log.step(2, totalSteps, globalLabel)
+    // deploy-global runs from a FIXED branch (GLOBAL_DISPATCH_REF), not the
+    // environment's branch. If a core upgrade landed on the branch we are
+    // deploying but has not been promoted to that fixed branch, the dispatch
+    // below runs the STALE workflow — silently (issue #328). Warn first.
+    await warnIfDispatchRefStale(
+      github,
+      org,
+      repo,
+      'deploy-global.yml',
+      GLOBAL_DISPATCH_REF,
+      branch,
+    )
     const globalBaselineId = await github.getLatestWorkflowRunId(org, repo, 'deploy-global.yml')
-    await github.triggerWorkflow(org, repo, 'deploy-global.yml', {}, 'main')
+    await github.triggerWorkflow(org, repo, 'deploy-global.yml', {}, GLOBAL_DISPATCH_REF)
     if (dns.mode === 'external') {
       log.info('  DNS will not be changed automatically.')
       log.info('  The workflow summary will list ACM validation CNAMEs to add manually.')
@@ -327,7 +449,7 @@ export async function runDeploy(
       globalBaselineId,
       3_600_000,
       30_000,
-      'main',
+      GLOBAL_DISPATCH_REF,
     )
     if (globalResult.conclusion !== 'success') {
       log.error(`Global infrastructure deploy ${globalResult.conclusion ?? 'failed'}.`)

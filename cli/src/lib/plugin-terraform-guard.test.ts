@@ -117,6 +117,46 @@ describe('checkPluginTerraform', () => {
   })
 })
 
+describe('template-owned scope (#327)', () => {
+  // When a core-manifest.json is present, the guard must only assert over
+  // template-owned plugin locations. A third-party plugin the instance installed
+  // into user-owned services/<name>/ is not the template's to fix, so a
+  // template-shipped gate must never red an instance's CI on it (the #325 class).
+  function writeManifest(): void {
+    writeFileSync(
+      join(root, 'core-manifest.json'),
+      JSON.stringify({
+        version: 1,
+        templateOwned: ['services/_plugins/', 'services/_template/', '_skeletons/'],
+        userOwned: ['services/'],
+      }),
+    )
+  }
+
+  it('skips a user-owned third-party plugin, flags a template-owned one', () => {
+    writeManifest()
+    // Both declare a subscription and ship no terraform/ — the exact #194 defect.
+    writePlugin('services/stripe-sync', SUBSCRIBING) // user-owned (services/<name>/)
+    writePlugin('services/_plugins/orchestrator', SUBSCRIBING) // template-owned
+
+    const violations = checkPluginTerraform(root)
+
+    // Only the template-owned plugin is flagged; the third-party one is out of scope.
+    expect(violations.map((v) => v.manifest)).toEqual([
+      'services/_plugins/orchestrator/biffo.plugin.json',
+    ])
+  })
+
+  it('still flags a skeleton plugin (template-owned) with the defect', () => {
+    writeManifest()
+    writePlugin('_skeletons/plugin-template', SUBSCRIBING)
+
+    expect(checkPluginTerraform(root).map((v) => v.manifest)).toEqual([
+      '_skeletons/plugin-template/biffo.plugin.json',
+    ])
+  })
+})
+
 describe('the real repository', () => {
   it('has no plugin declaring subscriptions without terraform/', () => {
     // Guards the guard: this is the assertion that would have caught #194, run

@@ -15,6 +15,7 @@
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
+import { CORE_MANIFEST_FILE, isTemplateOwned, readCoreManifest } from './core-manifest.js'
 
 /** Directories never worth walking when looking for plugin manifests. */
 const SKIP_DIRS = new Set(['node_modules', '.git', '.worktrees', 'dist', '.venv', '__pycache__'])
@@ -82,11 +83,23 @@ function readSubscriptions(absManifestPath: string): string[] | null {
 /**
  * Check every plugin manifest under `root`. Returns one violation per manifest
  * that declares subscriptions but has no sibling `terraform/` directory.
+ *
+ * Scope (issue #327): this guard ships in the template-owned `cli/`, so `biffo
+ * core upgrade` distributes it to every instance. A third-party plugin installed
+ * into `services/<name>/` is user-owned by design (see core-manifest.json) — the
+ * template neither ships it nor can fix it — so hard-failing on it would red an
+ * instance's CI over a subject it cannot receive or repair (the #325 class).
+ * When a `core-manifest.json` is present at `root` (always true for a real
+ * repo/instance), manifests are therefore filtered to template-owned paths:
+ * `services/_plugins/`, `_skeletons/plugin-template/`, `services/_template/`.
+ * Fixture roots without a manifest (unit tests) are scanned unfiltered.
  */
 export function checkPluginTerraform(root: string): PluginTerraformViolation[] {
   const violations: PluginTerraformViolation[] = []
+  const coreManifest = existsSync(join(root, CORE_MANIFEST_FILE)) ? readCoreManifest(root) : null
 
   for (const manifest of findPluginManifests(root)) {
+    if (coreManifest && !isTemplateOwned(manifest, coreManifest)) continue
     const absManifest = join(root, manifest)
     const subscriptions = readSubscriptions(absManifest)
     if (subscriptions === null) continue

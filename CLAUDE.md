@@ -130,7 +130,7 @@ exactly how #259 and #315 shipped.
 1. **`tenant_id` on every table** — `TenantScopedModel` in `services/api/src/api/models/base.py` is the base class. Use it.
 2. **`require_tenant_context()` on every route** — FastAPI dependency in `services/api/src/api/dependencies.py`.
 3. **`BiffoEvent` base model for all events** — `services/api/src/api/events/base.py`. Never publish raw dicts to EventBridge.
-4. **No DB clients outside `services/api/`** — this is enforced by a Ruff plugin in CI. Adding `asyncpg` to `services/_template/` or any other service will fail the build.
+4. **No DB clients outside `services/api/`** — enforced in CI by a Ruff `flake8-tidy-imports` banned-api rule (`TID251`) configured in `ruff.toml`, which bans importing `psycopg2`/`psycopg`/`asyncpg`/`sqlalchemy` anywhere except `services/api/` (exempted via `per-file-ignores`). Adding `asyncpg` to `services/_plugins/`, a `packages/` SDK, or any other service fails the build. (Note: `ruff.toml` is the _active_ Ruff config — it shadows the `[tool.ruff]` section in `pyproject.toml`, whose richer strict select is currently dormant; see the header comment in `ruff.toml`.)
 5. **No force pushes to main** — branch protection is enforced. Use PRs.
 
 ## Technology

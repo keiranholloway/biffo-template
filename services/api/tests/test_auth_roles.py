@@ -63,7 +63,5 @@ async def test_roles_default_empty_when_claim_null(monkeypatch):
 def test_authenticated_user_defaults_to_no_roles():
     # Fail-closed default: a construction site that doesn't set roles (tests,
     # dependency overrides) gets an empty list, not an error.
-    caller = AuthenticatedUser(
-        sub="s", email="e@example.com", username="u", tenant_id="default"
-    )
+    caller = AuthenticatedUser(sub="s", email="e@example.com", username="u", tenant_id="default")
     assert caller.roles == []

@@ -82,7 +82,5 @@ async def record_run_result(
         error=body.error,
     )
     if run is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     return run

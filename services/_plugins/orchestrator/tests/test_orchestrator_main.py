@@ -14,9 +14,7 @@ class _FakeContext:
     aws_request_id = "test-request-id"
     function_name = "orchestrator-plugin"
     memory_limit_in_mb = 128
-    invoked_function_arn = (
-        "arn:aws:lambda:eu-west-1:123456789012:function:orchestrator-plugin"
-    )
+    invoked_function_arn = "arn:aws:lambda:eu-west-1:123456789012:function:orchestrator-plugin"
 
     def get_remaining_time_in_millis(self) -> int:
         return 30_000

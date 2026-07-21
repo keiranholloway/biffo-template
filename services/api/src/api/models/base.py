@@ -35,9 +35,7 @@ class TenantScopedModel(Base):
     # hand-written because they carry auth-linkage semantics (ADR-0004 §1).
     __crud_permissions__: ClassVar[dict[str, Any]] = {}
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     tenant_id: Mapped[str] = mapped_column(
         String(64), nullable=False, index=True, default="default"
     )

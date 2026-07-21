@@ -18,15 +18,11 @@ _CALLER = AuthenticatedUser(
 
 class TestListAvailablePlugins:
     async def test_no_plugins_installed_returns_empty_list(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            "api.routers.admin.plugins.discover_plugin_manifests", lambda: []
-        )
+        monkeypatch.setattr("api.routers.admin.plugins.discover_plugin_manifests", lambda: [])
         result = await list_available_plugins(_caller=_CALLER)
         assert result == []
 
-    async def test_returns_installed_plugin_with_table_schema(
-        self, tmp_path, monkeypatch
-    ):
+    async def test_returns_installed_plugin_with_table_schema(self, tmp_path, monkeypatch):
         manifest = {
             "name": "rbac",
             "version": "1.0.0",

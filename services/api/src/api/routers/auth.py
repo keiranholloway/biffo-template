@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
@@ -39,7 +39,7 @@ async def get_current_user(
             email=caller.email,
             username=caller.username,
             tenant_id=caller.tenant_id,
-            last_login_at=datetime.now(tz=timezone.utc),
+            last_login_at=datetime.now(tz=UTC),
         )
         db.add(user)
         # id/is_active are populated by ORM-level defaults and created_at/updated_at
@@ -65,6 +65,6 @@ async def get_current_user(
             tenant_id=user.tenant_id,
         )
     else:
-        user.last_login_at = datetime.now(tz=timezone.utc)
+        user.last_login_at = datetime.now(tz=UTC)
 
     return user

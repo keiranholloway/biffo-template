@@ -14,9 +14,7 @@ OPENAPI = {
                 "requestBody": {
                     "content": {
                         "application/json": {
-                            "schema": {
-                                "$ref": "#/components/schemas/DemoRequestRequest"
-                            }
+                            "schema": {"$ref": "#/components/schemas/DemoRequestRequest"}
                         }
                     }
                 },
@@ -25,9 +23,7 @@ OPENAPI = {
                         "description": "Created",
                         "content": {
                             "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/DemoRequestResponse"
-                                }
+                                "schema": {"$ref": "#/components/schemas/DemoRequestResponse"}
                             }
                         },
                     },
@@ -125,10 +121,7 @@ class TestBuildEndpointDetail:
 
     def test_unknown_route_returns_none(self):
         assert build_endpoint_detail(OPENAPI, "GET", "/api/v1/nope") is None
-        assert (
-            build_endpoint_detail(OPENAPI, "DELETE", "/api/v1/public/demo-requests")
-            is None
-        )
+        assert build_endpoint_detail(OPENAPI, "DELETE", "/api/v1/public/demo-requests") is None
 
 
 class TestCollectOpenapiEndpoints:
@@ -147,9 +140,7 @@ class TestCollectOpenapiEndpoints:
         by_key = {(r.method, r.path): r for r in rows}
 
         # Both routes present, sorted by path then method.
-        assert [(r.method, r.path) for r in rows] == sorted(
-            (r.method, r.path) for r in rows
-        )
+        assert [(r.method, r.path) for r in rows] == sorted((r.method, r.path) for r in rows)
 
         widget = by_key[("GET", "/api/v1/data/widgets/{id}")]
         assert widget.source == "core"

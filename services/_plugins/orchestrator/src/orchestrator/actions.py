@@ -80,9 +80,7 @@ def _require(config: dict[str, Any], action: str, key: str) -> Any:
     try:
         return config[key]
     except KeyError as exc:
-        raise ActionError(
-            f"{action} action_config missing required key: {exc}"
-        ) from exc
+        raise ActionError(f"{action} action_config missing required key: {exc}") from exc
 
 
 def send_email(
@@ -131,9 +129,7 @@ def send_google_chat(
 
     response = http_client.post(url, json={"text": text})
     if response.status_code >= 400:
-        raise ActionError(
-            f"Google Chat webhook failed: {response.status_code} {response.text}"
-        )
+        raise ActionError(f"Google Chat webhook failed: {response.status_code} {response.text}")
     return {"status_code": response.status_code}
 
 
@@ -152,9 +148,7 @@ def _template_params(config: dict[str, Any], payload: dict[str, Any]) -> list[st
     return [value for value in rendered if value]
 
 
-def _whatsapp_body(
-    config: dict[str, Any], payload: dict[str, Any], to: str
-) -> dict[str, Any]:
+def _whatsapp_body(config: dict[str, Any], payload: dict[str, Any], to: str) -> dict[str, Any]:
     """Build the Cloud API message body for the configured ``message_type``."""
     message_type = config.get("message_type") or "text"
 
@@ -180,9 +174,7 @@ def _whatsapp_body(
             template["components"] = [
                 {
                     "type": "body",
-                    "parameters": [
-                        {"type": "text", "text": value} for value in parameters
-                    ],
+                    "parameters": [{"type": "text", "text": value} for value in parameters],
                 }
             ]
         return {
@@ -230,19 +222,14 @@ def send_whatsapp(
     to = _require(config, "whatsapp", "to")
     body = _whatsapp_body(config, payload, to)
 
-    url = (
-        f"https://graph.facebook.com/{whatsapp.api_version}"
-        f"/{whatsapp.phone_number_id}/messages"
-    )
+    url = f"https://graph.facebook.com/{whatsapp.api_version}/{whatsapp.phone_number_id}/messages"
     response = http_client.post(
         url,
         json=body,
         headers={"Authorization": f"Bearer {whatsapp.access_token}"},
     )
     if response.status_code >= 400:
-        raise ActionError(
-            f"WhatsApp send failed: {response.status_code} {response.text}"
-        )
+        raise ActionError(f"WhatsApp send failed: {response.status_code} {response.text}")
     data = response.json()
     messages = data.get("messages") if isinstance(data, dict) else None
     message_id = messages[0].get("id") if messages else None

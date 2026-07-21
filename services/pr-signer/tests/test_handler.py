@@ -69,9 +69,7 @@ class FakeContents:
     def create_branch(self, branch: str, from_ref: str) -> None:
         pass
 
-    def put_file(
-        self, *, path: str, content: str, message: str, branch: str, sha: str
-    ) -> None:
+    def put_file(self, *, path: str, content: str, message: str, branch: str, sha: str) -> None:
         pass
 
     def open_pull_request(self, *, head: str, base: str, title: str, body: str) -> str:

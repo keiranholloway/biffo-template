@@ -47,9 +47,7 @@ class SignedCoreClient(BiffoAPIClient):
         timeout: float = 30.0,
     ) -> None:
         super().__init__(base_url=base_url, token=None, timeout=timeout, client=client)
-        self._region = (
-            region if region is not None else os.environ.get("AWS_REGION", "")
-        )
+        self._region = region if region is not None else os.environ.get("AWS_REGION", "")
         self._service = service
         self._credentials = credentials
 
@@ -69,9 +67,7 @@ class SignedCoreClient(BiffoAPIClient):
 
         headers = {"Content-Type": "application/json"} if body is not None else {}
         aws_request = AWSRequest(method=method, url=url, data=body, headers=headers)
-        SigV4Auth(self._get_credentials(), self._service, self._region).add_auth(
-            aws_request
-        )
+        SigV4Auth(self._get_credentials(), self._service, self._region).add_auth(aws_request)
         return dict(aws_request.headers)
 
     async def _send(
@@ -87,9 +83,7 @@ class SignedCoreClient(BiffoAPIClient):
             url = f"{url}?{urlencode(params)}"
         body = json.dumps(json_body).encode() if json_body is not None else None
         headers = self._sign(method, url, body)
-        response = await self._client.request(
-            method, url, headers=headers, content=body
-        )
+        response = await self._client.request(method, url, headers=headers, content=body)
         self._raise_if_error(response)
         return self._parse_json(response)
 
@@ -131,6 +125,4 @@ def create_core_client(**kwargs: Any) -> BiffoAPIClient:
         kwargs.pop("credentials", None)
         kwargs.pop("service", None)
         return BiffoAPIClient(**kwargs)
-    raise ValueError(
-        f"Invalid {_AUTH_MODE_ENV}={mode!r}: expected 'sigv4' (default) or 'none'"
-    )
+    raise ValueError(f"Invalid {_AUTH_MODE_ENV}={mode!r}: expected 'sigv4' (default) or 'none'")

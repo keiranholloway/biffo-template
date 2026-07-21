@@ -30,7 +30,7 @@ def set_identity_provider(provider: IdentityProvider) -> None:
     _provider = provider
 
 
-async def identity_session() -> AsyncGenerator[AsyncSession, None]:
+async def identity_session() -> AsyncGenerator[AsyncSession]:
     """FastAPI dependency yielding the session identity resolution runs on.
 
     A fixed dependency that dispatches to the provider at request time, rather

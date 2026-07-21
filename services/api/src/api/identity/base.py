@@ -39,7 +39,7 @@ class ResolvedIdentity:
 class IdentityProvider(Protocol):
     """How the Core reaches a deployment's identity records."""
 
-    def session(self) -> AsyncGenerator[AsyncSession, None]:
+    def session(self) -> AsyncGenerator[AsyncSession]:
         """The database session identity resolution runs on.
 
         Part of the seam because it is not always `get_db`. A provider backed by
@@ -75,9 +75,7 @@ class IdentityProvider(Protocol):
         """
         ...
 
-    async def resolve_permissions(
-        self, db: AsyncSession, user_id: str | None
-    ) -> frozenset[str]:
+    async def resolve_permissions(self, db: AsyncSession, user_id: str | None) -> frozenset[str]:
         """The caller's effective permission codes.
 
         For deployments that grant permissions through database-held roles. The

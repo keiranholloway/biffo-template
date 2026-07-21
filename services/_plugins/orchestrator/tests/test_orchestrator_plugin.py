@@ -6,7 +6,6 @@ from __future__ import annotations
 from typing import Any
 
 from biffo_plugin_sdk import BiffoEvent
-
 from orchestrator.actions import WhatsAppSettings
 from orchestrator.plugin import OrchestratorPlugin
 from orchestrator_fakes import FakeCore, FakeHttp, FakeSes
@@ -16,8 +15,7 @@ def _event(payload: dict[str, Any] | None = None) -> BiffoEvent:
     return BiffoEvent(
         source="biffo.core",
         detail_type="demo.requested",
-        payload=payload
-        or {"demo_request_id": "d1", "company": "Acme", "email": "lead@acme.com"},
+        payload=payload or {"demo_request_id": "d1", "company": "Acme", "email": "lead@acme.com"},
     )
 
 
@@ -69,9 +67,7 @@ async def test_process_event_dispatches_google_chat_via_http():
     }
     core = FakeCore([run])
     http = FakeHttp(status_code=200)
-    plugin = OrchestratorPlugin(
-        api=core.client(), ses_client=FakeSes(), http_client=http
-    )
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes(), http_client=http)
 
     await plugin.process_event(_event())
 
@@ -132,9 +128,7 @@ async def test_unknown_action_type_records_failure():
 
 async def test_action_failure_records_failure():
     # action_config missing 'to' -> ActionError inside send_email.
-    core = FakeCore(
-        [_email_run(created=True, action_config={"from": "no-reply@example.com"})]
-    )
+    core = FakeCore([_email_run(created=True, action_config={"from": "no-reply@example.com"})])
     ses = FakeSes()
     plugin = OrchestratorPlugin(api=core.client(), ses_client=ses)
 

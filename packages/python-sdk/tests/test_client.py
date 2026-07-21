@@ -10,7 +10,6 @@ from typing import Any
 
 import httpx
 import pytest
-
 from biffo_plugin_sdk import BiffoAPIClient, BiffoAPIError
 
 
@@ -35,9 +34,7 @@ class TestInit:
 
         assert client.base_url == "https://core.biffo.dev"
 
-    def test_ignores_biffo_jwt_token_env_var(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_ignores_biffo_jwt_token_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``BIFFO_JWT_TOKEN`` is no longer read — nothing ever issued it.
 
         The env fallback made the default client look authenticated while
@@ -52,9 +49,7 @@ class TestInit:
         assert client.token is None
         assert client._auth_headers() == {}
 
-    def test_missing_env_vars_handled_gracefully(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_missing_env_vars_handled_gracefully(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("BIFFO_CORE_API_URL", raising=False)
 
         client = BiffoAPIClient()
@@ -65,9 +60,7 @@ class TestInit:
     def test_explicit_args_override_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("BIFFO_CORE_API_URL", "https://core.biffo.dev")
 
-        client = BiffoAPIClient(
-            base_url="https://override.example.com", token="override-token"
-        )
+        client = BiffoAPIClient(base_url="https://override.example.com", token="override-token")
 
         assert client.base_url == "https://override.example.com"
         assert client.token == "override-token"

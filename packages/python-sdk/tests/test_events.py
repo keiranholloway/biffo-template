@@ -5,10 +5,9 @@ from __future__ import annotations
 import json
 
 import pytest
-from pydantic import ValidationError
-
 from biffo_plugin_sdk import BiffoEvent, EventSubscriber, create_event_handler
 from biffo_plugin_sdk.events import WILDCARD
+from pydantic import ValidationError
 
 
 def make_raw_event(
@@ -317,5 +316,5 @@ class TestCreateEventHandler:
         raw_event = make_raw_event()
         del raw_event["detail-type"]
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 — asserting any failure is intentional here
             create_event_handler(raw_event)

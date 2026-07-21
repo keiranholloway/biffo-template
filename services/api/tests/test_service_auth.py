@@ -7,18 +7,16 @@ hand-built Request scope standing in for what API Gateway + Mangum deliver.
 """
 
 import pytest
-from fastapi import HTTPException
-from starlette.requests import Request
-
 from api.config import settings
 from api.middleware.service_auth import (
     ServicePrincipal,
     require_service_principal,
 )
+from fastapi import HTTPException
+from starlette.requests import Request
 
 ORCHESTRATOR_ARN = (
-    "arn:aws:sts::123456789012:assumed-role/"
-    "acme-dev-plugin-orchestrator-role/orchestrator-session"
+    "arn:aws:sts::123456789012:assumed-role/acme-dev-plugin-orchestrator-role/orchestrator-session"
 )
 ALLOWLIST = ["arn:aws:sts::123456789012:assumed-role/acme-dev-plugin-*/*"]
 

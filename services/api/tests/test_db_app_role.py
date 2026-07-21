@@ -19,7 +19,6 @@ from __future__ import annotations
 import re
 
 import pytest
-
 from src.api import db_app_role
 from src.api.db_app_role import (
     InvalidIdentifierError,
@@ -169,9 +168,7 @@ class TestIdentifierValidation:
         "bad",
         ['app"; DROP DATABASE x; --', "Biffo_App", "app role", "", "1app", "a" * 64],
     )
-    def test_rejects_anything_that_is_not_a_plain_lowercase_identifier(
-        self, bad: str
-    ) -> None:
+    def test_rejects_anything_that_is_not_a_plain_lowercase_identifier(self, bad: str) -> None:
         with pytest.raises(InvalidIdentifierError):
             build_grant_statements(bad, ["public"])
 
@@ -195,18 +192,12 @@ class TestSchemaSelection:
         # The system list is a bind parameter, not interpolated.
         assert "$1" in DISCOVER_SCHEMAS_SQL
 
-    def test_empty_setting_means_auto_discover(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_empty_setting_means_auto_discover(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(db_app_role.settings, "app_role_schemas", "")
         assert db_app_role.configured_schemas() is None
 
-    def test_setting_pins_an_explicit_list(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            db_app_role.settings, "app_role_schemas", "public, tabsii ,"
-        )
+    def test_setting_pins_an_explicit_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(db_app_role.settings, "app_role_schemas", "public, tabsii ,")
         assert db_app_role.configured_schemas() == ["public", "tabsii"]
 
 
@@ -224,17 +215,13 @@ class TestPostgresOnly:
         assert db_app_role.is_postgres(url) is expected
 
     @pytest.mark.asyncio
-    async def test_bootstrap_is_a_no_op_on_sqlite(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_bootstrap_is_a_no_op_on_sqlite(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from src.api import database
 
         monkeypatch.setattr(
             database.resolve_master_database_url, "__wrapped__", lambda: "sqlite://"
         )
-        monkeypatch.setattr(
-            database, "resolve_master_database_url", lambda: "sqlite://"
-        )
+        monkeypatch.setattr(database, "resolve_master_database_url", lambda: "sqlite://")
         monkeypatch.setattr(database, "app_role_credentials", lambda: None)
 
         result = await db_app_role.bootstrap_app_role_async()
@@ -258,9 +245,7 @@ class TestUrlResolution:
 
         monkeypatch.setattr(database.settings, "db_secret_arn", "")
         monkeypatch.setattr(database.settings, "app_db_secret_arn", "")
-        monkeypatch.setattr(
-            database.settings, "database_url", "postgresql+asyncpg://master:pw@h/d"
-        )
+        monkeypatch.setattr(database.settings, "database_url", "postgresql+asyncpg://master:pw@h/d")
         monkeypatch.setattr(
             database.settings,
             "app_database_url",
@@ -268,12 +253,8 @@ class TestUrlResolution:
         )
         self._clear_caches()
 
-        assert database.resolve_app_database_url() == (
-            "postgresql+asyncpg://biffo_app:apw@h/d"
-        )
-        assert database.resolve_master_database_url() == (
-            "postgresql+asyncpg://master:pw@h/d"
-        )
+        assert database.resolve_app_database_url() == ("postgresql+asyncpg://biffo_app:apw@h/d")
+        assert database.resolve_master_database_url() == ("postgresql+asyncpg://master:pw@h/d")
         self._clear_caches()
 
     def test_falls_back_to_master_when_no_app_credential_is_provisioned(
@@ -287,14 +268,10 @@ class TestUrlResolution:
         monkeypatch.setattr(database.settings, "db_secret_arn", "")
         monkeypatch.setattr(database.settings, "app_db_secret_arn", "")
         monkeypatch.setattr(database.settings, "app_database_url", "")
-        monkeypatch.setattr(
-            database.settings, "database_url", "postgresql+asyncpg://master:pw@h/d"
-        )
+        monkeypatch.setattr(database.settings, "database_url", "postgresql+asyncpg://master:pw@h/d")
         self._clear_caches()
 
-        assert database.resolve_app_database_url() == (
-            database.resolve_master_database_url()
-        )
+        assert database.resolve_app_database_url() == (database.resolve_master_database_url())
         assert database.app_role_credentials() is None
         self._clear_caches()
 

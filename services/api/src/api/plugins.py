@@ -85,11 +85,7 @@ def discover_plugin_manifests(
     # itself, so a manifest sitting directly in it is not a plugin and is
     # excluded — only its children are scanned.
     manifest_paths = sorted(
-        [
-            p
-            for p in root.glob("*/biffo.plugin.json")
-            if p.parent.name != FIRST_PARTY_PLUGINS_DIR
-        ]
+        [p for p in root.glob("*/biffo.plugin.json") if p.parent.name != FIRST_PARTY_PLUGINS_DIR]
         + list(root.glob(f"{FIRST_PARTY_PLUGINS_DIR}/*/biffo.plugin.json"))
     )
 
@@ -98,9 +94,7 @@ def discover_plugin_manifests(
         try:
             manifests.append(json.loads(manifest_path.read_text(encoding="utf-8")))
         except (OSError, json.JSONDecodeError) as exc:
-            logger.warning(
-                f"Skipping unreadable plugin manifest {manifest_path}: {exc}"
-            )
+            logger.warning(f"Skipping unreadable plugin manifest {manifest_path}: {exc}")
     return manifests
 
 

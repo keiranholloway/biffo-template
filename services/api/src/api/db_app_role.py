@@ -118,7 +118,7 @@ def _quote_ident(name: str, kind: str) -> str:
 # immediately afterwards. This keeps the password out of the SQL statement text
 # entirely, which matters because `log_statement`/`log_min_duration_statement`
 # are enabled on this parameter group (modules/cloud/aws/database/main.tf).
-_PASSWORD_GUC = "biffo.app_role_password"
+_PASSWORD_GUC = "biffo.app_role_password"  # noqa: S105 — GUC parameter name, not a secret
 _ROLE_GUC = "biffo.app_role_name"
 
 SET_PASSWORD_SQL = f"SELECT set_config('{_PASSWORD_GUC}', $1, false)"
@@ -200,8 +200,7 @@ def build_grant_statements(role: str, schemas: list[str]) -> list[str]:
         quoted_schema = _quote_ident(schema, "schema name")
         statements += [
             f"GRANT USAGE ON SCHEMA {quoted_schema} TO {quoted_role}",
-            f"GRANT {TABLE_PRIVILEGES} ON ALL TABLES IN SCHEMA {quoted_schema} "
-            f"TO {quoted_role}",
+            f"GRANT {TABLE_PRIVILEGES} ON ALL TABLES IN SCHEMA {quoted_schema} TO {quoted_role}",
             f"GRANT {SEQUENCE_PRIVILEGES} ON ALL SEQUENCES IN SCHEMA "
             f"{quoted_schema} TO {quoted_role}",
             f"ALTER DEFAULT PRIVILEGES IN SCHEMA {quoted_schema} "
@@ -327,9 +326,7 @@ async def bootstrap_app_role_async() -> dict:
 
             schemas = configured_schemas()
             if schemas is None:
-                rows = await asyncpg_conn.fetch(
-                    DISCOVER_SCHEMAS_SQL, list(SYSTEM_SCHEMAS)
-                )
+                rows = await asyncpg_conn.fetch(DISCOVER_SCHEMAS_SQL, list(SYSTEM_SCHEMAS))
                 schemas = [row["nspname"] for row in rows]
 
             # One transaction: either the role exists with the full grant set,

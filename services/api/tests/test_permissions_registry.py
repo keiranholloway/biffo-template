@@ -1,8 +1,7 @@
 """ADR-0004: build-time permissions registry (services/api/src/api/permissions.py)."""
 
-import pytest
-
 import api.permissions as permissions_module
+import pytest
 from api.models.plugin_table import PermissionRule, TablePermissions
 from api.permissions import (
     build_permissions_registry,
@@ -71,7 +70,7 @@ class TestBuildFromPlugins:
             ],
         )
         assert build_permissions_registry([bad], core_models=[]) == {}
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 — asserting strict mode raises at all
             build_permissions_registry([bad], core_models=[], strict=True)
 
 
@@ -90,7 +89,7 @@ class TestBuildFromCoreModels:
         model = _fake_core_model("audit_log", {"delet": {"allowed": True}})  # typo'd op
 
         assert build_permissions_registry([], core_models=[model]) == {}
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 — asserting strict mode raises at all
             build_permissions_registry([], core_models=[model], strict=True)
 
     def test_default_core_walk_excludes_models_without_permissions(self):
@@ -155,10 +154,7 @@ class TestLookup:
         assert rule.allowed is False
 
     def test_unknown_operation_returns_none(self):
-        assert (
-            lookup_permission("widgets", "frobnicate", registry=self._registry())
-            is None
-        )
+        assert lookup_permission("widgets", "frobnicate", registry=self._registry()) is None
 
 
 class TestGetRegistryCaching:

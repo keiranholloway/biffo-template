@@ -28,7 +28,6 @@ from ..events.registry import (
 )
 from ..middleware.auth import AuthenticatedUser
 from ..models.orchestration import WorkflowDefinition
-from ..permissions import get_permissions_registry
 from ..orchestration import (
     create_definition,
     delete_definition,
@@ -39,6 +38,7 @@ from ..orchestration import (
     set_definition_enabled,
     update_definition,
 )
+from ..permissions import get_permissions_registry
 from ..schemas.orchestration import (
     WORKFLOW_ACTIONS,
     CreateWorkflowDefinitionRequest,
@@ -134,9 +134,7 @@ async def _require_known_trigger(
     db: AsyncSession, *, tenant_id: str, source: str, detail_type: str
 ) -> None:
     """422 unless the trigger is a declared or already-observed event."""
-    if not await is_known_trigger(
-        db, tenant_id=tenant_id, source=source, detail_type=detail_type
-    ):
+    if not await is_known_trigger(db, tenant_id=tenant_id, source=source, detail_type=detail_type):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Unknown trigger: {source}/{detail_type}",
@@ -152,9 +150,7 @@ async def list_workflows(
     return [WorkflowDefinitionResponse.model_validate(d) for d in definitions]
 
 
-@router.post(
-    "", response_model=WorkflowDefinitionResponse, status_code=status.HTTP_201_CREATED
-)
+@router.post("", response_model=WorkflowDefinitionResponse, status_code=status.HTTP_201_CREATED)
 async def create_workflow(
     body: CreateWorkflowDefinitionRequest,
     caller: AuthenticatedUser = Depends(require_admin),
@@ -192,9 +188,7 @@ async def get_workflow(
     caller: AuthenticatedUser = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> WorkflowDefinitionResponse:
-    definition = await get_definition(
-        db, tenant_id=caller.tenant_id, definition_id=definition_id
-    )
+    definition = await get_definition(db, tenant_id=caller.tenant_id, definition_id=definition_id)
     if definition is None:
         raise _not_found()
     return WorkflowDefinitionResponse.model_validate(definition)
@@ -267,9 +261,7 @@ async def delete_workflow(
     caller: AuthenticatedUser = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    deleted = await delete_definition(
-        db, tenant_id=caller.tenant_id, definition_id=definition_id
-    )
+    deleted = await delete_definition(db, tenant_id=caller.tenant_id, definition_id=definition_id)
     if deleted is None:
         raise _not_found()
     emit_event(
@@ -281,6 +273,4 @@ async def delete_workflow(
 
 
 def _not_found() -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found"
-    )
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")

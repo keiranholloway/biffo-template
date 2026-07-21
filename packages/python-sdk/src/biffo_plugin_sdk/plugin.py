@@ -23,50 +23,35 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .client import BiffoAPIClient
-from .signed_client import create_core_client
 from .events import EventHandler, EventSubscriber
+from .signed_client import create_core_client
 
 
 class ColumnDefinition(BaseModel):
     """Defines a single column on a plugin-created table."""
 
     name: str = Field(description="Column name.")
-    type: str = Field(
-        description="SQLAlchemy column type string, e.g. 'String(255)' or 'Integer'."
-    )
-    primary_key: bool = Field(
-        default=False, description="Whether this is the primary key."
-    )
-    nullable: bool = Field(
-        default=False, description="Whether NULL values are allowed."
-    )
-    index: bool = Field(
-        default=False, description="Create a database index on this column."
-    )
-    default: str | None = Field(
-        default=None, description="SQL default value expression."
-    )
-    description: str = Field(
-        default="", description="Human-readable column description."
-    )
+    type: str = Field(description="SQLAlchemy column type string, e.g. 'String(255)' or 'Integer'.")
+    primary_key: bool = Field(default=False, description="Whether this is the primary key.")
+    nullable: bool = Field(default=False, description="Whether NULL values are allowed.")
+    index: bool = Field(default=False, description="Create a database index on this column.")
+    default: str | None = Field(default=None, description="SQL default value expression.")
+    description: str = Field(default="", description="Human-readable column description.")
 
 
 class IndexDefinition(BaseModel):
     """Defines a database index on a plugin-created table."""
 
     name: str = Field(description="Index name in the database.")
-    columns: list[str] = Field(
-        min_length=1, description="Column names included in the index."
-    )
-    unique: bool = Field(
-        default=False, description="Whether the index enforces uniqueness."
-    )
+    columns: list[str] = Field(min_length=1, description="Column names included in the index.")
+    unique: bool = Field(default=False, description="Whether the index enforces uniqueness.")
 
 
 # The five generic CRUD operations the permission model authorises, in a
@@ -173,7 +158,7 @@ class TableDefinition(BaseModel):
         return data
 
     @model_validator(mode="after")
-    def _validate_uniqueness(self) -> "TableDefinition":
+    def _validate_uniqueness(self) -> TableDefinition:
         """Validate no duplicate column or index names, and that every
         index only references columns that actually exist on the table.
         """
@@ -239,9 +224,7 @@ class RouteDef(BaseModel):
         "(/api/v1/plugins/<name>), e.g. '/widgets' or '/widgets/{id}'. "
         "Must start with '/'."
     )
-    table: str = Field(
-        description="Name of a table declared in this manifest's `tables`."
-    )
+    table: str = Field(description="Name of a table declared in this manifest's `tables`.")
     operation: Literal["list", "read", "create", "update", "delete"] = Field(
         description="Generic CRUD operation the Core API synthesizes for "
         "this route against `table`."
@@ -249,7 +232,7 @@ class RouteDef(BaseModel):
     description: str = ""
 
     @model_validator(mode="after")
-    def _validate_method_and_path(self) -> "RouteDef":
+    def _validate_method_and_path(self) -> RouteDef:
         if not self.path.startswith("/"):
             raise ValueError(f"path must start with '/': {self.path!r}")
 
@@ -292,7 +275,7 @@ class PluginManifest(BaseModel):
     required_core_version: str = ">=0.0.0"
 
     @model_validator(mode="after")
-    def _validate_routes_reference_declared_tables(self) -> "PluginManifest":
+    def _validate_routes_reference_declared_tables(self) -> PluginManifest:
         """A route can only expose a table this same manifest declares — it
         can't reference another plugin's table, and can't be declared
         without the table it serves."""
@@ -384,9 +367,7 @@ class BiffoPluginBase(ABC):
     what the CLI already generates.
     """
 
-    def __init__(
-        self, manifest: PluginManifest, api: BiffoAPIClient | None = None
-    ) -> None:
+    def __init__(self, manifest: PluginManifest, api: BiffoAPIClient | None = None) -> None:
         self.manifest = manifest
         self.api = api if api is not None else create_core_client()
         self.events = EventSubscriber()

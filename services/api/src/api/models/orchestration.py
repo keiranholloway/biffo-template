@@ -57,9 +57,7 @@ class WorkflowDefinition(TenantScopedModel):
     # a later increment; the wedge matches on (source, detail_type) only.
     trigger_filter: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     action_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    action_config: Mapped[dict[str, Any]] = mapped_column(
-        JSON, nullable=False, default=dict
-    )
+    action_config: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
@@ -75,9 +73,7 @@ class TriggerCatalog(TenantScopedModel):
 
     __tablename__ = "orchestration_trigger_catalog"
     __table_args__ = (
-        UniqueConstraint(
-            "tenant_id", "source", "detail_type", name="uq_orch_trigger_catalog"
-        ),
+        UniqueConstraint("tenant_id", "source", "detail_type", name="uq_orch_trigger_catalog"),
     )
 
     source: Mapped[str] = mapped_column(String(128), nullable=False)

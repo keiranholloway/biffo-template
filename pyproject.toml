@@ -5,31 +5,76 @@ members = ["services/*", "services/_plugins/*", "packages/python-sdk"]
 # are claimed by `services/_plugins/*` instead.
 exclude = ["services/_plugins"]
 
-# NOTE (issue #327): this [tool.ruff] section is currently DORMANT. Ruff resolves
-# `ruff.toml` ahead of `pyproject.toml` in the same directory, and a `ruff.toml`
-# exists at the repo root, so THAT file — not this section — is the config
-# `ruff check` actually uses. The richer select below (I, N, W, B, S, UP, ANN)
-# has therefore never been enforced; CI has run Ruff's default E/F rules only.
-# Consolidating the two configs and activating the intended strict ruleset (and
-# fixing the violations it surfaces) is tracked in issue #345; the security-critical
-# TID251 banned-api rule (ADR-0002 / invariant 4) is wired into the ACTIVE
-# ruff.toml so it takes effect now regardless.
+# ============================================================================
+# Ruff — SINGLE authoritative config (issue #345).
+#
+# This [tool.ruff] section is now the ONE source of truth for Ruff. The repo
+# root's comment-only `ruff.toml` stub — which used to shadow this section, since
+# Ruff resolves `ruff.toml` ahead of `pyproject.toml` in the same directory — has
+# been removed. `ruff check` / `ruff format` now honour exactly what is below.
+#
+# Before #345 the strict select here was DORMANT: CI ran Ruff's default E/F only.
+# The security-critical TID251 banned-api rule (previously carried by ruff.toml,
+# #327) is merged in below so ADR-0002 / invariant 4 stays enforced.
+# ============================================================================
 [tool.ruff]
 target-version = "py313"
 line-length = 100
-exclude = [".worktrees", "services/_template", "migrations"]
+# `extend-exclude` (not `exclude`) keeps Ruff's built-in excludes (.venv,
+# node_modules, .git, …) and adds template-scoped paths: `_skeletons/` is
+# standalone-repo scaffold linted by its own CI once copied out (matching
+# [tool.pyright] below); `db/` is user-owned; `services/_template` is a
+# placeholder stub; `migrations` are generated.
+extend-exclude = [".worktrees", "services/_template", "_skeletons", "db", "migrations"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "B", "S", "UP", "ANN"]
+# ANN (flake8-annotations) is deliberately NOT selected: activating it surfaces
+# hundreds of missing-annotation violations across the tree that cannot be
+# auto-fixed, which would balloon this consolidation PR unboundedly. Adding it is
+# left as a tracked follow-up (see issue #345). Everything else from the intended
+# strict set is active.
+select = ["E", "F", "I", "N", "W", "B", "S", "UP", "TID251"]
 ignore = [
-  "S101",   # allow assert in tests
-  "ANN101", # missing type for self
-  "ANN102", # missing type for cls
+  "S101", # allow assert in tests
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection defaults (`x = Depends(...)`, `Query(...)`, etc.)
+# are the framework's idiomatic call-in-default pattern, not the B008 mutable-
+# default bug. Treat them as immutable so B008 stays useful for real cases.
+extend-immutable-calls = [
+  "fastapi.Depends",
+  "fastapi.Query",
+  "fastapi.Path",
+  "fastapi.Body",
+  "fastapi.Header",
+  "fastapi.Cookie",
+  "fastapi.Form",
+  "fastapi.File",
+  "fastapi.Security",
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "ANN"]
-"migrations/**/*.py" = ["ANN"]
+# Tests legitimately use fake credentials/tokens as fixtures — the hardcoded-
+# password bandit checks (S105/S106/S107) are pure false positives there.
+# NOTE: the glob is `**/tests/**` (not `tests/**`): Ruff anchors slash-containing
+# per-file patterns at the project root, so `tests/**` would match only a
+# repo-root tests/ dir, never the nested `services/*/tests/` and
+# `packages/*/tests/` dirs where these fixtures actually live.
+"**/tests/**/*.py" = ["S101", "S105", "S106", "S107"]
+# services/api/ IS the data-access layer — the one place DB clients are allowed
+# (ADR-0002 / invariant 4). Everywhere else TID251 bans them.
+"services/api/**/*.py" = ["TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# No DB client outside services/api/ (ADR-0002 / CLAUDE.md invariant 4). All
+# other services and packages call the Core API over HTTP. TID251 is the
+# specific banned-api rule; the whole TID family is not selected (TID252 would
+# ban every relative import).
+"psycopg2".msg = "No DB client outside services/api/ (ADR-0002). Call the Core API over HTTP."
+"psycopg".msg = "No DB client outside services/api/ (ADR-0002). Call the Core API over HTTP."
+"asyncpg".msg = "No DB client outside services/api/ (ADR-0002). Call the Core API over HTTP."
+"sqlalchemy".msg = "No DB client outside services/api/ (ADR-0002). Call the Core API over HTTP."
 
 [tool.ruff.format]
 quote-style = "double"

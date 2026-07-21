@@ -23,9 +23,9 @@ from __future__ import annotations
 
 import base64
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable
 
 import httpx
 import jwt
@@ -177,9 +177,7 @@ class GitHubAppContents:
 
     def get_file(self, path: str, ref: str) -> GitFile:
         api_path = self._repo_path(f"/contents/{path}")
-        response = self._client.get(
-            api_path, params={"ref": ref}, headers=self._headers()
-        )
+        response = self._client.get(api_path, params={"ref": ref}, headers=self._headers())
         self._raise_for_status("GET", api_path, response)
         data = response.json()
         content = base64.b64decode(data["content"]).decode("utf-8")
@@ -199,9 +197,7 @@ class GitHubAppContents:
         )
         self._raise_for_status("POST", refs_path, create_response)
 
-    def put_file(
-        self, *, path: str, content: str, message: str, branch: str, sha: str
-    ) -> None:
+    def put_file(self, *, path: str, content: str, message: str, branch: str, sha: str) -> None:
         api_path = self._repo_path(f"/contents/{path}")
         response = self._client.put(
             api_path,

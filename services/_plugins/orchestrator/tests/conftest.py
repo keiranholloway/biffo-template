@@ -1,5 +1,6 @@
-"""Configure pytest to find the orchestrator package from src/ (this workspace member has no [build-system],
-so it's a uv "virtual" package, not installed into the shared venv)."""
+"""Configure pytest to find the orchestrator package from src/ (this workspace
+member has no [build-system], so it's a uv "virtual" package, not installed into
+the shared venv)."""
 
 import sys
 from pathlib import Path

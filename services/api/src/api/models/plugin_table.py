@@ -15,7 +15,7 @@ import ast
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, Float
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
 
 # Module-level constant — built once, not on every _resolve_sa_type call.
 _TYPE_MAP: dict[str, type] = {
@@ -65,36 +65,20 @@ class ColumnDefinition(BaseModel):
     """
 
     name: str = Field(description="Column name.")
-    type: str = Field(
-        description="SQLAlchemy column type string, e.g. 'String(255)' or 'Integer'."
-    )
-    primary_key: bool = Field(
-        default=False, description="Whether this is the primary key."
-    )
-    nullable: bool = Field(
-        default=False, description="Whether NULL values are allowed."
-    )
-    index: bool = Field(
-        default=False, description="Create a database index on this column."
-    )
-    default: str | None = Field(
-        default=None, description="SQL default value expression."
-    )
-    description: str = Field(
-        default="", description="Human-readable column description."
-    )
+    type: str = Field(description="SQLAlchemy column type string, e.g. 'String(255)' or 'Integer'.")
+    primary_key: bool = Field(default=False, description="Whether this is the primary key.")
+    nullable: bool = Field(default=False, description="Whether NULL values are allowed.")
+    index: bool = Field(default=False, description="Create a database index on this column.")
+    default: str | None = Field(default=None, description="SQL default value expression.")
+    description: str = Field(default="", description="Human-readable column description.")
 
 
 class IndexDefinition(BaseModel):
     """Defines a database index on a plugin-created table."""
 
     name: str = Field(description="Index name in the database.")
-    columns: list[str] = Field(
-        min_length=1, description="Column names included in the index."
-    )
-    unique: bool = Field(
-        default=False, description="Whether the index enforces uniqueness."
-    )
+    columns: list[str] = Field(min_length=1, description="Column names included in the index.")
+    unique: bool = Field(default=False, description="Whether the index enforces uniqueness.")
 
 
 # The five generic CRUD operations the permission model authorises, in a
@@ -211,7 +195,7 @@ class PluginTableDefinition(BaseModel):
         return data
 
     @model_validator(mode="after")
-    def _validate_uniqueness(self) -> "PluginTableDefinition":
+    def _validate_uniqueness(self) -> PluginTableDefinition:
         """Validate no duplicate column or index names."""
         from collections import Counter
 
@@ -272,7 +256,8 @@ class PluginTableDefinition(BaseModel):
 
     @staticmethod
     def _resolve_sa_type(type_str: str) -> Any:
-        """Resolve a type string like 'String(36)' or 'DateTime(timezone=True)' to a SQLAlchemy type instance."""
+        """Resolve a type string like 'String(36)' or 'DateTime(timezone=True)'
+        to a SQLAlchemy type instance."""
         base_type, args, kwargs = resolve_type_call(type_str)
         cls = _TYPE_MAP.get(base_type) or String
         return cls(*args, **kwargs)

@@ -49,9 +49,7 @@ def _idempotency_key(event: BiffoEvent) -> str:
         if value:
             return str(value)
     digest = hashlib.sha256(
-        json.dumps(
-            {"d": event.detail_type, "p": payload}, sort_keys=True, default=str
-        ).encode()
+        json.dumps({"d": event.detail_type, "p": payload}, sort_keys=True, default=str).encode()
     ).hexdigest()
     return f"{event.detail_type}:{digest}"
 
@@ -71,9 +69,7 @@ class OrchestratorPlugin(BiffoPluginBase):
         self._ses = ses_client if ses_client is not None else boto3.client("ses")
         # Plain (unsigned) HTTP client for webhook actions — distinct from the
         # IAM-signed Core client. Reused across warm invocations to pool connections.
-        self._http = (
-            http_client if http_client is not None else httpx.Client(timeout=10)
-        )
+        self._http = http_client if http_client is not None else httpx.Client(timeout=10)
         # Account-level WhatsApp credentials come from the orchestrator's env, never
         # from a workflow's action_config (which is stored in the DB).
         self._whatsapp = whatsapp or WhatsAppSettings(
@@ -146,14 +142,10 @@ class OrchestratorPlugin(BiffoPluginBase):
             )
         except Exception as exc:  # noqa: BLE001 — any dispatch failure is recorded, not raised
             logger.exception("Action dispatch failed", extra={"run_id": run_id})
-            await self._record(
-                run_id, action_type, "failed", request=config, error=str(exc)
-            )
+            await self._record(run_id, action_type, "failed", request=config, error=str(exc))
             return
 
-        await self._record(
-            run_id, action_type, "succeeded", request=config, response=result
-        )
+        await self._record(run_id, action_type, "succeeded", request=config, response=result)
 
     async def _record(
         self,

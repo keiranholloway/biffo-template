@@ -178,6 +178,4 @@ def test_long_array_wraps_when_it_exceeds_print_width():
 def _diff_lines(before: str, after: str) -> list[str]:
     import difflib
 
-    return list(
-        difflib.unified_diff(before.splitlines(), after.splitlines(), lineterm="", n=0)
-    )
+    return list(difflib.unified_diff(before.splitlines(), after.splitlines(), lineterm="", n=0))

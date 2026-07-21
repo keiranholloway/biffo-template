@@ -63,9 +63,7 @@ def _render(value: Any, line_indent: int, prefix_len: int) -> str:
         if not value:
             return "[]"
         if all(_is_primitive(item) for item in value):
-            inline = (
-                "[" + ", ".join(json.dumps(i, ensure_ascii=False) for i in value) + "]"
-            )
+            inline = "[" + ", ".join(json.dumps(i, ensure_ascii=False) for i in value) + "]"
             if prefix_len + len(inline) <= _PRINT_WIDTH:
                 return inline
         inner = line_indent + _INDENT
@@ -98,9 +96,7 @@ def apply_permission_change(
     one table's permissions block is touched; everything else is preserved.
     """
     if operation not in OPERATIONS:
-        raise ValueError(
-            f"unknown operation {operation!r}; expected one of {list(OPERATIONS)}"
-        )
+        raise ValueError(f"unknown operation {operation!r}; expected one of {list(OPERATIONS)}")
 
     try:
         data: Any = json.loads(manifest_json)

@@ -51,9 +51,7 @@ class RouteDefinition(BaseModel):
         "(/api/v1/plugins/<name>), e.g. '/widgets' or '/widgets/{id}'. "
         "Must start with '/'."
     )
-    table: str = Field(
-        description="Name of a table declared in this manifest's `tables`."
-    )
+    table: str = Field(description="Name of a table declared in this manifest's `tables`.")
     operation: Literal["list", "read", "create", "update", "delete"] = Field(
         description="Generic CRUD operation the Core API synthesizes for "
         "this route against `table`, scoped to the caller's tenant_id "
@@ -62,7 +60,7 @@ class RouteDefinition(BaseModel):
     description: str = ""
 
     @model_validator(mode="after")
-    def _validate_method_and_path(self) -> "RouteDefinition":
+    def _validate_method_and_path(self) -> RouteDefinition:
         if not self.path.startswith("/"):
             raise ValueError(f"path must start with '/': {self.path!r}")
 
@@ -113,9 +111,7 @@ def parse_plugin_routes_from_manifest(
     if not routes_data:
         return []
 
-    table_names = {
-        t["name"] if isinstance(t, dict) else t.name for t in manifest.get("tables", [])
-    }
+    table_names = {t["name"] if isinstance(t, dict) else t.name for t in manifest.get("tables", [])}
 
     routes: list[RouteDefinition] = []
     seen: set[tuple[str, str]] = set()
@@ -129,9 +125,7 @@ def parse_plugin_routes_from_manifest(
             )
         key = (route.method, route.path)
         if key in seen:
-            raise ValueError(
-                f"Duplicate route declaration: {route.method} {route.path}"
-            )
+            raise ValueError(f"Duplicate route declaration: {route.method} {route.path}")
         seen.add(key)
         routes.append(route)
     return routes

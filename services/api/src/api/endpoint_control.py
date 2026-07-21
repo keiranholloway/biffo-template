@@ -59,9 +59,7 @@ class LambdaSignerInvoker:
         try:
             result = json.loads(body)
         except (ValueError, TypeError) as exc:
-            raise SignerInvocationError(
-                "the PR-signer returned an unreadable response"
-            ) from exc
+            raise SignerInvocationError("the PR-signer returned an unreadable response") from exc
         if not isinstance(result, dict):
             raise SignerInvocationError("the PR-signer returned an unexpected response")
         return result

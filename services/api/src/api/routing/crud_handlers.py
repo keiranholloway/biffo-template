@@ -90,9 +90,7 @@ def _emit_crud_event(
 # Auto-managed columns (ADR-0001) — never settable from a request body. Kept in
 # sync with TenantScopedModel in models/base.py / _AUTO_COLUMNS in
 # models/plugin_table.py.
-AUTO_COLUMN_NAMES: frozenset[str] = frozenset(
-    {"id", "tenant_id", "created_at", "updated_at"}
-)
+AUTO_COLUMN_NAMES: frozenset[str] = frozenset({"id", "tenant_id", "created_at", "updated_at"})
 
 
 def serialize(row: Any) -> dict[str, Any]:
@@ -105,9 +103,7 @@ def user_columns_from_model(model: type[Any]) -> frozenset[str]:
     model except the auto-managed id/tenant_id/created_at/updated_at ones.
     ``tenant_id`` in particular must never be settable from the body: it always
     comes from require_plugin_tenant_context (ADR-0001)."""
-    return frozenset(
-        c.name for c in model.__table__.columns if c.name not in AUTO_COLUMN_NAMES
-    )
+    return frozenset(c.name for c in model.__table__.columns if c.name not in AUTO_COLUMN_NAMES)
 
 
 def make_list_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
@@ -127,14 +123,10 @@ def make_read_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
         tenant_id: str = Depends(require_plugin_tenant_context),
         db: AsyncSession = Depends(get_db),
     ) -> dict[str, Any]:
-        result = await db.execute(
-            select(model).where(model.id == id, model.tenant_id == tenant_id)
-        )
+        result = await db.execute(select(model).where(model.id == id, model.tenant_id == tenant_id))
         row = result.scalar_one_or_none()
         if row is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
         return serialize(row)
 
     return handler
@@ -174,14 +166,10 @@ def make_update_handler(
         tenant_id: str = Depends(require_plugin_tenant_context),
         db: AsyncSession = Depends(get_db),
     ) -> dict[str, Any]:
-        result = await db.execute(
-            select(model).where(model.id == id, model.tenant_id == tenant_id)
-        )
+        result = await db.execute(select(model).where(model.id == id, model.tenant_id == tenant_id))
         row = result.scalar_one_or_none()
         if row is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
         for key, value in payload.items():
             if key in user_columns:
                 setattr(row, key, value)
@@ -205,14 +193,10 @@ def make_delete_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
         tenant_id: str = Depends(require_plugin_tenant_context),
         db: AsyncSession = Depends(get_db),
     ) -> dict[str, Any]:
-        result = await db.execute(
-            select(model).where(model.id == id, model.tenant_id == tenant_id)
-        )
+        result = await db.execute(select(model).where(model.id == id, model.tenant_id == tenant_id))
         row = result.scalar_one_or_none()
         if row is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
         # Capture the row for the event before it's deleted/expired.
         exclude = frozenset(getattr(model, "__event_exclude__", ()) or ())
         deleted_payload = _event_payload(row, exclude)

@@ -12,15 +12,11 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPT_PATH = (
-    Path(__file__).resolve().parent.parent / "scripts" / "generate_plugin_migrations.py"
-)
+_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "generate_plugin_migrations.py"
 
 
 def _load_main():
-    spec = importlib.util.spec_from_file_location(
-        "generate_plugin_migrations", _SCRIPT_PATH
-    )
+    spec = importlib.util.spec_from_file_location("generate_plugin_migrations", _SCRIPT_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -57,9 +53,7 @@ class TestGeneratePluginMigrationsCli:
         exit_code = main(argv)
         return exit_code
 
-    def test_generates_and_prints_the_absolute_path(
-        self, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_generates_and_prints_the_absolute_path(self, capsys: pytest.CaptureFixture) -> None:
         self._write_manifest(
             "rbac", {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
         )
@@ -74,9 +68,7 @@ class TestGeneratePluginMigrationsCli:
         assert generated_path.exists()
         assert generated_path.parent == self.versions_dir
 
-    def test_idempotent_rerun_prints_nothing(
-        self, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_idempotent_rerun_prints_nothing(self, capsys: pytest.CaptureFixture) -> None:
         self._write_manifest(
             "rbac", {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
         )
@@ -132,9 +124,7 @@ class TestGeneratePluginMigrationsCli:
         err = capsys.readouterr().err
         assert "nonexistent" in err
 
-    def test_plugin_with_no_tables_generates_nothing(
-        self, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_plugin_with_no_tables_generates_nothing(self, capsys: pytest.CaptureFixture) -> None:
         self._write_manifest("noop", {"name": "noop", "version": "1.0.0", "tables": []})
 
         exit_code = self._run()

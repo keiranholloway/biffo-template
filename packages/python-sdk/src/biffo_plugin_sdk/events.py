@@ -29,7 +29,8 @@ from __future__ import annotations
 import inspect
 import json
 from collections import defaultdict
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from aws_lambda_powertools.utilities.data_classes import EventBridgeEvent
 from pydantic import BaseModel, Field
@@ -133,9 +134,7 @@ def create_event_handler(raw_event: dict[str, Any]) -> BiffoEvent:
             raise ValueError(f"Invalid JSON in event detail: {exc}") from exc
 
     if not isinstance(detail, dict):
-        raise ValueError(
-            f"Event detail must be a JSON object, got {type(detail).__name__}"
-        )
+        raise ValueError(f"Event detail must be a JSON object, got {type(detail).__name__}")
 
     try:
         return BiffoEvent(

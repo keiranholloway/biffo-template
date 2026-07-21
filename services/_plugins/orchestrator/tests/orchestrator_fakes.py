@@ -14,9 +14,8 @@ import json
 from typing import Any
 
 import httpx
-from botocore.credentials import Credentials
-
 from biffo_plugin_sdk import SignedCoreClient
+from botocore.credentials import Credentials
 
 
 class FakeCore:
@@ -36,14 +35,10 @@ class FakeCore:
         )
 
     def result_posts(self) -> list[dict[str, Any]]:
-        return [
-            body for method, path, body in self.requests if path.endswith("/result")
-        ]
+        return [body for method, path, body in self.requests if path.endswith("/result")]
 
     def event_posts(self) -> list[dict[str, Any]]:
-        return [
-            body for method, path, body in self.requests if path.endswith("/events")
-        ]
+        return [body for method, path, body in self.requests if path.endswith("/events")]
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content or b"{}")
@@ -76,9 +71,7 @@ class FakeSes:
 
 
 class FakeHttpResponse:
-    def __init__(
-        self, status_code: int = 200, json_data: Any = None, text: str = ""
-    ) -> None:
+    def __init__(self, status_code: int = 200, json_data: Any = None, text: str = "") -> None:
         self.status_code = status_code
         self._json = {} if json_data is None else json_data
         self.text = text
@@ -90,9 +83,7 @@ class FakeHttpResponse:
 class FakeHttp:
     """Records POST calls; returns a canned response (the webhook actions)."""
 
-    def __init__(
-        self, status_code: int = 200, json_data: Any = None, text: str = ""
-    ) -> None:
+    def __init__(self, status_code: int = 200, json_data: Any = None, text: str = "") -> None:
         self._status = status_code
         self._json = json_data
         self._text = text

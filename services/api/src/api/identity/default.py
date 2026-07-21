@@ -20,7 +20,7 @@ from .base import ResolvedIdentity
 class DefaultIdentityProvider:
     """Core-owned identity: one indexed lookup by `cognito_sub` per request."""
 
-    def session(self) -> AsyncGenerator[AsyncSession, None]:
+    def session(self) -> AsyncGenerator[AsyncSession]:
         # No RLS in the base template, so the ordinary request session is right.
         return get_db()
 
@@ -66,9 +66,7 @@ class DefaultIdentityProvider:
         """
         return None
 
-    async def resolve_permissions(
-        self, db: AsyncSession, user_id: str | None
-    ) -> frozenset[str]:
+    async def resolve_permissions(self, db: AsyncSession, user_id: str | None) -> frozenset[str]:
         """Empty: the ADR-0004 model authorises from Cognito groups on the token,
         which `AuthenticatedUser.roles` already carries. No lookup needed."""
         return frozenset()

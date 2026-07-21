@@ -101,18 +101,14 @@ def build_plugin_router(
     for manifest in discovered:
         name = manifest.get("name")
         if not name:
-            logger.warning(
-                "Skipping plugin manifest with no 'name'; cannot mount routes."
-            )
+            logger.warning("Skipping plugin manifest with no 'name'; cannot mount routes.")
             continue
 
         try:
             tables = {t.name: t for t in parse_plugin_tables_from_manifest(manifest)}
             routes: list[RouteDefinition] = parse_plugin_routes_from_manifest(manifest)
         except (ValueError, TypeError) as exc:
-            logger.warning(
-                f"Skipping routes for plugin {name!r}: invalid manifest: {exc}"
-            )
+            logger.warning(f"Skipping routes for plugin {name!r}: invalid manifest: {exc}")
             continue
 
         if not routes:
@@ -131,9 +127,7 @@ def build_plugin_router(
                 status_code=SUCCESS_STATUS[route.operation],
                 summary=route.description or f"{route.operation} {route.table}",
                 dependencies=[
-                    Depends(
-                        require_crud_permission(route.table, route.operation, registry)
-                    )
+                    Depends(require_crud_permission(route.table, route.operation, registry))
                 ],
             )
         router.include_router(plugin_router)

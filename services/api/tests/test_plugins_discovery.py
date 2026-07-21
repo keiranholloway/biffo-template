@@ -20,9 +20,7 @@ class TestDiscoverPluginManifests:
         assert discover_plugin_manifests(tmp_path) == []
 
     def test_finds_single_plugin_manifest(self, tmp_path):
-        _write_manifest(
-            tmp_path, "rbac", {"name": "rbac", "version": "1.0.0", "tables": []}
-        )
+        _write_manifest(tmp_path, "rbac", {"name": "rbac", "version": "1.0.0", "tables": []})
         manifests = discover_plugin_manifests(tmp_path)
         assert len(manifests) == 1
         assert manifests[0]["name"] == "rbac"

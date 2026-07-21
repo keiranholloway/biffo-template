@@ -54,9 +54,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.plugin:
-        discovered = {
-            m.get("name") for m in discover_plugin_manifests(args.services_root)
-        }
+        discovered = {m.get("name") for m in discover_plugin_manifests(args.services_root)}
         missing = set(args.plugin) - discovered
         if missing:
             print(

@@ -75,8 +75,8 @@ variable "max_turns_ceiling" {
   }
 }
 
-variable "openrouter_api_key_secret_arn" {
-  description = "ARN of the Secrets Manager secret holding the OpenRouter API key (a bare string, or JSON with an `api_key` key). The runtime reads it at first use; the key itself is never a Lambda environment variable and never enters Terraform state. Empty (the default) grants nothing and leaves the runtime unable to call the provider — every run then fails with a clear credential error rather than silently."
+variable "openrouter_api_key_parameter" {
+  description = "Name of the SSM SecureString parameter holding the OpenRouter API key, e.g. /myproject/dev/agent-runtime/openrouter-api-key (the same /<project>/<env>/<component>/<secret> shape as db/credentials and pr-signer/github-app-key). The runtime reads it at first use; the key itself is never a Lambda environment variable and never enters Terraform state — only the parameter name does. SSM rather than Secrets Manager because this is one API key read at cold start: a SecureString on the AWS-managed key is free at standard tier, a Secrets Manager secret bills ~$0.40/month, and rotation, versioning and cross-account policies buy nothing here. It also matches the orchestrator's WhatsApp credentials, so both plugin third-party credentials live in one place. Empty (the default) grants nothing and leaves the runtime unable to call the provider — every run then fails with a clear credential error rather than silently."
   type        = string
   default     = ""
 }

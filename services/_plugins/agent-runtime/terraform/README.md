@@ -13,9 +13,18 @@ What differs from the skeleton, and why:
 | `max_turns_ceiling` | — | **10** | Deployment ceiling a worker's `max_turns` is clamped into; a definition can only narrow it. |
 | `memory_size` | 512 | **1024** | Memory buys CPU share; the runtime signs requests and parses responses around a long await. |
 | `subscribe_all` | false | false | Kept false. One trigger only: `biffo.core` / `agent.run.requested`. |
-| IAM | Core API | Core API **+ one secret** | `secretsmanager:GetSecretValue` scoped to `openrouter_api_key_secret_arn`. |
+| IAM | Core API | Core API **+ one SSM parameter** | `ssm:GetParameter` scoped to the ARN of `openrouter_api_key_parameter`, plus `kms:Decrypt` fenced by `kms:ViaService = ssm.<region>.amazonaws.com`. |
 
-**The OpenRouter key is never in this module.** Terraform takes an ARN; the runtime reads the secret at first use and caches it for the warm container. So the key is absent from Terraform state, absent from the Lambda's environment (where `lambda:GetFunction` would expose it), and rotatable without a deploy. Set `openrouter_api_key_secret_arn` to a secret holding either the bare key or JSON with an `api_key` field. Leave it empty and the runtime fails each run with an explicit credential error — deliberately loud, never a silent no-op.
+**The OpenRouter key is never in this module.** Terraform takes a *parameter name*; the runtime reads the value at first use and caches it for the warm container. So the key is absent from Terraform state, absent from the Lambda's environment (where `lambda:GetFunction` would expose it), and rotatable without a deploy. Store it as a SecureString under the platform's `/<project>/<env>/<component>/<secret>` convention — the same shape as `db/credentials` and `pr-signer/github-app-key`:
+
+```bash
+aws ssm put-parameter --type SecureString \
+  --name /myproject/dev/agent-runtime/openrouter-api-key --value "<key>"
+```
+
+and set `openrouter_api_key_parameter` to that name. Leave it empty and no SSM or KMS permission is created at all, and the runtime fails each run with an explicit credential error — deliberately loud, never a silent no-op.
+
+**Why Parameter Store and not Secrets Manager** (recorded here because it looks like an inconsistency with `db/credentials` and is not one): the key is a single string fetched once per cold start, so Secrets Manager's rotation, versioning and cross-account resource policies buy nothing, while it bills roughly $0.40 per secret per month against a SecureString on the AWS-managed key being free at standard tier. The database secret is different — it is Terraform-generated and rotatable, which is what that service is for. This also matches the orchestrator's WhatsApp token, so both plugin third-party credentials are stored and fetched the same way.
 
 **Allowlisting.** Like every plugin that calls Core's internal routes, this Lambda's role must also appear in the Core API's `BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST` (ADR-0009). Use the assumed-role glob described below — never wire the `role_arn` output into the core API module, which creates a dependency cycle (#201).
 

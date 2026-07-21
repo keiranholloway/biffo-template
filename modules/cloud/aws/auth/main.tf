@@ -106,6 +106,13 @@ resource "aws_cognito_user_pool" "main" {
     # requires both {username} and {####} placeholders. Each credential gets its
     # own labelled line inside <code>/<b> with whitespace around it, so no
     # adjacent character can be mistaken for part of the value.
+    #
+    # sms_message is mandatory even though invites go by email: Cognito's
+    # CreateUserPool validates ALL three members of inviteMessageTemplate, and
+    # rejects an empty sMSMessage with InvalidParameterException ("Member must
+    # have length greater than or equal to 6"), so omitting it means no pool can
+    # ever be created (issue #356). It must be >= 6 chars and, like the email
+    # members, carry both the {username} and {####} placeholders.
     invite_message_template {
       email_subject = "Your ${var.project_name} admin account"
       email_message = <<-EOT
@@ -116,6 +123,7 @@ resource "aws_cognito_user_pool" "main" {
         <b><code>{####}</code></b><br><br>
         Enter each value exactly as shown on its own line above, with no surrounding punctuation. On your first sign-in you will be asked to set a new password of your own.
       EOT
+      sms_message   = "Your ${var.project_name} admin username is {username}, temporary password {####}."
     }
   }
 

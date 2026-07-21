@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { isTemplateOwned, readCoreManifest } from './core-manifest.js'
+import { findModuleTerraformFiles } from './cognito-invite-template-guard.js'
 import { findPluginManifests } from './plugin-terraform-guard.js'
 import { findWorkflowFiles } from './terraform-input-guard.js'
 
@@ -40,6 +41,12 @@ describe('META: template-owned checks must not assert over unowned paths (#325/#
     // for instances (see plugin-terraform-guard.test.ts). In the TEMPLATE its
     // raw reach is already entirely template-owned, which this asserts.
     { name: 'plugin-terraform-guard.findPluginManifests', scan: findPluginManifests },
+    // Scans the modules/ tree for Cognito invite_message_template blocks (#356);
+    // modules/ is wholly template-owned, which this asserts.
+    {
+      name: 'cognito-invite-template-guard.findModuleTerraformFiles',
+      scan: findModuleTerraformFiles,
+    },
   ]
 
   it.each(rawTreeScanners)('$name reaches only template-owned paths', ({ scan }) => {

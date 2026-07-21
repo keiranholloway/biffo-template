@@ -132,15 +132,26 @@ Synchronous agents (chat over data) are foreseeable but out of scope. The differ
 
 None of these are abstractions or indirection. They are choices that avoid encoding an assumption known to be wrong.
 
-### 7. Data access is scoped, declared, and enforced
+### 7. Data access is a thin ceiling, narrowed by declaration, enforced by core
 
-A worker declares the Core tables and fields it may read. Three layers:
+Effective read permission is the **intersection** of two independently maintained things:
 
-- **Declared read scope** on the definition — the ADR-0004 declarative permission model extended to a new principal type.
-- **Authoring-time validation** — saving a worker verifies the *author* holds the permissions it declares. Failing at save is far better than failing at run.
-- **Run-time enforcement in Core**, applied independently of the declaration, consistent with ADR-0013 §3.
+1. **The agent principal's ceiling** — what agents may *ever* read in this deployment.
+2. **The worker's declared read scope** — what this particular worker reads.
 
-In v1 every run is `run_as: system` with no writes, so user-delegated authority is **designed for but not exercised**. That is a deliberate deferral, recorded here so it is not mistaken for a solved problem.
+A worker cannot grant itself anything outside the ceiling, so editing a definition can never widen access. Scope is expressed as `(table, operation)` pairs — the primitives ADR-0004 already uses — not a new addressing scheme.
+
+**The ceiling reuses ADR-0004 rather than adding a mechanism.** The runtime resolves to a principal holding a single pseudo-role, `agent-runtime`. A table becomes readable by agents by naming that role in its `__crud_permissions__` read entry, and in no other way. Three properties follow for no new machinery:
+
+- **Thin by default.** No table names the role, so a freshly scaffolded instance grants agents nothing at all. The ceiling starts empty and is widened one table at a time.
+- **Widening is a reviewed code change, not an admin toggle.** The grant lives beside the model, so it arrives as a PR and a deploy. It cannot be escalated by whoever holds admin rights at the time — which is what makes this a genuine second layer rather than a restatement of the declaration.
+- **Default-deny, 404-on-undeclared, and unconditional tenant scoping** are inherited unchanged from the existing handler path.
+
+**Writes are not reachable through this path at all.** `agent-runtime` is never granted create, update or delete. A run's only write is completing itself, through a purpose-built internal route authorised by the run's own identity and state rather than by generic CRUD. A worker needing to write business data is a new decision requiring an amendment to this ADR — the right amount of friction for the thing §5 exists to prevent.
+
+**Authoring-time validation** still applies: saving a worker verifies both that its declared scope sits inside the ceiling, and that the *author* holds the permissions it declares. Failing at save beats failing at run.
+
+In v1 every run is `run_as: system`, so user-delegated authority is **designed for but not exercised**. Note what is and is not deferred: the ceiling and the declared scope are both live from the first run, and only the third term is missing. When `run_as: user` arrives it composes as `ceiling ∩ declared scope ∩ the user's own permissions`, with no change to the first two.
 
 ### 8. Cost and recursion are bounded by the framework, not by convention
 
@@ -205,7 +216,8 @@ The first intended worker enriches inbound demo requests, and it demonstrates th
 
 - **Core carries the framework unconditionally**, used or not.
 - **Two-step authoring** (§4), pending the resolution of open question 1.
-- **User-delegated authority is designed but unexercised** in v1 (§7) — the hardest part of the permission model stays unvalidated until a worker runs under a user's authority.
+- **User-delegated authority is designed but unexercised** in v1 (§7). Two of the three permission layers are live from the first run; the third stays unvalidated until a worker runs under a user's authority.
+- **The ceiling is deliberately inconvenient to widen.** Granting agents a new table means a PR and a deploy, not an admin screen. That is the point, and it will still be irritating the first time a worker needs a table nobody anticipated.
 - **Async-only** rules out conversational agents until the sync edges are built.
 
 ### Neutral

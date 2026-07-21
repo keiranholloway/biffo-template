@@ -1,6 +1,6 @@
 # ADR-0014: Agentic workers — framework is code, workers are data
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-21
 **Deciders:** Keiran Holloway (Technical Architect)
 
@@ -92,6 +92,8 @@ Distribution is `biffo core upgrade`, not the plugin registry. This is the chann
 
 JSON columns are available here because these are core SQLAlchemy models, not manifest-declared plugin tables — which is a further reason the framework cannot be an ADR-0003 plugin.
 
+**The LLM provider is OpenRouter**, with the model selected per worker so alternatives can be compared without a code change — §10 records which model each run actually used, which is what makes that comparison meaningful after the fact. Provider access sits behind the runtime's own client and is never exposed to worker definitions, so changing provider later is a framework change rather than a migration of every worker.
+
 ### 2. Workers are data, authored in the portal
 
 A worker is a **row**, created and edited through the admin UI by an authenticated platform user — not an installed artifact. "Installed more than once" is "create another row."
@@ -174,7 +176,11 @@ Effective read permission is the **intersection** of two independently maintaine
 
 A worker cannot grant itself anything outside the ceiling, so editing a definition can never widen access. Scope is expressed as `(table, operation)` pairs — the primitives ADR-0004 already uses — not a new addressing scheme.
 
-**The ceiling reuses ADR-0004 rather than adding a mechanism.** The runtime resolves to a principal holding a single pseudo-role, `agent-runtime`. A table becomes readable by agents by naming that role in its `__crud_permissions__` read entry, and in no other way. Three properties follow for no new machinery:
+**The ceiling reuses ADR-0004's declaration site, but deliberately not its role field.** A table becomes readable by agents by naming `system:agent-runtime` in an `allowed_principals` entry on its `__crud_permissions__` block — a field distinct from `required_role`, evaluated only for ADR-0009 service principals and never for authenticated users.
+
+**That separation is structural, not a naming convention, and the distinction matters.** Putting the grant in `required_role` alongside Cognito groups would mean a Cognito group named `agent-runtime` silently conferring agent read access on every member. A reserved prefix alone does not close this: Cognito groups can be created out-of-band through the AWS console or CLI, so any guard on the portal's group-creation route is bypassable by the very people most able to abuse it. The `system:` prefix is kept for legibility; the security property comes from the field, which a Cognito group cannot populate at all.
+
+Three properties follow for almost no new machinery:
 
 - **Thin by default.** No table names the role, so a freshly scaffolded instance grants agents nothing at all. The ceiling starts empty and is widened one table at a time.
 - **Widening is a reviewed code change, not an admin toggle.** The grant lives beside the model, so it arrives as a PR and a deploy. It cannot be escalated by whoever holds admin rights at the time — which is what makes this a genuine second layer rather than a restatement of the declaration.
@@ -188,11 +194,20 @@ A worker cannot grant itself anything outside the ceiling, so editing a definiti
 
 **Tools are not tables, and the registry is their ceiling.** §7 governs Core reads; the first worker's primary source is web search, which is no table at all. Tools are registered functions in the framework — as orchestrator's actions already are — so adding one is inherently a reviewed code change and needs no separate allowlist. A worker **declares which registered tools it uses, defaulting to none**, mirroring the default-deny posture above. This matters beyond tidiness: web search is the untrusted-content channel the security model identifies as the injection vector, and enabling it should be no less deliberate than exposing a table. Per-deployment tool gating (available in dev, off in prod) is deferred — it is configuration over an existing registry, addable with no lock-in.
 
+**Two edge cases, both failing closed:**
+
+- **The author's permissions change after a worker is saved.** Authoring-time validation checks the author at the moment of creation — it stops someone granting a worker reach they do not themselves hold. It is not a continuing binding: afterwards a worker's authority is ceiling ∩ declared scope, independent of who wrote it. That is deliberate, since the run principal is `system` rather than the author. The ceiling stays the continuous control, and the worker remains visible, editable and deletable by anyone who can administer them.
+- **A table's model is deleted.** The permissions registry then holds no entry, `lookup_permission` returns `None`, and default-deny yields 404. Removing a model revokes agent access as a side effect — the correct direction to fail.
+
 In v1 every run is `run_as: system`, so user-delegated authority is **designed for but not exercised**. Note what is and is not deferred: the ceiling and the declared scope are both live from the first run, and only the third term is missing. When `run_as: user` arrives it composes as `ceiling ∩ declared scope ∩ the user's own permissions`, with no change to the first two.
 
 ### 8. Cost and recursion are bounded by the framework, not by convention
 
 Per-worker `max_turns`, token ceilings and wall-clock timeouts are enforced with hard stops. Events carry `causation_id` and `depth`, and dispatch refuses past a maximum depth — because event-triggered processes that emit events can cycle, and here each iteration has an invoice attached.
+
+**The platform imposes a ceiling of its own.** A Lambda invocation is capped at 15 minutes, so a multi-turn loop must either finish inside one invocation or be resumable across several. §6's state machine and durable message array are what make the second possible — that is the operational reason for those choices, not only sync-readiness. Per-worker wall-clock limits therefore have to sit inside the platform ceiling, not merely inside a cost budget.
+
+**Current posture on spend.** The deployment is single-operator, so volume is not the risk — runaway is. Limits should be set to make an unbounded loop impossible rather than to ration ordinary use, and generous per-run ceilings are acceptable while the maximum concurrent-run count stays small. That posture changes the moment the platform carries other people's traffic, and the enforcement points above are what make the change a configuration edit rather than a redesign.
 
 ### 9. Memory is deferred, with two guardrails
 
@@ -244,7 +259,7 @@ The first intended worker enriches inbound demo requests, and it demonstrates th
 - **Untrusted input reaches the model.** The demo form is public and attacker-controlled; a company-name field flows into agent context and then into web searches. Form fields must land in an **untrusted context channel kept structurally separate from instructions**.
 - **Untrusted output must not be broadcast.** Enrichment text is LLM output derived from a public form and web results. It stays behind an API fetch (§5) rather than being pushed to every subscriber.
 - **The trifecta is bounded by construction.** Access to private data, exposure to untrusted content, and an outbound channel is the dangerous combination. §5 removes the third by giving agents no write surface beyond their own run record.
-- **PII leaves the platform.** Prospect name, email, company and role are sent to a third-party LLM provider from a UK business operating in `eu-west-2`. This requires an explicit processing decision and a DPA — and redaction of fields the task does not need. Brand enrichment does not need an email address.
+- **PII leaves the platform, and is redacted before it does.** Prospect data is sent to OpenRouter from a UK business operating in `eu-west-2`. **Email addresses are redacted before any payload leaves the platform** — brand, size and role enrichment does not need them, and they are the highest-value identifier in the set. Redaction is the runtime's responsibility, not the worker author's, so it cannot be forgotten in a prompt. Note that name, company and role remain personal data after redaction, so the provider relationship still carries a processing obligation; that is reduced, not eliminated.
 - **Cost is an availability concern**, not just a budget one. §8 treats it as such.
 
 ---

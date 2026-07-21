@@ -926,3 +926,54 @@ describe('commitFiles deletions', () => {
     )
   })
 })
+
+// ─── getBranchSha & fastForwardBranch (issue #329) ───────────────────────────
+
+describe('getBranchSha', () => {
+  it("returns the branch head's commit SHA", async () => {
+    octokitMock.git.getRef.mockResolvedValue({ data: { object: { sha: 'headsha' } } })
+
+    const sha = await adapter().getBranchSha('acme', 'my-app', 'dev')
+
+    expect(sha).toBe('headsha')
+    expect(octokitMock.git.getRef).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: 'acme', repo: 'my-app', ref: 'heads/dev' }),
+    )
+  })
+})
+
+describe('fastForwardBranch', () => {
+  it('moves the branch ref onto the target SHA without forcing (fast-forward only)', async () => {
+    octokitMock.git.getRef.mockResolvedValue({ data: { object: { sha: 'oldsha' } } })
+    octokitMock.git.updateRef.mockResolvedValue({ data: {} })
+
+    await adapter().fastForwardBranch('acme', 'my-app', 'dev', 'sharedsha')
+
+    expect(octokitMock.git.updateRef).toHaveBeenCalledWith({
+      owner: 'acme',
+      repo: 'my-app',
+      ref: 'heads/dev',
+      sha: 'sharedsha',
+      force: false,
+    })
+  })
+
+  it('is a no-op when the branch is already at the target SHA (resumed init)', async () => {
+    octokitMock.git.getRef.mockResolvedValue({ data: { object: { sha: 'sharedsha' } } })
+
+    await adapter().fastForwardBranch('acme', 'my-app', 'staging', 'sharedsha')
+
+    expect(octokitMock.git.updateRef).not.toHaveBeenCalled()
+  })
+
+  it('propagates a non-fast-forward rejection instead of clobbering history', async () => {
+    octokitMock.git.getRef.mockResolvedValue({ data: { object: { sha: 'divergedsha' } } })
+    octokitMock.git.updateRef.mockRejectedValue(
+      Object.assign(new Error('Update is not a fast forward'), { status: 422 }),
+    )
+
+    await expect(
+      adapter().fastForwardBranch('acme', 'my-app', 'staging', 'sharedsha'),
+    ).rejects.toThrow('Update is not a fast forward')
+  })
+})

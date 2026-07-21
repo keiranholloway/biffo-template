@@ -467,6 +467,41 @@ export class GitHubAdapter {
     return commit.sha
   }
 
+  /** The commit SHA at the head of `branch`. */
+  async getBranchSha(org: string, repo: string, branch: string): Promise<string> {
+    const ref = await this.waitForRef(org, repo, `heads/${branch}`, 120_000, 3_000)
+    return ref.object.sha
+  }
+
+  /**
+   * Point `branch` at `sha` via a fast-forward-only ref update (issue #329).
+   *
+   * `sha` must be an ancestor-descendant of the branch's current head:
+   * GitHub's `updateRef` rejects a non-fast-forward move unless `force` is set,
+   * and it is deliberately left unset here. The only caller is `writeInstanceFiles`,
+   * moving a freshly-created branch onto the instance commit built on that
+   * branch's own shared base — always a fast-forward. If it ever isn't, failing
+   * loudly is the correct outcome, not clobbering history.
+   *
+   * Idempotent: a no-op (no API write) when `branch` is already at `sha`, so a
+   * resumed init neither errors nor rewrites anything.
+   */
+  async fastForwardBranch(org: string, repo: string, branch: string, sha: string): Promise<void> {
+    const current = await this.getBranchSha(org, repo, branch)
+    if (current === sha) {
+      log.info(`${branch} already at ${sha.slice(0, 7)} — skipping`)
+      return
+    }
+    await this.octokit.git.updateRef({
+      owner: org,
+      repo,
+      ref: `heads/${branch}`,
+      sha,
+      force: false,
+    })
+    log.info(`Fast-forwarded ${branch} to ${sha.slice(0, 7)}`)
+  }
+
   async setDefaultBranch(org: string, repo: string, branch: string): Promise<void> {
     await this.octokit.repos.update({ owner: org, repo, default_branch: branch })
     log.info(`Default branch set to ${branch}`)

@@ -65,6 +65,7 @@ beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
 afterEach(() => {
   server.resetHandlers()
   committedTrees = []
+  updatedRefs = []
   stsMock.reset()
   iamMock.reset()
   s3Mock.reset()
@@ -177,7 +178,12 @@ function instanceIdentityHandlers() {
     http.post(`${GH}/repos/acme/my-app/git/commits`, () =>
       HttpResponse.json({ sha: 'newcommitsha' }),
     ),
-    http.patch(`${GH}/repos/acme/my-app/git/refs/*`, () => HttpResponse.json({})),
+    http.patch(`${GH}/repos/acme/my-app/git/refs/*`, async ({ request }) => {
+      const ref = decodeURIComponent(request.url.split('/git/refs/')[1] ?? '')
+      const body = (await request.json()) as { sha: string }
+      updatedRefs.push({ ref, sha: body.sha })
+      return HttpResponse.json({})
+    }),
   ]
 }
 
@@ -186,6 +192,7 @@ interface TreeRequest {
 }
 
 let committedTrees: TreeRequest[] = []
+let updatedRefs: { ref: string; sha: string }[] = []
 
 function setupGithubHandlers() {
   server.use(
@@ -294,19 +301,23 @@ describe('runInit (integration — real adapters + HTTP mocks)', () => {
     expect(deleteSession).not.toHaveBeenCalled()
   })
 
-  it('adds biffo.core.json and deletes the placeholder biffo.config.json on all three branches', async () => {
+  it('adds biffo.core.json and deletes the placeholder biffo.config.json in one shared commit', async () => {
     setupGithubHandlers()
     setupAwsMocks()
 
     await runInit(new GitHubAdapter('test-token'), new AwsAdapter(CONFIG), CONFIG, makeSession())
 
-    // One tree per branch: main, dev, staging.
-    expect(committedTrees).toHaveLength(3)
-    for (const tree of committedTrees) {
-      const byPath = Object.fromEntries(tree.tree.map((e) => [e.path, e.sha]))
-      expect(byPath['biffo.core.json']).toBe('blobsha')
-      // null sha = deletion
-      expect(byPath['biffo.config.json']).toBeNull()
-    }
+    // Issue #329: ONE tree/commit, built on the base branch, not one per branch.
+    expect(committedTrees).toHaveLength(1)
+    const byPath = Object.fromEntries(committedTrees[0]!.tree.map((e) => [e.path, e.sha]))
+    expect(byPath['biffo.core.json']).toBe('blobsha')
+    // null sha = deletion
+    expect(byPath['biffo.config.json']).toBeNull()
+
+    // All three branch refs end at that single commit — main from the commit
+    // itself, dev and staging fast-forwarded onto it — so they share it and the
+    // first dev→main promotion merges cleanly.
+    const pointedAtCommit = updatedRefs.filter((r) => r.sha === 'newcommitsha').map((r) => r.ref)
+    expect(pointedAtCommit.sort()).toEqual(['heads/dev', 'heads/main', 'heads/staging'])
   })
 })

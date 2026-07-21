@@ -7,6 +7,7 @@ import {
   appSiblingRegistryFiles,
   applyResolvedAwsCredentials,
   INSTANCE_CONFIG_FILE,
+  INSTANCE_FILE_BASE_BRANCH,
   INSTANCE_FILE_BRANCHES,
   resolveConfigFileSession,
   runInit,
@@ -93,6 +94,8 @@ function makeGithubMock() {
     setRepoSecret: vi.fn().mockResolvedValue(undefined),
     enableVulnerabilityAlerts: vi.fn().mockResolvedValue(undefined),
     commitFiles: vi.fn().mockResolvedValue('commitsha'),
+    getBranchSha: vi.fn().mockResolvedValue('commitsha'),
+    fastForwardBranch: vi.fn().mockResolvedValue(undefined),
     getRepoIds: vi.fn().mockResolvedValue({ ownerId: 42, repoId: 99 }),
   }
 }
@@ -433,17 +436,45 @@ describe('error handling', () => {
 describe('instance identity files', () => {
   const INSTANCE_CORE_FILE = 'biffo.core.json'
 
-  function changesOn(github: ReturnType<typeof makeGithubMock>, branch: string) {
-    const call = github.commitFiles.mock.calls.find((c) => c[2] === branch)
-    if (!call) throw new Error(`no commitFiles call for branch ${branch}`)
+  // Every branch shares ONE commit now (issue #329): the files are committed
+  // once on the base branch and the others are fast-forwarded onto it. So the
+  // committed content is whatever went onto the base branch.
+  function sharedCommitFiles(github: ReturnType<typeof makeGithubMock>) {
+    const call = github.commitFiles.mock.calls.find((c) => c[2] === INSTANCE_FILE_BASE_BRANCH)
+    if (!call) throw new Error(`no commitFiles call for the ${INSTANCE_FILE_BASE_BRANCH} branch`)
     return call[3] as { path: string; content: string | null }[]
   }
 
-  it('commits to main, dev and staging', async () => {
+  // Issue #329: one shared commit, not three independent look-alikes. The
+  // commit is built once on the base branch; dev and staging are fast-forwarded
+  // onto its SHA so they descend from it and the first dev→main promotion merges
+  // cleanly.
+  it('commits once on the base branch and fast-forwards dev and staging onto it', async () => {
     const github = makeGithubMock()
+    github.commitFiles.mockResolvedValue('shared-sha')
     await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
 
-    expect(github.commitFiles.mock.calls.map((c) => c[2])).toEqual(INSTANCE_FILE_BRANCHES)
+    expect(github.commitFiles.mock.calls.map((c) => c[2])).toEqual([INSTANCE_FILE_BASE_BRANCH])
+    expect(github.fastForwardBranch.mock.calls.map((c) => [c[2], c[3]])).toEqual([
+      ['dev', 'shared-sha'],
+      ['staging', 'shared-sha'],
+    ])
+  })
+
+  // Resume path: on re-entry the base already carries the content, so
+  // `commitFiles` returns null. The followers must then converge on the base's
+  // existing head rather than on `null`.
+  it('fast-forwards followers onto the existing base head when the commit is a resume no-op', async () => {
+    const github = makeGithubMock()
+    github.commitFiles.mockResolvedValue(null)
+    github.getBranchSha.mockResolvedValue('existing-base-head')
+    await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
+
+    expect(github.getBranchSha).toHaveBeenCalledWith('acme', 'my-app', INSTANCE_FILE_BASE_BRANCH)
+    expect(github.fastForwardBranch.mock.calls.map((c) => [c[2], c[3]])).toEqual([
+      ['dev', 'existing-base-head'],
+      ['staging', 'existing-base-head'],
+    ])
   })
 
   it('commits before branch protection is configured', async () => {
@@ -466,7 +497,7 @@ describe('instance identity files', () => {
     const github = makeGithubMock()
     await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
 
-    const core = changesOn(github, 'main').find((f) => f.path === INSTANCE_CORE_FILE)
+    const core = sharedCommitFiles(github).find((f) => f.path === INSTANCE_CORE_FILE)
     expect(core).toBeDefined()
     expect(JSON.parse(core!.content!)).toEqual({ version: getLatestCoreVersion() })
   })
@@ -475,7 +506,7 @@ describe('instance identity files', () => {
     const github = makeGithubMock()
     await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
 
-    const config = changesOn(github, 'main').find((f) => f.path === INSTANCE_CONFIG_FILE)
+    const config = sharedCommitFiles(github).find((f) => f.path === INSTANCE_CONFIG_FILE)
     expect(config).toBeDefined()
     // null content is the Git Data API deletion sentinel.
     expect(config!.content).toBeNull()
@@ -498,14 +529,12 @@ describe('instance identity files', () => {
     const github = makeGithubMock()
     await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
 
-    for (const branch of INSTANCE_FILE_BRANCHES) {
-      for (const change of changesOn(github, branch)) {
-        if (change.content === null) continue
-        expect(change.content).not.toContain('admin@example.com')
-        if (REGISTRY_FILE.test(change.path)) continue
-        expect(change.content).not.toContain('123456789012')
-        expect(change.content).not.toMatch(/\b\d{12}\b/)
-      }
+    for (const change of sharedCommitFiles(github)) {
+      if (change.content === null) continue
+      expect(change.content).not.toContain('admin@example.com')
+      if (REGISTRY_FILE.test(change.path)) continue
+      expect(change.content).not.toContain('123456789012')
+      expect(change.content).not.toMatch(/\b\d{12}\b/)
     }
   })
 
@@ -516,7 +545,7 @@ describe('instance identity files', () => {
     const github = makeGithubMock()
     await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
 
-    const registry = changesOn(github, 'dev').filter((c) => REGISTRY_FILE.test(c.path))
+    const registry = sharedCommitFiles(github).filter((c) => REGISTRY_FILE.test(c.path))
     expect(registry).toHaveLength(CONFIG.environments.length)
     for (const file of registry) {
       const parsed = JSON.parse(file.content!) as {
@@ -536,21 +565,30 @@ describe('instance identity files', () => {
     const github = makeGithubMock()
     await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
 
-    for (const branch of INSTANCE_FILE_BRANCHES) {
-      for (const change of changesOn(github, branch)) {
-        if (change.content === null) continue
-        expect(change.content, `${branch}:${change.path}`).not.toMatch(/\{\{[^}]*\}\}/)
-      }
+    for (const change of sharedCommitFiles(github)) {
+      if (change.content === null) continue
+      expect(change.content, change.path).not.toMatch(/\{\{[^}]*\}\}/)
     }
   })
 
-  it('commits identical changes to every branch', async () => {
+  // Issue #329: because there is one shared commit, "identical across branches"
+  // is now guaranteed by construction — the followers are fast-forwarded onto
+  // the exact SHA committed on the base branch, so they cannot diverge.
+  it('gives every branch the same commit by fast-forwarding onto the base SHA', async () => {
     const github = makeGithubMock()
+    github.commitFiles.mockResolvedValue('shared-sha')
     await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
 
-    const [main, dev, staging] = INSTANCE_FILE_BRANCHES.map((b) => changesOn(github, b))
-    expect(dev).toEqual(main)
-    expect(staging).toEqual(main)
+    expect(github.commitFiles).toHaveBeenCalledTimes(1)
+    expect(github.commitFiles.mock.calls[0]![2]).toBe(INSTANCE_FILE_BASE_BRANCH)
+    for (const follower of INSTANCE_FILE_BRANCHES.filter((b) => b !== INSTANCE_FILE_BASE_BRANCH)) {
+      expect(github.fastForwardBranch).toHaveBeenCalledWith(
+        'acme',
+        'my-app',
+        follower,
+        'shared-sha',
+      )
+    }
   })
 
   it('does not commit when github_config is already checkpointed complete', async () => {
@@ -569,9 +607,11 @@ describe('instance identity files', () => {
 // ─── The root application sibling (issue #306) ───────────────────────────────
 
 describe('the app sibling', () => {
-  function changesOn(github: ReturnType<typeof makeGithubMock>, branch: string) {
-    const call = github.commitFiles.mock.calls.find((c) => c[2] === branch)
-    if (!call) throw new Error(`no commitFiles call for branch ${branch}`)
+  // One shared commit on the base branch (issue #329); the followers are
+  // fast-forwarded onto it, so its content is what every branch carries.
+  function sharedCommitFiles(github: ReturnType<typeof makeGithubMock>) {
+    const call = github.commitFiles.mock.calls.find((c) => c[2] === INSTANCE_FILE_BASE_BRANCH)
+    if (!call) throw new Error(`no commitFiles call for the ${INSTANCE_FILE_BASE_BRANCH} branch`)
     return call[3] as { path: string; content: string | null }[]
   }
 
@@ -632,13 +672,21 @@ describe('the app sibling', () => {
   // The safety property: registration is derived and lands in step 5, BEFORE
   // the sibling's repo is created in step 6. A crash between the two leaves a
   // registration teardown can still act on, never an unregistered repo.
-  it('commits the registration onto every branch even without the sibling deps', async () => {
+  it('commits the registration into the shared instance commit even without the sibling deps', async () => {
     const github = makeGithubMock()
     await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
 
-    for (const branch of INSTANCE_FILE_BRANCHES) {
-      const paths = changesOn(github, branch).map((c) => c.path)
-      expect(paths).toContain('infra/environments/dev/siblings.auto.tfvars.json')
+    const paths = sharedCommitFiles(github).map((c) => c.path)
+    expect(paths).toContain('infra/environments/dev/siblings.auto.tfvars.json')
+    // Every branch descends from that commit — dev and staging are
+    // fast-forwarded onto it — so all of them carry the registration.
+    for (const follower of INSTANCE_FILE_BRANCHES.filter((b) => b !== INSTANCE_FILE_BASE_BRANCH)) {
+      expect(github.fastForwardBranch).toHaveBeenCalledWith(
+        'acme',
+        'my-app',
+        follower,
+        expect.anything(),
+      )
     }
   })
 
@@ -663,11 +711,9 @@ describe('the app sibling', () => {
     const steps = vi.mocked(markStepComplete).mock.calls.map((c) => c[1])
     expect(steps).toContain('github_instance_files')
     expect(steps).not.toContain('app_sibling')
-    for (const branch of INSTANCE_FILE_BRANCHES) {
-      expect(changesOn(github, branch).map((c) => c.path)).toContain(
-        'infra/environments/dev/siblings.auto.tfvars.json',
-      )
-    }
+    expect(sharedCommitFiles(github).map((c) => c.path)).toContain(
+      'infra/environments/dev/siblings.auto.tfvars.json',
+    )
   })
 
   it('skips the sibling step when it is already checkpointed', async () => {

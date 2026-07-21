@@ -575,10 +575,26 @@ export interface AppSiblingDeps {
 
 export const INSTANCE_CONFIG_FILE = 'biffo.config.json'
 
-/** The branches every scaffolded repo has, and which therefore all need the
- * instance files — `dev` (default) and `staging`/`main` (promotion targets),
- * each of which is protected and can only be updated by PR afterwards. */
-export const INSTANCE_FILE_BRANCHES = ['main', 'dev', 'staging']
+/**
+ * The branch the instance commit is created on. All three branches are cut from
+ * `main` at the same template commit (see runInit step 5a), so building the
+ * commit here and fast-forwarding the others onto it gives every branch one
+ * shared commit rather than three look-alike commits with unrelated SHAs.
+ */
+export const INSTANCE_FILE_BASE_BRANCH = 'main'
+
+/**
+ * The remaining branches, fast-forwarded onto the base branch's instance commit
+ * so they share its history. `dev` is the default and `staging`/`main` are the
+ * promotion targets; each is protected and can only be updated by PR afterwards.
+ */
+export const INSTANCE_FILE_FOLLOWER_BRANCHES = ['dev', 'staging'] as const
+
+/** Every branch that ends up carrying the instance files. */
+export const INSTANCE_FILE_BRANCHES = [
+  INSTANCE_FILE_BASE_BRANCH,
+  ...INSTANCE_FILE_FOLLOWER_BRANCHES,
+]
 
 /**
  * Commit the instance-identity changes onto every branch of the scaffolded repo:
@@ -601,8 +617,17 @@ export const INSTANCE_FILE_BRANCHES = ['main', 'dev', 'staging']
  * the instance's own Secret Scan red on its first run, which is a worse defect
  * than the one being fixed.
  *
- * Idempotent — `commitFiles` no-ops when the branch head already matches, so a
- * resumed `init` neither fails nor duplicates commits.
+ * All three branches get ONE shared commit, not three look-alikes (issue #329).
+ * The commit is built once on `INSTANCE_FILE_BASE_BRANCH` and `dev`/`staging`
+ * are fast-forwarded onto it. Committing the identical content to each branch
+ * independently produced three distinct SHAs; git treats those as unrelated, so
+ * the instance's very first `dev`→`main` promotion conflicted on files the user
+ * never touched. A single shared commit makes that promotion a clean merge.
+ *
+ * Idempotent — `commitFiles` no-ops when the base head already matches (a
+ * resumed init reuses that head as the shared commit), and `fastForwardBranch`
+ * no-ops when a follower is already there, so a resumed `init` neither fails nor
+ * duplicates commits.
  */
 export async function writeInstanceFiles(
   github: GitHubAdapter,
@@ -623,8 +648,15 @@ export async function writeInstanceFiles(
   const message = config
     ? `chore: record core version, register the ${ROOT_SIBLING_NAME} sibling, and drop the template ${INSTANCE_CONFIG_FILE}`
     : `chore: record core version and drop the template ${INSTANCE_CONFIG_FILE}`
-  for (const branch of INSTANCE_FILE_BRANCHES) {
-    await github.commitFiles(org, repo, branch, files, message)
+
+  // Build the commit once on the base branch, then fast-forward the rest onto
+  // it so all three branches share it (issue #329). `commitFiles` returns null
+  // when the base already carries the content (a resumed init): in that case its
+  // current head IS the shared commit the followers must converge on.
+  const committed = await github.commitFiles(org, repo, INSTANCE_FILE_BASE_BRANCH, files, message)
+  const sharedSha = committed ?? (await github.getBranchSha(org, repo, INSTANCE_FILE_BASE_BRANCH))
+  for (const branch of INSTANCE_FILE_FOLLOWER_BRANCHES) {
+    await github.fastForwardBranch(org, repo, branch, sharedSha)
   }
 }
 

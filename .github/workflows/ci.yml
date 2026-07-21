@@ -206,15 +206,8 @@ jobs:
           # Each module declares its own required_providers, so it validates
           # standalone after `init -backend=false`. A shared plugin cache means
           # providers download once, not once per module.
-          # NOTE: modules/source-control/github is skipped — it has pre-existing
-          # validate errors (a `require_linear_history` typo and a `clone_url`
-          # output attribute) unrelated to #327 and tracked in #344; fixing infra
-          # module bugs is out of scope for this check-scoping change.
           rc=0
           while IFS= read -r dir; do
-            case "$dir" in
-              modules/source-control/github) echo "== skip $dir (tracked separately) =="; continue ;;
-            esac
             echo "== validating $dir =="
             terraform -chdir="$dir" init -backend=false -input=false >/dev/null || { rc=1; continue; }
             terraform -chdir="$dir" validate || rc=1

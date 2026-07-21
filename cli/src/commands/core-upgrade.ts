@@ -25,6 +25,18 @@ import {
 import { type MaterializedTree, materializeTemplateAtTag } from '../lib/core-template-trees.js'
 import { log } from '../lib/logger.js'
 
+/**
+ * Guidance shown when `core upgrade` cannot find a template root — which is the
+ * normal case from a published CLI, since `core-manifest.json` is excluded from
+ * the npm package (issue #315). It names the flag this command actually exposes
+ * (`--template-repo`) and shows a complete invocation, because that flag is
+ * always required on this path. Every `--flag` it names must be a real option on
+ * `coreUpgradeCommand`; `error-flag-consistency.test.ts` enforces that (#324).
+ */
+export const MISSING_TEMPLATE_ROOT_GUIDANCE =
+  'Pass --template-repo <path> to a biffo-template git checkout, e.g. ' +
+  '`biffo core upgrade --template-repo /path/to/biffo-template`.'
+
 export const coreUpgradeCommand = new Command('upgrade')
   .description('Three-way-merge template-owned files for a core upgrade; preview it or open a PR')
   .option('--cwd <path>', 'Instance repo root to upgrade (defaults to the current directory)')
@@ -177,7 +189,9 @@ async function runCoreUpgradeResolved(
   cleanups: Array<() => void>,
 ): Promise<void> {
   const materialize = deps.materialize ?? materializeTemplateAtTag
-  const templateRepo = options.templateRepo ? resolve(options.templateRepo) : resolveTemplateRoot()
+  const templateRepo = options.templateRepo
+    ? resolve(options.templateRepo)
+    : resolveTemplateRoot({ guidance: MISSING_TEMPLATE_ROOT_GUIDANCE })
   const instanceVersion = readInstanceCoreVersion(options.cwd)
 
   // Target tree (theirs): explicit checkout > template working tree (when the

@@ -10,6 +10,17 @@ import {
 import { readCoreVersionFile, readInstanceCoreVersion } from '../lib/core-version.js'
 import { log } from '../lib/logger.js'
 
+/**
+ * Guidance shown when `core diff` cannot find a template root. It names the flag
+ * this command exposes (`--template`) — distinct from `core upgrade`'s
+ * `--template-repo` — with a complete invocation. Every `--flag` it names must
+ * be a real option on `coreDiffCommand`; `error-flag-consistency.test.ts`
+ * enforces that (#324).
+ */
+export const MISSING_TEMPLATE_ROOT_GUIDANCE =
+  'Pass --template <path> to a biffo-template checkout, e.g. ' +
+  '`biffo core diff --template /path/to/biffo-template`.'
+
 export const coreDiffCommand = new Command('diff')
   .description(
     'Show which template-owned files an upgrade would change in this instance (read-only)',
@@ -43,7 +54,8 @@ export interface CoreDiffOptions {
  * it's the preview that `biffo core upgrade` (Phase 3) will turn into a PR.
  */
 export async function runCoreDiff(options: CoreDiffOptions): Promise<void> {
-  const templateRoot = options.templateRoot ?? resolveTemplateRoot()
+  const templateRoot =
+    options.templateRoot ?? resolveTemplateRoot({ guidance: MISSING_TEMPLATE_ROOT_GUIDANCE })
   const manifest = readCoreManifest(templateRoot)
 
   const templateVersion = readCoreVersionFile(join(templateRoot, 'core.version'))

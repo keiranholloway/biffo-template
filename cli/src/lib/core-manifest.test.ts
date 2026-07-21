@@ -10,6 +10,7 @@ import {
   isTemplateOwned,
   listTemplateOwnedFiles,
   readCoreManifest,
+  resolveTemplateRoot,
 } from './core-manifest.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -92,6 +93,19 @@ describe('real repo core-manifest.json', () => {
 
   it('findTemplateRoot locates the repo root from a nested dir', () => {
     expect(findTemplateRoot(here)).toBe(repoRoot)
+  })
+
+  it('resolveTemplateRoot appends caller guidance verbatim when no root is found', () => {
+    // A tmp dir has no core-manifest.json / core.version above it, so the walk
+    // fails and the command-specific remedy (issue #324) must reach the user.
+    const noRoot = mkdtempSync(join(tmpdir(), 'biffo-noroot-'))
+    try {
+      expect(() =>
+        resolveTemplateRoot({ fromDir: noRoot, guidance: 'Pass --template-repo <path>.' }),
+      ).toThrow(/Could not locate a Biffo template root.*Pass --template-repo <path>\./s)
+    } finally {
+      rmSync(noRoot, { recursive: true, force: true })
+    }
   })
 })
 

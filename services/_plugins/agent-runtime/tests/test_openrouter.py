@@ -8,20 +8,27 @@ import httpx
 import pytest
 from agent_runtime.openrouter import LLMError, OpenRouterClient
 
-_SECRET_ARN = "arn:aws:secretsmanager:eu-west-2:123456789012:secret:openrouter-AbCdEf"
+_PARAMETER = "/myproject/dev/agent-runtime/openrouter-api-key"
 _FAKE_KEY = "not-a-real-openrouter-key"
 
 
-class FakeSecrets:
-    """The one Secrets Manager call this client makes."""
+class FakeSsm:
+    """Serves SSM parameters from a dict; records what was asked for."""
 
-    def __init__(self, secret_string: str) -> None:
-        self.secret_string = secret_string
-        self.calls: list[str] = []
+    def __init__(self, parameters: dict[str, str] | None = None) -> None:
+        self.parameters = parameters or {}
+        self.calls: list[dict[str, Any]] = []
 
-    def get_secret_value(self, *, SecretId: str) -> dict[str, Any]:  # noqa: N803 — boto3 kwarg
-        self.calls.append(SecretId)
-        return {"SecretString": self.secret_string}
+    def get_parameter(
+        self,
+        *,
+        Name: str,  # noqa: N803 — boto3's own parameter casing
+        WithDecryption: bool = False,  # noqa: N803 — boto3's own parameter casing
+    ) -> dict[str, Any]:
+        self.calls.append({"Name": Name, "WithDecryption": WithDecryption})
+        if Name not in self.parameters:
+            raise KeyError(f"Parameter {Name} not found")
+        return {"Parameter": {"Name": Name, "Value": self.parameters[Name]}}
 
 
 def _client(handler, **kwargs: Any) -> OpenRouterClient:
@@ -63,35 +70,63 @@ async def test_sends_the_model_and_message_array_and_parses_usage(monkeypatch):
     assert request.headers["authorization"] == f"Bearer {_FAKE_KEY}"
 
 
-async def test_the_key_comes_from_secrets_manager_when_no_env_var_is_set(monkeypatch):
+async def test_the_key_comes_from_ssm_when_no_env_var_is_set(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.setenv("OPENROUTER_API_KEY_SECRET_ARN", _SECRET_ARN)
-    secrets = FakeSecrets(_FAKE_KEY)
+    monkeypatch.setenv("OPENROUTER_API_KEY_PARAMETER", _PARAMETER)
+    ssm = FakeSsm({_PARAMETER: _FAKE_KEY})
     handler, seen = _ok()
-    client = _client(handler, secrets_client=secrets)
+    client = _client(handler, ssm_client=ssm)
 
     await client.complete(model="m", messages=[], timeout=5.0)
     await client.complete(model="m", messages=[], timeout=5.0)
 
     assert seen[0].headers["authorization"] == f"Bearer {_FAKE_KEY}"
-    # Resolved once and cached for the warm container, not per call.
-    assert secrets.calls == [_SECRET_ARN]
+    # A SecureString must be fetched decrypted, and resolved once for the warm
+    # container rather than on every call.
+    assert ssm.calls == [{"Name": _PARAMETER, "WithDecryption": True}]
 
 
-async def test_a_json_secret_is_unwrapped(monkeypatch):
+async def test_an_unreadable_parameter_is_a_credential_error_and_no_provider_call(monkeypatch):
+    """A missing parameter or denied GetParameter must not reach the provider."""
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.setenv("OPENROUTER_API_KEY_SECRET_ARN", _SECRET_ARN)
+    monkeypatch.setenv("OPENROUTER_API_KEY_PARAMETER", _PARAMETER)
     handler, seen = _ok()
-    client = _client(handler, secrets_client=FakeSecrets(f'{{"api_key": "{_FAKE_KEY}"}}'))
+    client = _client(handler, ssm_client=FakeSsm({}))
 
-    await client.complete(model="m", messages=[], timeout=5.0)
+    with pytest.raises(LLMError, match="Could not read the OpenRouter API key from SSM parameter"):
+        await client.complete(model="m", messages=[], timeout=5.0)
+
+    assert seen == []
+
+
+async def test_an_empty_parameter_value_is_a_credential_error(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY_PARAMETER", _PARAMETER)
+    handler, seen = _ok()
+    client = _client(handler, ssm_client=FakeSsm({_PARAMETER: "  "}))
+
+    with pytest.raises(LLMError, match="empty OpenRouter API key"):
+        await client.complete(model="m", messages=[], timeout=5.0)
+
+    assert seen == []
+
+
+async def test_the_env_var_override_wins_and_never_touches_ssm(monkeypatch):
+    """Local runs and tests set the key directly; AWS is never reached."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    monkeypatch.setenv("OPENROUTER_API_KEY_PARAMETER", _PARAMETER)
+    ssm = FakeSsm({_PARAMETER: "a-different-key"})
+    handler, seen = _ok()
+
+    await _client(handler, ssm_client=ssm).complete(model="m", messages=[], timeout=5.0)
 
     assert seen[0].headers["authorization"] == f"Bearer {_FAKE_KEY}"
+    assert ssm.calls == []
 
 
 async def test_missing_credential_fails_loudly(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.delenv("OPENROUTER_API_KEY_SECRET_ARN", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY_PARAMETER", raising=False)
     handler, _ = _ok()
 
     with pytest.raises(LLMError, match="No OpenRouter credential"):
@@ -109,6 +144,20 @@ async def test_a_provider_error_becomes_an_llm_error_without_the_key(monkeypatch
 
     assert "429" in str(exc.value)
     # The credential must never travel in an error that lands on a run record.
+    assert _FAKE_KEY not in str(exc.value)
+
+
+async def test_a_key_fetched_from_ssm_never_appears_in_a_provider_error(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY_PARAMETER", _PARAMETER)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, text="unauthorized")
+
+    client = _client(handler, ssm_client=FakeSsm({_PARAMETER: _FAKE_KEY}))
+    with pytest.raises(LLMError) as exc:
+        await client.complete(model="m", messages=[], timeout=5.0)
+
     assert _FAKE_KEY not in str(exc.value)
 
 

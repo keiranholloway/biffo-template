@@ -13,10 +13,19 @@ implemented here:
 
 **The credential.** ``OPENROUTER_API_KEY`` is read from the environment when
 present (local runs, tests); otherwise it is fetched once per warm container from
-Secrets Manager using ``OPENROUTER_API_KEY_SECRET_ARN``. It is never committed,
-never logged, and never included in an error: the exceptions raised below carry
-the provider's status and body, both of which are provider output, and the key
-only ever leaves this module inside an ``Authorization`` header.
+an SSM SecureString parameter named by ``OPENROUTER_API_KEY_PARAMETER``. It is
+never committed, never logged, and never included in an error: the exceptions
+raised below carry the provider's status and body, both of which are provider
+output, and the key only ever leaves this module inside an ``Authorization``
+header.
+
+Parameter Store rather than Secrets Manager, deliberately — this is one API key
+read at cold start, so rotation, versioning and cross-account policies buy
+nothing, a Secrets Manager secret bills ~$0.40/month, and a SecureString on the
+AWS-managed key is free at standard tier. It also matches the orchestrator's
+WhatsApp credentials, so both plugin third-party credentials are fetched the
+same way. A SecureString holding one key is a plain string, which is why nothing
+here unwraps JSON.
 
 The client is deliberately thin — no retries, no streaming, no tool schemas. Each
 of those is a later milestone, and each attaches to the loop rather than to this
@@ -35,12 +44,9 @@ import httpx
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
 # Env var names. The direct value wins so a local run or a test never reaches for
-# AWS; the ARN is what Terraform wires in a real deployment.
+# AWS; the parameter name is what Terraform wires in a real deployment.
 _KEY_ENV = "OPENROUTER_API_KEY"  # noqa: S105 — an env var name, not a credential
-_KEY_SECRET_ARN_ENV = "OPENROUTER_API_KEY_SECRET_ARN"  # noqa: S105 — likewise
-
-# Keys tried when a Secrets Manager secret holds JSON rather than a bare string.
-_SECRET_JSON_KEYS = ("api_key", "OPENROUTER_API_KEY", "key")
+_KEY_PARAMETER_ENV = "OPENROUTER_API_KEY_PARAMETER"  # noqa: S105 — likewise
 
 
 class LLMError(Exception):
@@ -75,26 +81,6 @@ class LLMClient(Protocol):
     ) -> LLMResponse: ...
 
 
-def _extract_secret_value(raw: str) -> str:
-    """A Secrets Manager secret may be the bare key or a JSON object holding it."""
-    import json
-
-    stripped = raw.strip()
-    if not stripped.startswith("{"):
-        return stripped
-    try:
-        data = json.loads(stripped)
-    except json.JSONDecodeError as exc:
-        raise LLMError(f"OpenRouter secret is neither a bare key nor valid JSON: {exc}") from exc
-    for key in _SECRET_JSON_KEYS:
-        value = data.get(key)
-        if value:
-            return str(value)
-    raise LLMError(
-        f"OpenRouter secret JSON has none of the expected keys {list(_SECRET_JSON_KEYS)}"
-    )
-
-
 class OpenRouterClient:
     """Async OpenRouter chat-completions client."""
 
@@ -104,21 +90,23 @@ class OpenRouterClient:
         *,
         base_url: str | None = None,
         http_client: httpx.AsyncClient | None = None,
-        secrets_client: Any | None = None,
+        ssm_client: Any | None = None,
     ) -> None:
         self._api_key = api_key
         self._base_url = (base_url or os.environ.get("OPENROUTER_BASE_URL") or "").rstrip(
             "/"
         ) or DEFAULT_BASE_URL
         self._http = http_client if http_client is not None else httpx.AsyncClient()
-        self._secrets = secrets_client
+        self._ssm = ssm_client
 
     def _resolve_api_key(self) -> str:
         """The key, resolved once and cached for the life of the container.
 
-        Env var first (local, tests), Secrets Manager second (deployed). Raises
-        rather than proceeding unauthenticated — a 401 from the provider is a
-        worse diagnostic than the missing-configuration message.
+        Env var first (local, tests), SSM second (deployed). Raises rather than
+        proceeding unauthenticated — a 401 from the provider is a worse
+        diagnostic than the missing-configuration message. The parameter is a
+        SecureString, so the fetch always decrypts; the error path names the
+        parameter, never the value it failed to read.
         """
         if self._api_key:
             return self._api_key
@@ -128,23 +116,29 @@ class OpenRouterClient:
             self._api_key = env_key
             return env_key
 
-        secret_arn = os.environ.get(_KEY_SECRET_ARN_ENV, "").strip()
-        if not secret_arn:
-            raise LLMError(f"No OpenRouter credential: set {_KEY_ENV} or {_KEY_SECRET_ARN_ENV}.")
+        parameter = os.environ.get(_KEY_PARAMETER_ENV, "").strip()
+        if not parameter:
+            raise LLMError(f"No OpenRouter credential: set {_KEY_ENV} or {_KEY_PARAMETER_ENV}.")
 
-        client = self._secrets
+        client = self._ssm
         if client is None:
             import boto3
 
-            client = boto3.client("secretsmanager")
-            self._secrets = client
+            client = boto3.client("ssm")
+            self._ssm = client
         try:
-            secret = client.get_secret_value(SecretId=secret_arn)
+            response = client.get_parameter(Name=parameter, WithDecryption=True)
+            key = str(response["Parameter"]["Value"]).strip()
         except Exception as exc:  # noqa: BLE001 — botocore raises many shapes; all are fatal here
-            raise LLMError(f"Could not read the OpenRouter secret: {exc}") from exc
+            raise LLMError(
+                f"Could not read the OpenRouter API key from SSM parameter {parameter}: {exc}"
+            ) from exc
 
-        self._api_key = _extract_secret_value(str(secret.get("SecretString") or ""))
-        return self._api_key
+        if not key:
+            raise LLMError(f"SSM parameter {parameter} holds an empty OpenRouter API key.")
+
+        self._api_key = key
+        return key
 
     async def complete(
         self,

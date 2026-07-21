@@ -14,10 +14,10 @@
 #      platform ceiling this sits inside: "A Lambda invocation is capped at 15
 #      minutes, so a multi-turn loop must either finish inside one invocation or
 #      be resumable across several."
-#   2. It reads one secret — the OpenRouter API key — so it attaches a
-#      least-privilege secretsmanager:GetSecretValue policy scoped to that one
-#      secret ARN. The key is never a Terraform-committed literal and never an
-#      environment variable holding the value itself.
+#   2. It reads one credential — the OpenRouter API key — so it attaches a
+#      least-privilege ssm:GetParameter policy scoped to that one parameter,
+#      plus a kms:Decrypt fenced to SSM. The key is never a Terraform-committed
+#      literal and never an environment variable holding the value itself.
 #   3. Its event subscription is specific, not a catch-all: only
 #      biffo.core/agent.run.requested. The orchestrator subscribes to everything
 #      because it is a generic forwarder; this runtime has exactly one trigger
@@ -36,6 +36,9 @@ terraform {
   }
 }
 
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
 locals {
   name_prefix   = "${var.project_name}-${var.environment}"
   function_name = "${local.name_prefix}-plugin-${var.plugin_name}"
@@ -45,10 +48,14 @@ locals {
   # Grant Core API access only when the root config told us which API to scope
   # it to. Empty (the default) => the plugin never calls Core, so no grant.
   grants_core_api_access = var.core_api_execution_arn != ""
-  # Likewise for the OpenRouter key: no secret ARN, no grant. The runtime then
-  # fails its first run with a clear "no OpenRouter credential" error rather
-  # than holding a permission it cannot use.
-  grants_secret_access = var.openrouter_api_key_secret_arn != ""
+  # Likewise for the OpenRouter key: no parameter name, no grant. The runtime
+  # then fails its first run with a clear "no OpenRouter credential" error
+  # rather than holding a permission it cannot use.
+  grants_credential_access = var.openrouter_api_key_parameter != ""
+  # The parameter is configured by *name*; the ARN is derived. Names are written
+  # with or without a leading slash, and the ARN always has exactly one — the
+  # same normalisation the orchestrator does for its WhatsApp parameters.
+  openrouter_parameter_arn = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/${trimprefix(var.openrouter_api_key_parameter, "/")}"
 }
 
 # Compute — the plugin's Lambda function.
@@ -72,11 +79,11 @@ module "function" {
     {
       BIFFO_CORE_API_URL = var.core_api_url
       BIFFO_PLUGIN_NAME  = var.plugin_name
-      # The ARN of the secret holding the OpenRouter key — never the key. The
-      # runtime resolves it once per warm container (src/agent_runtime/
+      # The *name* of the SSM parameter holding the OpenRouter key — never the
+      # key. The runtime resolves it once per warm container (src/agent_runtime/
       # openrouter.py) so the value never appears in the function's
       # configuration, where anyone with lambda:GetFunction could read it.
-      OPENROUTER_API_KEY_SECRET_ARN = var.openrouter_api_key_secret_arn
+      OPENROUTER_API_KEY_PARAMETER = var.openrouter_api_key_parameter
       # ADR-0014 §8 hard stops, deployment-wide ceilings a worker definition can
       # only narrow. The wall clock sits inside var.timeout with room to spare
       # so a run that exhausts its budget can still POST its failure to Core
@@ -177,24 +184,49 @@ resource "aws_iam_role_policy" "core_api" {
 }
 
 # The OpenRouter API key (ADR-0014 §1: "Provider access sits behind the runtime's
-# own client"). Read at runtime from Secrets Manager, so the credential is never
-# in Terraform state as a literal, never in the Lambda's environment, and
+# own client"). Read at runtime from SSM Parameter Store, so the credential is
+# never in Terraform state as a literal, never in the Lambda's environment, and
 # rotatable without a deploy.
-data "aws_iam_policy_document" "openrouter_secret" {
-  count = local.grants_secret_access ? 1 : 0
+#
+# Parameter Store rather than Secrets Manager, deliberately — do not "fix" this
+# back. This is a single API key fetched once per cold start: rotation,
+# versioning and cross-account resource policies (what the extra service buys)
+# are all unused, while a Secrets Manager secret bills ~$0.40/month and a
+# SecureString on the AWS-managed key is free at standard tier. It also makes
+# the two plugin third-party credentials consistent — the orchestrator's
+# WhatsApp token is already an SSM SecureString read the same way.
+#
+# The grant is two statements: GetParameter on exactly this one parameter, and
+# Decrypt fenced to SSM by kms:ViaService, so the AWS-managed key it names
+# cannot be used for anything but a parameter fetch. Both are absent entirely
+# when no parameter is configured.
+data "aws_iam_policy_document" "openrouter_credential" {
+  count = local.grants_credential_access ? 1 : 0
 
   statement {
-    sid       = "ReadOpenRouterApiKey"
+    sid       = "ReadOpenRouterApiKeyParameter"
     effect    = "Allow"
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = [var.openrouter_api_key_secret_arn]
+    actions   = ["ssm:GetParameter"]
+    resources = [local.openrouter_parameter_arn]
+  }
+
+  statement {
+    sid       = "DecryptOpenRouterApiKeyParameter"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.${data.aws_region.current.name}.amazonaws.com"]
+    }
   }
 }
 
-resource "aws_iam_role_policy" "openrouter_secret" {
-  count = local.grants_secret_access ? 1 : 0
+resource "aws_iam_role_policy" "openrouter_credential" {
+  count = local.grants_credential_access ? 1 : 0
   name  = "${local.function_name}-openrouter"
   role  = element(split("/", module.function.role_arn), length(split("/", module.function.role_arn)) - 1)
 
-  policy = data.aws_iam_policy_document.openrouter_secret[0].json
+  policy = data.aws_iam_policy_document.openrouter_credential[0].json
 }

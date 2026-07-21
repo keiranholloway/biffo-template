@@ -58,18 +58,42 @@ cheap now and expensive later:
 
 ## Configuration
 
-| Env var                          | Set by                            | Purpose                                                     |
-| -------------------------------- | --------------------------------- | ----------------------------------------------------------- |
-| `BIFFO_CORE_API_URL`             | Terraform                         | Core API base URL for the signed client.                     |
-| `OPENROUTER_API_KEY_SECRET_ARN`  | Terraform (`terraform/`)          | Secrets Manager ARN of the key; read at first use, cached.   |
-| `OPENROUTER_API_KEY`             | local runs / tests only           | Direct key. Takes precedence; never set this in a deployment. |
-| `AGENT_RUNTIME_MAX_SECONDS`      | Terraform (`run_timeout_seconds`) | Deployment wall-clock ceiling (§8). Default 240.             |
-| `AGENT_RUNTIME_MAX_TURNS`        | Terraform (`max_turns_ceiling`)   | Deployment turn ceiling (§8). Default 10.                    |
+| Env var                        | Set by                            | Purpose                                                       |
+| ------------------------------ | --------------------------------- | ------------------------------------------------------------- |
+| `BIFFO_CORE_API_URL`           | Terraform                         | Core API base URL for the signed client.                       |
+| `OPENROUTER_API_KEY_PARAMETER` | Terraform (`terraform/`)          | SSM SecureString parameter *name*; read at first use, cached.  |
+| `OPENROUTER_API_KEY`           | local runs / tests only           | Direct key. Takes precedence; never set this in a deployment.  |
+| `AGENT_RUNTIME_MAX_SECONDS`    | Terraform (`run_timeout_seconds`) | Deployment wall-clock ceiling (§8). Default 240.               |
+| `AGENT_RUNTIME_MAX_TURNS`      | Terraform (`max_turns_ceiling`)   | Deployment turn ceiling (§8). Default 10.                      |
 
-**The key is never committed and never logged.** Terraform takes an ARN, not a
-value, so the credential is absent from state and from the Lambda's environment,
-and rotates without a deploy. A worker definition never sees it — it names a
-model, and provider access stays behind this runtime's client (§1).
+**The key is never committed and never logged.** Terraform takes a parameter
+name, not a value, so the credential is absent from state and from the Lambda's
+environment, and rotates without a deploy. A worker definition never sees it —
+it names a model, and provider access stays behind this runtime's client (§1).
+
+### The credential lives in SSM Parameter Store, not Secrets Manager
+
+Deliberate; don't "fix" it back. This is a single API key read once per cold
+start, so the features Secrets Manager adds — rotation, versioning,
+cross-account resource policies — are all unused, while a secret bills roughly
+$0.40/month and a SecureString on the AWS-managed key is free at standard tier.
+It also makes the two plugin third-party credentials consistent: the
+orchestrator's WhatsApp token already works exactly this way.
+
+Follow the platform's `/<project>/<env>/<component>/<secret>` naming (the same
+shape as `db/credentials` and `pr-signer/github-app-key`):
+
+```bash
+aws ssm put-parameter --type SecureString \
+  --name /myproject/dev/agent-runtime/openrouter-api-key --value "<key>"
+```
+
+then pass that name as the module's `openrouter_api_key_parameter`. The module
+grants `ssm:GetParameter` on exactly that parameter plus `kms:Decrypt` fenced by
+a `kms:ViaService` condition, so the grant is useless outside an SSM fetch — and
+is absent entirely when no parameter is configured. Because a SecureString
+holding one key is just a string, the runtime does no JSON unwrapping: whatever
+the parameter holds *is* the key.
 
 A worker's own `max_turns` / `timeout_seconds` are read from the run's
 `definition_snapshot` and **clamped into** the ceilings above, so editing a

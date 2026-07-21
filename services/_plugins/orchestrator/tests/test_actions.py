@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from orchestrator.actions import (
     ActionError,
     WhatsAppSettings,
@@ -39,9 +38,7 @@ def test_send_email_renders_templates_and_sends():
 def test_missing_template_field_renders_empty():
     ses = FakeSes()
 
-    send_email(
-        {"from": "f@x", "to": "t@x", "subject": "Hi {missing}"}, {}, ses_client=ses
-    )
+    send_email({"from": "f@x", "to": "t@x", "subject": "Hi {missing}"}, {}, ses_client=ses)
 
     assert ses.calls[0]["Message"]["Subject"]["Data"] == "Hi "
 

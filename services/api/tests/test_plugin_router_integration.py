@@ -13,16 +13,15 @@ import asyncio
 from collections.abc import AsyncGenerator, Generator
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
-
 from api.database import get_db
 from api.dependencies import require_plugin_tenant_context
 from api.middleware.auth import AuthenticatedUser, require_auth
 from api.models.base import Base
 from api.routing.plugin_router import build_plugin_router
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 _NOTEPAD_MANIFEST = {
     "name": "notepad",
@@ -82,7 +81,7 @@ def _caller(tenant_id: str, roles: list[str] | None = None) -> AuthenticatedUser
 
 
 @pytest.fixture
-def plugin_app() -> Generator[FastAPI, None, None]:
+def plugin_app() -> Generator[FastAPI]:
     """A throwaway FastAPI app with the notepad plugin's routes mounted the
     same way main.py mounts build_plugin_router() on the real app, backed by
     a single shared in-memory SQLite connection (StaticPool — the default
@@ -103,7 +102,7 @@ def plugin_app() -> Generator[FastAPI, None, None]:
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
+    async def override_get_db() -> AsyncGenerator[AsyncSession]:
         async with session_factory() as session:
             try:
                 yield session
@@ -113,9 +112,7 @@ def plugin_app() -> Generator[FastAPI, None, None]:
                 raise
 
     app = FastAPI()
-    app.include_router(
-        build_plugin_router(manifests=[_NOTEPAD_MANIFEST]), prefix="/api/v1"
-    )
+    app.include_router(build_plugin_router(manifests=[_NOTEPAD_MANIFEST]), prefix="/api/v1")
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[require_auth] = lambda: _caller("default")
 
@@ -192,9 +189,7 @@ class TestGenericCrudFlow:
         assert resp.status_code == 404
 
     def test_update_unknown_id_returns_404(self, client: TestClient):
-        resp = client.put(
-            "/api/v1/plugins/notepad/notes/does-not-exist", json={"title": "x"}
-        )
+        resp = client.put("/api/v1/plugins/notepad/notes/does-not-exist", json={"title": "x"})
         assert resp.status_code == 404
 
     def test_delete_unknown_id_returns_404(self, client: TestClient):
@@ -216,9 +211,7 @@ class TestTenantScoping:
         # tenant_id always comes from require_plugin_tenant_context, never the body.
         assert resp.json()["tenant_id"] == "default"
 
-    def test_other_tenant_cannot_see_or_mutate_row(
-        self, plugin_app: FastAPI, client: TestClient
-    ):
+    def test_other_tenant_cannot_see_or_mutate_row(self, plugin_app: FastAPI, client: TestClient):
         create_resp = client.post(
             "/api/v1/plugins/notepad/notes", json={"title": "tenant A's note"}
         )
@@ -241,9 +234,7 @@ class TestTenantScoping:
         — and a request with no Authorization header is rejected before it
         ever reaches the generic CRUD handler."""
         app = FastAPI()
-        app.include_router(
-            build_plugin_router(manifests=[_NOTEPAD_MANIFEST]), prefix="/api/v1"
-        )
+        app.include_router(build_plugin_router(manifests=[_NOTEPAD_MANIFEST]), prefix="/api/v1")
         # get_db must still be overridden (no real DB in this test process),
         # but require_auth is deliberately left un-overridden.
         app.dependency_overrides[get_db] = lambda: iter(())
@@ -260,9 +251,7 @@ class TestRequirePluginTenantContext:
         assert require_plugin_tenant_context(_caller("default")) == "default"
 
 
-def _enforcement_client(
-    manifest: dict, caller: AuthenticatedUser
-) -> Generator[TestClient, None, None]:
+def _enforcement_client(manifest: dict, caller: AuthenticatedUser) -> Generator[TestClient]:
     """Build a throwaway app for one manifest + caller, for the ADR-0004
     enforcement tests. Mirrors the plugin_app fixture but parameterized."""
     engine = create_async_engine(
@@ -278,7 +267,7 @@ def _enforcement_client(
     asyncio.run(_create_tables())
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
+    async def override_get_db() -> AsyncGenerator[AsyncSession]:
         async with session_factory() as session:
             try:
                 yield session
@@ -370,12 +359,7 @@ class TestPermissionEnforcement:
         }
         for client in _enforcement_client(manifest, _caller("default")):
             assert client.get("/api/v1/plugins/gadgets/g").status_code == 404
-            assert (
-                client.post(
-                    "/api/v1/plugins/gadgets/g", json={"label": "x"}
-                ).status_code
-                == 404
-            )
+            assert client.post("/api/v1/plugins/gadgets/g", json={"label": "x"}).status_code == 404
 
     def test_allowed_op_is_reachable_denied_op_is_404(self):
         manifest = _manifest_with_permissions(
@@ -384,12 +368,7 @@ class TestPermissionEnforcement:
         for client in _enforcement_client(manifest, _caller("default")):
             assert client.get("/api/v1/plugins/gadgets/g").status_code == 200
             # create declared as a route but not allowed -> 404, not 403.
-            assert (
-                client.post(
-                    "/api/v1/plugins/gadgets/g", json={"label": "x"}
-                ).status_code
-                == 404
-            )
+            assert client.post("/api/v1/plugins/gadgets/g", json={"label": "x"}).status_code == 404
 
     def test_role_gated_op_forbidden_without_role(self):
         manifest = _manifest_with_permissions(
@@ -401,21 +380,14 @@ class TestPermissionEnforcement:
         # Caller has no roles -> can list, but create is 403 (exposed, wrong role).
         for client in _enforcement_client(manifest, _caller("default")):
             assert client.get("/api/v1/plugins/gadgets/g").status_code == 200
-            assert (
-                client.post(
-                    "/api/v1/plugins/gadgets/g", json={"label": "x"}
-                ).status_code
-                == 403
-            )
+            assert client.post("/api/v1/plugins/gadgets/g", json={"label": "x"}).status_code == 403
 
     def test_role_gated_op_allowed_with_matching_role(self):
         manifest = _manifest_with_permissions(
             {"create": {"allowed": True, "required_role": ["editor", "admin"]}}
         )
         # Any-of match: caller has 'editor', one of the required roles.
-        for client in _enforcement_client(
-            manifest, _caller("default", roles=["editor"])
-        ):
+        for client in _enforcement_client(manifest, _caller("default", roles=["editor"])):
             resp = client.post("/api/v1/plugins/gadgets/g", json={"label": "x"})
             assert resp.status_code == 201
             assert resp.json()["label"] == "x"

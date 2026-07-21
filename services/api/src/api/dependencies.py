@@ -111,12 +111,8 @@ def require_crud_permission(
     async def guard(caller: AuthenticatedUser = Depends(require_auth)) -> None:
         rule = lookup_permission(table, operation, registry=registry)
         if rule is None or not rule.allowed:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Not found"
-            )
-        if rule.required_role and not set(rule.required_role).intersection(
-            caller.roles
-        ):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        if rule.required_role and not set(rule.required_role).intersection(caller.roles):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have permission to perform this action",

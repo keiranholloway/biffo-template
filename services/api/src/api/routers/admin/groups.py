@@ -30,7 +30,5 @@ async def list_groups(
     try:
         groups = cog.list_groups()
     except CognitoAdminError as err:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=err.message
-        ) from err
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=err.message) from err
     return GroupListResponse(groups=groups)

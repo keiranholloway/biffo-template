@@ -67,14 +67,10 @@ def _to_response(cog: CognitoAdmin, user: dict) -> AdminUserResponse:
 async def _mirror_is_active(db: AsyncSession, cognito_sub: str, active: bool) -> None:
     """Best-effort mirror of Cognito enabled-state onto the DB user row, if one
     exists. A user provisioned but never logged in has no row yet — nothing to do."""
-    await db.execute(
-        update(User).where(User.cognito_sub == cognito_sub).values(is_active=active)
-    )
+    await db.execute(update(User).where(User.cognito_sub == cognito_sub).values(is_active=active))
 
 
-def _emit_user_lifecycle(
-    db: AsyncSession, event: EventType, user: dict, *, tenant_id: str
-) -> None:
+def _emit_user_lifecycle(db: AsyncSession, event: EventType, user: dict, *, tenant_id: str) -> None:
     """Buffer a user-lifecycle state-change for publish after commit (ADR-0002).
 
     These actions live in Cognito with a best-effort DB mirror, so there's no

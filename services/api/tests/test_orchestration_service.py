@@ -6,9 +6,6 @@ and outcome recording (record_result).
 """
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
 from api import orchestration as svc
 from api.models.base import Base
 from api.models.orchestration import (  # noqa: F401 — registers tables on Base.metadata
@@ -16,6 +13,8 @@ from api.models.orchestration import (  # noqa: F401 — registers tables on Bas
     WorkflowDefinition,
     WorkflowRun,
 )
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 @pytest.fixture
@@ -101,12 +100,8 @@ async def test_dispatch_is_idempotent_on_replay(db_session):
 
 async def test_dispatch_ignores_disabled_and_mismatched(db_session):
     await _make_definition(db_session, name="disabled", enabled=False)
-    await _make_definition(
-        db_session, name="other-event", trigger_detail_type="lead.captured"
-    )
-    await _make_definition(
-        db_session, name="other-source", trigger_source="other.system"
-    )
+    await _make_definition(db_session, name="other-event", trigger_detail_type="lead.captured")
+    await _make_definition(db_session, name="other-source", trigger_source="other.system")
 
     claimed = await svc.dispatch_event(
         db_session,
@@ -169,9 +164,7 @@ async def test_dispatch_honors_trigger_filter(db_session):
 async def test_dispatch_empty_filter_matches_every_event(db_session):
     # A None/empty filter is the wildcard: the definition fires regardless of
     # payload — the default behaviour for triggers that don't need refining.
-    await _make_definition(
-        db_session, trigger_detail_type="leads.updated", trigger_filter=None
-    )
+    await _make_definition(db_session, trigger_detail_type="leads.updated", trigger_filter=None)
 
     claimed = await svc.dispatch_event(
         db_session,

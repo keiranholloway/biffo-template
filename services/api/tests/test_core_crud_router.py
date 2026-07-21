@@ -19,17 +19,16 @@ import asyncio
 from collections.abc import AsyncGenerator, Generator
 
 import pytest
+from api.database import get_db
+from api.middleware.auth import AuthenticatedUser, require_auth
+from api.models.base import Base, TenantScopedModel
+from api.routing.core_crud_router import build_core_crud_router
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import String
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.pool import StaticPool
-
-from api.database import get_db
-from api.middleware.auth import AuthenticatedUser, require_auth
-from api.models.base import Base, TenantScopedModel
-from api.routing.core_crud_router import build_core_crud_router
 
 
 class Gadget(TenantScopedModel):
@@ -63,7 +62,7 @@ def _caller(tenant_id: str, roles: list[str]) -> AuthenticatedUser:
 
 
 @pytest.fixture
-def gadget_app() -> Generator[FastAPI, None, None]:
+def gadget_app() -> Generator[FastAPI]:
     """A throwaway FastAPI app with the Gadget core table's generic CRUD routes
     mounted the same way main.py mounts build_core_crud_router() on the real
     app, backed by a single shared in-memory SQLite connection (StaticPool — the
@@ -86,7 +85,7 @@ def gadget_app() -> Generator[FastAPI, None, None]:
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
+    async def override_get_db() -> AsyncGenerator[AsyncSession]:
         async with session_factory() as session:
             try:
                 yield session
@@ -154,9 +153,7 @@ class TestFullFlowAsAdmin:
         assert read_resp.status_code == 200
         assert read_resp.json()["label"] == "first gadget"
 
-        update_resp = client.put(
-            f"{_BASE}/{gadget_id}", json={"label": "updated gadget"}
-        )
+        update_resp = client.put(f"{_BASE}/{gadget_id}", json={"label": "updated gadget"})
         assert update_resp.status_code == 200
         assert update_resp.json()["label"] == "updated gadget"
 
@@ -195,9 +192,7 @@ class TestTenantScoping:
         gadget_id = create_resp.json()["id"]
 
         # Re-point the app at an admin caller in a different tenant.
-        gadget_app.dependency_overrides[require_auth] = lambda: _caller(
-            "other-tenant", ["admin"]
-        )
+        gadget_app.dependency_overrides[require_auth] = lambda: _caller("other-tenant", ["admin"])
         other_client = TestClient(gadget_app)
 
         list_resp = other_client.get(_BASE)

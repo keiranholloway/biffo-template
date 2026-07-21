@@ -198,8 +198,7 @@ def get_permissions_registry(*, force_rebuild: bool = False) -> PermissionsRegis
             _REGISTRY_CACHE = build_permissions_registry()
         except Exception:  # noqa: BLE001 — fail closed on *any* build error
             logger.exception(
-                "Failed to build permissions registry; failing closed "
-                "(all generic CRUD denied)."
+                "Failed to build permissions registry; failing closed (all generic CRUD denied)."
             )
             _REGISTRY_CACHE = {}
     return _REGISTRY_CACHE

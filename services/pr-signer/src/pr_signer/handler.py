@@ -28,8 +28,9 @@ what, resulting branch + PR) is emitted as a structured log on success.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Protocol
 
 from aws_lambda_powertools import Logger
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -187,9 +188,7 @@ def run(
     gh = contents_factory(private_key)
 
     try:
-        result = open_permission_pr(
-            gh, request, requester=requester, base=config.base_branch
-        )
+        result = open_permission_pr(gh, request, requester=requester, base=config.base_branch)
     except ValueError as exc:
         # No-op (already set that way) or an invalid edit the manifest rejects.
         return _error(409, str(exc))

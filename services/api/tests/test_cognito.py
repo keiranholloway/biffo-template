@@ -2,9 +2,8 @@
 
 import boto3
 import pytest
-from moto import mock_aws
-
 from api.cognito import CognitoAdmin, CognitoAdminError
+from moto import mock_aws
 
 REGION = "us-east-1"
 
@@ -34,9 +33,7 @@ def test_create_user_returns_normalized_user_with_sub(pool):
 
 def test_create_user_assigns_initial_groups(pool):
     admin, _client, _pool_id = pool
-    admin.create_user(
-        email="bob@example.com", groups=["editor"], suppress_invite_email=True
-    )
+    admin.create_user(email="bob@example.com", groups=["editor"], suppress_invite_email=True)
 
     assert admin.list_groups_for_user("bob@example.com") == ["editor"]
 

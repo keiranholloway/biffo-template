@@ -13,9 +13,8 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-import pytest
-
 import biffo_plugin_sdk
+import pytest
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 SRC = PACKAGE_ROOT / "src" / "biffo_plugin_sdk"
@@ -77,9 +76,7 @@ def test_readme_and_license_files_exist(pyproject: dict) -> None:
     """
     assert (PACKAGE_ROOT / pyproject["project"]["readme"]).is_file()
     for pattern in pyproject["project"]["license-files"]:
-        assert list(PACKAGE_ROOT.glob(pattern)), (
-            f"license-files matched nothing: {pattern}"
-        )
+        assert list(PACKAGE_ROOT.glob(pattern)), f"license-files matched nothing: {pattern}"
 
 
 def test_py_typed_marker_backs_the_typed_classifier(pyproject: dict) -> None:
@@ -113,13 +110,9 @@ def test_public_surface_matches_dunder_all() -> None:
         name
         for name in vars(biffo_plugin_sdk)
         if not name.startswith("_")
-        and getattr(vars(biffo_plugin_sdk)[name], "__module__", "").startswith(
-            "biffo_plugin_sdk"
-        )
+        and getattr(vars(biffo_plugin_sdk)[name], "__module__", "").startswith("biffo_plugin_sdk")
     }
-    assert declared == actual, (
-        f"undeclared: {actual - declared}; missing: {declared - actual}"
-    )
+    assert declared == actual, f"undeclared: {actual - declared}; missing: {declared - actual}"
 
 
 def test_dunder_all_is_sorted_and_unique() -> None:
@@ -145,6 +138,4 @@ def test_sigv4_extra_keeps_botocore_optional(pyproject: dict) -> None:
     signed_client_source = (SRC / "signed_client.py").read_text()
     for line in signed_client_source.splitlines():
         if "botocore" in line and ("import " in line):
-            assert line.startswith("    "), (
-                f"botocore imported at module scope: {line!r}"
-            )
+            assert line.startswith("    "), f"botocore imported at module scope: {line!r}"

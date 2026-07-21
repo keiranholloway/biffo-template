@@ -8,14 +8,13 @@ from collections.abc import Generator
 
 import boto3
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from moto import mock_aws
-
 from api.cognito import CognitoAdmin
 from api.dependencies import get_cognito_admin
 from api.middleware.auth import AuthenticatedUser, require_auth
 from api.routers.admin import groups as admin_groups
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from moto import mock_aws
 
 REGION = "us-east-1"
 _BASE = "/api/v1/admin/groups"
@@ -32,7 +31,7 @@ def _caller(roles: list[str]) -> AuthenticatedUser:
 
 
 @pytest.fixture
-def harness() -> Generator[dict, None, None]:
+def harness() -> Generator[dict]:
     with mock_aws():
         client = boto3.client("cognito-idp", region_name=REGION)
         pool_id = client.create_user_pool(PoolName="test")["UserPool"]["Id"]

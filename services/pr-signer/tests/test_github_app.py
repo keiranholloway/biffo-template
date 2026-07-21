@@ -10,14 +10,13 @@ from __future__ import annotations
 
 import base64
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-
 from pr_signer.github_app import GitHubApiError, GitHubAppContents
 from pr_signer.pr import PermissionChangeRequest, open_permission_pr
 
@@ -54,10 +53,7 @@ def keypair() -> tuple[str, object]:
 
 def _iso(offset_seconds: float, *, base: float = 1_000_000.0) -> str:
     return (
-        (
-            datetime.fromtimestamp(base, tz=timezone.utc)
-            + timedelta(seconds=offset_seconds)
-        )
+        (datetime.fromtimestamp(base, tz=UTC) + timedelta(seconds=offset_seconds))
         .isoformat()
         .replace("+00:00", "Z")
     )
@@ -101,9 +97,7 @@ class FakeGitHub:
         path = request.url.path
         auth = request.headers.get("Authorization", "")
         body = json.loads(request.content) if request.content else None
-        self.calls.append(
-            {"method": request.method, "path": path, "auth": auth, "body": body}
-        )
+        self.calls.append({"method": request.method, "path": path, "auth": auth, "body": body})
 
         if path.endswith("/access_tokens") and request.method == "POST":
             self.jwts_presented.append(auth.removeprefix("Bearer "))
@@ -142,9 +136,7 @@ class FakeGitHub:
             assert body is not None
             self.pulls.append(body)
             if self.pull_status >= 400:
-                return httpx.Response(
-                    self.pull_status, json={"message": "Validation Failed"}
-                )
+                return httpx.Response(self.pull_status, json={"message": "Validation Failed"})
             return httpx.Response(
                 self.pull_status,
                 json={"html_url": "https://github.com/acme/widget/pull/7"},
@@ -232,9 +224,7 @@ def test_create_branch_reads_base_ref_then_posts_new_ref(private_key):
 
     gh.create_branch("biffo/endpoint-x", "main")
 
-    assert fake.created_refs == [
-        {"ref": "refs/heads/biffo/endpoint-x", "sha": "basecommitsha"}
-    ]
+    assert fake.created_refs == [{"ref": "refs/heads/biffo/endpoint-x", "sha": "basecommitsha"}]
 
 
 def test_put_file_sends_base64_content_and_sha(private_key):
@@ -263,9 +253,7 @@ def test_open_pull_request_returns_html_url(private_key):
     url = gh.open_pull_request(head="biffo/x", base="main", title="t", body="b")
 
     assert url == "https://github.com/acme/widget/pull/7"
-    assert fake.pulls == [
-        {"head": "biffo/x", "base": "main", "title": "t", "body": "b"}
-    ]
+    assert fake.pulls == [{"head": "biffo/x", "base": "main", "title": "t", "body": "b"}]
 
 
 def test_non_success_raises_github_api_error(private_key):

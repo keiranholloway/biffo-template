@@ -78,9 +78,7 @@ class TestCollectEndpoints:
         assert collect_endpoints([manifest], core_models=[model]) == []
 
     def test_sorted_by_path_then_method(self):
-        model = _fake_core_model(
-            "zeta", {"list": {"allowed": True}, "create": {"allowed": True}}
-        )
+        model = _fake_core_model("zeta", {"list": {"allowed": True}, "create": {"allowed": True}})
         manifest = _manifest(
             "alpha",
             "alpha_t",
@@ -104,10 +102,9 @@ class TestEndpointsRoute:
     them; the base template has none, so every row here is core."""
 
     def _client(self, roles=("admin",)):
-        from fastapi.testclient import TestClient
-
         from api.main import app
         from api.middleware.auth import AuthenticatedUser, require_auth
+        from fastapi.testclient import TestClient
 
         app.dependency_overrides[require_auth] = lambda: AuthenticatedUser(
             sub="s",
@@ -145,9 +142,8 @@ class TestEndpointsRoute:
             app.dependency_overrides.clear()
 
     def test_requires_auth(self):
-        from fastapi.testclient import TestClient
-
         from api.main import app
+        from fastapi.testclient import TestClient
 
         resp = TestClient(app).get("/api/v1/admin/endpoints")
         assert resp.status_code in (401, 403)
@@ -157,10 +153,9 @@ class TestEndpointDetailRoute:
     """GET /admin/endpoints/detail: the request/response specifics for one route."""
 
     def _client(self, roles=("admin",)):
-        from fastapi.testclient import TestClient
-
         from api.main import app
         from api.middleware.auth import AuthenticatedUser, require_auth
+        from fastapi.testclient import TestClient
 
         app.dependency_overrides[require_auth] = lambda: AuthenticatedUser(
             sub="s",
@@ -201,9 +196,8 @@ class TestEndpointDetailRoute:
             app.dependency_overrides.clear()
 
     def test_requires_auth(self):
-        from fastapi.testclient import TestClient
-
         from api.main import app
+        from fastapi.testclient import TestClient
 
         resp = TestClient(app).get(
             "/api/v1/admin/endpoints/detail",
@@ -224,15 +218,12 @@ class TestChangePermissionRoute:
         "required_role": ["admin"],
     }
 
-    def _client(
-        self, monkeypatch, *, roles=("admin",), invoker=None, function_name="signer-fn"
-    ):
-        from fastapi.testclient import TestClient
-
+    def _client(self, monkeypatch, *, roles=("admin",), invoker=None, function_name="signer-fn"):
         from api.config import settings
         from api.main import app
         from api.middleware.auth import AuthenticatedUser, require_auth
         from api.routers.admin import endpoints
+        from fastapi.testclient import TestClient
 
         monkeypatch.setattr(settings, "pr_signer_function_name", function_name)
         if invoker is not None:
@@ -269,9 +260,7 @@ class TestChangePermissionRoute:
         )
         app, client = self._client(monkeypatch, invoker=invoker)
         try:
-            resp = client.post(
-                "/api/v1/admin/endpoints/permission", json=self.VALID_BODY
-            )
+            resp = client.post("/api/v1/admin/endpoints/permission", json=self.VALID_BODY)
             assert resp.status_code == 202
             assert resp.json() == {
                 "pr_url": "https://github.com/o/r/pull/9",
@@ -288,9 +277,7 @@ class TestChangePermissionRoute:
         invoker = self._FakeInvoker({"statusCode": 200, "pr_url": "u", "branch": "b"})
         app, client = self._client(monkeypatch, roles=("editor",), invoker=invoker)
         try:
-            resp = client.post(
-                "/api/v1/admin/endpoints/permission", json=self.VALID_BODY
-            )
+            resp = client.post("/api/v1/admin/endpoints/permission", json=self.VALID_BODY)
             assert resp.status_code == 403
             # A non-admin never reaches the signer.
             assert invoker.payload is None
@@ -300,22 +287,16 @@ class TestChangePermissionRoute:
     def test_not_configured_returns_501(self, monkeypatch):
         app, client = self._client(monkeypatch, function_name="")
         try:
-            resp = client.post(
-                "/api/v1/admin/endpoints/permission", json=self.VALID_BODY
-            )
+            resp = client.post("/api/v1/admin/endpoints/permission", json=self.VALID_BODY)
             assert resp.status_code == 501
         finally:
             app.dependency_overrides.clear()
 
     def test_signer_conflict_relayed_as_409(self, monkeypatch):
-        invoker = self._FakeInvoker(
-            {"statusCode": 409, "error": "already set that way"}
-        )
+        invoker = self._FakeInvoker({"statusCode": 409, "error": "already set that way"})
         app, client = self._client(monkeypatch, invoker=invoker)
         try:
-            resp = client.post(
-                "/api/v1/admin/endpoints/permission", json=self.VALID_BODY
-            )
+            resp = client.post("/api/v1/admin/endpoints/permission", json=self.VALID_BODY)
             assert resp.status_code == 409
             assert "already set" in resp.json()["detail"]
         finally:
@@ -325,9 +306,7 @@ class TestChangePermissionRoute:
         invoker = self._FakeInvoker({"statusCode": 400, "error": "bad event"})
         app, client = self._client(monkeypatch, invoker=invoker)
         try:
-            resp = client.post(
-                "/api/v1/admin/endpoints/permission", json=self.VALID_BODY
-            )
+            resp = client.post("/api/v1/admin/endpoints/permission", json=self.VALID_BODY)
             assert resp.status_code == 400
         finally:
             app.dependency_overrides.clear()
@@ -338,9 +317,7 @@ class TestChangePermissionRoute:
         invoker = self._FakeInvoker(raises=SignerInvocationError("signer down"))
         app, client = self._client(monkeypatch, invoker=invoker)
         try:
-            resp = client.post(
-                "/api/v1/admin/endpoints/permission", json=self.VALID_BODY
-            )
+            resp = client.post("/api/v1/admin/endpoints/permission", json=self.VALID_BODY)
             assert resp.status_code == 502
         finally:
             app.dependency_overrides.clear()

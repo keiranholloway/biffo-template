@@ -112,8 +112,7 @@ USER_CREATED = register_event(
         source="biffo.core",
         detail_type="user.created",
         label="User created",
-        description="A user record is first created in Core, on their first "
-        "authenticated request.",
+        description="A user record is first created in Core, on their first authenticated request.",
     )
 )
 
@@ -162,8 +161,7 @@ WORKFLOW_DEFINITION_UPDATED = register_event(
         source="biffo.core",
         detail_type="workflow_definition.updated",
         label="Workflow updated",
-        description="An admin edits a workflow definition or toggles it "
-        "enabled/disabled.",
+        description="An admin edits a workflow definition or toggles it enabled/disabled.",
     )
 )
 

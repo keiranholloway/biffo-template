@@ -10,11 +10,6 @@ import asyncio
 from collections.abc import AsyncGenerator, Generator
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
-
 from api.database import get_db
 from api.events.emit import is_declared, pending_events
 from api.middleware.auth import AuthenticatedUser, require_auth
@@ -27,13 +22,15 @@ from api.models.orchestration import (  # noqa: F401 — registers tables on Bas
 )
 from api.orchestration import observe_trigger
 from api.routers import orchestration
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 _BASE = "/api/v1/orchestration/workflows"
 
 
-def _caller(
-    tenant_id: str = "default", roles: list[str] | None = None
-) -> AuthenticatedUser:
+def _caller(tenant_id: str = "default", roles: list[str] | None = None) -> AuthenticatedUser:
     return AuthenticatedUser(
         sub="admin-sub",
         email="admin@example.com",
@@ -62,7 +59,7 @@ def _valid_body(**over) -> dict:
 
 
 @pytest.fixture
-def app() -> Generator[tuple[FastAPI, async_sessionmaker], None, None]:
+def app() -> Generator[tuple[FastAPI, async_sessionmaker]]:
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         poolclass=StaticPool,
@@ -80,7 +77,7 @@ def app() -> Generator[tuple[FastAPI, async_sessionmaker], None, None]:
     # tests can assert what would reach the bus — the real get_db publishes them.
     published: list = []
 
-    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
+    async def override_get_db() -> AsyncGenerator[AsyncSession]:
         async with session_factory() as session:
             try:
                 yield session
@@ -150,9 +147,7 @@ def test_update_can_set_and_clear_trigger_filter(client: TestClient):
 
 
 def test_create_rejects_invalid_action_config(client: TestClient):
-    body = _valid_body(
-        action_config={"from": "no-reply@example.com"}
-    )  # missing to/subject/body
+    body = _valid_body(action_config={"from": "no-reply@example.com"})  # missing to/subject/body
     resp = client.post(_BASE, json=body)
     assert resp.status_code == 422
 
@@ -170,18 +165,13 @@ def test_create_rejects_bad_email(client: TestClient):
 
 
 def test_create_rejects_unknown_trigger(client: TestClient):
-    assert (
-        client.post(_BASE, json=_valid_body(trigger_detail_type="nope")).status_code
-        == 422
-    )
+    assert client.post(_BASE, json=_valid_body(trigger_detail_type="nope")).status_code == 422
 
 
 def test_update_and_toggle(client: TestClient):
     row = client.post(_BASE, json=_valid_body()).json()
 
-    updated = client.put(
-        f"{_BASE}/{row['id']}", json=_valid_body(name="Renamed", enabled=True)
-    )
+    updated = client.put(f"{_BASE}/{row['id']}", json=_valid_body(name="Renamed", enabled=True))
     assert updated.status_code == 200
     assert updated.json()["name"] == "Renamed"
 
@@ -208,9 +198,7 @@ def test_catalog(client: TestClient):
     assert any(t["detail_type"] == "demo.requested" for t in body["triggers"])
     # declared events are tagged so the UI can badge them
     assert all(
-        t["origin"] == "declared"
-        for t in body["triggers"]
-        if t["detail_type"] == "demo.requested"
+        t["origin"] == "declared" for t in body["triggers"] if t["detail_type"] == "demo.requested"
     )
     assert any(a["type"] == "email" for a in body["actions"])
 
@@ -355,15 +343,11 @@ def test_whatsapp_defaults_to_the_text_branch(client: TestClient):
     i.e. `message` is still required when the toggle is absent."""
     resp = client.post(
         _BASE,
-        json=_valid_body(
-            action_type="whatsapp", action_config={"to": "+1", "message": "hi"}
-        ),
+        json=_valid_body(action_type="whatsapp", action_config={"to": "+1", "message": "hi"}),
     )
     assert resp.status_code == 201, resp.text
 
-    resp = client.post(
-        _BASE, json=_valid_body(action_type="whatsapp", action_config={"to": "+1"})
-    )
+    resp = client.post(_BASE, json=_valid_body(action_type="whatsapp", action_config={"to": "+1"}))
     assert resp.status_code == 422
 
 
@@ -401,9 +385,7 @@ def test_observe_trigger_is_idempotent(app):
         from sqlalchemy import func, select
 
         async with session_factory() as session:
-            result = await session.execute(
-                select(func.count()).select_from(TriggerCatalog)
-            )
+            result = await session.execute(select(func.count()).select_from(TriggerCatalog))
             return result.scalar_one()
 
     assert asyncio.run(_count()) == 1
@@ -455,9 +437,7 @@ def test_catalog_includes_declared_crud_events(client: TestClient, monkeypatch):
         )
     }
     # The catalog endpoint reads the permissions registry directly (imported name).
-    monkeypatch.setattr(
-        "api.routers.orchestration.get_permissions_registry", lambda **_: registry
-    )
+    monkeypatch.setattr("api.routers.orchestration.get_permissions_registry", lambda **_: registry)
 
     body = client.get(f"{_BASE}/catalog").json()
     by_dt = {t["detail_type"]: t for t in body["triggers"]}
@@ -535,9 +515,7 @@ def test_create_accepts_a_declared_crud_trigger(client: TestClient, monkeypatch)
     registry = {"widgets": TablePermissions(create=PermissionRule(allowed=True))}
     # is_known_trigger -> is_declared lazily imports get_permissions_registry
     # from api.permissions, so patch it there.
-    monkeypatch.setattr(
-        "api.permissions.get_permissions_registry", lambda **_: registry
-    )
+    monkeypatch.setattr("api.permissions.get_permissions_registry", lambda **_: registry)
 
     resp = client.post(_BASE, json=_valid_body(trigger_detail_type="widgets.created"))
     assert resp.status_code == 201, resp.text

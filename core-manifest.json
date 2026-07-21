@@ -15,7 +15,6 @@
     "pnpm-workspace.yaml",
     "turbo.json",
     "eslint.config.mjs",
-    "ruff.toml",
     "pyproject.toml",
     "commitlint.config.js",
     "CLAUDE.md",

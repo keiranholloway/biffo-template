@@ -10,6 +10,14 @@ from collections.abc import AsyncGenerator, Generator
 
 import boto3
 import pytest
+from api.cognito import CognitoAdmin
+from api.database import get_db
+from api.dependencies import get_cognito_admin
+from api.events.emit import is_declared, pending_events
+from api.middleware.auth import AuthenticatedUser, require_auth
+from api.models.base import Base
+from api.models.user import User
+from api.routers.admin import users as admin_users
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from moto import mock_aws
@@ -20,15 +28,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.pool import StaticPool
-
-from api.cognito import CognitoAdmin
-from api.database import get_db
-from api.dependencies import get_cognito_admin
-from api.events.emit import is_declared, pending_events
-from api.middleware.auth import AuthenticatedUser, require_auth
-from api.models.base import Base
-from api.models.user import User
-from api.routers.admin import users as admin_users
 
 REGION = "us-east-1"
 _BASE = "/api/v1/admin/users"
@@ -45,7 +44,7 @@ def _caller(roles: list[str]) -> AuthenticatedUser:
 
 
 @pytest.fixture
-def harness() -> Generator[dict, None, None]:
+def harness() -> Generator[dict]:
     with mock_aws():
         client = boto3.client("cognito-idp", region_name=REGION)
         pool_id = client.create_user_pool(PoolName="test")["UserPool"]["Id"]
@@ -66,7 +65,7 @@ def harness() -> Generator[dict, None, None]:
         # tests can assert what would go on the bus.
         published: list = []
 
-        async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
+        async def override_get_db() -> AsyncGenerator[AsyncSession]:
             async with session_factory() as session:
                 try:
                     yield session
@@ -100,9 +99,7 @@ async def _create_tables(engine) -> None:
 
 async def _seed_db_user(session_factory, *, cognito_sub: str, email: str) -> None:
     async with session_factory() as session:
-        session.add(
-            User(cognito_sub=cognito_sub, email=email, username=email, is_active=True)
-        )
+        session.add(User(cognito_sub=cognito_sub, email=email, username=email, is_active=True))
         await session.commit()
 
 
@@ -184,9 +181,7 @@ def test_get_missing_user_returns_404(harness):
 def test_add_and_remove_group(harness):
     harness["cog"].create_user(email="heidi@example.com", suppress_invite_email=True)
 
-    added = harness["client"].post(
-        f"{_BASE}/heidi@example.com/groups", json={"group": "editor"}
-    )
+    added = harness["client"].post(f"{_BASE}/heidi@example.com/groups", json={"group": "editor"})
     assert added.status_code == 200
     assert "editor" in added.json()["groups"]
 
@@ -199,13 +194,9 @@ def test_add_and_remove_group(harness):
 
 
 def test_suspend_disables_and_mirrors_is_active(harness):
-    user = harness["cog"].create_user(
-        email="frank@example.com", suppress_invite_email=True
-    )
+    user = harness["cog"].create_user(email="frank@example.com", suppress_invite_email=True)
     asyncio.run(
-        _seed_db_user(
-            harness["session_factory"], cognito_sub=user["sub"], email=user["email"]
-        )
+        _seed_db_user(harness["session_factory"], cognito_sub=user["sub"], email=user["email"])
     )
 
     resp = harness["client"].post(f"{_BASE}/frank@example.com/suspend")
@@ -215,13 +206,9 @@ def test_suspend_disables_and_mirrors_is_active(harness):
 
 
 def test_reactivate_enables_and_mirrors_is_active(harness):
-    user = harness["cog"].create_user(
-        email="grace@example.com", suppress_invite_email=True
-    )
+    user = harness["cog"].create_user(email="grace@example.com", suppress_invite_email=True)
     asyncio.run(
-        _seed_db_user(
-            harness["session_factory"], cognito_sub=user["sub"], email=user["email"]
-        )
+        _seed_db_user(harness["session_factory"], cognito_sub=user["sub"], email=user["email"])
     )
     harness["client"].post(f"{_BASE}/grace@example.com/suspend")
 
@@ -232,13 +219,9 @@ def test_reactivate_enables_and_mirrors_is_active(harness):
 
 
 def test_delete_removes_from_cognito_and_deactivates_db_row(harness):
-    user = harness["cog"].create_user(
-        email="ivan@example.com", suppress_invite_email=True
-    )
+    user = harness["cog"].create_user(email="ivan@example.com", suppress_invite_email=True)
     asyncio.run(
-        _seed_db_user(
-            harness["session_factory"], cognito_sub=user["sub"], email=user["email"]
-        )
+        _seed_db_user(harness["session_factory"], cognito_sub=user["sub"], email=user["email"])
     )
 
     resp = harness["client"].delete(f"{_BASE}/ivan@example.com")
@@ -268,9 +251,7 @@ def _only_event(harness):
 
 
 def test_suspend_emits_user_suspended_event(harness):
-    user = harness["cog"].create_user(
-        email="kate@example.com", suppress_invite_email=True
-    )
+    user = harness["cog"].create_user(email="kate@example.com", suppress_invite_email=True)
     harness["client"].post(f"{_BASE}/kate@example.com/suspend")
 
     event = _only_event(harness)
@@ -292,9 +273,7 @@ def test_reactivate_emits_user_reactivated_event(harness):
 
 
 def test_delete_emits_user_deleted_event(harness):
-    user = harness["cog"].create_user(
-        email="mia@example.com", suppress_invite_email=True
-    )
+    user = harness["cog"].create_user(email="mia@example.com", suppress_invite_email=True)
     harness["client"].delete(f"{_BASE}/mia@example.com")
 
     event = _only_event(harness)

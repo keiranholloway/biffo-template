@@ -44,9 +44,7 @@ def _table_names(db_path: Path) -> set[str]:
         engine.dispose()
 
 
-def _write_sql_file(
-    import_dir: Path, filename: str, content: str = "SELECT 1;"
-) -> Path:
+def _write_sql_file(import_dir: Path, filename: str, content: str = "SELECT 1;") -> Path:
     import_dir.mkdir(parents=True, exist_ok=True)
     path = import_dir / filename
     path.write_text(content)
@@ -70,9 +68,7 @@ def ddl_import_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str,
     database_url = f"sqlite+aiosqlite:///{db_path}"
     monkeypatch.setenv("BIFFO_DATABASE_URL", database_url)
     if "src.api.config" in sys.modules:
-        monkeypatch.setattr(
-            sys.modules["src.api.config"].settings, "database_url", database_url
-        )
+        monkeypatch.setattr(sys.modules["src.api.config"].settings, "database_url", database_url)
 
     imports_root = tmp_path / "db" / "imports"
     monkeypatch.setenv("BIFFO_DDL_IMPORT_ROOT", str(imports_root))
@@ -99,11 +95,8 @@ def ddl_import_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str,
     return {"db_path": db_path, "imports_root": imports_root}
 
 
-async def _seed_applied(
-    database_url: str, import_name: str, filename: str, checksum: str
-) -> None:
+async def _seed_applied(database_url: str, import_name: str, filename: str, checksum: str) -> None:
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
     from src.api.models.ddl_import_history import DdlImportHistory
 
     engine = create_async_engine(database_url)
@@ -111,9 +104,7 @@ async def _seed_applied(
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
             session.add(
-                DdlImportHistory(
-                    import_name=import_name, filename=filename, checksum=checksum
-                )
+                DdlImportHistory(import_name=import_name, filename=filename, checksum=checksum)
             )
             await session.commit()
     finally:
@@ -158,9 +149,7 @@ class TestRunDdlImportSkipsAlreadyApplied:
 
         content = "SELECT 1;"
         checksum = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        _write_sql_file(
-            ddl_import_env["imports_root"] / "widgets", "000_widgets.sql", content
-        )
+        _write_sql_file(ddl_import_env["imports_root"] / "widgets", "000_widgets.sql", content)
         asyncio.run(
             _seed_applied(
                 f"sqlite+aiosqlite:///{ddl_import_env['db_path']}",
@@ -195,9 +184,7 @@ class TestRunDdlImportSkipsAlreadyApplied:
             "000_widgets.sql",
             "SELECT 2; -- changed since it was applied",
         )
-        _write_sql_file(
-            ddl_import_env["imports_root"] / "widgets", "001_more.sql", "SELECT 3;"
-        )
+        _write_sql_file(ddl_import_env["imports_root"] / "widgets", "001_more.sql", "SELECT 3;")
         asyncio.run(
             _seed_applied(
                 f"sqlite+aiosqlite:///{ddl_import_env['db_path']}",

@@ -4,7 +4,6 @@ import shutil
 import tempfile
 from pathlib import Path
 
-
 from api.migrations.plugin_migrations import (
     _column_to_alembic_def,
     generate_migration_for_plugin,
@@ -299,10 +298,7 @@ class TestGetCurrentHeadRevision:
         assert "down_revision = '0001'" in content
         # The generated migration is now itself the head — it appended to
         # the chain rather than forking a second one.
-        assert (
-            get_current_head_revision(self.versions_dir)
-            == migration_file.stem.split("_")[0]
-        )
+        assert get_current_head_revision(self.versions_dir) == migration_file.stem.split("_")[0]
 
     def test_second_plugin_migration_chains_onto_first_not_original_head(self):
         existing = self.versions_dir / "0001_create_users_table.py"
@@ -352,38 +348,28 @@ class TestSyncPluginMigrations:
         (plugin_dir / "biffo.plugin.json").write_text(json.dumps(manifest))
 
     def test_no_plugins_generates_nothing(self):
-        generated = sync_plugin_migrations(
-            self.versions_dir, services_root=self.services_root
-        )
+        generated = sync_plugin_migrations(self.versions_dir, services_root=self.services_root)
         assert generated == []
 
     def test_generates_migration_for_discovered_plugin(self):
         self._write_manifest(
             "rbac", {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
         )
-        generated = sync_plugin_migrations(
-            self.versions_dir, services_root=self.services_root
-        )
+        generated = sync_plugin_migrations(self.versions_dir, services_root=self.services_root)
         assert len(generated) == 1
         assert generated[0].exists()
 
     def test_plugin_with_no_tables_is_skipped(self):
         self._write_manifest("noop", {"name": "noop", "version": "1.0.0", "tables": []})
-        generated = sync_plugin_migrations(
-            self.versions_dir, services_root=self.services_root
-        )
+        generated = sync_plugin_migrations(self.versions_dir, services_root=self.services_root)
         assert generated == []
 
     def test_rerunning_sync_is_idempotent(self):
         self._write_manifest(
             "rbac", {"name": "rbac", "version": "1.0.0", "tables": [{"name": "roles"}]}
         )
-        first = sync_plugin_migrations(
-            self.versions_dir, services_root=self.services_root
-        )
-        second = sync_plugin_migrations(
-            self.versions_dir, services_root=self.services_root
-        )
+        first = sync_plugin_migrations(self.versions_dir, services_root=self.services_root)
+        second = sync_plugin_migrations(self.versions_dir, services_root=self.services_root)
         assert len(first) == 1
         assert second == []
         # Only one migration file exists, not a duplicate.
@@ -397,9 +383,7 @@ class TestSyncPluginMigrations:
             "billing",
             {"name": "billing", "version": "1.0.0", "tables": [{"name": "invoices"}]},
         )
-        generated = sync_plugin_migrations(
-            self.versions_dir, services_root=self.services_root
-        )
+        generated = sync_plugin_migrations(self.versions_dir, services_root=self.services_root)
         assert len(generated) == 2
         # Exactly one head — sync_plugin_migrations must not fork branches
         # when generating migrations for multiple plugins in one pass.

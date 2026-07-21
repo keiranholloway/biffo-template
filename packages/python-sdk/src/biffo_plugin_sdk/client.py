@@ -64,15 +64,11 @@ class BiffoAPIClient:
         client: httpx.AsyncClient | None = None,
     ) -> None:
         resolved_base_url = (
-            base_url
-            if base_url is not None
-            else os.environ.get("BIFFO_CORE_API_URL", "")
+            base_url if base_url is not None else os.environ.get("BIFFO_CORE_API_URL", "")
         )
         self.base_url = resolved_base_url.rstrip("/")
         self.token = token
-        self._client = (
-            client if client is not None else httpx.AsyncClient(timeout=timeout)
-        )
+        self._client = client if client is not None else httpx.AsyncClient(timeout=timeout)
 
     def _auth_headers(self) -> dict[str, str]:
         """Return an ``Authorization`` header when a JWT token is available."""
@@ -113,25 +109,19 @@ class BiffoAPIClient:
 
     async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         """Issue an authenticated GET request and return the parsed JSON body."""
-        response = await self._client.get(
-            self._url(path), headers=self._headers(), params=params
-        )
+        response = await self._client.get(self._url(path), headers=self._headers(), params=params)
         self._raise_if_error(response)
         return self._parse_json(response)
 
     async def post(self, path: str, json: dict[str, Any] | None = None) -> Any:
         """Issue an authenticated POST request and return the parsed JSON body."""
-        response = await self._client.post(
-            self._url(path), headers=self._headers(), json=json
-        )
+        response = await self._client.post(self._url(path), headers=self._headers(), json=json)
         self._raise_if_error(response)
         return self._parse_json(response)
 
     async def put(self, path: str, json: dict[str, Any] | None = None) -> Any:
         """Issue an authenticated PUT request and return the parsed JSON body."""
-        response = await self._client.put(
-            self._url(path), headers=self._headers(), json=json
-        )
+        response = await self._client.put(self._url(path), headers=self._headers(), json=json)
         self._raise_if_error(response)
         return self._parse_json(response)
 

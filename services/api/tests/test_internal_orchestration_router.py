@@ -11,11 +11,6 @@ import asyncio
 from collections.abc import AsyncGenerator, Generator
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
-
 from api.database import get_db
 from api.middleware.service_auth import ServicePrincipal, require_service_principal
 from api.models.base import Base
@@ -25,12 +20,16 @@ from api.models.orchestration import (  # noqa: F401 — registers tables on Bas
     WorkflowRun,
 )
 from api.routers import internal_orchestration
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 _EVENTS = "/api/v1/internal/orchestration/events"
 
 
 @pytest.fixture
-def orchestration_app() -> Generator[tuple[FastAPI, async_sessionmaker], None, None]:
+def orchestration_app() -> Generator[tuple[FastAPI, async_sessionmaker]]:
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         poolclass=StaticPool,
@@ -45,7 +44,7 @@ def orchestration_app() -> Generator[tuple[FastAPI, async_sessionmaker], None, N
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
+    async def override_get_db() -> AsyncGenerator[AsyncSession]:
         async with session_factory() as session:
             try:
                 yield session

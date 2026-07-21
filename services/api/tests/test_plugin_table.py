@@ -1,8 +1,6 @@
 """Tests for plugin table definition models."""
 
 import pytest
-from pydantic import ValidationError
-
 from api.models.plugin_table import (
     ColumnDefinition,
     IndexDefinition,
@@ -11,6 +9,7 @@ from api.models.plugin_table import (
     TablePermissions,
     resolve_type_call,
 )
+from pydantic import ValidationError
 
 
 class TestResolveTypeCall:
@@ -216,9 +215,9 @@ class TestPluginTableDefinition:
         Python-side defaults (uuid4 id, "default" tenant_id) are lost and
         inserting a row without explicitly setting them raises IntegrityError.
         """
+        from api.models.base import Base
         from sqlalchemy import create_engine
         from sqlalchemy.orm import Session
-        from api.models.base import Base
 
         cols = [ColumnDefinition(name="label", type="String(100)")]
         table = PluginTableDefinition(name="widgets", columns=cols)
@@ -301,8 +300,6 @@ class TestTablePermissions:
             op: {"allowed": True, "required_role": [f"{op}-role"]}
             for op in ("list", "read", "create", "update", "delete")
         }
-        table = PluginTableDefinition.model_validate(
-            {"name": "roles", "permissions": block}
-        )
+        table = PluginTableDefinition.model_validate({"name": "roles", "permissions": block})
         dumped = table.model_dump(mode="json")["permissions"]
         assert dumped == block

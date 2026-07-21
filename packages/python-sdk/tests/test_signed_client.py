@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import httpx
 import pytest
-from botocore.credentials import Credentials
-
 from biffo_plugin_sdk import (
     BiffoAPIClient,
     BiffoPluginBase,
@@ -13,6 +11,7 @@ from biffo_plugin_sdk import (
     SignedCoreClient,
     create_core_client,
 )
+from botocore.credentials import Credentials
 
 _CREDS = Credentials("AKIDTEST", "SECRETTEST")
 
@@ -105,9 +104,7 @@ class TestCreateCoreClient:
         assert isinstance(client, BiffoAPIClient)
         assert not isinstance(client, SignedCoreClient)
 
-    def test_invalid_mode_is_rejected_not_guessed(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_invalid_mode_is_rejected_not_guessed(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("BIFFO_CORE_AUTH_MODE", "bearer")
 
         with pytest.raises(ValueError, match="BIFFO_CORE_AUTH_MODE"):
@@ -116,9 +113,7 @@ class TestCreateCoreClient:
     def test_plugin_base_default_api_signs(self, monkeypatch: pytest.MonkeyPatch):
         """A plugin author who does nothing gets an authenticated client."""
         monkeypatch.delenv("BIFFO_CORE_AUTH_MODE", raising=False)
-        manifest = PluginManifest(
-            name="example", version="0.1.0", description="d", author="a"
-        )
+        manifest = PluginManifest(name="example", version="0.1.0", description="d", author="a")
 
         class _Plugin(BiffoPluginBase):
             def on_install(self) -> None: ...

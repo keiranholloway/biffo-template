@@ -55,9 +55,7 @@ def _normalize_user(raw: dict[str, Any]) -> dict[str, Any]:
     AdminGetUser returns attributes under `UserAttributes`; ListUsers under
     `Attributes` — handle both.
     """
-    attrs = _attributes_to_dict(
-        raw.get("UserAttributes") or raw.get("Attributes") or []
-    )
+    attrs = _attributes_to_dict(raw.get("UserAttributes") or raw.get("Attributes") or [])
     return {
         "username": raw.get("Username", ""),
         "sub": attrs.get("sub", ""),
@@ -82,9 +80,7 @@ class CognitoAdmin:
         user_pool_id: str | None = None,
         region: str | None = None,
     ) -> None:
-        self._pool_id = (
-            user_pool_id if user_pool_id is not None else settings.cognito_user_pool_id
-        )
+        self._pool_id = user_pool_id if user_pool_id is not None else settings.cognito_user_pool_id
         self._client = client or boto3.client(
             "cognito-idp", region_name=region or settings.cognito_region
         )
@@ -132,9 +128,7 @@ class CognitoAdmin:
     def get_user(self, username: str) -> dict[str, Any]:
         return _normalize_user(self._call("admin_get_user", Username=username))
 
-    def list_users(
-        self, *, limit: int = 60, pagination_token: str | None = None
-    ) -> dict[str, Any]:
+    def list_users(self, *, limit: int = 60, pagination_token: str | None = None) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"Limit": limit}
         if pagination_token:
             kwargs["PaginationToken"] = pagination_token

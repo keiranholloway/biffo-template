@@ -70,9 +70,7 @@ def collect_endpoints(
             tables = {t.name: t for t in parse_plugin_tables_from_manifest(manifest)}
             routes = parse_plugin_routes_from_manifest(manifest)
         except (ValueError, TypeError) as exc:
-            logger.warning(
-                f"Skipping endpoints for plugin {name!r}: invalid manifest: {exc}"
-            )
+            logger.warning(f"Skipping endpoints for plugin {name!r}: invalid manifest: {exc}")
             continue
         for route in routes:
             table = tables.get(route.table)
@@ -206,9 +204,7 @@ async def change_endpoint_permission(
             requester=requester,
         )
     except SignerInvocationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     if result.status == 200 and result.pr_url and result.branch:
         logger.info(
@@ -224,9 +220,7 @@ async def change_endpoint_permission(
         return EndpointPermissionResult(pr_url=result.pr_url, branch=result.branch)
 
     # Relay the signer's own status where it's a meaningful client error.
-    mapped = (
-        result.status if result.status in (400, 409) else status.HTTP_502_BAD_GATEWAY
-    )
+    mapped = result.status if result.status in (400, 409) else status.HTTP_502_BAD_GATEWAY
     raise HTTPException(
         status_code=mapped,
         detail=result.error or "The PR-signer could not complete the request.",

@@ -32,7 +32,6 @@ from .models.orchestration import (
     WorkflowRun,
 )
 
-
 logger = Logger()
 
 
@@ -116,9 +115,7 @@ async def dispatch_event(
     # Record the event type so the builder can offer it as a trigger even if the
     # code registry doesn't name it (self-building catalog, ADR-0010). Best-effort
     # and isolated in a SAVEPOINT so it never disturbs the dispatch itself.
-    await observe_trigger(
-        db, tenant_id=tenant_id, source=source, detail_type=detail_type
-    )
+    await observe_trigger(db, tenant_id=tenant_id, source=source, detail_type=detail_type)
 
     result = await db.execute(
         select(WorkflowDefinition).where(
@@ -148,9 +145,7 @@ async def dispatch_event(
     return claimed
 
 
-def _matches_trigger_filter(
-    trigger_filter: dict[str, Any] | None, event: dict[str, Any]
-) -> bool:
+def _matches_trigger_filter(trigger_filter: dict[str, Any] | None, event: dict[str, Any]) -> bool:
     """A definition's ``trigger_filter`` (reserved JSON column, #226) is an all-of
     exact-match predicate over the event payload: ``{"field": value}`` fires the
     workflow only when the payload's ``field`` equals ``value``. An empty/None
@@ -200,19 +195,13 @@ async def observe_trigger(
         return
     try:
         async with db.begin_nested():
-            db.add(
-                TriggerCatalog(
-                    tenant_id=tenant_id, source=source, detail_type=detail_type
-                )
-            )
+            db.add(TriggerCatalog(tenant_id=tenant_id, source=source, detail_type=detail_type))
             await db.flush()
     except IntegrityError:
         await db.execute(touch)  # lost an insert race — the row now exists
 
 
-async def list_observed_triggers(
-    db: AsyncSession, *, tenant_id: str
-) -> list[TriggerCatalog]:
+async def list_observed_triggers(db: AsyncSession, *, tenant_id: str) -> list[TriggerCatalog]:
     """Every event type this tenant has been seen dispatching, newest-seen first."""
     result = await db.execute(
         select(TriggerCatalog)
@@ -293,9 +282,7 @@ async def record_result(
 # response_model can serialize server-default columns without lazy IO.
 
 
-async def list_definitions(
-    db: AsyncSession, *, tenant_id: str
-) -> list[WorkflowDefinition]:
+async def list_definitions(db: AsyncSession, *, tenant_id: str) -> list[WorkflowDefinition]:
     result = await db.execute(
         select(WorkflowDefinition)
         .where(WorkflowDefinition.tenant_id == tenant_id)
@@ -357,9 +344,7 @@ async def update_definition(
     enabled: bool,
     trigger_filter: dict[str, Any] | None = None,
 ) -> WorkflowDefinition | None:
-    definition = await get_definition(
-        db, tenant_id=tenant_id, definition_id=definition_id
-    )
+    definition = await get_definition(db, tenant_id=tenant_id, definition_id=definition_id)
     if definition is None:
         return None
     definition.name = name
@@ -377,9 +362,7 @@ async def update_definition(
 async def set_definition_enabled(
     db: AsyncSession, *, tenant_id: str, definition_id: str, enabled: bool
 ) -> WorkflowDefinition | None:
-    definition = await get_definition(
-        db, tenant_id=tenant_id, definition_id=definition_id
-    )
+    definition = await get_definition(db, tenant_id=tenant_id, definition_id=definition_id)
     if definition is None:
         return None
     definition.enabled = enabled
@@ -394,9 +377,7 @@ async def delete_definition(
     """Delete the definition, returning the (now-deleted) row so the caller can
     emit its state-change payload, or ``None`` if it didn't exist. The returned
     instance's attributes stay readable until the surrounding commit expires it."""
-    definition = await get_definition(
-        db, tenant_id=tenant_id, definition_id=definition_id
-    )
+    definition = await get_definition(db, tenant_id=tenant_id, definition_id=definition_id)
     if definition is None:
         return None
     await db.delete(definition)

@@ -18,7 +18,6 @@ import pytest
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
-
 from api.migrations.plugin_migrations import (
     generate_migration_for_plugin,
     sync_plugin_migrations,
@@ -84,9 +83,7 @@ class TestPluginMigrationIntegration:
             "tables": [
                 {
                     "name": "widgets",
-                    "columns": [
-                        {"name": "label", "type": "String(100)", "index": True}
-                    ],
+                    "columns": [{"name": "label", "type": "String(100)", "index": True}],
                 }
             ],
         }
@@ -154,9 +151,7 @@ class TestPluginMigrationIntegration:
 
         # Idempotent: re-running discovery + upgrade (as every db-init call
         # does) doesn't error, fork a second head, or duplicate the table.
-        generated_again = sync_plugin_migrations(
-            versions_dir, services_root=services_root
-        )
+        generated_again = sync_plugin_migrations(versions_dir, services_root=services_root)
         assert generated_again == []
         command.upgrade(cfg, "head")
         assert "gizmos" in _table_names(db_path)

@@ -92,7 +92,8 @@ def _verify_token(token: str) -> dict:
     signing_key = next((k for k in jwks["keys"] if k["kid"] == kid), None)
 
     if signing_key is None and not settings.cognito_jwks_json:
-        # Unknown kid and we can fetch remotely — JWKS may have rotated; bust the cache and retry once.
+        # Unknown kid and we can fetch remotely — JWKS may have rotated; bust
+        # the cache and retry once.
         _get_jwks.cache_clear()
         jwks = _get_jwks(settings.cognito_user_pool_id, settings.cognito_region)
         signing_key = next((k for k in jwks["keys"] if k["kid"] == kid), None)

@@ -91,9 +91,7 @@ def build_core_crud_router(
                 methods=[method],
                 status_code=SUCCESS_STATUS[operation],
                 summary=f"{operation} {table}",
-                dependencies=[
-                    Depends(require_crud_permission(table, operation, registry))
-                ],
+                dependencies=[Depends(require_crud_permission(table, operation, registry))],
             )
         router.include_router(table_router)
 

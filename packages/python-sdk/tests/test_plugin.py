@@ -4,8 +4,6 @@ import json
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
-
 from biffo_plugin_sdk import (
     BiffoAPIClient,
     BiffoEvent,
@@ -20,6 +18,7 @@ from biffo_plugin_sdk import (
     load_manifest,
     register_plugin,
 )
+from pydantic import ValidationError
 
 # Kept textually identical to services/api/tests/test_plugin_migrations.py's
 # manifest fixture — if the two ever need to diverge, that's a sign the SDK's
@@ -80,9 +79,7 @@ class TestPluginManifestModel:
                 ),
             ],
             api_routes=[
-                RouteDef(
-                    method="GET", path="/roles", table="rbac_roles", operation="list"
-                ),
+                RouteDef(method="GET", path="/roles", table="rbac_roles", operation="list"),
             ],
         )
         assert len(manifest.tables) == 2
@@ -132,9 +129,7 @@ class TestPluginManifestModel:
 
 class TestRouteDef:
     def test_minimal_route(self):
-        route = RouteDef(
-            method="GET", path="/widgets", table="widgets", operation="list"
-        )
+        route = RouteDef(method="GET", path="/widgets", table="widgets", operation="list")
         assert route.method == "GET"
         assert route.table == "widgets"
         assert route.operation == "list"
@@ -147,12 +142,8 @@ class TestRouteDef:
             RouteDef(method="GET", path="/widgets", table="widgets", operation="create")
 
     def test_update_accepts_put_or_patch(self):
-        RouteDef(
-            method="PUT", path="/widgets/{id}", table="widgets", operation="update"
-        )
-        RouteDef(
-            method="PATCH", path="/widgets/{id}", table="widgets", operation="update"
-        )
+        RouteDef(method="PUT", path="/widgets/{id}", table="widgets", operation="update")
+        RouteDef(method="PATCH", path="/widgets/{id}", table="widgets", operation="update")
 
     def test_single_row_operation_requires_id_path_param(self):
         with pytest.raises(ValidationError):
@@ -160,9 +151,7 @@ class TestRouteDef:
 
     def test_collection_operation_rejects_id_path_param(self):
         with pytest.raises(ValidationError):
-            RouteDef(
-                method="GET", path="/widgets/{id}", table="widgets", operation="list"
-            )
+            RouteDef(method="GET", path="/widgets/{id}", table="widgets", operation="list")
 
     def test_path_must_start_with_slash(self):
         with pytest.raises(ValidationError):
@@ -200,18 +189,14 @@ class TestTableDefinition:
         with pytest.raises(ValidationError):
             TableDefinition(
                 name="bad_table",
-                columns=[
-                    ColumnDefinition(name="tenant_id", type="String(64)", nullable=True)
-                ],
+                columns=[ColumnDefinition(name="tenant_id", type="String(64)", nullable=True)],
             )
 
     def test_cannot_redeclare_id_column(self):
         with pytest.raises(ValidationError):
             TableDefinition(
                 name="bad_table",
-                columns=[
-                    ColumnDefinition(name="id", type="String(36)", primary_key=True)
-                ],
+                columns=[ColumnDefinition(name="id", type="String(36)", primary_key=True)],
             )
 
     def test_duplicate_column_names_rejected(self):
@@ -268,9 +253,7 @@ class TestTablePermissions:
         table = TableDefinition.model_validate(
             {
                 "name": "roles",
-                "permissions": {
-                    "delete": {"allowed": True, "required_role": ["admin", "ops"]}
-                },
+                "permissions": {"delete": {"allowed": True, "required_role": ["admin", "ops"]}},
             }
         )
         assert table.permissions.delete.allowed is True
@@ -346,9 +329,7 @@ class TestLoadManifest:
 
     def test_invalid_schema_raises_value_error(self, tmp_path: Path) -> None:
         manifest_json = tmp_path / "biffo.plugin.json"
-        manifest_json.write_text(
-            json.dumps({"description": "missing name and version"})
-        )
+        manifest_json.write_text(json.dumps({"description": "missing name and version"}))
 
         with pytest.raises(ValueError):
             load_manifest(manifest_json)
@@ -363,9 +344,7 @@ class TestRegisterPlugin:
             name="rbac",
             version="1.0.0",
             tables=[TableDefinition(name="roles")],
-            api_routes=[
-                RouteDef(method="GET", path="/roles", table="roles", operation="list")
-            ],
+            api_routes=[RouteDef(method="GET", path="/roles", table="roles", operation="list")],
         )
 
         registration = register_plugin(manifest)
@@ -505,9 +484,9 @@ class TestBiffoPluginBaseSubscribe:
         plugin_two = ExamplePlugin()
 
         assert plugin_one.events is not plugin_two.events
-        assert plugin_one.events.get_handlers(
+        assert plugin_one.events.get_handlers("user.created") != plugin_two.events.get_handlers(
             "user.created"
-        ) != plugin_two.events.get_handlers("user.created")
+        )
 
 
 class TestBiffoPluginBaseRegister:

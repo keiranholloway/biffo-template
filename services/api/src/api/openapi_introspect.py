@@ -100,9 +100,7 @@ def _fields(node: Any, components: dict[str, Any]) -> list[SchemaField]:
     out: list[SchemaField] = []
     for name, prop in props.items():
         resolved = _deref(prop, components)
-        description = (
-            resolved.get("description") if isinstance(resolved, dict) else None
-        )
+        description = resolved.get("description") if isinstance(resolved, dict) else None
         out.append(
             SchemaField(
                 name=name,
@@ -138,9 +136,7 @@ def _example(node: Any, components: dict[str, Any], seen: frozenset[str]) -> Any
     for combiner in ("anyOf", "oneOf"):
         if combiner in node:
             options = node[combiner]
-            non_null = [
-                s for s in options if _deref(s, components).get("type") != "null"
-            ]
+            non_null = [s for s in options if _deref(s, components).get("type") != "null"]
             chosen = non_null[0] if non_null else (options[0] if options else None)
             return _example(chosen, components, seen) if chosen is not None else None
     if "allOf" in node and node["allOf"]:
@@ -178,9 +174,7 @@ def _json_media(content: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     return ctype, media
 
 
-def _parameters(
-    operation: dict[str, Any], components: dict[str, Any]
-) -> list[ParamSpec]:
+def _parameters(operation: dict[str, Any], components: dict[str, Any]) -> list[ParamSpec]:
     out: list[ParamSpec] = []
     for param in operation.get("parameters", []):
         if not isinstance(param, dict):
@@ -197,9 +191,7 @@ def _parameters(
     return out
 
 
-def _operation(
-    openapi: dict[str, Any], method: str, path: str
-) -> dict[str, Any] | None:
+def _operation(openapi: dict[str, Any], method: str, path: str) -> dict[str, Any] | None:
     item = openapi.get("paths", {}).get(path)
     if not isinstance(item, dict):
         return None
@@ -207,9 +199,7 @@ def _operation(
     return op if isinstance(op, dict) else None
 
 
-def build_endpoint_detail(
-    openapi: dict[str, Any], method: str, path: str
-) -> EndpointDetail | None:
+def build_endpoint_detail(openapi: dict[str, Any], method: str, path: str) -> EndpointDetail | None:
     """Resolve one route's specifics from the OpenAPI schema, or None if absent."""
     operation = _operation(openapi, method, path)
     if operation is None:
@@ -226,8 +216,7 @@ def build_endpoint_detail(
             request_body = BodySpec(
                 content_type=content_type,
                 fields=_fields(schema, components),
-                example=media.get("example")
-                or _example(schema, components, frozenset()),
+                example=media.get("example") or _example(schema, components, frozenset()),
             )
 
     responses: list[ResponseSpec] = []
@@ -303,9 +292,7 @@ def collect_openapi_endpoints(
                 # to a plugin, everything else is core (in services/api/).
                 out.append(
                     EndpointResponse(
-                        source="plugin"
-                        if path.startswith("/api/v1/plugins/")
-                        else "core",
+                        source="plugin" if path.startswith("/api/v1/plugins/") else "core",
                         method=upper,
                         path=path,
                         summary=summary,

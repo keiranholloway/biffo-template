@@ -3,9 +3,7 @@
 from api.ddl_import import discover_ddl_import_dirs, list_sql_files
 
 
-def _write_sql_file(
-    root, import_name: str, filename: str, content: str = "SELECT 1;"
-) -> None:
+def _write_sql_file(root, import_name: str, filename: str, content: str = "SELECT 1;") -> None:
     import_dir = root / import_name
     import_dir.mkdir(parents=True, exist_ok=True)
     (import_dir / filename).write_text(content)

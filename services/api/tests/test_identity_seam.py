@@ -125,7 +125,7 @@ class TestOverride:
             """Sources identity from a business schema. Touches no Core table —
             note nothing here reads `public.users`."""
 
-            def session(self) -> AsyncGenerator[AsyncSession, None]:
+            def session(self) -> AsyncGenerator[AsyncSession]:
                 raise AssertionError("session() is not used when db is injected")
 
             async def resolve(self, db, claims) -> ResolvedIdentity:
@@ -174,7 +174,7 @@ class TestThroughFastAPI:
         opened: list[str] = []
 
         class SessionTrackingProvider:
-            def session(self) -> AsyncGenerator[AsyncSession, None]:
+            def session(self) -> AsyncGenerator[AsyncSession]:
                 async def _gen():
                     opened.append("open")
                     try:
@@ -184,7 +184,7 @@ class TestThroughFastAPI:
 
                 # _Db is a stand-in, not a real AsyncSession — the point of the
                 # test is the generator lifecycle, not the session type.
-                return cast(AsyncGenerator[AsyncSession, None], _gen())
+                return cast(AsyncGenerator[AsyncSession], _gen())
 
             async def resolve(self, db, claims) -> ResolvedIdentity:
                 # Proves the session the dependency yielded reached the provider.

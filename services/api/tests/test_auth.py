@@ -3,14 +3,13 @@ plus the user.created emission (now buffered on the session, published post-comm
 by get_db — ADR-0002 / #222)."""
 
 import pytest
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
 from api.events import pending_events
 from api.middleware.auth import AuthenticatedUser
 from api.models.base import Base
 from api.models.user import User  # noqa: F401 — registers the users table on Base.metadata
 from api.routers.auth import get_current_user
 from api.schemas.user import UserResponse
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 @pytest.fixture

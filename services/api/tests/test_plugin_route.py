@@ -1,16 +1,13 @@
 """Tests for plugin route definition models (issue #19)."""
 
 import pytest
-from pydantic import ValidationError
-
 from api.models.plugin_route import RouteDefinition, parse_plugin_routes_from_manifest
+from pydantic import ValidationError
 
 
 class TestRouteDefinition:
     def test_minimal_list_route(self):
-        route = RouteDefinition(
-            method="GET", path="/widgets", table="widgets", operation="list"
-        )
+        route = RouteDefinition(method="GET", path="/widgets", table="widgets", operation="list")
         assert route.method == "GET"
         assert route.path == "/widgets"
         assert route.table == "widgets"
@@ -19,9 +16,7 @@ class TestRouteDefinition:
 
     def test_read_route_requires_id_path_param(self):
         with pytest.raises(ValidationError):
-            RouteDefinition(
-                method="GET", path="/widgets", table="widgets", operation="read"
-            )
+            RouteDefinition(method="GET", path="/widgets", table="widgets", operation="read")
 
     def test_read_route_with_id_is_valid(self):
         route = RouteDefinition(
@@ -31,53 +26,33 @@ class TestRouteDefinition:
 
     def test_list_route_rejects_id_path_param(self):
         with pytest.raises(ValidationError):
-            RouteDefinition(
-                method="GET", path="/widgets/{id}", table="widgets", operation="list"
-            )
+            RouteDefinition(method="GET", path="/widgets/{id}", table="widgets", operation="list")
 
     def test_create_requires_post(self):
         with pytest.raises(ValidationError):
-            RouteDefinition(
-                method="GET", path="/widgets", table="widgets", operation="create"
-            )
-        route = RouteDefinition(
-            method="POST", path="/widgets", table="widgets", operation="create"
-        )
+            RouteDefinition(method="GET", path="/widgets", table="widgets", operation="create")
+        route = RouteDefinition(method="POST", path="/widgets", table="widgets", operation="create")
         assert route.method == "POST"
 
     def test_update_accepts_put_or_patch_only(self):
-        RouteDefinition(
-            method="PUT", path="/widgets/{id}", table="widgets", operation="update"
-        )
-        RouteDefinition(
-            method="PATCH", path="/widgets/{id}", table="widgets", operation="update"
-        )
+        RouteDefinition(method="PUT", path="/widgets/{id}", table="widgets", operation="update")
+        RouteDefinition(method="PATCH", path="/widgets/{id}", table="widgets", operation="update")
         with pytest.raises(ValidationError):
-            RouteDefinition(
-                method="GET", path="/widgets/{id}", table="widgets", operation="update"
-            )
+            RouteDefinition(method="GET", path="/widgets/{id}", table="widgets", operation="update")
 
     def test_delete_requires_delete_method_and_id(self):
-        RouteDefinition(
-            method="DELETE", path="/widgets/{id}", table="widgets", operation="delete"
-        )
+        RouteDefinition(method="DELETE", path="/widgets/{id}", table="widgets", operation="delete")
         with pytest.raises(ValidationError):
-            RouteDefinition(
-                method="DELETE", path="/widgets", table="widgets", operation="delete"
-            )
+            RouteDefinition(method="DELETE", path="/widgets", table="widgets", operation="delete")
 
     def test_path_must_start_with_slash(self):
         with pytest.raises(ValidationError):
-            RouteDefinition(
-                method="GET", path="widgets", table="widgets", operation="list"
-            )
+            RouteDefinition(method="GET", path="widgets", table="widgets", operation="list")
 
 
 class TestParsePluginRoutesFromManifest:
     def test_no_routes_key_returns_empty_list(self):
-        assert (
-            parse_plugin_routes_from_manifest({"name": "x", "version": "1.0.0"}) == []
-        )
+        assert parse_plugin_routes_from_manifest({"name": "x", "version": "1.0.0"}) == []
 
     def test_empty_routes_list_returns_empty_list(self):
         manifest = {"name": "x", "version": "1.0.0", "api_routes": []}

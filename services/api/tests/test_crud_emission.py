@@ -6,10 +6,6 @@ and opt-out works. The compliance gate for ``<table>.<op>`` is tested separately
 """
 
 import pytest
-from sqlalchemy import String
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.orm import Mapped, mapped_column
-
 from api.events import is_declared, pending_events
 from api.models.base import Base, TenantScopedModel
 from api.models.plugin_table import PermissionRule, TablePermissions
@@ -19,6 +15,9 @@ from api.routing.crud_handlers import (
     make_update_handler,
     user_columns_from_model,
 )
+from sqlalchemy import String
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.orm import Mapped, mapped_column
 
 # No __crud_permissions__ → excluded from the core CRUD registry (no pollution);
 # emission is gated by __emit_events__, not the permissions block.
@@ -93,9 +92,7 @@ async def test_delete_buffers_deleted_event_with_captured_row(session):
     )
     row_id = created["id"]
 
-    result = await make_delete_handler(_Widget)(
-        id=row_id, tenant_id="default", db=session
-    )
+    result = await make_delete_handler(_Widget)(id=row_id, tenant_id="default", db=session)
     assert result == {"deleted": True, "id": row_id}
 
     deleted = [e for e in pending_events(session) if e.detail_type.endswith(".deleted")]
@@ -114,9 +111,7 @@ async def test_opt_out_model_emits_nothing(session):
 
 def test_is_declared_admits_allowed_crud_ops(monkeypatch):
     registry = {"widgets": TablePermissions(create=PermissionRule(allowed=True))}
-    monkeypatch.setattr(
-        "api.permissions.get_permissions_registry", lambda **_: registry
-    )
+    monkeypatch.setattr("api.permissions.get_permissions_registry", lambda **_: registry)
 
     assert is_declared("biffo.core", "widgets.created") is True
     # delete not allowed on this table → not a declared event

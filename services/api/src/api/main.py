@@ -216,9 +216,7 @@ def _run_ddl_import(directory: str | None) -> dict:
         result["app_role"] = await bootstrap_app_role_async()
         return result
 
-    async def _apply_batch(
-        engine: AsyncEngine, session_factory: async_sessionmaker
-    ) -> dict:
+    async def _apply_batch(engine: AsyncEngine, session_factory: async_sessionmaker) -> dict:
         applied: list[str] = []
         skipped: list[str] = []
         to_execute: list[tuple[Path, str, str]] = []
@@ -288,9 +286,7 @@ def _run_ddl_import(directory: str | None) -> dict:
                             checksum,
                         )
                     applied.append(sql_file.name)
-                    logger.info(
-                        f"Applied DDL file {sql_file.name} for import {directory!r}"
-                    )
+                    logger.info(f"Applied DDL file {sql_file.name} for import {directory!r}")
 
         return {"ok": True, "applied": applied, "skipped": skipped}
 

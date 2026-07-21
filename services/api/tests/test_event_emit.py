@@ -2,14 +2,13 @@
 
 from typing import Any, cast
 
-import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
-import api.dependencies as dependencies
 import api.database as database
+import api.dependencies as dependencies
+import pytest
 from api.events import BiffoEvent, emit_event, is_declared, pending_events
 from api.events.emit import publish_pending
 from api.events.registry import DEMO_REQUESTED, EventType
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class _RecordingPublisher:

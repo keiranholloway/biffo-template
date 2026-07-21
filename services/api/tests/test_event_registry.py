@@ -3,7 +3,6 @@
 import dataclasses
 
 import pytest
-
 from api.events.registry import (
     DEMO_REQUESTED,
     LEAD_CAPTURED,
@@ -41,9 +40,7 @@ def test_build_produces_biffo_event_with_identity():
 
 
 def test_register_event_returns_the_event_and_lists_it():
-    ev = register_event(
-        EventType("test.source", "unit.registered", "Unit registered", "desc")
-    )
+    ev = register_event(EventType("test.source", "unit.registered", "Unit registered", "desc"))
     assert ev.detail_type == "unit.registered"
     assert find_event("test.source", "unit.registered") is ev
     assert ev in registered_events()

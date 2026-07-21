@@ -10,14 +10,13 @@ Cognito JWTs, never signs.
 
 import json
 
+import api.middleware.auth as auth_module
 import jwt
 import pytest
+from api.middleware.auth import _verify_token
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
 from jwt.algorithms import RSAAlgorithm
-
-import api.middleware.auth as auth_module
-from api.middleware.auth import _verify_token
 
 _KID = "test-key-1"
 _AUD = "test-client-id"
@@ -29,9 +28,7 @@ def signing_key(monkeypatch):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     jwk = json.loads(RSAAlgorithm.to_jwk(key.public_key()))
     jwk["kid"] = _KID
-    monkeypatch.setattr(
-        auth_module.settings, "cognito_jwks_json", json.dumps({"keys": [jwk]})
-    )
+    monkeypatch.setattr(auth_module.settings, "cognito_jwks_json", json.dumps({"keys": [jwk]}))
     monkeypatch.setattr(auth_module.settings, "cognito_client_id", _AUD)
     auth_module._get_jwks.cache_clear()
     yield key

@@ -178,9 +178,7 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _URL_RE = re.compile(r"^https://[^\s]+$")
 
 
-def _effective(
-    config_fields: list[dict[str, Any]], config: dict[str, Any], name: str
-) -> Any:
+def _effective(config_fields: list[dict[str, Any]], config: dict[str, Any], name: str) -> Any:
     """A field's value, falling back to its catalog ``default`` when unset.
 
     Definitions saved before a field existed carry no value for it, so the
@@ -243,9 +241,7 @@ class WorkflowDefinitionBody(BaseModel):
 
     @model_validator(mode="after")
     def _validate_action(self) -> WorkflowDefinitionBody:
-        action = next(
-            (a for a in WORKFLOW_ACTIONS if a["type"] == self.action_type), None
-        )
+        action = next((a for a in WORKFLOW_ACTIONS if a["type"] == self.action_type), None)
         if action is None:
             raise ValueError(f"Unknown action_type: {self.action_type}")
 
@@ -267,12 +263,9 @@ class WorkflowDefinitionBody(BaseModel):
             # "Required" means the value must *resolve* to something — a field
             # with a catalog default therefore always satisfies it.
             resolved = _effective(config_fields, self.action_config, field["name"])
-            if field["required"] and not (
-                isinstance(resolved, str) and resolved.strip()
-            ):
+            if field["required"] and not (isinstance(resolved, str) and resolved.strip()):
                 raise ValueError(
-                    f"action_config.{field['name']} is required "
-                    f"for the {self.action_type} action"
+                    f"action_config.{field['name']} is required for the {self.action_type} action"
                 )
             if (
                 field["type"] == "email"
@@ -280,9 +273,7 @@ class WorkflowDefinitionBody(BaseModel):
                 and value
                 and not _EMAIL_RE.match(value)
             ):
-                raise ValueError(
-                    f"action_config.{field['name']} must be a valid email address"
-                )
+                raise ValueError(f"action_config.{field['name']} must be a valid email address")
             if (
                 field["type"] == "url"
                 and isinstance(value, str)

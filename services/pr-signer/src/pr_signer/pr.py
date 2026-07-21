@@ -46,13 +46,9 @@ class GitHubContents(Protocol):
 
     def create_branch(self, branch: str, from_ref: str) -> None: ...
 
-    def put_file(
-        self, *, path: str, content: str, message: str, branch: str, sha: str
-    ) -> None: ...
+    def put_file(self, *, path: str, content: str, message: str, branch: str, sha: str) -> None: ...
 
-    def open_pull_request(
-        self, *, head: str, base: str, title: str, body: str
-    ) -> str: ...
+    def open_pull_request(self, *, head: str, base: str, title: str, body: str) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -82,7 +78,8 @@ def _rule_summary(req: PermissionChangeRequest) -> str:
 def _commit_message(req: PermissionChangeRequest, requester: str) -> str:
     return (
         f"feat(permissions): {req.operation} on {req.plugin}/{req.table} -> "
-        f"{_rule_summary(req)}\n\nRequested by {requester} via the portal endpoints view (ADR-0008)."
+        f"{_rule_summary(req)}\n\nRequested by {requester} "
+        f"via the portal endpoints view (ADR-0008)."
     )
 
 
@@ -104,9 +101,7 @@ def _pr_body(req: PermissionChangeRequest, requester: str) -> str:
     )
 
 
-def _audit(
-    req: PermissionChangeRequest, requester: str, branch: str, url: str
-) -> dict[str, Any]:
+def _audit(req: PermissionChangeRequest, requester: str, branch: str, url: str) -> dict[str, Any]:
     return {
         "event": "endpoint_permission_change_pr",
         "requester": requester,

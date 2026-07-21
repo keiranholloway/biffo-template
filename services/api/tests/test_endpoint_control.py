@@ -101,9 +101,7 @@ class FakeLambdaClient:
 
 
 def test_lambda_invoker_parses_success_payload():
-    client = FakeLambdaClient(
-        payload_bytes=json.dumps({"statusCode": 200, "pr_url": "u"}).encode()
-    )
+    client = FakeLambdaClient(payload_bytes=json.dumps({"statusCode": 200, "pr_url": "u"}).encode())
     invoker = LambdaSignerInvoker("signer-fn", client=client)
 
     out = invoker.invoke({"plugin": "p"})
@@ -117,9 +115,7 @@ def test_lambda_invoker_parses_success_payload():
 
 
 def test_lambda_invoker_raises_on_function_error():
-    client = FakeLambdaClient(
-        payload_bytes=b'{"errorMessage": "boom"}', function_error="Unhandled"
-    )
+    client = FakeLambdaClient(payload_bytes=b'{"errorMessage": "boom"}', function_error="Unhandled")
     invoker = LambdaSignerInvoker("signer-fn", client=client)
 
     with pytest.raises(SignerInvocationError):

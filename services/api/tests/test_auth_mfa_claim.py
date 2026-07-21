@@ -53,9 +53,7 @@ class TestOnAuthenticatedUser:
         return _stub
 
     def _call(self):
-        return identity_from_token(
-            HTTPAuthorizationCredentials(scheme="Bearer", credentials="t")
-        )
+        return identity_from_token(HTTPAuthorizationCredentials(scheme="Bearer", credentials="t"))
 
     def test_set_when_token_shows_mfa(self, _claims):
         _claims({"sub": "s1", "amr": ["pwd", "mfa"]})

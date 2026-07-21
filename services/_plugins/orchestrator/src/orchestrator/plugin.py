@@ -11,6 +11,7 @@ IAM-signed internal API (ADR-0009) via ``SignedCoreClient``.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import inspect
 import json
@@ -28,12 +29,17 @@ from biffo_plugin_sdk import (
     load_manifest,
 )
 
-from .actions import ACTION_HANDLERS, WhatsAppSettings
+from .actions import ACTION_HANDLERS, TransientActionError, WhatsAppSettings
 from .manifest import MANIFEST_PATH
 
 logger = Logger()
 
 _INTERNAL_BASE = "/api/v1/internal/orchestration"
+# Bounded in-process retry for transient action failures. Worst case is
+# 3 × the 10s HTTP timeout plus 1.5s of backoff — comfortably inside the
+# engine Lambda's 60s timeout, with room for the Core API calls either side.
+_MAX_ATTEMPTS = 3
+_BACKOFF_SECONDS = (0.5, 1.0)
 # Payload keys, in preference order, used as the event's idempotency key.
 _ID_KEYS = ("demo_request_id", "id", "lead_id")
 
@@ -55,6 +61,44 @@ def _idempotency_key(event: BiffoEvent) -> str:
     return f"{event.detail_type}:{digest}"
 
 
+def _whatsapp_from_ssm(ssm_client: Any | None) -> WhatsAppSettings:
+    """Resolve the WhatsApp credentials from SSM, once per cold start.
+
+    The Lambda carries only the *parameter names*, so the token is never in the
+    function's configuration or in Terraform state. Unset names mean the action
+    is not configured — the handler then fails the run with a clear message
+    rather than the engine failing to start. A fetch that errors (parameter
+    missing, permission denied) is logged and treated the same way, so a broken
+    WhatsApp setup can never stop email, Chat or agent workflows from running.
+    """
+    token_parameter = os.environ.get("WHATSAPP_ACCESS_TOKEN_PARAMETER", "")
+    number_parameter = os.environ.get("WHATSAPP_PHONE_NUMBER_ID_PARAMETER", "")
+    api_version = os.environ.get("WHATSAPP_API_VERSION", "v22.0")
+
+    if not (token_parameter and number_parameter):
+        return WhatsAppSettings("", "", api_version)
+
+    client = ssm_client if ssm_client is not None else boto3.client("ssm")
+
+    def _get(name: str) -> str:
+        response = client.get_parameter(Name=name, WithDecryption=True)
+        return str(response["Parameter"]["Value"])
+
+    try:
+        return WhatsAppSettings(
+            access_token=_get(token_parameter),
+            phone_number_id=_get(number_parameter),
+            api_version=api_version,
+        )
+    except Exception:  # noqa: BLE001 — a broken WhatsApp setup must not break the engine
+        logger.exception(
+            "Could not read the WhatsApp credentials from SSM; "
+            "the whatsapp action will report itself unconfigured",
+            extra={"access_token_parameter": token_parameter},
+        )
+        return WhatsAppSettings("", "", api_version)
+
+
 class OrchestratorPlugin(BiffoPluginBase):
     """Event-driven orchestration engine (ADR-0003 plugin)."""
 
@@ -64,6 +108,7 @@ class OrchestratorPlugin(BiffoPluginBase):
         ses_client: Any | None = None,
         http_client: Any | None = None,
         whatsapp: WhatsAppSettings | None = None,
+        ssm_client: Any | None = None,
     ) -> None:
         manifest = load_manifest(MANIFEST_PATH)
         super().__init__(manifest, api=api if api is not None else SignedCoreClient())
@@ -71,13 +116,10 @@ class OrchestratorPlugin(BiffoPluginBase):
         # Plain (unsigned) HTTP client for webhook actions — distinct from the
         # IAM-signed Core client. Reused across warm invocations to pool connections.
         self._http = http_client if http_client is not None else httpx.Client(timeout=10)
-        # Account-level WhatsApp credentials come from the orchestrator's env, never
-        # from a workflow's action_config (which is stored in the DB).
-        self._whatsapp = whatsapp or WhatsAppSettings(
-            access_token=os.environ.get("WHATSAPP_ACCESS_TOKEN", ""),
-            phone_number_id=os.environ.get("WHATSAPP_PHONE_NUMBER_ID", ""),
-            api_version=os.environ.get("WHATSAPP_API_VERSION", "v22.0"),
-        )
+        # Account-level WhatsApp credentials: read once per cold start from SSM,
+        # never from a workflow's action_config (which is stored in the DB) and
+        # never from an env var (which shows in the function's config).
+        self._whatsapp = whatsapp or _whatsapp_from_ssm(ssm_client)
 
         # Generic forwarder: react to *every* event and let Core decide what to
         # do (match it against enabled workflow definitions). Adding a new trigger
@@ -133,27 +175,61 @@ class OrchestratorPlugin(BiffoPluginBase):
             )
             return
 
-        try:
-            result = handler(
-                config,
-                event.payload,
-                ses_client=self._ses,
-                http_client=self._http,
-                core_client=self.api,
-                whatsapp=self._whatsapp,
-            )
-            # Handlers whose side effect is an await-only call (the agent action
-            # POSTs to Core through the async signed client) are `async def`.
-            # Awaiting here rather than in every handler keeps registration and
-            # the sync handlers unchanged.
-            if inspect.isawaitable(result):
-                result = await result
-        except Exception as exc:  # noqa: BLE001 — any dispatch failure is recorded, not raised
-            logger.exception("Action dispatch failed", extra={"run_id": run_id})
-            await self._record(run_id, action_type, "failed", request=config, error=str(exc))
-            return
+        # Retry in-process rather than by failing the invocation: the run was
+        # already claimed in Core before the action ran, so a redelivered event
+        # comes back created=False and would be skipped. This loop is the only
+        # thing standing between a transient 503 and a permanently failed run.
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                result = handler(
+                    config,
+                    event.payload,
+                    ses_client=self._ses,
+                    http_client=self._http,
+                    core_client=self.api,
+                    whatsapp=self._whatsapp,
+                )
+                # Handlers whose side effect is an await-only call (the agent
+                # action POSTs to Core through the async signed client) are
+                # `async def`. Awaiting here rather than in every handler keeps
+                # registration and the sync handlers unchanged — and the await
+                # must sit inside the try, since an async handler raises when it
+                # is awaited, not when it is called.
+                if inspect.isawaitable(result):
+                    result = await result
+            except TransientActionError as exc:
+                if attempt == _MAX_ATTEMPTS:
+                    logger.warning(
+                        "Action failed after retries",
+                        extra={"run_id": run_id, "attempts": attempt},
+                    )
+                    await self._record(
+                        run_id,
+                        action_type,
+                        "failed",
+                        request=config,
+                        error=f"{exc} (after {attempt} attempts)",
+                    )
+                    return
+                logger.info(
+                    "Retrying transient action failure",
+                    extra={"run_id": run_id, "attempt": attempt},
+                )
+                await asyncio.sleep(_BACKOFF_SECONDS[attempt - 1])
+                continue
+            except Exception as exc:  # noqa: BLE001 — permanent: record, don't retry
+                logger.exception("Action dispatch failed", extra={"run_id": run_id})
+                await self._record(run_id, action_type, "failed", request=config, error=str(exc))
+                return
 
-        await self._record(run_id, action_type, "succeeded", request=config, response=result)
+            await self._record(
+                run_id,
+                action_type,
+                "succeeded",
+                request=config,
+                response={**result, "attempts": attempt},
+            )
+            return
 
     async def _record(
         self,

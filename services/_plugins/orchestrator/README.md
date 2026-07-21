@@ -7,9 +7,31 @@ more channels later) based on **workflow definitions stored in the Core API**.
 Actions are registered in `src/orchestrator/actions.py` (`ACTION_HANDLERS`) and
 must have a matching entry in the Core builder catalog
 (`services/api/.../schemas/orchestration.WORKFLOW_ACTIONS`) so they can be
-configured in the portal. WhatsApp needs account credentials on the Lambda:
-set `WHATSAPP_ACCESS_TOKEN` + `WHATSAPP_PHONE_NUMBER_ID` (Terraform vars
-`whatsapp_access_token` / `whatsapp_phone_number_id`); empty disables it.
+configured in the portal.
+
+### WhatsApp credentials come from SSM
+
+WhatsApp needs account credentials, and the Lambda carries only their **SSM
+parameter names** — `WHATSAPP_ACCESS_TOKEN_PARAMETER` and
+`WHATSAPP_PHONE_NUMBER_ID_PARAMETER` (Terraform vars
+`whatsapp_access_token_parameter` / `whatsapp_phone_number_id_parameter`). The
+engine resolves them once per cold start. A token passed as a Terraform variable
+would sit in state and in the function's configuration; a parameter name does
+neither. Store the token as a `SecureString`:
+
+```bash
+aws ssm put-parameter --type SecureString \
+  --name /myproject/dev/whatsapp/access-token --value "<token>"
+aws ssm put-parameter --type String \
+  --name /myproject/dev/whatsapp/phone-number-id --value "<phone-number-id>"
+```
+
+The module grants `ssm:GetParameter` on exactly those two parameters, plus
+`kms:Decrypt` fenced by a `kms:ViaService` condition so it grants nothing
+outside an SSM fetch. Leave the names empty to disable WhatsApp; a fetch that
+fails (missing parameter, denied permission) is logged and leaves the action
+reporting itself unconfigured, so a broken WhatsApp setup never stops email,
+Chat or agent workflows.
 
 ### WhatsApp: text vs template
 
@@ -54,6 +76,15 @@ EventBridge (biffo.core)  ──►  Orchestrator Lambda (this plugin)
 - **Idempotent.** Core claims one run per (definition, event) on a unique dedupe
   key, so an at-least-once / replayed event fires each action exactly once. The
   engine skips runs Core reports as already claimed (`created=false`).
+- **Transient action failures are retried in-process** — 3 attempts, 0.5s then
+  1.0s backoff. It has to be in-process: the run is claimed in Core _before_ the
+  action executes, so a redelivered event comes back `created=false` and is
+  skipped. EventBridge retry and the DLQ only ever covered the Core call, never
+  the action. Only a `TransientActionError` retries (throttling, 429/5xx, a
+  connection that never completed); a permanent failure — a rejected recipient,
+  a missing config key, a revoked webhook's 403, Core's 409 depth-ceiling
+  refusal — fails on the first attempt. The attempt count is recorded on the
+  action log, so a flaky channel is visible in history.
 
 ## Layout
 
@@ -90,7 +121,12 @@ them via a DDL import (ADR-0005) until the editing UI lands.
 3. **SES**: verify a sending identity for `action_config.from`. In the SES sandbox
    (default on new accounts / dev), also verify each recipient or request
    production access.
-4. **Seed** at least one workflow definition (DDL import) matching a live event.
+4. **WhatsApp (optional)**: put the credentials in SSM and pass
+   `whatsapp_access_token_parameter` / `whatsapp_phone_number_id_parameter`.
+   These replaced the old `whatsapp_access_token` / `whatsapp_phone_number_id`
+   variables, which put the token in Terraform state — an instance still wiring
+   those must switch, or `terraform plan` fails on an unsupported argument.
+5. **Seed** at least one workflow definition (DDL import) matching a live event.
 
 ## Tests
 

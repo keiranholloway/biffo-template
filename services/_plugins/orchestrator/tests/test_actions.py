@@ -6,13 +6,14 @@ import pytest
 from orchestrator.actions import (
     ACTION_HANDLERS,
     ActionError,
+    TransientActionError,
     WhatsAppSettings,
     request_agent_run,
     send_email,
     send_google_chat,
     send_whatsapp,
 )
-from orchestrator_fakes import FakeCore, FakeHttp, FakeSes
+from orchestrator_fakes import FakeCore, FakeHttp, FakeSes, FlakyHttp, FlakySes
 
 
 def test_send_email_renders_templates_and_sends():
@@ -425,3 +426,104 @@ async def test_agent_action_requires_name_and_instructions():
 def test_every_catalog_action_type_has_a_handler():
     """The engine registry and the Core builder catalog must stay in step."""
     assert "agent" in ACTION_HANDLERS
+
+
+# ── Transient vs permanent classification ────────────────────────────────────
+#
+# The dispatcher retries `TransientActionError` and nothing else, so this split
+# is the whole value of the retry: a retry that also retries permanent failures
+# just wastes time and money three times over.
+
+
+def test_a_throttled_ses_send_is_transient():
+    ses = FlakySes(failures=99, code="Throttling")
+
+    with pytest.raises(TransientActionError):
+        send_email({"from": "f@x", "to": "t@x"}, {}, ses_client=ses)
+
+
+def test_a_rejected_ses_recipient_is_permanent():
+    ses = FlakySes(failures=99, code="MessageRejected")
+
+    with pytest.raises(ActionError) as caught:
+        send_email({"from": "f@x", "to": "t@x"}, {}, ses_client=ses)
+    assert not isinstance(caught.value, TransientActionError)
+
+
+def test_a_missing_config_key_is_permanent():
+    with pytest.raises(ActionError) as caught:
+        send_email({"from": "f@x"}, {}, ses_client=FakeSes())
+    assert not isinstance(caught.value, TransientActionError)
+
+
+@pytest.mark.parametrize("status", [429, 500, 502, 503])
+def test_a_throttled_or_unwell_webhook_is_transient(status: int):
+    http = FakeHttp(status_code=status, text="nope")
+
+    with pytest.raises(TransientActionError):
+        send_google_chat({"webhook_url": "https://chat.example/x"}, {}, http_client=http)
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404])
+def test_a_rejected_webhook_request_is_permanent(status: int):
+    # A revoked or mistyped webhook URL is wrong on every attempt.
+    http = FakeHttp(status_code=status, text="nope")
+
+    with pytest.raises(ActionError) as caught:
+        send_google_chat({"webhook_url": "https://chat.example/x"}, {}, http_client=http)
+    assert not isinstance(caught.value, TransientActionError)
+
+
+def test_a_connection_that_never_completed_is_transient():
+    http = FlakyHttp(failures=99, mode="raise")
+
+    with pytest.raises(TransientActionError):
+        send_google_chat({"webhook_url": "https://chat.example/x"}, {}, http_client=http)
+
+
+def test_an_unconfigured_whatsapp_action_is_permanent():
+    # No amount of retrying resolves an SSM parameter that was never set.
+    with pytest.raises(ActionError) as caught:
+        send_whatsapp(
+            {"to": "+1", "message": "hi"},
+            {},
+            http_client=FakeHttp(),
+            whatsapp=WhatsAppSettings(access_token="", phone_number_id=""),
+        )
+    assert not isinstance(caught.value, TransientActionError)
+
+
+def test_a_5xx_from_the_whatsapp_cloud_api_is_transient():
+    http = FakeHttp(status_code=503, text="unavailable")
+
+    with pytest.raises(TransientActionError):
+        send_whatsapp({"to": "+1", "message": "hi"}, {}, http_client=http, whatsapp=_WA)
+
+
+async def test_the_agent_depth_ceiling_refusal_is_permanent():
+    """ADR-0014 §8: a 409 is the loop guard tripping. Retrying it would be the
+    runaway chain the ceiling exists to stop."""
+    core = FakeCore([], agent_run_status=409, agent_run_detail="exceeds the maximum chain depth")
+
+    with pytest.raises(ActionError) as caught:
+        await request_agent_run(
+            _AGENT_CONFIG, _completed_event(depth=2, causation_id="c"), core_client=core.client()
+        )
+    assert not isinstance(caught.value, TransientActionError)
+
+
+@pytest.mark.parametrize("status", [400, 403, 404, 422])
+async def test_other_4xx_from_core_on_the_agent_action_is_permanent(status: int):
+    core = FakeCore([], agent_run_status=status, agent_run_detail="no")
+
+    with pytest.raises(ActionError) as caught:
+        await request_agent_run(_AGENT_CONFIG, {}, core_client=core.client())
+    assert not isinstance(caught.value, TransientActionError)
+
+
+@pytest.mark.parametrize("status", [429, 500, 503])
+async def test_a_5xx_or_429_from_core_on_the_agent_action_is_transient(status: int):
+    core = FakeCore([], agent_run_status=status, agent_run_detail="unavailable")
+
+    with pytest.raises(TransientActionError):
+        await request_agent_run(_AGENT_CONFIG, {}, core_client=core.client())

@@ -132,3 +132,88 @@ class FakeHttp:
     ) -> FakeHttpResponse:
         self.calls.append({"url": url, "json": json, "headers": headers})
         return FakeHttpResponse(self._status, self._json, self._text)
+
+
+class FlakyHttp(FakeHttp):
+    """Fails the first ``failures`` POSTs, then succeeds — the retry fixture.
+
+    ``mode="status"`` answers with ``status_code`` (a 5xx/429 the action reads as
+    transient); ``mode="raise"`` raises instead, standing in for a connection
+    that never completed.
+    """
+
+    def __init__(
+        self,
+        failures: int,
+        *,
+        status_code: int = 503,
+        mode: str = "status",
+        json_data: Any = None,
+    ) -> None:
+        super().__init__(200, json_data, "")
+        self._failures = failures
+        self._failure_status = status_code
+        self._mode = mode
+
+    def post(
+        self,
+        url: str,
+        *,
+        json: Any = None,
+        headers: dict[str, str] | None = None,
+    ) -> FakeHttpResponse:
+        self.calls.append({"url": url, "json": json, "headers": headers})
+        if len(self.calls) <= self._failures:
+            if self._mode == "raise":
+                raise ConnectionError("connection reset")
+            return FakeHttpResponse(self._failure_status, None, "upstream unavailable")
+        return FakeHttpResponse(200, self._json, "")
+
+
+class AwsError(Exception):
+    """Shaped like a botocore ClientError: carries ``response['Error']['Code']``."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.response = {"Error": {"Code": code}}
+
+
+class FlakySes(FakeSes):
+    """Raises an AWS error for the first ``failures`` sends, then succeeds."""
+
+    def __init__(
+        self,
+        failures: int,
+        *,
+        code: str = "Throttling",
+        message_id: str = "ses-message-1",
+    ) -> None:
+        super().__init__(message_id)
+        self._failures = failures
+        self._code = code
+        self.attempts = 0
+
+    def send_email(self, **kwargs: Any) -> dict[str, Any]:
+        self.attempts += 1
+        if self.attempts <= self._failures:
+            raise AwsError(self._code)
+        return super().send_email(**kwargs)
+
+
+class FakeSsm:
+    """Serves SSM parameters from a dict; records what was asked for."""
+
+    def __init__(self, parameters: dict[str, str] | None = None) -> None:
+        self.parameters = parameters or {}
+        self.calls: list[dict[str, Any]] = []
+
+    def get_parameter(
+        self,
+        *,
+        Name: str,  # noqa: N803 — boto3's own parameter casing
+        WithDecryption: bool = False,  # noqa: N803 — boto3's own parameter casing
+    ) -> dict[str, Any]:
+        self.calls.append({"Name": Name, "WithDecryption": WithDecryption})
+        if Name not in self.parameters:
+            raise KeyError(f"Parameter {Name} not found")
+        return {"Parameter": {"Name": Name, "Value": self.parameters[Name]}}

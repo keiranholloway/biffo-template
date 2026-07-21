@@ -21,12 +21,26 @@ terraform {
   }
 }
 
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
 locals {
   name_prefix   = "${var.project_name}-${var.environment}"
   function_name = "${local.name_prefix}-plugin-${var.plugin_name}"
   # The engine is a generic forwarder (subscribe_all): a rule is always created,
   # matching every event so a new trigger needs no Terraform change (ADR-0010).
   has_subscriptions = var.subscribe_all || length(var.event_subscriptions) > 0
+
+  # SSM parameters the engine may read (WhatsApp credentials). Names are
+  # configured with or without a leading slash; the ARN always has exactly one.
+  whatsapp_parameters = compact([
+    var.whatsapp_access_token_parameter,
+    var.whatsapp_phone_number_id_parameter,
+  ])
+  whatsapp_parameter_arns = [
+    for name in local.whatsapp_parameters :
+    "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/${trimprefix(name, "/")}"
+  ]
 }
 
 # Compute — the engine's Lambda. Non-VPC (no enable_vpc_access) so it can reach
@@ -47,10 +61,13 @@ module "function" {
     {
       BIFFO_CORE_API_URL = var.core_api_url
       BIFFO_PLUGIN_NAME  = var.plugin_name
-      # WhatsApp workflow action (empty = disabled). Account-level creds live
-      # here, not in a workflow's action_config (which is stored in the DB).
-      WHATSAPP_ACCESS_TOKEN    = var.whatsapp_access_token
-      WHATSAPP_PHONE_NUMBER_ID = var.whatsapp_phone_number_id
+      # WhatsApp workflow action (empty = disabled). Only the SSM *parameter
+      # names* travel as env vars; the engine fetches the values at cold start,
+      # so the token stays out of Terraform state and out of the function config.
+      # Account-level creds live here, not in a workflow's action_config (which
+      # is stored in the DB).
+      WHATSAPP_ACCESS_TOKEN_PARAMETER    = var.whatsapp_access_token_parameter
+      WHATSAPP_PHONE_NUMBER_ID_PARAMETER = var.whatsapp_phone_number_id_parameter
     },
     var.environment_variables,
   )
@@ -77,6 +94,35 @@ data "aws_iam_policy_document" "engine" {
     effect    = "Allow"
     actions   = ["ses:SendEmail", "ses:SendRawEmail"]
     resources = [var.ses_identity_arn]
+  }
+
+  # Read the WhatsApp credentials at cold start — only the named parameters,
+  # and only when the action is configured at all.
+  dynamic "statement" {
+    for_each = length(local.whatsapp_parameter_arns) > 0 ? [1] : []
+    content {
+      sid       = "ReadWhatsAppParameters"
+      effect    = "Allow"
+      actions   = ["ssm:GetParameter"]
+      resources = local.whatsapp_parameter_arns
+    }
+  }
+
+  # Decrypt the SecureString. Scoped to SSM via the kms:ViaService condition, so
+  # this grants nothing outside a parameter fetch even on the account-default key.
+  dynamic "statement" {
+    for_each = length(local.whatsapp_parameter_arns) > 0 ? [1] : []
+    content {
+      sid       = "DecryptWhatsAppParameters"
+      effect    = "Allow"
+      actions   = ["kms:Decrypt"]
+      resources = ["*"]
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["ssm.${data.aws_region.current.name}.amazonaws.com"]
+      }
+    }
   }
 }
 

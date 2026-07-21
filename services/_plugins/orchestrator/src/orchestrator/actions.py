@@ -81,7 +81,92 @@ class WhatsAppSettings:
 
 
 class ActionError(Exception):
-    """A dispatch failure the engine records as a failed run (not a crash)."""
+    """A dispatch failure the engine records as a failed run (not a crash).
+
+    Permanent by default: a bad recipient, a missing config key or a rejected
+    request will fail identically however many times it is sent.
+    """
+
+
+class TransientActionError(ActionError):
+    """A failure that might not recur — the dispatcher retries these.
+
+    Throttling, a 5xx from the far end, or a connection that never completed.
+    Retrying a permanent failure just burns the Lambda's budget three times
+    over, so handlers must raise this only when a later attempt could
+    plausibly succeed.
+    """
+
+
+# AWS error codes that mean "try again", not "this will never work".
+_TRANSIENT_AWS_CODES = frozenset(
+    {
+        "InternalError",
+        "InternalFailure",
+        "RequestTimeout",
+        "ServiceUnavailable",
+        "SlowDown",
+        "Throttling",
+        "ThrottlingException",
+        "TooManyRequestsException",
+    }
+)
+
+
+def _transient_status(status_code: int) -> bool:
+    """Whether an HTTP status is worth another attempt.
+
+    429 (throttled) and 5xx (the far end is unwell) are; every other 4xx means
+    the request itself is wrong and will be wrong next time too.
+    """
+    return status_code == 429 or status_code >= 500
+
+
+def _aws_failure(action: str, exc: Exception) -> ActionError:
+    """Classify a boto exception as transient or permanent.
+
+    Reads ``exc.response["Error"]["Code"]`` by duck-typing rather than importing
+    botocore, so the fakes in the tests classify the same way the real client
+    does.
+    """
+    code = ""
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        error = response.get("Error")
+        if isinstance(error, dict):
+            code = str(error.get("Code", ""))
+    detail = code or str(exc)
+    if code in _TRANSIENT_AWS_CODES or isinstance(exc, (TimeoutError, ConnectionError)):
+        return TransientActionError(f"{action} failed (transient): {detail}")
+    return ActionError(f"{action} failed: {detail}")
+
+
+def _http_failure(action: str, response: HttpResponse) -> ActionError:
+    """A non-2xx webhook response, classified for retry."""
+    message = f"{action} failed: {response.status_code} {response.text}"
+    if _transient_status(response.status_code):
+        return TransientActionError(message)
+    return ActionError(message)
+
+
+def _post(
+    http_client: HttpClient,
+    action: str,
+    url: str,
+    *,
+    json: Any = None,
+    headers: dict[str, str] | None = None,
+) -> HttpResponse:
+    """POST, treating any transport-level failure as transient.
+
+    A request that never got an answer — DNS, connect timeout, read timeout,
+    reset connection — is the failure mode worth retrying, and it is what an
+    exception out of the client almost always means here.
+    """
+    try:
+        return http_client.post(url, json=json, headers=headers)
+    except Exception as exc:  # noqa: BLE001 — no answer from the far end is transient
+        raise TransientActionError(f"{action} request failed: {exc}") from exc
 
 
 def _render(template: str, payload: dict[str, Any]) -> str:
@@ -117,14 +202,17 @@ def send_email(
     subject = _render(config.get("subject", "Notification"), payload)
     body = _render(config.get("body", ""), payload)
 
-    response = ses_client.send_email(
-        Source=source,
-        Destination={"ToAddresses": recipients},
-        Message={
-            "Subject": {"Data": subject},
-            "Body": {"Text": {"Data": body}},
-        },
-    )
+    try:
+        response = ses_client.send_email(
+            Source=source,
+            Destination={"ToAddresses": recipients},
+            Message={
+                "Subject": {"Data": subject},
+                "Body": {"Text": {"Data": body}},
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 — classified, then recorded or retried
+        raise _aws_failure("SES send", exc) from exc
     return {"message_id": response.get("MessageId")}
 
 
@@ -145,9 +233,9 @@ def send_google_chat(
     url = _require(config, "google_chat", "webhook_url")
     text = _render(config.get("message", ""), payload)
 
-    response = http_client.post(url, json={"text": text})
+    response = _post(http_client, "Google Chat webhook", url, json={"text": text})
     if response.status_code >= 400:
-        raise ActionError(f"Google Chat webhook failed: {response.status_code} {response.text}")
+        raise _http_failure("Google Chat webhook", response)
     return {"status_code": response.status_code}
 
 
@@ -234,20 +322,23 @@ def send_whatsapp(
     """
     if whatsapp is None or not whatsapp.configured:
         raise ActionError(
-            "WhatsApp is not configured — set WHATSAPP_ACCESS_TOKEN and "
-            "WHATSAPP_PHONE_NUMBER_ID on the orchestrator."
+            "WhatsApp is not configured — point WHATSAPP_ACCESS_TOKEN_PARAMETER "
+            "and WHATSAPP_PHONE_NUMBER_ID_PARAMETER at SSM parameters holding "
+            "the credentials, and check the engine can read them."
         )
     to = _require(config, "whatsapp", "to")
     body = _whatsapp_body(config, payload, to)
 
     url = f"https://graph.facebook.com/{whatsapp.api_version}/{whatsapp.phone_number_id}/messages"
-    response = http_client.post(
+    response = _post(
+        http_client,
+        "WhatsApp send",
         url,
         json=body,
         headers={"Authorization": f"Bearer {whatsapp.access_token}"},
     )
     if response.status_code >= 400:
-        raise ActionError(f"WhatsApp send failed: {response.status_code} {response.text}")
+        raise _http_failure("WhatsApp send", response)
     data = response.json()
     messages = data.get("messages") if isinstance(data, dict) else None
     message_id = messages[0].get("id") if messages else None
@@ -300,7 +391,7 @@ async def request_agent_run(
     This action **does not execute an agent**. It POSTs to Core's internal
     agent-run API; Core persists the run and emits ``agent.run.requested``, and
     a separate runtime subscribes to that event and does the model work. The
-    orchestrator's Lambda has a 30-second timeout, so a turn loop could not run
+    orchestrator's Lambda has a 60-second timeout, so a turn loop could not run
     here even if the architecture allowed it.
 
     ``config`` keys: ``agent_name`` and ``instructions`` (required), ``model``
@@ -329,12 +420,33 @@ async def request_agent_run(
             },
         )
     except BiffoAPIError as exc:
-        # 409 is the §8 depth ceiling refusing a runaway chain. It must land as
-        # a failed run in the audit log, not a silent success — a loop guard
-        # nobody can see tripping is not a loop guard.
+        # Core answered, and what it answered decides whether another attempt
+        # could ever help:
+        #
+        # - 409 is the §8 depth ceiling refusing a runaway chain. It is the most
+        #   permanent refusal there is — retrying is precisely the runaway the
+        #   ceiling exists to stop — and it must land as a failed run in the
+        #   audit log, not a silent success: a loop guard nobody can see
+        #   tripping is not a loop guard.
+        # - Any other 4xx (a malformed snapshot, an unknown agent, a signature
+        #   Core rejects) is equally settled.
+        # - 429/5xx is Core itself being briefly unavailable, which is the one
+        #   case worth another attempt.
+        if _transient_status(exc.status_code):
+            raise TransientActionError(
+                f"Core could not create the agent run for {agent_name!r} at "
+                f"depth {depth} (transient): {exc.status_code} {exc.detail}"
+            ) from exc
         raise ActionError(
             f"Core refused the agent run for {agent_name!r} at depth {depth}: "
             f"{exc.status_code} {exc.detail}"
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 — no answer from Core at all is transient
+        # Not a BiffoAPIError, so Core never answered: a connect/read timeout or
+        # a reset connection on the way to the internal API. Same reasoning as
+        # ``_post`` — worth another attempt, unlike anything Core actually said.
+        raise TransientActionError(
+            f"Agent run request to Core failed for {agent_name!r}: {exc}"
         ) from exc
 
     run_id = (run or {}).get("id")

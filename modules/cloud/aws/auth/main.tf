@@ -48,10 +48,21 @@ resource "aws_cognito_user_pool" "main" {
   # Email verification
   auto_verified_attributes = ["email"]
 
+  # Password-reset / verification code email. Cognito sends these as HTML, so the
+  # code sits on its own labelled line inside <code>/<b> with whitespace around it
+  # — a founder must never have to guess whether an adjacent character (a stray
+  # leading ".", a client's punctuation) is part of the code (issue #350). Only
+  # {####} is supported here (no {username}); the copy names the action instead of
+  # threading a portal URL through, pairing with the self-service reset flow (#338).
   verification_message_template {
     default_email_option = "CONFIRM_WITH_CODE"
-    email_subject        = "Your ${var.project_name} verification code"
-    email_message        = "Your verification code is {####}"
+    email_subject        = "Your ${var.project_name} password-reset code"
+    email_message        = <<-EOT
+      Here is your ${var.project_name} password-reset code.<br><br>
+      Password-reset code:<br>
+      <b><code>{####}</code></b><br><br>
+      To finish resetting your password, open your ${var.project_name} admin portal, choose <b>Forgot password?</b>, and enter your username together with this code. The code is only the characters shown on the line above, and it expires shortly.
+    EOT
   }
 
   # Customize the sender identity when a SES identity
@@ -87,6 +98,25 @@ resource "aws_cognito_user_pool" "main" {
 
   admin_create_user_config {
     allow_admin_create_user_only = false
+
+    # Welcome / invite email. Without this block Cognito sends its unstyled
+    # default, which left a founder unable to tell which value was the username
+    # (it is the literal username "admin", NOT their email address) or where the
+    # temporary password ended (issue #350). Cognito renders this as HTML and
+    # requires both {username} and {####} placeholders. Each credential gets its
+    # own labelled line inside <code>/<b> with whitespace around it, so no
+    # adjacent character can be mistaken for part of the value.
+    invite_message_template {
+      email_subject = "Your ${var.project_name} admin account"
+      email_message = <<-EOT
+        Your ${var.project_name} admin account is ready. Sign in with the credentials below at your admin portal's login page.<br><br>
+        Username (this is your username, not your email address):<br>
+        <b><code>{username}</code></b><br><br>
+        Temporary password:<br>
+        <b><code>{####}</code></b><br><br>
+        Enter each value exactly as shown on its own line above, with no surrounding punctuation. On your first sign-in you will be asked to set a new password of your own.
+      EOT
+    }
   }
 
   # Feature tier. Advanced security (threat protection) requires the Plus tier,

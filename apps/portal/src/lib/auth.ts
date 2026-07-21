@@ -51,6 +51,34 @@ export function completeNewPassword(
   })
 }
 
+export function requestPasswordReset(username: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const user = new CognitoUser({ Username: username, Pool: userPool })
+    user.forgotPassword({
+      onSuccess: () => {
+        resolve()
+      },
+      onFailure: reject,
+    })
+  })
+}
+
+export function confirmPasswordReset(
+  username: string,
+  code: string,
+  newPassword: string,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const user = new CognitoUser({ Username: username, Pool: userPool })
+    user.confirmPassword(code, newPassword, {
+      onSuccess: () => {
+        resolve()
+      },
+      onFailure: reject,
+    })
+  })
+}
+
 export function signOut(): void {
   const user = userPool.getCurrentUser()
   user?.signOut()

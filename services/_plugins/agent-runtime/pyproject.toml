@@ -1,0 +1,22 @@
+[project]
+name = "biffo-plugin-agent-runtime"
+version = "0.1.0"
+description = "Agentic-worker execution runtime (ADR-0014): executes agent runs requested on the bus, against OpenRouter, and reports the outcome to the Core API"
+requires-python = ">=3.13"
+dependencies = [
+  "biffo-plugin-sdk",
+  "aws-lambda-powertools[tracer]>=3.4.0",
+  "httpx>=0.28.1",
+  "boto3>=1.35.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3.4",
+  "pytest-asyncio>=0.25.2",
+  "ruff>=0.8.0",
+  "pyright>=1.1.0",
+]
+
+[tool.uv.sources]
+biffo-plugin-sdk = { workspace = true }

@@ -31,8 +31,9 @@ variable "memory_size" {
 }
 
 variable "timeout" {
-  type    = number
-  default = 30
+  description = "Lambda timeout. Headroom for the engine's in-process action retries: 3 attempts at the 10s HTTP timeout plus backoff, with room for the Core API claim/record calls either side."
+  type        = number
+  default     = 60
 }
 
 variable "core_api_url" {
@@ -77,15 +78,14 @@ variable "environment_variables" {
   default     = {}
 }
 
-variable "whatsapp_access_token" {
-  description = "Meta WhatsApp Cloud API access token for the `whatsapp` workflow action. Empty (default) disables WhatsApp. Prefer sourcing from a secrets store rather than committing it."
+variable "whatsapp_access_token_parameter" {
+  description = "Name of the SSM SecureString parameter holding the Meta WhatsApp Cloud API access token (e.g. /myproject/dev/whatsapp/access-token). The engine reads it at cold start, so the token never lands in Terraform state or a Lambda env var — only its parameter name does. Empty (default) leaves the `whatsapp` action disabled."
   type        = string
   default     = ""
-  sensitive   = true
 }
 
-variable "whatsapp_phone_number_id" {
-  description = "Meta WhatsApp Cloud API phone-number id (the sending number) for the `whatsapp` workflow action."
+variable "whatsapp_phone_number_id_parameter" {
+  description = "Name of the SSM parameter holding the Meta WhatsApp Cloud API phone-number id (the sending number). Not itself a secret, but read the same way to keep the pair together."
   type        = string
   default     = ""
 }

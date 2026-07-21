@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import type { CognitoUser } from 'amazon-cognito-identity-js'
 import { useAuth } from '@/context/auth-context'
 import { completeNewPassword, confirmPasswordReset, requestPasswordReset } from '@/lib/auth'
-import { sanitizeReturnTo } from '@/lib/return-to'
+import { isWithinPortal, sanitizeReturnTo } from '@/lib/return-to'
 import { Button } from '@biffo/ui'
 
 // useSearchParams() requires a Suspense boundary in the App Router (it opts
@@ -59,6 +59,22 @@ function LoginForm() {
   // why an absolute URL here would be an open-redirect risk.
   const returnTo = sanitizeReturnTo(useSearchParams().get('return_to'))
 
+  // Send the user back to where they came from after auth succeeds. The portal
+  // is a standalone Next.js app mounted at /admin, so its client router can
+  // only resolve in-portal routes; `returnTo` may instead point at a SIBLING
+  // (e.g. `/`, ADR-0007), which lives on a different app/origin. A
+  // client-side `router.push` there fetches the sibling's RSC flight payload
+  // (`/index.txt`) and strands the browser on raw serialised React — the #275
+  // failure class across the app boundary (issue #351). Cross a boundary only
+  // with a full page load. See isWithinPortal for the boundary test.
+  const redirectAfterAuth = () => {
+    if (isWithinPortal(returnTo)) {
+      router.push(returnTo)
+    } else {
+      window.location.assign(returnTo)
+    }
+  }
+
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -87,7 +103,7 @@ function LoginForm() {
     try {
       const result = await login(username, password)
       if (result.kind === 'success') {
-        router.push(returnTo)
+        redirectAfterAuth()
       } else {
         setPendingUser(result.user)
         setPendingAttributes(result.userAttributes)
@@ -112,7 +128,7 @@ function LoginForm() {
     try {
       if (!pendingUser) return
       await completeNewPassword(pendingUser, newPassword, pendingAttributes)
-      router.push(returnTo)
+      redirectAfterAuth()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to set password')
     } finally {

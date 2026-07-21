@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { sanitizeReturnTo } from './return-to'
+import { isWithinPortal, sanitizeReturnTo } from './return-to'
 
 describe('sanitizeReturnTo', () => {
   it('returns the default when null', () => {
@@ -87,5 +87,53 @@ describe('sanitizeReturnTo', () => {
   it('normalises only values that already passed the origin checks', () => {
     expect(sanitizeReturnTo('//evil.com')).toBe('/admin/')
     expect(sanitizeReturnTo('https://evil.com')).toBe('/admin/')
+  })
+})
+
+/**
+ * The post-login redirect boundary test (issue #351).
+ *
+ * The portal is a standalone app at /admin. A `return_to` under /admin is one
+ * its own client router can `push`; anything else — most importantly the root
+ * sibling at `/` — is a different app and must be reached with a full page
+ * load, or the portal router fetches the sibling's RSC payload and strands the
+ * browser on `/index.txt` (the #275 failure, now cross-app).
+ */
+describe('isWithinPortal', () => {
+  it('treats the bare /admin route as in-portal', () => {
+    expect(isWithinPortal('/admin')).toBe(true)
+    expect(isWithinPortal('/admin/')).toBe(true)
+  })
+
+  it('treats nested /admin routes as in-portal', () => {
+    expect(isWithinPortal('/admin/plugins/')).toBe(true)
+    expect(isWithinPortal('/admin/users/')).toBe(true)
+  })
+
+  it('treats the root sibling as outside the portal', () => {
+    expect(isWithinPortal('/')).toBe(false)
+  })
+
+  it('treats a named sibling route as outside the portal', () => {
+    expect(isWithinPortal('/my-sibling/')).toBe(false)
+  })
+
+  /**
+   * A sibling path that merely starts with the letters "admin" (e.g. an
+   * "/administration" sibling) is NOT under the /admin prefix — the boundary
+   * is the path segment, so only "/admin" or "/admin/…" counts.
+   */
+  it('does not treat a same-prefix sibling as in-portal', () => {
+    expect(isWithinPortal('/administration/')).toBe(false)
+  })
+
+  /**
+   * The check is on the pathname only — a query string or hash naming /admin
+   * must not smuggle a sibling route past it.
+   */
+  it('ignores the query string and hash', () => {
+    expect(isWithinPortal('/?next=/admin')).toBe(false)
+    expect(isWithinPortal('/#/admin')).toBe(false)
+    expect(isWithinPortal('/admin/plugins/?slug=rbac')).toBe(true)
   })
 })

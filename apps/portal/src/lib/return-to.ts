@@ -54,3 +54,36 @@ export function sanitizeReturnTo(raw: string | null, fallback = '/admin/'): stri
   // can turn a rejected value into an accepted one.
   return withTrailingSlash(raw)
 }
+
+/**
+ * The URL prefix the portal itself owns and serves. Its routes live under
+ * `/admin` — the portal is a standalone Next.js app whose `next.config.ts`
+ * sets `assetPrefix: '/admin'` (issue #306), so `/admin` and `/admin/*` are
+ * the only paths its client router can resolve against its own RSC payloads.
+ *
+ * Anything else a sanitised `return_to` can carry — most commonly the root
+ * sibling at `/` (ADR-0007), or `/<sibling>/` — belongs to a *different*
+ * Next.js app on a different S3 origin. See `isWithinPortal` for why the
+ * distinction decides how the post-login redirect must be performed.
+ */
+export const PORTAL_BASE_PATH = '/admin'
+
+/**
+ * True when `path` is a route this portal owns (under `PORTAL_BASE_PATH`),
+ * i.e. one its own client router can navigate to.
+ *
+ * This gates the post-login redirect (issue #351). A client-side
+ * `router.push(returnTo)` is only correct for in-portal targets: for a sibling
+ * route the portal router would fetch that route's RSC flight payload
+ * (`/index.txt` for `/`) and try to render it within the portal, across an app
+ * boundary that a static export can only cross with a full page load — so the
+ * browser lands on the raw serialised React instead of the app (the #275
+ * failure class, now cross-app). A sibling target must therefore use a
+ * full-page `window.location.assign` instead.
+ */
+export function isWithinPortal(path: string, basePath: string = PORTAL_BASE_PATH): boolean {
+  // Compare on the pathname only — a query string or hash must not fool the
+  // prefix check (e.g. "/?next=/admin" is a sibling route, not a portal one).
+  const pathname = /^([^?#]*)/.exec(path)?.[1] ?? path
+  return pathname === basePath || pathname.startsWith(`${basePath}/`)
+}

@@ -114,14 +114,24 @@ describe('auditCoreTags', () => {
     ...over,
   })
 
+  /**
+   * These fixtures describe the real 0.32.4 collision, so they must be audited
+   * against a baseline below it — not against the production constant, which
+   * moves whenever a version has to be written off (it has since passed 0.58).
+   * A test of the audit's LOGIC should not change its verdict because the
+   * repo's history did.
+   */
+  const BASELINE = '0.24.0'
+
   it('passes when every tag stands for its version’s template tree', () => {
-    expect(auditCoreTags([fact({}), fact({ version: '0.32.5' })])).toEqual([])
+    expect(auditCoreTags([fact({}), fact({ version: '0.32.5' })], BASELINE)).toEqual([])
   })
 
   it('flags the observed a2acf15/be4c573 collision as drift', () => {
-    const violations = auditCoreTags([
-      fact({ taggedCommit: 'a2acf15', templateTreeMatches: false }),
-    ])
+    const violations = auditCoreTags(
+      [fact({ taggedCommit: 'a2acf15', templateTreeMatches: false })],
+      BASELINE,
+    )
     expect(violations).toEqual([
       {
         version: '0.32.4',
@@ -134,7 +144,10 @@ describe('auditCoreTags', () => {
   })
 
   it('flags a version with no tag at all as missing', () => {
-    const violations = auditCoreTags([fact({ taggedCommit: null, templateTreeMatches: false })])
+    const violations = auditCoreTags(
+      [fact({ taggedCommit: null, templateTreeMatches: false })],
+      BASELINE,
+    )
     expect(violations[0]?.kind).toBe('missing')
     expect(violations[0]?.actual).toBeNull()
   })
@@ -142,29 +155,31 @@ describe('auditCoreTags', () => {
   it('passes a tag on an earlier commit with an identical template tree', () => {
     // Correctness is about the tree, not the commit: user-owned commits between
     // the tag and the version head leave the template tree alone.
-    expect(auditCoreTags([fact({ taggedCommit: 'older', templateTreeMatches: true })])).toEqual([])
+    expect(
+      auditCoreTags([fact({ taggedCommit: 'older', templateTreeMatches: true })], BASELINE),
+    ).toEqual([])
   })
 
   it('ignores versions below the baseline', () => {
     // main carries pre-existing drift at 0.3.14 and 0.23.6 (and 0.1.0 predates
     // tagging). Those are history; the audit enforces from 0.24.0 up.
     const old = fact({ version: '0.23.6', taggedCommit: 'x', templateTreeMatches: false })
-    expect(auditCoreTags([old])).toEqual([])
+    expect(auditCoreTags([old], BASELINE)).toEqual([])
     expect(auditCoreTags([old], '0.1.0')).toHaveLength(1)
   })
 
   it('reports newest version first', () => {
     const bad = { taggedCommit: 'x', templateTreeMatches: false }
-    const violations = auditCoreTags([
-      fact({ version: '0.24.0', ...bad }),
-      fact({ version: '0.32.4', ...bad }),
-    ])
+    const violations = auditCoreTags(
+      [fact({ version: '0.24.0', ...bad }), fact({ version: '0.32.4', ...bad })],
+      BASELINE,
+    )
     expect(violations.map((v) => v.version)).toEqual(['0.32.4', '0.24.0'])
   })
 
   it('names the tag and the consequence in the failure report', () => {
     const report = formatTagViolations(
-      auditCoreTags([fact({ taggedCommit: 'a2acf15', templateTreeMatches: false })]),
+      auditCoreTags([fact({ taggedCommit: 'a2acf15', templateTreeMatches: false })], BASELINE),
     )
     expect(report).toContain('core-v0.32.4')
     expect(report).toContain('ADR-0006')
@@ -184,6 +199,14 @@ describe('coreVersionTag', () => {
 /**
  * End-to-end over a real git repo, replaying the #294 collision: two commits
  * carrying core.version 0.32.4 with different template-owned content.
+ */
+/**
+ * Fixture versions sit above AUDIT_BASELINE_VERSION on purpose. This block runs
+ * the real script, which audits from the production baseline — and that baseline
+ * moves whenever a version has to be written off (0.58.0 was, see core-tags.ts).
+ * Numbering these below it would silently stop the audit assertions testing
+ * anything. The 0.32.4 incident they model is still named in the comments and
+ * still exercised by the unit tests above, which pin their own baseline.
  */
 describe('sync-core-tag script', () => {
   let repo: string
@@ -224,19 +247,19 @@ describe('sync-core-tag script', () => {
     g('config', 'user.name', 'Test')
     commit('base', {
       'core-manifest.json': JSON.stringify(manifest),
-      'core.version': '0.32.3\n',
+      'core.version': '0.59.3\n',
       'cli/x.ts': 'v3',
     })
-    g('tag', '-a', 'core-v0.32.3', '-m', 'Biffo core 0.32.3')
+    g('tag', '-a', 'core-v0.59.3', '-m', 'Biffo core 0.59.3')
   })
 
   afterEach(() => rmSync(repo, { recursive: true, force: true }))
 
   it('creates the tag for a new version', () => {
-    const sha = commit('bump', { 'core.version': '0.32.4\n', 'cli/x.ts': 'v4' })
+    const sha = commit('bump', { 'core.version': '0.59.4\n', 'cli/x.ts': 'v4' })
     const { code, out } = run()
     expect(code).toBe(0)
-    expect(tagged('core-v0.32.4')).toBe(sha)
+    expect(tagged('core-v0.59.4')).toBe(sha)
     expect(out).toContain('core tag audit')
   })
 
@@ -244,11 +267,11 @@ describe('sync-core-tag script', () => {
   // than vitest's 5s default. They passed locally at ~1-4s and timed out in CI.
   it('refuses, loudly, when a second commit ships the same version', () => {
     // a2acf15 analogue.
-    const first = commit('#291', { 'core.version': '0.32.4\n', 'cli/x.ts': 'v4-first' })
+    const first = commit('#291', { 'core.version': '0.59.4\n', 'cli/x.ts': 'v4-first' })
     run()
-    expect(tagged('core-v0.32.4')).toBe(first)
+    expect(tagged('core-v0.59.4')).toBe(first)
 
-    // be4c573 analogue: rebased, kept 0.32.4, different template content. This
+    // be4c573 analogue: rebased, kept 0.59.4, different template content. This
     // push does not touch core.version at all — which is why the workflow can
     // no longer be path-filtered on it.
     commit('#292', { 'cli/x.ts': 'v4-second' })
@@ -256,11 +279,11 @@ describe('sync-core-tag script', () => {
 
     expect(code).toBe(1)
     // The tag is a released version: core-tag.yml pushed it and dispatched
-    // publish-cli.yml against it, so npm holds 0.32.4 built from `first`.
+    // publish-cli.yml against it, so npm holds 0.59.4 built from `first`.
     // Moving the tag cannot move the package, so it stays where it is (#342).
-    expect(tagged('core-v0.32.4')).toBe(first)
+    expect(tagged('core-v0.59.4')).toBe(first)
     expect(out).toContain('::error::')
-    expect(out).toContain('Refusing to move core-v0.32.4')
+    expect(out).toContain('Refusing to move core-v0.59.4')
     // Names the remedy, not just the problem.
     expect(out).toContain('core.version')
     // And the evidence: which template-owned paths actually diverged.
@@ -276,15 +299,15 @@ describe('sync-core-tag script', () => {
     execFileSync('git', ['init', '-q', '--bare', remote])
     g('remote', 'add', 'origin', remote)
 
-    const first = commit('#291', { 'core.version': '0.32.4\n', 'cli/x.ts': 'v4-first' })
+    const first = commit('#291', { 'core.version': '0.59.4\n', 'cli/x.ts': 'v4-first' })
     g('push', '-q', 'origin', 'main')
     runPush()
-    expect(tagged('core-v0.32.4')).toBe(first)
+    expect(tagged('core-v0.59.4')).toBe(first)
 
     commit('#292', { 'cli/x.ts': 'v4-second' })
     expect(runPush().code).toBe(1)
 
-    const remoteTag = execFileSync('git', ['-C', remote, 'rev-list', '-n', '1', 'core-v0.32.4'], {
+    const remoteTag = execFileSync('git', ['-C', remote, 'rev-list', '-n', '1', 'core-v0.59.4'], {
       encoding: 'utf8',
     }).trim()
     expect(remoteTag).toBe(first)
@@ -297,7 +320,7 @@ describe('sync-core-tag script', () => {
     // Refusal is not a one-shot complaint. Until core.version moves, every push
     // to main fails — the audit re-derives the same fact independently, so
     // there is no state in which main is green and the tag is a lie.
-    commit('#291', { 'core.version': '0.32.4\n', 'cli/x.ts': 'v4-first' })
+    commit('#291', { 'core.version': '0.59.4\n', 'cli/x.ts': 'v4-first' })
     run()
     commit('#292', { 'cli/x.ts': 'v4-second' })
     expect(run().code).toBe(1)
@@ -314,54 +337,54 @@ describe('sync-core-tag script', () => {
     //
     // Bumping does what it promises — the drifted tree gets a version, a tag
     // and a release of its own — but it does not make main green, because the
-    // tree at 0.32.4 on main still is not the tree core-v0.32.4 names. The
+    // tree at 0.59.4 on main still is not the tree core-v0.59.4 names. The
     // audit re-derives that independently of the tagging phase, so there is no
     // state in which main is green while a released tag is a lie.
-    const first = commit('#291', { 'core.version': '0.32.4\n', 'cli/x.ts': 'v4-first' })
+    const first = commit('#291', { 'core.version': '0.59.4\n', 'cli/x.ts': 'v4-first' })
     run()
     const drifted = commit('#292', { 'cli/x.ts': 'v4-second' })
     expect(run().code).toBe(1)
 
-    const bumped = commit('bump', { 'core.version': '0.32.5\n' })
+    const bumped = commit('bump', { 'core.version': '0.59.5\n' })
     const afterBump = run()
-    expect(tagged('core-v0.32.5')).toBe(bumped)
+    expect(tagged('core-v0.59.5')).toBe(bumped)
     expect(afterBump.code).toBe(1)
-    expect(afterBump.out).toContain('core-v0.32.4')
-    // 0.32.4's tag never moved: it still stands for whatever npm published.
-    expect(tagged('core-v0.32.4')).toBe(first)
+    expect(afterBump.out).toContain('core-v0.59.4')
+    // 0.59.4's tag never moved: it still stands for whatever npm published.
+    expect(tagged('core-v0.59.4')).toBe(first)
 
     // Settling it is a deliberate human act, and the escape hatch the message
-    // prescribes has to actually work. Here: the operator decides 0.32.4 means
+    // prescribes has to actually work. Here: the operator decides 0.59.4 means
     // the later tree and repoints the tag by hand, knowing what npm holds.
-    g('tag', '-f', '-a', 'core-v0.32.4', '-m', 'settled by hand', drifted)
+    g('tag', '-f', '-a', 'core-v0.59.4', '-m', 'settled by hand', drifted)
     expect(run().code).toBe(0)
   }, 30_000)
 
   it('leaves the tag alone when only user-owned paths changed', () => {
-    const first = commit('bump', { 'core.version': '0.32.4\n', 'cli/x.ts': 'v4' })
+    const first = commit('bump', { 'core.version': '0.59.4\n', 'cli/x.ts': 'v4' })
     run()
     commit('docs', { 'docs/ADR/0007-x.md': 'notes', 'apps/portal/page.tsx': 'x' })
     const { code, out } = run()
 
     expect(code).toBe(0)
-    expect(tagged('core-v0.32.4')).toBe(first)
+    expect(tagged('core-v0.59.4')).toBe(first)
     expect(out).toContain('already stands for this template tree')
     expect(out).not.toContain('::warning::')
   })
 
   it('ignores a new instance migration — user-owned inside a template-owned tree', () => {
-    const first = commit('bump', { 'core.version': '0.32.4\n', 'cli/x.ts': 'v4' })
+    const first = commit('bump', { 'core.version': '0.59.4\n', 'cli/x.ts': 'v4' })
     run()
     commit('migration', { 'services/api/migrations/versions/abc_add_table.py': 'revision = "abc"' })
     run()
-    expect(tagged('core-v0.32.4')).toBe(first)
+    expect(tagged('core-v0.59.4')).toBe(first)
   })
 
   it('fails rather than clobbering a tag that is not an ancestor of HEAD', () => {
-    commit('bump', { 'core.version': '0.32.4\n', 'cli/x.ts': 'v4' })
+    commit('bump', { 'core.version': '0.59.4\n', 'cli/x.ts': 'v4' })
     g('checkout', '-q', '-b', 'sidebranch')
     commit('elsewhere', { 'cli/x.ts': 'off-branch' })
-    g('tag', '-a', 'core-v0.32.4', '-m', 'off-branch')
+    g('tag', '-a', 'core-v0.59.4', '-m', 'off-branch')
     g('checkout', '-q', 'main')
 
     const { code, out } = run()
@@ -372,14 +395,14 @@ describe('sync-core-tag script', () => {
 
   it('does nothing in an instance', () => {
     commit('instance', {
-      'core.version': '0.32.4\n',
-      'biffo.core.json': JSON.stringify({ version: '0.32.4' }),
+      'core.version': '0.59.4\n',
+      'biffo.core.json': JSON.stringify({ version: '0.59.4' }),
       'cli/x.ts': 'v4',
     })
     const { code, out } = run()
     expect(code).toBe(0)
     expect(out).toContain('this is an instance')
-    expect(() => tagged('core-v0.32.4')).toThrow()
+    expect(() => tagged('core-v0.59.4')).toThrow()
   })
 })
 

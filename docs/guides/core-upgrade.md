@@ -129,23 +129,6 @@ Take a backup first if the data matters. The destroyed resources are listed in t
 
 The guard is deliberately narrow — it ignores Lambdas, roles, security groups and everything else Terraform rebuilds from this repo. A guard that fired on every deploy would have its trailer added by reflex, and would then be protecting nothing.
 
-## How the version is chosen
-
-Nobody sets `core.version`. After a PR merges to the template's default branch,
-the release job reads the squashed commit's Conventional Commit type and derives
-the next version — `feat` a minor, anything else a patch, and a declared break
-(`feat!:`) a minor while the template is pre-1.0 — then commits it and tags
-`core-v<version>`.
-
-That is why a template PR must never touch the file, and why its **title**
-matters: squash-merge makes the title the commit subject, so the title is what
-picks the version. CI refuses a title the derivation cannot read.
-
-It also means a version can only ever move forward. It used to be bumped by
-hand, and the guard checked only that the file *changed*, not that it
-*increased* — so a revert could restore a version already published to npm,
-which cannot be re-released (#422, #423).
-
 ## Breaking changes by version
 
 ### 0.54.0 — first-party plugin Terraform is referenced in place

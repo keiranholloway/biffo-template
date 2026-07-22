@@ -94,16 +94,27 @@ import { compareCoreVersions } from './core-version.js'
 /**
  * Versions before this one are not audited.
  *
- * `main` carries two pre-existing violations of the property — 0.3.14 and
+ * `main` carried two pre-existing violations of the property — 0.3.14 and
  * 0.23.6, where template-owned changes merged without a version bump and the
  * tag stayed on the introducing commit — plus 0.1.0, which predates tagging
  * entirely. They are history: repairing them means moving tags that instances
- * may have resolved against, to fix releases long superseded (main is well past
- * 0.30 by now). Auditing from 0.24.0 covers everything since and is green
- * today, so the check starts enforcing immediately rather than only for
- * versions shipped after it lands.
+ * may have resolved against, to fix releases long superseded.
+ *
+ * **0.58.0 joins them, and it is worth saying exactly why.** PR #425 tried to
+ * derive `core.version` in the release job instead of having authors bump it by
+ * hand (#423). The derivation was right — it read 0.58.0 -> 0.59.0 from the
+ * merge subject — but the job pushed the result straight to `main`, which is a
+ * protected branch that refuses direct pushes even from GITHUB_TOKEN. So #425
+ * merged, released nothing, and left its own tree sitting on `main` at 0.58.0,
+ * a version already tagged at 5af0180 and already published to npm.
+ *
+ * The tag is not wrong: `npm view @biffo/cli@0.58.0 gitHead` is 5af0180, so
+ * core-v0.58.0 stands for precisely what was published. Repointing or deleting
+ * it would contradict a real artifact to tidy a commit that has since been
+ * reverted. Raising the baseline is the honest record: the violation is known,
+ * bounded to one version, and its cause is written down.
  */
-export const AUDIT_BASELINE_VERSION = '0.24.0'
+export const AUDIT_BASELINE_VERSION = '0.58.1'
 
 /** The git tag for a core version, e.g. `0.2.0` -> `core-v0.2.0`. */
 export function coreVersionTag(version: string): string {

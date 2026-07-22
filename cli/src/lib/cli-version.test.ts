@@ -36,6 +36,13 @@ describe('CLI version reporting', () => {
    * the next release will be derived from (#423). Asserting the exact number
    * would just restate the tag, so assert the contract: a real semver, and the
    * same one `git tag` reports.
+   *
+   * `fetch: false` on both sides is load-bearing, not an optimisation. The
+   * default fetches, and CI on `main` runs concurrently with the tag job that
+   * pushes the new release — so a fetching read sees `core-v0.60.0` while the
+   * identity lookup, which never fetches, still reads 0.59.3 from the local tag
+   * set. Comparing the two is a race by construction, and it reddened `main`
+   * exactly once before this comment existed.
    */
   it('reports a real version, matching the highest core-v* tag', () => {
     const version = getLatestCoreVersion()
@@ -43,6 +50,6 @@ describe('CLI version reporting', () => {
     expect(version).not.toBe('0.0.0')
 
     const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
-    expect(latestCoreVersionFromTags(repoRoot)).toBe(version)
+    expect(latestCoreVersionFromTags(repoRoot, undefined, { fetch: false })).toBe(version)
   })
 })

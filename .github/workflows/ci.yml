@@ -97,11 +97,17 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           # The template's version is its highest core-v* tag (#423), and
-          # actions/checkout fetches none by default. Without this, anything
+          # actions/checkout fetches no tags by default. Without them, anything
           # resolving the version in a template checkout — `biffo init` stamping
-          # biffo.core.json, and the tests that drive it — finds no tags and
-          # fails with "missing its version identity".
-          fetch-tags: true
+          # biffo.core.json, and the tests that drive it — cannot say which core
+          # it is.
+          #
+          # `fetch-tags: true` alone does NOT fix this: at the default
+          # fetch-depth: 1 it fetches only tags reachable from the single commit
+          # fetched, which for a PR merge ref is none. Verified — the job failed
+          # identically with it set. Full history is what actually carries them,
+          # and it is what the guard jobs above already take.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:

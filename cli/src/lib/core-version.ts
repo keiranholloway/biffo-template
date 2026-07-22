@@ -193,11 +193,34 @@ export function writeInstanceCoreVersion(cwd: string, version: string): void {
  *
  * Returns null when the repo has no core tags at all (a fresh template, before
  * its first release), so callers can fall back rather than crash.
+ *
+ * ## Why it fetches first
+ *
+ * Tags do not arrive with `git pull`. A checkout can be perfectly up to date on
+ * `main` and still not have the newest `core-v*`, because the release job
+ * creates it after the merge — which is exactly the state a template checkout
+ * is in right after pulling. Reading local tags alone then resolves one version
+ * behind, silently: the upgrade targets the wrong version and every instance
+ * lands short of the release.
+ *
+ * That is not hypothetical. It happened on the first sync after this function
+ * shipped: `core-v0.59.0` existed on the remote, not locally, and two instances
+ * were offered 0.58.1. The file this replaced never had the problem, because
+ * `git pull` keeps a tracked file current.
+ *
+ * The fetch is best-effort — offline, or a repo with no remote, still resolves
+ * from whatever tags are local. `materializeTemplateAtTag` already does the
+ * same when a tag it needs is missing.
  */
 export function latestCoreVersionFromTags(
   repo: string,
   git: TagRunner = defaultTagRunner,
 ): string | null {
+  try {
+    git(['-C', repo, 'fetch', '--tags', '--quiet'])
+  } catch {
+    /* offline, or no remote — fall through to whatever is local */
+  }
   let out: string
   try {
     out = git(['-C', repo, 'tag', '--list', 'core-v*'])

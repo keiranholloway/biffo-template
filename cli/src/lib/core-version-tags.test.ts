@@ -48,3 +48,42 @@ describe('latestCoreVersionFromTags', () => {
     ).toBeNull()
   })
 })
+
+describe('latestCoreVersionFromTags — fetching', () => {
+  /**
+   * The regression this exists for. Tags do not arrive with `git pull`: the
+   * release job creates core-v<version> AFTER the merge, so a checkout freshly
+   * pulled on main still lacks the newest tag. Reading local tags alone
+   * resolved one version behind and offered two instances 0.58.1 when 0.59.0
+   * was released.
+   */
+  it('fetches tags before listing them', () => {
+    const calls: string[][] = []
+    latestCoreVersionFromTags('/repo', (args) => {
+      calls.push(args)
+      return args.includes('--list') ? 'core-v0.59.0' : ''
+    })
+    expect(calls[0]).toEqual(['-C', '/repo', 'fetch', '--tags', '--quiet'])
+    expect(calls[1]).toContain('--list')
+  })
+
+  it('still resolves when the fetch fails — offline, or no remote', () => {
+    const version = latestCoreVersionFromTags('/repo', (args) => {
+      if (args.includes('fetch')) throw new Error('no remote')
+      return 'core-v0.58.1'
+    })
+    expect(version).toBe('0.58.1')
+  })
+
+  it('picks up a tag that only the fetch made visible', () => {
+    let fetched = false
+    const version = latestCoreVersionFromTags('/repo', (args) => {
+      if (args.includes('fetch')) {
+        fetched = true
+        return ''
+      }
+      return fetched ? 'core-v0.58.1\ncore-v0.59.0' : 'core-v0.58.1'
+    })
+    expect(version).toBe('0.59.0')
+  })
+})

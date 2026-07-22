@@ -84,7 +84,7 @@ export interface PluginCreateOptions {
  * `biffo core upgrade` three-way-merges every template-owned path, so a plugin
  * you wrote there would be merged against a template that has never heard of
  * it. So the flag is refused when `biffo.core.json` is present — the same
- * instance marker `check-core-version-bump.ts` uses.
+ * instance marker `check-release-subject.ts` uses.
  *
  * The scaffold is validated before it is committed: the rewritten manifest goes
  * through `validateManifest`, so a broken skeleton fails here rather than at

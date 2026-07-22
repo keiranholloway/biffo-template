@@ -23,7 +23,7 @@ import { UPGRADE_BRANCH_PREFIX } from './core-upgrade.js'
  *
  * ## Direction of the check
  *
- * This is the mirror image of the core.version guard (core-version-guard.ts),
+ * This is the mirror image of the release subject guard (release-subject-guard.ts),
  * and the asymmetry is the whole point:
  *
  *   - **template** — every PR here legitimately edits template-owned paths; that

@@ -31,7 +31,16 @@ import { BiffoConfigSchema } from '../config/schema.js'
 import type { InitSession } from '../lib/session.js'
 import { runInit } from './init.js'
 
-vi.mock('node:child_process', () => ({ execSync: vi.fn() }))
+// Stub `execSync` only — init shells out with it, and a test must not run real
+// git against the developer's machine. The rest of the module has to stay real:
+// since #423 the core version is resolved from `core-v*` tags via
+// `execFileSync`, and replacing the whole module leaves that undefined, so
+// `biffo init` cannot stamp biffo.core.json. Replacing the module wholesale used
+// to be harmless because the version came from a committed file.
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:child_process')>()),
+  execSync: vi.fn(),
+}))
 
 vi.mock('../lib/session.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/session.js')>()

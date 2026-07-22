@@ -90,7 +90,7 @@ SDK is versioned `1.0.0` and biffo-template's
 builds and publishes it to PyPI (via Trusted Publishing) on a pushed
 `sdk-v*` tag. `>=1.0,<2.0` matches the `"biffo-plugin-sdk": "^1.0"` that
 `biffo.plugin.json` declares, and the SDK carries its own independent
-semver — it is **not** tied to the template's `core.version`, so a major
+semver — it is **not** tied to the template's core version, so a major
 bump here means the plugin API broke and nothing else.
 
 **Ordering caveat.** The release _pipeline_ exists; the _release_ does not

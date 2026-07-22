@@ -59,71 +59,85 @@ a **branch + pull request**, which the instance's own existing CI
 
 ### 1. Core versioning
 
-`biffo-template` carries an explicit **core version** (a `core.version` file at
-the repo root, semver, independent of any package version). This is the **single
-committed source of truth** for a core version: the template ships it, and every
-scaffolded instance inherits a copy via template generation — so an instance's
-current version is simply the `core.version` it carries.
+`biffo-template` carries an explicit **core version** (semver, independent of any
+package version), and its `core-v*` git tags are where that version lives: the
+highest `core-v<version>` tag is the template's current version, and the tag
+resolves to the template-owned tree as it stood at that version. Nothing in the
+tree names the version — it is **derived** at release time, never hand-written
+(see _Versioning discipline_ below).
 
-`biffo.core.json` is **not** a committed seed (that would duplicate the number in
-both the template and every instance). It is written by `biffo core upgrade` to
-record the version an instance was last upgraded to, so the _next_ upgrade knows
-the _from_ version independently of the inherited `core.version` file.
-Resolution of an instance's current version therefore prefers
-`biffo.core.json` if an upgrade has recorded one, and otherwise falls back to the
-inherited `core.version`. This makes ADR-0003's already-referenced
-`required_core_version` meaningful and gives the upgrade a well-defined _from_
-and _to_.
+`biffo.core.json` at an instance's root records the version that instance
+_received_: written by `biffo init` at scaffold time and bumped by every
+`biffo core upgrade`, so the _next_ upgrade knows its _from_ version. An instance
+scaffolded before that record existed has none, and resolution falls back to the
+`core.version` file such instances inherited via template generation. This makes
+ADR-0003's already-referenced `required_core_version` meaningful and gives the
+upgrade a well-defined _from_ and _to_.
 
 #### Versioning discipline (enforced)
 
-The mechanism only works if `core.version` actually moves. It initially did not
-— it sat at `0.1.0` across many template-owned releases, which made
-`biffo core status` a permanent "up to date" and `biffo core upgrade` a no-op
-for every instance. Two guardrails keep version and history in lockstep:
+The mechanism only works if the version actually moves. It initially did not —
+the `core.version` file then in use sat at `0.1.0` across many template-owned
+releases, which made `biffo core status` a permanent "up to date" and
+`biffo core upgrade` a no-op for every instance. Two guardrails keep version and
+history in lockstep:
 
-- **CI guard (`Core Version Guard`).** A required check fails any pull request
-  that changes a template-owned path (per `core-manifest.json`) without bumping
-  `core.version`. Patch for fixes, minor for features, major for breaking core
-  changes. Implemented by `cli/src/lib/core-version-guard.ts` (reusing the same
-  `isTemplateOwned` logic as the sync) and run via
-  `pnpm --filter @biffo/cli check:core-bump`.
-- **Auto-tagging (`Core Version Tag`).** On merge to `main`, a git tag
-  `core-v<version>` is created for the new `core.version`. These tags are the
-  recoverable template trees `biffo core upgrade` uses as its merge **base** (the
-  template as it was at an instance's current version) and **target** — without
-  them, the base tree is unrecoverable and the three-way merge produces spurious
-  conflicts.
+- **Release job (`Core Version Tag`).** On **every** push to `main` the job
+  derives the next version — the highest existing `core-v*` tag, bumped by the
+  conventional type of the commit being released (`feat` or a declared break
+  earns a minor, everything else a patch; pre-1.0, so a break is still a minor)
+  — and tags HEAD with it. A push whose template-owned tree is unchanged since
+  the last tag releases nothing, so an ordinary user-owned commit costs no
+  version. These tags are the recoverable template trees `biffo core upgrade`
+  uses as its merge **base** (the template as it was at an instance's current
+  version) and **target** — without them, the base tree is unrecoverable and the
+  three-way merge produces spurious conflicts. Implemented by
+  `cli/src/lib/release-version.ts` and `cli/src/scripts/sync-core-tag.ts`.
+- **CI guard (`Core Version Guard`).** Which bump that derivation picks rests on
+  a single input: the subject of the commit that lands on `main`, which under
+  squash-merge is the **pull request title**. commitlint never sees that title, and one it
+  cannot parse fails nothing — it falls through to a patch, so a feature merged
+  as "Update the API" would ship as a patch and the minor line instances watch
+  would never move. A required check therefore fails any pull request that
+  changes a template-owned path (per `core-manifest.json`) whose title is not a
+  Conventional Commits subject. Implemented by
+  `cli/src/lib/release-subject-guard.ts` (reusing the same `isTemplateOwned`
+  logic as the sync) and run via
+  `pnpm --filter @biffo/cli check:release-subject`.
 
-  The contract a tag must satisfy is about the **tree**, not the commit:
-  `core-v<V>` resolves to the template-owned tree as it stood at version `V`.
-  The Core Version Guard alone cannot guarantee that — it compares a PR against
-  its base at open time, so two PRs opened against the same base can both bump
-  to the same number, and the second one's template changes then land on `main`
-  under a tag that already exists (issue #294; a2acf15/be4c573 at 0.32.4). The
-  workflow therefore runs on **every** push to `main` — a colliding push does not
-  touch `core.version`, so a path filter cannot see it — leaving a tag alone when
-  it already stands for this template tree (most commits while the version sits
-  still are user-owned) and creating one when it does not exist.
+##### Why the version stopped being hand-written (issue #423)
 
-  It **never repoints an existing tag.** #294's answer was to move the tag onto
-  the later commit; #342 showed why that is wrong. A `core-v*` tag is a release —
-  `core-tag.yml` dispatches `publish-cli.yml` against every tag it pushes — and
-  an npm version is immutable, so moving the tag cannot move the artifact with
-  it. In #342 npm held one tree as 0.41.9 while `core-v0.41.9` was moved onto
-  another. The collision itself is now prevented upstream, by requiring branches
-  to be up to date before merging (`required_status_checks.strict`), so a tag
-  found drifted today means something out of the ordinary happened and the run
-  fails loudly rather than guessing. The remedy is a `core.version` bump: the
-  drifted tree gets a version, a tag and a release of its own, and no published
-  artifact is contradicted.
+`core.version` was a tracked file, and the guard above used to fail any pull
+request that changed a template-owned path without bumping it. One global counter
+plus branch protection's up-to-date requirement made a conflict between
+concurrent PRs certain: the second to merge always rebased, re-bumped,
+force-pushed and waited for another full CI cycle, resolving the same trivial
+conflict the same way every time.
 
-  It then **audits** every version from `AUDIT_BASELINE_VERSION` up, so a
-  regression in the tagging path reddens `main` instead of silently dropping
-  merged changes out of the version lineage. Refusing keeps the two mechanisms
-  consistent: under the old behaviour a move repaired the very drift the audit
-  exists to report. Implemented by `cli/src/lib/core-tags.ts` and
-  `cli/src/scripts/sync-core-tag.ts`.
+It also let a commit name a version that had already been released. The guard
+compared a PR against its base at open time, so two PRs opened against the same
+base could both bump to the same number, and the second one's template changes
+then landed on `main` under a tag that already existed (issue #294;
+a2acf15/be4c573 at 0.32.4). #294's answer was to move the tag onto the later
+commit, and #342 showed why that is wrong: a `core-v*` tag is a release —
+`core-tag.yml` hands every tag it pushes to `publish-cli.yml` — and an npm
+version is immutable, so the artifact cannot move with the tag. npm held one tree
+as 0.41.9 while `core-v0.41.9` had been moved onto another. A revert could
+restore an already-released number by the same route (#422), and the guard, which
+only asked whether the file appeared in the diff and never whether it had grown,
+passed it.
+
+A derived version cannot repeat a released one, so two commits shipping a single
+version is unrepresentable rather than policed, and the machinery that existed to
+detect it — drift detection, the refusal to repoint an existing tag, the audit of
+every historical tag — is gone with the file.
+
+One hand-editing fault survives derivation, because `git tag` is not covered by
+branch protection: the highest `core-v*` tag can be created or moved by hand onto
+a commit outside `main`'s history, and deriving from it would mint a successor to
+a tree `main` never carried. The release job fails on that rather than guessing,
+and says to establish what npm actually shipped as that version
+(`npm view @biffo/cli@<version> gitHead`) before anything is moved.
 
 ### 2. Core-owned path manifest
 
@@ -144,20 +158,20 @@ release notes rather than pushed into instances. What matters is that decisions
 stay documented and unambiguous per repo — not that the numbering is uniform
 across every instance.
 
-**`core.version` is likewise not synced** (amended 2026-07, issue #199). It is
-the version the template _emits_ — its own source of truth — while the version
-an instance _received_ is `biffo.core.json`, which takes precedence on every
-read. An instance's inherited `core.version` is therefore only a fallback, so
-syncing it cannot improve any lookup; it can only overwrite whatever the
-instance keeps in that file. One instance had repurposed it as its own app
-release lineage, which an upgrade regressed. It is omitted from
-`core-manifest.json` (user-owned by the fail-closed default) so an upgrade
-leaves it alone. For the same reason the `Core Version Tag` workflow — which
-ships to instances under `.github/` — skips itself when `biffo.core.json` is
-present, rather than pushing template version tags into an instance's tag
-namespace. The versioning discipline above is unaffected: the CI guard already
-excludes `core.version` itself from the template-owned change set it inspects,
-and runs only in the template.
+**The template's own version is likewise not synced** (amended 2026-07, issues
+#199 and #423). It is the version the template _emits_, while the version an
+instance _received_ is `biffo.core.json`, which takes precedence on every read.
+When the version was a `core.version` file, an instance inherited a copy of it
+via template generation, so syncing it could not improve any lookup — it could
+only overwrite whatever the instance kept in that file, and one instance had
+repurposed it as its own app release lineage, which an upgrade regressed. It was
+omitted from `core-manifest.json` (user-owned by the fail-closed default) for
+that reason; since #423 there is no such file to sync at all. For the same
+reason the `Core Version Tag` workflow — which ships to instances under
+`.github/` — skips itself when `biffo.core.json` is present, rather than pushing
+template version tags into an instance's tag namespace. The versioning
+discipline above is unaffected: its guard runs only in the template, for the
+same reason.
 
 **Core migrations are carried additively, not merged** (amended 2026-07, issue
 #198). `services/api/migrations/versions/` stays user-owned — an applied
@@ -181,7 +195,7 @@ ADR-0003's Implementation Note records.
 `biffo core upgrade [--to <version>] [--repo <path>]`:
 
 1. Resolve the instance's current core version (`biffo.core.json`) and the
-   target (`--to`, default: the template's latest `core.version`).
+   target (`--to`, default: the template's highest `core-v*` tag).
 2. For each template-owned path, perform a **three-way merge**: base = the
    template at the instance's _current_ version, ours = the instance's working
    file, theirs = the template at the _target_ version. This preserves
@@ -228,7 +242,7 @@ instance repo; the instance's own CI deploys on merge.
 - Requires an accurate core-owned path manifest, which must be maintained as the
   template evolves.
 - Merge conflicts in core files still need human resolution.
-- Version bookkeeping (`core.version` / `biffo.core.json`) is new surface to
+- Version bookkeeping (the `core-v*` tags / `biffo.core.json`) is new surface to
   keep correct.
 
 ### Option B — Git subtree / submodule of the template core
@@ -317,7 +331,7 @@ makes it safe to run against a live instance like `dev.tabsii.com`.
   but noise).
 - Conflicts in core files require human resolution — the tool does not
   auto-resolve core code.
-- New version-tracking surface (`core.version`, `biffo.core.json`) to keep
+- New version-tracking surface (the `core-v*` tags, `biffo.core.json`) to keep
   accurate.
 
 ### Neutral

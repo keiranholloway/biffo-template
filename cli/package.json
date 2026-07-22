@@ -23,7 +23,6 @@
   "files": [
     "dist",
     "schemas",
-    "core.version",
     "_skeletons"
   ],
   "scripts": {
@@ -35,7 +34,7 @@
     "lint:fix": "eslint src/ --fix",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check:core-bump": "tsx src/scripts/check-core-version-bump.ts",
+    "check:release-subject": "tsx src/scripts/check-release-subject.ts",
     "check:core-ownership": "tsx src/scripts/check-core-ownership.ts",
     "check:plugin-terraform": "tsx src/scripts/check-plugin-terraform.ts",
     "sync:core-tag": "tsx src/scripts/sync-core-tag.ts",

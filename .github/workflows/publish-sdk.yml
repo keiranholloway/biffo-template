@@ -5,7 +5,7 @@ name: Publish biffo-plugin-sdk
 #
 # WHY A SEPARATE TAG PATTERN (`sdk-v*`, not `core-v*` or `v*`)
 #
-# core-tag.yml owns `core-v<core.version>`, which stands for the template-owned
+# core-tag.yml owns `core-v<version>`, which stands for the template-owned
 # tree at a given core version (ADR-0006). The SDK deliberately does NOT share
 # that lineage: it is a public API contract for third-party plugin authors, so
 # it carries its own independent semver (see packages/python-sdk/pyproject.toml's

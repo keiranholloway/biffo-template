@@ -7,7 +7,7 @@
  *
  * Several parts of the CLI locate a companion asset by walking up from
  * `import.meta.url` to the nearest match. Inside the template checkout that walk
- * lands on the repo root, where `core.version` and `_skeletons/` live. Once the
+ * lands on the repo root, where `_skeletons/` lives. Once the
  * CLI is installed from npm there is nothing above `node_modules/@biffo/cli/dist/`,
  * so any such asset must be copied into the package at `prepack` AND listed in
  * package.json `files`.
@@ -17,7 +17,9 @@
  * `npm install` breaks. That happened twice —
  *
  *   - #259: `core.version` was not shipped; `biffo core status` failed for every
- *     npm user. Fixed with a prepack copy plus a guard test.
+ *     npm user. Fixed with a prepack copy plus a guard test — and since #423 the
+ *     version comes from the package's own `package.json`, stamped at publish,
+ *     so that asset is retired rather than merely packaged correctly.
  *   - #315: `_skeletons/` was not shipped; `biffo init` created both repos and
  *     then died at step 6/6 with an empty app sibling. Same bug, same mechanism
  *     — the earlier fix was applied to one asset and not the other.
@@ -38,16 +40,9 @@
  */
 export const PACKAGED_ROOT_ASSETS = [
   {
-    path: 'core.version',
-    kind: 'file',
-    /** A file that must exist inside the copy for it to count as complete. */
-    sentinel: 'core.version',
-    resolvedBy: 'src/lib/core-version.ts — getLatestCoreVersion()',
-    why: 'biffo core status/upgrade report the core version this CLI ships with (#259).',
-  },
-  {
     path: '_skeletons',
     kind: 'dir',
+    /** A file that must exist inside the copy for it to count as complete. */
     sentinel: '_skeletons/sibling-template/biffo.sibling.json',
     resolvedBy:
       'src/commands/sibling-create.ts — defaultSiblingTemplateRoot(); src/commands/plugin-create.ts',
@@ -65,8 +60,8 @@ export const UNPACKAGED_ROOT_ASSETS = [
     resolvedBy: 'src/lib/core-manifest.ts — resolveTemplateRoot()',
     why:
       'Shipping it would be actively harmful: findTemplateRoot() accepts any directory holding ' +
-      'both core-manifest.json and core.version, so a packaged copy would make the CLI package ' +
-      'itself look like a template root while none of the template-owned trees it indexes ' +
+      'a core-manifest.json without a biffo.core.json, so a packaged copy would make the CLI ' +
+      'package itself look like a template root while none of the trees it indexes ' +
       '(services/api, packages/, modules/) are present. `biffo core upgrade` must resolve a real ' +
       'biffo-template checkout via --template instead (ADR-0006 Phase 3).',
   },
@@ -79,8 +74,16 @@ export const UNPACKAGED_ROOT_ASSETS = [
  * deliberately unpackaged above.
  */
 export const RESOLVER_SITES = [
-  { file: 'src/lib/core-version.ts', asset: 'core.version', packaged: true },
   { file: 'src/lib/core-manifest.ts', asset: 'core-manifest.json', packaged: false },
+  {
+    file: 'src/lib/core-version.ts',
+    // Walks up for the nearest package.json — the package's own, whose version
+    // IS the core version (stamped at publish from the tag, #423) — falling back
+    // to the repo's core-v* tags in a checkout. Both travel with the package or
+    // the checkout, so there is no repo-root asset to ship.
+    asset: null,
+    packaged: false,
+  },
   { file: 'src/commands/sibling-create.ts', asset: '_skeletons', packaged: true },
   { file: 'src/commands/plugin-create.ts', asset: '_skeletons', packaged: true },
   {

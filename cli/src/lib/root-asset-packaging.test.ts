@@ -1,5 +1,14 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -197,13 +206,6 @@ describe.skipIf(runningInInstance)('sync-packaged-assets.mjs', () => {
     }
   })
 
-  it('copies core.version verbatim', () => {
-    run(dest)
-    expect(readFileSync(join(dest, 'core.version'), 'utf8')).toBe(
-      readFileSync(join(repoRoot, 'core.version'), 'utf8'),
-    )
-  })
-
   it('copies the sibling skeleton the way biffo init consumes it', () => {
     run(dest)
     const skeleton = join(dest, '_skeletons', 'sibling-template')
@@ -266,22 +268,32 @@ describe.skipIf(runningInInstance)('sync-packaged-assets.mjs', () => {
     }
   })
 
-  it('makes version resolution succeed from a tree with no core.version above it', () => {
-    // Simulate the installed layout: <pkg>/core.version with <pkg>/dist beside
-    // it, rooted in a temp dir that has no core.version anywhere above.
-    run(dest)
-    const distLike = join(dest, 'dist')
-    expect(findCoreVersionUpward(distLike)).toBe(join(dest, 'core.version'))
-    expect(getLatestCoreVersion(distLike)).toBe(
-      readFileSync(join(repoRoot, 'core.version'), 'utf8').trim(),
+  /**
+   * The installed layout, which is what #259 was really about: <pkg>/dist with
+   * <pkg>/package.json beside it and nothing Biffo-shaped above. The version no
+   * longer rides on a packaged file — it is the package's own stamped version —
+   * so this asserts the resolution that replaced it, from a tree with no
+   * core.version and no git repo anywhere above.
+   */
+  it('resolves the version from the packaged package.json, outside any checkout', () => {
+    writeFileSync(
+      join(dest, 'package.json'),
+      JSON.stringify({ name: '@biffo/cli', version: '9.9.9' }),
     )
+    mkdirSync(join(dest, 'dist'), { recursive: true })
+    expect(getLatestCoreVersion(join(dest, 'dist'))).toBe('9.9.9')
+    expect(findCoreVersionUpward(join(dest, 'dist'))).toBeNull()
   })
 
-  it('without the copies, resolution from that same tree fails', () => {
-    // The bug this guards: the tarball ships dist/ only, and nothing above it in
-    // node_modules carries the asset.
-    expect(findCoreVersionUpward(join(dest, 'dist'))).toBeNull()
-    expect(() => getLatestCoreVersion(join(dest, 'dist'))).toThrow(/missing its core version/)
-    expect(existsSync(join(dest, '_skeletons', 'sibling-template'))).toBe(false)
+  it('refuses a 0.0.0 placeholder rather than reporting it as the core version', () => {
+    // cli/package.json carries 0.0.0 until publish stamps it. Reporting that as
+    // a core version would be #259 again: a build that cannot be traced back to
+    // what produced it.
+    writeFileSync(
+      join(dest, 'package.json'),
+      JSON.stringify({ name: '@biffo/cli', version: '0.0.0' }),
+    )
+    mkdirSync(join(dest, 'dist'), { recursive: true })
+    expect(() => getLatestCoreVersion(join(dest, 'dist'))).toThrow(/no package.json version and no/)
   })
 })

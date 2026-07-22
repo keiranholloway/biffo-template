@@ -1,19 +1,18 @@
 name: Core Version Tag
 
-# Keeps the git tag `core-v<version>` standing for the template-owned tree at
-# that core version, so `biffo core upgrade` can resolve the template tree an
-# instance merges from — ADR-0006.
+# Releases the template. On every push to `main` it derives the next core
+# version — the highest existing `core-v*` tag, bumped by the commit's
+# conventional type (#423) — and tags HEAD with it. That tag is what `biffo core
+# upgrade` resolves the template tree from (ADR-0006), and what `publish-cli.yml`
+# publishes `@biffo/cli@<version>` off.
 on:
   push:
     branches: [main]
-    # Deliberately NOT path-filtered on core.version. The failure this workflow
-    # has to catch is precisely a push that does NOT change core.version: two
-    # PRs opened against the same base both bumped to the same number, the
-    # second rebased and kept it, and its template-owned changes landed on main
-    # under a tag that already existed and pointed at the first commit. Those
-    # changes were then reachable at no version at all — invisible to every
-    # instance, forever (issue #294; observed with a2acf15/be4c573 at 0.32.4).
-    # A path filter on core.version cannot see that push, so there is none.
+    # Deliberately NOT path-filtered. Every push to main is a candidate
+    # release: the script itself decides, by diffing the template-owned tree
+    # against the last tag, whether there is anything to release. A path filter
+    # would have to encode the manifest's ownership boundary a second time, in a
+    # place that cannot read it, and go stale the moment ownership moves.
   # Manual re-run, for the same reason as ci.yml. This workflow failing to fire
   # is worse than CI failing to fire: no tag means `biffo core upgrade` cannot
   # resolve the template tree at that version at all (ADR-0006), so the release
@@ -46,12 +45,17 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
+          # The version is derived from the tags, so the checkout must carry
+          # them. A release job that saw no tags would derive a first release
+          # (0.1.0) over a live 0.59.x line and try to publish a version npm
+          # already holds. fetch-depth: 0 is needed for the ancestry check.
           fetch-depth: 0
+          fetch-tags: true
       # This workflow lives in a template-owned path, so it ships to every
       # instance. Tagging there would push `core-v<template-version>` into the
       # instance's own tag namespace, alongside its release tags. An instance is
       # detected the same way the Core Version Guard detects one
-      # (cli/src/scripts/check-core-version-bump.ts): `biffo.core.json` is
+      # (cli/src/scripts/check-release-subject.ts): `biffo.core.json` is
       # present in an instance and absent in the template. sync-core-tag.ts
       # re-checks this itself; the step guard only avoids the install cost.
       - name: Skip in instances

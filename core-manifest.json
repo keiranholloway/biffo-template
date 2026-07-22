@@ -38,7 +38,5 @@
     "uv.lock",
     "biffo.divergence.json"
   ],
-  "released": [
-    "cli/"
-  ]
+  "released": ["cli/"]
 }

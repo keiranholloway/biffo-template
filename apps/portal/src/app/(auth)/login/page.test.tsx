@@ -39,7 +39,7 @@ function openResetFlow() {
 }
 
 function requestCodeFor(username: string) {
-  fireEvent.change(screen.getByLabelText('Username or email'), { target: { value: username } })
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: username } })
   fireEvent.click(screen.getByRole('button', { name: 'Send reset code' }))
 }
 
@@ -94,7 +94,9 @@ describe('LoginPage password reset', () => {
     requestCodeFor('ghost@example.com')
 
     // Generic notice, and it still advances to code entry (no enumeration).
-    expect(await screen.findByText(/if an account exists for that username/i)).toBeInTheDocument()
+    expect(
+      await screen.findByText(/if an account exists for that email address/i),
+    ).toBeInTheDocument()
     expect(screen.getByLabelText('Reset code')).toBeInTheDocument()
   })
 

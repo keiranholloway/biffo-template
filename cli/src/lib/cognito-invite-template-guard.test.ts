@@ -57,8 +57,14 @@ describe('stripHeredocs', () => {
       }
     `
     // The heredoc mentions sms_message, but it is body text, not an assignment.
-    expect(checkInviteTemplateSource('trap.tf', trap)).toHaveLength(1)
-    expect(checkInviteTemplateSource('trap.tf', trap)[0].message).toContain('sms_message')
+    // Asserted by content rather than by total count: this fixture's heredoc also
+    // lacks the required {username}/{####} placeholders, which is a separate and
+    // equally real violation. What matters here is that the *missing member* is
+    // still reported despite the decoy text.
+    const missingMember = checkInviteTemplateSource('trap.tf', trap).filter((v) =>
+      v.message.includes('is missing "sms_message"'),
+    )
+    expect(missingMember).toHaveLength(1)
   })
 })
 
@@ -137,5 +143,38 @@ describe('findModuleTerraformFiles', () => {
 describe('the repository itself', () => {
   it('has no Cognito invite template missing a required member (#356)', () => {
     expect(checkCognitoInviteTemplates(repoRoot)).toEqual([])
+  })
+
+  it('requires {username} and {####} in both message bodies', () => {
+    // Verified against the live CreateUserPool API: a template without these is
+    // rejected outright, so a missing placeholder is a failed deploy, not a
+    // cosmetic problem. {username} is required even when the pool uses
+    // username_attributes and the value is an opaque UUID.
+    const missing = `
+      invite_message_template {
+        email_subject = "s"
+        email_message = <<-EOT
+          Sign in with your email address. Temporary password: {####}
+        EOT
+        sms_message = "Temporary password {####}"
+      }
+    `
+    const violations = checkInviteTemplateSource('a.tf', missing)
+    expect(violations.filter((v) => v.message.includes('{username}'))).toHaveLength(2)
+  })
+
+  it('accepts a template that keeps the placeholders', () => {
+    const ok = `
+      invite_message_template {
+        email_subject = "s"
+        email_message = <<-EOT
+          Sign in with the email address this was sent to.<br>
+          Temporary password: <b><code>{####}</code></b><br>
+          Account reference: {username} — for support only.
+        EOT
+        sms_message = "Temporary password {####}. Sign in with your email. (Ref {username})"
+      }
+    `
+    expect(checkInviteTemplateSource('a.tf', ok)).toEqual([])
   })
 })

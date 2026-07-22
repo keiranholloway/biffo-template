@@ -101,7 +101,6 @@ class CognitoAdmin:
         self,
         *,
         email: str,
-        username: str | None = None,
         groups: list[str] | None = None,
         suppress_invite_email: bool = False,
     ) -> dict[str, Any]:
@@ -111,7 +110,12 @@ class CognitoAdmin:
         are assigned after creation.
         """
         kwargs: dict[str, Any] = {
-            "Username": username or email,
+            # The pool sets username_attributes = ["email"], so Cognito IGNORES
+            # this value and generates its own username (a UUID equal to `sub`).
+            # It is still a required parameter, and passing the address is what
+            # makes the intent readable — the created user's `Username` in the
+            # response is the generated id, not this.
+            "Username": email,
             "UserAttributes": [
                 {"Name": "email", "Value": email},
                 {"Name": "email_verified", "Value": "true"},

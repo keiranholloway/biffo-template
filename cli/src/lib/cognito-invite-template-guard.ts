@@ -35,6 +35,21 @@ import { join } from 'node:path'
  */
 export const REQUIRED_INVITE_MEMBERS = ['email_subject', 'email_message', 'sms_message'] as const
 
+/**
+ * Placeholders Cognito requires inside the invite message bodies. Verified
+ * against the live API: CreateUserPool rejects a template without them, with
+ *   "Email message body should have {username} which will be replaced by code"
+ *   "SMS message should have {username} which will be replaced by code"
+ * and the equivalent for {####}. The requirement holds even for a pool using
+ * `username_attributes = ["email"]`, where the generated username is an opaque
+ * UUID — so {username} must be PRESENT but must never be presented to the
+ * recipient as something to type.
+ */
+export const REQUIRED_INVITE_PLACEHOLDERS = ['{username}', '{####}'] as const
+
+/** Message members whose bodies must carry the placeholders above. */
+const PLACEHOLDER_MEMBERS = ['email_message', 'sms_message'] as const
+
 export interface Violation {
   file: string
   line: number
@@ -119,7 +134,50 @@ export function checkInviteTemplateSource(file: string, rawSource: string): Viol
     }
   }
 
+  // Placeholder checks need the heredoc bodies intact, so re-extract from a
+  // source with comments removed but heredocs preserved. Without this the
+  // email_message body is the literal "HEREDOC" and every placeholder looks
+  // absent.
+  for (const block of extractBlocks(stripHclComments(rawSource), 'invite_message_template')) {
+    for (const member of PLACEHOLDER_MEMBERS) {
+      const body = memberBody(block.body, member)
+      if (body === null) continue // absence is already reported above
+      for (const placeholder of REQUIRED_INVITE_PLACEHOLDERS) {
+        if (!body.includes(placeholder)) {
+          violations.push({
+            file,
+            line: block.line,
+            message:
+              `invite_message_template's "${member}" is missing the ${placeholder} ` +
+              `placeholder. Cognito's CreateUserPool rejects the template outright ` +
+              `("${member === 'sms_message' ? 'SMS message' : 'Email message body'} should have ` +
+              `${placeholder} which will be replaced by code"), so no user pool can be created. ` +
+              `Note {username} is required even when the pool uses username_attributes and the ` +
+              `value is an opaque UUID — keep it, but do not ask the recipient to type it.`,
+          })
+        }
+      }
+    }
+  }
+
   return violations
+}
+
+/**
+ * The assigned body of one member within an invite block, or null when the
+ * member is absent. Handles both a quoted string and a heredoc.
+ */
+function memberBody(blockBody: string, member: string): string | null {
+  const heredoc = new RegExp(
+    `(?:^|[\\s{])${member}\\s*=\\s*<<-?([A-Za-z_]+)([\\s\\S]*?)^\\s*\\1`,
+    'm',
+  )
+  const heredocMatch = heredoc.exec(blockBody)
+  if (heredocMatch?.[2] !== undefined) return heredocMatch[2]
+
+  const quoted = new RegExp(`(?:^|[\\s{])${member}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`)
+  const quotedMatch = quoted.exec(blockBody)
+  return quotedMatch?.[1] ?? null
 }
 
 /**

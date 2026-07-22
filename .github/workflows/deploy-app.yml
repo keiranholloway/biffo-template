@@ -248,7 +248,20 @@ jobs:
       - name: Package and deploy Lambda
         working-directory: api-service
         run: |
-          uv export --no-dev --output-file requirements.txt
+          # Export from the repo-root lock, NOT from this directory. The
+          # artifact is services/api/ alone, which carries a pyproject.toml but
+          # no uv.lock — this is a uv workspace, so the lock exists only at the
+          # root. Exporting from here found no lock and so re-resolved every
+          # dependency against live PyPI on each deploy, ignoring every pin:
+          # identical code could ship different trees on two runs, and a broken
+          # or hostile release reached the Lambda minutes after publication.
+          # greenlet 3.5.4 did precisely that — published with no manylinux
+          # wheels, it broke a deploy five minutes later (#410). --frozen uses
+          # the lock as-is and fails rather than quietly resolving something
+          # new, matching the PR-signer and plugin steps further down.
+          uv export --project .. --package biffo-api --no-dev --frozen \
+            --no-emit-workspace --no-emit-project \
+            --output-file requirements.txt
           uv pip install -r requirements.txt --target package/
           # Trim the package before zipping so the code update fits AWS's direct
           # update-function-code limit. That API base64-encodes the zip into the
@@ -629,7 +642,20 @@ jobs:
       - name: Package and deploy Lambda
         working-directory: api-service
         run: |
-          uv export --no-dev --output-file requirements.txt
+          # Export from the repo-root lock, NOT from this directory. The
+          # artifact is services/api/ alone, which carries a pyproject.toml but
+          # no uv.lock — this is a uv workspace, so the lock exists only at the
+          # root. Exporting from here found no lock and so re-resolved every
+          # dependency against live PyPI on each deploy, ignoring every pin:
+          # identical code could ship different trees on two runs, and a broken
+          # or hostile release reached the Lambda minutes after publication.
+          # greenlet 3.5.4 did precisely that — published with no manylinux
+          # wheels, it broke a deploy five minutes later (#410). --frozen uses
+          # the lock as-is and fails rather than quietly resolving something
+          # new, matching the PR-signer and plugin steps further down.
+          uv export --project .. --package biffo-api --no-dev --frozen \
+            --no-emit-workspace --no-emit-project \
+            --output-file requirements.txt
           uv pip install -r requirements.txt --target package/
           # Trim the package before zipping so the code update fits AWS's direct
           # update-function-code limit. That API base64-encodes the zip into the
@@ -1022,7 +1048,20 @@ jobs:
       - name: Package and deploy Lambda
         working-directory: api-service
         run: |
-          uv export --no-dev --output-file requirements.txt
+          # Export from the repo-root lock, NOT from this directory. The
+          # artifact is services/api/ alone, which carries a pyproject.toml but
+          # no uv.lock — this is a uv workspace, so the lock exists only at the
+          # root. Exporting from here found no lock and so re-resolved every
+          # dependency against live PyPI on each deploy, ignoring every pin:
+          # identical code could ship different trees on two runs, and a broken
+          # or hostile release reached the Lambda minutes after publication.
+          # greenlet 3.5.4 did precisely that — published with no manylinux
+          # wheels, it broke a deploy five minutes later (#410). --frozen uses
+          # the lock as-is and fails rather than quietly resolving something
+          # new, matching the PR-signer and plugin steps further down.
+          uv export --project .. --package biffo-api --no-dev --frozen \
+            --no-emit-workspace --no-emit-project \
+            --output-file requirements.txt
           uv pip install -r requirements.txt --target package/
           # Trim the package before zipping so the code update fits AWS's direct
           # update-function-code limit. That API base64-encodes the zip into the

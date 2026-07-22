@@ -247,7 +247,12 @@ jobs:
       - name: Package and deploy Lambda
         working-directory: services/api
         run: |
-          uv export --no-dev --output-file requirements.txt
+          # --frozen: export the lock as it stands, never re-resolve. Unlike the
+          # core's api-service artifact (#410), services/api/uv.lock IS present
+          # here, so this already exported pins — but a plain `uv export` will
+          # quietly re-lock when pyproject.toml has drifted from the lock, which
+          # puts an unreviewed dependency tree on the Lambda. Fail instead.
+          uv export --no-dev --frozen --output-file requirements.txt
           uv pip install -r requirements.txt --target package/
           cp -r src/ package/
           cd package && zip -r ../lambda.zip .

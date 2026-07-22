@@ -4,13 +4,17 @@ Pure async functions over an ``AsyncSession`` that the internal agents router
 (ADR-0009) exposes to the agent runtime, and that a future authoring UI or tests
 can call directly. All queries are tenant-scoped (ADR-0001).
 
-The lifecycle is two steps, mirroring the orchestration engine's shape:
+The lifecycle is three steps, mirroring the orchestration engine's shape:
 
 1. ``create_run`` — record the request with the **resolved definition** it will
    execute (§10) and leave it ``pending``. The §8 depth ceiling is enforced here,
    on the create path, because that is the only place a chain can be stopped
    before it costs money.
-2. ``complete_run`` — write the transcript, result and cost accounting, and move
+2. ``claim_run`` — take ownership of a ``pending`` run atomically, before any
+   model call. EventBridge delivery is at-least-once, so without this two
+   deliveries of the same request both read ``pending`` and both get billed
+   (§5). Exactly one claimant wins; the rest are told to stop.
+3. ``complete_run`` — write the transcript, result and cost accounting, and move
    the run to exactly one terminal state. A run already in a terminal state is
    refused, so a retried completion cannot rewrite a finished run.
 
@@ -22,9 +26,9 @@ commits (ADR-0014 §5).
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import CursorResult, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models.agent_run import TERMINAL_AGENT_RUN_STATUSES, AgentRun
@@ -54,6 +58,22 @@ class RunAlreadyTerminalError(Exception):
         self.run_id = run_id
         self.status = status
         super().__init__(f"Agent run {run_id} is already {status}; refusing to re-complete it.")
+
+
+class RunNotClaimableError(Exception):
+    """A claim arrived for a run that is not ``pending``.
+
+    Means another invocation owns this run — or it has already finished. The
+    caller must exit **without calling the model**: the tokens for this run are
+    either already being spent or already spent.
+    """
+
+    def __init__(self, run_id: str, status: str) -> None:
+        self.run_id = run_id
+        self.status = status
+        super().__init__(
+            f"Agent run {run_id} is {status}, not pending; another invocation has claimed it."
+        )
 
 
 async def create_run(
@@ -104,6 +124,73 @@ async def get_run(db: AsyncSession, *, tenant_id: str, run_id: str) -> AgentRun 
     return await db.scalar(
         select(AgentRun).where(AgentRun.tenant_id == tenant_id, AgentRun.id == run_id)
     )
+
+
+async def claim_run(db: AsyncSession, *, tenant_id: str, run_id: str) -> AgentRun | None:
+    """Take ownership of a ``pending`` run, moving it to ``running`` (ADR-0014 §5).
+
+    Returns ``None`` when no such run exists for this tenant.
+
+    Raises:
+        RunNotClaimableError: when the run is not ``pending`` — another
+            invocation owns it, or it has already finished.
+
+    ## Why this exists
+
+    EventBridge delivery is at-least-once. Without a claim, two deliveries of the
+    same ``agent.run.requested`` both read ``pending``, both call the provider,
+    and **both are billed**; the second completion is then refused by the
+    double-completion guard, so the recorded outcome is right and the invoice is
+    not. The runtime's local state check cannot help, because it only ever sees
+    an *already-terminal* run — with concurrent duplicates, both have spent by
+    the time either finishes.
+
+    This is a different failure from the §8 depth ceiling, which bounds
+    agent→agent recursion. Same symptom on the invoice, unrelated mechanism,
+    neither covers the other.
+
+    ## Why it is a single conditional UPDATE
+
+    The ``WHERE status = 'pending'`` and the write are one statement, so the
+    database decides the winner. A read-then-write claim — fetch, check
+    ``pending``, assign, flush — reintroduces exactly the race it exists to
+    close: both readers see ``pending`` before either writes.
+
+    ``rowcount`` is therefore the verdict, not a subsequent read. The follow-up
+    fetch below runs only on the losing path, to say *why* the claim failed.
+    """
+    # CursorResult, not Result: `rowcount` is only defined for DML, and it is
+    # the entire verdict here, so the cast is asserting what the statement is
+    # rather than silencing a nuisance.
+    result = cast(
+        CursorResult[Any],
+        await db.execute(
+            update(AgentRun)
+            .where(
+                AgentRun.tenant_id == tenant_id,
+                AgentRun.id == run_id,
+                AgentRun.status == "pending",
+            )
+            .values(status="running", started_at=datetime.now(UTC))
+        ),
+    )
+
+    if result.rowcount == 0:
+        # Lost, or absent. Only now is a read safe — the claim has already been
+        # decided, so this cannot influence the outcome.
+        existing = await get_run(db, tenant_id=tenant_id, run_id=run_id)
+        if existing is None:
+            return None
+        raise RunNotClaimableError(run_id, existing.status)
+
+    await db.flush()
+    run = await get_run(db, tenant_id=tenant_id, run_id=run_id)
+    if run is not None:
+        # The UPDATE bypassed the identity map, so a previously-loaded instance
+        # would still report `pending`; refresh inside the async context so
+        # response serialization (sync, in a threadpool) does no lazy IO.
+        await db.refresh(run)
+    return run
 
 
 async def complete_run(

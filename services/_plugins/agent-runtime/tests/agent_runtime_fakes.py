@@ -60,10 +60,14 @@ class FakeCore:
         run: dict[str, Any] | None = None,
         *,
         get_status: int = 200,
+        claim_status: int = 200,
         complete_status: int = 200,
     ) -> None:
         self._run = run if run is not None else make_run()
         self._get_status = get_status
+        # 409 is Core's answer when another invocation already owns the run
+        # (ADR-0014 §5 / issue #371) — the case a duplicate delivery must lose.
+        self._claim_status = claim_status
         self._complete_status = complete_status
         self.requests: list[tuple[str, str, dict[str, Any]]] = []
 
@@ -80,6 +84,10 @@ class FakeCore:
         """Bodies POSTed to ``/agent-runs/{id}/complete``."""
         return [body for _, path, body in self.requests if path.endswith("/complete")]
 
+    def claims(self) -> list[str]:
+        """Paths POSTed to ``/agent-runs/{id}/claim``."""
+        return [path for _, path, _ in self.requests if path.endswith("/claim")]
+
     def _handle(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content or b"{}") if request.content else {}
         self.requests.append((request.method, request.url.path, body))
@@ -89,6 +97,13 @@ class FakeCore:
             if self._get_status >= 400:
                 return httpx.Response(self._get_status, json={"detail": "Agent run not found"})
             return httpx.Response(200, json=self._run)
+        if request.method == "POST" and path.endswith("/claim"):
+            if self._claim_status >= 400:
+                return httpx.Response(
+                    self._claim_status,
+                    json={"detail": "Agent run run-1 is running, not pending"},
+                )
+            return httpx.Response(200, json={**self._run, "status": "running"})
         if request.method == "POST" and path.endswith("/complete"):
             if self._complete_status >= 400:
                 return httpx.Response(self._complete_status, json={"detail": "Already terminal"})

@@ -8,10 +8,17 @@ template-owned and distributed by ``biffo core upgrade``.
 One flow, entirely event-driven (§4: "There is no synchronous invocation path"):
 
     agent.run.requested (EventBridge)
-      -> claim the run     GET  /api/v1/internal/agent-runs/{id}
+      -> read the run      GET  /api/v1/internal/agent-runs/{id}
+      -> claim it          POST /api/v1/internal/agent-runs/{id}/claim
+                           409 => another invocation owns it; stop, spend nothing
       -> one turn loop     OpenRouter, model from the run's definition_snapshot
       -> report            POST /api/v1/internal/agent-runs/{id}/complete
                            Core persists and emits agent.run.completed
+
+The claim is what makes at-least-once delivery affordable. EventBridge can
+deliver the same event twice; without a claim both invocations read ``pending``,
+both call the provider, and both are billed (issue #371). The claim is a single
+conditional UPDATE in Core, so exactly one invocation proceeds.
 
 This plugin owns **no data** (ADR-0002): no tables, no API routes, no database
 client. Every piece of run state is Core's, reached over the IAM-signed internal
@@ -49,6 +56,12 @@ logger = Logger()
 
 AGENT_RUN_REQUESTED = "agent.run.requested"
 _AGENT_RUNS_PATH = "/api/v1/internal/agent-runs"
+
+# Core answers a claim for a run someone else already owns with 409 (ADR-0014
+# §5). Named rather than inlined: treating it as an ordinary error would make a
+# duplicate delivery look like an outage, and treating an outage as a lost claim
+# would silently drop runs.
+_CLAIM_CONFLICT = 409
 
 # Error text is stored on the run record and rendered in the run inspector; cap
 # it so a provider dumping an HTML error page cannot dominate the row.
@@ -102,12 +115,18 @@ class AgentRuntimePlugin(BiffoPluginBase):
         await self._report(str(run_id), outcome)
 
     async def _claim(self, run_id: str) -> dict[str, Any] | None:
-        """Fetch the run and check it is ours to execute.
+        """Take ownership of the run in Core, or give it up.
 
         The event carries only a reference (§5), so the definition and input are
-        read here. A run that is not ``pending`` — a replayed delivery, or one
-        another invocation already finished — is skipped rather than re-executed:
-        every re-execution is a second invoice for the same work.
+        read here. The **claim POST is what makes this safe**: it is a single
+        conditional UPDATE in Core, so of N concurrent deliveries of the same
+        ``agent.run.requested`` exactly one wins and the rest get 409.
+
+        The read below is a cheap pre-check, not the guard. It skips the obvious
+        replay without a write, but it cannot resolve a race — two invocations
+        arriving together both see ``pending``. Only the claim decides, and it
+        happens before the first model call, so a loser exits having spent
+        nothing (issue #371).
         """
         try:
             run = await self.api.get(f"{_AGENT_RUNS_PATH}/{run_id}")
@@ -135,7 +154,29 @@ class AgentRuntimePlugin(BiffoPluginBase):
                 extra={"run_id": run_id, "status": status},
             )
             return None
-        return run
+
+        try:
+            claimed = await self.api.post(f"{_AGENT_RUNS_PATH}/{run_id}/claim", json={})
+        except BiffoAPIError as exc:
+            if exc.status_code == _CLAIM_CONFLICT:
+                # Another invocation owns it. Exit silently and, above all,
+                # WITHOUT calling the model — this is the whole point.
+                logger.info(
+                    "Agent run already claimed by another invocation; not executing",
+                    extra={"run_id": run_id},
+                )
+            else:
+                # Could not claim for some other reason. Do not execute: an
+                # unclaimed run is one a duplicate delivery can still pick up,
+                # and running anyway would reinstate the double-spend.
+                logger.exception("Could not claim agent run", extra={"run_id": run_id})
+            return None
+
+        # Prefer Core's post-claim record — it is the authority on what this run
+        # is, and it now carries `running` and `started_at`. Falling back to the
+        # pre-claim read keeps a Core that returns something unexpected from
+        # stranding a run this invocation legitimately owns.
+        return claimed if isinstance(claimed, dict) else run
 
     async def _execute(self, run: dict[str, Any]) -> RunOutcome:
         """Run the turn loop. Returns an outcome; never raises."""

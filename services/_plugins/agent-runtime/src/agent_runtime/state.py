@@ -15,16 +15,23 @@ This module is the transition table plus the claim guard. Two rules:
   completion route (``RunAlreadyTerminalError``); this is the local half, which
   stops the runtime doing the model work before Core ever refuses to record it.
 
-**Known gap, recorded rather than papered over.** Core exposes no route to
-persist the ``pending -> running`` transition (its internal agent-run API is
-create / read / complete), so the transition below is *runtime-local*: the row
-stays ``pending`` in Core until the run terminates. The consequence is that
-``claim`` cannot deduplicate across invocations — two concurrent deliveries of
-the same ``agent.run.requested`` would both see ``pending`` — and a runtime
-killed mid-run leaves the row ``pending`` for ever rather than ``running``. This
-is the same stranding class ADR-0014 §5 records under "a second divergence
-point", and closing it needs a Core-side claim route plus the stale-run reaper
-§5 already calls for. Nothing here silently pretends otherwise.
+**This module is the local half only.** The transition table below validates a
+run's lifecycle *within one invocation*; it cannot arbitrate between two. The
+authority is Core's ``POST /agent-runs/{id}/claim`` — a single conditional
+UPDATE — which the runtime calls before the first model call. Of N concurrent
+deliveries exactly one gets a 200; the rest get 409 and exit having spent
+nothing (issue #371).
+
+That ordering is the point. The check here runs against a *read*, so two
+invocations arriving together both see ``pending`` and both would proceed; only
+the claim resolves it, and only because it happens before any tokens are bought.
+
+**Remaining gap.** A runtime killed *after* claiming leaves the row ``running``
+with a ``started_at`` rather than stranded in ``pending``. That does not fix
+ADR-0014 §5's stranding — the run still never terminates — but it makes it
+*detectable*: "running for longer than the wall-clock ceiling" is a query, where
+"pending for ever" is indistinguishable from "never picked up". A reaper that
+fails such runs deliberately is the remaining work, tracked separately.
 """
 
 from __future__ import annotations

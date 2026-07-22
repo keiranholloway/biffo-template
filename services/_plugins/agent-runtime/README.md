@@ -116,16 +116,24 @@ curtailed one.
 
 ## Known gaps (recorded, not hidden)
 
-- **The `pending → running` transition is runtime-local.** Core's internal
-  agent-run API is create / read / complete — there is no claim route — so the
-  row stays `pending` until the run terminates. Consequences: a duplicate event
-  delivery cannot be de-duplicated across invocations, and a runtime killed
-  mid-run leaves the row `pending` rather than `running`. This is the same class
-  as §5's "second divergence point" and needs a Core claim route plus the
-  stale-run reaper §5 already calls for.
+- **A run killed after claiming never terminates.** The claim moves it to
+  `running` with a `started_at`, so it no longer looks like a run that was never
+  picked up — but nothing yet fails it. §5's stranding gap is now *detectable*
+  ("running for longer than the wall-clock ceiling" is a query) rather than
+  invisible; a reaper that fails such runs deliberately is the remaining work.
 - **A completion POST that fails strands the run** — the model work is paid for
   and Core holds no result. Logged at error level (`run is stranded`) so it can
   be alarmed on, which is what §5 asks for pending a retry/outbox.
+
+### Closed
+
+- ~~The `pending → running` transition is runtime-local~~ — closed by
+  `POST /agent-runs/{id}/claim` (issue #371). Core now arbitrates: a single
+  conditional `UPDATE ... WHERE status = 'pending'` means exactly one of N
+  concurrent deliveries proceeds, and the losers get 409 **before** the first
+  model call. Previously both duplicates called the provider and both were
+  billed; only the second *completion* was refused, so the recorded outcome was
+  right and the invoice was not.
 
 ## Layout
 

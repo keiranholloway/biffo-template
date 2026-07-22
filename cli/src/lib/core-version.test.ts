@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   compareCoreVersions,
   findCoreVersionUpward,
+  isInstanceRepo,
   parseCoreVersion,
   readCoreVersionFile,
   readInstanceCoreVersion,
@@ -92,5 +93,54 @@ describe('readInstanceCoreVersion', () => {
   it('throws when version is missing or not semver', () => {
     writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: '1.2' }))
     expect(() => readInstanceCoreVersion(dir)).toThrow(/invalid/)
+  })
+})
+
+describe('isInstanceRepo', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'biffo-probe-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('is true when biffo.core.json is present', () => {
+    writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: '1.4.0' }))
+    expect(isInstanceRepo(dir)).toBe(true)
+  })
+
+  it('is false for a bare directory', () => {
+    expect(isInstanceRepo(dir)).toBe(false)
+  })
+
+  /**
+   * The discrimination that matters, and the one that is easy to get wrong:
+   * an instance inherits `core.version` through GitHub template generation, so
+   * that file says nothing about which repo you are in. Only `biffo.core.json`
+   * does. Keying the probe on `core.version` would classify the template AND
+   * every instance as an instance, silently skipping the template-only guards in
+   * the one repo that needs them (#367).
+   */
+  it('is false when only the inherited core.version is present', () => {
+    writeFileSync(join(dir, 'core.version'), '0.46.2\n')
+    expect(isInstanceRepo(dir)).toBe(false)
+  })
+
+  /**
+   * Negative control: the probe must actually FLIP, or every
+   * `skipIf(runningInInstance)` in this package is a no-op that silently runs
+   * template-only guards in instances (or, worse, skips them in the template)
+   * while looking correct.
+   *
+   * Deliberately not asserted against the repo this suite runs in: that
+   * assertion has one right answer in the template and the opposite one in an
+   * instance, so it would itself be a template-only check — the very defect
+   * #367 is about.
+   */
+  it('negative control: flips as the marker appears', () => {
+    expect(isInstanceRepo(dir)).toBe(false)
+    writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: '1.4.0' }))
+    expect(isInstanceRepo(dir)).toBe(true)
   })
 })

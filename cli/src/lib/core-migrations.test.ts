@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { readCoreManifest } from './core-manifest.js'
+import { isInstanceRepo } from './core-version.js'
 import {
   MIGRATIONS_VERSIONS_DIR,
   applyMigrationCarry,
@@ -278,10 +279,8 @@ describe('applyMigrationCarry', () => {
 // test file ships in the template-owned cli/, so it reaches every instance. Run
 // against the instance's own migration chain it would assert single-head over
 // user-owned instance data — a branch there is the instance's Alembic problem to
-// resolve, not a signal a template-shipped gate should red on. `biffo.core.json`
-// exists only in an instance (it is written at `biffo init`, never in the
-// template), so its presence is the instance/template discriminator.
-const runningInInstance = existsSync(join(repoRoot, 'biffo.core.json'))
+// resolve, not a signal a template-shipped gate should red on.
+const runningInInstance = isInstanceRepo(repoRoot)
 
 describe.skipIf(runningInInstance)('the real template', () => {
   it('ships a valid, single-head core migration chain', () => {

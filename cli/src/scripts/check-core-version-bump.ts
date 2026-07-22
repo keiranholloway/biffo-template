@@ -11,12 +11,10 @@
  * root) skips it, because a core upgrade PR there necessarily rewrites
  * template-owned paths and bumps `biffo.core.json` rather than `core.version`.
  */
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
 import { execa } from 'execa'
 import { readCoreManifest } from '../lib/core-manifest.js'
 import { checkCoreVersionBump } from '../lib/core-version-guard.js'
-import { CORE_VERSION_FILE, INSTANCE_CORE_FILE } from '../lib/core-version.js'
+import { CORE_VERSION_FILE, INSTANCE_CORE_FILE, isInstanceRepo } from '../lib/core-version.js'
 
 async function main(): Promise<void> {
   const base = process.env['GITHUB_BASE_REF'] ?? process.argv[2]
@@ -38,7 +36,7 @@ async function main(): Promise<void> {
 
   const manifest = readCoreManifest(root)
   const coreVersionChanged = changedFiles.includes(CORE_VERSION_FILE)
-  const isInstance = existsSync(join(root, INSTANCE_CORE_FILE))
+  const isInstance = isInstanceRepo(root)
   const { bumpRequired, templateOwnedChanges, skippedAsInstance } = checkCoreVersionBump(
     changedFiles,
     coreVersionChanged,

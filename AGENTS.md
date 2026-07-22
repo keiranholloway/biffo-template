@@ -43,11 +43,17 @@ Several agents often run concurrently in this repo. A worktree isolates your
   happened here. Prefer committing to your own branch over stashing; if you
   must stash, use `git stash push -m "<your branch>"` and pop by name, and
   never assume `stash@{0}` is yours.
-- **`core.version` will conflict.** Every template-owned change bumps it
-  (ADR-0006), so concurrent PRs collide there by design. Rebase onto the
-  updated default branch and re-bump — do not coordinate with the other agent,
-  and do not assume the number you chose is still free. See §3 for the trap
-  that follows from this.
+- **Never edit `core.version`.** It is derived after merge from your PR's
+  conventional-commit type and committed by the release job (issue #423), so a
+  PR that sets it fights the automation and CI refuses it. It used to be bumped
+  by hand, which made concurrent PRs collide on one line every time — and never
+  actually checked the number went up, so a revert could restore an
+  already-published version (#422).
+- **Your PR title decides the released version.** Squash-merge makes it the
+  commit subject, and the release job reads that subject: `feat` earns a minor,
+  everything else a patch, and a declared break (`feat!:`) a minor while the
+  template is pre-1.0. A title the derivation cannot parse fails CI rather than
+  releasing something arbitrary.
 - **Do not remove or modify a worktree you did not create.** Pulling the ground
   out from under a running agent breaks it mid-flight.
 

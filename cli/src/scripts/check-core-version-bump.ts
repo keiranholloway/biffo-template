@@ -1,8 +1,15 @@
 /**
- * CI guard (ADR-0006 versioning discipline): fail a pull request that changes
- * any template-owned path without bumping `core.version`. Run from CI via
- * `pnpm --filter @biffo/cli check:core-bump`; the base branch comes from
- * `GITHUB_BASE_REF` (or the first CLI arg).
+ * CI guard (ADR-0006 versioning discipline). `core.version` is no longer bumped
+ * by hand — the release job derives it after merge (#423) — so this checks the
+ * two things a PR CAN now get wrong:
+ *
+ *   1. it edits `core.version` itself, which belongs to the release job and is
+ *      the only way to move the version backwards onto a published one (#422);
+ *   2. it changes template-owned paths under a subject the derivation cannot
+ *      read, which under squash-merge decides the released version by accident.
+ *
+ * Run from CI via `pnpm --filter @biffo/cli check:core-bump`; the base branch
+ * comes from `GITHUB_BASE_REF` (or the first CLI arg).
  *
  * Ownership is resolved by the same `isTemplateOwned` logic core upgrade uses,
  * so the guard and the sync agree on what "template-owned" means.
@@ -34,15 +41,28 @@ async function main(): Promise<void> {
     .map((s) => s.trim())
     .filter(Boolean)
 
+  // Under squash-merge the PR TITLE becomes the commit subject on main, and
+  // that subject decides the released version. GITHUB_PR_TITLE carries it when
+  // CI knows it; the branch's own subjects are the fallback for a local run.
+  const prTitle = process.env['GITHUB_PR_TITLE']
+  let subjects: string[]
+  if (prTitle) {
+    subjects = [prTitle]
+  } else {
+    const { stdout: log } = await execa('git', ['log', '--format=%s', `origin/${base}..HEAD`], {
+      cwd: root,
+      reject: false,
+    })
+    subjects = log
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+
   const manifest = readCoreManifest(root)
-  const coreVersionChanged = changedFiles.includes(CORE_VERSION_FILE)
   const isInstance = isInstanceRepo(root)
-  const { bumpRequired, templateOwnedChanges, skippedAsInstance } = checkCoreVersionBump(
-    changedFiles,
-    coreVersionChanged,
-    manifest,
-    isInstance,
-  )
+  const { handEdited, unclassifiableSubjects, templateOwnedChanges, skippedAsInstance } =
+    checkCoreVersionBump({ changedFiles, manifest, subjects, isInstance })
 
   if (skippedAsInstance) {
     console.log(
@@ -52,20 +72,34 @@ async function main(): Promise<void> {
     return
   }
 
-  if (bumpRequired) {
+  if (handEdited) {
     console.error(
-      `\n✗ core.version bump required.\n\n` +
-        `  This PR changes ${templateOwnedChanges.length} template-owned path(s) but does not ` +
-        `bump ${CORE_VERSION_FILE}:\n` +
-        templateOwnedChanges.map((p) => `    - ${p}`).join('\n') +
-        `\n\n  Template-owned changes must move the core version so instances can detect them ` +
-        `and \`biffo core upgrade\` has a base to merge from (ADR-0006).\n` +
-        `  Bump ${CORE_VERSION_FILE} (patch for fixes, minor for features) in this PR.\n`,
+      `\n✗ ${CORE_VERSION_FILE} must not be edited by hand.\n\n` +
+        `  The release job derives it from this PR's commit type after merge (#423), so a\n` +
+        `  PR that sets it fights the automation — and a hand-edit is the only way to move\n` +
+        `  it BACKWARDS onto an already-published version (#422). core-v<version> is\n` +
+        `  released to npm, and npm versions are immutable, so two commits carrying one\n` +
+        `  version disagree for ever.\n\n` +
+        `  Drop ${CORE_VERSION_FILE} from this PR. Nothing else is needed — the version is\n` +
+        `  chosen for you.\n`,
     )
     process.exit(1)
   }
 
-  console.log('✓ core.version guard: OK')
+  if (unclassifiableSubjects.length > 0) {
+    console.error(
+      `\n✗ This PR releases a new core version, but its subject cannot be classified.\n\n` +
+        unclassifiableSubjects.map((s) => `    ${s}`).join('\n') +
+        `\n\n  Squash-merge makes the PR title the commit subject on main, and the release\n` +
+        `  job reads that subject to decide the version (feat -> minor, otherwise patch).\n` +
+        `  An unreadable title picks the version by accident.\n\n` +
+        `  Use a Conventional Commit title, e.g. \`fix(cli): ...\` or \`feat(api): ...\`.\n` +
+        `  It changes ${templateOwnedChanges.length} template-owned path(s), which is why this matters.\n`,
+    )
+    process.exit(1)
+  }
+
+  console.log('✓ core.version guard: OK — the release job will set the version.')
 }
 
 main().catch((err: unknown) => {

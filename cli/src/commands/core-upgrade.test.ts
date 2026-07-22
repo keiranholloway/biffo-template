@@ -79,7 +79,10 @@ describe('runCoreUpgrade --apply', () => {
   it('creates a branch, applies files, bumps biffo.core.json, commits, pushes, opens a PR', async () => {
     const { deps, git, createPullRequest } = fakeDeps()
 
-    await runCoreUpgrade({ cwd: instance, baseDir: base, theirsDir: theirs, apply: true }, deps)
+    await runCoreUpgrade(
+      { cwd: instance, templateRoot: theirs, baseDir: base, theirsDir: theirs, apply: true },
+      deps,
+    )
 
     // branch created from the from->to version
     expect(git.createBranch).toHaveBeenCalledWith(instance, 'biffo/core-upgrade-0.1.0-to-0.2.0')
@@ -140,7 +143,10 @@ describe('runCoreUpgrade --apply', () => {
     rmSync(join(instance, 'biffo.core.json'))
     const { deps } = fakeDeps()
     await expect(
-      runCoreUpgrade({ cwd: instance, templateRepo: theirs }, { ...deps, materialize: vi.fn() }),
+      runCoreUpgrade(
+        { cwd: instance, templateRoot: theirs, templateRepo: theirs },
+        { ...deps, materialize: vi.fn() },
+      ),
     ).rejects.toThrow(/current core version/)
   })
 
@@ -150,7 +156,10 @@ describe('runCoreUpgrade --apply', () => {
     const { deps, git, createPullRequest } = fakeDeps()
 
     await expect(
-      runCoreUpgrade({ cwd: instance, baseDir: base, theirsDir: theirs, apply: true }, deps),
+      runCoreUpgrade(
+        { cwd: instance, templateRoot: theirs, baseDir: base, theirsDir: theirs, apply: true },
+        deps,
+      ),
     ).rejects.toThrow(/conflict/i)
 
     expect(git.createBranch).not.toHaveBeenCalled()
@@ -162,7 +171,14 @@ describe('runCoreUpgrade --apply', () => {
     const { deps, createPullRequest } = fakeDeps()
 
     await runCoreUpgrade(
-      { cwd: instance, baseDir: base, theirsDir: theirs, apply: true, allowConflicts: true },
+      {
+        cwd: instance,
+        templateRoot: theirs,
+        baseDir: base,
+        theirsDir: theirs,
+        apply: true,
+        allowConflicts: true,
+      },
       deps,
     )
 
@@ -173,14 +189,20 @@ describe('runCoreUpgrade --apply', () => {
   it('refuses to run on a dirty working tree', async () => {
     const { deps, git } = fakeDeps({ hasUncommittedChanges: vi.fn().mockResolvedValue(true) })
     await expect(
-      runCoreUpgrade({ cwd: instance, baseDir: base, theirsDir: theirs, apply: true }, deps),
+      runCoreUpgrade(
+        { cwd: instance, templateRoot: theirs, baseDir: base, theirsDir: theirs, apply: true },
+        deps,
+      ),
     ).rejects.toThrow(/uncommitted/i)
     expect(git.createBranch).not.toHaveBeenCalled()
   })
 
   it('dry run (no --apply) never touches git or the working tree', async () => {
     const { deps, git, createPullRequest } = fakeDeps()
-    await runCoreUpgrade({ cwd: instance, baseDir: base, theirsDir: theirs }, deps)
+    await runCoreUpgrade(
+      { cwd: instance, templateRoot: theirs, baseDir: base, theirsDir: theirs },
+      deps,
+    )
     expect(readFileSync(join(instance, 'services/api/main.py'), 'utf8')).toBe('v1') // unchanged
     expect(git.createBranch).not.toHaveBeenCalled()
     expect(createPullRequest).not.toHaveBeenCalled()
@@ -240,10 +262,13 @@ describe('runCoreUpgrade — lockfile refresh is driven by what landed (#393)', 
 
   async function upgrade(): Promise<void> {
     const { deps } = fakeDeps()
-    await runCoreUpgrade({ cwd: instance, baseDir: base, theirsDir: theirs, apply: true }, {
-      ...deps,
-      runCommand,
-    } as CoreUpgradeDeps)
+    await runCoreUpgrade(
+      { cwd: instance, templateRoot: theirs, baseDir: base, theirsDir: theirs, apply: true },
+      {
+        ...deps,
+        runCommand,
+      } as CoreUpgradeDeps,
+    )
   }
 
   /**

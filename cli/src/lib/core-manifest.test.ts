@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  CORE_MANIFEST_FILE,
   type CoreManifest,
   computeCoreDiff,
   findTemplateRoot,
@@ -12,6 +13,7 @@ import {
   readCoreManifest,
   resolveTemplateRoot,
 } from './core-manifest.js'
+import { isInstanceRepo } from './core-version.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(here, '..', '..', '..')
@@ -113,8 +115,36 @@ describe('real repo core-manifest.json', () => {
     expect(isTemplateOwned('biffo.divergence.json', manifest)).toBe(false)
   })
 
-  it('findTemplateRoot locates the repo root from a nested dir', () => {
-    expect(findTemplateRoot(here)).toBe(repoRoot)
+  it.skipIf(isInstanceRepo(repoRoot))(
+    'findTemplateRoot locates the repo root from a nested dir',
+    () => {
+      // Template-only: it asserts over THIS repo's layout. An instance root
+      // carries biffo.core.json, so it is deliberately not a template root
+      // (see below) and the walk correctly leaves the repo entirely (#367).
+      expect(findTemplateRoot(here)).toBe(repoRoot)
+    },
+  )
+
+  /**
+   * The instance/template discriminator, tested on synthetic trees so it runs
+   * in both repos rather than only the one whose layout happens to match.
+   *
+   * An instance carries a core-manifest.json too — it is template-owned and
+   * distributed — so presence alone would resolve the instance the CLI is
+   * installed into as its own upgrade source, and `biffo core upgrade` would
+   * three-way merge a tree against itself and report nothing to do.
+   */
+  it('rejects an instance root, which also carries a core-manifest.json', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'biffo-root-'))
+    try {
+      writeFileSync(join(dir, CORE_MANIFEST_FILE), JSON.stringify({ version: 1 }))
+      expect(findTemplateRoot(dir)).toBe(dir)
+
+      writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: '0.1.0' }))
+      expect(findTemplateRoot(dir)).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('resolveTemplateRoot appends caller guidance verbatim when no root is found', () => {

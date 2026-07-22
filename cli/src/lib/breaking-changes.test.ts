@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { isInstanceRepo } from './core-version.js'
 import {
   UPGRADE_GUIDE_PATH,
   breakingChangesBetween,
@@ -10,6 +11,7 @@ import {
 } from './breaking-changes.js'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+const runningInInstance = isInstanceRepo(repoRoot)
 
 const GUIDE = `# Guide
 
@@ -96,7 +98,22 @@ describe('breakingChangesBetween', () => {
   })
 })
 
-describe('the real upgrade guide', () => {
+/**
+ * Template-only (#367 class). `docs/` is user-owned — it is in neither
+ * ownership list, so it is user-owned by fail-closed default — which means
+ * `biffo core upgrade` never carries the guide. An instance keeps whatever copy
+ * `biffo init` gave it, without the Breaking changes section these assertions
+ * read, so they fail there on content the instance cannot receive or repair.
+ *
+ * That the guide does not distribute is deliberate: an instance's docs are its
+ * own. The consequence is only that a template-owned test must not assert over
+ * them. The warning itself is unaffected — it reads the guide from the TEMPLATE
+ * at the target version, never from the instance.
+ *
+ * This is exactly the class #384 exists to catch automatically, and it shipped
+ * anyway, hours after that issue was filed.
+ */
+describe.skipIf(runningInInstance)('the real upgrade guide', () => {
   /**
    * The answer to "parsing prose is brittle". A heading typo, or the section
    * being renamed, would silently disable the warning — so the parse is

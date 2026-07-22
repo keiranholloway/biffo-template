@@ -183,6 +183,49 @@ describe('gitMergeFile (real git integration)', () => {
     expect(content).toContain('<<<<<<<')
     expect(content).toContain('>>>>>>>')
   })
+
+  /**
+   * #392. The merged content is written verbatim into the instance, so a lost
+   * trailing newline is a real defect in a real file: ruff W292 for Python,
+   * prettier --check for everything else, and a spurious "\ No newline at end
+   * of file" hunk in a diff someone has to review carefully.
+   *
+   * It survived this long because the assertions above use `toContain`, which
+   * is indifferent to how the string ends. These are not.
+   */
+  describe('preserves the trailing newline (#392)', () => {
+    it('on a clean merge', async () => {
+      const { conflicted, content } = await gitMergeFile(
+        'l1\nl2\nl3\n',
+        'OURS\nl2\nl3\n',
+        'l1\nl2\nTHEIRS\n',
+      )
+      expect(conflicted).toBe(false)
+      expect(content.endsWith('\n')).toBe(true)
+    })
+
+    it('on a conflicted merge, whose content is written out too', async () => {
+      const { conflicted, content } = await gitMergeFile('line\n', 'ours\n', 'theirs\n')
+      expect(conflicted).toBe(true)
+      expect(content.endsWith('\n')).toBe(true)
+    })
+
+    it('when only one side changed — the common case in an upgrade', async () => {
+      // The minimal reproduction: this returned 'y' before the fix.
+      const { content } = await gitMergeFile('x\n', 'x\n', 'y\n')
+      expect(content).toBe('y\n')
+    })
+
+    /**
+     * Preserve, not append. A file that genuinely has no trailing newline must
+     * keep that shape — the fix is "stop stripping", not "always add one",
+     * which would corrupt any file where the absence is deliberate.
+     */
+    it('and does not invent one that was never there', async () => {
+      const { content } = await gitMergeFile('x', 'x', 'y')
+      expect(content).toBe('y')
+    })
+  })
 })
 
 import { existsSync, readFileSync } from 'node:fs'

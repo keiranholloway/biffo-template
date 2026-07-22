@@ -1,0 +1,264 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { readCoreManifest } from './core-manifest.js'
+import {
+  DIVERGENCE_FILE,
+  type DivergenceEntry,
+  checkCoreOwnership,
+  parseDivergenceTrailer,
+  readDivergenceConfig,
+} from './core-ownership-guard.js'
+import { upgradeBranchName } from './core-upgrade.js'
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+const manifest = readCoreManifest(repoRoot)
+
+const check = (input: Partial<Parameters<typeof checkCoreOwnership>[0]>) =>
+  checkCoreOwnership({ changedFiles: [], manifest, isInstance: true, ...input })
+
+describe('checkCoreOwnership — direction of the check', () => {
+  /**
+   * The bug the ported version of this guard would have had. The instance-side
+   * original probed `existsSync('core-manifest.json')`, which is true in the
+   * TEMPLATE too — so shipped upstream unchanged it would have refused every
+   * commit in the repo it ships from.
+   */
+  it('is inert in the template, which owns these paths', () => {
+    const result = check({ changedFiles: ['services/api/src/api/main.py'], isInstance: false })
+    expect(result.skipped).toBe('template')
+    expect(result.blocked).toEqual([])
+  })
+
+  it('blocks the same change in an instance', () => {
+    const result = check({ changedFiles: ['services/api/src/api/main.py'] })
+    expect(result.skipped).toBeNull()
+    expect(result.blocked).toEqual(['services/api/src/api/main.py'])
+  })
+
+  it('makes the caller state which side it is on', () => {
+    // No default: the polarity is inverted relative to the core.version guard,
+    // so defaulting either way is a trap (see the note on the input type). This
+    // is a type-level guarantee — asserted here so removing it is a visible
+    // change rather than a silently-restored default.
+    // @ts-expect-error -- isInstance is required
+    expect(() => checkCoreOwnership({ changedFiles: [], manifest })).not.toThrow()
+  })
+})
+
+describe('checkCoreOwnership — what it lets through', () => {
+  it('ignores user-owned paths', () => {
+    const result = check({
+      changedFiles: ['infra/environments/dev/main.tf', 'db/seed.sql', 'apps/my-app/page.tsx'],
+    })
+    expect(result.blocked).toEqual([])
+    expect(result.skipped).toBeNull()
+  })
+
+  it('resolves ownership by longest prefix, as the upgrade does', () => {
+    // services/ is user-owned; services/api/ inside it is not. A guard that
+    // matched on the shortest prefix would wave the real drift through.
+    const result = check({
+      changedFiles: ['services/billing/handler.py', 'services/api/src/api/models/base.py'],
+    })
+    expect(result.blocked).toEqual(['services/api/src/api/models/base.py'])
+  })
+
+  it('exempts a core-upgrade branch, which is when these paths are meant to move', () => {
+    const result = check({
+      changedFiles: ['services/api/src/api/main.py'],
+      branch: upgradeBranchName('0.23.3', '0.41.18'),
+    })
+    expect(result.skipped).toBe('upgrade-branch')
+    expect(result.blocked).toEqual([])
+  })
+
+  /**
+   * The exemption is derived from `upgradeBranchName` rather than a hand-written
+   * regex, so the two cannot drift. If the upgrade ever renames its branches,
+   * this fails rather than silently blocking every upgrade PR in every instance.
+   */
+  it('recognises the branch name the upgrade actually creates', () => {
+    expect(upgradeBranchName('1.0.0', '1.1.0')).toMatch(/^biffo\/core-upgrade-/)
+  })
+
+  it('does not exempt a branch that merely mentions the words', () => {
+    const result = check({
+      changedFiles: ['cli/src/index.ts'],
+      branch: 'fix/notes-about-biffo-core-upgrade',
+    })
+    expect(result.skipped).toBeNull()
+    expect(result.blocked).toEqual(['cli/src/index.ts'])
+  })
+
+  it('allows an explicit Core-Divergence trailer, and reports the reason', () => {
+    const result = check({
+      changedFiles: ['cli/src/index.ts'],
+      commitMessage: 'fix: something\n\nCore-Divergence: upstream cannot express this yet\n',
+    })
+    expect(result.skipped).toBe('divergence-trailer')
+    expect(result.blocked).toEqual([])
+    expect(result.divergenceReason).toBe('upstream cannot express this yet')
+  })
+})
+
+describe('parseDivergenceTrailer', () => {
+  it('requires the trailer on its own line, not mentioned in prose', () => {
+    expect(parseDivergenceTrailer('fix: discuss Core-Divergence: later maybe')).toBeNull()
+  })
+
+  it('requires a reason', () => {
+    expect(parseDivergenceTrailer('fix: x\n\nCore-Divergence:\n')).toBeNull()
+    expect(parseDivergenceTrailer('fix: x\n\nCore-Divergence:   \n')).toBeNull()
+  })
+
+  it('trims surrounding whitespace from the reason', () => {
+    expect(parseDivergenceTrailer('x\n\nCore-Divergence:   because   \n')).toBe('because')
+  })
+
+  it('ignores a trailer inside a comment line git will strip', () => {
+    // The commit-msg hook sees the raw editor buffer, comments included. A
+    // trailer in git's own help text is not the author opting out.
+    expect(parseDivergenceTrailer('fix: x\n\n# Core-Divergence: example from the template\n')).toBe(
+      null,
+    )
+  })
+})
+
+describe('checkCoreOwnership — warn-only prefixes', () => {
+  const portal: DivergenceEntry = {
+    prefix: 'apps/portal/',
+    reason: 'product UI predates the boundary widening',
+    upstream: 'keiranholloway/biffo-template#370',
+  }
+
+  it('warns instead of blocking for an acknowledged prefix', () => {
+    const result = check({
+      changedFiles: ['apps/portal/src/app/page.tsx'],
+      warnOnly: [portal],
+    })
+    expect(result.blocked).toEqual([])
+    expect(result.warned.map((w) => w.path)).toEqual(['apps/portal/src/app/page.tsx'])
+    expect(result.warned[0]?.entry.upstream).toBe('keiranholloway/biffo-template#370')
+  })
+
+  it('still blocks everything outside the acknowledged prefix', () => {
+    const result = check({
+      changedFiles: ['apps/portal/src/app/page.tsx', 'services/api/src/api/main.py'],
+      warnOnly: [portal],
+    })
+    expect(result.blocked).toEqual(['services/api/src/api/main.py'])
+    expect(result.warned).toHaveLength(1)
+  })
+
+  it('reports the most specific matching entry', () => {
+    const admin: DivergenceEntry = {
+      prefix: 'apps/portal/src/app/admin/',
+      reason: 'narrower, more specific reason',
+      upstream: '#360',
+    }
+    const result = check({
+      changedFiles: ['apps/portal/src/app/admin/page.tsx'],
+      warnOnly: [portal, admin],
+    })
+    expect(result.warned[0]?.entry.upstream).toBe('#360')
+  })
+
+  /**
+   * A warn-only entry excuses the block, not the drift. Surfacing the warning
+   * on a trailer-allowed commit is what keeps the list from becoming a place
+   * divergence goes to be forgotten.
+   */
+  it('still surfaces warnings when a trailer allows the rest', () => {
+    const result = check({
+      changedFiles: ['apps/portal/src/app/page.tsx', 'cli/src/index.ts'],
+      commitMessage: 'x\n\nCore-Divergence: deliberate\n',
+      warnOnly: [portal],
+    })
+    expect(result.skipped).toBe('divergence-trailer')
+    expect(result.warned).toHaveLength(1)
+  })
+})
+
+describe('readDivergenceConfig', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'biffo-divergence-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('treats an absent file as no warn-only prefixes', () => {
+    expect(readDivergenceConfig(dir).warnOnly).toEqual([])
+  })
+
+  it('reads entries', () => {
+    writeFileSync(
+      join(dir, DIVERGENCE_FILE),
+      JSON.stringify({ warnOnly: [{ prefix: 'apps/portal/', reason: 'r', upstream: '#370' }] }),
+    )
+    expect(readDivergenceConfig(dir).warnOnly).toHaveLength(1)
+  })
+
+  /**
+   * Loud, not lenient. Degrading a broken config to "no warn-only prefixes"
+   * silently converts every warn into a block, so the guard starts refusing
+   * commits it was configured to allow with no indication why.
+   */
+  it('throws on malformed JSON rather than silently dropping the list', () => {
+    writeFileSync(join(dir, DIVERGENCE_FILE), '{ not json')
+    expect(() => readDivergenceConfig(dir)).toThrow(/not valid JSON/)
+  })
+
+  it('requires an upstream issue on every entry', () => {
+    // An entry with no issue to close it is permanent drift wearing a
+    // temporary label.
+    writeFileSync(
+      join(dir, DIVERGENCE_FILE),
+      JSON.stringify({ warnOnly: [{ prefix: 'apps/portal/', reason: 'r' }] }),
+    )
+    expect(() => readDivergenceConfig(dir)).toThrow(/invalid/)
+  })
+})
+
+describe('the real manifest', () => {
+  /**
+   * Negative control. Every assertion above drives a hand-written path list; if
+   * `isTemplateOwned` were wired up wrongly here the suite could still pass by
+   * agreeing with itself. These drive the REAL manifest, and the guard must
+   * disagree between the two sides of the boundary — a guard that classifies
+   * everything the same way is not a guard.
+   */
+  it('separates real template-owned from real user-owned paths', () => {
+    const blocked = check({
+      changedFiles: [
+        'services/api/src/api/main.py',
+        'cli/src/index.ts',
+        'modules/cloud/aws/main.tf',
+        '.github/workflows/ci.yml',
+        'core-manifest.json',
+      ],
+    }).blocked
+    expect(blocked).toHaveLength(5)
+
+    const allowed = check({
+      changedFiles: [
+        'infra/environments/dev/main.tf',
+        'services/api/migrations/versions/0009_x.py',
+        'docs/ADR/0001-tenancy.md',
+        'db/seed.sql',
+        'biffo.core.json',
+      ],
+    }).blocked
+    expect(allowed).toEqual([])
+  })
+
+  it('does not block the divergence config itself', () => {
+    // Otherwise recording a divergence would be blocked by the guard it
+    // configures — the instance could never adopt one.
+    expect(check({ changedFiles: [DIVERGENCE_FILE] }).blocked).toEqual([])
+  })
+})

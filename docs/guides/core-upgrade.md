@@ -38,6 +38,47 @@ Ownership is declared in the template's `core-manifest.json`. Only **template-ow
 
 On any ambiguity, user-owned wins — the upgrade is fail-closed and never touches a path it isn't sure the template owns.
 
+### The boundary is guarded at commit time, not just at upgrade time
+
+Declaring the boundary does not stop you crossing it. The drift that makes upgrades painful arrives as ordinary commits editing a template-owned path in your instance — each harmless on the day, each a merge conflict months later. One instance took 98 such commits over six months; the upgrade that finally closed the gap was 316 changes with 41 conflict hunks, one of which would have run `CREATE TABLE` against a live database.
+
+So the same ownership rule runs as a guard:
+
+- **`.husky/commit-msg`** — refuses the commit, naming the paths.
+- **CI, on every PR** — the same check, which `--no-verify` cannot skip.
+
+It is inert in `biffo-template` itself, where changing these paths is the entire point.
+
+Four ways past, in order of preference:
+
+1. **Put the change in a user-owned path.** Usually the right answer.
+2. **Make it upstream** in `biffo-template` and take it with `biffo core upgrade`. The answer whenever the change is genuinely core.
+3. **A `Core-Divergence:` trailer** in the commit message, when the instance genuinely must differ:
+
+   ```
+   Core-Divergence: <why this instance must differ from the template>
+   ```
+
+   The commit is allowed and the exception lands in history rather than being argued about later. Raise an upstream issue alongside it.
+
+4. **A warn-only prefix in `biffo.divergence.json`**, for a boundary you knowingly sit astride while an upstream fix is pending:
+
+   ```json
+   {
+     "warnOnly": [
+       {
+         "prefix": "apps/portal/",
+         "reason": "product UI predates the boundary widening in core 0.41.18",
+         "upstream": "keiranholloway/biffo-template#360"
+       }
+     ]
+   }
+   ```
+
+   Such paths warn instead of blocking. `upstream` is required: an entry with no issue to close it is permanent drift wearing a temporary label. Keep the list short — every entry is a standing admission that something will conflict at your next upgrade.
+
+A core-upgrade branch (`biffo/core-upgrade-*`) is exempt entirely, since that is precisely when these paths are meant to move.
+
 ### Core migrations are appended, never merged
 
 `services/api/migrations/versions/` is user-owned, so the three-way merge never rewrites a migration you have already applied. But a core feature that adds tables needs its migration to reach you, or it arrives as models and routers with no schema and 500s on deploy. So the upgrade runs a separate, strictly **additive** carry for that directory:

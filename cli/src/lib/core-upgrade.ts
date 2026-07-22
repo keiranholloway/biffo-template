@@ -245,7 +245,16 @@ export function parseGitHubRepo(remoteUrl: string): { owner: string; repo: strin
   throw new Error(`Could not parse a GitHub owner/repo from remote URL: ${remoteUrl}`)
 }
 
+/**
+ * Prefix of every core-upgrade branch. Exported because the ownership guard
+ * (core-ownership-guard.ts) exempts these branches — a core upgrade is precisely
+ * when template-owned paths are meant to change — and a guard that recognises a
+ * *different* prefix from the one the upgrade actually creates would block the
+ * one workflow it must let through.
+ */
+export const UPGRADE_BRANCH_PREFIX = 'biffo/core-upgrade-'
+
 /** Branch name for a core-upgrade PR, sanitised to safe git ref characters. */
 export function upgradeBranchName(from: string, to: string): string {
-  return `biffo/core-upgrade-${from}-to-${to}`.replace(/[^a-zA-Z0-9._/-]/g, '-')
+  return `${UPGRADE_BRANCH_PREFIX}${from}-to-${to}`.replace(/[^a-zA-Z0-9._/-]/g, '-')
 }

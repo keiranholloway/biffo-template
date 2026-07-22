@@ -104,7 +104,7 @@ jobs:
       - name: Destructive-plan guard
         run: |
           terraform show -json tfplan > plan.json
-          node "$GITHUB_WORKSPACE/cli/scripts/check-destructive-plan.mjs" plan.json
+          node "$GITHUB_WORKSPACE/scripts/check-destructive-plan.mjs" plan.json
         env:
           GITHUB_EVENT_BEFORE: ${{ github.event.before }}
   apply-dev:
@@ -224,7 +224,7 @@ jobs:
       - name: Destructive-plan guard
         run: |
           terraform show -json tfplan > plan.json
-          node "$GITHUB_WORKSPACE/cli/scripts/check-destructive-plan.mjs" plan.json
+          node "$GITHUB_WORKSPACE/scripts/check-destructive-plan.mjs" plan.json
         env:
           GITHUB_EVENT_BEFORE: ${{ github.event.before }}
   apply-staging:
@@ -351,7 +351,7 @@ jobs:
       - name: Destructive-plan guard
         run: |
           terraform show -json tfplan > plan.json
-          node "$GITHUB_WORKSPACE/cli/scripts/check-destructive-plan.mjs" plan.json
+          node "$GITHUB_WORKSPACE/scripts/check-destructive-plan.mjs" plan.json
         env:
           GITHUB_EVENT_BEFORE: ${{ github.event.before }}
   apply-prod:

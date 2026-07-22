@@ -36,9 +36,10 @@ class AdminUserResponse(BaseModel):
 
 
 class CreateUserRequest(BaseModel):
+    # The email address IS the identity — there is no separate username to
+    # supply. The pool uses username_attributes = ["email"], so Cognito derives
+    # its own internal id (see cognito.create_user).
     email: EmailStr
-    # Cognito username; defaults to the email when omitted.
-    username: str | None = None
     groups: list[str] = Field(default_factory=list)
     # Suppress Cognito's invitation email (e.g. when provisioning in bulk).
     suppress_invite_email: bool = False

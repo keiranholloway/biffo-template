@@ -100,7 +100,6 @@ async def create_user(
     try:
         user = cog.create_user(
             email=body.email,
-            username=body.username,
             groups=body.groups,
             suppress_invite_email=body.suppress_invite_email,
         )

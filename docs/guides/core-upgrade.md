@@ -113,6 +113,42 @@ If a file looks like a carried migration — same description — but its conten
 
 Anything the upgrade recognises by something other than its filename is printed as `already carried`, so you can see when your instance is in this shape.
 
+## Breaking changes by version
+
+Most of an upgrade is additive. A few changes **destroy data or require manual
+work**, and Terraform will apply them without ceremony — a Cognito pool
+replacement reads as an ordinary `-/+ resource` line in a plan nobody scrolls
+through. Check this list before upgrading past a version in it.
+
+### 0.50.0 — the email address becomes the sign-in identity
+
+`modules/cloud/aws/auth` moves from `alias_attributes = ["email"]` to
+`username_attributes = ["email"]`.
+
+**This REPLACES the Cognito user pool and deletes every user in it.** Cognito
+cannot migrate users between pools with their passwords intact, and the two
+settings are mutually exclusive and immutable, so there is no in-place path.
+
+What you must do:
+
+1. **Re-invite every user** after the upgrade deploys. They keep their email
+   address; they get a new temporary password.
+2. **Expect orphaned rows** in anything keyed on `cognito_sub` (ADR-0012). Each
+   re-invited user gets a new `sub`. Reconcile or clear those tables.
+3. **Tell your users first.** Their existing password stops working the moment
+   the deploy lands.
+
+Why it is worth the cost: the pool previously had a username *and* an email
+that had to agree, and that split leaked through the whole product — the sign-in
+field asked for "Username or email", the invite email had to explain "this is
+your username, not your email address", and the admin create-user API defaulted
+the username to the email, which an email-alias pool rejects outright. It also
+made one person able to become two accounts: a federated sign-in (Google)
+carrying an already-registered address creates a second profile with its own
+`sub` and moves the email alias to it, silently leaving the original user unable
+to sign in with their own address. With the address as the username it is unique
+pool-wide, so that collision surfaces instead of corrupting an identity.
+
 ## 1. Check where you stand
 
 ```bash

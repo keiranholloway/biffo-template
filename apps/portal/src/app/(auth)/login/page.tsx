@@ -36,11 +36,11 @@ function confirmResetErrorMessage(err: unknown): string {
 }
 
 // A missing account must look identical to a successful send so the form cannot
-// be used to enumerate valid usernames — UserNotFoundException is swallowed and
+// be used to enumerate registered addresses — UserNotFoundException is swallowed and
 // still advances to the code-entry step. LimitExceededException is the one
 // request-time error worth surfacing, since it is actionable.
 const RESET_CODE_SENT_NOTICE =
-  'If an account exists for that username, a reset code has been sent to its email.'
+  'If an account exists for that email address, a reset code has been sent to it.'
 
 function requestResetOutcome(err: unknown): { notice: string; sent: boolean } {
   const name = err instanceof Error ? err.name : ''
@@ -75,7 +75,7 @@ function LoginForm() {
     }
   }
 
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -101,7 +101,7 @@ function LoginForm() {
     setLoading(true)
 
     try {
-      const result = await login(username, password)
+      const result = await login(email, password)
       if (result.kind === 'success') {
         redirectAfterAuth()
       } else {
@@ -159,7 +159,7 @@ function LoginForm() {
     setLoading(true)
 
     try {
-      await requestPasswordReset(username)
+      await requestPasswordReset(email)
       setCodeSent(true)
       setResetNotice(RESET_CODE_SENT_NOTICE)
     } catch (err) {
@@ -182,7 +182,7 @@ function LoginForm() {
 
     setLoading(true)
     try {
-      await confirmPasswordReset(username, resetCode, resetNewPassword)
+      await confirmPasswordReset(email, resetCode, resetNewPassword)
       // Reset succeeded — drop back to the sign-in form so the user can sign in
       // with the new password.
       setResetMode(false)
@@ -203,7 +203,7 @@ function LoginForm() {
         <p className="mb-6 text-sm text-gray-500">
           {codeSent
             ? 'Enter the code from your email along with a new password.'
-            : 'Enter your username or email and we will send a reset code to your email.'}
+            : 'Enter your email address and we will send a reset code to it.'}
         </p>
 
         {!codeSent ? (
@@ -214,22 +214,19 @@ function LoginForm() {
             className="flex flex-col gap-4"
           >
             <div>
-              <label
-                htmlFor="reset-username"
-                className="mb-1 block text-sm font-medium text-gray-700"
-              >
-                Username or email
+              <label htmlFor="reset-email" className="mb-1 block text-sm font-medium text-gray-700">
+                Email
               </label>
               <input
-                id="reset-username"
-                type="text"
-                value={username}
+                id="reset-email"
+                type="email"
+                value={email}
                 onChange={(e) => {
-                  setUsername(e.target.value)
+                  setEmail(e.target.value)
                 }}
                 className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 required
-                autoComplete="username"
+                autoComplete="email"
               />
             </div>
 
@@ -425,19 +422,19 @@ function LoginForm() {
         className="flex flex-col gap-4"
       >
         <div>
-          <label htmlFor="username" className="mb-1 block text-sm font-medium text-gray-700">
-            Username or email
+          <label htmlFor="email" className="mb-1 block text-sm font-medium text-gray-700">
+            Email
           </label>
           <input
-            id="username"
-            type="text"
-            value={username}
+            id="email"
+            type="email"
+            value={email}
             onChange={(e) => {
-              setUsername(e.target.value)
+              setEmail(e.target.value)
             }}
             className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             required
-            autoComplete="username"
+            autoComplete="email"
           />
         </div>
 

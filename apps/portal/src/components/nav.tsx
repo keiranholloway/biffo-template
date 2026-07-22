@@ -6,7 +6,11 @@ import { Button } from '@biffo/ui'
 
 export function Nav() {
   const { session, logout } = useAuth()
-  const username = session?.getIdToken().decodePayload()['cognito:username'] as string | undefined
+  // The email address, not `cognito:username`. The pool uses
+  // username_attributes = ["email"], so Cognito generates the username as an
+  // opaque UUID — showing it here would put a meaningless id where the signed-in
+  // person's identity belongs.
+  const email = session?.getIdToken().decodePayload()['email'] as string | undefined
 
   return (
     <nav className="flex items-center justify-between border-b px-6 py-4">
@@ -32,7 +36,7 @@ export function Nav() {
         </Link>
       </div>
       <div className="flex items-center gap-4">
-        {username != null && <span className="text-sm text-gray-600">{username}</span>}
+        {email != null && <span className="text-sm text-gray-600">{email}</span>}
         <Button variant="secondary" onClick={logout} className="text-sm">
           Sign out
         </Button>

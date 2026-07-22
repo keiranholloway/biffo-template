@@ -12,22 +12,42 @@ locals {
 resource "aws_cognito_user_pool" "main" {
   name = local.name_prefix
 
-  # Sign in with the username OR the email address (issue #276).
+  # The email address IS the identity. There is no separate username anywhere in
+  # the product — not in the invite email, not on the sign-in form, not in the
+  # admin console.
   #
-  # `auto_verified_attributes` below only causes the email to be *verified*; it
-  # does not make it a login identifier. Without this, the only accepted
-  # identifier is the literal username — so an admin created as `admin` with
-  # keiran@example.com attached could not sign in with their email address, and
-  # Cognito reported it as "Incorrect username or password" rather than as an
-  # unsupported identifier. The portal's login field offers "Username or email",
-  # which was a promise the pool could not keep.
+  # This replaces `alias_attributes = ["email"]`, which made the username and the
+  # email two different things that had to agree. That split leaked everywhere:
+  # the sign-in field had to offer "Username or email", the invite email had to
+  # explain "this is your username, not your email address", and the admin
+  # create-user API defaulted the username to the email — which an email-alias
+  # pool rejects outright ("Username cannot be of email format"). Every one of
+  # those is a symptom of asking the same question twice.
+  #
+  # It also makes one person one account. With an email *alias*, a federated
+  # sign-in (Google) that carries an already-registered address creates a SECOND
+  # profile with its own `sub`, and Cognito moves the email alias to it —
+  # silently leaving the original user unable to sign in with their own address
+  # (see the pre sign-up trigger docs). As a username *attribute* the address is
+  # unique pool-wide, so that collision surfaces instead of corrupting an
+  # identity. Linking a federated identity to an existing user still requires
+  # AdminLinkProviderForUser in a pre sign-up trigger; the difference is that
+  # forgetting it now fails loudly.
+  #
+  # Note Cognito still keeps an internal username: with username_attributes it
+  # GENERATES one (a UUID equal to `sub`) and ignores any value you pass to
+  # AdminCreateUser. That id is an implementation detail — every admin API also
+  # accepts the email address in its place, so nothing needs to surface it. In
+  # particular the invite template must NOT use `{username}`, which would render
+  # that UUID.
   #
   # WARNING — changing this on an existing pool forces REPLACEMENT of the pool
   # and destroys every user in it. Cognito cannot migrate users between pools
   # with their passwords intact, so every user must re-register or be re-invited.
   # Any table keyed on `cognito_sub` (see ADR-0012) is orphaned by the change.
-  # Deliberately accepted here while instances have only a handful of users.
-  alias_attributes = ["email"]
+  # Instances upgrading past this version MUST expect to re-invite their users;
+  # see the release note.
+  username_attributes = ["email"]
 
   # Password policy
   password_policy {
@@ -100,30 +120,38 @@ resource "aws_cognito_user_pool" "main" {
     allow_admin_create_user_only = false
 
     # Welcome / invite email. Without this block Cognito sends its unstyled
-    # default, which left a founder unable to tell which value was the username
-    # (it is the literal username "admin", NOT their email address) or where the
-    # temporary password ended (issue #350). Cognito renders this as HTML and
-    # requires both {username} and {####} placeholders. Each credential gets its
-    # own labelled line inside <code>/<b> with whitespace around it, so no
-    # adjacent character can be mistaken for part of the value.
+    # default, which left a founder unable to tell where the temporary password
+    # ended (issue #350). Cognito renders this as HTML.
+    #
+    # The copy leads with "the email address this message was sent to", because
+    # that is the sign-in identifier under username_attributes and it needs no
+    # placeholder — the message is already in that inbox.
+    #
+    # {username} is present only because Cognito REQUIRES it. CreateUserPool
+    # rejects an invite template without it in either member:
+    #   "Email message body should have {username} which will be replaced by code"
+    #   "SMS message should have {username} which will be replaced by code"
+    # Under username_attributes the generated username is a UUID, so this may
+    # render as an opaque id rather than the address. It is therefore labelled as
+    # a reference and NOT as something to type — copy that reads correctly
+    # whichever value Cognito substitutes.
     #
     # sms_message is mandatory even though invites go by email: Cognito's
     # CreateUserPool validates ALL three members of inviteMessageTemplate, and
     # rejects an empty sMSMessage with InvalidParameterException ("Member must
     # have length greater than or equal to 6"), so omitting it means no pool can
-    # ever be created (issue #356). It must be >= 6 chars and, like the email
-    # members, carry both the {username} and {####} placeholders.
+    # ever be created (issue #356).
     invite_message_template {
       email_subject = "Your ${var.project_name} admin account"
       email_message = <<-EOT
-        Your ${var.project_name} admin account is ready. Sign in with the credentials below at your admin portal's login page.<br><br>
-        Username (this is your username, not your email address):<br>
-        <b><code>{username}</code></b><br><br>
+        Your ${var.project_name} admin account is ready.<br><br>
+        Sign in at your admin portal with <b>the email address this message was sent to</b>, and the temporary password below.<br><br>
         Temporary password:<br>
         <b><code>{####}</code></b><br><br>
-        Enter each value exactly as shown on its own line above, with no surrounding punctuation. On your first sign-in you will be asked to set a new password of your own.
+        Enter it exactly as shown on its own line above, with no surrounding punctuation. On your first sign-in you will be asked to set a new password of your own.<br><br>
+        <span style="color:#6b7280;font-size:12px">Account reference: {username} — for support only, you do not need to enter this.</span>
       EOT
-      sms_message   = "Your ${var.project_name} admin username is {username}, temporary password {####}."
+      sms_message   = "Your ${var.project_name} admin temporary password is {####}. Sign in with your email address. (Ref {username})"
     }
   }
 

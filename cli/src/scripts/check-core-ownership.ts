@@ -17,6 +17,7 @@ import { execa } from 'execa'
 import {
   DIVERGENCE_FILE,
   checkCoreOwnership,
+  parseNameStatus,
   readDivergenceConfig,
   resolveBranch,
 } from '../lib/core-ownership-guard.js'
@@ -45,16 +46,16 @@ async function main(): Promise<void> {
   }
 
   let changedFiles: string[]
+  let deletedFiles: string[] = []
   let commitMessage = ''
 
   if (staged) {
-    // ACMR: a path the commit deletes is not drift the template can carry back.
-    const { stdout } = await execa(
-      'git',
-      ['diff', '--cached', '--name-only', '--diff-filter=ACMR'],
-      { cwd: root },
-    )
-    changedFiles = splitLines(stdout)
+    // --name-status, unfiltered, exactly as the CI branch below. Deletions are
+    // INCLUDED: deleting a template-owned file is drift, and a silent kind —
+    // an upgrade will not restore it (#395), so the instance simply loses a
+    // core file for ever. The two modes previously disagreed here (#411).
+    const { stdout } = await execa('git', ['diff', '--cached', '--name-status'], { cwd: root })
+    ;({ changed: changedFiles, deleted: deletedFiles } = parseNameStatus(stdout))
     if (messageFile) {
       const { readFileSync, existsSync } = await import('node:fs')
       if (existsSync(messageFile)) commitMessage = readFileSync(messageFile, 'utf8')
@@ -66,10 +67,10 @@ async function main(): Promise<void> {
       process.exit(2)
     }
     await execa('git', ['fetch', '--quiet', 'origin', base], { cwd: root, reject: false })
-    const { stdout } = await execa('git', ['diff', '--name-only', `origin/${base}...HEAD`], {
+    const { stdout } = await execa('git', ['diff', '--name-status', `origin/${base}...HEAD`], {
       cwd: root,
     })
-    changedFiles = splitLines(stdout)
+    ;({ changed: changedFiles, deleted: deletedFiles } = parseNameStatus(stdout))
     // On a PR the trailer lives in the commits, not in a message file.
     const { stdout: log } = await execa('git', ['log', '--format=%B', `origin/${base}..HEAD`], {
       cwd: root,
@@ -134,7 +135,16 @@ ${BOLD}What to do instead${OFF}
   \`biffo core upgrade\`. Instance-specific behaviour belongs in a user-owned
   path — see core-manifest.json for the split.
 
-${BOLD}If the divergence is deliberate${OFF}
+${
+  result.blocked.some((p) => deletedFiles.includes(p))
+    ? `${BOLD}Some of these are deletions${OFF}
+  Deleting a template-owned file is not a smaller change than editing one — a
+  core upgrade will not restore it (#395), so the instance loses it silently and
+  for ever. If the file genuinely should not exist, delete it in biffo-template.
+
+`
+    : ''
+}${BOLD}If the divergence is deliberate${OFF}
   Record it in the commit message and it is allowed:
 
     ${DIM}Core-Divergence: <why this instance must differ from the template>${OFF}
@@ -143,13 +153,6 @@ ${BOLD}If the divergence is deliberate${OFF}
   boundary you knowingly sit astride, add a warn-only prefix to ${DIVERGENCE_FILE}.
 `)
   process.exit(1)
-}
-
-function splitLines(stdout: string): string[] {
-  return stdout
-    .split('\n')
-    .map((s) => s.trim())
-    .filter(Boolean)
 }
 
 main().catch((err: unknown) => {

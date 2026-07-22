@@ -147,6 +147,32 @@ export function resolveBranch(env: Record<string, string | undefined>, gitBranch
   return (env['GITHUB_HEAD_REF'] || env['GITHUB_REF_NAME'] || gitBranch).trim()
 }
 
+/**
+ * Split `git diff --name-status` output into all changed paths and the deleted
+ * subset.
+ *
+ * Both modes of the guard parse the same thing, which is the point: the CI diff
+ * and the staged diff used different `--diff-filter`s, so a commit that deleted
+ * a template-owned path passed the hook and failed CI (#411). A guard whose
+ * verdict depends on where it runs is worse than one that is merely strict.
+ *
+ * Rename lines carry two paths (`R100\told\tnew`); the destination is the one
+ * that exists afterwards, so it is what gets classified.
+ */
+export function parseNameStatus(stdout: string): { changed: string[]; deleted: string[] } {
+  const changed: string[] = []
+  const deleted: string[] = []
+  for (const line of stdout.split('\n')) {
+    const parts = line.split('\t').filter(Boolean)
+    const status = parts[0]
+    const path = parts[parts.length - 1]
+    if (!status || !path || parts.length < 2) continue
+    changed.push(path)
+    if (status.startsWith('D')) deleted.push(path)
+  }
+  return { changed, deleted }
+}
+
 export type OwnershipSkipReason = 'template' | 'upgrade-branch' | 'divergence-trailer'
 
 export interface OwnershipCheckInput {

@@ -57,7 +57,19 @@ export type MergeFileFn = (
 ) => Promise<{ conflicted: boolean; content: string }>
 
 /** Default MergeFileFn: shells `git merge-file -p` (diff3), the same binary the
- * rest of the CLI uses. Exit code 0 = clean, >0 = conflict count. */
+ * rest of the CLI uses. Exit code 0 = clean, >0 = conflict count.
+ *
+ * `stripFinalNewline: false` is load-bearing (#392). execa strips the final
+ * newline from stdout by default, which is right for a value you are about to
+ * parse and wrong for one you are about to write to a file — and this one is
+ * written verbatim into the instance. Left on, every merged file lands without
+ * its trailing newline: ruff W292 for Python, prettier --check for everything
+ * else, and a spurious "\ No newline at end of file" hunk in a diff a human has
+ * to review.
+ *
+ * It is invisible here, because the template never upgrades itself. The first
+ * place it shows up is an instance's PR, where it reads like the instance's
+ * fault. */
 export const gitMergeFile: MergeFileFn = async (base, ours, theirs) => {
   const dir = mkdtempSync(join(tmpdir(), 'biffo-merge-'))
   try {
@@ -67,7 +79,10 @@ export const gitMergeFile: MergeFileFn = async (base, ours, theirs) => {
     writeFileSync(b, base)
     writeFileSync(o, ours)
     writeFileSync(t, theirs)
-    const result = await execa('git', ['merge-file', '-p', o, b, t], { reject: false })
+    const result = await execa('git', ['merge-file', '-p', o, b, t], {
+      reject: false,
+      stripFinalNewline: false,
+    })
     if (typeof result.exitCode !== 'number' || result.exitCode < 0) {
       throw new Error(`git merge-file failed: ${result.stderr}`)
     }

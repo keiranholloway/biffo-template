@@ -177,4 +177,25 @@ describe('the repository itself', () => {
     `
     expect(checkInviteTemplateSource('a.tf', ok)).toEqual([])
   })
+
+  it('does not mistake hex colours in a branded HTML body for comments', () => {
+    // Regression: the placeholder check originally ran over comment-stripped
+    // source. A branded invite is full of `color:#0f1613`, and outside a
+    // heredoc `#` starts a comment — so the stripper deleted the rest of those
+    // lines and took {####} with them, failing a template that was correct.
+    const branded = `
+      invite_message_template {
+        email_subject = "s"
+        email_message = <<-EOT
+          <div style="color:#0f1613">
+            <h2 style="color:#006c49">Welcome</h2>
+            <p style="background:#f0f4f2">{####}</p>
+            <p style="color:#8a9691">Ref {username}</p>
+          </div>
+        EOT
+        sms_message = "Password {####} (Ref {username})"
+      }
+    `
+    expect(checkInviteTemplateSource('branded.tf', branded)).toEqual([])
+  })
 })

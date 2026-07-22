@@ -75,7 +75,7 @@ jobs:
       # derives the bump from the squash-merge subject — which is this PR's
       # title. Fail if that title is not a Conventional Commits subject, or a
       # feature ships silently as a patch (ADR-0006, #423).
-      - run: ./scripts/biffo.sh check release-subject
+      - run: sh scripts/biffo.sh check release-subject
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
           PR_TITLE: ${{ github.event.pull_request.title }}
@@ -86,7 +86,7 @@ jobs:
       # bills each job's wall time rounded up to a full minute.
       - name: Core ownership guard
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: ./scripts/biffo.sh check ownership
+        run: sh scripts/biffo.sh check ownership
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
 
@@ -136,7 +136,7 @@ jobs:
       # other job in this workflow touches.
       - name: Plugin Terraform guard
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: ./scripts/biffo.sh check plugin-terraform
+        run: sh scripts/biffo.sh check plugin-terraform
 
   python:
     name: Python (lint, types, test, security)

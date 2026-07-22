@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { execa } from 'execa'
@@ -229,7 +238,11 @@ export interface ApplyResult {
  * removed files. Leaves unchanged / keep-ours / remove-conflict files as they
  * are. The caller is responsible for staging/committing the result.
  */
-export function applyUpgradePlan(instanceDir: string, plan: UpgradePlan): ApplyResult {
+export function applyUpgradePlan(
+  instanceDir: string,
+  plan: UpgradePlan,
+  theirsDir?: string,
+): ApplyResult {
   const written: string[] = []
   const deleted: string[] = []
   for (const e of plan.entries) {
@@ -244,6 +257,18 @@ export function applyUpgradePlan(instanceDir: string, plan: UpgradePlan): ApplyR
     if (e.content !== undefined) {
       mkdirSync(dirname(abs), { recursive: true })
       writeFileSync(abs, e.content)
+      // Mirror the executable bit from upstream. `writeFileSync` creates 0644,
+      // so without this a shell script delivered by an upgrade arrives
+      // non-executable and every `./script.sh` invocation in the instance dies
+      // with "Permission denied". Latent until #440 shipped the first
+      // executable an upgrade had ever *added* (scripts/biffo.sh) — one an
+      // instance's CI runs on every job.
+      if (theirsDir !== undefined) {
+        const source = join(theirsDir, e.path)
+        if (existsSync(source) && (statSync(source).mode & 0o111) !== 0) {
+          chmodSync(abs, 0o755)
+        }
+      }
       written.push(e.path)
     }
   }

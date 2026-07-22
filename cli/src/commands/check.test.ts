@@ -35,12 +35,12 @@ describe('biffo check', () => {
     const workflow = readFileSync(join(repoRoot, '.github/workflows', file), 'utf8')
     // `pnpm --filter @biffo/cli` only works where cli/ exists — the template.
     expect(workflow).not.toContain('pnpm --filter @biffo/cli check')
-    for (const name of names) expect(workflow).toContain(`biffo.sh check ${name}`)
+    for (const name of names) expect(workflow).toContain(`sh scripts/biffo.sh check ${name}`)
   })
 
   it('the commit hook uses the dispatcher too', () => {
     const hook = readFileSync(join(repoRoot, '.husky/commit-msg'), 'utf8')
-    expect(hook).toContain('biffo.sh check ownership')
+    expect(hook).toContain('sh scripts/biffo.sh check ownership')
     expect(hook).not.toContain('pnpm --filter @biffo/cli')
   })
 })

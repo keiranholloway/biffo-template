@@ -427,6 +427,54 @@ describe('planMigrationCarry — recognising an already-carried migration', () =
     expect(plan.recognised).toEqual([])
   })
 
+  /**
+   * The realistic shape of a renamed carry, and the case that motivated
+   * ignoring prose: an instance forced to renumber a carried migration
+   * documents why, in the docstring. Every carried migration in
+   * `tabsii-platform` is DDL-identical to the template's and differs only in
+   * that explanation. Treating it as a different migration penalised precisely
+   * the operators who documented their divergence.
+   */
+  it('an instance annotating a carried migration is not a difference', () => {
+    const template = migration('0003', '0002', ddl('orch'))
+    const annotated = template.replace(
+      'a migration',
+      'a migration\n\nPorted from the template and re-chained onto our head, because revision\nid "0003" was already taken here.',
+    )
+    expect(migrationBodyHash(annotated)).toBe(migrationBodyHash(template))
+  })
+
+  it('a whole-line comment is commentary too', () => {
+    const template = migration('0003', null, ddl('orch'))
+    const commented = template.replace('def upgrade', '# ported by hand, see #366\ndef upgrade')
+    expect(migrationBodyHash(commented)).toBe(migrationBodyHash(template))
+  })
+
+  it('negative control: a real DDL change IS a difference', () => {
+    // Ignoring prose must not slide into ignoring schema — otherwise the
+    // comparison would call every migration the same and skip them all.
+    expect(migrationBodyHash(migration('0003', null, ddl('orch')))).not.toBe(
+      migrationBodyHash(migration('0003', null, ddl('something_else'))),
+    )
+  })
+
+  it('recognises a renamed carry whose only difference is its annotation', () => {
+    write(templateDir, '0003_create_orchestration_tables.py', migration('0003', null, ddl('orch')))
+    write(instanceDir, '0001_own.py', migration('0001', null, ddl('own')))
+    write(
+      instanceDir,
+      '0007_create_orchestration_tables.py',
+      migration('0007', '0001', ddl('orch')).replace(
+        'a migration',
+        'a migration\n\nRenumbered on carry; the id 0003 was taken.',
+      ),
+    )
+
+    const plan = planMigrationCarry({ templateDir, instanceDir })
+    expect(plan.entries).toEqual([])
+    expect(plan.recognised[0]?.how).toBe('body')
+  })
+
   it('a base migration hashes like any other — empty Revises is not a difference', () => {
     // `Revises: ` on a base migration is chaining metadata, not DDL. Leaving it
     // in gave every base migration a hash of its own, which made an indistinct

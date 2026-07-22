@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -184,6 +184,134 @@ describe('runCoreUpgrade --apply', () => {
     expect(readFileSync(join(instance, 'services/api/main.py'), 'utf8')).toBe('v1') // unchanged
     expect(git.createBranch).not.toHaveBeenCalled()
     expect(createPullRequest).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Issue #393, reopened half: the refresh fired on entries that wrote nothing.
+ *
+ * `plan.changes` is what the upgrade *considered*; it includes `removed`
+ * entries for files the instance never had, which land nothing on disk. The
+ * refresh now reads `applyUpgradePlan`'s result instead — what actually
+ * happened — so these tests drive the whole command and assert on whether the
+ * lockfile commands ran at all.
+ */
+describe('runCoreUpgrade — lockfile refresh is driven by what landed (#393)', () => {
+  // Root manifests and _skeletons/ are template-owned, as in the real
+  // core-manifest.json; services/ stays user-owned so it does not sweep in.
+  const LOCK_MANIFEST = {
+    version: 1,
+    templateOwned: ['services/api/', 'package.json', 'pyproject.toml', '_skeletons/'],
+    userOwned: ['services/'],
+  }
+
+  let base: string
+  let theirs: string
+  let instance: string
+  let runCommand: ReturnType<typeof vi.fn>
+
+  function seed(root: string, version: string): void {
+    writeFileSync(join(root, 'core.version'), `${version}\n`)
+    writeFileSync(join(root, 'core-manifest.json'), JSON.stringify(LOCK_MANIFEST))
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    base = mkdtempSync(join(tmpdir(), 'lock-base-'))
+    theirs = mkdtempSync(join(tmpdir(), 'lock-theirs-'))
+    instance = mkdtempSync(join(tmpdir(), 'lock-inst-'))
+    seed(base, '0.1.0')
+    seed(theirs, '0.2.0')
+    writeFileSync(join(instance, 'biffo.core.json'), JSON.stringify({ version: '0.1.0' }))
+    // The instance locks both ecosystems, so nothing is skipped for a missing
+    // lockfile and the assertions are about the trigger, not its guard.
+    writeFileSync(join(instance, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n')
+    writeFileSync(join(instance, 'uv.lock'), 'version = 1\n')
+    // Something must always change, or the upgrade is a no-op and exits early.
+    w(base, 'services/api/main.py', 'v1')
+    w(theirs, 'services/api/main.py', 'v2')
+    w(instance, 'services/api/main.py', 'v1')
+    runCommand = vi.fn().mockResolvedValue({ ok: true })
+  })
+  afterEach(() => {
+    for (const d of [base, theirs, instance]) rmSync(d, { recursive: true, force: true })
+  })
+
+  async function upgrade(): Promise<void> {
+    const { deps } = fakeDeps()
+    await runCoreUpgrade({ cwd: instance, baseDir: base, theirsDir: theirs, apply: true }, {
+      ...deps,
+      runCommand,
+    } as CoreUpgradeDeps)
+  }
+
+  /**
+   * The exact pair of entries that fired the false positive on
+   * tabsii-platform 0.50.2 -> 0.53.0. `_skeletons/` is template-owned and the
+   * instance does not carry it, so both sides agree and the instance's absence
+   * is respected — status `removed`, nothing written, nothing deleted.
+   */
+  it('does not refresh for _skeletons/ manifests the instance never had', async () => {
+    for (const root of [base, theirs]) {
+      w(root, '_skeletons/sibling-template/apps/frontend/package.json', '{"name":"frontend"}')
+      w(root, '_skeletons/sibling-template/services/api/pyproject.toml', '[project]\n')
+    }
+
+    await upgrade()
+
+    expect(runCommand).not.toHaveBeenCalled()
+    // And it does not claim otherwise in the log.
+    const info = vi.mocked(log.info).mock.calls.map((c) => String(c[0]))
+    expect(info.some((m) => m.includes('Refreshed'))).toBe(false)
+  })
+
+  /**
+   * The same defect with `_skeletons/` taken out of the picture: a `removed`
+   * entry for a manifest on a path this repo really does lock, which the
+   * instance simply never had. `plan.changes` lists it; nothing is written or
+   * deleted, so nothing is invalidated. This is the assertion the exclusion
+   * alone cannot make.
+   */
+  it('does not refresh for a removed manifest that was already absent', async () => {
+    w(base, 'services/api/pyproject.toml', '[project]\nname = "api"\n')
+    w(theirs, 'services/api/pyproject.toml', '[project]\nname = "api"\n')
+    // ...and the instance does not have it, so the deletion is a no-op.
+
+    await upgrade()
+
+    expect(runCommand).not.toHaveBeenCalled()
+  })
+
+  it('still refreshes when a real root manifest is rewritten', async () => {
+    writeFileSync(join(base, 'package.json'), '{"name":"inst"}\n')
+    writeFileSync(join(theirs, 'package.json'), '{"name":"inst","overrides":{"sharp":"1"}}\n')
+    writeFileSync(join(instance, 'package.json'), '{"name":"inst"}\n')
+
+    await upgrade()
+
+    expect(runCommand).toHaveBeenCalledWith(['pnpm', 'install', '--lockfile-only'], instance)
+    expect(vi.mocked(log.info).mock.calls.map((c) => String(c[0]))).toContainEqual(
+      expect.stringContaining('pnpm-lock.yaml'),
+    )
+  })
+
+  /**
+   * Why the filtering reads the apply result rather than dropping `removed` by
+   * status: a `removed` entry that actually deletes a workspace member's
+   * manifest changes resolution just as much as editing one does. Filtering on
+   * status would have silently stopped refreshing here.
+   */
+  it('refreshes when a workspace member manifest is genuinely deleted', async () => {
+    writeFileSync(join(base, 'pyproject.toml'), '[project]\nname = "x"\n')
+    writeFileSync(join(instance, 'pyproject.toml'), '[project]\nname = "x"\n')
+    // absent from `theirs` — upstream removed it, and the instance had not
+    // touched it, so the upgrade deletes it for real.
+
+    await upgrade()
+
+    expect(existsSync(join(instance, 'pyproject.toml'))).toBe(false)
+    expect(runCommand).toHaveBeenCalledWith(['uv', 'lock'], instance)
   })
 })
 

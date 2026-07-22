@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { globSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -41,6 +41,41 @@ describe('lockfilesNeedingRefresh', () => {
   it('picks up a nested workspace member, which the root lockfile also locks', () => {
     expect(names(['services/_plugins/agent-runtime/pyproject.toml'])).toEqual(['uv.lock'])
     expect(names(['cli/package.json'])).toEqual(['pnpm-lock.yaml'])
+  })
+
+  /**
+   * The reopened half of #393, and the exact pair of paths that fired it on
+   * tabsii-platform 0.50.2 -> 0.53.0.
+   *
+   * `_skeletons/` is scaffolding source: those manifests describe the tree
+   * `biffo sibling create` copies into a NEW repo, and are deliberately not
+   * pnpm/uv workspace members here. Nothing in this repo's lockfiles resolves
+   * them, so changing them cannot invalidate either — but the matcher only
+   * looked at the filename, so it announced a refresh that had nothing to do.
+   *
+   * This is the distinction the previous suite could not make: the nested
+   * workspace-member case above and this one are both nested manifests, and
+   * only one of them is locked here. Both assertions must hold at once.
+   */
+  it('ignores a manifest under _skeletons/, which no lockfile here resolves', () => {
+    expect(
+      names([
+        '_skeletons/sibling-template/apps/frontend/package.json',
+        '_skeletons/sibling-template/services/api/pyproject.toml',
+        '_skeletons/plugin-template/pyproject.toml',
+      ]),
+    ).toEqual([])
+  })
+
+  it('still refreshes when a real workspace member changes alongside a skeleton', () => {
+    // The skeleton must not *suppress* a genuine trigger either — the exclusion
+    // narrows which paths count, it does not veto the run.
+    expect(
+      names([
+        '_skeletons/sibling-template/apps/frontend/package.json',
+        'services/_plugins/agent-runtime/pyproject.toml',
+      ]),
+    ).toEqual(['uv.lock'])
   })
 
   it('handles both ecosystems changing at once', () => {
@@ -154,5 +189,27 @@ describe('the real template repo', () => {
     } finally {
       rmSync(scratch, { recursive: true, force: true })
     }
+  })
+
+  /**
+   * Drift guard for the exclusion: `_skeletons/` really does hold manifests
+   * (so the test above is not vacuous), and the workspace globs really do
+   * leave them out — which is why no lockfile here resolves them. If a
+   * skeleton ever becomes a workspace member, this fails and the exclusion
+   * must be revisited rather than quietly hiding a real trigger.
+   */
+  it('excludes the skeleton manifests that exist, and they are not workspace members', () => {
+    const repoRoot = join(__dirname, '..', '..', '..')
+    const skeletonManifests = globSync('_skeletons/**/{package.json,pyproject.toml}', {
+      cwd: repoRoot,
+    })
+    expect(skeletonManifests.length, '_skeletons/ has no manifests to exclude').toBeGreaterThan(0)
+    expect(lockfilesNeedingRefresh(skeletonManifests, repoRoot)).toEqual([])
+
+    const pnpmWorkspace = readFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'utf8')
+    expect(pnpmWorkspace).not.toContain('_skeletons')
+    const rootPyproject = readFileSync(join(repoRoot, 'pyproject.toml'), 'utf8')
+    const uvMembers = /members\s*=\s*\[(.*?)\]/s.exec(rootPyproject)?.[1] ?? ''
+    expect(uvMembers).not.toContain('_skeletons')
   })
 })

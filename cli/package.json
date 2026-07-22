@@ -39,7 +39,6 @@
     "check:core-ownership": "tsx src/scripts/check-core-ownership.ts",
     "check:plugin-terraform": "tsx src/scripts/check-plugin-terraform.ts",
     "sync:core-tag": "tsx src/scripts/sync-core-tag.ts",
-    "release:core-version": "tsx src/scripts/release-core-version.ts",
     "report:publish-failure": "tsx src/scripts/report-publish-failure.ts"
   },
   "dependencies": {

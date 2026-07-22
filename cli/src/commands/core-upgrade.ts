@@ -441,6 +441,17 @@ const STATUS_COLOR: Record<string, (s: string) => string> = {
 }
 
 function printMigrationCarry(migrations: MigrationCarryPlan): void {
+  // Surfaced, not silent: a migration recognised by anything other than its
+  // filename means this instance renamed or renumbered a carried copy. That is
+  // the case filename matching alone used to get wrong, by re-issuing an
+  // already-applied migration against a live database (#366). Seeing it here is
+  // how an operator learns their instance is in that shape.
+  for (const r of migrations.recognised) {
+    console.log(
+      `  ${chalk.dim('already carried'.padEnd(15))} ${r.file} ` +
+        chalk.dim(`→ this instance calls it ${r.instanceFile} (matched by ${r.how})`),
+    )
+  }
   for (const e of migrations.entries) {
     const suffix = e.reissuedFrom
       ? chalk.dim(

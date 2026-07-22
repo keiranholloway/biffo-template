@@ -83,7 +83,7 @@ A core-upgrade branch (`biffo/core-upgrade-*`) is exempt entirely, since that is
 
 `services/api/migrations/versions/` is user-owned, so the three-way merge never rewrites a migration you have already applied. But a core feature that adds tables needs its migration to reach you, or it arrives as models and routers with no schema and 500s on deploy. So the upgrade runs a separate, strictly **additive** carry for that directory:
 
-- A migration you already have (matched by filename) is **skipped** — applied history is immutable.
+- A migration you already have is **skipped** — applied history is immutable. See _How a carried migration is recognised_ below; it is not just the filename.
 - A new core migration is **appended**: its `down_revision` is rewritten to your chain's current head, so it extends your chain rather than forking a second one.
 - If the template's revision id is already used in your repo (the classic `0003` collision), the carried migration gets a deterministic `core_<hash>` id instead. Your migration keeps its id.
 - The resulting chain is validated — every parent resolves, one base, exactly one head — **before** the PR is opened. If your chain is already broken or branched, the upgrade aborts with the reason and writes nothing.
@@ -91,6 +91,27 @@ A core-upgrade branch (`biffo/core-upgrade-*`) is exempt entirely, since that is
 All of this happens once, at CLI time, and lands as a reviewable file in the PR. Nothing is generated or re-chained at deploy time (see ADR-0003's Implementation Note for the incident that rule exists to prevent). Re-running an upgrade is idempotent.
 
 Review the carried DDL like any other migration before merging: merging runs it against your database on the next deploy.
+
+#### How a carried migration is recognised
+
+Getting this wrong is expensive in one specific direction. If the upgrade fails to recognise a migration you already have, it carries it again — and `op.create_table(...)` runs against a database that already has those tables. Since `db-init` runs `alembic upgrade head` on every deploy, that surfaces as a **failed deploy**, not a caught mistake.
+
+Recognition used to be by filename alone, which is defeated by the very thing an upgrade pushes you into doing: when a carried migration's revision id collides with one of yours it gets re-issued, and the natural tidy-up is to rename the file to match its new id. Same migration, already applied, no longer recognised.
+
+So each carried migration is stamped with its origin:
+
+```python
+# biffo:carried-from: 0003_create_orchestration_tables.py
+revision: str = "core_f85dc07e"
+```
+
+That line is the identity. **Keep it** — rename and renumber the file freely, but do not delete the marker, and do not copy it onto a migration it did not come from.
+
+Migrations carried before this existed have no marker, so they are recognised by their DDL instead (compared with the chaining metadata stripped out, since that is what a carry legitimately rewrites). That covers the renamed-but-unmodified case, which is the common one.
+
+If a file looks like a carried migration — same description — but its contents differ and it has no marker, the upgrade **stops** rather than guessing. Skipping would leave you with core models and no schema; carrying would run DDL against a live database. Neither is inferable, so it tells you both filenames and asks you to either add the marker (if it is that migration) or rename it (if it is not).
+
+Anything the upgrade recognises by something other than its filename is printed as `already carried`, so you can see when your instance is in this shape.
 
 ## 1. Check where you stand
 

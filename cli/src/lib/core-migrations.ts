@@ -78,8 +78,15 @@ export interface MigrationCarryPlan {
   entries: MigrationCarryEntry[]
   /** The instance's head before the carry (null when it has no migrations). */
   instanceHead: string | null
-  /** Instance migrations already carrying a template filename — left untouched. */
+  /** Template migrations the instance already has — left untouched. */
   skipped: string[]
+  /**
+   * Of those, the ones recognised by something other than their filename. The
+   * upgrade surfaces these: they are the cases filename matching alone used to
+   * get wrong, and seeing "recognised by body hash" is how an operator learns
+   * their instance has a renamed carry (#366).
+   */
+  recognised: RecognisedCarry[]
 }
 
 export const MIGRATIONS_VERSIONS_DIR = 'services/api/migrations/versions'
@@ -262,6 +269,78 @@ export function reissuedRevisionId(file: string): string {
   return `core_${createHash('sha256').update(file).digest('hex').slice(0, 8)}`
 }
 
+/**
+ * Provenance marker stamped into every carried migration, naming the template
+ * file it came from (issue #366).
+ *
+ * Filename, not revision id: the revision is frequently re-issued on carry
+ * (`core_<hash>`) and can be renumbered again by the instance, whereas the
+ * template filename is the stable identity of "which core migration is this".
+ */
+export const CARRIED_FROM_MARKER = '# biffo:carried-from:'
+const CARRIED_FROM_RE = /^# biffo:carried-from:[ \t]*(\S+)[ \t]*$/m
+
+/** The template migration a carried file records itself as coming from, or null
+ * for a migration the instance wrote (or one carried before #366 shipped). */
+export function parseCarriedFrom(content: string): string | null {
+  return CARRIED_FROM_RE.exec(content)?.[1] ?? null
+}
+
+/** Stamp the provenance marker above the `revision` assignment. Idempotent: a
+ * file that already carries a marker is returned unchanged, so re-running an
+ * interrupted upgrade cannot accumulate duplicates. */
+export function stampCarriedFrom(content: string, templateFile: string): string {
+  if (CARRIED_FROM_RE.test(content)) return content
+  return content.replace(REVISION_RE, (m) => `${CARRIED_FROM_MARKER} ${templateFile}\n${m}`)
+}
+
+/**
+ * Identity of a migration's *substance* — everything except the parts a carry
+ * legitimately rewrites.
+ *
+ * Stripped: the `revision` / `down_revision` assignments and their docstring
+ * echoes, the provenance marker, `Create Date` (Alembic metadata, not schema),
+ * and blank-line/trailing-whitespace noise. What remains is the DDL, which is
+ * what makes two files "the same migration".
+ */
+export function migrationBodyHash(content: string): string {
+  const normalised = content
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter(
+      (line) =>
+        !REVISION_RE.test(line) &&
+        !DOWN_REVISION_RE.test(line) &&
+        !CARRIED_FROM_RE.test(line) &&
+        // No trailing space in the patterns: lines are trimEnd()ed first, and a
+        // base migration's `Revises: ` is empty, so requiring the space would
+        // leave that one line in and give every base migration a hash of its
+        // own — a difference in chaining metadata masquerading as a difference
+        // in DDL.
+        !/^Revision ID:/.test(line) &&
+        !/^Revises:/.test(line) &&
+        !/^Create Date:/.test(line) &&
+        line !== '',
+    )
+    .join('\n')
+  return createHash('sha256').update(normalised).digest('hex')
+}
+
+/**
+ * The descriptive part of a version filename, with any leading revision-ish
+ * prefix removed: `0007_create_orchestration_tables.py` and
+ * `0003_create_orchestration_tables.py` share the slug
+ * `create_orchestration_tables`.
+ *
+ * This is the tell for the #366 trap specifically. An instance forced to
+ * renumber a carried migration renames the file to match its new revision id
+ * and leaves the description alone, so the slug survives the rename that
+ * defeats filename matching.
+ */
+export function migrationSlug(file: string): string {
+  return file.replace(/\.py$/, '').replace(/^[0-9a-f]+_/i, '')
+}
+
 export interface PlanMigrationCarryOptions {
   /** Template checkout at the target version. */
   templateDir: string
@@ -284,17 +363,27 @@ export function planMigrationCarry(options: PlanMigrationCarryOptions): Migratio
   // ambiguous head is exactly how a revision graph gets silently corrupted.
   const instanceHead = validateChain(instance, `${MIGRATIONS_VERSIONS_DIR} (instance)`)
 
-  const instanceFiles = new Set(instance.map((m) => m.file))
   const usedRevisions = new Set(instance.map((m) => m.revision))
+  const identity = indexInstanceMigrations(instance)
+  const templateBodyCounts = new Map<string, number>()
+  for (const m of template) {
+    const body = migrationBodyHash(m.content)
+    templateBodyCounts.set(body, (templateBodyCounts.get(body) ?? 0) + 1)
+  }
 
   const entries: MigrationCarryEntry[] = []
   const skipped: string[] = []
+  const recognised: RecognisedCarry[] = []
   let head = instanceHead
 
   for (const m of chainOrder(template)) {
-    if (instanceFiles.has(m.file)) {
+    const already = alreadyCarried(m, identity, templateBodyCounts)
+    if (already) {
       // Already in the instance — immutable history, never re-chained.
       skipped.push(m.file)
+      if (already.how !== 'filename') {
+        recognised.push({ file: m.file, instanceFile: already.instance.file, how: already.how })
+      }
       continue
     }
 
@@ -317,7 +406,9 @@ export function planMigrationCarry(options: PlanMigrationCarryOptions): Migratio
       file: m.file,
       revision,
       downRevision: head,
-      content: rechainMigration(m.content, revision, head),
+      // Stamped before re-chaining so the instance's copy records which template
+      // migration it is, whatever it is later renamed or renumbered to.
+      content: rechainMigration(stampCarriedFrom(m.content, m.file), revision, head),
     }
     if (reissuedFrom !== undefined) entry.reissuedFrom = reissuedFrom
     entries.push(entry)
@@ -341,7 +432,127 @@ export function planMigrationCarry(options: PlanMigrationCarryOptions): Migratio
     `${MIGRATIONS_VERSIONS_DIR} (after carry)`,
   )
 
-  return { entries, instanceHead, skipped }
+  return { entries, instanceHead, skipped, recognised }
+}
+
+/** How a template migration was recognised as already present in the instance. */
+export type CarryMatchKind = 'provenance' | 'filename' | 'body'
+
+/** A template migration recognised as already carried by something other than
+ * its filename — worth surfacing, because it is the case filename matching
+ * alone used to get wrong (#366). */
+export interface RecognisedCarry {
+  /** Template filename. */
+  file: string
+  /** What the instance calls its copy. */
+  instanceFile: string
+  how: CarryMatchKind
+}
+
+interface InstanceIndex {
+  byCarriedFrom: Map<string, MigrationFile>
+  byFile: Map<string, MigrationFile>
+  byBody: Map<string, MigrationFile[]>
+  bySlug: Map<string, MigrationFile[]>
+}
+
+function indexInstanceMigrations(instance: MigrationFile[]): InstanceIndex {
+  const index: InstanceIndex = {
+    byCarriedFrom: new Map(),
+    byFile: new Map(),
+    byBody: new Map(),
+    bySlug: new Map(),
+  }
+  for (const m of instance) {
+    index.byFile.set(m.file, m)
+    const from = parseCarriedFrom(m.content)
+    if (from !== null) index.byCarriedFrom.set(from, m)
+    const body = migrationBodyHash(m.content)
+    index.byBody.set(body, [...(index.byBody.get(body) ?? []), m])
+    const slug = migrationSlug(m.file)
+    index.bySlug.set(slug, [...(index.bySlug.get(slug) ?? []), m])
+  }
+  return index
+}
+
+/**
+ * Decide whether the instance already has this template migration.
+ *
+ * ## The bug this replaces (#366)
+ *
+ * Identity used to be the filename alone, which is defeated by exactly the
+ * thing instances are pushed into doing. A template migration arrives as
+ * `0003_create_orchestration_tables.py`; if the instance already used revision
+ * `0003`, the carry re-issues the id and the instance renames the file to match
+ * — `0007_create_orchestration_tables.py`. Same content, applied, done. But the
+ * filename no longer matches, so the *next* upgrade does not skip it: it
+ * re-issues the migration onto the current head, and `op.create_table(...)` runs
+ * against a database that already has those tables. Because `db-init` runs
+ * `command.upgrade(cfg, "head")` on every deploy, that lands as a **failed
+ * production deploy**, not a caught mistake.
+ *
+ * ## Evidence, strongest first
+ *
+ * 1. **Provenance** — the carried file names the template migration it came
+ *    from. Exact, and survives any rename or renumber. Only present on
+ *    migrations carried since #366.
+ * 2. **Filename** — the original signal, and still the common case.
+ * 3. **Body** — same DDL once the re-chainable parts are stripped. This is what
+ *    recognises migrations carried *before* provenance existed and since
+ *    renamed, which is the whole population currently in the trap.
+ *
+ * ## Where it stops rather than guesses
+ *
+ * A slug match with a differing body is the residual ambiguity: it looks like a
+ * carried migration that was renamed *and* edited, but it could equally be an
+ * unrelated instance migration that happens to describe the same thing. Guessing
+ * either way is unsafe — skip and the instance silently never gets the schema;
+ * carry and DDL runs against a live database. So it stops, names both files, and
+ * says how to resolve it. A hard stop is far better than DDL against a live
+ * database.
+ */
+function alreadyCarried(
+  m: MigrationFile,
+  index: InstanceIndex,
+  templateBodyCounts: Map<string, number>,
+): { instance: MigrationFile; how: CarryMatchKind } | null {
+  const byProvenance = index.byCarriedFrom.get(m.file)
+  if (byProvenance) return { instance: byProvenance, how: 'provenance' }
+
+  const byFile = index.byFile.get(m.file)
+  if (byFile) return { instance: byFile, how: 'filename' }
+
+  // Body identity is evidence only when the body actually DISCRIMINATES. Two
+  // migrations can share one — `pass`, or a pair of no-op placeholders — and
+  // treating that as "already carried" would silently skip a migration the
+  // instance needs, leaving it with models and no schema. So it counts only
+  // when exactly one migration on each side has this body.
+  const body = migrationBodyHash(m.content)
+  const bodyMatches = index.byBody.get(body) ?? []
+  if (bodyMatches.length === 1 && templateBodyCounts.get(body) === 1) {
+    return { instance: bodyMatches[0] as MigrationFile, how: 'body' }
+  }
+
+  const slugMatches = (index.bySlug.get(migrationSlug(m.file)) ?? []).filter(
+    // A file already claimed as a copy of some OTHER template migration is not
+    // an ambiguous match for this one.
+    (candidate) => parseCarriedFrom(candidate.content) === null,
+  )
+  if (slugMatches.length > 0) {
+    const names = slugMatches.map((c) => c.file).join(', ')
+    throw new Error(
+      `Cannot carry ${m.file}: the instance has ${names}, which describes the same migration ` +
+        `but whose contents differ, and which carries no provenance marker. Refusing to guess.\n\n` +
+        `  If it IS this migration (carried before provenance was recorded, then renamed or ` +
+        `edited), add this line above its 'revision' assignment and re-run:\n\n` +
+        `      ${CARRIED_FROM_MARKER} ${m.file}\n\n` +
+        `  If it is unrelated, rename it so the descriptions differ.\n\n` +
+        `  Carrying it blindly would re-issue an already-applied migration and run its DDL ` +
+        `against a database that already has those objects (#366).`,
+    )
+  }
+
+  return null
 }
 
 /**

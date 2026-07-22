@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,6 +9,7 @@ import {
   type DivergenceEntry,
   checkCoreOwnership,
   parseDivergenceTrailer,
+  parseNameStatus,
   readDivergenceConfig,
   resolveBranch,
 } from './core-ownership-guard.js'
@@ -313,5 +314,96 @@ describe('the real manifest', () => {
     // Otherwise recording a divergence would be blocked by the guard it
     // configures — the instance could never adopt one.
     expect(check({ changedFiles: [DIVERGENCE_FILE] }).blocked).toEqual([])
+  })
+})
+
+/**
+ * Regression for #411. The CI diff and the staged diff used different
+ * `--diff-filter`s, so a commit deleting a template-owned path passed the
+ * commit-msg hook and then failed CI — the same commit, two verdicts, and the
+ * failure only visible after push.
+ *
+ * The existing tests drive `checkCoreOwnership` with hand-built path lists, so
+ * they could never see the difference between the two `git diff` invocations.
+ * That is exactly why it shipped, so these test the parsing both modes now
+ * share.
+ */
+describe('parseNameStatus', () => {
+  it('reports modifications and additions as changed, not deleted', () => {
+    const { changed, deleted } = parseNameStatus('M\tcli/src/index.ts\nA\tcli/src/new.ts')
+    expect(changed).toEqual(['cli/src/index.ts', 'cli/src/new.ts'])
+    expect(deleted).toEqual([])
+  })
+
+  it('reports a deletion as both changed and deleted', () => {
+    const { changed, deleted } = parseNameStatus('D\tmodules/plugins/orchestrator/main.tf')
+    expect(changed).toEqual(['modules/plugins/orchestrator/main.tf'])
+    expect(deleted).toEqual(['modules/plugins/orchestrator/main.tf'])
+  })
+
+  it('classifies a rename by its destination — the path that exists afterwards', () => {
+    const { changed, deleted } = parseNameStatus('R100\tcli/src/old.ts\tcli/src/new.ts')
+    expect(changed).toEqual(['cli/src/new.ts'])
+    expect(deleted).toEqual([])
+  })
+
+  it('ignores blank and malformed lines rather than inventing a path', () => {
+    expect(parseNameStatus('\n\nM\ta.ts\n\n').changed).toEqual(['a.ts'])
+    expect(parseNameStatus('garbage').changed).toEqual([])
+  })
+
+  it('a deletion-only diff is not an empty diff', () => {
+    // The bug in miniature: filtered out, this looked like "nothing changed".
+    const { changed } = parseNameStatus('D\tservices/api/src/api/main.py')
+    expect(changed).toHaveLength(1)
+  })
+})
+
+describe('deleting a template-owned file is drift (#411)', () => {
+  it('blocks it, rather than treating deletion as a lesser change', () => {
+    // A core upgrade will not restore a deleted template-owned file (#395), so
+    // the instance loses it silently and permanently. That is worse than an
+    // edit, not better.
+    const result = check({ changedFiles: ['services/api/src/api/routers/orchestration.py'] })
+    expect(result.blocked).toEqual(['services/api/src/api/routers/orchestration.py'])
+  })
+
+  it('still lets a recorded divergence through', () => {
+    const result = check({
+      changedFiles: ['modules/plugins/orchestrator/main.tf'],
+      commitMessage:
+        'chore: drop the dead copy\n\nCore-Divergence: install-time copy, not in the template\n',
+    })
+    expect(result.skipped).toBe('divergence-trailer')
+  })
+})
+
+/**
+ * Structural guard for #411: the two modes must issue equivalent git diffs.
+ *
+ * They drifted once (`--diff-filter=ACMR` on one side only) and the behavioural
+ * tests could not see it, because they drive the decision function directly and
+ * never run git. A refactor that re-filters one side would restore the split
+ * silently, so the invariant is asserted against the source.
+ */
+describe('both guard modes ask git the same question', () => {
+  const runnerSource = readFileSync(
+    join(__dirname, '..', 'scripts', 'check-core-ownership.ts'),
+    'utf8',
+  )
+
+  it('uses --name-status on both sides and filters neither', () => {
+    const diffs = runnerSource.match(/'diff',[^)]*/g) ?? []
+    expect(diffs.length).toBe(2)
+    for (const call of diffs) {
+      expect(call).toContain("'--name-status'")
+      expect(call).not.toContain('--diff-filter')
+    }
+  })
+
+  it('negative control: the assertion sees a filter when one is present', () => {
+    const withFilter =
+      "await execa('git', ['diff', '--cached', '--name-status', '--diff-filter=ACMR'])"
+    expect((withFilter.match(/'diff',[^)]*/g) ?? [])[0]).toContain('--diff-filter')
   })
 })

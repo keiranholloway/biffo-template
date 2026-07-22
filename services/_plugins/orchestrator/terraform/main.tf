@@ -11,9 +11,12 @@
 # its Lambda role. It stays NON-VPC (ADR-0002): it touches no database and needs
 # outbound internet to reach the public Core API endpoint and SES.
 #
-# Relative module sources (../../cloud/aws/compute) resolve once this directory
-# is copied to modules/plugins/orchestrator/ in the instance — exactly as the
-# _template module documents.
+# Referenced IN PLACE by infra/environments/*/main.tf, as
+# ../../../services/_plugins/orchestrator/terraform (issue #406). It used to be
+# copied to modules/plugins/orchestrator/ like a third-party plugin, and that
+# copy was never re-synced — so a core upgrade updated this file while Terraform
+# kept applying a module frozen at install time. The relative module source
+# below is therefore written for THIS location, not for a copy of it.
 
 terraform {
   required_providers {

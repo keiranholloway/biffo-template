@@ -240,6 +240,8 @@ describe('sync-core-tag script', () => {
     expect(out).toContain('core tag audit')
   })
 
+  // Multi-run: each `run()` spawns tsx over a real git repo, so these need more
+  // than vitest's 5s default. They passed locally at ~1-4s and timed out in CI.
   it('refuses, loudly, when a second commit ships the same version', () => {
     // a2acf15 analogue.
     const first = commit('#291', { 'core.version': '0.32.4\n', 'cli/x.ts': 'v4-first' })
@@ -263,8 +265,10 @@ describe('sync-core-tag script', () => {
     expect(out).toContain('core.version')
     // And the evidence: which template-owned paths actually diverged.
     expect(out).toContain('cli/x.ts')
-  })
+  }, 30_000)
 
+  // Multi-run: each `run()` spawns tsx over a real git repo, so these need more
+  // than vitest's 5s default. They passed locally at ~1-4s and timed out in CI.
   it('does not push a tag it refused to move', () => {
     // Refusing in the log while still writing the ref would be the worst of
     // both — so assert on the ref, with a real remote to push to.
@@ -285,8 +289,10 @@ describe('sync-core-tag script', () => {
     }).trim()
     expect(remoteTag).toBe(first)
     rmSync(remote, { recursive: true, force: true })
-  })
+  }, 30_000)
 
+  // Multi-run: each `run()` spawns tsx over a real git repo, so these need more
+  // than vitest's 5s default. They passed locally at ~1-4s and timed out in CI.
   it('stays red on the next push while the drift is unresolved', () => {
     // Refusal is not a one-shot complaint. Until core.version moves, every push
     // to main fails — the audit re-derives the same fact independently, so
@@ -298,8 +304,10 @@ describe('sync-core-tag script', () => {
 
     commit('unrelated docs', { 'docs/ADR/0008-x.md': 'notes' })
     expect(run().code).toBe(1)
-  })
+  }, 30_000)
 
+  // Multi-run: each `run()` spawns tsx over a real git repo, so these need more
+  // than vitest's 5s default. They passed locally at ~1-4s and timed out in CI.
   it('releases the drifted tree on a bump, but stays red until the old version is settled', () => {
     // The consequence the error message has to be honest about, pinned so it
     // cannot be softened by accident.
@@ -327,7 +335,7 @@ describe('sync-core-tag script', () => {
     // the later tree and repoints the tag by hand, knowing what npm holds.
     g('tag', '-f', '-a', 'core-v0.32.4', '-m', 'settled by hand', drifted)
     expect(run().code).toBe(0)
-  })
+  }, 30_000)
 
   it('leaves the tag alone when only user-owned paths changed', () => {
     const first = commit('bump', { 'core.version': '0.32.4\n', 'cli/x.ts': 'v4' })

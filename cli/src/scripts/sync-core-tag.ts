@@ -8,10 +8,13 @@
  *
  * Two phases, in order:
  *
- *   1. **Tag.** Create `core-v<version>` at HEAD, or move it forward when the
- *      template-owned tree has changed underneath an existing tag. A tag that
- *      already stands for this tree is left alone, so it does not chase
- *      user-owned commits. A tag pointing off-branch is a hard failure.
+ *   1. **Tag.** Create `core-v<version>` at HEAD when no such tag exists. A tag
+ *      that already stands for this tree is left alone, so it does not chase
+ *      user-owned commits. Anything else — a tag whose template tree has moved
+ *      underneath it, or one pointing off-branch — is a hard failure. This
+ *      script never repoints an existing tag: it is a published release, and
+ *      the npm artifact behind it cannot move with it (#342). See the reasoning
+ *      in `../lib/core-tags.ts`.
  *   2. **Audit.** Re-derive, for every core version on `main` at or above the
  *      audit baseline, the newest commit carrying it, and assert its tag stands
  *      for that tree. Prevention plus detection: if the tagging path regresses,
@@ -72,9 +75,9 @@ function summary(markdown: string): void {
 /**
  * Step output, so the workflow can act on what happened here.
  *
- * Specifically: whether a tag was actually created or moved. A release must
- * only be dispatched when there is a new tag to release — not on every push to
- * the default branch, and not when the tag already stood for this tree.
+ * Specifically: whether a tag was actually created. A release must only be
+ * dispatched when there is a new tag to release — not on every push to the
+ * default branch, and not when the tag already stood for this tree.
  */
 function output(key: string, value: string): void {
   const path = process.env['GITHUB_OUTPUT']
@@ -165,49 +168,92 @@ async function main(): Promise<void> {
       )
       process.exit(1)
       break
+    case 'drifted': {
+      const changed = await git(['diff', '--name-only', taggedCommit!, head, '--', ...pathspecs])
+      // The #294 collision, reached again. #294 moved the tag here; #342 is why
+      // that is now a refusal — the tag is a released version whose npm
+      // artifact cannot move with it, so repointing it only makes the two
+      // disagree. Never silent, and never automatic: this needs a person
+      // holding the answer to "what is actually inside @biffo/cli@<version>?".
+      notice(
+        'error',
+        `Refusing to move ${tag}. It points at ${taggedCommit!.slice(0, 8)}, whose template-owned tree ` +
+          `differs from HEAD (${head.slice(0, 8)}) while core.version has stayed at ${version} — two commits ` +
+          `on main are shipping one released version. ${tag} was already pushed and publish-cli.yml was ` +
+          `already dispatched against it, so npm may hold ${version} built from the other tree; moving the ` +
+          `tag cannot move the published package with it (#342).`,
+      )
+      notice(
+        'error',
+        `Fix forward: land a core.version bump on main. The tree at HEAD then gets a version, a tag and a ` +
+          `release of its own, and no published artifact is contradicted.`,
+      )
+      // Say this here rather than let someone discover it: bumping releases the
+      // new tree but does NOT clear the audit, because the tree at this version
+      // on main is still not the tree the tag names. That question has no
+      // mechanical answer — it depends on what npm actually shipped — so main
+      // stays red until a person answers it. Which is the point.
+      notice(
+        'error',
+        `Bumping does not on its own clear this: the audit below independently re-derives the same fact, so ` +
+          `main stays red until ${tag} and the tree at ${version} agree. Settle that deliberately — repoint or ` +
+          `delete ${tag} once you know what npm shipped as ${version}, or raise AUDIT_BASELINE_VERSION past it ` +
+          `and record why (as 0.3.14 and 0.23.6 already are).`,
+      )
+      console.log(`Template-owned paths that differ between ${tag} and HEAD:\n${changed}`)
+      summary(
+        `### ❌ Refused to move \`${tag}\`\n\n` +
+          `\`${taggedCommit!.slice(0, 8)}\` (tagged) vs \`${head.slice(0, 8)}\` (HEAD) — the template-owned ` +
+          `tree changed while \`core.version\` stayed at \`${version}\`, so two commits on \`main\` ship one ` +
+          `released version.\n\n` +
+          `A \`core-v*\` tag is a release: it was pushed and \`publish-cli.yml\` was dispatched against it. ` +
+          `npm versions are immutable, so moving the tag would leave \`core-v${version}\` and ` +
+          `\`@biffo/cli@${version}\` describing different trees — the failure recorded in #342. #294's ` +
+          `original answer (move the tag forward) is superseded.\n\n` +
+          `**Template-owned paths that differ**\n\n` +
+          '```\n' +
+          changed +
+          '\n```\n\n' +
+          `**How to resolve**\n\n` +
+          `1. Establish what was actually released: \`npm view @biffo/cli@${version} gitHead dist.tarball\`.\n` +
+          `2. Fix forward — land a \`core.version\` bump on \`main\`, so the tree at HEAD gets its own ` +
+          `version, tag and release. Nothing is lost while this is unresolved; it is simply unreleased.\n` +
+          `3. Then settle \`${version}\` itself. The bump does **not** clear this on its own — the audit ` +
+          `below re-derives the same fact independently, so \`main\` stays red until \`${tag}\` and the tree ` +
+          `at \`${version}\` agree. There is no mechanical answer (it depends on what npm shipped), which is ` +
+          `why a person has to give one: repoint or delete \`${tag}\` knowing what it costs, or raise ` +
+          `\`AUDIT_BASELINE_VERSION\` past \`${version}\` and record why — as 0.3.14 and 0.23.6 already are.\n\n` +
+          `**How you might have got here** (branch protection is meant to prevent it): \`core.version\` ` +
+          `moved backwards onto an already-released number — the Core Version Guard checks only that it ` +
+          `*changed*, not that it increased; a \`core-v*\` tag was deleted or created by hand, as tags are ` +
+          `unprotected; or "require branches to be up to date before merging" was turned off on \`main\`.\n`,
+      )
+      process.exit(1)
+      break
+    }
     case 'keep':
       console.log(
         `✓ ${tag} already stands for this template tree (${taggedCommit?.slice(0, 8)}) — nothing to do.`,
       )
       break
-    case 'create':
-    case 'move': {
-      if (action === 'move') {
-        const changed = await git(['diff', '--name-only', taggedCommit!, head, '--', ...pathspecs])
-        // Loud on purpose: a moving tag is surprising, and anything that pinned
-        // the old SHA sees it shift. This is the #294 collision — two commits
-        // shipped the same core.version, and the tag must stand for the later
-        // template tree or the later commit reaches no instance, ever.
-        notice(
-          'warning',
-          `Moving ${tag} from ${taggedCommit!.slice(0, 8)} to ${head.slice(0, 8)}: the template-owned tree ` +
-            `changed while core.version stayed at ${version} (issue #294). Anything pinned to the old SHA ` +
-            `will see this tag move; the old commit itself is untouched and still on main.`,
-        )
-        console.log(`Template-owned paths that changed under ${tag}:\n${changed}`)
-        summary(
-          `### ⚠️ Moved \`${tag}\`\n\n\`${taggedCommit!.slice(0, 8)}\` → \`${head.slice(0, 8)}\`\n\n` +
-            `The template-owned tree changed while \`core.version\` stayed at \`${version}\` — two ` +
-            `commits shipped the same version (#294). The tag now stands for the later tree.\n\n` +
-            '```\n' +
-            changed +
-            '\n```\n',
-        )
-      }
+    case 'create': {
       await git(['config', 'user.name', 'github-actions[bot]'])
       await git(['config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'])
-      await git(['tag', '-f', '-a', tag, '-m', `Biffo core ${version}`, head])
+      // No -f: `create` means the tag does not exist, and every path that would
+      // overwrite one has already refused above. A plain `git tag` fails rather
+      // than clobbering if that ever stops being true.
+      await git(['tag', '-a', tag, '-m', `Biffo core ${version}`, head])
       if (push) {
-        await git(['push', '--force', 'origin', `refs/tags/${tag}`])
-        console.log(
-          `${action === 'move' ? 'Moved' : 'Created'} and pushed ${tag} at ${head.slice(0, 8)}.`,
-        )
+        // No --force either: this ref is new, and a push that would need force
+        // is a push this script has already decided must not happen.
+        await git(['push', 'origin', `refs/tags/${tag}`])
+        console.log(`Created and pushed ${tag} at ${head.slice(0, 8)}.`)
         // Consumed by core-tag.yml to dispatch the release. Only set when a tag
         // was really pushed, so `keep` and dry runs release nothing.
         output('tag', tag)
         output('action', action)
       } else {
-        console.log(`[dry run] would ${action} ${tag} to ${head.slice(0, 8)} (no --push).`)
+        console.log(`[dry run] would ${action} ${tag} at ${head.slice(0, 8)} (no --push).`)
       }
       break
     }

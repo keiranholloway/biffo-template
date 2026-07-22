@@ -94,6 +94,12 @@ jobs:
               ;;
           esac
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          # The commit actually checked out — not $GITHUB_SHA, which is the SHA
+          # of the event's ref and diverges from what was built whenever the
+          # `tag` input names something other than the dispatch ref. The failure
+          # report compares this against the registry's gitHead, so it has to be
+          # the tree in hand.
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "Publishing biffo@$version from $tag"
 
       - uses: pnpm/action-setup@v4
@@ -196,13 +202,70 @@ jobs:
             exit 1
           fi
 
+      # Publish, and make the failure legible.
+      #
+      # This step used to be a bare `npm publish`. It failed the job on the #342
+      # release race — correctly, as exit codes go — with npm's 403 "cannot
+      # publish over the previously published versions" as the only record, in a
+      # log nobody had reason to open. main carried one tree, npm carried
+      # another as 0.41.9, and nothing said so.
+      #
+      # Exit status was never the gap. The gap is that "npm is down" and "this
+      # version was already released from a different tree" arrive looking the
+      # same, and only one of them is fixed by pressing re-run. So npm's output
+      # is captured and handed to report-publish-failure.ts, which classifies it
+      # and writes ::error:: annotations plus a step summary saying what happened
+      # and what to do. The judgement is unit-tested in cli/src/lib/npm-publish.ts
+      # rather than living in this YAML.
       - name: Publish
         if: steps.guard.outputs.is_template == 'true' && !inputs.dry_run
         working-directory: cli
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
-        run: npm publish --provenance --access public
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          COMMIT: ${{ steps.version.outputs.commit }}
+        run: |
+          set -u
+          log="$(mktemp)"
+
+          # Deliberately NOT `set -o pipefail` here, and deliberately not `set
+          # -e`: the default shell is `bash -e`, so either would abort on the
+          # very failure this step exists to explain. PIPESTATUS[0] is npm's own
+          # status through the tee — see AGENTS.md §4 on exit status through a
+          # pipe, which is how a teardown once reported success while destroying
+          # nothing.
+          set +e
+          npm publish --provenance --access public 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+
+          package="$(node -p "require('./package.json').name")"
+
+          if [ "$status" -eq 0 ]; then
+            echo "::notice::Published ${package}@${VERSION} from ${TAG}."
+            {
+              echo "### ✅ Published \`${package}@${VERSION}\`"
+              echo
+              echo "From \`${TAG}\` (\`${COMMIT}\`), with provenance."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Ask the registry what it actually holds for this version. npm records
+          # gitHead on publish, so this is what turns "someone must decide which
+          # of the tag and the registry is right" into a one-line verdict. Best
+          # effort: an outage here must not replace the real failure with its own.
+          registry_git_head="$(npm view "${package}@${VERSION}" gitHead 2>/dev/null || true)"
+
+          PUBLISH_PACKAGE="$package" \
+          PUBLISH_VERSION="$VERSION" \
+          PUBLISH_TAG="$TAG" \
+          PUBLISH_COMMIT="$COMMIT" \
+          PUBLISH_LOG="$log" \
+          PUBLISH_REGISTRY_GIT_HEAD="$registry_git_head" \
+            pnpm --filter @biffo/cli report:publish-failure
 
       - name: Dry run summary
         if: steps.guard.outputs.is_template == 'true' && inputs.dry_run

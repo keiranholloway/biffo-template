@@ -71,11 +71,10 @@ describe('decideTagAction', () => {
     expect(decideTagAction(state)).toBe('keep')
   })
 
-  it('moves a tag when the template tree changed underneath it', () => {
-    // The #294 collision: a second commit shipped the same core.version with
-    // different template content. Without the move, that content is on main
-    // but reachable at no version, so no instance can ever receive it.
-    expect(decideTagAction({ ...state, templateTreeDiffers: true })).toBe('move')
+  it('refuses when the template tree changed underneath the tag', () => {
+    // The #294 collision. #294 moved the tag forward here; #342 is why that is
+    // now a refusal — the tag is a published release and npm cannot follow it.
+    expect(decideTagAction({ ...state, templateTreeDiffers: true })).toBe('drifted')
   })
 
   it('refuses to move a tag that is not an ancestor of HEAD', () => {
@@ -84,6 +83,25 @@ describe('decideTagAction', () => {
     expect(
       decideTagAction({ ...state, taggedCommitIsAncestorOfHead: false, templateTreeDiffers: true }),
     ).toBe('conflict')
+  })
+
+  it('never moves an existing tag, for any input', () => {
+    // The load-bearing assertion, stated over the whole input space rather than
+    // case by case: a `core-v*` tag that exists has been pushed and dispatched
+    // to publish-cli.yml, so it names a released npm version. Repointing it
+    // cannot repoint the artifact — it only makes the two disagree (#342).
+    // Anything that reintroduces a move must fail here, not just in the case
+    // whoever added it happened to think of.
+    for (const taggedCommitIsAncestorOfHead of [true, false]) {
+      for (const templateTreeDiffers of [true, false]) {
+        const action = decideTagAction({
+          tagExists: true,
+          taggedCommitIsAncestorOfHead,
+          templateTreeDiffers,
+        })
+        expect(['keep', 'drifted', 'conflict']).toContain(action)
+      }
+    }
   })
 })
 
@@ -174,15 +192,18 @@ describe('sync-core-tag script', () => {
 
   const g = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' })
 
-  /** Run the script against the temp repo; never pushes (no remote, no --push). */
-  const run = (): { code: number; out: string } => {
+  /** Run the script against the temp repo. Without args it never pushes (no --push). */
+  const run = (...args: string[]): { code: number; out: string } => {
     try {
-      return { code: 0, out: execFileSync(tsx, [script], { cwd: repo, encoding: 'utf8' }) }
+      return { code: 0, out: execFileSync(tsx, [script, ...args], { cwd: repo, encoding: 'utf8' }) }
     } catch (err) {
       const e = err as { status: number; stdout: string; stderr: string }
       return { code: e.status, out: `${e.stdout}${e.stderr}` }
     }
   }
+
+  /** The real CI invocation, against a throwaway bare remote. */
+  const runPush = () => run('--push')
 
   const commit = (message: string, files: Record<string, string>) => {
     for (const [path, content] of Object.entries(files)) {
@@ -219,7 +240,9 @@ describe('sync-core-tag script', () => {
     expect(out).toContain('core tag audit')
   })
 
-  it('moves the tag when a second commit ships the same version', () => {
+  // Multi-run: each `run()` spawns tsx over a real git repo, so these need more
+  // than vitest's 5s default. They passed locally at ~1-4s and timed out in CI.
+  it('refuses, loudly, when a second commit ships the same version', () => {
     // a2acf15 analogue.
     const first = commit('#291', { 'core.version': '0.32.4\n', 'cli/x.ts': 'v4-first' })
     run()
@@ -228,16 +251,91 @@ describe('sync-core-tag script', () => {
     // be4c573 analogue: rebased, kept 0.32.4, different template content. This
     // push does not touch core.version at all — which is why the workflow can
     // no longer be path-filtered on it.
-    const second = commit('#292', { 'cli/x.ts': 'v4-second' })
+    commit('#292', { 'cli/x.ts': 'v4-second' })
     const { code, out } = run()
 
-    expect(code).toBe(0)
-    expect(tagged('core-v0.32.4')).toBe(second)
-    // Loud, not silent: a moving tag is surprising and must be visible in the run.
-    expect(out).toContain('::warning::')
-    expect(out).toContain('Moving core-v0.32.4')
+    expect(code).toBe(1)
+    // The tag is a released version: core-tag.yml pushed it and dispatched
+    // publish-cli.yml against it, so npm holds 0.32.4 built from `first`.
+    // Moving the tag cannot move the package, so it stays where it is (#342).
+    expect(tagged('core-v0.32.4')).toBe(first)
+    expect(out).toContain('::error::')
+    expect(out).toContain('Refusing to move core-v0.32.4')
+    // Names the remedy, not just the problem.
+    expect(out).toContain('core.version')
+    // And the evidence: which template-owned paths actually diverged.
     expect(out).toContain('cli/x.ts')
-  })
+  }, 30_000)
+
+  // Multi-run: each `run()` spawns tsx over a real git repo, so these need more
+  // than vitest's 5s default. They passed locally at ~1-4s and timed out in CI.
+  it('does not push a tag it refused to move', () => {
+    // Refusing in the log while still writing the ref would be the worst of
+    // both — so assert on the ref, with a real remote to push to.
+    const remote = mkdtempSync(join(tmpdir(), 'biffo-core-tag-remote-'))
+    execFileSync('git', ['init', '-q', '--bare', remote])
+    g('remote', 'add', 'origin', remote)
+
+    const first = commit('#291', { 'core.version': '0.32.4\n', 'cli/x.ts': 'v4-first' })
+    g('push', '-q', 'origin', 'main')
+    runPush()
+    expect(tagged('core-v0.32.4')).toBe(first)
+
+    commit('#292', { 'cli/x.ts': 'v4-second' })
+    expect(runPush().code).toBe(1)
+
+    const remoteTag = execFileSync('git', ['-C', remote, 'rev-list', '-n', '1', 'core-v0.32.4'], {
+      encoding: 'utf8',
+    }).trim()
+    expect(remoteTag).toBe(first)
+    rmSync(remote, { recursive: true, force: true })
+  }, 30_000)
+
+  // Multi-run: each `run()` spawns tsx over a real git repo, so these need more
+  // than vitest's 5s default. They passed locally at ~1-4s and timed out in CI.
+  it('stays red on the next push while the drift is unresolved', () => {
+    // Refusal is not a one-shot complaint. Until core.version moves, every push
+    // to main fails — the audit re-derives the same fact independently, so
+    // there is no state in which main is green and the tag is a lie.
+    commit('#291', { 'core.version': '0.32.4\n', 'cli/x.ts': 'v4-first' })
+    run()
+    commit('#292', { 'cli/x.ts': 'v4-second' })
+    expect(run().code).toBe(1)
+
+    commit('unrelated docs', { 'docs/ADR/0008-x.md': 'notes' })
+    expect(run().code).toBe(1)
+  }, 30_000)
+
+  // Multi-run: each `run()` spawns tsx over a real git repo, so these need more
+  // than vitest's 5s default. They passed locally at ~1-4s and timed out in CI.
+  it('releases the drifted tree on a bump, but stays red until the old version is settled', () => {
+    // The consequence the error message has to be honest about, pinned so it
+    // cannot be softened by accident.
+    //
+    // Bumping does what it promises — the drifted tree gets a version, a tag
+    // and a release of its own — but it does not make main green, because the
+    // tree at 0.32.4 on main still is not the tree core-v0.32.4 names. The
+    // audit re-derives that independently of the tagging phase, so there is no
+    // state in which main is green while a released tag is a lie.
+    const first = commit('#291', { 'core.version': '0.32.4\n', 'cli/x.ts': 'v4-first' })
+    run()
+    const drifted = commit('#292', { 'cli/x.ts': 'v4-second' })
+    expect(run().code).toBe(1)
+
+    const bumped = commit('bump', { 'core.version': '0.32.5\n' })
+    const afterBump = run()
+    expect(tagged('core-v0.32.5')).toBe(bumped)
+    expect(afterBump.code).toBe(1)
+    expect(afterBump.out).toContain('core-v0.32.4')
+    // 0.32.4's tag never moved: it still stands for whatever npm published.
+    expect(tagged('core-v0.32.4')).toBe(first)
+
+    // Settling it is a deliberate human act, and the escape hatch the message
+    // prescribes has to actually work. Here: the operator decides 0.32.4 means
+    // the later tree and repoints the tag by hand, knowing what npm holds.
+    g('tag', '-f', '-a', 'core-v0.32.4', '-m', 'settled by hand', drifted)
+    expect(run().code).toBe(0)
+  }, 30_000)
 
   it('leaves the tag alone when only user-owned paths changed', () => {
     const first = commit('bump', { 'core.version': '0.32.4\n', 'cli/x.ts': 'v4' })

@@ -34,18 +34,61 @@ import { compareCoreVersions } from './core-version.js'
  * this PR bump the version relative to its base?", which the second PR did. The
  * base moved afterwards. The guard is right about the diff it was handed.
  *
+ * ## Why the tag is never moved (and used to be)
+ *
+ * #294's answer was to move the tag forward onto the later commit: if two
+ * commits ship the same version, the tag must stand for the *later* template
+ * tree or the later commit reaches no instance at all. Given the choice between
+ * a surprising tag and silently lost changes, that was right at the time.
+ *
+ * It is the wrong answer now, for two reasons.
+ *
+ * 1. **The collision is prevented at the gate.** `main` now requires a branch to
+ *    be up to date before it can merge (`required_status_checks.strict`, #342).
+ *    The second of two concurrent PRs cannot merge without first rebasing onto
+ *    the first, which re-runs the Core Version Guard against the new base —
+ *    where `core.version` is no longer changed relative to that base, so the
+ *    guard fails until the PR picks a different number.
+ * 2. **The tag is a release, and releases are immutable.** `core-tag.yml`
+ *    dispatches `publish-cli.yml` against every tag it pushes, so by the time a
+ *    later push finds an existing `core-v<V>`, V has already been offered to
+ *    npm — and an npm version, once published, cannot be republished. Moving the
+ *    tag cannot move the artifact with it; it can only make the two disagree.
+ *    That is exactly what #342 recorded: npm held #339's tree as 0.41.9 while
+ *    `core-v0.41.9` was moved onto #340's.
+ *
+ * So reaching that state today means something happened that this repo's rules
+ * say cannot. Known routes, none of them ordinary:
+ *
+ *   - `core.version` moved *backwards* onto an already-released number. The
+ *     Core Version Guard asserts only that `core.version` *changed* relative to
+ *     the PR's base, never that it increased, so a revert or a hand-edit can
+ *     re-use a released number and still pass every required check.
+ *   - `core-v*` tags are not protected — one can be deleted, or created by hand
+ *     at the wrong commit.
+ *   - Branch protection is a repository setting, not code. Turn `strict` off and
+ *     the original race is back.
+ *
+ * Every one of those is a release-integrity question a person has to answer with
+ * the registry in front of them ("what is actually inside `@biffo/cli@V`?"), not
+ * something a CI job should decide by force-pushing a tag. So `decideTagAction`
+ * refuses, loudly, and says what to do instead.
+ *
  * ## The two mechanisms here
  *
  * 1. `decideTagAction` — the tag workflow runs on *every* push to `main` (no
- *    path filter, since the failure case is precisely a push that does not
- *    touch `core.version`) and moves the tag forward when, and only when, the
- *    template-owned tree has changed underneath a tag that stayed put. So the
- *    tag tracks the tree, which is what the property is about.
+ *    path filter, since the failure case is precisely a push that does not touch
+ *    `core.version`). It creates a tag that does not exist, keeps one that
+ *    already stands for this tree, and refuses everything else.
  * 2. `auditCoreTags` — an assertion, run after tagging, that the property holds
  *    across `main`'s recent history and not merely for the commit just pushed.
  *    Detection as well as prevention: if a future change to the tagging path
  *    regresses, this reddens `main` immediately instead of the drift being
  *    found days later by hand.
+ *
+ * The two now agree by construction. Under the old behaviour they could not: a
+ * move repaired the very drift the audit exists to report, so the audit could
+ * never see the case it was written for.
  */
 
 /**
@@ -90,8 +133,12 @@ export type TagAction =
   | 'create'
   /** Tag exists and already stands for this template tree. Leave it alone. */
   | 'keep'
-  /** Tag exists but the template tree moved underneath it — move it to HEAD. */
-  | 'move'
+  /**
+   * Tag exists on this branch, but the template tree moved underneath it while
+   * `core.version` stayed put — two commits shipping one released version.
+   * Refuse: the tag has already been released (see the header). Fix by bumping.
+   */
+  | 'drifted'
   /** Tag exists off `main` (or on a commit HEAD does not descend from). Refuse. */
   | 'conflict'
 
@@ -110,17 +157,29 @@ export interface TagState {
 /**
  * Decide what to do with `core-v<version>` given where it currently points.
  *
+ * Exactly one outcome writes a tag that did not exist (`create`); one leaves a
+ * correct tag alone (`keep`); the other two refuse. **No input produces a move.**
+ * An existing `core-v*` tag is a published release — `core-tag.yml` pushed it
+ * and dispatched `publish-cli.yml` against it — so repointing it can only make
+ * the tag and the npm artifact describe different trees (#342).
+ *
  * `keep` on an unchanged template tree is what stops the tag chasing every
- * user-owned commit on `main`; `move` on a changed one is what closes the
- * collision hole. `conflict` is deliberate: a tag pointing somewhere HEAD does
- * not descend from means either history was rewritten or the tag was created
- * by hand off-branch, and quietly force-pushing over it would destroy the only
- * record of which tree a released version meant.
+ * user-owned commit on `main` — most commits that land while the version sits
+ * still are user-owned, and the property is about the tree, not the commit.
+ *
+ * The two refusals differ in diagnosis, which is why they are separate:
+ *
+ *   - `drifted` — the tag is on this branch but its template tree is not HEAD's.
+ *     Two commits carry one version. Remedy: bump `core.version`, so the new
+ *     tree gets a version and a release of its own.
+ *   - `conflict` — the tag is not an ancestor of HEAD at all: history was
+ *     rewritten, or the tag was made by hand off-branch. Nothing here can infer
+ *     what was intended.
  */
 export function decideTagAction(state: TagState): TagAction {
   if (!state.tagExists) return 'create'
   if (!state.taggedCommitIsAncestorOfHead) return 'conflict'
-  return state.templateTreeDiffers ? 'move' : 'keep'
+  return state.templateTreeDiffers ? 'drifted' : 'keep'
 }
 
 /** One version's worth of evidence for the audit. */

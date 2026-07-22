@@ -101,13 +101,28 @@ for every instance. Two guardrails keep version and history in lockstep:
   its base at open time, so two PRs opened against the same base can both bump
   to the same number, and the second one's template changes then land on `main`
   under a tag that already exists (issue #294; a2acf15/be4c573 at 0.32.4). The
-  workflow therefore runs on **every** push to `main` (a colliding push does not
-  touch `core.version`, so a path filter cannot see it) and moves the tag
-  forward when — and only when — the template-owned tree changed underneath it,
-  leaving it alone for user-owned commits. It then **audits** every version from
-  `AUDIT_BASELINE_VERSION` up, so a regression in the tagging path reddens
-  `main` instead of silently dropping merged changes out of the version lineage.
-  Implemented by `cli/src/lib/core-tags.ts` and
+  workflow therefore runs on **every** push to `main` — a colliding push does not
+  touch `core.version`, so a path filter cannot see it — leaving a tag alone when
+  it already stands for this template tree (most commits while the version sits
+  still are user-owned) and creating one when it does not exist.
+
+  It **never repoints an existing tag.** #294's answer was to move the tag onto
+  the later commit; #342 showed why that is wrong. A `core-v*` tag is a release —
+  `core-tag.yml` dispatches `publish-cli.yml` against every tag it pushes — and
+  an npm version is immutable, so moving the tag cannot move the artifact with
+  it. In #342 npm held one tree as 0.41.9 while `core-v0.41.9` was moved onto
+  another. The collision itself is now prevented upstream, by requiring branches
+  to be up to date before merging (`required_status_checks.strict`), so a tag
+  found drifted today means something out of the ordinary happened and the run
+  fails loudly rather than guessing. The remedy is a `core.version` bump: the
+  drifted tree gets a version, a tag and a release of its own, and no published
+  artifact is contradicted.
+
+  It then **audits** every version from `AUDIT_BASELINE_VERSION` up, so a
+  regression in the tagging path reddens `main` instead of silently dropping
+  merged changes out of the version lineage. Refusing keeps the two mechanisms
+  consistent: under the old behaviour a move repaired the very drift the audit
+  exists to report. Implemented by `cli/src/lib/core-tags.ts` and
   `cli/src/scripts/sync-core-tag.ts`.
 
 ### 2. Core-owned path manifest

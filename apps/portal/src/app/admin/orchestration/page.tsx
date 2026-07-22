@@ -7,6 +7,7 @@ import {
   createWorkflow,
   deleteWorkflow,
   fetchCatalog,
+  fetchRuns,
   fetchWorkflows,
   setWorkflowEnabled,
   updateWorkflow,
@@ -16,6 +17,7 @@ import {
   type WorkflowDefinition,
   type CatalogTrigger,
   type WorkflowInput,
+  type WorkflowRun,
 } from '@/lib/orchestration-api'
 import {
   filterTriggers,
@@ -30,6 +32,46 @@ function errorMessage(err: unknown): string {
 }
 
 const inputClass = 'mt-1 rounded border px-2 py-1 text-sm'
+
+/** One row of the "only when" editor. Kept as a list, not an object, so a row
+ *  being typed into can have an empty field name without collapsing. */
+interface FilterRow {
+  field: string
+  value: string
+}
+
+/** Rows -> the API's trigger_filter. Rows with no field name are dropped; no
+ *  usable rows at all means null (matches every event). */
+function toTriggerFilter(rows: FilterRow[]): Record<string, string> | null {
+  const entries = rows
+    .map((r) => [r.field.trim(), r.value] as const)
+    .filter(([field]) => field !== '')
+  return entries.length > 0 ? Object.fromEntries(entries) : null
+}
+
+function toFilterRows(filter: Record<string, string> | null | undefined): FilterRow[] {
+  return Object.entries(filter ?? {}).map(([field, value]) => ({ field, value }))
+}
+
+// Run status -> badge colour. Terminal failure reads red, success green, and
+// anything still in flight stays neutral.
+const runStatusClass: Record<string, string> = {
+  succeeded: 'bg-emerald-100 text-emerald-700',
+  failed: 'bg-rose-100 text-rose-700',
+  skipped: 'bg-amber-100 text-amber-700',
+}
+
+function formatWhen(iso: string | null): string {
+  if (iso == null) return '—'
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString()
+}
+
+/** The error from a run's last recorded action, if it failed. */
+function runError(run: WorkflowRun): string | null {
+  const last = run.logs.at(-1)
+  return last?.error ?? null
+}
 
 // Config-field type -> HTML <input type>. Anything else falls back to text.
 function inputType(fieldType: string): string {
@@ -77,6 +119,7 @@ export default function OrchestrationPage() {
   const client = useMemo(() => createApiClient(getIdToken), [getIdToken])
 
   const [workflows, setWorkflows] = useState<WorkflowDefinition[] | null>(null)
+  const [runs, setRuns] = useState<WorkflowRun[] | null>(null)
   const [catalog, setCatalog] = useState<WorkflowCatalog | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -87,6 +130,7 @@ export default function OrchestrationPage() {
   const [triggerQuery, setTriggerQuery] = useState('')
   const [actionType, setActionType] = useState('')
   const [config, setConfig] = useState<Record<string, string>>({})
+  const [filterRows, setFilterRows] = useState<FilterRow[]>([])
   const [enabled, setEnabled] = useState(true)
   const [busy, setBusy] = useState(false)
 
@@ -98,6 +142,7 @@ export default function OrchestrationPage() {
     setTriggerQuery('')
     setActionType(cat?.actions[0]?.type ?? '')
     setConfig(defaultConfig(cat?.actions[0]))
+    setFilterRows([])
     setEnabled(true)
   }, [])
 
@@ -114,7 +159,9 @@ export default function OrchestrationPage() {
 
   const reload = useCallback(async () => {
     try {
-      setWorkflows(await fetchWorkflows(client))
+      const [definitions, history] = await Promise.all([fetchWorkflows(client), fetchRuns(client)])
+      setWorkflows(definitions)
+      setRuns(history)
       setError(null)
     } catch (err: unknown) {
       setError(errorMessage(err))
@@ -162,6 +209,7 @@ export default function OrchestrationPage() {
     setTriggerQuery('')
     setActionType(w.action_type)
     setConfig({ ...w.action_config })
+    setFilterRows(toFilterRows(w.trigger_filter))
     setEnabled(w.enabled)
   }
 
@@ -180,6 +228,7 @@ export default function OrchestrationPage() {
       name: name.trim(),
       trigger_source: trigger_source ?? '',
       trigger_detail_type: trigger_detail_type ?? '',
+      trigger_filter: toTriggerFilter(filterRows),
       action_type: actionType,
       action_config: applicable,
       enabled,
@@ -333,6 +382,63 @@ export default function OrchestrationPage() {
             </label>
           </div>
 
+          <fieldset className="mt-4 rounded-lg border border-gray-200 p-3">
+            <legend className="px-1 text-xs font-semibold text-gray-700">
+              Only when… (optional)
+            </legend>
+            <p className="text-xs text-gray-500">
+              Narrow a broad trigger. Every condition must match the event exactly — leave empty to
+              run on every one.
+            </p>
+            <div className="mt-2 space-y-2">
+              {filterRows.map((row, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input
+                    aria-label={`Condition ${String(i + 1)} field`}
+                    value={row.field}
+                    onChange={(e) => {
+                      setFilterRows((rows) =>
+                        rows.map((r, j) => (j === i ? { ...r, field: e.target.value } : r)),
+                      )
+                    }}
+                    placeholder="status"
+                    className="rounded border px-2 py-1 text-sm"
+                  />
+                  <span className="text-xs text-gray-400">is</span>
+                  <input
+                    aria-label={`Condition ${String(i + 1)} value`}
+                    value={row.value}
+                    onChange={(e) => {
+                      setFilterRows((rows) =>
+                        rows.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)),
+                      )
+                    }}
+                    placeholder="won"
+                    className="rounded border px-2 py-1 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilterRows((rows) => rows.filter((_, j) => j !== i))
+                    }}
+                    className="rounded border px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setFilterRows((rows) => [...rows, { field: '', value: '' }])
+              }}
+              className="mt-2 rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+            >
+              Add condition
+            </button>
+          </fieldset>
+
           {selectedAction != null && (
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               {selectedAction.config_fields
@@ -440,7 +546,19 @@ export default function OrchestrationPage() {
               {workflows.map((w) => (
                 <tr key={w.id}>
                   <td className="px-4 py-2 text-gray-800">{w.name}</td>
-                  <td className="px-4 py-2 text-gray-600">{triggerLabel(w)}</td>
+                  <td className="px-4 py-2 text-gray-600">
+                    {triggerLabel(w)}
+                    {Object.keys(w.trigger_filter ?? {}).length > 0 && (
+                      <span
+                        className="ml-1.5 rounded bg-indigo-50 px-1.5 py-0.5 text-xs text-indigo-700"
+                        title={Object.entries(w.trigger_filter ?? {})
+                          .map(([f, v]) => `${f} is ${v}`)
+                          .join(', ')}
+                      >
+                        filtered
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-2 text-gray-600">{w.action_type}</td>
                   <td className="px-4 py-2">
                     {w.enabled ? (
@@ -484,6 +602,59 @@ export default function OrchestrationPage() {
                       </button>
                     </div>
                   </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <h2 className="mt-10 text-lg font-semibold text-gray-900">Recent runs</h2>
+      <p className="mt-1 text-sm text-gray-600">
+        Every time an event matched a workflow — what fired, when, and whether the action succeeded.
+      </p>
+
+      {runs != null && runs.length === 0 && (
+        <div className="mt-4 rounded-xl border border-dashed border-gray-300 bg-white p-8 text-center">
+          <p className="text-sm font-medium text-gray-600">Nothing has run yet</p>
+          <p className="mt-1 text-xs text-gray-400">
+            Runs appear here the next time a matching event fires.
+          </p>
+        </div>
+      )}
+
+      {runs != null && runs.length > 0 && (
+        <div className="mt-4 overflow-x-auto rounded-xl border bg-white shadow-sm">
+          <table className="min-w-full divide-y divide-gray-200 text-sm">
+            <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+              <tr>
+                <th className="px-4 py-2">When</th>
+                <th className="px-4 py-2">Workflow</th>
+                <th className="px-4 py-2">Action</th>
+                <th className="px-4 py-2">Outcome</th>
+                <th className="px-4 py-2">Detail</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {runs.map((r) => (
+                <tr key={r.id}>
+                  <td className="whitespace-nowrap px-4 py-2 text-gray-600">
+                    {formatWhen(r.created_at)}
+                  </td>
+                  <td className="px-4 py-2 text-gray-800">
+                    {r.definition_name ?? <span className="text-gray-400">(deleted)</span>}
+                  </td>
+                  <td className="px-4 py-2 text-gray-600">{r.logs.at(-1)?.action_type ?? '—'}</td>
+                  <td className="px-4 py-2">
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-xs ${
+                        runStatusClass[r.status] ?? 'bg-gray-100 text-gray-600'
+                      }`}
+                    >
+                      {r.status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 text-xs text-rose-700">{runError(r)}</td>
                 </tr>
               ))}
             </tbody>

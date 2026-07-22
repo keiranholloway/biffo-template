@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import OrchestrationPage from './page'
 import type * as OrchestrationApiModule from '@/lib/orchestration-api'
-import type { WorkflowCatalog, WorkflowDefinition } from '@/lib/orchestration-api'
+import type { WorkflowCatalog, WorkflowDefinition, WorkflowRun } from '@/lib/orchestration-api'
 
 vi.mock('@/context/auth-context', () => ({
   useAuth: () => ({ getIdToken: () => 'fake-token' }),
@@ -14,6 +14,7 @@ vi.mock('@/lib/api-client', () => ({
 
 const {
   fetchWorkflows,
+  fetchRuns,
   fetchCatalog,
   createWorkflow,
   updateWorkflow,
@@ -21,6 +22,7 @@ const {
   deleteWorkflow,
 } = vi.hoisted(() => ({
   fetchWorkflows: vi.fn(),
+  fetchRuns: vi.fn(),
   fetchCatalog: vi.fn(),
   createWorkflow: vi.fn(),
   updateWorkflow: vi.fn(),
@@ -33,6 +35,7 @@ vi.mock('@/lib/orchestration-api', async () => {
   return {
     ...actual,
     fetchWorkflows,
+    fetchRuns,
     fetchCatalog,
     createWorkflow,
     updateWorkflow,
@@ -134,6 +137,7 @@ const notify: WorkflowDefinition = {
   name: 'Notify sales',
   trigger_source: 'biffo.core',
   trigger_detail_type: 'demo.requested',
+  trigger_filter: null,
   action_type: 'email',
   action_config: {
     from: 'keiran@tabsii.com',
@@ -144,10 +148,33 @@ const notify: WorkflowDefinition = {
   enabled: true,
 }
 
+const succeededRun: WorkflowRun = {
+  id: 'run1',
+  tenant_id: 'default',
+  created_at: '2026-07-20T09:30:00Z',
+  updated_at: '2026-07-20T09:30:00Z',
+  definition_id: 'wf1',
+  definition_name: 'Notify sales',
+  status: 'succeeded',
+  trigger_event: { company: 'Acme' },
+  logs: [
+    {
+      id: 'log1',
+      created_at: '2026-07-20T09:30:01Z',
+      run_id: 'run1',
+      action_type: 'email',
+      status: 'succeeded',
+      response: { message_id: 'ses-1' },
+      error: null,
+    },
+  ],
+}
+
 describe('OrchestrationPage', () => {
   beforeEach(() => {
     for (const fn of [
       fetchWorkflows,
+      fetchRuns,
       fetchCatalog,
       createWorkflow,
       updateWorkflow,
@@ -157,6 +184,7 @@ describe('OrchestrationPage', () => {
       fn.mockReset()
     }
     fetchCatalog.mockResolvedValue(catalog)
+    fetchRuns.mockResolvedValue([])
   })
 
   it('renders workflows with name, trigger label, action and status', async () => {
@@ -198,6 +226,7 @@ describe('OrchestrationPage', () => {
         name: 'Sales ping',
         trigger_source: 'biffo.core',
         trigger_detail_type: 'demo.requested',
+        trigger_filter: null,
         action_type: 'email',
         action_config: { from: 'a@b.com', to: 'c@d.com', subject: 'Hi', body: 'Hello there' },
         enabled: true,
@@ -385,5 +414,159 @@ describe('OrchestrationPage', () => {
     fetchWorkflows.mockRejectedValue(new Error('administrator access required'))
     render(<OrchestrationPage />)
     expect(await screen.findByText('administrator access required')).toBeInTheDocument()
+  })
+
+  // ── "Only when…" conditions (trigger_filter) ──────────────────────────────
+
+  it('sends conditions as a trigger_filter object', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    createWorkflow.mockResolvedValue(notify)
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByPlaceholderText('Notify the sales team'), {
+      target: { value: 'Won deals' },
+    })
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: 'a@b.com' } })
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: 'c@d.com' } })
+    fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'Hi' } })
+    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'Hello' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add condition' }))
+    fireEvent.change(screen.getByLabelText('Condition 1 field'), { target: { value: 'status' } })
+    fireEvent.change(screen.getByLabelText('Condition 1 value'), { target: { value: 'won' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add workflow' }))
+
+    await waitFor(() => {
+      expect(createWorkflow).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ trigger_filter: { status: 'won' } }),
+      )
+    })
+  })
+
+  it('sends null when no conditions are set', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    createWorkflow.mockResolvedValue(notify)
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByPlaceholderText('Notify the sales team'), {
+      target: { value: 'Any deal' },
+    })
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: 'a@b.com' } })
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: 'c@d.com' } })
+    fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'Hi' } })
+    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'Hello' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add workflow' }))
+
+    await waitFor(() => {
+      expect(createWorkflow).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ trigger_filter: null }),
+      )
+    })
+  })
+
+  it('ignores a condition row with no field name', async () => {
+    // A half-typed row must not become a filter on the empty-string key.
+    fetchWorkflows.mockResolvedValue([])
+    createWorkflow.mockResolvedValue(notify)
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByPlaceholderText('Notify the sales team'), {
+      target: { value: 'Half typed' },
+    })
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: 'a@b.com' } })
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: 'c@d.com' } })
+    fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'Hi' } })
+    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'Hello' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add condition' }))
+    fireEvent.change(screen.getByLabelText('Condition 1 value'), { target: { value: 'orphan' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add workflow' }))
+
+    await waitFor(() => {
+      expect(createWorkflow).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ trigger_filter: null }),
+      )
+    })
+  })
+
+  it('loads existing conditions into the form for editing', async () => {
+    fetchWorkflows.mockResolvedValue([{ ...notify, trigger_filter: { status: 'won' } }])
+
+    render(<OrchestrationPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+
+    expect(screen.getByLabelText('Condition 1 field')).toHaveValue('status')
+    expect(screen.getByLabelText('Condition 1 value')).toHaveValue('won')
+  })
+
+  it('removes a condition', async () => {
+    fetchWorkflows.mockResolvedValue([{ ...notify, trigger_filter: { status: 'won' } }])
+    updateWorkflow.mockResolvedValue(notify)
+
+    render(<OrchestrationPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => {
+      expect(updateWorkflow).toHaveBeenCalledWith(
+        expect.anything(),
+        'wf1',
+        expect.objectContaining({ trigger_filter: null }),
+      )
+    })
+  })
+
+  it('flags a filtered workflow in the list', async () => {
+    fetchWorkflows.mockResolvedValue([{ ...notify, trigger_filter: { status: 'won' } }])
+    render(<OrchestrationPage />)
+    expect(await screen.findByText('filtered')).toBeInTheDocument()
+  })
+
+  it('renders the run history with workflow name and outcome', async () => {
+    fetchWorkflows.mockResolvedValue([notify])
+    fetchRuns.mockResolvedValue([succeededRun])
+
+    render(<OrchestrationPage />)
+
+    expect(await screen.findByText('Recent runs')).toBeInTheDocument()
+    expect(screen.getByText('succeeded')).toBeInTheDocument()
+  })
+
+  it('shows the error of a failed run', async () => {
+    fetchWorkflows.mockResolvedValue([notify])
+    fetchRuns.mockResolvedValue([
+      {
+        ...succeededRun,
+        status: 'failed',
+        logs: [{ ...succeededRun.logs[0], status: 'failed', error: 'SES rejected the recipient' }],
+      },
+    ])
+
+    render(<OrchestrationPage />)
+
+    expect(await screen.findByText('SES rejected the recipient')).toBeInTheDocument()
+    expect(screen.getByText('failed')).toBeInTheDocument()
+  })
+
+  it('still lists a run whose workflow was deleted', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    fetchRuns.mockResolvedValue([{ ...succeededRun, definition_name: null }])
+
+    render(<OrchestrationPage />)
+
+    expect(await screen.findByText('(deleted)')).toBeInTheDocument()
+  })
+
+  it('shows an empty state when nothing has run', async () => {
+    fetchWorkflows.mockResolvedValue([notify])
+    fetchRuns.mockResolvedValue([])
+
+    render(<OrchestrationPage />)
+
+    expect(await screen.findByText('Nothing has run yet')).toBeInTheDocument()
   })
 })

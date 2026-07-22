@@ -15,7 +15,6 @@ out
 # node_modules/@biffo/cli/dist/ for the CLI's upward walk to find. See
 # cli/scripts/packaged-root-assets.mjs. Never committed — the repo root copies
 # are the single source of truth.
-cli/core.version
 cli/_skeletons/
 # TypeScript incremental-compile cache. Regenerated from source on every build,
 # so committing it only produces churn in unrelated diffs — it turned up in a PR

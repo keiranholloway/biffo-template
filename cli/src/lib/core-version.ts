@@ -109,13 +109,66 @@ export function findCoreVersionUpward(startDir: string): string | null {
  */
 export function getLatestCoreVersion(fromDir?: string): string {
   const start = fromDir ?? dirname(fileURLToPath(import.meta.url))
+
+  // Installed from npm: the package version IS the core version (ADR-0006 —
+  // one number, no mapping table), stamped at publish from the tag being
+  // released. Reading it needs no file beside dist/ and no git.
+  const fromPackage = versionFromPackageJson(start)
+  if (fromPackage) return fromPackage
+
+  // A template checkout: the highest core-v* tag. Walking up finds the repo
+  // root, which is a git repo; the published package never is.
+  const fromTags = latestCoreVersionFromTags(findRepoRoot(start) ?? start)
+  if (fromTags) return fromTags
+
+  // Anything older that still carries the retired file.
   const path = findCoreVersionUpward(start)
-  if (!path) {
-    throw new Error(
-      `Could not locate a ${CORE_VERSION_FILE} file above ${start}. This CLI build is missing its core version.`,
-    )
+  if (path) return readCoreVersionFile(path)
+
+  throw new Error(
+    `Could not determine the core version above ${start}: no package.json version, no core-v* ` +
+      `tag, and no ${CORE_VERSION_FILE}. This CLI build is missing its version identity.`,
+  )
+}
+
+/**
+ * The nearest ancestor `package.json` carrying a semver `version`.
+ *
+ * In the published package that is `@biffo/cli`'s own, whose version is the
+ * core version. In a template checkout the nearest one is `cli/package.json`,
+ * which is a placeholder `0.0.0` — rejected here so the checkout falls through
+ * to its tags rather than reporting a version that means nothing.
+ */
+function versionFromPackageJson(startDir: string): string | null {
+  let dir = startDir
+  for (;;) {
+    const candidate = join(dir, 'package.json')
+    if (existsSync(candidate)) {
+      try {
+        const raw = JSON.parse(readFileSync(candidate, 'utf8')) as { version?: unknown }
+        if (typeof raw.version === 'string' && SEMVER.test(raw.version) && raw.version !== '0.0.0') {
+          return raw.version
+        }
+      } catch {
+        /* unreadable or not JSON — keep walking */
+      }
+      return null
+    }
+    const parent = dirname(dir)
+    if (parent === dir || dir === parsePath(dir).root) return null
+    dir = parent
   }
-  return readCoreVersionFile(path)
+}
+
+/** Nearest ancestor directory containing `.git` — the repo root, or null. */
+function findRepoRoot(startDir: string): string | null {
+  let dir = startDir
+  for (;;) {
+    if (existsSync(join(dir, '.git'))) return dir
+    const parent = dirname(dir)
+    if (parent === dir || dir === parsePath(dir).root) return null
+    dir = parent
+  }
 }
 
 /**

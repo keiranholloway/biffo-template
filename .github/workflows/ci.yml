@@ -48,6 +48,14 @@ env:
 # silently skips.
 
 jobs:
+  # Job id and `name` are load-bearing: "Core Version Guard" is a REQUIRED
+  # status check in this repo's branch protection and in every instance's, and
+  # `biffo core upgrade` cannot update branch protection. Renaming it here would
+  # ship a workflow that reports a check name no instance requires, leaving every
+  # instance PR waiting forever on a check that never arrives. The name is now a
+  # misnomer — since #423 there is no version to bump, and the job carries two
+  # guards — but fixing it needs a coordinated protection update across the
+  # template and every instance, tracked separately.
   core-version-guard:
     name: Core Version Guard
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
@@ -63,10 +71,14 @@ jobs:
           cache: pnpm
       - id: install
         run: pnpm install --frozen-lockfile
-      # Fail if a template-owned path changed without a core.version bump (ADR-0006).
-      - run: pnpm --filter @biffo/cli check:core-bump
+      # A template-owned change cuts a release on merge, and the release job
+      # derives the bump from the squash-merge subject — which is this PR's
+      # title. Fail if that title is not a Conventional Commits subject, or a
+      # feature ships silently as a patch (ADR-0006, #423).
+      - run: pnpm --filter @biffo/cli check:release-subject
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
       # The mirror image, for instances: fail if an INSTANCE changed a
       # template-owned path (#370). Inert in the template, where that is the
       # point of every PR. Shares this job rather than adding its own — same

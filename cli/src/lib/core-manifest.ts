@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
+import { INSTANCE_CORE_FILE } from './core-version.js'
 
 /**
  * The ADR-0006 core-owned path boundary (`core-manifest.json` at the template
@@ -40,12 +41,25 @@ const HARD_EXCLUDED_DIRS: ReadonlySet<string> = new Set([
   '.terraform',
 ])
 
-/** Walk up from `startDir` for a directory that holds both a core-manifest.json
- * and a core.version — i.e. a Biffo template root. Returns it, or null. */
+/**
+ * Walk up from `startDir` for a Biffo **template** root: a directory holding a
+ * core-manifest.json but no `biffo.core.json`. Returns it, or null.
+ *
+ * The second half is what makes it a *template* root. An instance carries a
+ * core-manifest.json too (it is template-owned and distributed), so presence
+ * alone would match the instance this CLI is installed into — and `biffo core
+ * upgrade` would then resolve the instance as its own upgrade source. The
+ * marker used to be a `core.version` file beside the manifest, which instances
+ * also carry, so it never actually drew that line; `biffo.core.json` is the
+ * same instance discriminator the Core Version Guard and the tag job use.
+ */
 export function findTemplateRoot(startDir: string): string | null {
   let dir = startDir
   for (;;) {
-    if (existsSync(join(dir, CORE_MANIFEST_FILE)) && existsSync(join(dir, 'core.version'))) {
+    if (
+      existsSync(join(dir, CORE_MANIFEST_FILE)) &&
+      !existsSync(join(dir, INSTANCE_CORE_FILE))
+    ) {
       return dir
     }
     const parent = dirname(dir)
@@ -82,7 +96,7 @@ export function resolveTemplateRoot(options: ResolveTemplateRootOptions = {}): s
     const guidance =
       options.guidance ?? 'Point this command at a biffo-template checkout at the target version.'
     throw new Error(
-      `Could not locate a Biffo template root (a directory with ${CORE_MANIFEST_FILE} and core.version) above ${start}. ` +
+      `Could not locate a Biffo template root (a directory with ${CORE_MANIFEST_FILE} and no ${INSTANCE_CORE_FILE}) above ${start}. ` +
         guidance,
     )
   }

@@ -25,12 +25,11 @@
  *   node scripts/sync-packaged-assets.mjs [destDir]    copy in   (default: package root)
  *   node scripts/sync-packaged-assets.mjs --clean [destDir]   remove the copies
  */
-import { cpSync, existsSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
+import { cpSync, existsSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PACKAGED_ROOT_ASSETS } from './packaged-root-assets.mjs'
 
-const SEMVER = /^\d+\.\d+\.\d+$/
 
 /**
  * npm drops `.gitignore` from every tarball — at any depth, unconditionally, and
@@ -105,13 +104,6 @@ for (const asset of PACKAGED_ROOT_ASSETS) {
   const sentinel = join(destDir, asset.sentinel)
   if (!existsSync(sentinel)) {
     fail(`copied ${asset.path} but ${asset.sentinel} is missing — the copy is incomplete.`)
-  }
-
-  if (asset.path === 'core.version') {
-    const version = readFileSync(dest, 'utf8').trim()
-    if (!SEMVER.test(version)) {
-      fail(`${source} is not a semver: ${JSON.stringify(version)}`)
-    }
   }
 
   // stderr, not stdout: this runs as `prepack`, so anything written to stdout is

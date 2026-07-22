@@ -66,33 +66,27 @@ jobs:
             echo "is_template=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # The tag name and core.version must agree, or the artifact would be
-      # published under a version that does not describe the tree inside it.
-      # Fail loudly; never guess which of the two is right.
-      - name: Resolve and verify version
+      # The tag IS the version (#423). It is created by core-tag.yml, which
+      # derives it as "highest existing core-v* tag, bumped by the commit's
+      # conventional type" — so nothing in the tree names a version that could
+      # disagree with it, and there is nothing left to cross-check.
+      - name: Resolve version
         id: version
         if: steps.guard.outputs.is_template == 'true'
         run: |
           set -euo pipefail
-          version="$(tr -d '[:space:]' < core.version)"
-          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::core.version is not a semver: '$version'"
-            exit 1
-          fi
           tag="${{ inputs.tag || github.ref_name }}"
           case "$tag" in
-            core-v*)
-              if [ "${tag#core-v}" != "$version" ]; then
-                echo "::error::Tag '$tag' does not match core.version '$version' at that ref."
-                echo "::error::Refusing to publish biffo@$version from a mismatched tag."
-                exit 1
-              fi
-              ;;
+            core-v*) version="${tag#core-v}" ;;
             *)
               echo "::error::'$tag' is not a core-v* tag. Publish only from a core version tag."
               exit 1
               ;;
           esac
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Tag '$tag' does not carry a semver version."
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           # The commit actually checked out — not $GITHUB_SHA, which is the SHA
           # of the event's ref and diverges from what was built whenever the
@@ -118,8 +112,9 @@ jobs:
         if: steps.guard.outputs.is_template == 'true'
         run: pnpm --filter @biffo/cli build
 
-      # package.json carries a 0.0.0 placeholder: the version lives in
-      # core.version and is stamped here, so there is exactly one number to bump.
+      # package.json carries a 0.0.0 placeholder: the version comes from the tag
+      # and is stamped here, so it is the published package.json — and therefore
+      # the installed CLI's `--version` — that carries the core version.
       - name: Stamp package version
         if: steps.guard.outputs.is_template == 'true'
         working-directory: cli
@@ -127,8 +122,7 @@ jobs:
 
       # `npm pack` runs prepack, which copies the repo-root assets listed in
       # cli/scripts/packaged-root-assets.mjs into the package. Verify they
-      # actually landed in the tarball: without core.version `biffo core status`
-      # fails on every npm install (#259); without _skeletons/ `biffo init`
+      # actually landed in the tarball: without _skeletons/ `biffo init`
       # creates both repos and then dies at step 6/6 leaving the app sibling
       # empty (#315). Both shipped green — every in-repo test still passes,
       # because the upward walk finds the repo root in a checkout. The tarball is
@@ -156,17 +150,17 @@ jobs:
           listing="$(mktemp)"
           tar -tzf "$tarball" > "$listing"
 
-          if ! grep -qx 'package/core.version' "$listing"; then
-            echo "::error::Packed tarball is missing core.version — refusing to publish."
-            cat "$listing"
-            exit 1
-          fi
-          packed="$(tar -xzOf "$tarball" package/core.version | tr -d '[:space:]')"
+          # The package's own version is the core version the installed CLI
+          # reports (getLatestCoreVersion reads it), so a tarball whose stamped
+          # version disagrees with the tag would ship a CLI that misreports which
+          # core it is — the #259 failure by another route.
+          packed="$(tar -xzOf "$tarball" package/package.json | node -e \
+            'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).version))')"
           if [ "$packed" != "${{ steps.version.outputs.version }}" ]; then
-            echo "::error::Tarball core.version '$packed' != published version '${{ steps.version.outputs.version }}'."
+            echo "::error::Tarball package.json version '$packed' != published version '${{ steps.version.outputs.version }}'."
             exit 1
           fi
-          echo "OK: tarball ships core.version $packed"
+          echo "OK: tarball is stamped $packed"
 
           # _skeletons/ must be present AND complete. Checking only that the
           # directory prefix appears would pass on an empty tree, which would

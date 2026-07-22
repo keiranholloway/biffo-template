@@ -131,6 +131,46 @@ jobs:
         with:
           name: portal-build-dev
           path: portal-dist/
+      - name: Verify the portal was built against live Cognito
+        run: |
+          # Deploy Application and Deploy Infrastructure trigger independently and
+          # run CONCURRENTLY — a core upgrade touches modules/ AND apps/, firing
+          # both. The portal bakes NEXT_PUBLIC_COGNITO_* at build time from
+          # GitHub variables that the infra run writes at the END of its apply, so
+          # a build that starts first ships the PREVIOUS pool.
+          #
+          # Not theoretical: replacing a user pool (any change to an immutable
+          # attribute such as username_attributes) produced a fully green deploy
+          # serving a portal that answered every sign-in with
+          # "User pool client <id> does not exist".
+          #
+          # Ordering cannot express the rule — a push touching only apps/**
+          # legitimately never runs infra and must not wait for it — so assert the
+          # artefact against reality instead. Catches the race, a stale variable, a
+          # manual dispatch after an infra change, and the empty-string fallback in
+          # lib/auth.ts, regardless of cause.
+          set -euo pipefail
+          POOL=$(grep -rhoE '[a-z]{2}-[a-z]+-[0-9]+_[A-Za-z0-9]{9}' portal-dist/ | sort -u | head -1 || true)
+          if [ -z "$POOL" ]; then
+            echo "::error::No Cognito user pool id in the built portal. NEXT_PUBLIC_COGNITO_USER_POOL_ID was empty at build time; lib/auth.ts falls back to '' and every sign-in fails."
+            exit 1
+          fi
+          if ! aws cognito-idp describe-user-pool --user-pool-id "$POOL" >/dev/null 2>&1; then
+            echo "::error::The portal was built against Cognito pool $POOL, which does not exist. It was almost certainly replaced by a concurrent Deploy Infrastructure run. Re-run this workflow now that infrastructure has settled."
+            exit 1
+          fi
+          # One call, then a grep — never guess client ids out of the bundle, which
+          # is full of same-shaped build hashes.
+          MATCH=""
+          for c in $(aws cognito-idp list-user-pool-clients --user-pool-id "$POOL" \
+                       --query 'UserPoolClients[].ClientId' --output text); do
+            if grep -rq "$c" portal-dist/; then MATCH="$c"; break; fi
+          done
+          if [ -z "$MATCH" ]; then
+            echo "::error::The portal names pool $POOL but none of that pool's app clients. The baked client id is stale — re-run this workflow."
+            exit 1
+          fi
+          echo "Portal builds against live pool $POOL / client $MATCH"
       - name: Place portal assets under /admin
         run: |
           # apps/portal/next.config.ts sets `assetPrefix: '/admin'` (issue #306)
@@ -472,6 +512,46 @@ jobs:
         with:
           name: portal-build-staging
           path: portal-dist/
+      - name: Verify the portal was built against live Cognito
+        run: |
+          # Deploy Application and Deploy Infrastructure trigger independently and
+          # run CONCURRENTLY — a core upgrade touches modules/ AND apps/, firing
+          # both. The portal bakes NEXT_PUBLIC_COGNITO_* at build time from
+          # GitHub variables that the infra run writes at the END of its apply, so
+          # a build that starts first ships the PREVIOUS pool.
+          #
+          # Not theoretical: replacing a user pool (any change to an immutable
+          # attribute such as username_attributes) produced a fully green deploy
+          # serving a portal that answered every sign-in with
+          # "User pool client <id> does not exist".
+          #
+          # Ordering cannot express the rule — a push touching only apps/**
+          # legitimately never runs infra and must not wait for it — so assert the
+          # artefact against reality instead. Catches the race, a stale variable, a
+          # manual dispatch after an infra change, and the empty-string fallback in
+          # lib/auth.ts, regardless of cause.
+          set -euo pipefail
+          POOL=$(grep -rhoE '[a-z]{2}-[a-z]+-[0-9]+_[A-Za-z0-9]{9}' portal-dist/ | sort -u | head -1 || true)
+          if [ -z "$POOL" ]; then
+            echo "::error::No Cognito user pool id in the built portal. NEXT_PUBLIC_COGNITO_USER_POOL_ID was empty at build time; lib/auth.ts falls back to '' and every sign-in fails."
+            exit 1
+          fi
+          if ! aws cognito-idp describe-user-pool --user-pool-id "$POOL" >/dev/null 2>&1; then
+            echo "::error::The portal was built against Cognito pool $POOL, which does not exist. It was almost certainly replaced by a concurrent Deploy Infrastructure run. Re-run this workflow now that infrastructure has settled."
+            exit 1
+          fi
+          # One call, then a grep — never guess client ids out of the bundle, which
+          # is full of same-shaped build hashes.
+          MATCH=""
+          for c in $(aws cognito-idp list-user-pool-clients --user-pool-id "$POOL" \
+                       --query 'UserPoolClients[].ClientId' --output text); do
+            if grep -rq "$c" portal-dist/; then MATCH="$c"; break; fi
+          done
+          if [ -z "$MATCH" ]; then
+            echo "::error::The portal names pool $POOL but none of that pool's app clients. The baked client id is stale — re-run this workflow."
+            exit 1
+          fi
+          echo "Portal builds against live pool $POOL / client $MATCH"
       - name: Place portal assets under /admin
         run: |
           # apps/portal/next.config.ts sets `assetPrefix: '/admin'` (issue #306)
@@ -825,6 +905,46 @@ jobs:
         with:
           name: portal-build-prod
           path: portal-dist/
+      - name: Verify the portal was built against live Cognito
+        run: |
+          # Deploy Application and Deploy Infrastructure trigger independently and
+          # run CONCURRENTLY — a core upgrade touches modules/ AND apps/, firing
+          # both. The portal bakes NEXT_PUBLIC_COGNITO_* at build time from
+          # GitHub variables that the infra run writes at the END of its apply, so
+          # a build that starts first ships the PREVIOUS pool.
+          #
+          # Not theoretical: replacing a user pool (any change to an immutable
+          # attribute such as username_attributes) produced a fully green deploy
+          # serving a portal that answered every sign-in with
+          # "User pool client <id> does not exist".
+          #
+          # Ordering cannot express the rule — a push touching only apps/**
+          # legitimately never runs infra and must not wait for it — so assert the
+          # artefact against reality instead. Catches the race, a stale variable, a
+          # manual dispatch after an infra change, and the empty-string fallback in
+          # lib/auth.ts, regardless of cause.
+          set -euo pipefail
+          POOL=$(grep -rhoE '[a-z]{2}-[a-z]+-[0-9]+_[A-Za-z0-9]{9}' portal-dist/ | sort -u | head -1 || true)
+          if [ -z "$POOL" ]; then
+            echo "::error::No Cognito user pool id in the built portal. NEXT_PUBLIC_COGNITO_USER_POOL_ID was empty at build time; lib/auth.ts falls back to '' and every sign-in fails."
+            exit 1
+          fi
+          if ! aws cognito-idp describe-user-pool --user-pool-id "$POOL" >/dev/null 2>&1; then
+            echo "::error::The portal was built against Cognito pool $POOL, which does not exist. It was almost certainly replaced by a concurrent Deploy Infrastructure run. Re-run this workflow now that infrastructure has settled."
+            exit 1
+          fi
+          # One call, then a grep — never guess client ids out of the bundle, which
+          # is full of same-shaped build hashes.
+          MATCH=""
+          for c in $(aws cognito-idp list-user-pool-clients --user-pool-id "$POOL" \
+                       --query 'UserPoolClients[].ClientId' --output text); do
+            if grep -rq "$c" portal-dist/; then MATCH="$c"; break; fi
+          done
+          if [ -z "$MATCH" ]; then
+            echo "::error::The portal names pool $POOL but none of that pool's app clients. The baked client id is stale — re-run this workflow."
+            exit 1
+          fi
+          echo "Portal builds against live pool $POOL / client $MATCH"
       - name: Place portal assets under /admin
         run: |
           # apps/portal/next.config.ts sets `assetPrefix: '/admin'` (issue #306)

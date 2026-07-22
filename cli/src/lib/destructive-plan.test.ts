@@ -8,7 +8,7 @@ import {
   STATEFUL_RESOURCE_TYPES,
   checkDestructivePlan,
   parseDestroyTrailer,
-} from '../../scripts/destructive-plan.mjs'
+} from '../../../scripts/destructive-plan.mjs'
 
 /** A `terraform show -json` resource_changes entry. */
 const change = (address: string, type: string, actions: string[]) => ({

@@ -22,16 +22,20 @@ function w(root: string, rel: string, content: string): void {
 
 function fakeDeps(over: Partial<ReturnType<typeof fakeGit>> = {}) {
   const git = fakeGit(over)
+  // Instances integrate on `dev`, the template on `main`. The fake answers
+  // `dev` so a regression to "use the current branch" (which the git fake
+  // reports as `main`) shows up as a wrong base rather than passing by accident.
+  const defaultBranch = vi.fn().mockResolvedValue('dev')
   const createPullRequest = vi.fn().mockResolvedValue({
     url: 'https://github.com/acme/instance/pull/7',
     number: 7,
   })
   const deps: CoreUpgradeDeps = {
     git,
-    makeGitHub: () => ({ createPullRequest }),
+    makeGitHub: () => ({ createPullRequest, defaultBranch }),
     resolveToken: () => 'TOKEN',
   }
-  return { deps, git, createPullRequest }
+  return { deps, git, createPullRequest, defaultBranch }
 }
 
 function fakeGit(over: Record<string, unknown> = {}) {
@@ -77,7 +81,7 @@ describe('runCoreUpgrade --apply', () => {
   })
 
   it('creates a branch, applies files, bumps biffo.core.json, commits, pushes, opens a PR', async () => {
-    const { deps, git, createPullRequest } = fakeDeps()
+    const { deps, git, createPullRequest, defaultBranch } = fakeDeps()
 
     await runCoreUpgrade(
       { cwd: instance, templateRoot: theirs, baseDir: base, theirsDir: theirs, apply: true },
@@ -99,17 +103,33 @@ describe('runCoreUpgrade --apply', () => {
     expect(git.push).toHaveBeenCalledWith(instance, 'biffo/core-upgrade-0.1.0-to-0.2.0', {
       token: 'TOKEN',
     })
-    // PR opened against the parsed owner/repo and current branch
+    // PR opened against the parsed owner/repo and the repo's DEFAULT branch —
+    // not the branch the caller happens to be on. The git fake reports `main`
+    // as current and the GitHub fake reports `dev` as default, so this asserts
+    // which of the two is used.
+    expect(defaultBranch).toHaveBeenCalledWith({ owner: 'acme', repo: 'instance' })
     expect(createPullRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         owner: 'acme',
         repo: 'instance',
         head: 'biffo/core-upgrade-0.1.0-to-0.2.0',
-        base: 'main',
+        base: 'dev',
         title: expect.stringContaining('0.1.0 → 0.2.0'),
       }),
     )
     expect(log.success).toHaveBeenCalledWith(expect.stringContaining('pull/7'))
+  })
+
+  it('honors an explicit --base over the repo default', async () => {
+    const { deps, createPullRequest, defaultBranch } = fakeDeps()
+    await runCoreUpgrade(
+      { cwd: instance, baseDir: base, theirsDir: theirs, apply: true, base: 'release/2026-07' },
+      deps,
+    )
+    expect(createPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ base: 'release/2026-07' }),
+    )
+    expect(defaultBranch).not.toHaveBeenCalled()
   })
 
   it('auto-resolves the merge base from the instance version tag when --from-template is omitted', async () => {

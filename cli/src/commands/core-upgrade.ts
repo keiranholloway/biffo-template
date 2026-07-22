@@ -79,7 +79,7 @@ export const coreUpgradeCommand = new Command('upgrade')
     '--acknowledge-breaking',
     'With --apply, proceed even though this upgrade crosses a documented breaking change',
   )
-  .option('--base <branch>', 'Base branch for the PR (defaults to the current branch)')
+  .option('--base <branch>', 'Base branch for the PR (defaults to the repo’s default branch)')
   .option('--remote <name>', 'Git remote to push to and open the PR on (default: origin)')
   .action(
     async (options: {
@@ -142,7 +142,6 @@ export interface CoreUpgradeOptions {
 export interface CoreUpgradeGit {
   isGitRepo(cwd: string): Promise<boolean>
   hasUncommittedChanges(cwd: string): Promise<boolean>
-  currentBranch(cwd: string): Promise<string>
   getRemoteUrl(cwd: string, remote?: string): Promise<string>
   createBranch(cwd: string, branch: string): Promise<void>
   add(cwd: string, paths: string[]): Promise<void>
@@ -150,6 +149,8 @@ export interface CoreUpgradeGit {
   push(cwd: string, branch: string, opts?: { remote?: string; token?: string }): Promise<void>
 }
 export interface CoreUpgradeGitHub {
+  /** The repo's default branch, as GitHub reports it. */
+  defaultBranch(args: { owner: string; repo: string }): Promise<string>
   createPullRequest(args: {
     owner: string
     repo: string
@@ -367,7 +368,6 @@ async function applyAndOpenPr(
     throw new Error('The working tree has uncommitted changes. Commit or stash them first.')
   }
 
-  const base = options.base ?? (await git.currentBranch(options.cwd))
   const branch = upgradeBranchName(fromVersion, toVersion)
 
   log.step(1, 4, `Creating branch ${branch}`)
@@ -401,7 +401,21 @@ async function applyAndOpenPr(
   log.step(4, 4, 'Opening pull request')
   const remoteUrl = await git.getRemoteUrl(options.cwd, options.remote)
   const { owner, repo } = parseGitHubRepo(remoteUrl)
-  const pr = await deps.makeGitHub(token).createPullRequest({
+  const github = deps.makeGitHub(token)
+
+  // The integration branch, asked of GitHub rather than assumed. It differs per
+  // repo — the template uses `main`, instances use `dev` — so a literal would be
+  // wrong for half of them.
+  //
+  // This used to default to the CURRENT branch, which is wrong in exactly the
+  // situation AGENTS.md mandates: run from a worktree on its own branch, the
+  // upgrade opened its PR against a local branch that was never pushed, and
+  // GitHub rejected it with `field: base, code: invalid` after having already
+  // created, committed and pushed the upgrade branch. The work was fine; only
+  // the last step failed, which is a confusing place to fail.
+  const base = options.base ?? (await github.defaultBranch({ owner, repo }))
+
+  const pr = await github.createPullRequest({
     owner,
     repo,
     head: branch,

@@ -60,6 +60,19 @@ export class GitHubAdapter {
    * `biffo core upgrade --apply` (ADR-0006 Phase 3b) to propose a core upgrade
    * as a reviewable PR rather than pushing to a protected branch.
    */
+  /**
+   * The repo's default branch — the integration branch a PR should target.
+   *
+   * Asked of GitHub rather than inferred from the local checkout: it differs per
+   * repo (biffo-template uses `main`, instances use `dev`), and the local
+   * current branch is whatever the caller happens to be on, which under the
+   * worktree-per-change workflow is never it.
+   */
+  async defaultBranch(args: { owner: string; repo: string }): Promise<string> {
+    const { data } = await this.octokit.repos.get({ owner: args.owner, repo: args.repo })
+    return data.default_branch
+  }
+
   async createPullRequest(args: {
     owner: string
     repo: string

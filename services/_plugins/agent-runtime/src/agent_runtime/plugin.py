@@ -12,7 +12,9 @@ The execution flow:
       -> read the run      GET  /api/v1/internal/agent-runs/{id}
       -> claim it          POST /api/v1/internal/agent-runs/{id}/claim
                            409 => another invocation owns it; stop, spend nothing
-      -> one turn loop     OpenRouter, model from the run's definition_snapshot
+      -> resolve tools     the snapshot's declared tools, defaulting to none (§7)
+                           an unregistered name fails the run before any spend
+      -> the turn loop     OpenRouter, model from the run's definition_snapshot
       -> report            POST /api/v1/internal/agent-runs/{id}/complete
                            Core persists and emits agent.run.completed
 
@@ -61,6 +63,7 @@ from .loop import AgentLoop, RunLimits, RunOutcome, collect, failure
 from .manifest import MANIFEST_PATH
 from .openrouter import LLMClient, OpenRouterClient
 from .state import PENDING, RunState, RunStateError
+from .tools import ToolError, declared_tools, resolve_tools
 
 logger = Logger()
 
@@ -229,8 +232,27 @@ class AgentRuntimePlugin(BiffoPluginBase):
         if not model:
             return failure("definition_snapshot names no model for this run.")
 
+        # Tools are resolved BEFORE the first model call (§7). An unregistered
+        # name fails the run here, having spent nothing: dropping it silently
+        # would produce a run that looks exactly like a model declining to use a
+        # tool it was offered, which is undiagnosable from the transcript.
+        try:
+            tools = resolve_tools(declared_tools(snapshot))
+        except ToolError as exc:
+            return failure(str(exc))
+
         payload = run.get("input_payload") or {}
         limits = RunLimits.from_snapshot(snapshot)
+        if tools and limits.max_turns < 2:
+            # Not fatal, but it can never work: turn 1 asks for a tool, and the
+            # hard stop lands before the turn that would use the answer. Cheap to
+            # say so, and the M1 field notes are full of defaults that bit
+            # silently (docs/guides/agentic-workers.md).
+            logger.warning(
+                "Worker offers tools but max_turns is 1, so any tool call will hit "
+                "the §8 hard stop before the model can use the result",
+                extra={"run_id": run.get("id"), "tools": [tool.name for tool in tools]},
+            )
         try:
             return await collect(
                 self._loop.stream(
@@ -238,6 +260,7 @@ class AgentRuntimePlugin(BiffoPluginBase):
                     instructions=instructions,
                     input_payload=payload if isinstance(payload, dict) else {"input": payload},
                     limits=limits,
+                    tools=tools,
                 )
             )
         except Exception as exc:  # noqa: BLE001 — an abandoned run is worse than a failed one

@@ -83,7 +83,10 @@ But search happens inside OpenRouter, before the model sees the prompt, so:
 - Results are injected as trusted context. They cannot be wrapped in the
   `<untrusted-context>` fencing the runtime applies to the triggering payload,
   even though a search result is at least as attacker-influenceable as a form
-  field.
+  field. This is the gap the M3 `web_search` tool closes: a result that arrives
+  through the tool loop is fenced as `<untrusted-tool-result tool="…">`,
+  redacted, and framed as untrusted in the system message. A result injected by
+  `:online` is none of those things, because the runtime never sees it.
 - Input size is not observable or boundable. With a 1M-token context and
   server-side injection, the §8 token ceiling has a blind spot specific to this
   mode.
@@ -125,8 +128,12 @@ output is *correct*, just more expensive.
 
 Recorded so nobody mistakes M1 for more than it is:
 
-- The **tool seam** — `_wants_another_turn()` returns true on
-  `finish_reason == "tool_calls"`, which no run has produced.
+- The **tool seam** is implemented as of M3 — a registry, a `web_search` tool and
+  fenced tool results — and is covered by tests, but **no live run has exercised
+  it**. The evidence above is all M1, and nothing here should be read as saying
+  a real model called a real tool against a deployed instance. That takes a
+  Brave key in SSM, a worker declaring `tools: ["web_search"]` with `max_turns`
+  of at least 2, and someone watching a run.
 - **Multi-turn.** Every run so far is `turns: 1`.
 - **§7's read-scope ceiling.** No worker has read a Core table; the payload
   arrives in the event. The permission model is designed and deployed but

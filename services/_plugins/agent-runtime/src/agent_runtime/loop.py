@@ -1,8 +1,9 @@
-"""The turn loop (ADR-0014 §6.3, §8).
+"""The turn loop (ADR-0014 §6.3, §7, §8).
 
-M1 is a walking skeleton: one model call, no tools, no memory. The *shape* is not
-provisional, because §6 lists the choices that are cheap now and expensive later.
-Two of them live here.
+M1 was a walking skeleton: one model call, no tools, no memory. M3 fills the tool
+seam the ``while`` loop was built around — the control flow is unchanged, and
+that was the point. The *shape* is not provisional, because §6 lists the choices
+that are cheap now and expensive later. Two of them live here.
 
 **The loop is internally incremental.** ``AgentLoop.stream`` is an async
 generator that yields a :class:`TurnEvent` per step — the opening messages, each
@@ -12,19 +13,27 @@ The only consumer today is :func:`collect`, which folds them into one
 returns one final string, adding streaming later means rewriting the core loop."
 Streaming becomes a second consumer of this same generator.
 
-**``max_turns > 1`` is a config change, not a rewrite.** The loop is already a
-bounded ``while`` over turns that appends to a persistent message array and asks
-after each turn whether the model wants another. M1 sends no tool definitions, so
-the model has no way to ask for one and every run ends on turn 1 — but nothing
-about "one turn" is baked into the control flow. M3 adds tool execution between
-the assistant message and the next turn; the surrounding structure is unchanged.
+**``max_turns > 1`` is a config change, not a rewrite.** The loop is a bounded
+``while`` over turns that appends to a persistent message array and asks after
+each turn whether the model wants another. Tool execution slots in between the
+assistant message and the next turn: the model asks, the loop runs what it asked
+for, appends the results, and goes round again. Nothing about "one turn" was ever
+baked into the control flow, which is why M3 adds a branch rather than a rewrite.
+
+**A worker only ever gets the tools it declared** (§7). The loop executes from a
+resolved list handed to it, never from the registry — so a model naming a tool
+that was not offered gets an error result, not the tool. The list is resolved
+before the run starts (``plugin.py``), because a run that has already spent money
+is the wrong place to discover a definition is wrong.
 
 **Both limits are hard stops (§8), enforced here rather than by convention.**
 ``max_turns`` bounds iterations; a wall-clock deadline bounds elapsed time and is
 re-checked before every turn *and* applied to the in-flight provider call. Hitting
 either is a terminal **failure**, not a truncated success: a subscriber must be
 able to tell a finished run from a curtailed one (§5), and the transcript
-collected so far still travels with it.
+collected so far still travels with it. Tools make this live rather than
+theoretical: a model that keeps calling tools is exactly the unbounded loop §8
+says must be impossible by construction.
 """
 
 from __future__ import annotations
@@ -32,13 +41,14 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from .messages import Message, assistant_message, build_messages
-from .openrouter import LLMClient, LLMError, LLMResponse
+from .messages import Message, assistant_message, build_messages, tool_result_message
+from .openrouter import LLMClient, LLMError, LLMResponse, ToolCall
 from .state import COMPLETED, FAILED
+from .tools import ToolDefinition, ToolError
 
 # The platform ceiling §8 names: "A Lambda invocation is capped at 15 minutes, so
 # a multi-turn loop must either finish inside one invocation or be resumable
@@ -60,6 +70,14 @@ TIMEOUT_CEILING_ENV = "AGENT_RUNTIME_MAX_SECONDS"
 # a run that spends its whole invocation on the model and is then killed before
 # reporting is the stranded-run failure §5 warns about.
 DEFAULT_TIMEOUT_CEILING = 240.0
+
+# How many tool calls one turn may actually run. A model can ask for arbitrarily
+# many in a single message, and each is a paid outbound request whose result then
+# re-enters the next turn's input tokens — so the §8 posture ("make an unbounded
+# loop impossible") applies within a turn as well as across turns. Calls past the
+# cap are answered with an error result rather than dropped, so the model is told
+# what happened instead of inferring it from silence.
+MAX_TOOL_CALLS_PER_TURN = 8
 
 # Event kinds yielded by the loop.
 RUN_STARTED = "run.started"
@@ -161,9 +179,12 @@ class AgentLoop:
         instructions: str,
         input_payload: dict[str, Any],
         limits: RunLimits,
+        tools: Sequence[ToolDefinition] = (),
     ) -> AsyncIterator[TurnEvent]:
         """Yield the run's turn events, ending with exactly one ``run.finished``."""
         messages = build_messages(instructions, input_payload)
+        offered = {tool.name: tool for tool in tools}
+        schemas = [tool.to_provider_schema() for tool in tools] or None
         yield TurnEvent(
             RUN_STARTED,
             0,
@@ -171,6 +192,7 @@ class AgentLoop:
                 "model": model,
                 "max_turns": limits.max_turns,
                 "timeout_seconds": limits.timeout_seconds,
+                "tools": sorted(offered),
             },
         )
         for message in messages:
@@ -195,7 +217,12 @@ class AgentLoop:
             yield TurnEvent(TURN_STARTED, turn, {"remaining_seconds": remaining})
             try:
                 response = await asyncio.wait_for(
-                    self._llm.complete(model=model, messages=list(messages), timeout=remaining),
+                    self._llm.complete(
+                        model=model,
+                        messages=list(messages),
+                        timeout=remaining,
+                        tools=schemas,
+                    ),
                     timeout=remaining,
                 )
             except TimeoutError:
@@ -212,7 +239,9 @@ class AgentLoop:
                 yield _finished(turn, FAILED, error=f"LLM call failed on turn {turn}: {exc}")
                 return
 
-            message = assistant_message(response.content)
+            message = assistant_message(
+                response.content, [call.to_wire() for call in response.tool_calls]
+            )
             messages.append(message)
             yield TurnEvent(MESSAGE, turn, {"message": message})
             yield TurnEvent(
@@ -224,8 +253,16 @@ class AgentLoop:
                     "input_tokens": response.input_tokens,
                     "output_tokens": response.output_tokens,
                     "cost_usd": response.cost_usd,
+                    "tool_calls": [call.name for call in response.tool_calls],
                 },
             )
+
+            # The tool seam. Results are appended to the same array the next turn
+            # replays, each one fenced and redacted on the way in (messages.py) —
+            # a tool result never reaches the model as plain content.
+            for result in await self._run_tools(response.tool_calls, offered):
+                messages.append(result)
+                yield TurnEvent(MESSAGE, turn, {"message": result})
 
             if not _wants_another_turn(response):
                 yield _finished(
@@ -248,6 +285,39 @@ class AgentLoop:
                 "(ADR-0014 §8 max_turns hard stop)."
             ),
         )
+
+    async def _run_tools(
+        self,
+        calls: Sequence[ToolCall],
+        offered: dict[str, ToolDefinition],
+    ) -> list[Message]:
+        """Execute the model's tool calls, in order, into fenced result messages.
+
+        Sequential rather than concurrent: a transcript that replays in the order
+        things happened is worth more here than the latency, and the run's wall
+        clock already bounds the total.
+
+        **Nothing raises out of here.** Every failure — an unoffered tool, bad
+        arguments, a provider outage inside a tool — becomes a result the model
+        can read. A search that fails should degrade an enrichment, not end it,
+        and the alternative (a terminal failure per tool hiccup) would make tools
+        a liability rather than a capability. The one thing that is *not*
+        forgiving is a tool the worker never declared: it is answered with an
+        error naming what was actually offered, and it can never execute.
+        """
+        results: list[Message] = []
+        for index, call in enumerate(calls):
+            if index >= MAX_TOOL_CALLS_PER_TURN:
+                content = (
+                    f"Not run: this turn already used its limit of "
+                    f"{MAX_TOOL_CALLS_PER_TURN} tool calls. Ask for fewer at a time."
+                )
+            else:
+                content = await _execute_call(call, offered)
+            results.append(
+                tool_result_message(tool_call_id=call.id, tool_name=call.name, content=content)
+            )
+        return results
 
 
 async def collect(events: AsyncIterator[TurnEvent]) -> RunOutcome:
@@ -284,13 +354,36 @@ async def collect(events: AsyncIterator[TurnEvent]) -> RunOutcome:
     return outcome
 
 
+async def _execute_call(call: ToolCall, offered: dict[str, ToolDefinition]) -> str:
+    """Run one tool call, returning the text the model gets back."""
+    tool = offered.get(call.name)
+    if tool is None:
+        # Either the model invented a name, or it named a registered tool this
+        # worker did not declare. Both are the same answer: it is not available
+        # here (§7 — the declaration is the ceiling, not the registry).
+        return (
+            f"No tool named {call.name!r} is available to this worker. "
+            f"Available: {sorted(offered) or 'none'}."
+        )
+    try:
+        arguments = tool.coerce_arguments(call.arguments)
+        return await tool.execute(arguments)
+    except ToolError as exc:
+        return f"Tool {call.name} could not run: {exc}"
+    except Exception as exc:  # noqa: BLE001 — a failing tool degrades a run, never ends it
+        return f"Tool {call.name} failed: {exc}"
+
+
 def _wants_another_turn(response: LLMResponse) -> bool:
     """Whether the model asked for work the loop must do before answering.
 
-    ``tool_calls`` is the provider's signal that the assistant wants a tool run.
-    M1 sends no tool definitions, so it cannot occur against a real provider —
-    this is the seam M3 fills in, and it is what makes ``max_turns`` a live limit
-    rather than a decoration.
+    ``tool_calls`` is the provider's signal that the assistant wants a tool run,
+    and the loop has by now appended a result for each. Deliberately keyed on
+    ``finish_reason`` rather than on "were there parsed calls": a provider that
+    says it wants tools but sends nothing usable must not read as a finished
+    answer with empty content. It goes round again and, finding nothing new,
+    terminates on the ``max_turns`` hard stop — bounded, and visible in the
+    transcript as what it was.
     """
     return response.finish_reason == "tool_calls"
 

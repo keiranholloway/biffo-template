@@ -27,16 +27,19 @@ WhatsApp credentials, so both plugin third-party credentials are fetched the
 same way. A SecureString holding one key is a plain string, which is why nothing
 here unwraps JSON.
 
-The client is deliberately thin — no retries, no streaming, no tool schemas. Each
-of those is a later milestone, and each attaches to the loop rather than to this
-file: ``AgentLoop`` already yields per-turn events, so streaming becomes a
-different consumer rather than a rewrite here.
+The client is deliberately thin — no retries, no streaming. It passes tool
+schemas through and normalises tool calls back (M3), but it neither decides what
+tools exist (``tools.py``) nor executes one (``loop.py``): this file is a
+translation layer between the runtime's vocabulary and one provider's wire
+format, and staying that way is what makes a second provider a new file rather
+than a fork.
 """
 
 from __future__ import annotations
 
+import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import httpx
@@ -54,6 +57,30 @@ class LLMError(Exception):
 
 
 @dataclass(frozen=True)
+class ToolCall:
+    """One tool the model asked to run, normalised away from the wire shape.
+
+    ``arguments`` is the parsed object the executor receives; ``arguments_json``
+    is the provider's original string, kept because the assistant message is
+    replayed verbatim on the next turn and a re-serialised object is not
+    guaranteed to be byte-identical.
+    """
+
+    id: str
+    name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+    arguments_json: str = "{}"
+
+    def to_wire(self) -> dict[str, Any]:
+        """The shape this call takes inside an assistant message."""
+        return {
+            "id": self.id,
+            "type": "function",
+            "function": {"name": self.name, "arguments": self.arguments_json},
+        }
+
+
+@dataclass(frozen=True)
 class LLMResponse:
     """One completion, normalised away from the provider's wire shape."""
 
@@ -63,6 +90,7 @@ class LLMResponse:
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
+    tool_calls: tuple[ToolCall, ...] = ()
 
 
 class LLMClient(Protocol):
@@ -76,8 +104,9 @@ class LLMClient(Protocol):
         self,
         *,
         model: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         timeout: float,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMResponse: ...
 
 
@@ -144,8 +173,9 @@ class OpenRouterClient:
         self,
         *,
         model: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         timeout: float,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMResponse:
         """One chat completion. Raises :class:`LLMError` for anything non-2xx."""
         headers = {
@@ -159,6 +189,11 @@ class OpenRouterClient:
             # run record rather than being reconstructed from token counts.
             "usage": {"include": True},
         }
+        # Omitted entirely rather than sent empty: a worker declaring no tools
+        # (the §7 default) must produce a request indistinguishable from M1's,
+        # since some providers treat an empty `tools` array as malformed.
+        if tools:
+            body["tools"] = tools
         try:
             response = await self._http.post(
                 f"{self._base_url}/chat/completions",
@@ -194,7 +229,47 @@ def _parse_completion(data: Any, *, fallback_model: str) -> LLMResponse:
         input_tokens=_as_int(usage.get("prompt_tokens")),
         output_tokens=_as_int(usage.get("completion_tokens")),
         cost_usd=_as_float(usage.get("cost")),
+        tool_calls=_parse_tool_calls(message.get("tool_calls")),
     )
+
+
+def _parse_tool_calls(raw: Any) -> tuple[ToolCall, ...]:
+    """Normalise the provider's ``tool_calls`` array.
+
+    Anything malformed is skipped rather than raising: a call with no id can
+    never be answered (a tool result is keyed to one), and failing the whole
+    completion over one bad entry would throw away the turn's other work. What
+    survives is bounded and typed; the arguments are still model-generated text
+    and are re-checked against the tool's schema before execution (``tools.py``).
+    """
+    if not isinstance(raw, list):
+        return ()
+    calls: list[ToolCall] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        function = item.get("function")
+        if not isinstance(function, dict):
+            continue
+        call_id = str(item.get("id") or "").strip()
+        name = str(function.get("name") or "").strip()
+        if not call_id or not name:
+            continue
+        arguments_json = function.get("arguments")
+        arguments_json = arguments_json if isinstance(arguments_json, str) else "{}"
+        try:
+            parsed = json.loads(arguments_json or "{}")
+        except ValueError:
+            parsed = {}
+        calls.append(
+            ToolCall(
+                id=call_id,
+                name=name,
+                arguments=parsed if isinstance(parsed, dict) else {},
+                arguments_json=arguments_json or "{}",
+            )
+        )
+    return tuple(calls)
 
 
 def _as_int(value: Any) -> int | None:

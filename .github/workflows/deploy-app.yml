@@ -18,22 +18,27 @@ on:
       # so a newly-registered sibling routes at /<name> yet never appears in
       # the tab (ADR-0007).
       - 'infra/environments/*/siblings.auto.tfvars.json'
-      # A plugin's Lambda code is only shipped once its Terraform module exists:
-      # the packaging loop below skips any plugin with no
-      # `modules/plugins/<name>/` ("skip <name> (no installed terraform
-      # module)"). So wiring a plugin — `biffo plugin install`, or a manual
-      # copy-in — is what makes its code deployable, and that change touches
-      # only modules/ and infra/.
+      # A plugin's Lambda code is only shipped once its Terraform is wired, so
+      # WIRING a plugin is what makes its code deployable — and wiring touches
+      # only modules/ and infra/, neither of which otherwise fires this workflow.
       #
       # Without this path the sequence fails silently and permanently: the core
       # upgrade that adds `services/_plugins/<name>/` fires this workflow, which
-      # skips the plugin because its module is not installed yet; the wiring PR
-      # that installs the module fires Deploy Infrastructure, which creates the
-      # Lambda; and nothing ever runs this workflow again. The function exists
-      # and serves the compute module's placeholder forever. Observed on
-      # tabsii-platform with the ADR-0014 agent runtime, and only fixable by a
-      # manual workflow_dispatch.
+      # skips the plugin because it is not wired yet; the wiring PR fires Deploy
+      # Infrastructure, which creates the Lambda; and nothing ever runs this
+      # workflow again. The function exists and serves the compute module's
+      # placeholder forever. Observed on tabsii-platform with the ADR-0014 agent
+      # runtime, and only fixable by a manual workflow_dispatch.
+      #
+      # Both wiring locations are covered: modules/plugins/ for a third-party
+      # plugin whose terraform is copied in, and infra/environments/ for a
+      # first-party one, which is referenced in place (#406) and whose wiring is
+      # therefore just a module block. Missing the second is how this recurred:
+      # repointing tabsii-platform's module sources touched only infra/ and
+      # modules/, so no Deploy Application ran for it at all.
       - 'modules/plugins/**'
+      - 'infra/environments/*/main.tf'
+      - 'infra/environments/*/plugins.generated.tf'
   workflow_dispatch:
     inputs:
       environment:
@@ -425,7 +430,11 @@ jobs:
           for manifest in services/*/biffo.plugin.json services/_plugins/*/biffo.plugin.json; do
             plugin_dir="$(dirname "$manifest")"
             name="$(basename "$plugin_dir")"
-            [ -d "modules/plugins/$name" ] || { echo "skip $name (no installed terraform module)"; continue; }
+            # Wired means: a copied module (third-party) OR terraform/ beside the
+            # plugin (first-party, referenced in place since #406). Checking only
+            # modules/plugins/ silently stopped shipping first-party plugin code
+            # the moment their dead copies were deleted.
+            [ -d "modules/plugins/$name" ] || [ -d "$plugin_dir/terraform" ] || { echo "skip $name (no terraform module)"; continue; }
             fn="${prefix}-plugin-${name}"
             echo "::group::plugin $name -> $fn"
             found=""
@@ -819,7 +828,11 @@ jobs:
           for manifest in services/*/biffo.plugin.json services/_plugins/*/biffo.plugin.json; do
             plugin_dir="$(dirname "$manifest")"
             name="$(basename "$plugin_dir")"
-            [ -d "modules/plugins/$name" ] || { echo "skip $name (no installed terraform module)"; continue; }
+            # Wired means: a copied module (third-party) OR terraform/ beside the
+            # plugin (first-party, referenced in place since #406). Checking only
+            # modules/plugins/ silently stopped shipping first-party plugin code
+            # the moment their dead copies were deleted.
+            [ -d "modules/plugins/$name" ] || [ -d "$plugin_dir/terraform" ] || { echo "skip $name (no terraform module)"; continue; }
             fn="${prefix}-plugin-${name}"
             echo "::group::plugin $name -> $fn"
             found=""
@@ -1225,7 +1238,11 @@ jobs:
           for manifest in services/*/biffo.plugin.json services/_plugins/*/biffo.plugin.json; do
             plugin_dir="$(dirname "$manifest")"
             name="$(basename "$plugin_dir")"
-            [ -d "modules/plugins/$name" ] || { echo "skip $name (no installed terraform module)"; continue; }
+            # Wired means: a copied module (third-party) OR terraform/ beside the
+            # plugin (first-party, referenced in place since #406). Checking only
+            # modules/plugins/ silently stopped shipping first-party plugin code
+            # the moment their dead copies were deleted.
+            [ -d "modules/plugins/$name" ] || [ -d "$plugin_dir/terraform" ] || { echo "skip $name (no terraform module)"; continue; }
             fn="${prefix}-plugin-${name}"
             echo "::group::plugin $name -> $fn"
             found=""

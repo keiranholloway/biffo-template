@@ -2,7 +2,7 @@
 
 Service-only routes under ``/api/v1/internal/agent-runs`` — reachable only by an
 allowlisted IAM principal (the agent-runtime plugin's Lambda role), never by a
-user. Four steps, matching the run lifecycle:
+user. Four steps matching the run lifecycle, plus a scheduled sweep:
 
 1. ``POST /agent-runs`` — record a requested run and emit ``agent.run.requested``.
    The §8 depth ceiling is enforced here: a chain past the maximum is refused
@@ -17,6 +17,9 @@ user. Four steps, matching the run lifecycle:
 4. ``POST /agent-runs/{id}/complete`` — the terminal report, emitting
    ``agent.run.completed`` for failures as well as successes so a subscriber can
    distinguish "failed" from "still running".
+5. ``POST /agent-runs/reap`` — scheduled sweep that fails runs a dead runtime
+   left in ``running``, emitting the same completion event so whatever was
+   waiting on them is released (§5, issue #402).
 
 Both emits go through ``emit_event``, never the publisher directly: the event is
 buffered on the request's session and published by ``get_db`` only after the
@@ -31,6 +34,7 @@ principal no write surface beyond finishing its own run.
 
 from __future__ import annotations
 
+from aws_lambda_powertools import Logger
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,6 +46,7 @@ from ..agent_runs import (
     complete_run,
     create_run,
     get_run,
+    reap_stale_runs,
 )
 from ..config import settings
 from ..database import get_db
@@ -54,6 +59,8 @@ from ..schemas.agent_run import (
     CompleteAgentRunRequest,
     CreateAgentRunRequest,
 )
+
+logger = Logger()
 
 router = APIRouter(prefix="/internal/agent-runs", tags=["internal:agents"])
 
@@ -179,6 +186,36 @@ async def complete_agent_run(
 
     emit_event(db, AGENT_RUN_COMPLETED, _reference_payload(run), tenant_id=principal.tenant_id)
     return AgentRunResponse.model_validate(run)
+
+
+@router.post("/reap", response_model=list[AgentRunResponse])
+async def reap_stale_agent_runs(
+    principal: ServicePrincipal = Depends(require_service_principal),
+    db: AsyncSession = Depends(get_db),
+) -> list[AgentRunResponse]:
+    """Fail runs a dead runtime left in ``running``, and announce each one.
+
+    Called on a schedule, so it must be safe to call when there is nothing to do
+    — and it is: with nothing stale it reaps nothing and emits nothing.
+
+    Each reaped run emits ``agent.run.completed`` with ``status="failed"``,
+    because that is the entire point. §5 exists so a subscriber can tell
+    "failed" from "still running"; a stranded run says neither, and anything
+    waiting on it waits for ever.
+    """
+    reaped = await reap_stale_runs(
+        db,
+        tenant_id=principal.tenant_id,
+        stale_after_seconds=settings.agent_run_stale_after_seconds,
+    )
+    for run in reaped:
+        emit_event(db, AGENT_RUN_COMPLETED, _reference_payload(run), tenant_id=principal.tenant_id)
+    if reaped:
+        logger.warning(
+            "Reaped stale agent runs",
+            extra={"count": len(reaped), "run_ids": [r.id for r in reaped]},
+        )
+    return [AgentRunResponse.model_validate(run) for run in reaped]
 
 
 def _not_found() -> HTTPException:

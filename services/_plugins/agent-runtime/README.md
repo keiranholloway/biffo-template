@@ -116,17 +116,23 @@ curtailed one.
 
 ## Known gaps (recorded, not hidden)
 
-- **A run killed after claiming never terminates.** The claim moves it to
-  `running` with a `started_at`, so it no longer looks like a run that was never
-  picked up — but nothing yet fails it. §5's stranding gap is now *detectable*
-  ("running for longer than the wall-clock ceiling" is a query) rather than
-  invisible; a reaper that fails such runs deliberately is the remaining work.
-- **A completion POST that fails strands the run** — the model work is paid for
-  and Core holds no result. Logged at error level (`run is stranded`) so it can
-  be alarmed on, which is what §5 asks for pending a retry/outbox.
+- **A reaped run's cost is not recovered.** The sweep records the run as failed,
+  but the tokens it spent before dying are unaccounted — `input_tokens`,
+  `output_tokens` and `cost_usd` stay null, because nothing reported them. Spend
+  attributed to a reaped run is therefore under-counted.
+- **A completion POST that fails is reaped rather than retried.** The model work
+  is paid for and Core holds no result, so the sweep eventually fails the run —
+  correct for the waiting subscriber, but the *result* is still lost. A
+  completion retry or outbox is what would actually save it (§5).
 
 ### Closed
 
+- ~~A run killed after claiming never terminates~~ — closed by the scheduled
+  sweep (issue #402). `POST /agent-runs/reap` fails runs left in `running` past
+  `agent_run_stale_after_seconds` and emits `agent.run.completed` for each, so a
+  subscriber is released rather than waiting for ever. Triggered by this
+  plugin's own `rate(15 minutes)` EventBridge rule (`terraform/`), on the
+  default bus because that is the only one that supports schedules.
 - ~~The `pending → running` transition is runtime-local~~ — closed by
   `POST /agent-runs/{id}/claim` (issue #371). Core now arbitrates: a single
   conditional `UPDATE ... WHERE status = 'pending'` means exactly one of N

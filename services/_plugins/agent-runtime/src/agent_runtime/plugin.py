@@ -5,7 +5,8 @@ definitions and runs live in Core, the authoring UI in the portal, and *this* �
 "the execution runtime (LLM loop, tool calls)" — in ``services/_plugins/``,
 template-owned and distributed by ``biffo core upgrade``.
 
-One flow, entirely event-driven (§4: "There is no synchronous invocation path"):
+Two triggers, both EventBridge — there is no synchronous invocation path (§4).
+The execution flow:
 
     agent.run.requested (EventBridge)
       -> read the run      GET  /api/v1/internal/agent-runs/{id}
@@ -14,6 +15,11 @@ One flow, entirely event-driven (§4: "There is no synchronous invocation path")
       -> one turn loop     OpenRouter, model from the run's definition_snapshot
       -> report            POST /api/v1/internal/agent-runs/{id}/complete
                            Core persists and emits agent.run.completed
+
+    agent.runs.reap_due (this plugin's own schedule, terraform/)
+      -> sweep             POST /api/v1/internal/agent-runs/reap
+                           Core fails runs a dead invocation left in `running`
+                           and emits their completion (§5, issue #402)
 
 The claim is what makes at-least-once delivery affordable. EventBridge can
 deliver the same event twice; without a claim both invocations read ``pending``,
@@ -28,9 +34,13 @@ API (ADR-0009) via ``SignedCoreClient``.
 claimed a run ends in a completion POST — a bad definition, a provider outage, a
 blown limit, an unexpected exception. §5 requires a subscriber to tell "failed"
 from "still running", and ADR-0014 records a silently abandoned run as an open
-stranding gap; this does not add to it. The one case that remains uncovered is
-the POST itself failing (§5's "second divergence point"), which is logged at
-error level so it can be alarmed on rather than lost.
+stranding gap; this does not add to it.
+
+The completion POST itself failing (§5's "second divergence point") is still not
+*recovered* — the model work is paid for and its result is lost — but it is no
+longer silent: the run stays ``running``, the sweep eventually fails it, and
+whatever was waiting is released. Logged at error level so the lost result can
+still be alarmed on.
 """
 
 from __future__ import annotations
@@ -55,6 +65,11 @@ from .state import PENDING, RunState, RunStateError
 logger = Logger()
 
 AGENT_RUN_REQUESTED = "agent.run.requested"
+# Synthesised by this plugin's own scheduled EventBridge rule (terraform/), not
+# emitted by Core — hence its own source. It carries no payload: the sweep's
+# subject is "whatever is stale now", which only Core can know (issue #402).
+AGENT_RUNS_REAP_DUE = "agent.runs.reap_due"
+AGENT_RUNTIME_SOURCE = "biffo.agent-runtime"
 _AGENT_RUNS_PATH = "/api/v1/internal/agent-runs"
 
 # Core answers a claim for a run someone else already owns with 409 (ADR-0014
@@ -86,6 +101,10 @@ class AgentRuntimePlugin(BiffoPluginBase):
         async def _on_run_requested(event: BiffoEvent) -> None:
             await self.process_event(event)
 
+        @self.subscribe(AGENT_RUNS_REAP_DUE, source=AGENT_RUNTIME_SOURCE)
+        async def _on_reap_due(event: BiffoEvent) -> None:
+            await self.reap_stale_runs()
+
     def on_install(self) -> None:
         """No-op: this plugin declares no tables and seeds nothing. Workers are
         rows in Core authored through the portal (§2), not install-time data."""
@@ -113,6 +132,28 @@ class AgentRuntimePlugin(BiffoPluginBase):
         except RunStateError:  # pragma: no cover — the loop only ever terminates
             logger.exception("Agent run produced an illegal terminal state")
         await self._report(str(run_id), outcome)
+
+    async def reap_stale_runs(self) -> None:
+        """Ask Core to fail runs a dead runtime left in ``running`` (§5, #402).
+
+        All the work is Core's: it owns the runs, the clock and the threshold,
+        and it emits the completion events. This is only the schedule tick — the
+        plugin holds no state and makes no decision about what is stale.
+
+        A failure here is logged and swallowed. The sweep runs again on the next
+        tick, so one missed pass costs nothing, whereas raising would fail the
+        Lambda invocation and produce an EventBridge retry storm against a Core
+        that is already unwell.
+        """
+        try:
+            reaped = await self.api.post(f"{_AGENT_RUNS_PATH}/reap", json={})
+        except BiffoAPIError:
+            logger.exception("Stale-run sweep failed; will retry on the next schedule")
+            return
+
+        count = len(reaped) if isinstance(reaped, list) else 0
+        if count:
+            logger.warning("Reaped stale agent runs", extra={"count": count})
 
     async def _claim(self, run_id: str) -> dict[str, Any] | None:
         """Take ownership of the run in Core, or give it up.

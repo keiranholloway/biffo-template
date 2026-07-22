@@ -26,12 +26,13 @@ That ordering is the point. The check here runs against a *read*, so two
 invocations arriving together both see ``pending`` and both would proceed; only
 the claim resolves it, and only because it happens before any tokens are bought.
 
-**Remaining gap.** A runtime killed *after* claiming leaves the row ``running``
-with a ``started_at`` rather than stranded in ``pending``. That does not fix
-ADR-0014 §5's stranding — the run still never terminates — but it makes it
-*detectable*: "running for longer than the wall-clock ceiling" is a query, where
-"pending for ever" is indistinguishable from "never picked up". A reaper that
-fails such runs deliberately is the remaining work, tracked separately.
+A runtime killed *after* claiming leaves the row ``running`` with a
+``started_at`` rather than stranded in ``pending``, which is what makes it
+findable: "running for longer than the ceiling" is a query, where "pending for
+ever" is indistinguishable from "never picked up". Core'''s scheduled sweep
+(``POST /agent-runs/reap``, issue #402) fails those runs and emits their
+completion, so nothing waits on them for ever. What it cannot recover is the
+run'''s *result* or its token spend — both died with the invocation.
 """
 
 from __future__ import annotations

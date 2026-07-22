@@ -93,6 +93,21 @@ class Settings(BaseSettings):
     # permits two further generations of agent-triggered-by-agent.
     agent_max_run_depth: int = 2
 
+    # How long a run may sit in `running` before the reaper fails it (ADR-0014
+    # §5, issue #402). A run only reaches `running` by being claimed, so one
+    # that stays there past any possible invocation is a runtime that died
+    # holding it: already paid for, no result recorded, and nothing waiting on
+    # `agent.run.completed` will ever be released.
+    #
+    # The floor is AWS's own 900s Lambda cap, NOT the agent-runtime module's
+    # configured `timeout` (300s). Deriving it from the platform ceiling rather
+    # than from a second configurable number means raising the plugin's timeout
+    # can never silently bring this below it and start reaping runs that are
+    # still legitimately executing — which would be worse than the gap, since
+    # the reap would then race a real completion. 1800s leaves an hour's slack
+    # over the worst case while still bounding "stuck for ever" to half an hour.
+    agent_run_stale_after_seconds: int = 1800
+
     # Application
     environment: str = "dev"
     log_level: str = "INFO"

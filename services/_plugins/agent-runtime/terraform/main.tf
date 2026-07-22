@@ -153,6 +153,59 @@ resource "aws_lambda_permission" "subscription" {
   source_arn    = aws_cloudwatch_event_rule.subscription[0].arn
 }
 
+# ── Stale-run sweep (ADR-0014 §5, issue #402) ────────────────────────────────
+#
+# A run reaches `running` only by being claimed, so one still there long after
+# any invocation could have finished is a runtime that died holding it: the
+# model work is already paid for, Core holds no result, and anything waiting on
+# agent.run.completed waits for ever. This rule ticks; Core decides what is
+# stale and fails it.
+#
+# On the DEFAULT bus, not var.event_bus_name: EventBridge only supports
+# schedule_expression on the default bus. It targets the Lambda directly rather
+# than publishing to the custom bus, so the tick never traverses the bus the
+# subscription rule above watches.
+#
+# `input` synthesises the BiffoEvent envelope create_event_handler expects, so
+# the tick arrives through the same dispatch path as a real event and needs no
+# second entrypoint in the handler. The source is this plugin's own, never
+# biffo.core — Core did not emit this, and claiming otherwise would put a
+# fabricated core event in front of anyone reading the bus.
+resource "aws_cloudwatch_event_rule" "reap_schedule" {
+  count               = var.reap_schedule_expression == "" ? 0 : 1
+  name                = "${local.function_name}-reap"
+  description         = "Periodic stale agent-run sweep for ${var.plugin_name} (ADR-0014 section 5)"
+  schedule_expression = var.reap_schedule_expression
+
+  tags = var.tags
+}
+
+resource "aws_cloudwatch_event_target" "reap_schedule" {
+  count     = var.reap_schedule_expression == "" ? 0 : 1
+  rule      = aws_cloudwatch_event_rule.reap_schedule[0].name
+  target_id = "${var.plugin_name}-reap"
+  arn       = module.function.function_arn
+
+  input = jsonencode({
+    source        = "biffo.agent-runtime"
+    "detail-type" = "agent.runs.reap_due"
+    detail = {
+      schema_version = "1.0"
+      tenant_id      = var.tenant_id
+      payload        = {}
+    }
+  })
+}
+
+resource "aws_lambda_permission" "reap_schedule" {
+  count         = var.reap_schedule_expression == "" ? 0 : 1
+  statement_id  = "AllowEventBridgeReapInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = module.function.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.reap_schedule[0].arn
+}
+
 # Core API access (ADR-0009) — the plugin->Core auth path.
 #
 # ADR-0002 forbids this Lambda from touching the database, so anything it needs

@@ -330,7 +330,7 @@ async function runCoreUpgradeResolved(
     return
   }
 
-  await applyAndOpenPr(options, deps, plan, migrations, fromVersion, toVersion, breaking)
+  await applyAndOpenPr(options, deps, plan, migrations, fromVersion, toVersion, breaking, theirsDir)
 }
 
 async function applyAndOpenPr(
@@ -341,6 +341,8 @@ async function applyAndOpenPr(
   fromVersion: string,
   toVersion: string,
   breaking: BreakingChange[],
+  /** Upstream tree the plan was built from — read for file modes on write. */
+  theirsDir: string,
 ): Promise<void> {
   if (breaking.length > 0 && !options.acknowledgeBreaking) {
     throw new Error(
@@ -373,7 +375,7 @@ async function applyAndOpenPr(
   log.step(1, 4, `Creating branch ${branch}`)
   await git.createBranch(options.cwd, branch)
 
-  const applied = applyUpgradePlan(options.cwd, plan)
+  const applied = applyUpgradePlan(options.cwd, plan, theirsDir)
   const carried = applyMigrationCarry(options.cwd, migrations)
   writeInstanceCoreVersion(options.cwd, toVersion)
   log.step(

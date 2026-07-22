@@ -1,10 +1,16 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { type CoreManifest, readCoreManifest } from './core-manifest.js'
-import { type MergeFileFn, gitMergeFile, planCoreUpgrade } from './core-upgrade.js'
+import {
+  type MergeFileFn,
+  type UpgradePlan,
+  applyUpgradePlan,
+  gitMergeFile,
+  planCoreUpgrade,
+} from './core-upgrade.js'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 
@@ -231,6 +237,44 @@ describe('gitMergeFile (real git integration)', () => {
 import { existsSync, readFileSync } from 'node:fs'
 import { applyUpgradePlan, parseGitHubRepo, upgradeBranchName } from './core-upgrade.js'
 import type { UpgradePlan } from './core-upgrade.js'
+
+/**
+ * An executable delivered by an upgrade must arrive executable.
+ *
+ * `writeFileSync` creates 0644, so without mirroring the upstream mode a shell
+ * script lands non-executable and every `./script.sh` in the instance dies with
+ * "Permission denied". Latent for the whole life of the upgrade path: no
+ * upgrade had ever *added* an executable until scripts/biffo.sh (#440), which
+ * an instance's CI runs on every job. Caught in a real instance, not here.
+ */
+describe('applyUpgradePlan — file modes', () => {
+  it('mirrors the executable bit from the upstream tree', () => {
+    const theirs = mkdtempSync(join(tmpdir(), 'theirs-mode-'))
+    const instance = mkdtempSync(join(tmpdir(), 'inst-mode-'))
+    try {
+      writeFileSync(join(theirs, 'run.sh'), '#!/bin/sh\necho hi\n', { mode: 0o755 })
+      writeFileSync(join(theirs, 'plain.txt'), 'data\n', { mode: 0o644 })
+
+      const plan: UpgradePlan = {
+        entries: [
+          { path: 'run.sh', status: 'added', conflicted: false, content: '#!/bin/sh\necho hi\n' },
+          { path: 'plain.txt', status: 'added', conflicted: false, content: 'data\n' },
+        ],
+        changes: [],
+        conflicts: [],
+        summary: {} as UpgradePlan['summary'],
+      }
+      applyUpgradePlan(instance, plan, theirs)
+
+      expect(statSync(join(instance, 'run.sh')).mode & 0o111).not.toBe(0)
+      // ...and does not make everything executable.
+      expect(statSync(join(instance, 'plain.txt')).mode & 0o111).toBe(0)
+    } finally {
+      rmSync(theirs, { recursive: true, force: true })
+      rmSync(instance, { recursive: true, force: true })
+    }
+  })
+})
 
 describe('applyUpgradePlan', () => {
   let dir: string

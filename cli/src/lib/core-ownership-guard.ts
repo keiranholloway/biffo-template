@@ -123,6 +123,30 @@ export function parseDivergenceTrailer(commitMessage: string): string | null {
   return match?.[1] ?? null
 }
 
+/**
+ * The branch a check is running against, given the runner's environment and
+ * whatever git reports.
+ *
+ * git alone is right locally and **wrong in CI**: `actions/checkout` on a
+ * `pull_request` event leaves HEAD detached at the merge commit, so
+ * `rev-parse --abbrev-ref HEAD` returns the literal string `HEAD`. The
+ * core-upgrade exemption then never fires and the guard blocks the one workflow
+ * it exists to let through — every `biffo core upgrade` PR, in every instance.
+ *
+ * Not hypothetical: it blocked the first upgrade PR this guard ever saw
+ * (biffo-platform#2). The hook path was unaffected, because a local branch is a
+ * real branch — so the failure appeared only in CI, which is exactly where
+ * nobody was watching.
+ *
+ * Preference order: `GITHUB_HEAD_REF` (the PR's source branch, set only on
+ * pull_request), then `GITHUB_REF_NAME` (push events), then git. A genuinely
+ * detached HEAD still yields `HEAD`, which matches no prefix and so falls
+ * through to the file check rather than inventing an exemption.
+ */
+export function resolveBranch(env: Record<string, string | undefined>, gitBranch: string): string {
+  return (env['GITHUB_HEAD_REF'] || env['GITHUB_REF_NAME'] || gitBranch).trim()
+}
+
 export type OwnershipSkipReason = 'template' | 'upgrade-branch' | 'divergence-trailer'
 
 export interface OwnershipCheckInput {

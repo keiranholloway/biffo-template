@@ -25,6 +25,12 @@ import {
   upgradeBranchName,
 } from '../lib/core-upgrade.js'
 import { type MaterializedTree, materializeTemplateAtTag } from '../lib/core-template-trees.js'
+import {
+  type BreakingChange,
+  UPGRADE_GUIDE_PATH,
+  breakingChangesBetween,
+  readBreakingChanges,
+} from '../lib/breaking-changes.js'
 import { GLOBAL_DISPATCH_REF, GLOBAL_DISPATCH_WORKFLOW_PATHS } from '../lib/global-workflows.js'
 import { staleFirstPartyCopies } from '../lib/plugin-terraform-wiring.js'
 import {
@@ -66,6 +72,10 @@ export const coreUpgradeCommand = new Command('upgrade')
   )
   .option('--apply', 'Apply the plan on a new branch and open a PR (default: dry run)')
   .option('--allow-conflicts', 'With --apply, open the PR even if some files conflict')
+  .option(
+    '--acknowledge-breaking',
+    'With --apply, proceed even though this upgrade crosses a documented breaking change',
+  )
   .option('--base <branch>', 'Base branch for the PR (defaults to the current branch)')
   .option('--remote <name>', 'Git remote to push to and open the PR on (default: origin)')
   .action(
@@ -77,6 +87,7 @@ export const coreUpgradeCommand = new Command('upgrade')
       toTemplate?: string
       apply?: boolean
       allowConflicts?: boolean
+      acknowledgeBreaking?: boolean
       base?: string
       remote?: string
     }) => {
@@ -85,6 +96,7 @@ export const coreUpgradeCommand = new Command('upgrade')
         cwd,
         apply: options.apply ?? false,
         allowConflicts: options.allowConflicts ?? false,
+        acknowledgeBreaking: options.acknowledgeBreaking ?? false,
       }
       if (options.templateRepo) runOptions.templateRepo = resolve(options.templateRepo)
       if (options.to) runOptions.toVersion = options.to
@@ -116,6 +128,9 @@ export interface CoreUpgradeOptions {
   toVersion?: string
   apply?: boolean
   allowConflicts?: boolean
+  /** Proceed with --apply even though the upgrade crosses a documented
+   * breaking change. Deliberate keystroke, not a default. */
+  acknowledgeBreaking?: boolean
   base?: string
   remote?: string
 }
@@ -275,6 +290,17 @@ async function runCoreUpgradeResolved(
     return
   }
 
+  // Before the plan, not after: the plan is long, and a warning below it is a
+  // warning nobody reads (#407).
+  const breaking = breakingChangesBetween(
+    fromVersion,
+    toVersion,
+    // From the TEMPLATE at the target version, never the instance's own copy —
+    // docs/ is user-owned, so an instance's guide may be stale or edited.
+    readBreakingChanges(theirsDir),
+  )
+  printBreakingChanges(breaking, options.apply === true)
+
   printPlan(plan)
   printMigrationCarry(migrations)
   warnStaleFirstPartyCopies(options.cwd)
@@ -294,7 +320,7 @@ async function runCoreUpgradeResolved(
     return
   }
 
-  await applyAndOpenPr(options, deps, plan, migrations, fromVersion, toVersion)
+  await applyAndOpenPr(options, deps, plan, migrations, fromVersion, toVersion, breaking)
 }
 
 async function applyAndOpenPr(
@@ -304,7 +330,17 @@ async function applyAndOpenPr(
   migrations: MigrationCarryPlan,
   fromVersion: string,
   toVersion: string,
+  breaking: BreakingChange[],
 ): Promise<void> {
+  if (breaking.length > 0 && !options.acknowledgeBreaking) {
+    throw new Error(
+      `This upgrade crosses ${breaking.length} documented breaking change(s): ` +
+        `${breaking.map((b) => b.version).join(', ')}. They are printed above and in ` +
+        `${UPGRADE_GUIDE_PATH}. Read what each one requires — some destroy data or need ` +
+        `manual work after the deploy — then re-run with --acknowledge-breaking.`,
+    )
+  }
+
   if (plan.conflicts.length > 0 && !options.allowConflicts) {
     throw new Error(
       `${plan.conflicts.length} file(s) conflict. Resolve them upstream, or re-run with ` +
@@ -362,7 +398,7 @@ async function applyAndOpenPr(
     head: branch,
     base,
     title: `Upgrade Biffo core ${fromVersion} → ${toVersion}`,
-    body: buildPrBody(fromVersion, toVersion, plan, migrations, base, lockfiles),
+    body: buildPrBody(fromVersion, toVersion, plan, migrations, base, lockfiles, breaking),
   })
 
   if (plan.conflicts.length > 0) {
@@ -379,8 +415,23 @@ export function buildPrBody(
   migrations: MigrationCarryPlan,
   base = GLOBAL_DISPATCH_REF,
   lockfiles: LockfileRefreshOutcome[] = [],
+  breaking: BreakingChange[] = [],
 ): string {
-  const lines: string[] = [
+  const lines: string[] = []
+  if (breaking.length > 0) {
+    // First thing in the body, above everything. A warning below a 60-line
+    // change list is a warning nobody scrolls to (#407).
+    lines.push(
+      `## ⚠ This upgrade crosses ${breaking.length} breaking change(s)`,
+      '',
+      'Read these before merging — some destroy data or require manual work afterwards.',
+      '',
+      ...breaking.flatMap((b) => [`### ${b.version} — ${b.title}`, '', b.body, '']),
+      '---',
+      '',
+    )
+  }
+  lines.push(
     'Automated core upgrade generated by `biffo core upgrade` (ADR-0006).',
     '',
     `Bumps the Biffo template core from **${from}** to **${to}** and updates \`biffo.core.json\`. Only template-owned paths (see \`core-manifest.json\`) were touched — product, plugin, and infra files were left untouched.`,
@@ -391,7 +442,7 @@ export function buildPrBody(
     `- take-theirs: ${plan.summary['take-theirs']}`,
     `- added: ${plan.summary.added}`,
     `- removed: ${plan.summary.removed}`,
-  ]
+  )
   if (migrations.entries.length > 0) {
     lines.push(
       '',
@@ -595,4 +646,31 @@ function warnStaleFirstPartyCopies(cwd: string): void {
       `are NOT deployed. Point the module source at services/_plugins/<name>/terraform ` +
       `and delete the copy — see docs/guides/core-upgrade.md.`,
   )
+}
+
+/**
+ * Print the breaking changes an upgrade crosses, before the plan.
+ *
+ * The guide's own preamble says "check this list before upgrading past a
+ * version in it" — which depended on a human remembering the list exists. The
+ * CLI knows both versions and ships the guide, so it can simply say (#407).
+ */
+function printBreakingChanges(breaking: BreakingChange[], applying: boolean): void {
+  if (breaking.length === 0) return
+  console.log(
+    chalk.red.bold(
+      `\n  ⚠ This upgrade crosses ${breaking.length} documented breaking change(s):\n`,
+    ),
+  )
+  for (const b of breaking) {
+    console.log(`  ${chalk.bold(b.version)} — ${b.title}`)
+    for (const line of b.body.split('\n').slice(0, 6)) console.log(chalk.dim(`      ${line}`))
+    console.log()
+  }
+  console.log(chalk.dim(`  Full detail: ${UPGRADE_GUIDE_PATH}\n`))
+  if (!applying) {
+    console.log(
+      chalk.dim('  Re-run with --apply --acknowledge-breaking once you have read them.\n'),
+    )
+  }
 }

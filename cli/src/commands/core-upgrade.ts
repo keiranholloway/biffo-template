@@ -17,6 +17,7 @@ import {
   planMigrationCarry,
 } from '../lib/core-migrations.js'
 import {
+  type ApplyResult,
   type UpgradePlan,
   applyUpgradePlan,
   parseGitHubRepo,
@@ -342,7 +343,7 @@ async function applyAndOpenPr(
   // template-owned and the upgrade rewrites them; the lockfiles are user-owned
   // so it cannot carry them, and the two disagreeing fails
   // `pnpm install --frozen-lockfile` outright in the instance's CI.
-  const lockfiles = await refreshInstanceLockfiles(options.cwd, plan, deps)
+  const lockfiles = await refreshInstanceLockfiles(options.cwd, applied, deps)
 
   await git.add(options.cwd, ['-A'])
   await git.commit(options.cwd, `chore(core): upgrade template core ${fromVersion} -> ${toVersion}`)
@@ -522,16 +523,24 @@ function printPlan(plan: UpgradePlan): void {
  * pnpm or uv. Aborting would leave a created branch and no PR; skipping quietly
  * would open a PR that is red for a reason nobody can see. So a failure warns
  * with the exact command and is carried into the PR body.
+ *
+ * Takes the `ApplyResult`, not the plan. `plan.changes` is everything the
+ * upgrade *considered* — it includes `removed` entries for files that were
+ * already absent from the instance, which write nothing. Two of those fired
+ * this refresh on an upgrade that touched no manifest at all, and it announced
+ * "the upgrade changed a dependency manifest they lock" when it hadn't (#393,
+ * reopened). `applyUpgradePlan` is the only thing that knows what actually
+ * landed, so the decision is made from its result rather than by re-deriving a
+ * status filter here — and that keeps a *real* deletion of a workspace member's
+ * manifest triggering a refresh, which it must, since removing a manifest
+ * changes resolution just as surely as editing one.
  */
 async function refreshInstanceLockfiles(
   cwd: string,
-  plan: UpgradePlan,
+  applied: ApplyResult,
   deps: CoreUpgradeDeps,
 ): Promise<LockfileRefreshOutcome[]> {
-  const triggers = lockfilesNeedingRefresh(
-    plan.changes.map((c) => c.path),
-    cwd,
-  )
+  const triggers = lockfilesNeedingRefresh([...applied.written, ...applied.deleted], cwd)
   if (triggers.length === 0) return []
 
   const run: RunCommandFn = deps.runCommand ?? defaultRunCommand

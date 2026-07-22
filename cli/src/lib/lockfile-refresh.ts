@@ -76,12 +76,41 @@ export const LOCKFILE_TRIGGERS: readonly LockfileTrigger[] = [
 ]
 
 /**
+ * Trees that contain manifests describing a *different* repo, not this one.
+ *
+ * `_skeletons/` is scaffolding source: the tree `biffo sibling create` /
+ * `biffo plugin create` copies into a brand-new repository. Its
+ * `package.json` / `pyproject.toml` are deliberately **not** pnpm or uv
+ * workspace members here (see `pnpm-workspace.yaml`, `[tool.uv.workspace]`
+ * and each skeleton's own README), so this repo's `pnpm-lock.yaml` and
+ * `uv.lock` do not resolve them and changing them cannot invalidate either.
+ *
+ * Any other vendored tree of foreign manifests belongs here for the same
+ * reason.
+ */
+export const NON_WORKSPACE_TREES: readonly string[] = ['_skeletons']
+
+/** True when the path lives inside a tree whose manifests belong to another repo. */
+function isForeignManifest(path: string): boolean {
+  return path.split('/').some((segment) => NON_WORKSPACE_TREES.includes(segment))
+}
+
+/**
  * Which lockfiles a set of changed paths invalidates.
  *
  * Matches a manifest **anywhere** in the tree, not just at the root: a workspace
  * member's `package.json` or `pyproject.toml` is locked by the root lockfile
  * too, and adding one (as the agent-runtime plugin did) is precisely a change
  * that makes `uv lock --check` fail.
+ *
+ * Except when the manifest is not this repo's to resolve. `_skeletons/` holds
+ * the manifests of repos that do not exist yet, and matching them fired a
+ * refresh — and printed "the upgrade changed a dependency manifest they lock" —
+ * on an upgrade that changed no root manifest at all (issue #393, reopened).
+ * See `NON_WORKSPACE_TREES`.
+ *
+ * `changedPaths` must be what the upgrade actually *wrote or deleted*, not what
+ * it considered: see `refreshInstanceLockfiles` in `commands/core-upgrade.ts`.
  *
  * A lockfile the instance does not have is not created — its absence means that
  * ecosystem is not locked here, and inventing one would be a bigger change than
@@ -92,8 +121,9 @@ export function lockfilesNeedingRefresh(
   instanceDir: string,
   triggers: readonly LockfileTrigger[] = LOCKFILE_TRIGGERS,
 ): LockfileTrigger[] {
+  const locked = changedPaths.filter((p) => !isForeignManifest(p))
   return triggers.filter((t) => {
-    const touched = changedPaths.some((p) => p === t.manifest || p.endsWith(`/${t.manifest}`))
+    const touched = locked.some((p) => p === t.manifest || p.endsWith(`/${t.manifest}`))
     return touched && existsSync(join(instanceDir, t.lockfile))
   })
 }

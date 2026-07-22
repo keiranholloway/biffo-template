@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { CoreManifest } from './core-manifest.js'
-import { coreVersionTag, templateOwnedPathspecs } from './core-tags.js'
+import { coreVersionTag, releasePathspecs, templateOwnedPathspecs } from './core-tags.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '../../..')
@@ -14,6 +14,7 @@ const manifest: CoreManifest = {
   version: 1,
   templateOwned: ['cli/', 'services/api/', '.github/', 'core-manifest.json'],
   userOwned: ['services/', 'services/api/migrations/versions/', 'docs/ADR/', 'apps/'],
+  released: [],
 }
 
 describe('templateOwnedPathspecs', () => {
@@ -43,6 +44,32 @@ describe('templateOwnedPathspecs', () => {
       readFileSync(join(repoRoot, 'core-manifest.json'), 'utf8'),
     ) as CoreManifest
     expect(templateOwnedPathspecs(real)).toContain(':(exclude)services/api/migrations/versions/')
+  })
+})
+
+describe('releasePathspecs', () => {
+  // `tools/` is in neither list, so it can only appear via `released`.
+  const withReleased = { ...manifest, released: ['tools/'] }
+
+  it('adds released-but-not-distributed paths to the distributed set', () => {
+    expect(releasePathspecs(withReleased)).toContain('tools/')
+    expect(templateOwnedPathspecs(withReleased)).not.toContain('tools/')
+  })
+
+  it('keeps the nested user-owned exclusion', () => {
+    expect(releasePathspecs(withReleased)).toContain(':(exclude)services/api/migrations/versions/')
+  })
+
+  it('is the distributed set when nothing is released separately', () => {
+    expect(releasePathspecs(manifest)).toEqual(templateOwnedPathspecs(manifest))
+  })
+
+  it('matches the real manifest — cli/ releases without distributing', () => {
+    const real = JSON.parse(
+      readFileSync(join(repoRoot, 'core-manifest.json'), 'utf8'),
+    ) as CoreManifest
+    expect(releasePathspecs(real)).toContain('cli/')
+    expect(templateOwnedPathspecs(real)).not.toContain('cli/')
   })
 })
 

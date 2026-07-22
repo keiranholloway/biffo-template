@@ -36,7 +36,7 @@ import { existsSync, appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { execa } from 'execa'
 import { readCoreManifest } from '../lib/core-manifest.js'
-import { coreVersionTag, templateOwnedPathspecs } from '../lib/core-tags.js'
+import { coreVersionTag, releasePathspecs } from '../lib/core-tags.js'
 import { INSTANCE_CORE_FILE, latestCoreVersionFromTags } from '../lib/core-version.js'
 import { decideRelease } from '../lib/release-version.js'
 
@@ -82,7 +82,7 @@ async function main(): Promise<void> {
   }
 
   const manifest = readCoreManifest(root)
-  const pathspecs = templateOwnedPathspecs(manifest)
+  const pathspecs = releasePathspecs(manifest)
   const head = await git(['rev-parse', 'HEAD'])
   const subject = await git(['log', '-1', '--format=%s', head])
 

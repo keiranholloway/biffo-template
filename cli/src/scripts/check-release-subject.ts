@@ -18,8 +18,8 @@ import { readCoreManifest } from '../lib/core-manifest.js'
 import { INSTANCE_CORE_FILE, isInstanceRepo } from '../lib/core-version.js'
 import { checkReleaseSubject } from '../lib/release-subject-guard.js'
 
-async function main(): Promise<void> {
-  const base = process.env['GITHUB_BASE_REF'] ?? process.argv[2]
+export async function runReleaseSubjectCheck(argv: string[]): Promise<void> {
+  const base = process.env['GITHUB_BASE_REF'] ?? argv[0]
   if (!base) {
     console.error('No base ref: set GITHUB_BASE_REF or pass a base branch as the first argument.')
     process.exit(2)
@@ -95,8 +95,3 @@ async function main(): Promise<void> {
       `${templateOwnedChanges.length} template-owned change(s).`,
   )
 }
-
-main().catch((err: unknown) => {
-  console.error(err instanceof Error ? err.message : err)
-  process.exit(2)
-})

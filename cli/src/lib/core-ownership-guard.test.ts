@@ -88,16 +88,16 @@ describe('checkCoreOwnership — what it lets through', () => {
 
   it('does not exempt a branch that merely mentions the words', () => {
     const result = check({
-      changedFiles: ['cli/src/index.ts'],
+      changedFiles: ['packages/ui/src/index.ts'],
       branch: 'fix/notes-about-biffo-core-upgrade',
     })
     expect(result.skipped).toBeNull()
-    expect(result.blocked).toEqual(['cli/src/index.ts'])
+    expect(result.blocked).toEqual(['packages/ui/src/index.ts'])
   })
 
   it('allows an explicit Core-Divergence trailer, and reports the reason', () => {
     const result = check({
-      changedFiles: ['cli/src/index.ts'],
+      changedFiles: ['packages/ui/src/index.ts'],
       commitMessage: 'fix: something\n\nCore-Divergence: upstream cannot express this yet\n',
     })
     expect(result.skipped).toBe('divergence-trailer')
@@ -122,7 +122,7 @@ describe('resolveBranch', () => {
 
   it('exempts the upgrade PR end to end, which is the whole point', () => {
     const result = check({
-      changedFiles: ['services/api/src/api/main.py', 'cli/src/lib/core-version.ts'],
+      changedFiles: ['services/api/src/api/main.py', 'packages/ui/src/index.ts'],
       branch: resolveBranch({ GITHUB_HEAD_REF: upgradeBranch }, 'HEAD'),
     })
     expect(result.skipped).toBe('upgrade-branch')
@@ -133,7 +133,7 @@ describe('resolveBranch', () => {
     // Proof the exemption above comes from resolveBranch and not from the
     // change being harmless — this is the pre-fix behaviour.
     const result = check({
-      changedFiles: ['services/api/src/api/main.py', 'cli/src/lib/core-version.ts'],
+      changedFiles: ['services/api/src/api/main.py', 'packages/ui/src/index.ts'],
       branch: resolveBranch({}, 'HEAD'),
     })
     expect(result.skipped).toBeNull()
@@ -227,7 +227,7 @@ describe('checkCoreOwnership — warn-only prefixes', () => {
    */
   it('still surfaces warnings when a trailer allows the rest', () => {
     const result = check({
-      changedFiles: ['apps/portal/src/app/page.tsx', 'cli/src/index.ts'],
+      changedFiles: ['apps/portal/src/app/page.tsx', 'packages/ui/src/index.ts'],
       commitMessage: 'x\n\nCore-Divergence: deliberate\n',
       warnOnly: [portal],
     })
@@ -290,7 +290,7 @@ describe('the real manifest', () => {
     const blocked = check({
       changedFiles: [
         'services/api/src/api/main.py',
-        'cli/src/index.ts',
+        'packages/ui/src/index.ts',
         'modules/cloud/aws/main.tf',
         '.github/workflows/ci.yml',
         'core-manifest.json',

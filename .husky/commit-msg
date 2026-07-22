@@ -1,4 +1,4 @@
 pnpm exec commitlint --edit "$1"
 # Refuse commits that edit template-owned paths (#370). Inert in the template;
 # enforces in instances. CI runs the same check, which --no-verify cannot skip.
-pnpm --filter @biffo/cli check:core-ownership -- --staged "$1"
+./scripts/biffo.sh check ownership --staged "$1"

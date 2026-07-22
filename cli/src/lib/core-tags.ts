@@ -48,6 +48,18 @@ export function coreVersionTag(version: string): string {
  * carved back out — as a git `:(exclude)` pathspec. Top-level user-owned entries
  * need no exclusion: they were never included.
  */
+/**
+ * Pathspecs whose change should cut a release: everything distributed, plus
+ * everything merely *published* from the same tag (`released` in the manifest).
+ *
+ * The two lists differ because `cli/` is released but not distributed. Diffing
+ * only the distributed set would leave a CLI-only fix untagged and unpublished,
+ * so no instance could ever install it.
+ */
+export function releasePathspecs(manifest: CoreManifest): string[] {
+  return [...templateOwnedPathspecs(manifest), ...manifest.released]
+}
+
 export function templateOwnedPathspecs(manifest: CoreManifest): string[] {
   const nestedUserOwned = manifest.userOwned.filter((u) =>
     manifest.templateOwned.some((t) => t !== u && t.endsWith('/') && u.startsWith(t)),

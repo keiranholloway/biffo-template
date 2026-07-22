@@ -1,0 +1,126 @@
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { describe, expect, it } from 'vitest'
+import type { CoreManifest } from '../lib/core-manifest.js'
+import { checkCommand } from './check.js'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const repoRoot = resolve(here, '../../..')
+
+/**
+ * These guard the seam that lets an instance stop carrying `cli/`.
+ *
+ * An instance runs the guards from the published package via `scripts/biffo.sh`
+ * (`biffo check ownership`), while the template runs the same subcommands from
+ * its working tree. Rename or drop one and every instance's CI fails on a
+ * command that no longer exists — in a repo that cannot fix it, which is the
+ * failure class this change exists to remove.
+ */
+describe('biffo check', () => {
+  const names = checkCommand.commands.map((c) => c.name()).sort()
+
+  it('exposes exactly the guards CI and the commit hook invoke', () => {
+    expect(names).toEqual(['ownership', 'plugin-terraform', 'release-subject'])
+  })
+
+  it('is registered on the root program, or the published binary has no guards', () => {
+    const index = readFileSync(join(repoRoot, 'cli/src/index.ts'), 'utf8')
+    expect(index).toContain('addCommand(checkCommand)')
+  })
+
+  it.each(['ci.yml'])('%s invokes the guards through the dispatcher, not the workspace', (file) => {
+    const workflow = readFileSync(join(repoRoot, '.github/workflows', file), 'utf8')
+    // `pnpm --filter @biffo/cli` only works where cli/ exists — the template.
+    expect(workflow).not.toContain('pnpm --filter @biffo/cli check')
+    for (const name of names) expect(workflow).toContain(`biffo.sh check ${name}`)
+  })
+
+  it('the commit hook uses the dispatcher too', () => {
+    const hook = readFileSync(join(repoRoot, '.husky/commit-msg'), 'utf8')
+    expect(hook).toContain('biffo.sh check ownership')
+    expect(hook).not.toContain('pnpm --filter @biffo/cli')
+  })
+})
+
+describe('cli/ is no longer distributed to instances', () => {
+  const manifest = JSON.parse(
+    readFileSync(join(repoRoot, 'core-manifest.json'), 'utf8'),
+  ) as CoreManifest
+
+  /**
+   * The point of the change. `cli/` is 31k lines of a scaffolding tool an
+   * instance never develops and never deploys; template-owned, it was built,
+   * linted, type-checked and tested in every tenant's CI on every core release,
+   * and the template's own tests failed there routinely — in repos with no
+   * stake in them and no way to fix them.
+   */
+  it('is absent from templateOwned', () => {
+    expect(manifest.templateOwned).not.toContain('cli/')
+  })
+
+  it('leaves scripts/ owned, or the dispatcher never reaches an instance', () => {
+    expect(manifest.templateOwned).toContain('scripts/')
+  })
+
+  /**
+   * Not distributed, but still released. The CLI publishes from the same
+   * `core-v*` tag as everything else, so the release job has to see a CLI-only
+   * change — otherwise the fix is never tagged, never published, and no
+   * instance can install it. Dropping `cli/` from templateOwned without adding
+   * it here would break publishing silently, which is what this pins.
+   */
+  it('is listed as released, so a CLI-only change still cuts a version', () => {
+    expect(manifest.released).toContain('cli/')
+  })
+})
+
+describe('scripts/biffo.sh', () => {
+  const script = join(repoRoot, 'scripts/biffo.sh')
+
+  /**
+   * Both branches, driven for real: a repo with `biffo.core.json` must reach for
+   * the published package at that exact version, and one without must use the
+   * local workspace. Asserting on the source instead would not catch a shell
+   * bug, and this dispatcher runs in every guard invocation in every repo.
+   */
+  const dispatchFor = (instanceVersion: string | null): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'biffo-dispatch-'))
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir })
+      if (instanceVersion !== null) {
+        writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: instanceVersion }))
+      }
+      // Shim npx/pnpm onto PATH so the exec is observable instead of real.
+      const bin = join(dir, 'bin')
+      execFileSync('mkdir', ['-p', bin])
+      for (const name of ['npx', 'pnpm']) {
+        const shim = join(bin, name)
+        writeFileSync(shim, `#!/bin/sh\necho "${name} $*"\n`, { mode: 0o755 })
+      }
+      return execFileSync('sh', [script, 'check', 'ownership'], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${bin}:${process.env['PATH'] ?? ''}` },
+      }).trim()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  it('an instance runs the published package, pinned to its own core version', () => {
+    const out = dispatchFor('0.61.0')
+    expect(out).toContain('npx')
+    expect(out).toContain('@biffo/cli@0.61.0')
+    expect(out).toContain('check ownership')
+  })
+
+  it('the template runs its working tree, not the last release', () => {
+    const out = dispatchFor(null)
+    expect(out).toContain('pnpm')
+    expect(out).toContain('src/index.ts')
+    expect(out).not.toContain('npx')
+  })
+})

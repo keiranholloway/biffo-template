@@ -297,3 +297,71 @@ def test_complete_unknown_run_is_404(client):
     resp = client.post(f"{_RUNS}/nope/complete", json={"status": "completed"})
 
     assert resp.status_code == 404
+
+
+# ── Claim (ADR-0014 §5, issue #371) ──────────────────────────────────────────
+#
+# EventBridge delivery is at-least-once. Without a claim, two deliveries of the
+# same agent.run.requested both read `pending`, both call the provider, and both
+# are billed — only the second *completion* is refused, so the recorded outcome
+# is right and the invoice is not.
+
+
+def test_claim_moves_a_pending_run_to_running_and_stamps_started_at(client):
+    run_id = _create(client).json()["id"]
+
+    resp = client.post(f"{_RUNS}/{run_id}/claim", json={})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "running"
+    # started_at is what makes a stranded run detectable: "running for longer
+    # than the ceiling" is a query; "pending for ever" is indistinguishable from
+    # "never picked up".
+    assert body["started_at"] is not None
+
+
+def test_a_second_claim_is_refused(client):
+    run_id = _create(client).json()["id"]
+    assert client.post(f"{_RUNS}/{run_id}/claim", json={}).status_code == 200
+
+    resp = client.post(f"{_RUNS}/{run_id}/claim", json={})
+
+    assert resp.status_code == 409
+    assert "running" in resp.json()["detail"]
+
+
+def test_claiming_a_finished_run_is_refused(client):
+    run_id = _create(client).json()["id"]
+    client.post(f"{_RUNS}/{run_id}/claim", json={})
+    client.post(f"{_RUNS}/{run_id}/complete", json={"status": "completed"})
+
+    resp = client.post(f"{_RUNS}/{run_id}/claim", json={})
+
+    assert resp.status_code == 409
+
+
+def test_claim_unknown_run_is_404(client):
+    assert client.post(f"{_RUNS}/nope/claim", json={}).status_code == 404
+
+
+def test_claim_emits_nothing(client, publisher):
+    # A claim is a lease on work already announced by agent.run.requested, not a
+    # new fact. Emitting per claim would put a message on the bus for every
+    # duplicate delivery — the thing being suppressed.
+    run_id = _create(client).json()["id"]
+    publisher.events.clear()
+
+    client.post(f"{_RUNS}/{run_id}/claim", json={})
+
+    assert publisher.events == []
+
+
+def test_a_claimed_run_still_completes_normally(client):
+    run_id = _create(client).json()["id"]
+    client.post(f"{_RUNS}/{run_id}/claim", json={})
+
+    resp = client.post(f"{_RUNS}/{run_id}/complete", json={"status": "completed"})
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "completed"

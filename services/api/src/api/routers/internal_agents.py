@@ -2,7 +2,7 @@
 
 Service-only routes under ``/api/v1/internal/agent-runs`` — reachable only by an
 allowlisted IAM principal (the agent-runtime plugin's Lambda role), never by a
-user. Three steps, matching the run lifecycle:
+user. Four steps, matching the run lifecycle:
 
 1. ``POST /agent-runs`` — record a requested run and emit ``agent.run.requested``.
    The §8 depth ceiling is enforced here: a chain past the maximum is refused
@@ -10,7 +10,11 @@ user. Three steps, matching the run lifecycle:
 2. ``GET /agent-runs/{id}`` — the runtime reads the resolved definition and the
    input it must execute. This route exists because the event carries only a
    **reference** (§5); the payload never travels on the bus.
-3. ``POST /agent-runs/{id}/complete`` — the terminal report, emitting
+3. ``POST /agent-runs/{id}/claim`` — take ownership of a ``pending`` run before
+   any model call. 409 when someone else already has it. EventBridge is
+   at-least-once, so without this two deliveries both execute and both are
+   billed (§5).
+4. ``POST /agent-runs/{id}/complete`` — the terminal report, emitting
    ``agent.run.completed`` for failures as well as successes so a subscriber can
    distinguish "failed" from "still running".
 
@@ -33,6 +37,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..agent_runs import (
     DepthLimitExceededError,
     RunAlreadyTerminalError,
+    RunNotClaimableError,
+    claim_run,
     complete_run,
     create_run,
     get_run,
@@ -108,6 +114,33 @@ async def read_agent_run(
 ) -> AgentRunResponse:
     """The full run record — the definition and input the runtime executes."""
     run = await get_run(db, tenant_id=principal.tenant_id, run_id=run_id)
+    if run is None:
+        raise _not_found()
+    return AgentRunResponse.model_validate(run)
+
+
+@router.post("/{run_id}/claim", response_model=AgentRunResponse)
+async def claim_agent_run(
+    run_id: str,
+    principal: ServicePrincipal = Depends(require_service_principal),
+    db: AsyncSession = Depends(get_db),
+) -> AgentRunResponse:
+    """Take ownership of a ``pending`` run before spending anything on it.
+
+    409 when the run is not ``pending``: another invocation owns it, or it has
+    already finished. The runtime must treat that as "not mine" and exit
+    **without calling the model** — at-least-once delivery otherwise buys the
+    same tokens twice (ADR-0014 §5).
+
+    Deliberately emits no event. A claim is a lease on work already announced by
+    ``agent.run.requested``, not a new fact about the world, and an event per
+    claim would put a message on the bus for every duplicate delivery — which is
+    the thing being suppressed.
+    """
+    try:
+        run = await claim_run(db, tenant_id=principal.tenant_id, run_id=run_id)
+    except RunNotClaimableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if run is None:
         raise _not_found()
     return AgentRunResponse.model_validate(run)

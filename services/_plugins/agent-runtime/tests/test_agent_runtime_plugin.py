@@ -45,8 +45,11 @@ async def test_a_successful_run_completes_and_posts_the_right_body():
     await _plugin(core, llm).events.dispatch(_event())
 
     methods_and_paths = [(m, p) for m, p, _ in core.requests]
+    # Read, then CLAIM, then report. The claim sits before the model call so a
+    # duplicate delivery loses before it can spend anything (issue #371).
     assert methods_and_paths == [
         ("GET", "/api/v1/internal/agent-runs/run-1"),
+        ("POST", "/api/v1/internal/agent-runs/run-1/claim"),
         ("POST", "/api/v1/internal/agent-runs/run-1/complete"),
     ]
     body = core.completions()[0]
@@ -114,6 +117,49 @@ async def test_a_run_that_is_not_pending_is_skipped_not_re_executed():
 
     assert llm.calls == []
     assert core.completions() == []
+
+
+async def test_a_lost_claim_makes_no_provider_call_at_all():
+    """The #371 case, and the only one that costs money to get wrong.
+
+    Two concurrent deliveries both read ``pending`` — the local status check
+    cannot separate them. Core's claim does, and the loser must stop *before*
+    the model call: `llm.calls == []` is the assertion that money was not spent.
+    """
+    core = FakeCore(claim_status=409)
+    llm = FakeLLM()
+
+    await _plugin(core, llm).events.dispatch(_event())
+
+    assert llm.calls == []
+    # It tried to claim (so it is genuinely the loser, not a run it skipped
+    # earlier), and it reported nothing — the winner owns the completion.
+    assert core.claims() == ["/api/v1/internal/agent-runs/run-1/claim"]
+    assert core.completions() == []
+
+
+async def test_a_claim_that_fails_for_any_other_reason_also_spends_nothing():
+    # An unclaimed run is one a duplicate delivery can still pick up. Executing
+    # anyway on a 500 would reinstate the double-spend this exists to prevent.
+    core = FakeCore(claim_status=503)
+    llm = FakeLLM()
+
+    await _plugin(core, llm).events.dispatch(_event())
+
+    assert llm.calls == []
+    assert core.completions() == []
+
+
+async def test_the_winner_executes_using_the_post_claim_record():
+    # Core's claim response is the authority: it carries `running`, so the run
+    # the loop executes is the claimed one, not the stale pre-claim read.
+    core = FakeCore()
+    llm = FakeLLM()
+
+    await _plugin(core, llm).events.dispatch(_event())
+
+    assert len(llm.calls) == 1
+    assert core.completions()[0]["status"] == "completed"
 
 
 async def test_a_snapshot_without_instructions_fails_the_run_without_calling_the_model():

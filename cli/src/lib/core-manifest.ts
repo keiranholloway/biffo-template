@@ -17,6 +17,17 @@ const CoreManifestSchema = z.object({
   note: z.string().optional(),
   templateOwned: z.array(z.string()).min(1),
   userOwned: z.array(z.string()).default([]),
+  /**
+   * Paths that version the core but are NOT distributed to instances.
+   *
+   * `cli/` is the case this exists for. The CLI is released from the same
+   * `core-v*` tag as everything else — its published version IS the core
+   * version (ADR-0006) — but an instance consumes it from npm and must not
+   * carry its source. Without this list a CLI-only change would look like "no
+   * template-owned change", the release job would cut nothing, and the fix
+   * would never reach npm for any instance to install.
+   */
+  released: z.array(z.string()).default([]),
 })
 
 export type CoreManifest = z.infer<typeof CoreManifestSchema>

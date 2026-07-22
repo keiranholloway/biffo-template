@@ -64,6 +64,17 @@ describe('cli/ is no longer distributed to instances', () => {
   it('leaves scripts/ owned, or the dispatcher never reaches an instance', () => {
     expect(manifest.templateOwned).toContain('scripts/')
   })
+
+  /**
+   * Not distributed, but still released. The CLI publishes from the same
+   * `core-v*` tag as everything else, so the release job has to see a CLI-only
+   * change — otherwise the fix is never tagged, never published, and no
+   * instance can install it. Dropping `cli/` from templateOwned without adding
+   * it here would break publishing silently, which is what this pins.
+   */
+  it('is listed as released, so a CLI-only change still cuts a version', () => {
+    expect(manifest.released).toContain('cli/')
+  })
 })
 
 describe('scripts/biffo.sh', () => {

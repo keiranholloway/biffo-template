@@ -3,12 +3,7 @@
   "version": "0.1.0",
   "description": "The agentic-worker execution runtime (ADR-0014): subscribes to agent.run.requested, reads the run's resolved definition from the Core internal API, runs the turn loop against OpenRouter, and posts the outcome back so Core emits agent.run.completed. Owns no data \u2014 every piece of run state lives in Core (ADR-0002), reached over the IAM-signed internal API (ADR-0009). First-party and template-owned: distributed by `biffo core upgrade`, not the plugin registry.",
   "author": "Biffo Team",
-  "tags": [
-    "agents",
-    "ai",
-    "automation",
-    "events"
-  ],
+  "tags": ["agents", "ai", "automation", "events"],
   "required_core_version": ">=0.44.0",
   "tables": [],
   "api_routes": [],

@@ -147,8 +147,8 @@ class TestGrantSet:
         assert all("FOR ROLE" not in s for s in defaults)
 
     def test_covers_every_schema_it_is_given(self) -> None:
-        statements = build_grant_statements(ROLE, ["public", "tabsii"])
-        assert any('SCHEMA "tabsii"' in s for s in statements)
+        statements = build_grant_statements(ROLE, ["public", "acme"])
+        assert any('SCHEMA "acme"' in s for s in statements)
         assert any('SCHEMA "public"' in s for s in statements)
 
     def test_no_schemas_emits_no_grants(self) -> None:
@@ -197,8 +197,8 @@ class TestSchemaSelection:
         assert db_app_role.configured_schemas() is None
 
     def test_setting_pins_an_explicit_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(db_app_role.settings, "app_role_schemas", "public, tabsii ,")
-        assert db_app_role.configured_schemas() == ["public", "tabsii"]
+        monkeypatch.setattr(db_app_role.settings, "app_role_schemas", "public, acme ,")
+        assert db_app_role.configured_schemas() == ["public", "acme"]
 
 
 class TestPostgresOnly:

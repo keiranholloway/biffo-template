@@ -34,9 +34,9 @@
     "lint:fix": "eslint src/ --fix",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check:release-subject": "tsx src/scripts/check-release-subject.ts",
-    "check:core-ownership": "tsx src/scripts/check-core-ownership.ts",
-    "check:plugin-terraform": "tsx src/scripts/check-plugin-terraform.ts",
+    "check:release-subject": "tsx src/index.ts check release-subject",
+    "check:core-ownership": "tsx src/index.ts check ownership",
+    "check:plugin-terraform": "tsx src/index.ts check plugin-terraform",
     "sync:core-tag": "tsx src/scripts/sync-core-tag.ts",
     "report:publish-failure": "tsx src/scripts/report-publish-failure.ts"
   },

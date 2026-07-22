@@ -30,10 +30,10 @@ const RED = '[31m'
 const YELLOW = '[33m'
 const OFF = '[0m'
 
-async function main(): Promise<void> {
+export async function runOwnershipCheck(argv: string[]): Promise<void> {
   // `pnpm run <script> -- --staged x` forwards the `--` itself as an argument,
   // so drop it rather than letting it be read as a base ref.
-  const args = process.argv.slice(2).filter((a) => a !== '--')
+  const args = argv.filter((a) => a !== '--')
   const stagedFlag = args.indexOf('--staged')
   const staged = stagedFlag !== -1
   const messageFile = staged ? args[stagedFlag + 1] : undefined
@@ -154,8 +154,3 @@ ${
 `)
   process.exit(1)
 }
-
-main().catch((err: unknown) => {
-  console.error(err instanceof Error ? err.message : err)
-  process.exit(2)
-})

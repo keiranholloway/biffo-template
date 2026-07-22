@@ -14,7 +14,7 @@
 import { execa } from 'execa'
 import { checkPluginTerraform, formatViolations } from '../lib/plugin-terraform-guard.js'
 
-async function main(): Promise<void> {
+export async function runPluginTerraformCheck(): Promise<void> {
   const root = (await execa('git', ['rev-parse', '--show-toplevel'])).stdout.trim()
   const violations = checkPluginTerraform(root)
 
@@ -26,8 +26,3 @@ async function main(): Promise<void> {
 
   console.log('✓ plugin Terraform guard: OK')
 }
-
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error))
-  process.exit(2)
-})

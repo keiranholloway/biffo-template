@@ -2,33 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
 import pytest
 from agent_runtime.openrouter import LLMError, OpenRouterClient
+from agent_runtime.tools import TOOL_REGISTRY
+from agent_runtime_fakes import FakeSsm
 
 _PARAMETER = "/myproject/dev/agent-runtime/openrouter-api-key"
 _FAKE_KEY = "not-a-real-openrouter-key"
-
-
-class FakeSsm:
-    """Serves SSM parameters from a dict; records what was asked for."""
-
-    def __init__(self, parameters: dict[str, str] | None = None) -> None:
-        self.parameters = parameters or {}
-        self.calls: list[dict[str, Any]] = []
-
-    def get_parameter(
-        self,
-        *,
-        Name: str,  # noqa: N803 — boto3's own parameter casing
-        WithDecryption: bool = False,  # noqa: N803 — boto3's own parameter casing
-    ) -> dict[str, Any]:
-        self.calls.append({"Name": Name, "WithDecryption": WithDecryption})
-        if Name not in self.parameters:
-            raise KeyError(f"Parameter {Name} not found")
-        return {"Parameter": {"Name": Name, "Value": self.parameters[Name]}}
 
 
 def _client(handler, **kwargs: Any) -> OpenRouterClient:
@@ -177,3 +161,97 @@ async def test_an_empty_choices_list_is_an_error_not_an_empty_answer(monkeypatch
 
     with pytest.raises(LLMError, match="no choices"):
         await _client(handler).complete(model="m", messages=[], timeout=5.0)
+
+
+# ── Tools on the wire (M3) ───────────────────────────────────────────────────
+
+
+async def test_tools_are_omitted_entirely_when_a_worker_declares_none(monkeypatch):
+    # §7's default. An empty `tools` array is malformed for some providers, and
+    # the M1 request shape is the one that has actually run in production.
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, seen = _ok()
+
+    await _client(handler).complete(model="m", messages=[], timeout=5.0, tools=None)
+    await _client(handler).complete(model="m", messages=[], timeout=5.0, tools=[])
+
+    assert all("tools" not in json.loads(request.content) for request in seen)
+
+
+async def test_declared_tool_schemas_are_sent_verbatim(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, seen = _ok()
+    schema = TOOL_REGISTRY["web_search"].to_provider_schema()
+
+    await _client(handler).complete(model="m", messages=[], timeout=5.0, tools=[schema])
+
+    assert json.loads(seen[0].content)["tools"] == [schema]
+
+
+async def test_tool_calls_are_parsed_off_the_completion(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, _ = _ok(
+        {
+            "model": "m",
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "web_search",
+                                    "arguments": '{"query": "acme anvils"}',
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+        }
+    )
+
+    response = await _client(handler).complete(model="m", messages=[], timeout=5.0)
+
+    assert response.finish_reason == "tool_calls"
+    assert [(c.id, c.name, c.arguments) for c in response.tool_calls] == [
+        ("call-1", "web_search", {"query": "acme anvils"})
+    ]
+    # The original argument string is kept: the assistant message is replayed
+    # verbatim on the next turn.
+    assert response.tool_calls[0].to_wire()["function"]["arguments"] == '{"query": "acme anvils"}'
+
+
+async def test_a_malformed_tool_call_is_skipped_rather_than_failing_the_turn(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, _ = _ok(
+        {
+            "model": "m",
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {"function": {"name": "web_search", "arguments": "{}"}},  # no id
+                            {"id": "c2", "function": {"name": "", "arguments": "{}"}},  # no name
+                            {
+                                "id": "c3",
+                                "function": {"name": "web_search", "arguments": "not json"},
+                            },
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+        }
+    )
+
+    response = await _client(handler).complete(model="m", messages=[], timeout=5.0)
+
+    # A call with no id can never be answered — a tool result is keyed to one.
+    # Unparseable arguments survive as an empty object and are then rejected by
+    # the tool's own schema, which is where argument validation belongs.
+    assert [(c.id, c.arguments) for c in response.tool_calls] == [("c3", {})]

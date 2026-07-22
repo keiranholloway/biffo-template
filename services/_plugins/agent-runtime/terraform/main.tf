@@ -51,14 +51,24 @@ locals {
   # Grant Core API access only when the root config told us which API to scope
   # it to. Empty (the default) => the plugin never calls Core, so no grant.
   grants_core_api_access = var.core_api_execution_arn != ""
-  # Likewise for the OpenRouter key: no parameter name, no grant. The runtime
-  # then fails its first run with a clear "no OpenRouter credential" error
-  # rather than holding a permission it cannot use.
-  grants_credential_access = var.openrouter_api_key_parameter != ""
-  # The parameter is configured by *name*; the ARN is derived. Names are written
-  # with or without a leading slash, and the ARN always has exactly one — the
-  # same normalisation the orchestrator does for its WhatsApp parameters.
-  openrouter_parameter_arn = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/${trimprefix(var.openrouter_api_key_parameter, "/")}"
+  # Likewise for the third-party credentials: no parameter name, no grant. The
+  # two behave differently when absent, and deliberately so — no OpenRouter key
+  # fails the first run with a clear credential error (nothing can run without a
+  # model), while no Brave key simply means the web_search tool is never offered
+  # to the model (ADR-0014 §7 — a worker declaring it still runs, with one fewer
+  # capability). Neither holds a permission it cannot use.
+  #
+  # The parameters are configured by *name*; the ARNs are derived. Names are
+  # written with or without a leading slash, and an ARN always has exactly one —
+  # the same normalisation the orchestrator does for its WhatsApp parameters.
+  ssm_parameter_prefix     = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter"
+  openrouter_parameter_arn = "${local.ssm_parameter_prefix}/${trimprefix(var.openrouter_api_key_parameter, "/")}"
+  brave_parameter_arn      = "${local.ssm_parameter_prefix}/${trimprefix(var.brave_search_api_key_parameter, "/")}"
+  credential_parameter_arns = compact([
+    var.openrouter_api_key_parameter == "" ? "" : local.openrouter_parameter_arn,
+    var.brave_search_api_key_parameter == "" ? "" : local.brave_parameter_arn,
+  ])
+  grants_credential_access = length(local.credential_parameter_arns) > 0
 }
 
 # Compute — the plugin's Lambda function.
@@ -87,6 +97,10 @@ module "function" {
       # openrouter.py) so the value never appears in the function's
       # configuration, where anyone with lambda:GetFunction could read it.
       OPENROUTER_API_KEY_PARAMETER = var.openrouter_api_key_parameter
+      # Same pattern for the web_search tool's Brave credential (ADR-0014 §7).
+      # Empty is a supported state: the tool is then not offered at all, rather
+      # than being offered and failing on every call.
+      BRAVE_SEARCH_API_KEY_PARAMETER = var.brave_search_api_key_parameter
       # ADR-0014 §8 hard stops, deployment-wide ceilings a worker definition can
       # only narrow. The wall clock sits inside var.timeout with room to spare
       # so a run that exhausts its budget can still POST its failure to Core
@@ -239,10 +253,11 @@ resource "aws_iam_role_policy" "core_api" {
   policy = data.aws_iam_policy_document.core_api[0].json
 }
 
-# The OpenRouter API key (ADR-0014 §1: "Provider access sits behind the runtime's
-# own client"). Read at runtime from SSM Parameter Store, so the credential is
-# never in Terraform state as a literal, never in the Lambda's environment, and
-# rotatable without a deploy.
+# The third-party API keys — OpenRouter (ADR-0014 §1: "Provider access sits
+# behind the runtime's own client") and Brave Search, the web_search tool's
+# provider (§7). Read at runtime from SSM Parameter Store, so neither credential
+# is in Terraform state as a literal, neither is in the Lambda's environment, and
+# both rotate without a deploy.
 #
 # Parameter Store rather than Secrets Manager, deliberately — do not "fix" this
 # back. This is a single API key fetched once per cold start: rotation,
@@ -252,22 +267,24 @@ resource "aws_iam_role_policy" "core_api" {
 # the two plugin third-party credentials consistent — the orchestrator's
 # WhatsApp token is already an SSM SecureString read the same way.
 #
-# The grant is two statements: GetParameter on exactly this one parameter, and
-# Decrypt fenced to SSM by kms:ViaService, so the AWS-managed key it names
-# cannot be used for anything but a parameter fetch. Both are absent entirely
-# when no parameter is configured.
-data "aws_iam_policy_document" "openrouter_credential" {
+# The grant is two statements: GetParameter on exactly the configured
+# parameter(s) — never a prefix, never the account's parameters generally — and
+# Decrypt fenced to SSM by kms:ViaService, so the AWS-managed key it names cannot
+# be used for anything but a parameter fetch. Both are absent entirely when no
+# parameter is configured, and a parameter left empty contributes no resource,
+# so enabling web search is what grants access to the Brave key and nothing else.
+data "aws_iam_policy_document" "credentials" {
   count = local.grants_credential_access ? 1 : 0
 
   statement {
-    sid       = "ReadOpenRouterApiKeyParameter"
+    sid       = "ReadAgentRuntimeCredentialParameters"
     effect    = "Allow"
     actions   = ["ssm:GetParameter"]
-    resources = [local.openrouter_parameter_arn]
+    resources = local.credential_parameter_arns
   }
 
   statement {
-    sid       = "DecryptOpenRouterApiKeyParameter"
+    sid       = "DecryptAgentRuntimeCredentialParameters"
     effect    = "Allow"
     actions   = ["kms:Decrypt"]
     resources = ["*"]
@@ -279,10 +296,10 @@ data "aws_iam_policy_document" "openrouter_credential" {
   }
 }
 
-resource "aws_iam_role_policy" "openrouter_credential" {
+resource "aws_iam_role_policy" "credentials" {
   count = local.grants_credential_access ? 1 : 0
-  name  = "${local.function_name}-openrouter"
+  name  = "${local.function_name}-credentials"
   role  = element(split("/", module.function.role_arn), length(split("/", module.function.role_arn)) - 1)
 
-  policy = data.aws_iam_policy_document.openrouter_credential[0].json
+  policy = data.aws_iam_policy_document.credentials[0].json
 }

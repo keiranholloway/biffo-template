@@ -13,7 +13,15 @@ What differs from the skeleton, and why:
 | `max_turns_ceiling` | — | **10** | Deployment ceiling a worker's `max_turns` is clamped into; a definition can only narrow it. |
 | `memory_size` | 512 | **1024** | Memory buys CPU share; the runtime signs requests and parses responses around a long await. |
 | `subscribe_all` | false | false | Kept false. One trigger only: `biffo.core` / `agent.run.requested`. |
-| IAM | Core API | Core API **+ one SSM parameter** | `ssm:GetParameter` scoped to the ARN of `openrouter_api_key_parameter`, plus `kms:Decrypt` fenced by `kms:ViaService = ssm.<region>.amazonaws.com`. |
+| IAM | Core API | Core API **+ the configured SSM parameters** | `ssm:GetParameter` scoped to the exact ARNs of `openrouter_api_key_parameter` and `brave_search_api_key_parameter` (only the ones actually set), plus `kms:Decrypt` fenced by `kms:ViaService = ssm.<region>.amazonaws.com`. |
+| `brave_search_api_key_parameter` | — | **empty** | The `web_search` tool's credential (ADR-0014 §7). Empty means the tool is not offered at all. |
+
+**Two credentials, two different behaviours when absent.** No OpenRouter key fails every run with an explicit credential error — nothing can run without a model. No Brave key means the `web_search` tool is simply **not offered** to the model: a worker that declares it still runs, with one fewer capability, because a missing credential is an operational state rather than a broken definition (ADR-0014 §7). Setting the parameter is therefore what turns web search on in an environment, and leaving it empty is a supported way to keep it off — the grant follows the parameter, so an environment without the key also has no permission to read it.
+
+```bash
+aws ssm put-parameter --type SecureString \
+  --name /myproject/dev/agent-runtime/brave-search-api-key --value "<key>"
+```
 
 **The OpenRouter key is never in this module.** Terraform takes a *parameter name*; the runtime reads the value at first use and caches it for the warm container. So the key is absent from Terraform state, absent from the Lambda's environment (where `lambda:GetFunction` would expose it), and rotatable without a deploy. Store it as a SecureString under the platform's `/<project>/<env>/<component>/<secret>` convention — the same shape as `db/credentials` and `pr-signer/github-app-key`:
 

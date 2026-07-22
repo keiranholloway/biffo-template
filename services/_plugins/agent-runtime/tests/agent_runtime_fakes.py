@@ -14,7 +14,8 @@ import json
 from typing import Any
 
 import httpx
-from agent_runtime.openrouter import LLMError, LLMResponse
+from agent_runtime.openrouter import LLMError, LLMResponse, ToolCall
+from agent_runtime.tools import ToolDefinition
 from biffo_plugin_sdk import SignedCoreClient
 from botocore.credentials import Credentials
 
@@ -155,10 +156,13 @@ class FakeLLM:
         self,
         *,
         model: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         timeout: float,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMResponse:
-        self.calls.append({"model": model, "messages": messages, "timeout": timeout})
+        self.calls.append(
+            {"model": model, "messages": messages, "timeout": timeout, "tools": tools}
+        )
         if self.on_call is not None:
             self.on_call()
         if self.error is not None:
@@ -169,6 +173,97 @@ class FakeLLM:
 
 def llm_error(message: str = "provider exploded") -> LLMError:
     return LLMError(message)
+
+
+def tool_call_response(
+    name: str = "echo",
+    arguments: dict[str, Any] | None = None,
+    *,
+    call_id: str = "call-1",
+    content: str = "",
+    model: str = "m",
+) -> LLMResponse:
+    """A completion in which the model asks for one tool call."""
+    arguments_json = json.dumps(arguments or {"text": "hello"})
+    return LLMResponse(
+        content=content,
+        model=model,
+        finish_reason="tool_calls",
+        tool_calls=(
+            ToolCall(
+                id=call_id,
+                name=name,
+                arguments=json.loads(arguments_json),
+                arguments_json=arguments_json,
+            ),
+        ),
+    )
+
+
+class RecordingTool:
+    """A registered-tool stand-in that records what it was asked to do.
+
+    Built as a real :class:`ToolDefinition` (through the registry's own
+    validation) so a test cannot accidentally exercise a schema the registry
+    would refuse in production.
+    """
+
+    def __init__(
+        self,
+        name: str = "echo",
+        *,
+        result: str = "the tool said hello",
+        error: Exception | None = None,
+        available: bool = True,
+        max_length: int = 32,
+    ) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.result = result
+        self.error = error
+        self.available = available
+        self.definition = ToolDefinition(
+            name=name,
+            description="Echoes its argument back.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Text", "maxLength": max_length}
+                },
+                "required": ["text"],
+                "additionalProperties": False,
+            },
+            execute=self._execute,
+            is_available=lambda: self.available,
+        )
+
+    async def _execute(self, arguments: dict[str, Any]) -> str:
+        self.calls.append(arguments)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+class FakeSsm:
+    """Serves SSM parameters from a dict; records what was asked for.
+
+    Same shape as ``orchestrator/tests/orchestrator_fakes.py``'s — both plugins
+    resolve their third-party credentials the same way, so their fakes match.
+    """
+
+    def __init__(self, parameters: dict[str, str] | None = None) -> None:
+        self.parameters = parameters or {}
+        self.calls: list[dict[str, Any]] = []
+
+    def get_parameter(
+        self,
+        *,
+        Name: str,  # noqa: N803 — boto3's own parameter casing
+        WithDecryption: bool = False,  # noqa: N803 — boto3's own parameter casing
+    ) -> dict[str, Any]:
+        self.calls.append({"Name": Name, "WithDecryption": WithDecryption})
+        if Name not in self.parameters:
+            raise KeyError(f"Parameter {Name} not found")
+        return {"Parameter": {"Name": Name, "Value": self.parameters[Name]}}
 
 
 class FakeClock:

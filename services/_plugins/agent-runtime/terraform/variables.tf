@@ -81,6 +81,12 @@ variable "openrouter_api_key_parameter" {
   default     = ""
 }
 
+variable "brave_search_api_key_parameter" {
+  description = "Name of the SSM SecureString parameter holding the Brave Search API key, e.g. /myproject/dev/agent-runtime/brave-search-api-key. This is the credential behind the `web_search` tool (ADR-0014 section 7). Same shape and same reasoning as openrouter_api_key_parameter: the runtime reads it at first use, the key is never a Lambda environment variable and never enters Terraform state, and the IAM grant is ssm:GetParameter on exactly this parameter plus a kms:ViaService-fenced kms:Decrypt. Empty (the default) grants nothing and means the web_search tool is NOT OFFERED to the model at all — a worker declaring it still runs, with one fewer capability, rather than failing every run on a credential the deployment was never given. Leave it empty to keep web search off in an environment."
+  type        = string
+  default     = ""
+}
+
 variable "enable_vpc_access" {
   description = <<-EOT
     Attach this plugin's Lambda to a VPC. Leave false (the default) — per

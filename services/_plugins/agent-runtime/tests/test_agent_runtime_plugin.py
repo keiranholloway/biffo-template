@@ -173,6 +173,62 @@ async def test_a_snapshot_without_instructions_fails_the_run_without_calling_the
     assert "instructions" in core.completions()[0]["error"]
 
 
+async def test_a_declared_tool_this_build_does_not_register_fails_before_any_spend():
+    """§7's loud failure, and the reason it is loud.
+
+    Silently dropping the tool produces a run that looks exactly like a model
+    choosing not to call one — same transcript, same status, same cost — so the
+    definition stays wrong indefinitely. Failing costs nothing: the check runs
+    before the first model call, which ``llm.calls == []`` is what proves.
+    """
+    core = FakeCore(make_run(tools=["read_database"]))
+    llm = FakeLLM()
+
+    await _plugin(core, llm).events.dispatch(_event())
+
+    assert llm.calls == []
+    assert core.completions()[0]["status"] == "failed"
+    error = core.completions()[0]["error"]
+    assert "read_database" in error
+    assert "web_search" in error  # names what this build does register
+
+
+async def test_a_declared_tool_that_is_not_configured_still_runs_the_worker(monkeypatch):
+    # The other half of the pair: a missing credential is an operational state,
+    # not a broken definition, so the run proceeds with one fewer capability.
+    monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
+    monkeypatch.delenv("BRAVE_SEARCH_API_KEY_PARAMETER", raising=False)
+    core = FakeCore(make_run(tools=["web_search"]))
+    llm = FakeLLM()
+
+    await _plugin(core, llm).events.dispatch(_event())
+
+    assert core.completions()[0]["status"] == "completed"
+    assert llm.calls[0]["tools"] is None
+
+
+async def test_a_configured_declared_tool_is_offered_to_the_model(monkeypatch):
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "not-a-real-brave-key")
+    core = FakeCore(make_run(tools=["web_search"], max_turns=2))
+    llm = FakeLLM()
+
+    await _plugin(core, llm).events.dispatch(_event())
+
+    offered = llm.calls[0]["tools"]
+    assert [entry["function"]["name"] for entry in offered] == ["web_search"]
+
+
+async def test_a_worker_declaring_nothing_is_offered_nothing(monkeypatch):
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "not-a-real-brave-key")
+    core = FakeCore(make_run())
+    llm = FakeLLM()
+
+    await _plugin(core, llm).events.dispatch(_event())
+
+    # Configured is not the same as offered — the worker never asked for it (§7).
+    assert llm.calls[0]["tools"] is None
+
+
 async def test_a_snapshot_without_a_model_fails_the_run():
     core = FakeCore(make_run(model=""))
 

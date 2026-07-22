@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { getLatestCoreVersion, latestCoreVersionFromTags } from './core-version.js'
+import { getLatestCoreVersion, isInstanceRepo, latestCoreVersionFromTags } from './core-version.js'
 
 /**
  * Guard: the CLI must report a real version (#259).
@@ -44,12 +44,15 @@ describe('CLI version reporting', () => {
    * set. Comparing the two is a race by construction, and it reddened `main`
    * exactly once before this comment existed.
    */
-  it('reports a real version, matching the highest core-v* tag', () => {
-    const version = getLatestCoreVersion()
-    expect(version).toMatch(/^\d+\.\d+\.\d+$/)
-    expect(version).not.toBe('0.0.0')
+  it.skipIf(isInstanceRepo(resolve(dirname(fileURLToPath(import.meta.url)), '../../..')))(
+    'reports a real version, matching the highest core-v* tag',
+    () => {
+      const version = getLatestCoreVersion()
+      expect(version).toMatch(/^\d+\.\d+\.\d+$/)
+      expect(version).not.toBe('0.0.0')
 
-    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
-    expect(latestCoreVersionFromTags(repoRoot, undefined, { fetch: false })).toBe(version)
-  })
+      const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
+      expect(latestCoreVersionFromTags(repoRoot, undefined, { fetch: false })).toBe(version)
+    },
+  )
 })

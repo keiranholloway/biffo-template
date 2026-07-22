@@ -17,8 +17,8 @@ class TestDiscoverDdlImportDirs:
         assert discover_ddl_import_dirs(tmp_path) == []
 
     def test_finds_single_import_directory(self, tmp_path):
-        _write_sql_file(tmp_path, "tabsii", "000_schema.sql")
-        assert discover_ddl_import_dirs(tmp_path) == ["tabsii"]
+        _write_sql_file(tmp_path, "acme", "000_schema.sql")
+        assert discover_ddl_import_dirs(tmp_path) == ["acme"]
 
     def test_finds_multiple_import_directories_sorted(self, tmp_path):
         _write_sql_file(tmp_path, "zeta", "000.sql")
@@ -41,11 +41,11 @@ class TestListSqlFiles:
         assert list_sql_files(tmp_path / "does-not-exist") == []
 
     def test_lists_sql_files_sorted_by_name(self, tmp_path):
-        _write_sql_file(tmp_path, "tabsii", "001_second.sql")
-        _write_sql_file(tmp_path, "tabsii", "000_first.sql")
-        _write_sql_file(tmp_path, "tabsii", "010_tenth.sql")
+        _write_sql_file(tmp_path, "acme", "001_second.sql")
+        _write_sql_file(tmp_path, "acme", "000_first.sql")
+        _write_sql_file(tmp_path, "acme", "010_tenth.sql")
 
-        files = list_sql_files(tmp_path / "tabsii")
+        files = list_sql_files(tmp_path / "acme")
         assert [f.name for f in files] == [
             "000_first.sql",
             "001_second.sql",
@@ -53,17 +53,17 @@ class TestListSqlFiles:
         ]
 
     def test_non_recursive_ignores_nested_sql_files(self, tmp_path):
-        _write_sql_file(tmp_path, "tabsii", "000_first.sql")
-        nested = tmp_path / "tabsii" / "nested"
+        _write_sql_file(tmp_path, "acme", "000_first.sql")
+        nested = tmp_path / "acme" / "nested"
         nested.mkdir()
         (nested / "999_nested.sql").write_text("SELECT 1;")
 
-        files = list_sql_files(tmp_path / "tabsii")
+        files = list_sql_files(tmp_path / "acme")
         assert [f.name for f in files] == ["000_first.sql"]
 
     def test_ignores_non_sql_files(self, tmp_path):
-        _write_sql_file(tmp_path, "tabsii", "000_first.sql")
-        (tmp_path / "tabsii" / "NOTES.md").write_text("not sql")
+        _write_sql_file(tmp_path, "acme", "000_first.sql")
+        (tmp_path / "acme" / "NOTES.md").write_text("not sql")
 
-        files = list_sql_files(tmp_path / "tabsii")
+        files = list_sql_files(tmp_path / "acme")
         assert [f.name for f in files] == ["000_first.sql"]

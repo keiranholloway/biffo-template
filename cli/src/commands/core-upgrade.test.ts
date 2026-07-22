@@ -84,7 +84,7 @@ describe('runCoreUpgrade --apply', () => {
     const { deps, git, createPullRequest, defaultBranch } = fakeDeps()
 
     await runCoreUpgrade(
-      { cwd: instance, templateRoot: theirs, baseDir: base, theirsDir: theirs, apply: true },
+      { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs, apply: true },
       deps,
     )
 
@@ -123,7 +123,14 @@ describe('runCoreUpgrade --apply', () => {
   it('honors an explicit --base over the repo default', async () => {
     const { deps, createPullRequest, defaultBranch } = fakeDeps()
     await runCoreUpgrade(
-      { cwd: instance, baseDir: base, theirsDir: theirs, apply: true, base: 'release/2026-07' },
+      {
+        cwd: instance,
+        templateRepo: theirs,
+        baseDir: base,
+        theirsDir: theirs,
+        apply: true,
+        base: 'release/2026-07',
+      },
       deps,
     )
     expect(createPullRequest).toHaveBeenCalledWith(
@@ -163,10 +170,7 @@ describe('runCoreUpgrade --apply', () => {
     rmSync(join(instance, 'biffo.core.json'))
     const { deps } = fakeDeps()
     await expect(
-      runCoreUpgrade(
-        { cwd: instance, templateRoot: theirs, templateRepo: theirs },
-        { ...deps, materialize: vi.fn() },
-      ),
+      runCoreUpgrade({ cwd: instance, templateRepo: theirs }, { ...deps, materialize: vi.fn() }),
     ).rejects.toThrow(/current core version/)
   })
 
@@ -177,7 +181,7 @@ describe('runCoreUpgrade --apply', () => {
 
     await expect(
       runCoreUpgrade(
-        { cwd: instance, templateRoot: theirs, baseDir: base, theirsDir: theirs, apply: true },
+        { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs, apply: true },
         deps,
       ),
     ).rejects.toThrow(/conflict/i)
@@ -193,7 +197,7 @@ describe('runCoreUpgrade --apply', () => {
     await runCoreUpgrade(
       {
         cwd: instance,
-        templateRoot: theirs,
+        templateRepo: theirs,
         baseDir: base,
         theirsDir: theirs,
         apply: true,
@@ -210,7 +214,7 @@ describe('runCoreUpgrade --apply', () => {
     const { deps, git } = fakeDeps({ hasUncommittedChanges: vi.fn().mockResolvedValue(true) })
     await expect(
       runCoreUpgrade(
-        { cwd: instance, templateRoot: theirs, baseDir: base, theirsDir: theirs, apply: true },
+        { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs, apply: true },
         deps,
       ),
     ).rejects.toThrow(/uncommitted/i)
@@ -220,7 +224,7 @@ describe('runCoreUpgrade --apply', () => {
   it('dry run (no --apply) never touches git or the working tree', async () => {
     const { deps, git, createPullRequest } = fakeDeps()
     await runCoreUpgrade(
-      { cwd: instance, templateRoot: theirs, baseDir: base, theirsDir: theirs },
+      { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs },
       deps,
     )
     expect(readFileSync(join(instance, 'services/api/main.py'), 'utf8')).toBe('v1') // unchanged
@@ -283,7 +287,7 @@ describe('runCoreUpgrade — lockfile refresh is driven by what landed (#393)', 
   async function upgrade(): Promise<void> {
     const { deps } = fakeDeps()
     await runCoreUpgrade(
-      { cwd: instance, templateRoot: theirs, baseDir: base, theirsDir: theirs, apply: true },
+      { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs, apply: true },
       {
         ...deps,
         runCommand,

@@ -60,7 +60,7 @@ locals {
 
 # Compute — the plugin's Lambda function.
 module "function" {
-  source = "../../cloud/aws/compute"
+  source = "../../../../modules/cloud/aws/compute"
 
   project_name       = var.project_name
   environment        = var.environment

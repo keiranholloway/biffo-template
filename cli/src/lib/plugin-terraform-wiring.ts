@@ -133,6 +133,95 @@ export function listPluginModules(cwd: string): string[] {
     .sort()
 }
 
+/** Where a plugin's Terraform actually lives, relative to a root config under
+ * `infra/environments/<env>/`. */
+export const FIRST_PARTY_TERRAFORM = (name: string) =>
+  `../../../services/_plugins/${name}/terraform`
+export const THIRD_PARTY_TERRAFORM = (name: string) => `../../../modules/plugins/${name}`
+
+/**
+ * Does this instance carry the plugin as **first-party** source?
+ *
+ * First-party plugins live in the template-owned `services/_plugins/<name>/`
+ * (issue #243) and their Terraform rides `biffo core upgrade` like any other
+ * template-owned file.
+ */
+export function isFirstPartyPlugin(cwd: string, name: string): boolean {
+  return existsSync(join(cwd, 'services', '_plugins', name, 'terraform', 'main.tf'))
+}
+
+/**
+ * The `source` a generated module block should use for *name*.
+ *
+ * ## Why first-party plugins are referenced in place (issue #406)
+ *
+ * `biffo plugin install` copies a plugin's `terraform/` into
+ * `modules/plugins/<name>/`, and that copy is what Terraform reads. For a
+ * **third-party** plugin the copy is the delivery mechanism: its source is
+ * cloned from a registry repo and is not otherwise in the tree (ADR-0003).
+ *
+ * A **first-party** plugin's Terraform is already in the tree, already
+ * template-owned, and already synced by `biffo core upgrade`. Copying it as
+ * well gave that channel a synced source *and* a stale deployed copy of the
+ * same file — so an upgrade updated `services/_plugins/<name>/terraform/` while
+ * Terraform kept applying a copy frozen at install time. Nothing failed: the
+ * upgrade reported the change, CI passed, `terraform plan` was clean, the
+ * deploy succeeded, and the feature simply was not running.
+ *
+ * Measured in `tabsii-platform` right after a clean 0.50.2 → 0.53.0 upgrade:
+ * `agent-runtime` 53 lines adrift, `orchestrator` 15.
+ *
+ * So first-party plugins point at their real source and there is nothing to go
+ * stale. Every other module in `infra/environments/*` is referenced in place;
+ * this removes the deviation rather than patching around it.
+ */
+export function pluginModuleSource(cwd: string, name: string): string {
+  return isFirstPartyPlugin(cwd, name) ? FIRST_PARTY_TERRAFORM(name) : THIRD_PARTY_TERRAFORM(name)
+}
+
+/**
+ * Every plugin that should get a module block: the copied ones under
+ * `modules/plugins/`, plus first-party plugins carried in `services/_plugins/`.
+ *
+ * Union, not either/or. A first-party plugin whose stale copy is still present
+ * must appear exactly once — and referenced at its real source, not the copy.
+ */
+export function listWireablePlugins(cwd: string): string[] {
+  const copied = listPluginModules(cwd)
+  const firstParty = firstPartyPluginNames(cwd)
+  return [...new Set([...copied, ...firstParty])].sort()
+}
+
+/** First-party plugin names — directories under `services/_plugins/` that ship
+ * their own `terraform/main.tf`. */
+export function firstPartyPluginNames(cwd: string): string[] {
+  const dir = join(cwd, 'services', '_plugins')
+  let entries
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  return entries
+    .filter((e) => e.isDirectory() && !e.name.startsWith('.') && isFirstPartyPlugin(cwd, e.name))
+    .map((e) => e.name)
+    .sort()
+}
+
+/**
+ * First-party plugins that still have a copy under `modules/plugins/`.
+ *
+ * The copy is now dead weight — it is never read and never synced — and while
+ * it exists it is the thing someone will mistake for the source of truth. It is
+ * template-owned by the `modules/` prefix, so an upgrade will not update it and
+ * the ownership guard (#370) discourages editing it: frozen and unmaintainable
+ * at once. Surfaced so it can be deleted deliberately.
+ */
+export function staleFirstPartyCopies(cwd: string): string[] {
+  const copied = new Set(listPluginModules(cwd))
+  return firstPartyPluginNames(cwd).filter((name) => copied.has(name))
+}
+
 /**
  * Root-module environment directories under `infra/environments/` that this
  * generator can safely write into, sorted.
@@ -232,12 +321,17 @@ function renderArguments(args: Array<[string, string]>, indent: string): string 
   return args.map(([key, value]) => `${indent}${key.padEnd(width)} = ${value}`).join('\n')
 }
 
-function renderModuleBlock(pluginName: string, declared: Set<string>, handler: string): string {
+function renderModuleBlock(
+  pluginName: string,
+  declared: Set<string>,
+  handler: string,
+  source: string,
+): string {
   const args = standardArguments(pluginName, handler).filter(([key]) => declared.has(key))
   const quoted = JSON.stringify(pluginName)
   return [
     `module "plugin_${pluginName}" {`,
-    `  source   = "../../../modules/plugins/${pluginName}"`,
+    `  source   = "${source}"`,
     `  for_each = contains(var.enabled_plugins, ${quoted}) ? { ${quoted} = true } : {}`,
     '',
     renderArguments(args, '  '),
@@ -275,10 +369,22 @@ const GENERATED_HEADER = `# ----------------------------------------------------
 
 /** The full text of `plugins.generated.tf` for a given set of plugins. */
 export function renderGeneratedTerraform(
-  plugins: Array<{ name: string; declaredVariables: Set<string>; handler?: string }>,
+  plugins: Array<{
+    name: string
+    declaredVariables: Set<string>
+    handler?: string
+    /** Defaults to the copied `modules/plugins/<name>` path, which is correct
+     * for a third-party plugin; a first-party one passes its real source. */
+    source?: string
+  }>,
 ): string {
   const blocks = plugins.map((p) =>
-    renderModuleBlock(p.name, p.declaredVariables, p.handler ?? DEFAULT_PLUGIN_HANDLER),
+    renderModuleBlock(
+      p.name,
+      p.declaredVariables,
+      p.handler ?? DEFAULT_PLUGIN_HANDLER,
+      p.source ?? THIRD_PARTY_TERRAFORM(p.name),
+    ),
   )
   return `${GENERATED_HEADER}\n${blocks.join('\n\n')}\n`
 }
@@ -296,15 +402,25 @@ export function renderGeneratedTfvars(pluginNames: string[]): string {
  * that never installs a plugin carries no CLI-owned Terraform at all.
  */
 export function syncPluginTerraform(cwd: string): PluginTerraformSyncResult {
-  const plugins = listPluginModules(cwd)
+  // Union of copied and first-party plugins (#406). A first-party plugin is
+  // wired even with no copy under modules/plugins/, and if a stale copy is
+  // still present it appears once, sourced from its real location.
+  const plugins = listWireablePlugins(cwd)
   const environments = listEnvironments(cwd)
   const skippedEnvironments = listUnwirableEnvironments(cwd)
   const changedPaths: string[] = []
 
-  const rendered = plugins.map((name) => ({
-    name,
-    declaredVariables: declaredVariables(join(cwd, 'modules', 'plugins', name)),
-  }))
+  const rendered = plugins.map((name) => {
+    const firstParty = isFirstPartyPlugin(cwd, name)
+    const moduleDir = firstParty
+      ? join(cwd, 'services', '_plugins', name, 'terraform')
+      : join(cwd, 'modules', 'plugins', name)
+    return {
+      name,
+      declaredVariables: declaredVariables(moduleDir),
+      source: pluginModuleSource(cwd, name),
+    }
+  })
 
   for (const env of environments) {
     const envDir = join(cwd, 'infra', 'environments', env)

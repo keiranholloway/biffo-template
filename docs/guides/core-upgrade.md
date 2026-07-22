@@ -115,6 +115,34 @@ Anything the upgrade recognises by something other than its filename is printed 
 
 ## Breaking changes by version
 
+### 0.54.0 — first-party plugin Terraform is referenced in place
+
+`orchestrator` and `agent-runtime` are **first-party** plugins: their Terraform lives in the template-owned `services/_plugins/<name>/terraform/` and rides `biffo core upgrade` like any other core file.
+
+Until now it was also *copied* to `modules/plugins/<name>/` at install time, and that copy is what Terraform read. The copy was never re-synced, so **an upgrade updated the source and left the deployed module frozen at install time** — silently. Measured in a live instance right after a clean upgrade: `agent-runtime` 53 lines adrift, `orchestrator` 15.
+
+New instances need nothing: `biffo plugin install` now sources first-party plugins from their real path.
+
+**An existing instance must change one line per environment**, because module sources live in user-owned `infra/`, which an upgrade cannot touch:
+
+```hcl
+module "plugin_agent_runtime" {
+-  source   = "../../../modules/plugins/agent-runtime"
++  source   = "../../../services/_plugins/agent-runtime/terraform"
+```
+
+Then delete the dead copy:
+
+```bash
+git rm -r modules/plugins/agent-runtime modules/plugins/orchestrator
+```
+
+`biffo core upgrade` warns when it finds a first-party plugin that still has a copy, so you do not have to remember.
+
+Order does not matter and nothing breaks mid-migration: each directory's internal module reference matches its own location, so the old copy keeps working until you stop pointing at it.
+
+Third-party plugins are unaffected — for them the copy *is* the delivery mechanism, since their source comes from a registry repo rather than this tree.
+
 Most of an upgrade is additive. A few changes **destroy data or require manual
 work**, and Terraform will apply them without ceremony — a Cognito pool
 replacement reads as an ordinary `-/+ resource` line in a plan nobody scrolls

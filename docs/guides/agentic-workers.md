@@ -51,12 +51,24 @@ orchestrator, which logs `Received event` and nothing further. No error, no
 warning, no run row. Both deploy workflows stay green.
 
 Observed twice in one session: a definition was inadvertently disabled during an
-edit, and two subsequent requests vanished with no trace beyond their absence.
-Diagnosing it required reading orchestrator logs and noticing that
+edit, and two subsequent requests produced no run, with no trace beyond their
+absence. Diagnosing it required reading orchestrator logs and noticing that
 `agent.run.requested` never followed `demo.requested`.
 
 Editing a definition while events are in flight drops those events for the same
 reason.
+
+**What this does and does not cost.** The triggering record is safe — it was
+committed before the event was emitted — and any *other* workflow on the same
+trigger still fires, so a notification path is unaffected by an unrelated
+definition being disabled. For an enrichment worker, what is lost is an
+enhancement to a record that is stored and surfaced elsewhere.
+
+The reason to care anyway is that the mechanism is workflow-agnostic while the
+blast radius is not: the same silent failure on a workflow that is the *only*
+path by which a human learns something gives exactly the same signal — none.
+And the diagnostic cost applies either way, because every surface an operator
+normally checks reports healthy. Tracked as #418.
 
 ### `:online` bypasses the tool loop entirely
 

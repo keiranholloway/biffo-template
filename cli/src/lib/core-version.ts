@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, parse as parsePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -171,3 +172,54 @@ export function serializeInstanceCoreVersion(version: string): string {
 export function writeInstanceCoreVersion(cwd: string, version: string): void {
   writeFileSync(join(cwd, INSTANCE_CORE_FILE), serializeInstanceCoreVersion(version))
 }
+
+/**
+ * The highest `core-v*` tag in a template checkout — the template's current
+ * core version (issue #423).
+ *
+ * ## Why the tag, and not a file
+ *
+ * `core.version` used to be a tracked file every template-owned PR had to bump.
+ * One global counter plus branch protection made a conflict between concurrent
+ * PRs certain, and the attempt to derive it in the release job (#425) failed for
+ * a reason no amount of care would have avoided: `main` refuses direct pushes,
+ * so nothing running in CI can write the file at all.
+ *
+ * A tag needs no push to a protected branch, cannot conflict between PRs
+ * because no PR creates one, and already IS the release — `core-v<version>` is
+ * what `publish-cli.yml` fires on and what `biffo core upgrade` materialises
+ * trees from. Making it the source of truth removes a second representation of
+ * something git was already recording.
+ *
+ * Returns null when the repo has no core tags at all (a fresh template, before
+ * its first release), so callers can fall back rather than crash.
+ */
+export function latestCoreVersionFromTags(
+  repo: string,
+  git: TagRunner = defaultTagRunner,
+): string | null {
+  let out: string
+  try {
+    out = git(['-C', repo, 'tag', '--list', 'core-v*'])
+  } catch {
+    return null
+  }
+  const versions = out
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith(CORE_TAG_PREFIX))
+    .map((tag) => tag.slice(CORE_TAG_PREFIX.length))
+    // A tag that is not a plain semver is not a core release; ignore rather
+    // than throw, so one stray tag cannot break every upgrade.
+    .filter((v) => SEMVER.test(v))
+  if (versions.length === 0) return null
+  return versions.sort(compareCoreVersions).at(-1) ?? null
+}
+
+/** Prefix of every core release tag. */
+export const CORE_TAG_PREFIX = 'core-v'
+
+export type TagRunner = (args: string[]) => string
+
+const defaultTagRunner: TagRunner = (args) =>
+  execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })

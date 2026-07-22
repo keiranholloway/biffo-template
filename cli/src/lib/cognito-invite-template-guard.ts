@@ -134,11 +134,19 @@ export function checkInviteTemplateSource(file: string, rawSource: string): Viol
     }
   }
 
-  // Placeholder checks need the heredoc bodies intact, so re-extract from a
-  // source with comments removed but heredocs preserved. Without this the
-  // email_message body is the literal "HEREDOC" and every placeholder looks
-  // absent.
-  for (const block of extractBlocks(stripHclComments(rawSource), 'invite_message_template')) {
+  // Placeholder checks need the heredoc bodies intact, so re-extract from the
+  // RAW source. Two things must not happen here:
+  //
+  //   - stripHeredocs, because the body is exactly what we are inspecting; and
+  //   - stripHclComments, because a branded HTML invite is full of hex colours
+  //     (`color:#0f1613`). Outside a heredoc a `#` starts a comment, so the
+  //     stripper would delete the rest of those lines and take the placeholders
+  //     with them — reporting {####} as missing from a template that has it.
+  //
+  // The cost is that a `{username}` sitting in a real comment inside the block
+  // would satisfy the check. That is a far smaller risk than failing a template
+  // that is actually correct.
+  for (const block of extractBlocks(rawSource, 'invite_message_template')) {
     for (const member of PLACEHOLDER_MEMBERS) {
       const body = memberBody(block.body, member)
       if (body === null) continue // absence is already reported above

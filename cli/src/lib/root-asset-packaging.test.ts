@@ -11,7 +11,7 @@ import {
   RESOLVER_SITES,
   UNPACKAGED_ROOT_ASSETS,
 } from '../../scripts/packaged-root-assets.mjs'
-import { findCoreVersionUpward, getLatestCoreVersion } from './core-version.js'
+import { findCoreVersionUpward, getLatestCoreVersion, isInstanceRepo } from './core-version.js'
 import { restorePackagedDotfiles } from './skeleton-dotfiles.js'
 
 /**
@@ -30,6 +30,15 @@ import { restorePackagedDotfiles } from './skeleton-dotfiles.js'
  * the second slipped through because the guard only knew about the first. So
  * this file is driven by the shared inventory and additionally asserts that no
  * NEW resolver appears without its asset being classified.
+ *
+ * ## What an instance can and cannot check (#367)
+ *
+ * `cli/` is template-owned, so `biffo core upgrade` ships this file to every
+ * instance — where publishing `@biffo/cli` is not a thing that happens, and the
+ * repo root holds no publishable `_skeletons/`. Assertions about package.json
+ * and about `cli/src/` itself still hold there (both are distributed), and are
+ * left live. Assertions that read the REPO ROOT, or that run the prepack script
+ * against it, are template-only and gate on `runningInInstance`.
  */
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -54,6 +63,7 @@ const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) 
 const assets = PACKAGED_ROOT_ASSETS as Asset[]
 const resolverSites = RESOLVER_SITES as { file: string; asset: string | null; packaged: boolean }[]
 const unpackaged = UNPACKAGED_ROOT_ASSETS as { path: string; why: string }[]
+const runningInInstance = isInstanceRepo(repoRoot)
 
 describe('published package manifest', () => {
   /**
@@ -87,7 +97,11 @@ describe('published package manifest', () => {
     expect(existsSync(join(packageRoot, asset.path))).toBe(false)
   })
 
-  it('every asset exists at the repo root to be copied from', () => {
+  // Template-only: the sole assertion in this describe that reads the repo root
+  // rather than package.json. An instance's root has no publishable `_skeletons/`
+  // (it inherited a stale copy at template-generation time, and never republishes
+  // the CLI), so the sentinel is legitimately absent there.
+  it.skipIf(runningInInstance)('every asset exists at the repo root to be copied from', () => {
     for (const asset of assets) {
       expect(existsSync(join(repoRoot, asset.path)), `${asset.path} missing from repo root`).toBe(
         true,
@@ -149,7 +163,11 @@ describe('resolver registry covers every upward-walking module', () => {
   })
 })
 
-describe('sync-packaged-assets.mjs', () => {
+// Template-only in full (#367): every test here runs the prepack script against
+// the repo root and asserts on what it copied out of it. That is the template's
+// publishing pipeline — an instance neither has the source assets in publishable
+// form nor ever runs `npm publish` for `@biffo/cli`.
+describe.skipIf(runningInInstance)('sync-packaged-assets.mjs', () => {
   let dest: string
   beforeEach(() => {
     dest = mkdtempSync(join(tmpdir(), 'biffo-pack-'))

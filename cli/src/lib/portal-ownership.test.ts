@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { type CoreManifest, isTemplateOwned } from './core-manifest.js'
+import { isInstanceRepo } from './core-version.js'
 
 /**
  * Ownership guard for the portal (issue #279 part 1, corrected by #306).
@@ -34,6 +35,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const manifest: CoreManifest = JSON.parse(
   readFileSync(resolve(repoRoot, 'core-manifest.json'), 'utf8'),
 )
+const runningInInstance = isInstanceRepo(repoRoot)
 
 describe('portal ownership split', () => {
   it.each([
@@ -82,10 +84,20 @@ describe('portal ownership split', () => {
     ).toEqual([])
   })
 
-  it('no longer ships a portal landing page — the root path is the sibling’s', () => {
-    // The portal serves /admin and /login only (#306, decision 2). A page.tsx at
-    // the app root would export an index.html that competes with the root
-    // sibling for `/`.
-    expect(existsSync(resolve(repoRoot, 'apps/portal/src/app/page.tsx'))).toBe(false)
-  })
+  // The only assertion here about the repo's own FILES rather than the manifest,
+  // so the only one an instance cannot satisfy (#367): an instance that predates
+  // #306 still has its landing page at that path, and removing it is its own
+  // migration, not something a template-shipped test should red on. Everything
+  // above reads core-manifest.json, which is template-owned and therefore
+  // identical in an instance — worth keeping live there, since it catches a
+  // manifest an upgrade mangled.
+  it.skipIf(runningInInstance)(
+    'no longer ships a portal landing page — the root path is the sibling’s',
+    () => {
+      // The portal serves /admin and /login only (#306, decision 2). A page.tsx
+      // at the app root would export an index.html that competes with the root
+      // sibling for `/`.
+      expect(existsSync(resolve(repoRoot, 'apps/portal/src/app/page.tsx'))).toBe(false)
+    },
+  )
 })

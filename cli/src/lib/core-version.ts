@@ -27,6 +27,24 @@ const CoreManifestSchema = z.object({
 export const CORE_VERSION_FILE = 'core.version'
 export const INSTANCE_CORE_FILE = 'biffo.core.json'
 
+/**
+ * Is `repoRoot` an instance rather than the template?
+ *
+ * `biffo.core.json` is written at `biffo init` and never committed in the
+ * template, so its presence is the discriminator. `core.version` is *not* — an
+ * instance inherits a copy of it through GitHub template generation.
+ *
+ * This matters beyond the CLI's own behaviour, because `cli/` is template-owned:
+ * `biffo core upgrade` copies it — tests included — into every instance. A check
+ * that asserts on the template's own repo layout therefore arrives in a repo
+ * that legitimately has a different one, and turns its CI red on files it never
+ * wrote (#367). Such a check must gate on this (`describe.skipIf`), and the
+ * probe lives here so there is one definition of it rather than one per caller.
+ */
+export function isInstanceRepo(repoRoot: string): boolean {
+  return existsSync(join(repoRoot, INSTANCE_CORE_FILE))
+}
+
 /** Parse a `major.minor.patch` string into a numeric tuple, throwing on any
  * other shape (no pre-release/build metadata — core versions are plain semver). */
 export function parseCoreVersion(raw: string): [number, number, number] {

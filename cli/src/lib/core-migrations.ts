@@ -294,32 +294,46 @@ export function stampCarriedFrom(content: string, templateFile: string): string 
   return content.replace(REVISION_RE, (m) => `${CARRIED_FROM_MARKER} ${templateFile}\n${m}`)
 }
 
+/** The module docstring, if the file opens with one. */
+const MODULE_DOCSTRING_RE = /^\s*("""|''')[\s\S]*?\1/
+
 /**
- * Identity of a migration's *substance* — everything except the parts a carry
- * legitimately rewrites.
+ * Identity of a migration's *substance*: its DDL, and nothing else.
  *
- * Stripped: the `revision` / `down_revision` assignments and their docstring
- * echoes, the provenance marker, `Create Date` (Alembic metadata, not schema),
- * and blank-line/trailing-whitespace noise. What remains is the DDL, which is
- * what makes two files "the same migration".
+ * Stripped, because none of it is schema —
+ *
+ *   - the `revision` / `down_revision` assignments, which a carry rewrites by
+ *     design;
+ *   - the module docstring, and any full-line `#` comment;
+ *   - the provenance marker;
+ *   - blank lines and trailing whitespace.
+ *
+ * **Commentary is not substance.** An instance that has to renumber a carried
+ * migration typically documents why, in the docstring — which is the careful
+ * thing to do, and used to defeat this comparison. Every carried migration in
+ * `tabsii-platform` is DDL-identical to the template's and differs only in
+ * prose explaining the workaround; treating that as a different migration meant
+ * the operators who documented their divergence were the ones penalised for it.
+ *
+ * Ignoring prose is not a loosening. Two migrations with the same DDL *are* the
+ * same migration for carry purposes, and the discriminating-body rule in
+ * `alreadyCarried` still refuses to draw any conclusion from a body that more
+ * than one migration shares.
+ *
+ * Inline trailing comments are deliberately NOT stripped: doing so means
+ * distinguishing a `#` that starts a comment from one inside a string literal,
+ * which needs a Python parser. Whole-line comments cover the real case.
  */
 export function migrationBodyHash(content: string): string {
   const normalised = content
+    .replace(MODULE_DOCSTRING_RE, '')
     .split('\n')
     .map((line) => line.trimEnd())
     .filter(
       (line) =>
         !REVISION_RE.test(line) &&
         !DOWN_REVISION_RE.test(line) &&
-        !CARRIED_FROM_RE.test(line) &&
-        // No trailing space in the patterns: lines are trimEnd()ed first, and a
-        // base migration's `Revises: ` is empty, so requiring the space would
-        // leave that one line in and give every base migration a hash of its
-        // own — a difference in chaining metadata masquerading as a difference
-        // in DDL.
-        !/^Revision ID:/.test(line) &&
-        !/^Revises:/.test(line) &&
-        !/^Create Date:/.test(line) &&
+        !line.trimStart().startsWith('#') &&
         line !== '',
     )
     .join('\n')

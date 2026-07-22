@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,9 +16,13 @@ import { isInstanceRepo } from './core-version.js'
 import {
   MIGRATIONS_VERSIONS_DIR,
   applyMigrationCarry,
+  migrationBodyHash,
+  parseCarriedFrom,
+  stampCarriedFrom,
   parseMigration,
   planMigrationCarry,
   readMigrations,
+  rechainMigration,
   reissuedRevisionId,
   validateChain,
 } from './core-migrations.js'
@@ -271,6 +283,179 @@ describe('applyMigrationCarry', () => {
     const plan = planMigrationCarry({ templateDir, instanceDir })
     applyMigrationCarry(instanceDir, plan)
     expect(() => applyMigrationCarry(instanceDir, plan)).toThrow(/Refusing to overwrite/)
+  })
+})
+
+/**
+ * Migration identity (#366).
+ *
+ * The carry used to decide "have I already carried this?" by filename alone,
+ * which is defeated by exactly the thing instances are pushed into doing: a
+ * revision-id collision forces the carried copy to be re-issued, so the instance
+ * renames the file to match its new id. Same content, already applied — but the
+ * next upgrade no longer recognises it and re-issues the migration, running
+ * `op.create_table(...)` against a database that already has those tables.
+ *
+ * `db-init` runs `command.upgrade(cfg, "head")` on every deploy, so that lands
+ * as a failed production deploy rather than a caught mistake.
+ */
+describe('planMigrationCarry — recognising an already-carried migration', () => {
+  let templateDir: string
+  let instanceDir: string
+
+  beforeEach(() => {
+    templateDir = mkdtempSync(join(tmpdir(), 'tmpl-'))
+    instanceDir = mkdtempSync(join(tmpdir(), 'inst-'))
+    for (const d of [templateDir, instanceDir]) {
+      mkdirSync(join(d, MIGRATIONS_VERSIONS_DIR), { recursive: true })
+    }
+  })
+  afterEach(() => {
+    for (const d of [templateDir, instanceDir]) rmSync(d, { recursive: true, force: true })
+  })
+
+  const write = (root: string, file: string, content: string): void =>
+    writeFileSync(join(root, MIGRATIONS_VERSIONS_DIR, file), content)
+
+  const ddl = (table: string) => `op.create_table("${table}")`
+
+  /** The exact #366 scenario, reproduced. */
+  it('does not re-issue a carried migration the instance renamed', () => {
+    write(templateDir, '0003_create_orchestration_tables.py', migration('0003', null, ddl('orch')))
+
+    // The instance already used 0003, so its copy was re-issued and renamed to
+    // match — byte-identical DDL, applied, under a different filename.
+    write(instanceDir, '0001_own.py', migration('0001', null, ddl('own')))
+    write(
+      instanceDir,
+      '0007_create_orchestration_tables.py',
+      migration('0007', '0001', ddl('orch')),
+    )
+
+    const plan = planMigrationCarry({ templateDir, instanceDir })
+
+    // Before the fix this planned 1 entry: CREATE TABLE against a live database.
+    expect(plan.entries).toEqual([])
+    expect(plan.skipped).toEqual(['0003_create_orchestration_tables.py'])
+    expect(plan.recognised).toEqual([
+      {
+        file: '0003_create_orchestration_tables.py',
+        instanceFile: '0007_create_orchestration_tables.py',
+        how: 'body',
+      },
+    ])
+  })
+
+  it('stamps provenance on carry, so the next upgrade needs no inference', () => {
+    write(templateDir, '0003_orchestration.py', migration('0003', null, ddl('orch')))
+    write(instanceDir, '0003_mine.py', migration('0003', null, ddl('mine')))
+
+    const first = planMigrationCarry({ templateDir, instanceDir })
+    expect(first.entries).toHaveLength(1)
+    // The id collided, so it was re-issued — the situation that leads to a rename.
+    expect(first.entries[0]?.reissuedFrom).toBe('0003')
+    expect(first.entries[0]?.content).toContain('# biffo:carried-from: 0003_orchestration.py')
+    applyMigrationCarry(instanceDir, first)
+
+    // Now rename it AND edit it, defeating both filename and body matching.
+    const carried = join(instanceDir, MIGRATIONS_VERSIONS_DIR, '0003_orchestration.py')
+    const renamed = join(instanceDir, MIGRATIONS_VERSIONS_DIR, '0009_orchestration.py')
+    renameSync(carried, renamed)
+    writeFileSync(renamed, `${readFileSync(renamed, 'utf8')}\n# a later local tweak\n`)
+
+    const second = planMigrationCarry({ templateDir, instanceDir })
+    expect(second.entries).toEqual([])
+    expect(second.recognised[0]?.how).toBe('provenance')
+  })
+
+  it('stamping is idempotent, so a resumed upgrade cannot double-stamp', () => {
+    const once = stampCarriedFrom(migration('0003', null, ddl('x')), '0003_a.py')
+    expect(stampCarriedFrom(once, '0003_a.py')).toBe(once)
+    expect(once.match(/# biffo:carried-from:/g)).toHaveLength(1)
+  })
+
+  /**
+   * The residual ambiguity, and the one case where stopping is the answer. It
+   * looks like a carried migration that was renamed *and* edited, but it could
+   * equally be an unrelated instance migration describing the same thing.
+   * Skipping leaves the instance with models and no schema; carrying runs DDL
+   * against a live database. Neither is guessable, so it refuses.
+   */
+  it('refuses rather than guess when the description matches but the body does not', () => {
+    write(templateDir, '0003_create_orchestration_tables.py', migration('0003', null, ddl('orch')))
+    write(
+      instanceDir,
+      '0007_create_orchestration_tables.py',
+      migration('0007', null, ddl('something_else')),
+    )
+
+    expect(() => planMigrationCarry({ templateDir, instanceDir })).toThrow(
+      /Refusing to guess[\s\S]*biffo:carried-from: 0003_create_orchestration_tables\.py/,
+    )
+  })
+
+  it('the refusal is resolvable by stamping the marker the message asks for', () => {
+    write(templateDir, '0003_create_orchestration_tables.py', migration('0003', null, ddl('orch')))
+    const instanceFile = '0007_create_orchestration_tables.py'
+    write(instanceDir, instanceFile, migration('0007', null, ddl('something_else')))
+    expect(() => planMigrationCarry({ templateDir, instanceDir })).toThrow()
+
+    const path = join(instanceDir, MIGRATIONS_VERSIONS_DIR, instanceFile)
+    writeFileSync(
+      path,
+      stampCarriedFrom(readFileSync(path, 'utf8'), '0003_create_orchestration_tables.py'),
+    )
+
+    const plan = planMigrationCarry({ templateDir, instanceDir })
+    expect(plan.entries).toEqual([])
+    expect(plan.recognised[0]?.how).toBe('provenance')
+  })
+
+  /**
+   * Body identity is evidence only when the body discriminates. Two no-op
+   * migrations share one, and treating that as "already carried" would silently
+   * skip a migration the instance needs — models with no schema, which fails at
+   * runtime rather than at upgrade time.
+   */
+  it('does not treat an indistinct body as evidence', () => {
+    write(templateDir, '0001_a.py', migration('0001', null))
+    write(templateDir, '0002_b.py', migration('0002', '0001'))
+    write(instanceDir, '0009_unrelated.py', migration('0009', null))
+
+    const plan = planMigrationCarry({ templateDir, instanceDir })
+    expect(plan.entries.map((e) => e.file)).toEqual(['0001_a.py', '0002_b.py'])
+    expect(plan.recognised).toEqual([])
+  })
+
+  it('a base migration hashes like any other — empty Revises is not a difference', () => {
+    // `Revises: ` on a base migration is chaining metadata, not DDL. Leaving it
+    // in gave every base migration a hash of its own, which made an indistinct
+    // body look distinct and re-enabled the false match this guards.
+    const base = migration('0001', null, ddl('thing'))
+    const chained = migration('0007', '0006', ddl('thing'))
+    expect(migrationBodyHash(base)).toBe(migrationBodyHash(chained))
+  })
+
+  it('a file already claimed by another template migration is not an ambiguous match', () => {
+    write(templateDir, '0003_tables.py', migration('0003', null, ddl('a')))
+    write(templateDir, '0004_tables.py', migration('0004', '0003', ddl('b')))
+    // The instance's copy of 0003 — same slug as 0004, but it says what it is.
+    write(
+      instanceDir,
+      '0009_tables.py',
+      stampCarriedFrom(migration('0009', null, ddl('a')), '0003_tables.py'),
+    )
+
+    const plan = planMigrationCarry({ templateDir, instanceDir })
+    expect(plan.skipped).toEqual(['0003_tables.py'])
+    expect(plan.entries.map((e) => e.file)).toEqual(['0004_tables.py'])
+  })
+
+  it('provenance survives a renumber that also changes the revision id', () => {
+    const carried = stampCarriedFrom(migration('core_abc12345', '0009', ddl('x')), '0003_x.py')
+    expect(parseCarriedFrom(carried)).toBe('0003_x.py')
+    // ...and re-chaining does not disturb it.
+    expect(parseCarriedFrom(rechainMigration(carried, '0012', '0011'))).toBe('0003_x.py')
   })
 })
 

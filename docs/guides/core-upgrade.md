@@ -162,7 +162,16 @@ Third-party plugins are unaffected — for them the copy *is* the delivery mecha
 Most of an upgrade is additive. A few changes **destroy data or require manual
 work**, and Terraform will apply them without ceremony — a Cognito pool
 replacement reads as an ordinary `-/+ resource` line in a plan nobody scrolls
-through. Check this list before upgrading past a version in it.
+through.
+
+**`biffo core upgrade` reads this list for you.** It prints every entry the
+upgrade crosses before the plan, puts them at the top of the PR body, and
+refuses `--apply` until you pass `--acknowledge-breaking`. You no longer have to
+remember the list exists — but you do have to read what it says, because the
+manual steps below are not something the CLI can do for you.
+
+Entries are matched as `from < version <= to`: an instance already **on** a
+breaking version is not warned again, one moving **to** it is.
 
 ### 0.50.0 — the email address becomes the sign-in identity
 

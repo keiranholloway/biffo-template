@@ -91,6 +91,28 @@ describe('real repo core-manifest.json', () => {
     expect(manifest.templateOwned).not.toContain('core.version')
   })
 
+  it('owns the two hooks it wires, but not the .husky/ directory (#370)', () => {
+    const manifest = readCoreManifest(repoRoot)
+    // The template wires commitlint, lint-staged and the core-ownership guard,
+    // so those two files must reach instances — a guard that stays in the repo
+    // that does not need it guards nothing.
+    expect(isTemplateOwned('.husky/commit-msg', manifest)).toBe(true)
+    expect(isTemplateOwned('.husky/pre-commit', manifest)).toBe(true)
+    // ...but a hook the INSTANCE adds is its own. Owning the directory would
+    // make an upgrade propose deleting it — the #279 part-1 trap.
+    expect(isTemplateOwned('.husky/pre-push', manifest)).toBe(false)
+    expect(isTemplateOwned('.husky/post-merge', manifest)).toBe(false)
+    expect(manifest.templateOwned).not.toContain('.husky/')
+  })
+
+  it('leaves biffo.divergence.json user-owned, or the guard would block its own config', () => {
+    const manifest = readCoreManifest(repoRoot)
+    // Which template-owned prefixes an instance knowingly diverges in is
+    // per-instance policy. Were it template-owned, recording a divergence would
+    // be refused by the guard it configures.
+    expect(isTemplateOwned('biffo.divergence.json', manifest)).toBe(false)
+  })
+
   it('findTemplateRoot locates the repo root from a nested dir', () => {
     expect(findTemplateRoot(here)).toBe(repoRoot)
   })

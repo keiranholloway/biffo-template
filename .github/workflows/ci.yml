@@ -52,6 +52,16 @@ jobs:
       - run: pnpm --filter @biffo/cli check:core-bump
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
+      # The mirror image, for instances: fail if an INSTANCE changed a
+      # template-owned path (#370). Inert in the template, where that is the
+      # point of every PR. Shares this job rather than adding its own — same
+      # toolchain, same full-depth checkout, same PR-only trigger, and GitHub
+      # bills each job's wall time rounded up to a full minute.
+      - name: Core ownership guard
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @biffo/cli check:core-ownership
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
 
   js:
     name: JS (lint, types, test, audit)

@@ -62,6 +62,8 @@ class FakeCore:
         get_status: int = 200,
         claim_status: int = 200,
         complete_status: int = 200,
+        reap_status: int = 200,
+        reaped: list[dict[str, Any]] | None = None,
     ) -> None:
         self._run = run if run is not None else make_run()
         self._get_status = get_status
@@ -69,6 +71,8 @@ class FakeCore:
         # (ADR-0014 §5 / issue #371) — the case a duplicate delivery must lose.
         self._claim_status = claim_status
         self._complete_status = complete_status
+        self._reap_status = reap_status
+        self._reaped = reaped if reaped is not None else []
         self.requests: list[tuple[str, str, dict[str, Any]]] = []
 
     def client(self) -> SignedCoreClient:
@@ -84,6 +88,10 @@ class FakeCore:
         """Bodies POSTed to ``/agent-runs/{id}/complete``."""
         return [body for _, path, body in self.requests if path.endswith("/complete")]
 
+    def reaps(self) -> list[str]:
+        """Paths POSTed to ``/agent-runs/reap``."""
+        return [path for _, path, _ in self.requests if path.endswith("/reap")]
+
     def claims(self) -> list[str]:
         """Paths POSTed to ``/agent-runs/{id}/claim``."""
         return [path for _, path, _ in self.requests if path.endswith("/claim")]
@@ -97,6 +105,10 @@ class FakeCore:
             if self._get_status >= 400:
                 return httpx.Response(self._get_status, json={"detail": "Agent run not found"})
             return httpx.Response(200, json=self._run)
+        if request.method == "POST" and path.endswith("/reap"):
+            if self._reap_status >= 400:
+                return httpx.Response(self._reap_status, json={"detail": "boom"})
+            return httpx.Response(200, json=self._reaped)
         if request.method == "POST" and path.endswith("/claim"):
             if self._claim_status >= 400:
                 return httpx.Response(

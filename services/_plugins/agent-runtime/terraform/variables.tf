@@ -184,3 +184,26 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+variable "reap_schedule_expression" {
+  description = <<-EOT
+    How often to sweep for stale agent runs (ADR-0014 section 5, issue #402).
+    An EventBridge schedule expression; empty disables the sweep entirely.
+
+    15 minutes is deliberately far more frequent than the staleness threshold
+    Core applies (agent_run_stale_after_seconds, 1800s). The two are independent
+    on purpose: the schedule decides how quickly a stranded run is *noticed*,
+    Core decides what counts as stranded. Sweeping often is nearly free — with
+    nothing stale the route reaps nothing and emits nothing — whereas sweeping
+    rarely leaves a subscriber waiting on agent.run.completed for the length of
+    the gap.
+  EOT
+  type        = string
+  default     = "rate(15 minutes)"
+}
+
+variable "tenant_id" {
+  description = "Tenant the scheduled sweep runs for (ADR-0001). Single-tenant deployments leave this as \"default\"; the seam exists so a multi-tenant deployment can schedule per tenant rather than retrofitting one later."
+  type        = string
+  default     = "default"
+}

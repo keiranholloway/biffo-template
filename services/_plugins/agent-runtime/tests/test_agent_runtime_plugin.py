@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from agent_runtime.openrouter import LLMResponse
-from agent_runtime.plugin import AGENT_RUN_REQUESTED, AgentRuntimePlugin
+from agent_runtime.plugin import AGENT_RUN_REQUESTED, AGENT_RUNS_REAP_DUE, AgentRuntimePlugin
 from agent_runtime.redaction import EMAIL_PLACEHOLDER
 from agent_runtime_fakes import FakeCore, FakeLLM, llm_error, make_run
 from biffo_plugin_sdk import BiffoEvent
@@ -211,3 +211,58 @@ async def test_a_failed_completion_post_does_not_raise_into_the_lambda():
     await _plugin(core, FakeLLM()).events.dispatch(_event())
 
     assert len(core.completions()) == 1
+
+
+# ── Stale-run sweep (ADR-0014 §5, issue #402) ────────────────────────────────
+
+
+def _reap_event() -> BiffoEvent:
+    """The schedule tick, as this plugin's own EventBridge rule synthesises it."""
+    return BiffoEvent(detail_type=AGENT_RUNS_REAP_DUE, payload={})
+
+
+async def test_the_schedule_tick_asks_core_to_sweep():
+    core = FakeCore(reaped=[make_run("run-9", status="failed")])
+    llm = FakeLLM()
+
+    await _plugin(core, llm).events.dispatch(_reap_event())
+
+    assert core.reaps() == ["/api/v1/internal/agent-runs/reap"]
+    # The sweep is Core's work: the runtime decides nothing about staleness and
+    # must never call the model on this path.
+    assert llm.calls == []
+    assert core.completions() == []
+
+
+async def test_a_sweep_with_nothing_stale_is_harmless():
+    core = FakeCore(reaped=[])
+    llm = FakeLLM()
+
+    await _plugin(core, llm).events.dispatch(_reap_event())
+
+    assert core.reaps() == ["/api/v1/internal/agent-runs/reap"]
+    assert llm.calls == []
+
+
+async def test_a_failed_sweep_is_swallowed_not_raised():
+    """One missed pass costs nothing; the next tick sweeps again.
+
+    Raising would fail the Lambda invocation and earn an EventBridge retry
+    storm against a Core that is evidently already unwell.
+    """
+    core = FakeCore(reap_status=503)
+    llm = FakeLLM()
+
+    await _plugin(core, llm).events.dispatch(_reap_event())
+
+    assert llm.calls == []
+
+
+async def test_a_run_request_does_not_trigger_a_sweep():
+    # The two triggers are independent; execution must not do bookkeeping.
+    core = FakeCore()
+    llm = FakeLLM()
+
+    await _plugin(core, llm).events.dispatch(_event())
+
+    assert core.reaps() == []

@@ -18,6 +18,10 @@ The lifecycle is three steps, mirroring the orchestration engine's shape:
    the run to exactly one terminal state. A run already in a terminal state is
    refused, so a retried completion cannot rewrite a finished run.
 
+And one step outside the happy path: ``reap_stale_runs`` fails runs a dead
+runtime left in ``running``, so a subscriber waiting on ``agent.run.completed``
+is released rather than waiting for ever (§5).
+
 Emission is **not** done here: the routers call ``emit_event`` so the event is
 buffered on the session and published by ``get_db`` only after the transaction
 commits (ADR-0014 §5).
@@ -25,7 +29,7 @@ commits (ADR-0014 §5).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, select, update
@@ -191,6 +195,82 @@ async def claim_run(db: AsyncSession, *, tenant_id: str, run_id: str) -> AgentRu
         # response serialization (sync, in a threadpool) does no lazy IO.
         await db.refresh(run)
     return run
+
+
+# AWS's hard cap on a single Lambda invocation. The reaper's threshold is
+# measured against this rather than against the agent-runtime module's own
+# `timeout`, so the two cannot drift into reaping live runs (issue #402).
+LAMBDA_MAX_SECONDS = 900
+
+REAPED_ERROR = (
+    "Reaped: the run was claimed but never reported a result. The runtime that "
+    "claimed it is presumed dead (ADR-0014 §5)."
+)
+
+
+async def reap_stale_runs(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    stale_after_seconds: int,
+    now: datetime | None = None,
+) -> list[AgentRun]:
+    """Fail runs stuck in ``running`` past *stale_after_seconds*, returning them.
+
+    A run reaches ``running`` only by being claimed, so one still there long
+    after any invocation could have finished is a runtime that died holding it.
+    The model work is already paid for and Core holds no result, so the run
+    never terminates — and anything waiting on ``agent.run.completed`` waits for
+    ever, because §5's whole point is telling "failed" from "still running".
+    This makes that a definite "failed".
+
+    Each run is flipped by its **own** conditional UPDATE, the same shape as
+    ``claim_run``: a reap that raced a real completion matches zero rows and is
+    skipped, so a late-arriving result is never overwritten. Whichever lands
+    first wins, and the other becomes a no-op — which is what makes calling this
+    on a schedule safe.
+
+    ``now`` is injectable so a test can age a run without sleeping.
+    """
+    moment = now or datetime.now(UTC)
+    cutoff = moment - timedelta(seconds=stale_after_seconds)
+
+    candidates = list(
+        (
+            await db.scalars(
+                select(AgentRun).where(
+                    AgentRun.tenant_id == tenant_id,
+                    AgentRun.status == "running",
+                    AgentRun.started_at.is_not(None),
+                    AgentRun.started_at < cutoff,
+                )
+            )
+        ).all()
+    )
+
+    reaped: list[AgentRun] = []
+    for candidate in candidates:
+        result = cast(
+            CursorResult[Any],
+            await db.execute(
+                update(AgentRun)
+                .where(
+                    AgentRun.tenant_id == tenant_id,
+                    AgentRun.id == candidate.id,
+                    # Re-checked, because the SELECT above is a snapshot: the
+                    # runtime may have completed the run in between.
+                    AgentRun.status == "running",
+                )
+                .values(status="failed", error=REAPED_ERROR, completed_at=moment)
+            ),
+        )
+        if result.rowcount == 0:
+            continue
+        await db.flush()
+        await db.refresh(candidate)
+        reaped.append(candidate)
+
+    return reaped
 
 
 async def complete_run(

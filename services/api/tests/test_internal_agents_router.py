@@ -365,3 +365,114 @@ def test_a_claimed_run_still_completes_normally(client):
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "completed"
+
+
+# ── Reap (ADR-0014 §5, issue #402) ───────────────────────────────────────────
+#
+# A run reaches `running` only by being claimed, so one still there long after
+# any invocation could have finished is a runtime that died holding it: already
+# paid for, no result, and anything waiting on agent.run.completed waits for
+# ever. The sweep makes that a definite "failed".
+
+
+def _claimed_run(client: TestClient) -> str:
+    """A run in `running` — the only state the reaper considers."""
+    run_id = _create(client).json()["id"]
+    client.post(f"{_RUNS}/{run_id}/claim", json={})
+    return run_id
+
+
+# Staleness is driven by the threshold rather than by ageing `started_at`:
+# `stale_after_seconds=0` puts the cutoff at "now", so a run claimed a moment
+# ago is already past it. That exercises the same comparison without a test that
+# either sleeps for half an hour or reaches behind the API to rewrite a column.
+STALE_IMMEDIATELY = 0
+NEVER_STALE = 3600
+
+
+def test_reap_fails_a_run_stuck_running_past_the_threshold(client, monkeypatch):
+    monkeypatch.setattr(settings, "agent_run_stale_after_seconds", STALE_IMMEDIATELY)
+    run_id = _claimed_run(client)
+
+    resp = client.post(f"{_RUNS}/reap", json={})
+
+    assert resp.status_code == 200
+    assert [r["id"] for r in resp.json()] == [run_id]
+    assert resp.json()[0]["status"] == "failed"
+
+    after = client.get(f"{_RUNS}/{run_id}").json()
+    assert after["status"] == "failed"
+    assert "Reaped" in after["error"]
+    assert after["completed_at"] is not None
+
+
+def test_reap_leaves_a_run_that_is_still_within_its_budget(client, monkeypatch):
+    monkeypatch.setattr(settings, "agent_run_stale_after_seconds", NEVER_STALE)
+    run_id = _claimed_run(client)
+
+    assert client.post(f"{_RUNS}/reap", json={}).json() == []
+    assert client.get(f"{_RUNS}/{run_id}").json()["status"] == "running"
+
+
+def test_reap_never_touches_a_pending_run(client, monkeypatch):
+    # Pending means nobody claimed it, so nothing was spent and nothing is
+    # waiting on it — re-delivery can still pick it up.
+    monkeypatch.setattr(settings, "agent_run_stale_after_seconds", STALE_IMMEDIATELY)
+    run_id = _create(client).json()["id"]
+
+    assert client.post(f"{_RUNS}/reap", json={}).json() == []
+    assert client.get(f"{_RUNS}/{run_id}").json()["status"] == "pending"
+
+
+def test_reap_never_rewrites_a_finished_run(client, monkeypatch):
+    monkeypatch.setattr(settings, "agent_run_stale_after_seconds", STALE_IMMEDIATELY)
+    run_id = _claimed_run(client)
+    client.post(
+        f"{_RUNS}/{run_id}/complete",
+        json={"status": "completed", "result": {"output": "real answer"}},
+    )
+
+    assert client.post(f"{_RUNS}/reap", json={}).json() == []
+    after = client.get(f"{_RUNS}/{run_id}").json()
+    assert after["status"] == "completed"
+    assert after["result"] == {"output": "real answer"}
+
+
+def test_reap_emits_a_completion_per_reaped_run(client, publisher, monkeypatch):
+    # The point of the sweep: §5 exists so a subscriber can tell "failed" from
+    # "still running", and a stranded run says neither.
+    monkeypatch.setattr(settings, "agent_run_stale_after_seconds", STALE_IMMEDIATELY)
+    run_id = _claimed_run(client)
+    publisher.events.clear()
+
+    client.post(f"{_RUNS}/reap", json={})
+
+    assert [e.detail_type for e in publisher.events] == ["agent.run.completed"]
+    assert publisher.events[0].payload["run_id"] == run_id
+    assert publisher.events[0].payload["status"] == "failed"
+
+
+def test_reap_with_nothing_stale_is_a_silent_no_op(client, publisher, monkeypatch):
+    # It runs on a schedule, so the common case is having nothing to do.
+    monkeypatch.setattr(settings, "agent_run_stale_after_seconds", STALE_IMMEDIATELY)
+    publisher.events.clear()
+
+    assert client.post(f"{_RUNS}/reap", json={}).json() == []
+    assert publisher.events == []
+
+
+def test_reaping_twice_reaps_once(client, publisher, monkeypatch):
+    # Scheduled, so it will be called again before anyone looks at the result.
+    monkeypatch.setattr(settings, "agent_run_stale_after_seconds", STALE_IMMEDIATELY)
+    _claimed_run(client)
+
+    assert len(client.post(f"{_RUNS}/reap", json={}).json()) == 1
+    publisher.events.clear()
+    assert client.post(f"{_RUNS}/reap", json={}).json() == []
+    assert publisher.events == []
+
+
+def test_reap_is_not_shadowed_by_the_run_id_routes(client):
+    # `/reap` is a literal segment where `{run_id}` also lives. If FastAPI ever
+    # matched it as a run id, the sweep would silently 404 instead of running.
+    assert client.post(f"{_RUNS}/reap", json={}).status_code == 200

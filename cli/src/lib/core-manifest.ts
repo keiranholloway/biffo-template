@@ -56,10 +56,7 @@ const HARD_EXCLUDED_DIRS: ReadonlySet<string> = new Set([
 export function findTemplateRoot(startDir: string): string | null {
   let dir = startDir
   for (;;) {
-    if (
-      existsSync(join(dir, CORE_MANIFEST_FILE)) &&
-      !existsSync(join(dir, INSTANCE_CORE_FILE))
-    ) {
+    if (existsSync(join(dir, CORE_MANIFEST_FILE)) && !existsSync(join(dir, INSTANCE_CORE_FILE))) {
       return dir
     }
     const parent = dirname(dir)

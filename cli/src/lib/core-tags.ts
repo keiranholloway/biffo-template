@@ -38,7 +38,6 @@ export function coreVersionTag(version: string): string {
   return `core-v${version}`
 }
 
-
 /**
  * Git pathspecs selecting exactly the template-owned tree, used to ask "did the
  * template change between these two commits?".

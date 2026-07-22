@@ -132,7 +132,9 @@ export function getLatestCoreVersion(fromDir?: string): string {
 
   // A template checkout: the highest core-v* tag. Walking up finds the repo
   // root, which is a git repo; the published package never is.
-  const fromTags = latestCoreVersionFromTags(findRepoRoot(start) ?? start)
+  const fromTags = latestCoreVersionFromTags(findRepoRoot(start) ?? start, defaultTagRunner, {
+    fetch: false,
+  })
   if (fromTags) return fromTags
 
   // Anything older that still carries the retired file.
@@ -140,8 +142,12 @@ export function getLatestCoreVersion(fromDir?: string): string {
   if (path) return readCoreVersionFile(path)
 
   throw new Error(
-    `Could not determine the core version above ${start}: no package.json version, no core-v* ` +
-      `tag, and no ${CORE_VERSION_FILE}. This CLI build is missing its version identity.`,
+    `Could not determine the core version above ${start}: no package.json version and no ` +
+      `core-v* tag.\n` +
+      `Installed from npm, the package's own version answers this. In a template checkout the ` +
+      `tags do — so a checkout with none (a shallow CI clone, or a source download with no git ` +
+      `history) cannot say which core it is. Run \`git fetch --tags\` and retry, or use the ` +
+      `published CLI (\`npx @biffo/cli\`), whose version is stamped at publish.`,
   )
 }
 
@@ -160,7 +166,11 @@ function versionFromPackageJson(startDir: string): string | null {
     if (existsSync(candidate)) {
       try {
         const raw = JSON.parse(readFileSync(candidate, 'utf8')) as { version?: unknown }
-        if (typeof raw.version === 'string' && SEMVER.test(raw.version) && raw.version !== '0.0.0') {
+        if (
+          typeof raw.version === 'string' &&
+          SEMVER.test(raw.version) &&
+          raw.version !== '0.0.0'
+        ) {
           return raw.version
         }
       } catch {
@@ -281,14 +291,30 @@ export function writeInstanceCoreVersion(cwd: string, version: string): void {
  * from whatever tags are local. `materializeTemplateAtTag` already does the
  * same when a tag it needs is missing.
  */
+export interface TagLookupOptions {
+  /**
+   * Fetch tags from the remote first. Default true.
+   *
+   * On for anything asking "what is the newest release?" — a stale local tag
+   * set silently resolved the wrong upgrade target in #428, and tags do not
+   * arrive with `git pull`. Off for anything asking "what version am I?", which
+   * is answered by what is already in hand: a lookup has no business making a
+   * network round-trip, least of all inside `biffo init` or a unit test.
+   */
+  fetch?: boolean
+}
+
 export function latestCoreVersionFromTags(
   repo: string,
   git: TagRunner = defaultTagRunner,
+  options: TagLookupOptions = {},
 ): string | null {
-  try {
-    git(['-C', repo, 'fetch', '--tags', '--quiet'])
-  } catch {
-    /* offline, or no remote — fall through to whatever is local */
+  if (options.fetch !== false) {
+    try {
+      git(['-C', repo, 'fetch', '--tags', '--quiet'])
+    } catch {
+      /* offline, or no remote — fall through to whatever is local */
+    }
   }
   let out: string
   try {

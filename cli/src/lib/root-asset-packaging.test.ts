@@ -276,7 +276,10 @@ describe.skipIf(runningInInstance)('sync-packaged-assets.mjs', () => {
    * core.version and no git repo anywhere above.
    */
   it('resolves the version from the packaged package.json, outside any checkout', () => {
-    writeFileSync(join(dest, 'package.json'), JSON.stringify({ name: '@biffo/cli', version: '9.9.9' }))
+    writeFileSync(
+      join(dest, 'package.json'),
+      JSON.stringify({ name: '@biffo/cli', version: '9.9.9' }),
+    )
     mkdirSync(join(dest, 'dist'), { recursive: true })
     expect(getLatestCoreVersion(join(dest, 'dist'))).toBe('9.9.9')
     expect(findCoreVersionUpward(join(dest, 'dist'))).toBeNull()
@@ -286,8 +289,11 @@ describe.skipIf(runningInInstance)('sync-packaged-assets.mjs', () => {
     // cli/package.json carries 0.0.0 until publish stamps it. Reporting that as
     // a core version would be #259 again: a build that cannot be traced back to
     // what produced it.
-    writeFileSync(join(dest, 'package.json'), JSON.stringify({ name: '@biffo/cli', version: '0.0.0' }))
+    writeFileSync(
+      join(dest, 'package.json'),
+      JSON.stringify({ name: '@biffo/cli', version: '0.0.0' }),
+    )
     mkdirSync(join(dest, 'dist'), { recursive: true })
-    expect(() => getLatestCoreVersion(join(dest, 'dist'))).toThrow(/missing its version identity/)
+    expect(() => getLatestCoreVersion(join(dest, 'dist'))).toThrow(/no package.json version and no/)
   })
 })

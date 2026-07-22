@@ -95,6 +95,13 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          # The template's version is its highest core-v* tag (#423), and
+          # actions/checkout fetches none by default. Without this, anything
+          # resolving the version in a template checkout — `biffo init` stamping
+          # biffo.core.json, and the tests that drive it — finds no tags and
+          # fails with "missing its version identity".
+          fetch-tags: true
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:

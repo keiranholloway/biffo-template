@@ -170,6 +170,13 @@ jobs:
           # artefact against reality instead. Catches the race, a stale variable, a
           # manual dispatch after an infra change, and the empty-string fallback in
           # lib/auth.ts, regardless of cause.
+          #
+          # The remedy is always a FULL workflow re-run, never a failed-job re-run
+          # (issue #408). This job consumes the portal via download-artifact and the
+          # ids are baked in at build time, so re-running it alone re-downloads the
+          # identical stale bundle and fails identically. Say so in the messages
+          # below — "re-run failed jobs" is the cheaper and more obvious action, and
+          # it is the wrong one.
           set -euo pipefail
           POOL=$(grep -rhoE '[a-z]{2}-[a-z]+-[0-9]+_[A-Za-z0-9]{9}' portal-dist/ | sort -u | head -1 || true)
           if [ -z "$POOL" ]; then
@@ -177,7 +184,7 @@ jobs:
             exit 1
           fi
           if ! aws cognito-idp describe-user-pool --user-pool-id "$POOL" >/dev/null 2>&1; then
-            echo "::error::The portal was built against Cognito pool $POOL, which does not exist. It was almost certainly replaced by a concurrent Deploy Infrastructure run. Re-run this workflow now that infrastructure has settled."
+            echo "::error::The portal was built against Cognito pool $POOL, which does not exist. It was almost certainly replaced by a concurrent Deploy Infrastructure run. Fix: re-run the ENTIRE workflow now that infrastructure has settled - the 'Re-run all jobs' button, or 'gh run rerun <run-id>' WITHOUT --failed. Re-running only this failed job cannot work: the pool id is baked into the portal at build time, so this job just re-downloads the same stale build artifact and fails identically. Only a new Build job can pick up the live pool."
             exit 1
           fi
           # One call, then a grep — never guess client ids out of the bundle, which
@@ -188,7 +195,7 @@ jobs:
             if grep -rq "$c" portal-dist/; then MATCH="$c"; break; fi
           done
           if [ -z "$MATCH" ]; then
-            echo "::error::The portal names pool $POOL but none of that pool's app clients. The baked client id is stale — re-run this workflow."
+            echo "::error::The portal names pool $POOL but none of that pool's app clients. The baked client id is stale. Fix: re-run the ENTIRE workflow - the 'Re-run all jobs' button, or 'gh run rerun <run-id>' WITHOUT --failed. Re-running only this failed job cannot work: the client id is baked into the portal at build time, so this job just re-downloads the same stale build artifact and fails identically. Only a new Build job can pick up the live client."
             exit 1
           fi
           echo "Portal builds against live pool $POOL / client $MATCH"
@@ -568,6 +575,13 @@ jobs:
           # artefact against reality instead. Catches the race, a stale variable, a
           # manual dispatch after an infra change, and the empty-string fallback in
           # lib/auth.ts, regardless of cause.
+          #
+          # The remedy is always a FULL workflow re-run, never a failed-job re-run
+          # (issue #408). This job consumes the portal via download-artifact and the
+          # ids are baked in at build time, so re-running it alone re-downloads the
+          # identical stale bundle and fails identically. Say so in the messages
+          # below — "re-run failed jobs" is the cheaper and more obvious action, and
+          # it is the wrong one.
           set -euo pipefail
           POOL=$(grep -rhoE '[a-z]{2}-[a-z]+-[0-9]+_[A-Za-z0-9]{9}' portal-dist/ | sort -u | head -1 || true)
           if [ -z "$POOL" ]; then
@@ -575,7 +589,7 @@ jobs:
             exit 1
           fi
           if ! aws cognito-idp describe-user-pool --user-pool-id "$POOL" >/dev/null 2>&1; then
-            echo "::error::The portal was built against Cognito pool $POOL, which does not exist. It was almost certainly replaced by a concurrent Deploy Infrastructure run. Re-run this workflow now that infrastructure has settled."
+            echo "::error::The portal was built against Cognito pool $POOL, which does not exist. It was almost certainly replaced by a concurrent Deploy Infrastructure run. Fix: re-run the ENTIRE workflow now that infrastructure has settled - the 'Re-run all jobs' button, or 'gh run rerun <run-id>' WITHOUT --failed. Re-running only this failed job cannot work: the pool id is baked into the portal at build time, so this job just re-downloads the same stale build artifact and fails identically. Only a new Build job can pick up the live pool."
             exit 1
           fi
           # One call, then a grep — never guess client ids out of the bundle, which
@@ -586,7 +600,7 @@ jobs:
             if grep -rq "$c" portal-dist/; then MATCH="$c"; break; fi
           done
           if [ -z "$MATCH" ]; then
-            echo "::error::The portal names pool $POOL but none of that pool's app clients. The baked client id is stale — re-run this workflow."
+            echo "::error::The portal names pool $POOL but none of that pool's app clients. The baked client id is stale. Fix: re-run the ENTIRE workflow - the 'Re-run all jobs' button, or 'gh run rerun <run-id>' WITHOUT --failed. Re-running only this failed job cannot work: the client id is baked into the portal at build time, so this job just re-downloads the same stale build artifact and fails identically. Only a new Build job can pick up the live client."
             exit 1
           fi
           echo "Portal builds against live pool $POOL / client $MATCH"
@@ -978,6 +992,13 @@ jobs:
           # artefact against reality instead. Catches the race, a stale variable, a
           # manual dispatch after an infra change, and the empty-string fallback in
           # lib/auth.ts, regardless of cause.
+          #
+          # The remedy is always a FULL workflow re-run, never a failed-job re-run
+          # (issue #408). This job consumes the portal via download-artifact and the
+          # ids are baked in at build time, so re-running it alone re-downloads the
+          # identical stale bundle and fails identically. Say so in the messages
+          # below — "re-run failed jobs" is the cheaper and more obvious action, and
+          # it is the wrong one.
           set -euo pipefail
           POOL=$(grep -rhoE '[a-z]{2}-[a-z]+-[0-9]+_[A-Za-z0-9]{9}' portal-dist/ | sort -u | head -1 || true)
           if [ -z "$POOL" ]; then
@@ -985,7 +1006,7 @@ jobs:
             exit 1
           fi
           if ! aws cognito-idp describe-user-pool --user-pool-id "$POOL" >/dev/null 2>&1; then
-            echo "::error::The portal was built against Cognito pool $POOL, which does not exist. It was almost certainly replaced by a concurrent Deploy Infrastructure run. Re-run this workflow now that infrastructure has settled."
+            echo "::error::The portal was built against Cognito pool $POOL, which does not exist. It was almost certainly replaced by a concurrent Deploy Infrastructure run. Fix: re-run the ENTIRE workflow now that infrastructure has settled - the 'Re-run all jobs' button, or 'gh run rerun <run-id>' WITHOUT --failed. Re-running only this failed job cannot work: the pool id is baked into the portal at build time, so this job just re-downloads the same stale build artifact and fails identically. Only a new Build job can pick up the live pool."
             exit 1
           fi
           # One call, then a grep — never guess client ids out of the bundle, which
@@ -996,7 +1017,7 @@ jobs:
             if grep -rq "$c" portal-dist/; then MATCH="$c"; break; fi
           done
           if [ -z "$MATCH" ]; then
-            echo "::error::The portal names pool $POOL but none of that pool's app clients. The baked client id is stale — re-run this workflow."
+            echo "::error::The portal names pool $POOL but none of that pool's app clients. The baked client id is stale. Fix: re-run the ENTIRE workflow - the 'Re-run all jobs' button, or 'gh run rerun <run-id>' WITHOUT --failed. Re-running only this failed job cannot work: the client id is baked into the portal at build time, so this job just re-downloads the same stale build artifact and fails identically. Only a new Build job can pick up the live client."
             exit 1
           fi
           echo "Portal builds against live pool $POOL / client $MATCH"

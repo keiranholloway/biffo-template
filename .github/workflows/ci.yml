@@ -30,8 +30,22 @@ env:
 # and each job re-runs checkout + dependency install, so a dozen sub-minute jobs
 # cost ~12 billed minutes for ~5 minutes of real work and install deps a dozen
 # times. Installing once per toolchain and running the checks as steps cuts that
-# roughly in half. Check steps use `if: ${{ !cancelled() }}` so a failure in one
-# check still runs the rest — you see every failure in a run, not just the first.
+# roughly in half.
+#
+# Check steps run on `!cancelled() && steps.install.outcome == 'success'`, which
+# is two rules, not one:
+#
+#   - `!cancelled()` so a failure in one check still runs the rest — you see
+#     every failure in a run, not just the first;
+#   - the install gate so that when *dependency installation* fails, the checks
+#     do NOT run. Without it a failed `pnpm install --frozen-lockfile` leaves no
+#     node_modules, every later step dies on a missing binary, and the real
+#     error is buried under a pile of `tsx: not found` (#393). One honest
+#     failure beats eight misleading ones.
+#
+# Only jobs that install dependencies carry the gate; a job with no `id: install`
+# step must not use it, or `steps.install.outcome` is empty and every gated step
+# silently skips.
 
 jobs:
   core-version-guard:
@@ -47,7 +61,8 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - id: install
+        run: pnpm install --frozen-lockfile
       # Fail if a template-owned path changed without a core.version bump (ADR-0006).
       - run: pnpm --filter @biffo/cli check:core-bump
         env:
@@ -58,7 +73,7 @@ jobs:
       # toolchain, same full-depth checkout, same PR-only trigger, and GitHub
       # bills each job's wall time rounded up to a full minute.
       - name: Core ownership guard
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm --filter @biffo/cli check:core-ownership
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
@@ -73,28 +88,29 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - id: install
+        run: pnpm install --frozen-lockfile
       - name: Lint
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run lint
       - name: Format check
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run format:check
       - name: Type check
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run typecheck
       - name: Test
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run test
       - name: Dependency audit
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm audit --audit-level=high
       # A plugin manifest declaring event_subscriptions must ship terraform/,
       # or the subscription is inert in every deployment (#194). This walks the
       # whole tree from the git root so it also covers _skeletons/, which no
       # other job in this workflow touches.
       - name: Plugin Terraform guard
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm --filter @biffo/cli check:plugin-terraform
 
   python:
@@ -105,22 +121,23 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - run: uv sync --all-groups
+      - id: install
+        run: uv sync --all-groups
       - name: Lint
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: uv run ruff check .
       - name: Format check
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: uv run ruff format --check .
       - name: Type check
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: uv run pyright
       - name: Test
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         # Exit code 5 = no tests collected — valid for the template repo before tests are added
         run: uv run pytest --cov --cov-report=xml || [ $? -eq 5 ]
       - name: Coverage upload
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         uses: codecov/codecov-action@v5
         with:
           files: coverage.xml
@@ -131,16 +148,16 @@ jobs:
       # template nor can fix via `biffo core upgrade` (issue #327). An instance
       # that wants SAST over its own services adds its own Bandit step.
       - name: SAST (Bandit)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: uv run bandit -r services/api services/_plugins -ll --format json -o bandit-report.json
       - name: Upload Bandit report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         uses: actions/upload-artifact@v5
         with:
           name: bandit-report
           path: bandit-report.json
       - name: Dependency audit
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: uv run pip-audit
 
   security-secrets:

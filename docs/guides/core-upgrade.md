@@ -113,6 +113,22 @@ If a file looks like a carried migration — same description — but its conten
 
 Anything the upgrade recognises by something other than its filename is printed as `already carried`, so you can see when your instance is in this shape.
 
+## Destroying stateful infrastructure
+
+`terraform apply` runs with `-auto-approve`, so nothing pauses for a human. A guard in the **Plan** job (before Apply, so refusing costs nothing) fails the deploy if the plan would destroy a database, a Cognito user pool, an S3 bucket or another resource whose data no re-apply can recreate.
+
+**A replacement counts.** Terraform encodes it as delete-then-create, and it destroys the original just as surely. That is the case that actually happens: on `aws_db_instance`, `identifier`, `db_name` and `username` all force replacement and all derive from `project_name`, so renaming the project plans a database destroy from an edit that looks like a rename.
+
+If the destruction is intended, say so in the commit message:
+
+```
+Infra-Destroy: replacing the user pool for the 0.50.0 identity change; users re-invited
+```
+
+Take a backup first if the data matters. The destroyed resources are listed in the job summary either way, so an authorised destroy is still visible afterwards rather than buried in a log.
+
+The guard is deliberately narrow — it ignores Lambdas, roles, security groups and everything else Terraform rebuilds from this repo. A guard that fired on every deploy would have its trailer added by reflex, and would then be protecting nothing.
+
 ## Breaking changes by version
 
 ### 0.54.0 — first-party plugin Terraform is referenced in place

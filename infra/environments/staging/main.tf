@@ -169,7 +169,7 @@ module "database" {
   compute_security_group_id = module.core_api.security_group_id
   instance_class            = "db.t3.small"
   multi_az                  = true
-  deletion_protection       = false
+  deletion_protection       = true
   enable_rds_proxy          = true
   tags                      = local.tags
 }

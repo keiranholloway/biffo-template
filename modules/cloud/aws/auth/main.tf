@@ -220,7 +220,15 @@ resource "aws_cognito_user_pool_domain" "main" {
 # The admin signs in with that temp password and is immediately prompted to set a new one.
 resource "aws_cognito_user" "admin" {
   user_pool_id = aws_cognito_user_pool.main.id
-  username     = var.admin_username
+
+  # The email address, not var.admin_username. The pool sets
+  # username_attributes = ["email"], so Cognito requires the username to BE an
+  # address and rejects anything else outright:
+  #   InvalidParameterException: Username should be an email
+  # That failure lands in `terraform apply` AFTER the pool has been replaced,
+  # leaving a fresh pool with no administrator in it — so it is worth a guard
+  # (see services/api/tests/test_email_is_the_identity.py) rather than a comment.
+  username = var.admin_email
 
   attributes = {
     email              = var.admin_email

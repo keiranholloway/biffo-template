@@ -16,7 +16,17 @@ variable "admin_email" {
 }
 
 variable "admin_username" {
-  type = string
+  description = <<-EOT
+    DEPRECATED and unused since core 0.50.2. The pool uses
+    username_attributes = ["email"], so the administrator's username is their
+    email address (see admin_email) and Cognito generates its own internal id.
+
+    Kept only so that root configurations still passing it keep planning —
+    removing it would fail every instance's apply with "unsupported argument"
+    for no benefit. Safe to stop passing.
+  EOT
+  type        = string
+  default     = ""
 }
 
 variable "mfa_configuration" {

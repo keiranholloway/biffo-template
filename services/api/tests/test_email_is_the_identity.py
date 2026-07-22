@@ -80,3 +80,21 @@ class TestCreateUserRequest:
         body = CreateUserRequest(email="person@example.com")
         assert body.email == "person@example.com"
         assert body.groups == []
+
+    def test_the_bootstrap_admin_is_created_with_its_email(self, auth_tf: str) -> None:
+        # Cognito rejects a non-email username under username_attributes:
+        #   InvalidParameterException: Username should be an email
+        # This one bites late and hard. The pool is REPLACED first, then the
+        # admin user fails to create — so a fresh pool is left with no
+        # administrator in it and the apply is only half done. Seeding it from
+        # var.admin_username (which is a plain name like "keiran") did exactly
+        # that on a live upgrade.
+        block = auth_tf.split('resource "aws_cognito_user" "admin"', 1)[1].split("\n}", 1)[0]
+        assigned = [
+            line.split("=", 1)[1].strip()
+            for line in block.splitlines()
+            if line.strip().startswith("username") and "=" in line
+        ]
+        assert assigned == ["var.admin_email"], (
+            f"the bootstrap admin's username must be the email address, got {assigned}"
+        )

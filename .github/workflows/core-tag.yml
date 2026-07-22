@@ -73,6 +73,21 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
         if: steps.guard.outputs.is_template == 'true'
+      # Derive core.version from what was merged and commit it (#423).
+      #
+      # It is no longer bumped by hand: one global counter that every
+      # template-owned PR had to edit made a conflict between concurrent PRs
+      # certain, and the guard that enforced it never checked the number went
+      # UP, so a revert could restore an already-published version (#422).
+      #
+      # Runs BEFORE the tag step, so the tag below points at a commit whose
+      # core.version is already correct. The commit carries [skip ci] and the
+      # script also recognises its own subject, because a loop here would mint
+      # versions and tags until someone noticed.
+      - name: Derive and commit core.version
+        if: steps.guard.outputs.is_template == 'true'
+        run: pnpm --filter @biffo/cli release:core-version -- --push
+
       # Creates core-v<version> when it does not exist, and leaves it alone when
       # it already stands for this template tree. It never repoints an existing
       # tag: that tag is a release, and the npm artifact behind it cannot move

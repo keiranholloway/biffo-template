@@ -67,6 +67,11 @@ jobs:
       - run: pnpm --filter @biffo/cli check:core-bump
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
+          # Squash-merge makes the PR TITLE the commit subject on main, and the
+          # release job reads that subject to derive the version (#423). So the
+          # title is what the guard must check — commitlint only ever sees the
+          # branch's own commit messages, which are discarded by the squash.
+          GITHUB_PR_TITLE: ${{ github.event.pull_request.title }}
       # The mirror image, for instances: fail if an INSTANCE changed a
       # template-owned path (#370). Inert in the template, where that is the
       # point of every PR. Shares this job rather than adding its own — same

@@ -18,6 +18,7 @@ import {
   DIVERGENCE_FILE,
   checkCoreOwnership,
   readDivergenceConfig,
+  resolveBranch,
 } from '../lib/core-ownership-guard.js'
 import { readCoreManifest } from '../lib/core-manifest.js'
 import { isInstanceRepo } from '../lib/core-version.js'
@@ -77,18 +78,17 @@ async function main(): Promise<void> {
     commitMessage = log
   }
 
-  // A detached HEAD or a fresh repo has no branch name; fall through to the
-  // file check rather than guessing an exemption.
-  const { stdout: branch } = await execa('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+  const { stdout: gitBranch } = await execa('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
     cwd: root,
     reject: false,
   })
+  const branch = resolveBranch(process.env, gitBranch)
 
   const result = checkCoreOwnership({
     changedFiles,
     manifest: readCoreManifest(root),
     isInstance: true,
-    branch: branch.trim(),
+    branch,
     commitMessage,
     warnOnly: readDivergenceConfig(root).warnOnly,
   })

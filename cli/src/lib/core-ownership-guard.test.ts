@@ -10,6 +10,7 @@ import {
   checkCoreOwnership,
   parseDivergenceTrailer,
   readDivergenceConfig,
+  resolveBranch,
 } from './core-ownership-guard.js'
 import { upgradeBranchName } from './core-upgrade.js'
 
@@ -101,6 +102,58 @@ describe('checkCoreOwnership — what it lets through', () => {
     expect(result.skipped).toBe('divergence-trailer')
     expect(result.blocked).toEqual([])
     expect(result.divergenceReason).toBe('upstream cannot express this yet')
+  })
+})
+
+/**
+ * Regression for the defect that blocked the first upgrade PR this guard ever
+ * saw (biffo-platform#2). The guard was correct about *which* prefix to exempt
+ * and wrong about how to find the branch in CI, which amounts to the same
+ * outage: every core upgrade blocked, in every instance.
+ */
+describe('resolveBranch', () => {
+  const upgradeBranch = upgradeBranchName('0.41.18', '0.49.1')
+
+  it('prefers the PR source branch over a detached git HEAD', () => {
+    // What actions/checkout actually leaves behind on a pull_request event.
+    expect(resolveBranch({ GITHUB_HEAD_REF: upgradeBranch }, 'HEAD')).toBe(upgradeBranch)
+  })
+
+  it('exempts the upgrade PR end to end, which is the whole point', () => {
+    const result = check({
+      changedFiles: ['services/api/src/api/main.py', 'cli/src/lib/core-version.ts'],
+      branch: resolveBranch({ GITHUB_HEAD_REF: upgradeBranch }, 'HEAD'),
+    })
+    expect(result.skipped).toBe('upgrade-branch')
+    expect(result.blocked).toEqual([])
+  })
+
+  it('negative control: the same change WITHOUT the env is blocked', () => {
+    // Proof the exemption above comes from resolveBranch and not from the
+    // change being harmless — this is the pre-fix behaviour.
+    const result = check({
+      changedFiles: ['services/api/src/api/main.py', 'cli/src/lib/core-version.ts'],
+      branch: resolveBranch({}, 'HEAD'),
+    })
+    expect(result.skipped).toBeNull()
+    expect(result.blocked).toHaveLength(2)
+  })
+
+  it('falls back to GITHUB_REF_NAME on push events', () => {
+    expect(resolveBranch({ GITHUB_REF_NAME: 'dev' }, 'HEAD')).toBe('dev')
+    // HEAD_REF wins when both are set: on a pull_request, REF_NAME is the
+    // merge ref (`123/merge`), not the branch.
+    expect(resolveBranch({ GITHUB_HEAD_REF: 'feat/x', GITHUB_REF_NAME: '12/merge' }, 'HEAD')).toBe(
+      'feat/x',
+    )
+  })
+
+  it('falls back to git locally, where the branch is real', () => {
+    expect(resolveBranch({}, upgradeBranch)).toBe(upgradeBranch)
+  })
+
+  it('treats an empty env var as absent rather than as a branch named ""', () => {
+    expect(resolveBranch({ GITHUB_HEAD_REF: '' }, 'dev')).toBe('dev')
   })
 })
 

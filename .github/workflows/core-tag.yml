@@ -29,7 +29,9 @@ permissions:
   # explicitly, and asking requires actions:write.
   actions: write
 
-# Serialise: two pushes racing here could both decide to move the same tag.
+# Serialise: two pushes racing here could both decide to create the same tag,
+# and the loser would then read main's tip as drifted from a tag it never saw
+# created — reporting a release-integrity failure that never happened.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -71,10 +73,12 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
         if: steps.guard.outputs.is_template == 'true'
-      # Creates core-v<version>, or moves it forward when the template-owned
-      # tree changed while core.version stayed put (logged loudly). Then audits
-      # every version from the baseline up and fails if any tag does not stand
-      # for its version's template tree.
+      # Creates core-v<version> when it does not exist, and leaves it alone when
+      # it already stands for this template tree. It never repoints an existing
+      # tag: that tag is a release, and the npm artifact behind it cannot move
+      # with it (#342), so a tree that has drifted underneath one fails here
+      # instead. Then audits every version from the baseline up and fails if any
+      # tag does not stand for its version's template tree.
       - name: Sync and audit core-v<version>
         id: sync
         if: steps.guard.outputs.is_template == 'true'
@@ -92,9 +96,11 @@ jobs:
       # and needs no new credential: a PAT purely to defeat the recursion guard
       # would be a long-lived secret bought for nothing.
       #
-      # Only fires when a tag was actually created or moved — `steps.sync.outputs.tag`
-      # is unset when the tag already stood for this tree, so an ordinary push to
-      # the default branch releases nothing.
+      # Only fires when a tag was actually created — `steps.sync.outputs.tag` is
+      # unset when the tag already stood for this tree, so an ordinary push to
+      # the default branch releases nothing. This is also why an existing tag is
+      # a *published* tag, and so must never be repointed: every tag this job
+      # writes is handed straight to publish-cli.yml.
       - name: Dispatch CLI release
         if: steps.sync.outputs.tag != ''
         env:

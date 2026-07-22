@@ -81,7 +81,7 @@ jobs:
           EOF
       - run: terraform init -input=false -backend-config=backend.hcl
         timeout-minutes: 10
-      - run: terraform plan -input=false -no-color 2>&1 | tee plan.txt
+      - run: terraform plan -input=false -no-color -out=tfplan 2>&1 | tee plan.txt
         timeout-minutes: 20
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
@@ -93,6 +93,20 @@ jobs:
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
           TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
 
+      # Refuse a plan that destroys stateful infrastructure without saying so
+      # (#387). Runs in the PLAN job, before Apply, so a refusal costs nothing —
+      # nothing has been touched yet. Apply is --auto-approve, so this is the
+      # only point where a human decision can still be required.
+      #
+      # Bare node, no pnpm install: this job sets up Terraform and AWS and
+      # nothing else, and the guard has no dependencies precisely so three plan
+      # jobs need not each install one.
+      - name: Destructive-plan guard
+        run: |
+          terraform show -json tfplan > plan.json
+          node "$GITHUB_WORKSPACE/cli/scripts/check-destructive-plan.mjs" plan.json
+        env:
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
   apply-dev:
     name: Apply (dev)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
@@ -187,7 +201,7 @@ jobs:
           EOF
       - run: terraform init -input=false -backend-config=backend.hcl
         timeout-minutes: 10
-      - run: terraform plan -input=false -no-color 2>&1 | tee plan.txt
+      - run: terraform plan -input=false -no-color -out=tfplan 2>&1 | tee plan.txt
         timeout-minutes: 20
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
@@ -199,6 +213,20 @@ jobs:
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
           TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
 
+      # Refuse a plan that destroys stateful infrastructure without saying so
+      # (#387). Runs in the PLAN job, before Apply, so a refusal costs nothing —
+      # nothing has been touched yet. Apply is --auto-approve, so this is the
+      # only point where a human decision can still be required.
+      #
+      # Bare node, no pnpm install: this job sets up Terraform and AWS and
+      # nothing else, and the guard has no dependencies precisely so three plan
+      # jobs need not each install one.
+      - name: Destructive-plan guard
+        run: |
+          terraform show -json tfplan > plan.json
+          node "$GITHUB_WORKSPACE/cli/scripts/check-destructive-plan.mjs" plan.json
+        env:
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
   apply-staging:
     name: Apply (staging)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
@@ -300,7 +328,7 @@ jobs:
           EOF
       - run: terraform init -input=false -backend-config=backend.hcl
         timeout-minutes: 10
-      - run: terraform plan -input=false -no-color 2>&1 | tee plan.txt
+      - run: terraform plan -input=false -no-color -out=tfplan 2>&1 | tee plan.txt
         timeout-minutes: 20
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
@@ -312,6 +340,20 @@ jobs:
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
           TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
 
+      # Refuse a plan that destroys stateful infrastructure without saying so
+      # (#387). Runs in the PLAN job, before Apply, so a refusal costs nothing —
+      # nothing has been touched yet. Apply is --auto-approve, so this is the
+      # only point where a human decision can still be required.
+      #
+      # Bare node, no pnpm install: this job sets up Terraform and AWS and
+      # nothing else, and the guard has no dependencies precisely so three plan
+      # jobs need not each install one.
+      - name: Destructive-plan guard
+        run: |
+          terraform show -json tfplan > plan.json
+          node "$GITHUB_WORKSPACE/cli/scripts/check-destructive-plan.mjs" plan.json
+        env:
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
   apply-prod:
     name: Apply (prod)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}

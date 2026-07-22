@@ -45,6 +45,23 @@ variable "deletion_protection" {
   default = false
 }
 
+variable "skip_final_snapshot" {
+  description = <<-EOT
+    Skip the final snapshot when the instance is destroyed. Defaults to false —
+    always snapshot — because the cost is pennies and the alternative is
+    unrecoverable data loss on a destroy nobody reviewed (#387).
+
+    It used to be `var.environment != "prod"`, so dev and staging took no
+    snapshot at all. That is backwards: those are the environments where a
+    replacement-forcing edit is most likely to be made and least likely to be
+    read, and prod already has deletion_protection to stop it earlier.
+
+    Set true only for a throwaway environment whose data genuinely has no value.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "backup_retention_days" {
   type    = number
   default = 7

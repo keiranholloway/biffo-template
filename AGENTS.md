@@ -43,11 +43,13 @@ Several agents often run concurrently in this repo. A worktree isolates your
   happened here. Prefer committing to your own branch over stashing; if you
   must stash, use `git stash push -m "<your branch>"` and pop by name, and
   never assume `stash@{0}` is yours.
-- **`core.version` will conflict.** Every template-owned change bumps it
-  (ADR-0006), so concurrent PRs collide there by design. Rebase onto the
-  updated default branch and re-bump — do not coordinate with the other agent,
-  and do not assume the number you chose is still free. See §3 for the trap
-  that follows from this.
+- **There is no core version to claim.** A `core.version` file used to be
+  bumped by every template-owned change, so concurrent PRs collided on it by
+  design and the loser rebased and re-bumped. Since #423 the version is derived
+  on merge (ADR-0006) from the highest `core-v*` tag and the squash-merge
+  subject — your PR title, which CI requires to be a Conventional Commits
+  subject. Nothing in the tree names a version, so there is no shared file to
+  conflict on and no number to coordinate over.
 - **Do not remove or modify a worktree you did not create.** Pulling the ground
   out from under a running agent breaks it mid-flight.
 

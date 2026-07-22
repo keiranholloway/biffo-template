@@ -7,16 +7,29 @@ import { z } from 'zod'
 /**
  * Core versioning primitives for ADR-0006 (Core Upgrade and Template Sync).
  *
- * Two files carry the version:
- *   - `core.version` at the template repo root — the single source of truth for
- *     the template's current core version. Every scaffolded instance inherits a
- *     copy via GitHub template generation.
- *   - `biffo.core.json` at an instance repo root — records the core version that
- *     instance was initialised from (and, later, last upgraded to).
+ * Where the version lives, on each side of the template/instance boundary:
  *
- * `biffo core status` compares the instance's recorded version (from cwd's
- * `biffo.core.json`) against the version this CLI ships with (its bundled
- * `core.version`).
+ *   - **The template** has no file naming its version. Since #423 it is derived:
+ *     the highest `core-v*` tag, bumped at release time by the conventional type
+ *     of the commit being released (`../scripts/sync-core-tag.ts`). Nothing in
+ *     the tree names a version, so nothing can name a stale or already-released
+ *     one — the fault behind #294, #342 and #422.
+ *   - **An instance** records the version it was initialised from, and later
+ *     upgraded to, in `biffo.core.json` at its root. `biffo init` writes and
+ *     commits it, and `biffo core upgrade` rewrites it.
+ *   - **This CLI** carries its version in its own `package.json`, stamped from
+ *     the tag at publish (`publish-cli.yml`). The CLI's version IS the core
+ *     version — one number, no mapping table (ADR-0006).
+ *
+ * `core.version` survives only as a legacy fallback. Instances scaffolded before
+ * #423 inherited a copy through GitHub template generation, and it is user-owned
+ * (absent from both lists in `core-manifest.json`), so no upgrade removes it.
+ * Nothing treats it as authoritative — `biffo.core.json` wins every lookup — but
+ * `deploy.ts` and `core-upgrade.ts` still read it when nothing better is present
+ * at the ref or checkout in hand. See #434.
+ *
+ * `biffo core status` compares the instance's recorded version against the
+ * version this CLI ships with.
  */
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/
@@ -31,9 +44,10 @@ export const INSTANCE_CORE_FILE = 'biffo.core.json'
 /**
  * Is `repoRoot` an instance rather than the template?
  *
- * `biffo.core.json` is written at `biffo init` and never committed in the
- * template, so its presence is the discriminator. `core.version` is *not* — an
- * instance inherits a copy of it through GitHub template generation.
+ * `biffo.core.json` is written at `biffo init` and never present in the
+ * template, so its presence is the discriminator. `core.version` is *not*: the
+ * template no longer has one at all (#423), and instances scaffolded before that
+ * still carry an inherited copy.
  *
  * This matters beyond the CLI's own behaviour, because `cli/` is template-owned:
  * `biffo core upgrade` copies it — tests included — into every instance. A check
@@ -174,16 +188,18 @@ function findRepoRoot(startDir: string): string | null {
 /**
  * The core version an instance repo is currently on.
  *
- * `core.version` is the single committed source of truth for a core version —
- * the template ships it and every instance inherits a copy via template
- * generation. `biffo.core.json` is NOT a committed seed; it is written only when
- * `biffo core upgrade` records an upgrade (so the *next* upgrade knows the
- * from-version independently of the synced `core.version` file).
+ * `biffo.core.json` is the authority. `biffo init` writes and commits it at
+ * scaffold time (see the seed files in `../commands/init.ts`), and `biffo core
+ * upgrade` rewrites it on every upgrade, so it records what this instance
+ * actually received rather than what some inherited file happens to say.
  *
- * Resolution therefore prefers the explicit upgrade record and falls back to the
- * inherited `core.version`:
- *   1. `<cwd>/biffo.core.json` if present (an instance that has been upgraded);
- *   2. otherwise `<cwd>/core.version` (a freshly-scaffolded instance);
+ * Resolution prefers that record and falls back to an inherited `core.version`
+ * only for instances that predate it:
+ *   1. `<cwd>/biffo.core.json` if present (any instance scaffolded or upgraded
+ *      by a CLI that writes it);
+ *   2. otherwise `<cwd>/core.version` — a copy inherited through GitHub template
+ *      generation before #423 removed the file from the template. User-owned, so
+ *      no upgrade deletes it, and nothing writes it any more (#434);
  *   3. otherwise null (not a Biffo instance).
  *
  * Throws when `biffo.core.json` is present but malformed, so a corrupt record is

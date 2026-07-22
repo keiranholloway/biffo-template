@@ -30,7 +30,7 @@ a deployed plugin already has it. The SDK imports it lazily, so
 ## Versioning
 
 This package carries its **own** semantic version, independent of the Biffo
-template's `core.version`. It is a public API contract for plugin authors: a
+template's core version. It is a public API contract for plugin authors: a
 major bump here means the plugin API broke, and nothing else. Plugin manifests
 declare `"biffo-plugin-sdk": "^1.0"` and plugin `pyproject.toml` files pin
 `biffo-plugin-sdk>=1.0,<2.0`.

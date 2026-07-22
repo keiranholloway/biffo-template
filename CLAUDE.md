@@ -73,7 +73,7 @@ pnpm run format
 # Start portal dev server
 pnpm --filter @biffo/portal dev
 
-# CLI — released usage (published to npm as `biffo`; version == core.version)
+# CLI — released usage (published to npm as `biffo`; version == the core version)
 npx @biffo/cli --help
 
 # CLI — local development (contributors working ON the CLI, from this checkout)
@@ -105,19 +105,24 @@ Two paths, and it matters which one you are on:
   Still supported and still guarded: `cli/src/lib/build-freshness.ts` refuses to
   scaffold from a `dist` older than `src` (issue #190).
 
-**The CLI's version _is_ `core.version`.** One number, no mapping table:
-`biffo@0.32.9` is the CLI shipping core 0.32.9. `.github/workflows/publish-cli.yml`
-fires on the `core-v*` tags that `core-tag.yml` maintains, checks the tag and
-`core.version` agree, stamps the package version, and publishes with provenance.
+**The CLI's version _is_ the core version.** One number, no mapping table:
+`biffo@0.32.9` is the CLI shipping core 0.32.9. No file names it (#423):
+`.github/workflows/core-tag.yml` derives it on every push to `main` — the
+highest existing `core-v*` tag, bumped by the conventional type of the commit
+being released — and tags HEAD. `.github/workflows/publish-cli.yml` fires on
+that tag, takes the version from the tag name, stamps `cli/package.json` with
+it, and publishes with provenance. So the installed CLI reports its version from
+its own packaged `package.json`, and in a template checkout
+`getLatestCoreVersion()` falls back to the highest `core-v*` tag
+(`cli/src/lib/core-version.ts`).
 
-Several CLI modules find a companion asset by walking _up_ from the running
-module — `core.version` for `getLatestCoreVersion()`, `_skeletons/` for `biffo
-init` / `sibling create` / `plugin create`. Nothing exists above
-`node_modules/@biffo/cli/dist/`, so the published tarball must carry its own copy
-of each, beside `dist/`. They are written by `cli/scripts/sync-packaged-assets.mjs`
+The CLI finds `_skeletons/` — used by `biffo init` / `sibling create` /
+`plugin create` — by walking _up_ from the running module. Nothing exists above
+`node_modules/@biffo/cli/dist/`, so the published tarball must carry its own
+copy beside `dist/`. It is written by `cli/scripts/sync-packaged-assets.mjs`
 from `prepack` (undone by `postpack`), listed in package.json `files`, and guarded
-by `cli/src/lib/root-asset-packaging.test.ts`. The copies are git-ignored; the
-repo-root originals stay the only committed ones.
+by `cli/src/lib/root-asset-packaging.test.ts`. The copy is git-ignored; the
+repo-root original stays the only committed one.
 
 **Adding a new root-level asset the CLI resolves this way?** Register it in
 `cli/scripts/packaged-root-assets.mjs` — that inventory drives both the prepack

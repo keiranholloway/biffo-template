@@ -27,31 +27,23 @@ def pyproject() -> dict:
 
 
 def test_version_is_independent_semver_at_or_above_1_0(pyproject: dict) -> None:
-    """The SDK carries its own semver, not the template's core.version.
+    """The SDK carries its own semver, not the template's core version.
 
     The floor matters: every plugin manifest and skeleton pyproject.toml in this
     repo already declares ^1.0 / >=1.0,<2.0, so publishing anything below 1.0.0
     would leave those declarations unsatisfiable, and anything at or above 2.0.0
     would silently stop satisfying them.
+
+    It is also what now keeps the two lineages apart. The template's core version
+    is pre-1.0 and, since #423, is not a file at all but its highest ``core-v*``
+    git tag — so there is nothing left in the tree for this version to be
+    accidentally inherited from, and wiring them together would have to move this
+    line off 1.x and fail here.
     """
     version = pyproject["project"]["version"]
     major, minor, patch = (int(part) for part in version.split("."))
     assert major == 1, f"{version} does not satisfy the published >=1.0,<2.0 pin"
     assert minor >= 0 and patch >= 0
-
-
-def test_version_is_not_tied_to_core_version(pyproject: dict) -> None:
-    """core.version is the template's lineage; the SDK deliberately diverges.
-
-    Not an assertion that the two must never coincide by chance, but that the
-    SDK's version is read from its own pyproject rather than inherited — if a
-    future change wires them together, this file is where that decision has to
-    be argued.
-    """
-    core_version_file = PACKAGE_ROOT.parent.parent / "core.version"
-    if not core_version_file.exists():
-        pytest.skip("core.version absent (package built outside the monorepo)")
-    assert pyproject["project"]["version"] != core_version_file.read_text().strip()
 
 
 def test_declares_metadata_pypi_requires(pyproject: dict) -> None:

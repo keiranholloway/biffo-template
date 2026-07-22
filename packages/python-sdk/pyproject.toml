@@ -1,18 +1,18 @@
 [project]
 name = "biffo-plugin-sdk"
-# 1.0.0, deliberately NOT tied to core.version (currently 0.3x.y).
+# 1.0.0, deliberately NOT tied to the template's core version (currently 0.5x.y).
 #
 # This package is a third-party API contract: every plugin manifest the
 # ecosystem ships already declares `"biffo-plugin-sdk": "^1.0"` (see
 # _skeletons/plugin-template/biffo.plugin.json and ADR-0003), and the plugin
 # skeleton's pyproject.toml already pins `>=1.0,<2.0`. Publishing the first
 # release as 1.0.0 makes those existing declarations true. Publishing it as
-# 0.32.x — the template's core.version — would break every one of them, and
+# 0.32.x — the template's own core version — would break every one of them, and
 # would couple a public, semver-bound plugin API to the template's own internal
 # release lineage, which moves on every template-owned change (ADR-0006) and
 # has nothing to do with whether this API broke.
 #
-# The CLI is unified with core.version (issue #259's other half) because the
+# The CLI is unified with the core version (issue #259's other half) because the
 # CLI *is* the template. The SDK is not: it is consumed by repos the template
 # does not own, so it keeps its own independent semver and its own release tag
 # (`sdk-v*`, see .github/workflows/publish-sdk.yml).

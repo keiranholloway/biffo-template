@@ -277,6 +277,70 @@ async def record_result(
     return run
 
 
+# ── Run history (user-facing, read-only) ─────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class RunWithLogs:
+    """A run, its definition's name, and the action outcomes recorded for it."""
+
+    run: WorkflowRun
+    definition_name: str | None
+    logs: list[ActionLog]
+
+
+async def list_runs(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    definition_id: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+) -> list[RunWithLogs]:
+    """Most-recent-first run history, each run carrying its action log.
+
+    The definition name is **outer**-joined: a run whose definition was since
+    deleted still appears, because the run is the audit record of what fired and
+    outlives the rule that caused it.
+    """
+    query = (
+        select(WorkflowRun, WorkflowDefinition.name)
+        .outerjoin(
+            WorkflowDefinition,
+            (WorkflowDefinition.id == WorkflowRun.definition_id)
+            & (WorkflowDefinition.tenant_id == WorkflowRun.tenant_id),
+        )
+        .where(WorkflowRun.tenant_id == tenant_id)
+        # id breaks ties: created_at has second granularity on some backends, and
+        # two runs claimed from one event share it.
+        .order_by(WorkflowRun.created_at.desc(), WorkflowRun.id.desc())
+        .limit(limit)
+    )
+    if definition_id is not None:
+        query = query.where(WorkflowRun.definition_id == definition_id)
+    if status is not None:
+        query = query.where(WorkflowRun.status == status)
+
+    rows = list((await db.execute(query)).all())
+
+    # One follow-up query for every log on the page, rather than one per run.
+    logs_by_run: dict[str, list[ActionLog]] = {}
+    run_ids = [run.id for run, _ in rows]
+    if run_ids:
+        result = await db.execute(
+            select(ActionLog)
+            .where(ActionLog.tenant_id == tenant_id, ActionLog.run_id.in_(run_ids))
+            .order_by(ActionLog.created_at)
+        )
+        for log in result.scalars().all():
+            logs_by_run.setdefault(log.run_id, []).append(log)
+
+    return [
+        RunWithLogs(run=run, definition_name=name, logs=logs_by_run.get(run.id, []))
+        for run, name in rows
+    ]
+
+
 # ── Workflow-definition CRUD (user-facing, the portal builder) ───────────────
 # All tenant-scoped (ADR-0001). Each returns the ORM row after refreshing so the
 # response_model can serialize server-default columns without lazy IO.

@@ -1,4 +1,4 @@
-"""User-facing orchestration workflow-definition CRUD (the portal builder).
+"""User-facing orchestration API: workflow-definition CRUD + run history.
 
 Cognito-authenticated, admin-gated, tenant-scoped (ADR-0001/ADR-0004). This is
 the editing surface the orchestration domain deferred — distinct from the
@@ -6,15 +6,20 @@ engine's IAM-signed internal API (``routers/internal_orchestration.py``, ADR-000
 and from the generic-CRUD layer: ``action_config`` needs shape validation per
 ``action_type``, and "toggle enabled" is a bespoke verb, so it is hand-written.
 
-Served at ``/api/v1/orchestration/workflows`` (mounted in main.py). No Terraform
-change is needed — the JWT ``$default`` API Gateway route covers it.
+Two routers are exported, both mounted in main.py and both covered by the JWT
+``$default`` API Gateway route (no Terraform change needed):
+
+- ``router`` at ``/api/v1/orchestration/workflows`` — the builder's CRUD.
+- ``runs_router`` at ``/api/v1/orchestration/runs`` — read-only run history. A
+  sibling prefix rather than ``workflows/runs`` so it can never be shadowed by
+  the ``workflows/{definition_id}`` path parameter.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
@@ -27,28 +32,33 @@ from ..events.registry import (
     registered_events,
 )
 from ..middleware.auth import AuthenticatedUser
-from ..models.orchestration import WorkflowDefinition
+from ..models.orchestration import RUN_STATUSES, WorkflowDefinition
 from ..orchestration import (
+    RunWithLogs,
     create_definition,
     delete_definition,
     get_definition,
     is_known_trigger,
     list_definitions,
     list_observed_triggers,
+    list_runs,
     set_definition_enabled,
     update_definition,
 )
 from ..permissions import get_permissions_registry
 from ..schemas.orchestration import (
     WORKFLOW_ACTIONS,
+    ActionLogEntry,
     CreateWorkflowDefinitionRequest,
     SetEnabledRequest,
     UpdateWorkflowDefinitionRequest,
     WorkflowCatalog,
     WorkflowDefinitionResponse,
+    WorkflowRunSummary,
 )
 
 router = APIRouter(prefix="/orchestration/workflows", tags=["orchestration"])
+runs_router = APIRouter(prefix="/orchestration/runs", tags=["orchestration"])
 
 
 @router.get("/catalog", response_model=WorkflowCatalog)
@@ -274,3 +284,51 @@ async def delete_workflow(
 
 def _not_found() -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+
+
+# ── Run history ──────────────────────────────────────────────────────────────
+
+
+def _run_summary(item: RunWithLogs) -> WorkflowRunSummary:
+    run = item.run
+    return WorkflowRunSummary(
+        id=run.id,
+        tenant_id=run.tenant_id,
+        created_at=run.created_at,
+        updated_at=run.updated_at,
+        definition_id=run.definition_id,
+        definition_name=item.definition_name,
+        status=run.status,
+        trigger_event=run.trigger_event,
+        logs=[ActionLogEntry.model_validate(log) for log in item.logs],
+    )
+
+
+@runs_router.get("", response_model=list[WorkflowRunSummary])
+async def list_workflow_runs(
+    definition_id: str | None = Query(None, description="Only runs of this workflow definition."),
+    run_status: str | None = Query(
+        None, alias="status", description=f"One of: {', '.join(RUN_STATUSES)}."
+    ),
+    limit: int = Query(50, ge=1, le=200),
+    caller: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> list[WorkflowRunSummary]:
+    """Most-recent-first history of what fired, when, and how it turned out.
+
+    Read-only: runs are written by the engine through the internal API, never
+    from here.
+    """
+    if run_status is not None and run_status not in RUN_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Unknown status: {run_status}",
+        )
+    runs = await list_runs(
+        db,
+        tenant_id=caller.tenant_id,
+        definition_id=definition_id,
+        status=run_status,
+        limit=limit,
+    )
+    return [_run_summary(item) for item in runs]

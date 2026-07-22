@@ -63,6 +63,38 @@ class WorkflowRunResponse(BiffoBaseSchema):
     trigger_event: dict[str, Any]
 
 
+# ── User-facing run history (portal admin) ───────────────────────────────────
+
+
+class ActionLogEntry(BiffoBaseSchema):
+    """One recorded action outcome for a run.
+
+    ``request`` is deliberately **not** exposed: it echoes the action's config,
+    which can carry a credential (a Google Chat webhook URL embeds its own
+    token). The history view needs the outcome, not the request that produced it.
+    """
+
+    run_id: str
+    action_type: str
+    status: str
+    response: dict[str, Any] | None = None
+    error: str | None = None
+
+
+class WorkflowRunSummary(BiffoBaseSchema):
+    """A run as the portal's history view shows it: what fired, when, outcome.
+
+    ``definition_name`` is null when the workflow has since been deleted — the
+    run outlives the rule that caused it.
+    """
+
+    definition_id: str
+    definition_name: str | None = None
+    status: str
+    trigger_event: dict[str, Any]
+    logs: list[ActionLogEntry] = Field(default_factory=list)
+
+
 # ── User-facing workflow-definition CRUD (portal admin builder) ──────────────
 #
 # Triggers come from the canonical event registry (``events/registry.py``, ADR-0010)

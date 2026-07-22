@@ -54,8 +54,10 @@ app.include_router(internal_orchestration.router, prefix="/api/v1")
 # requests, reads and completes runs here, under /api/v1/internal/*.
 app.include_router(internal_agents.router, prefix="/api/v1")
 # User-facing orchestration workflow CRUD (the portal builder): Cognito-authed,
-# admin-gated, under /api/v1/orchestration/workflows.
+# admin-gated, under /api/v1/orchestration/workflows, plus the read-only run
+# history under /api/v1/orchestration/runs.
 app.include_router(orchestration.router, prefix="/api/v1")
+app.include_router(orchestration.runs_router, prefix="/api/v1")
 # Auto-register plugin-declared routes (ADR-0003 chunk 6 / issue #19), after
 # the native routers so they group after them in the OpenAPI/Swagger docs.
 # Scans services/*/biffo.plugin.json at import time (build_plugin_router

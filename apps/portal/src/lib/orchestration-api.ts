@@ -13,6 +13,13 @@ export interface WorkflowDefinition {
   name: string
   trigger_source: string
   trigger_detail_type: string
+  /**
+   * Optional all-of exact-match predicate over the event payload: every entry
+   * must equal the event's value for the workflow to run. Null/empty matches
+   * every event — that's how a coarse trigger like `leads.updated` becomes a
+   * precise one ("...and only when status is won").
+   */
+  trigger_filter: Record<string, string> | null
   action_type: string
   action_config: Record<string, string>
   enabled: boolean
@@ -23,6 +30,7 @@ export interface WorkflowInput {
   name: string
   trigger_source: string
   trigger_detail_type: string
+  trigger_filter: Record<string, string> | null
   action_type: string
   action_config: Record<string, string>
   enabled: boolean
@@ -67,9 +75,39 @@ export interface WorkflowCatalog {
   actions: CatalogAction[]
 }
 
+/**
+ * One recorded action outcome for a run. The Core API deliberately omits the
+ * action's `request` — it echoes the action config, which can carry a
+ * credential — so the outcome is all the history view gets.
+ */
+export interface ActionLogEntry {
+  id: string
+  created_at: string | null
+  run_id: string
+  action_type: string
+  status: string
+  response: Record<string, unknown> | null
+  error: string | null
+}
+
+/** One execution of a workflow for one event. `definition_name` is null when
+ * the workflow has since been deleted — the run outlives the rule. */
+export interface WorkflowRun {
+  id: string
+  tenant_id: string
+  created_at: string | null
+  updated_at: string | null
+  definition_id: string
+  definition_name: string | null
+  status: string
+  trigger_event: Record<string, unknown>
+  logs: ActionLogEntry[]
+}
+
 type Client = ReturnType<typeof createApiClient>
 
 const BASE = '/api/v1/orchestration/workflows'
+const RUNS_BASE = '/api/v1/orchestration/runs'
 
 export function fetchWorkflows(client: Pick<Client, 'get'>): Promise<WorkflowDefinition[]> {
   return client.get<WorkflowDefinition[]>(BASE)
@@ -104,4 +142,9 @@ export function setWorkflowEnabled(
 
 export async function deleteWorkflow(client: Pick<Client, 'delete'>, id: string): Promise<void> {
   await client.delete(`${BASE}/${encodeURIComponent(id)}`)
+}
+
+/** Most-recent-first run history: what fired, when, and how it turned out. */
+export function fetchRuns(client: Pick<Client, 'get'>, limit = 25): Promise<WorkflowRun[]> {
+  return client.get<WorkflowRun[]>(`${RUNS_BASE}?limit=${String(limit)}`)
 }

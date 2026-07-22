@@ -9,6 +9,9 @@ import {
   listEnvironments,
   listPluginModules,
   listUnwirableEnvironments,
+  listWireablePlugins,
+  pluginModuleSource,
+  staleFirstPartyCopies,
   syncPluginTerraform,
 } from './plugin-terraform-wiring.js'
 
@@ -272,5 +275,105 @@ describe('syncPluginTerraform', () => {
     const columns = new Set(argLines.map((l) => l.indexOf('=')))
     expect(argLines.length).toBeGreaterThan(0)
     expect(columns.size).toBe(1)
+  })
+})
+
+describe('first-party plugins are referenced in place (#406)', () => {
+  let cwd: string
+  beforeEach(() => {
+    cwd = mkdtempSync(join(tmpdir(), 'biffo-fp-'))
+    mkdirSync(join(cwd, 'infra', 'environments', 'dev'), { recursive: true })
+    writeFileSync(
+      join(cwd, 'infra', 'environments', 'dev', 'main.tf'),
+      'variable "enabled_plugins" {}\n',
+    )
+  })
+  afterEach(() => rmSync(cwd, { recursive: true, force: true }))
+
+  const firstParty = (name: string) => {
+    const dir = join(cwd, 'services', '_plugins', name, 'terraform')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'main.tf'), 'variable "project_name" {}\nvariable "plugin_name" {}\n')
+  }
+  const copied = (name: string) => {
+    const dir = join(cwd, 'modules', 'plugins', name)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'main.tf'), 'variable "project_name" {}\nvariable "plugin_name" {}\n')
+  }
+
+  it('sources a first-party plugin from its real, synced location', () => {
+    firstParty('agent-runtime')
+    expect(pluginModuleSource(cwd, 'agent-runtime')).toBe(
+      '../../../services/_plugins/agent-runtime/terraform',
+    )
+  })
+
+  it('still sources a third-party plugin from the copy, which IS its delivery', () => {
+    copied('acme-crm')
+    expect(pluginModuleSource(cwd, 'acme-crm')).toBe('../../../modules/plugins/acme-crm')
+  })
+
+  it('wires a first-party plugin that was never copied at all', () => {
+    firstParty('orchestrator')
+    expect(listWireablePlugins(cwd)).toEqual(['orchestrator'])
+  })
+
+  /**
+   * The regression this whole issue is: an upgrade updates
+   * services/_plugins/<name>/terraform/ and leaves modules/plugins/<name>/
+   * frozen, so sourcing the copy deploys stale infrastructure. With both
+   * present the real source must win, and the plugin must appear exactly once.
+   */
+  it('prefers the real source when a stale copy is also present', () => {
+    firstParty('agent-runtime')
+    copied('agent-runtime')
+
+    expect(listWireablePlugins(cwd)).toEqual(['agent-runtime'])
+    expect(pluginModuleSource(cwd, 'agent-runtime')).toContain('services/_plugins/')
+
+    const tf = syncPluginTerraform(cwd)
+    const generated = readFileSync(
+      join(cwd, 'infra', 'environments', 'dev', GENERATED_TF_FILE),
+      'utf8',
+    )
+    expect(tf.plugins).toEqual(['agent-runtime'])
+    expect(generated).toContain('source   = "../../../services/_plugins/agent-runtime/terraform"')
+    expect(generated).not.toContain('modules/plugins/agent-runtime')
+    // Exactly one block, not one per location.
+    expect(generated.match(/module "plugin_agent-runtime"/g)).toHaveLength(1)
+  })
+
+  it('reports a stale copy so it can be deleted deliberately', () => {
+    firstParty('agent-runtime')
+    copied('agent-runtime')
+    copied('acme-crm')
+
+    // Only the first-party one is stale — the third-party copy is load-bearing.
+    expect(staleFirstPartyCopies(cwd)).toEqual(['agent-runtime'])
+  })
+
+  it('reports nothing once the copy is gone', () => {
+    firstParty('agent-runtime')
+    expect(staleFirstPartyCopies(cwd)).toEqual([])
+  })
+
+  it('reads variables from whichever directory it sources', () => {
+    // A first-party plugin's declared variables must come from its real
+    // terraform/, not from a stale copy that may predate a variable.
+    firstParty('agent-runtime')
+    const dir = join(cwd, 'modules', 'plugins', 'agent-runtime')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'main.tf'), 'variable "project_name" {}\n')
+    writeFileSync(
+      join(cwd, 'services', '_plugins', 'agent-runtime', 'terraform', 'main.tf'),
+      'variable "project_name" {}\nvariable "tags" {}\n',
+    )
+
+    syncPluginTerraform(cwd)
+    const generated = readFileSync(
+      join(cwd, 'infra', 'environments', 'dev', GENERATED_TF_FILE),
+      'utf8',
+    )
+    expect(generated).toContain('tags')
   })
 })

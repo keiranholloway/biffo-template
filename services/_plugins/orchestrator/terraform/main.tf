@@ -46,7 +46,7 @@ locals {
 # Compute — the engine's Lambda. Non-VPC (no enable_vpc_access) so it can reach
 # the public Core API endpoint and SES; it holds no db_credentials (ADR-0002).
 module "function" {
-  source = "../../cloud/aws/compute"
+  source = "../../../../modules/cloud/aws/compute"
 
   project_name   = var.project_name
   environment    = var.environment

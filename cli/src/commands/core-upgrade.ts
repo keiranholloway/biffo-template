@@ -25,6 +25,7 @@ import {
 } from '../lib/core-upgrade.js'
 import { type MaterializedTree, materializeTemplateAtTag } from '../lib/core-template-trees.js'
 import { GLOBAL_DISPATCH_REF, GLOBAL_DISPATCH_WORKFLOW_PATHS } from '../lib/global-workflows.js'
+import { staleFirstPartyCopies } from '../lib/plugin-terraform-wiring.js'
 import {
   type LockfileRefreshOutcome,
   type RunCommandFn,
@@ -275,6 +276,7 @@ async function runCoreUpgradeResolved(
 
   printPlan(plan)
   printMigrationCarry(migrations)
+  warnStaleFirstPartyCopies(options.cwd)
   console.log(
     `\n  ${chalk.bold(String(plan.changes.length))} change(s), ` +
       `${chalk.bold(String(migrations.entries.length))} new core migration(s), ` +
@@ -559,4 +561,29 @@ const defaultRunCommand: RunCommandFn = async (command, cwd) => {
     // warning has to stay readable enough to act on.
     return { ok: false, error: detail.split('\n')[0] ?? 'failed' }
   }
+}
+
+/**
+ * Warn about first-party plugins that still have a copy under
+ * `modules/plugins/` (issue #406).
+ *
+ * The copy is never synced by an upgrade and, if a root config still points at
+ * it, is what Terraform actually applies — so an upgrade can report a plugin's
+ * infrastructure as changed while the deployed module stays frozen at install
+ * time. That failed silently once already: every signal said success.
+ *
+ * Warned rather than fixed automatically. Deleting the copy is safe only once
+ * the environment's module `source` points at the real path, and that source
+ * lives in user-owned `infra/`, which an upgrade must not touch.
+ */
+function warnStaleFirstPartyCopies(cwd: string): void {
+  const stale = staleFirstPartyCopies(cwd)
+  if (stale.length === 0) return
+  log.warn(
+    `${stale.length} first-party plugin(s) still have a copy under modules/plugins/: ` +
+      `${stale.join(', ')}. An upgrade never updates those copies, so if ` +
+      `infra/environments/*/ still sources them, this plugin's infrastructure changes ` +
+      `are NOT deployed. Point the module source at services/_plugins/<name>/terraform ` +
+      `and delete the copy — see docs/guides/core-upgrade.md.`,
+  )
 }

@@ -1,4 +1,5 @@
 import { execSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import chalk from 'chalk'
 import { execa } from 'execa'
@@ -7,6 +8,8 @@ import { GitAdapter } from '../adapters/git/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
 import { readCoreManifest, resolveTemplateRoot } from '../lib/core-manifest.js'
 import {
+  CORE_VERSION_FILE,
+  latestCoreVersionFromTags,
   readCoreVersionFile,
   readInstanceCoreVersion,
   writeInstanceCoreVersion,
@@ -230,9 +233,15 @@ async function runCoreUpgradeResolved(
   let toVersion: string
   if (options.theirsDir) {
     theirsDir = options.theirsDir
-    toVersion = readCoreVersionFile(join(theirsDir, 'core.version'))
+    // An explicitly supplied tree is an arbitrary checkout, not a tag, so its
+    // version can only come from a file it may not have. Older tags still carry
+    // one; for anything newer the caller passes --to.
+    toVersion = versionOfCheckout(theirsDir, options.toVersion)
   } else {
-    const workingVersion = readCoreVersionFile(join(templateRepo, 'core.version'))
+    // The template's current version is its highest core-v* tag, not a file
+    // (#423). A tag needs no push to a protected branch and cannot conflict
+    // between concurrent PRs, which is what made the file churn.
+    const workingVersion = latestCoreVersion(templateRepo)
     toVersion = options.toVersion ?? workingVersion
     if (toVersion === workingVersion) {
       theirsDir = templateRepo
@@ -248,7 +257,7 @@ async function runCoreUpgradeResolved(
   let fromVersion: string
   if (options.baseDir) {
     baseDir = options.baseDir
-    fromVersion = readCoreVersionFile(join(baseDir, 'core.version'))
+    fromVersion = versionOfCheckout(baseDir, undefined)
   } else {
     if (instanceVersion === null) {
       throw new Error(
@@ -673,4 +682,43 @@ function printBreakingChanges(breaking: BreakingChange[], applying: boolean): vo
       chalk.dim('  Re-run with --apply --acknowledge-breaking once you have read them.\n'),
     )
   }
+}
+
+/**
+ * The core version a template checkout represents.
+ *
+ * Since #423 the version lives in the `core-v*` tag, so a checkout produced by
+ * `materializeTemplateAtTag` already knows its version — the caller passed it.
+ * This is only for a tree supplied explicitly with `--to-template` /
+ * `--from-template`, which is an arbitrary directory: tags say nothing about
+ * it. Trees checked out at an older tag still carry a `core.version` file, so
+ * that is read when present; otherwise the caller must say which version the
+ * tree is, because guessing would silently merge against the wrong base.
+ */
+function versionOfCheckout(dir: string, explicit: string | undefined): string {
+  if (explicit) return explicit
+  const file = join(dir, CORE_VERSION_FILE)
+  if (existsSync(file)) return readCoreVersionFile(file)
+  throw new Error(
+    `Cannot determine the core version of ${dir}: it has no ${CORE_VERSION_FILE}, and a ` +
+      `checkout supplied explicitly is not resolved from a tag. Pass --to to state which ` +
+      `version this tree is.`,
+  )
+}
+
+/**
+ * The template's current core version: its highest `core-v*` tag.
+ *
+ * Falls back to a `core.version` file only for a template that predates the
+ * switch or has no releases yet, so an older checkout still resolves.
+ */
+function latestCoreVersion(repo: string): string {
+  const fromTags = latestCoreVersionFromTags(repo)
+  if (fromTags) return fromTags
+  const file = join(repo, CORE_VERSION_FILE)
+  if (existsSync(file)) return readCoreVersionFile(file)
+  throw new Error(
+    `Cannot determine the template's core version: ${repo} has no core-v* tags and no ` +
+      `${CORE_VERSION_FILE}. Fetch tags (\`git fetch --tags\`) or pass --to explicitly.`,
+  )
 }

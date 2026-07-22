@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
@@ -7,7 +8,12 @@ import {
   readCoreManifest,
   resolveTemplateRoot,
 } from '../lib/core-manifest.js'
-import { readCoreVersionFile, readInstanceCoreVersion } from '../lib/core-version.js'
+import {
+  CORE_VERSION_FILE,
+  latestCoreVersionFromTags,
+  readCoreVersionFile,
+  readInstanceCoreVersion,
+} from '../lib/core-version.js'
 import { log } from '../lib/logger.js'
 
 /**
@@ -58,7 +64,13 @@ export async function runCoreDiff(options: CoreDiffOptions): Promise<void> {
     options.templateRoot ?? resolveTemplateRoot({ guidance: MISSING_TEMPLATE_ROOT_GUIDANCE })
   const manifest = readCoreManifest(templateRoot)
 
-  const templateVersion = readCoreVersionFile(join(templateRoot, 'core.version'))
+  // The template's current version is its highest core-v* tag (#423); the file
+  // is only a fallback for a checkout that predates the switch.
+  const templateVersion =
+    latestCoreVersionFromTags(templateRoot) ??
+    (existsSync(join(templateRoot, CORE_VERSION_FILE))
+      ? readCoreVersionFile(join(templateRoot, CORE_VERSION_FILE))
+      : '(unreleased)')
   const instanceVersion = readInstanceCoreVersion(options.cwd)
 
   const diff = computeCoreDiff(templateRoot, options.cwd, manifest)

@@ -258,6 +258,91 @@ def declared_tools(snapshot: dict[str, Any]) -> list[str]:
     return [str(item).strip() for item in items if str(item).strip()]
 
 
+class OutputToolError(ToolError):
+    """A run declared a malformed output tool. Fails the run before any spend."""
+
+
+@dataclass(frozen=True)
+class OutputTool:
+    """A terminal *submit-your-result* tool (ADR-0017 §5 / Phase 4).
+
+    The model calls it to return **structured output**, and that call ends the run.
+    It is deliberately exempt from rule 2 (bounded, scalar-only parameters) — read
+    the module rules first, because the exemption is the point, not an oversight:
+
+    Rule 2 bounds text a tool sends *outward*, because an executable tool is an
+    exfiltration channel. An output tool has **no executor and makes no outbound
+    call**. The model's arguments land in the run transcript — which Core already
+    stores and the run's owner already reads — and the run terminates. There is no
+    third-party channel to bound, so an output tool may carry an **arbitrary JSON
+    Schema** (nested objects, arrays, long text): that structured object *is* the
+    result it exists to collect (e.g. a plugin's ``submit_ideation_report``). It
+    gets its own minimal validation instead — a valid name and a JSON-Schema object
+    — and, structurally, can never be given an executor.
+    """
+
+    name: str
+    description: str
+    #: An arbitrary JSON Schema object — NOT rule-2 bounded (see the class docstring).
+    parameters: dict[str, Any]
+
+    def to_provider_schema(self) -> dict[str, Any]:
+        """The entry for the provider's ``tools`` array (OpenAI/OpenRouter shape)."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            },
+        }
+
+
+def _coerce_output_tool(raw: Any) -> OutputTool:
+    """Validate one declared output tool. Accepts the provider shape
+    (``{"type": "function", "function": {...}}``) or its inner ``function`` object
+    directly — a plugin's ``report_tool_schema()`` returns the former."""
+    if not isinstance(raw, dict):
+        raise OutputToolError(f"An output tool must be an object, got: {raw!r}")
+    fn = raw["function"] if isinstance(raw.get("function"), dict) else raw
+    name = str(fn.get("name") or "").strip()
+    if not _NAME_PATTERN.match(name):
+        raise OutputToolError(
+            f"Output tool name {name!r} must be lowercase alphanumeric with underscores."
+        )
+    description = str(fn.get("description") or "").strip()
+    if not description:
+        raise OutputToolError(f"Output tool {name!r} has no description.")
+    parameters = fn.get("parameters")
+    if not isinstance(parameters, dict) or parameters.get("type") != "object":
+        raise OutputToolError(f"Output tool {name!r} parameters must be a JSON Schema object.")
+    return OutputTool(name=name, description=description, parameters=parameters)
+
+
+def output_tools(snapshot: dict[str, Any]) -> list[OutputTool]:
+    """The output tools a run's definition snapshot declares — **defaulting to none**.
+
+    Unlike :func:`declared_tools` (names resolved against the registry), these are
+    full inline schemas the run carries, validated as terminal result-collectors and
+    offered to the model but never executed. A malformed one fails the run before any
+    spend, for the same reason an unregistered tool name does.
+    """
+    raw = snapshot.get("output_tools")
+    if not raw:
+        return []
+    items = [raw] if isinstance(raw, dict) else raw
+    if not isinstance(items, (list, tuple)):
+        raise OutputToolError(
+            f"A run's `output_tools` must be a list of tool schemas, got: {raw!r}"
+        )
+    tools = [_coerce_output_tool(item) for item in items]
+    names = [tool.name for tool in tools]
+    duplicated = sorted({name for name in names if names.count(name) > 1})
+    if duplicated:
+        raise OutputToolError(f"Output tool(s) declared more than once: {duplicated}.")
+    return tools
+
+
 def resolve_tools(names: Sequence[str]) -> list[ToolDefinition]:
     """Resolve declared names to definitions, or fail loudly.
 

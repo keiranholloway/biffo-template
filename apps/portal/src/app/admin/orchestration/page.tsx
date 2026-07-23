@@ -26,6 +26,9 @@ import {
   originOf,
   triggerKeyOf,
 } from '@/lib/trigger-catalog'
+import { fetchPromptComponents, type PromptComponent } from '@/lib/prompt-components-api'
+import { normalizeParts, type PromptPart } from '@/lib/prompt-parts'
+import { PartsField } from './parts-field'
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error'
@@ -81,10 +84,11 @@ function inputType(fieldType: string): string {
   return 'text'
 }
 
-// action_config values are strings for scalar fields and string lists for a
-// `multiselect`. These coerce a value to the shape a given control expects,
+// action_config values are strings for scalar fields, string lists for a
+// `multiselect`, and an ordered-parts list for a `parts: true` prompt field
+// (ADR-0015). These coerce a value to the shape a given control expects,
 // without asserting a type the data may not have.
-type ConfigValue = string | string[]
+type ConfigValue = string | string[] | PromptPart[]
 type Config = Record<string, ConfigValue>
 
 function asString(value: ConfigValue | undefined): string {
@@ -92,7 +96,9 @@ function asString(value: ConfigValue | undefined): string {
 }
 
 function asList(value: ConfigValue | undefined): string[] {
-  return Array.isArray(value) ? value : []
+  // Only the string members of a list (the multiselect/tools case). A parts
+  // list is never read through here — parts fields render via their own branch.
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []
 }
 
 // A field's effective value: what's configured, else the catalog default. Only
@@ -193,6 +199,10 @@ export default function OrchestrationPage() {
   const [workflows, setWorkflows] = useState<WorkflowDefinition[] | null>(null)
   const [runs, setRuns] = useState<WorkflowRun[] | null>(null)
   const [catalog, setCatalog] = useState<WorkflowCatalog | null>(null)
+  // Library components available to reference from a parts field (ADR-0015).
+  // Sourced from the prompt-library CRUD API, NOT the action catalog. A fetch
+  // failure leaves this [] so the parts editor still renders (unknown refs warn).
+  const [components, setComponents] = useState<PromptComponent[]>([])
   const [error, setError] = useState<string | null>(null)
 
   // Form state (create by default; `editingId` non-null while editing a row).
@@ -243,6 +253,17 @@ export default function OrchestrationPage() {
   useEffect(() => {
     void reload()
   }, [reload])
+
+  // Load the referenceable prompt components once. A failure is non-fatal to
+  // the builder — the parts editor renders with no options and warns on any
+  // unknown reference — so it does not clobber the page-level error banner.
+  useEffect(() => {
+    fetchPromptComponents(client)
+      .then(setComponents)
+      .catch(() => {
+        setComponents([])
+      })
+  }, [client])
 
   // Run a mutation, surface any error, and refresh from the server.
   async function run(action: () => Promise<unknown>) {
@@ -525,7 +546,18 @@ export default function OrchestrationPage() {
                   {fields
                     .filter((field) => fieldApplies(fields, config, field))
                     .map((field) =>
-                      field.type === 'multiselect' ? (
+                      field.parts === true ? (
+                        <PartsField
+                          key={field.name}
+                          label={field.label}
+                          required={field.required}
+                          components={components}
+                          value={normalizeParts(config[field.name])}
+                          onChange={(parts) => {
+                            setConfig((c) => ({ ...c, [field.name]: parts }))
+                          }}
+                        />
+                      ) : field.type === 'multiselect' ? (
                         <fieldset
                           key={field.name}
                           aria-label={field.label}

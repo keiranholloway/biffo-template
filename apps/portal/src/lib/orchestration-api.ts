@@ -1,4 +1,14 @@
 import type { createApiClient } from './api-client'
+import type { PromptPart } from './prompt-parts'
+
+/**
+ * A value in `action_config`. Scalar fields store a string; a `multiselect`
+ * (the tool picker) stores a string list; a `parts: true` prompt field
+ * (`instructions`/`goals`, ADR-0015) stores an ordered list of parts. Core
+ * accepts a plain string there too (one inline part) — that arrives typed as a
+ * string, the pre-library shape.
+ */
+export type ActionConfigValue = string | string[] | PromptPart[]
 
 /**
  * An orchestration workflow definition as surfaced by the Core API
@@ -23,10 +33,10 @@ export interface WorkflowDefinition {
   action_type: string
   /**
    * Per-field action config. Values are strings for scalar fields; a
-   * `multiselect` field (e.g. the agent action's tool picker) stores a list, so
-   * a value may be a string array.
+   * `multiselect` field (e.g. the agent action's tool picker) stores a list; a
+   * `parts: true` prompt field stores an ordered-parts list (ADR-0015).
    */
-  action_config: Record<string, string | string[]>
+  action_config: Record<string, ActionConfigValue>
   enabled: boolean
 }
 
@@ -37,7 +47,7 @@ export interface WorkflowInput {
   trigger_detail_type: string
   trigger_filter: Record<string, string> | null
   action_type: string
-  action_config: Record<string, string | string[]>
+  action_config: Record<string, ActionConfigValue>
   enabled: boolean
 }
 
@@ -65,6 +75,13 @@ export interface CatalogActionField {
    */
   type: 'email' | 'text' | 'textarea' | 'url' | 'tel' | 'number' | 'select' | 'multiselect'
   required: boolean
+  /**
+   * `true` on a prompt field composed from ordered parts (ADR-0015 §2) —
+   * `instructions`/`goals` on the agent action. The builder renders these with
+   * the ordered-parts editor instead of a plain textarea. Core accepts either a
+   * plain string (one inline part) or a parts list here.
+   */
+  parts?: boolean
   /** Value assumed when the field is absent from action_config. */
   default?: string
   /**

@@ -120,6 +120,21 @@ function fieldApplies(
 // the builder injects it from the action's `available_tools`.
 const TOOLS_FIELD = 'tools'
 
+// The web-search tool by name — the only runtime tool today, checked by name
+// deliberately (not generalised to hypothetical future web tools).
+const WEB_SEARCH_TOOL = 'web_search'
+
+// A model whose string ends in `:online` (the OpenRouter convention) performs
+// web search at the provider; the web_search tool performs it again in the
+// runtime. Both on one worker double the web injection — worth flagging, but
+// only informational, never a save-time block. Keyed off the `:online` suffix,
+// not a model name, so it covers any future web-connected model.
+function webSearchIsRedundant(config: Config): boolean {
+  return (
+    asString(config.model).endsWith(':online') && asList(config.tools).includes(WEB_SEARCH_TOOL)
+  )
+}
+
 // The agent action's tool picker, built from the tools the runtime declared. A
 // `multiselect` whose options come from `available_tools`, so it always mirrors
 // what the runtime actually registered — never a hardcoded list. Absent/empty
@@ -501,6 +516,10 @@ export default function OrchestrationPage() {
           {selectedAction != null &&
             (() => {
               const fields = configFieldsFor(selectedAction)
+              // Agent action only: warn (never block) when a web-connected model
+              // and the web_search tool are both selected — they duplicate.
+              const redundantWebSearch =
+                selectedAction.type === 'agent' && webSearchIsRedundant(config)
               return (
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   {fields
@@ -597,6 +616,15 @@ export default function OrchestrationPage() {
                         </label>
                       ),
                     )}
+                  {redundantWebSearch && (
+                    <p
+                      role="status"
+                      className="rounded bg-amber-50 px-3 py-2 text-xs text-amber-800 sm:col-span-2"
+                    >
+                      This model is web-connected and already performs web search — the web_search
+                      tool is redundant here.
+                    </p>
+                  )}
                 </div>
               )
             })()}

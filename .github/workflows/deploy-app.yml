@@ -316,6 +316,14 @@ jobs:
             --no-emit-workspace --no-emit-project \
             --output-file requirements.txt
           uv pip install -r requirements.txt --target package/
+          # The shared Cognito verifier (packages/cognito-auth) is a workspace
+          # package, excluded from the export above by --no-emit-workspace, so
+          # install it explicitly — the same pattern the PR-signer and plugin
+          # steps below use for packages/python-sdk. Core's middleware/auth.py
+          # imports it on every authenticated request, so it MUST land in the
+          # zip. The path is ../ because this step runs in the api-service
+          # artifact dir and the full repo checkout is its parent.
+          uv pip install ../packages/cognito-auth --target package/ --no-deps
           # Trim the package before zipping so the code update fits AWS's direct
           # update-function-code limit. That API base64-encodes the zip into the
           # request body (~1.33x), so a ~54MB zip inflates past the ~70MB request
@@ -757,6 +765,14 @@ jobs:
             --no-emit-workspace --no-emit-project \
             --output-file requirements.txt
           uv pip install -r requirements.txt --target package/
+          # The shared Cognito verifier (packages/cognito-auth) is a workspace
+          # package, excluded from the export above by --no-emit-workspace, so
+          # install it explicitly — the same pattern the PR-signer and plugin
+          # steps below use for packages/python-sdk. Core's middleware/auth.py
+          # imports it on every authenticated request, so it MUST land in the
+          # zip. The path is ../ because this step runs in the api-service
+          # artifact dir and the full repo checkout is its parent.
+          uv pip install ../packages/cognito-auth --target package/ --no-deps
           # Trim the package before zipping so the code update fits AWS's direct
           # update-function-code limit. That API base64-encodes the zip into the
           # request body (~1.33x), so a ~54MB zip inflates past the ~70MB request
@@ -1210,6 +1226,14 @@ jobs:
             --no-emit-workspace --no-emit-project \
             --output-file requirements.txt
           uv pip install -r requirements.txt --target package/
+          # The shared Cognito verifier (packages/cognito-auth) is a workspace
+          # package, excluded from the export above by --no-emit-workspace, so
+          # install it explicitly — the same pattern the PR-signer and plugin
+          # steps below use for packages/python-sdk. Core's middleware/auth.py
+          # imports it on every authenticated request, so it MUST land in the
+          # zip. The path is ../ because this step runs in the api-service
+          # artifact dir and the full repo checkout is its parent.
+          uv pip install ../packages/cognito-auth --target package/ --no-deps
           # Trim the package before zipping so the code update fits AWS's direct
           # update-function-code limit. That API base64-encodes the zip into the
           # request body (~1.33x), so a ~54MB zip inflates past the ~70MB request

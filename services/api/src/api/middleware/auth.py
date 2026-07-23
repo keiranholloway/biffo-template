@@ -1,16 +1,10 @@
-import json
 from dataclasses import dataclass, field, replace
-from functools import lru_cache
-from typing import cast
 
-import httpx
-import jwt
 from aws_lambda_powertools import Logger
-from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
+from biffo_cognito_auth import CognitoJWTError, verify_cognito_jwt
+from biffo_cognito_auth.verifier import _fetch_jwks as _get_jwks  # noqa: F401
 from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jwt import PyJWTError
-from jwt.algorithms import RSAAlgorithm
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
@@ -18,6 +12,12 @@ from ..identity import get_identity_provider, identity_session
 
 logger = Logger()
 _security = HTTPBearer()
+
+# The JWKS fetch/cache and the RS256/JWKS/audience verification now live in the
+# shared `biffo_cognito_auth` package (ADR-0016 §7) so the agent runtime can
+# reuse the exact same verifier. `_get_jwks` is re-exported above as an alias of
+# that package's cached remote fetcher purely so existing callers/tests that
+# reach for `auth_module._get_jwks.cache_clear()` keep working unchanged.
 
 
 @dataclass(frozen=True)
@@ -60,69 +60,33 @@ class AuthenticatedUser:
     mfa_authenticated: bool = False
 
 
-@lru_cache(maxsize=1)
-def _get_jwks(user_pool_id: str, region: str) -> dict:
-    """Fetch and cache JWKS. Cached per Lambda instance lifetime.
-
-    When BIFFO_COGNITO_JWKS_JSON is set (no-NAT dev environments), the JWKS is
-    read from the env var instead of making an outbound call to Cognito. Terraform
-    bakes it in at apply time. Key rotation in that environment requires a
-    terraform apply to refresh the env var.
-    """
-    if settings.cognito_jwks_json:
-        return json.loads(settings.cognito_jwks_json)  # type: ignore[no-any-return]
-    url = f"https://cognito-idp.{region}.amazonaws.com/{user_pool_id}/.well-known/jwks.json"
-    response = httpx.get(url, timeout=10)
-    response.raise_for_status()
-    return response.json()  # type: ignore[no-any-return]
-
-
 def _verify_token(token: str) -> dict:
+    """Verify the Cognito JWT and return its claims, or raise HTTP 401.
+
+    The verification itself (JWKS fetch/cache, kid-rotation cache-bust-and-retry,
+    RS256, audience check, baked-JWKS path) is the shared `verify_cognito_jwt`.
+    This wrapper is the Core-side translation of its framework-free exceptions
+    back into the exact HTTPException status/detail Core has always raised, so
+    every authenticated route and every auth test behaves identically:
+
+    - a malformed token   → 401 "Malformed token"
+    - an unmatched kid     → 401 "Unknown signing key"
+    - any other check fail → 401 "Token invalid: <reason>"
+    """
     try:
-        unverified_headers = jwt.get_unverified_header(token)
-    except PyJWTError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Malformed token",
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
-
-    kid = unverified_headers.get("kid")
-    jwks = _get_jwks(settings.cognito_user_pool_id, settings.cognito_region)
-    signing_key = next((k for k in jwks["keys"] if k["kid"] == kid), None)
-
-    if signing_key is None and not settings.cognito_jwks_json:
-        # Unknown kid and we can fetch remotely — JWKS may have rotated; bust
-        # the cache and retry once.
-        _get_jwks.cache_clear()
-        jwks = _get_jwks(settings.cognito_user_pool_id, settings.cognito_region)
-        signing_key = next((k for k in jwks["keys"] if k["kid"] == kid), None)
-
-    if signing_key is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unknown signing key",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    try:
-        # PyJWT needs a key object, not a raw JWK dict — convert the matched JWK.
-        # A Cognito JWKS only publishes public keys, so this is always public.
-        public_key = cast(RSAPublicKey, RSAAlgorithm.from_jwk(json.dumps(signing_key)))
-        claims: dict = jwt.decode(
+        return verify_cognito_jwt(
             token,
-            public_key,
-            algorithms=["RS256"],
-            audience=settings.cognito_client_id,
+            user_pool_id=settings.cognito_user_pool_id,
+            region=settings.cognito_region,
+            client_id=settings.cognito_client_id,
+            jwks_json=settings.cognito_jwks_json or None,
         )
-    except PyJWTError as exc:
+    except CognitoJWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Token invalid: {exc}",
+            detail=str(exc),
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
-
-    return claims
 
 
 def identity_from_token(

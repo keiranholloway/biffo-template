@@ -239,6 +239,78 @@ on either quietly hands a marketplace plugin the keys to Core.
   engine as the parity proof.
 - The async analysis path is unchanged except for carrying an inline output-tool.
 
+## Compatibility and lifecycle
+
+Option B makes the plugin a **separately-lifecycled artifact** — its own repo,
+dependency closure, IAM role, deploy cadence, and version. A Core upgrade never
+rewrites plugin code (the plugin is distributed by the marketplace, ADR-0003, not
+by `biffo core upgrade`, ADR-0006 — it is outside every template-owned path). The
+only thing a Core upgrade can break is a **seam the plugin binds to**. This section
+makes the resulting contract explicit, because it is the property that keeps
+installed plugins working across Core releases.
+
+### Capabilities are the unit of compatibility, and they are versioned
+
+Each Core seam a plugin can bind is a **named, semver'd capability**, independent
+of the Core release number:
+
+- `chat-turn` — the buffered turn engine via `/internal/agent-chat` (seam #3).
+- `agent-run-request` — kicking an async run (ADR-0014).
+- `run-output-tool` — an inline function-tool schema on a run (seam #5).
+- `owner-scoped-tables` — service-auth, owner-scoped access to CRUD-closed tables
+  (seam #5).
+- `chat-agent-registry` — registering a chat agent at install (seam #1).
+- events (e.g. `event:agent.run.completed`) — each event schema is versioned too.
+
+A breaking change to a seam bumps **that capability's major** — not merely the Core
+version — so impact is scoped to the plugins that actually bind it.
+
+### The plugin declares a dependency map at creation
+
+At creation the plugin records, in its manifest, exactly which capabilities it
+binds and at what version range — a **`core_capabilities` map** — plus a
+`required_core_version` **floor** (the minimum Core that offers those capabilities
+at all). The plugin uses `>=`/caret ranges: it opts in to compatible forward
+movement and is *excluded* from a capability major it has not adopted. The map is
+captured once, at creation, and only the owner widens it.
+
+```jsonc
+"required_core_version": ">=0.70.0",          // availability floor
+"core_capabilities": {                         // the dependency map
+  "chat-turn": "^1",
+  "agent-run-request": "^1",
+  "run-output-tool": "^1",
+  "owner-scoped-tables": "^1",
+  "chat-agent-registry": "^1",
+  "event:agent.run.completed": "^1"
+}
+```
+
+The dependency map, not the Core-version floor, is the precise contract: the floor
+only says "new enough to have these"; the capability ranges say "and I depend on
+*these* behaviours staying compatible."
+
+### Breaking changes are Core's to communicate — targeted, not broadcast
+
+The plugin does **not** defensively track Core; the burden of a breaking change
+sits with Core, which is the only party that knows it is about to break something.
+Core's obligations:
+
+1. **No breaking change to a capability except on that capability's major bump**,
+   preceded by a **deprecation window** in which both versions are served.
+2. **Targeted notification.** The marketplace registry (ADR-0003) knows which
+   plugins are installed, which capability versions each declared, and who owns
+   them. A capability major bump notifies **exactly** the owners whose
+   `core_capabilities` pin excludes the new version — not every plugin owner.
+3. A plugin whose pins are all satisfied by the running Core is **guaranteed to
+   keep working** across that upgrade; one that binds a now-majored capability is
+   flagged incompatible (and its owner already notified) rather than silently
+   breaking.
+
+This is the two-way contract behind the earlier decisions: the plugin owns its
+lifecycle and pins what it depends on; Core owns keeping those pins meaningful and
+telling the affected owners when it cannot.
+
 ## Compliance
 
 - The turn engine resolves the system prompt **only** from the registry by
@@ -252,6 +324,14 @@ on either quietly hands a marketplace plugin the keys to Core.
 - Closed-table access via the service seam **must** carry an `owner_sub` filter;
   Core rejects an unscoped call. `TID251` (ADR-0002) continues to bar any DB client
   outside `services/api/`.
+- A user-facing plugin's manifest **must** declare a `core_capabilities` map naming
+  every seam it binds, at a version range, alongside its `required_core_version`
+  floor. Install validates the map against the running Core's capability versions;
+  a pin that excludes a served version fails the install (the owner is directed to
+  the migration for that capability's major).
+- Core resolves each capability from a **single versioned registry**; a seam change
+  that alters observable behaviour requires a capability major bump + a deprecation
+  window, enforced in review (a CHANGELOG/registry check, not just convention).
 
 ## Decisions to ratify
 
@@ -289,6 +369,9 @@ they are the load-bearing calls to confirm before build:
   prompt assistant (the first registered agent) serves.
 - **ADR-0009** — internal service authentication (SigV4) used on the plugin→Core
   seam.
+- **ADR-0003 / ADR-0006** — the marketplace registry (which drives targeted
+  breaking-change notification) and core-upgrade/template-sync (whose ownership
+  boundary keeps a Core upgrade from ever touching plugin code).
 - **ADR-0002 / ADR-0004** — data stays in Core; the plugin's tables stay
   CRUD-closed and are served only across the owner-scoped service seam.
 - **ADR-0007 / #492** — shared Cognito and the shared JWT verifier used to

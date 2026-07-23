@@ -26,7 +26,7 @@ export interface GitHubAdapterOptions {
  * CI consolidates all JS checks into one job and all Python checks into another
  * (per-job billing + repeated installs make a dozen sub-minute jobs wasteful),
  * so lint/type/test/audit/SAST are folded into the two toolchain checks below.
- * The core workflow's template-only `Core Version Guard` job is deliberately
+ * The core workflow's template-only `Release Guards` job is deliberately
  * absent: it no-ops in instances (see `status-checks.test.ts`).
  */
 export const DEFAULT_STATUS_CHECKS = [

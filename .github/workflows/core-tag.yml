@@ -54,7 +54,7 @@ jobs:
       # This workflow lives in a template-owned path, so it ships to every
       # instance. Tagging there would push `core-v<template-version>` into the
       # instance's own tag namespace, alongside its release tags. An instance is
-      # detected the same way the Core Version Guard detects one
+      # detected the same way the Release Guards job detects one
       # (cli/src/scripts/check-release-subject.ts): `biffo.core.json` is
       # present in an instance and absent in the template. sync-core-tag.ts
       # re-checks this itself; the step guard only avoids the install cost.

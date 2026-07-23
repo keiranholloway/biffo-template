@@ -600,7 +600,7 @@ export const INSTANCE_FILE_BRANCHES = [
  * Commit the instance-identity changes onto every branch of the scaffolded repo:
  *
  *   + `biffo.core.json` — the instance marker, recording the core version this
- *     CLI shipped with. Its presence is how the Core Version Guard (#242) and
+ *     CLI shipped with. Its presence is how the Release Guards job (#242) and
  *     `.github/workflows/core-tag.yml` (#199) tell an instance from the
  *     template; without it every fresh repo is misread as the template and both
  *     of those guards misfire.

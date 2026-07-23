@@ -656,6 +656,54 @@ def test_agent_workflow_accepts_an_explicit_model():
     assert resolved == "anthropic/claude-opus-4-8"
 
 
+def test_agent_model_field_offers_curated_options(client: TestClient):
+    agent = _agent_action(client)
+    model = next(f for f in agent["config_fields"] if f["name"] == "model")
+    assert model["type"] == "select"
+    # Marked open so its options are suggestions, not an allowlist.
+    assert model["open"] is True
+    values = {o["value"] for o in model["options"]}
+    assert {
+        "moonshotai/kimi-k3",
+        "moonshotai/kimi-k3:online",
+        "anthropic/claude-opus-4-8",
+    } <= values
+
+
+def test_agent_workflow_accepts_an_off_list_model(client: TestClient):
+    """The correctness trap: a model outside the curated list must still save.
+
+    Otherwise editing an agent stored with such a model would 422 on every save,
+    silently locking the author out of a model they legitimately chose.
+    """
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="agent",
+            action_config={
+                "agent_name": "demo-enricher",
+                "instructions": "Enrich {company}.",
+                "model": "some-vendor/experimental-model-v9",
+            },
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["action_config"]["model"] == "some-vendor/experimental-model-v9"
+
+
+def test_non_open_select_still_rejects_off_list_values(client: TestClient):
+    """The relaxation is scoped to open selects: WhatsApp's message_type (no
+    ``open``) still enforces its allowlist."""
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="whatsapp",
+            action_config={"to": "+1", "message_type": "carrier-pigeon", "message": "hi"},
+        ),
+    )
+    assert resp.status_code == 422
+
+
 # ── Secret redaction (#432) ──────────────────────────────────────────────────
 #
 # A Google Chat webhook URL embeds its own bearer token, so the whole string is a

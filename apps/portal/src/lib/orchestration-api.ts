@@ -21,7 +21,12 @@ export interface WorkflowDefinition {
    */
   trigger_filter: Record<string, string> | null
   action_type: string
-  action_config: Record<string, string>
+  /**
+   * Per-field action config. Values are strings for scalar fields; a
+   * `multiselect` field (e.g. the agent action's tool picker) stores a list, so
+   * a value may be a string array.
+   */
+  action_config: Record<string, string | string[]>
   enabled: boolean
 }
 
@@ -32,7 +37,7 @@ export interface WorkflowInput {
   trigger_detail_type: string
   trigger_filter: Record<string, string> | null
   action_type: string
-  action_config: Record<string, string>
+  action_config: Record<string, string | string[]>
   enabled: boolean
 }
 
@@ -53,20 +58,47 @@ export interface CatalogTrigger {
 export interface CatalogActionField {
   name: string
   label: string
-  type: 'email' | 'text' | 'textarea' | 'url' | 'tel' | 'select'
+  /**
+   * `select` picks one value; `multiselect` renders a set of checkboxes and
+   * stores a list of the chosen values into action_config. Anything unknown is
+   * rendered as a plain text input.
+   */
+  type: 'email' | 'text' | 'textarea' | 'url' | 'tel' | 'number' | 'select' | 'multiselect'
   required: boolean
   /** Value assumed when the field is absent from action_config. */
   default?: string
-  /** Choices for a `select` field. */
-  options?: { value: string; label: string }[]
+  /**
+   * Choices for a `select` or `multiselect` field. `description` (used by the
+   * tool picker) is shown as per-option help text.
+   */
+  options?: { value: string; label: string; description?: string }[]
   /** The field only applies while this sibling's effective value matches. */
   visible_when?: { field: string; equals: string }
+}
+
+/**
+ * A tool the agent runtime registered (ADR-0014 §7), surfaced on the agent
+ * action so the builder can offer a picker whose options come from the runtime's
+ * own manifest — never a hardcoded list. This is discoverability, not the
+ * security boundary: the runtime enforces the declared-tools allowlist at
+ * run-start regardless of what the builder shows.
+ */
+export interface AvailableTool {
+  name: string
+  description: string
+  parameters: Record<string, unknown>
 }
 
 export interface CatalogAction {
   type: string
   label: string
   config_fields: CatalogActionField[]
+  /**
+   * Present on the agent action only: the tools the runtime declared. The
+   * builder turns these into a `tools` multiselect. Absent/empty on every other
+   * action, and on an instance whose runtime registered no tools.
+   */
+  available_tools?: AvailableTool[]
 }
 
 /** What the builder offers — drives the trigger/action dropdowns and config fields. */

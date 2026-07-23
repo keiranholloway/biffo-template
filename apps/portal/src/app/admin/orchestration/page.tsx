@@ -81,14 +81,25 @@ function inputType(fieldType: string): string {
   return 'text'
 }
 
-// A field's effective value: what's configured, else the catalog default.
-function effectiveValue(
-  fields: CatalogActionField[],
-  config: Record<string, string>,
-  name: string,
-): string {
+// action_config values are strings for scalar fields and string lists for a
+// `multiselect`. These coerce a value to the shape a given control expects,
+// without asserting a type the data may not have.
+type ConfigValue = string | string[]
+type Config = Record<string, ConfigValue>
+
+function asString(value: ConfigValue | undefined): string {
+  return typeof value === 'string' ? value : ''
+}
+
+function asList(value: ConfigValue | undefined): string[] {
+  return Array.isArray(value) ? value : []
+}
+
+// A field's effective value: what's configured, else the catalog default. Only
+// meaningful for scalar fields; a list value (multiselect) reads as unset here.
+function effectiveValue(fields: CatalogActionField[], config: Config, name: string): string {
   const value = config[name]
-  if (value != null && value !== '') return value
+  if (typeof value === 'string' && value !== '') return value
   return fields.find((f) => f.name === name)?.default ?? ''
 }
 
@@ -96,7 +107,7 @@ function effectiveValue(
 // field they depend on holds the matching value.
 function fieldApplies(
   fields: CatalogActionField[],
-  config: Record<string, string>,
+  config: Config,
   field: CatalogActionField,
 ): boolean {
   const condition = field.visible_when
@@ -104,10 +115,56 @@ function fieldApplies(
   return effectiveValue(fields, config, condition.field) === condition.equals
 }
 
+// The synthetic config field name the tool picker writes into action_config.
+// Deliberately NOT a Core config_field (Core keeps tools out of config_fields);
+// the builder injects it from the action's `available_tools`.
+const TOOLS_FIELD = 'tools'
+
+// The agent action's tool picker, built from the tools the runtime declared. A
+// `multiselect` whose options come from `available_tools`, so it always mirrors
+// what the runtime actually registered — never a hardcoded list. Absent/empty
+// available_tools yields no field (the picker simply doesn't render).
+function toolsField(action: CatalogAction | undefined): CatalogActionField | null {
+  const tools = action?.available_tools ?? []
+  if (tools.length === 0) return null
+  return {
+    name: TOOLS_FIELD,
+    label: 'Tools',
+    type: 'multiselect',
+    required: false,
+    options: tools.map((t) => ({ value: t.name, label: t.name, description: t.description })),
+  }
+}
+
+// The config fields the builder actually renders for an action: its Core-declared
+// fields, plus the injected tools multiselect when the action carries
+// available_tools. Used everywhere the field list drives behaviour (render,
+// applicability, and the save filter) so the tools value round-trips.
+function configFieldsFor(action: CatalogAction | undefined): CatalogActionField[] {
+  const base = action?.config_fields ?? []
+  const tools = toolsField(action)
+  return tools == null ? base : [...base, tools]
+}
+
+// A select's options, guaranteeing the current value is always among them. A
+// stored value outside the curated list (e.g. an agent's model that predates the
+// list) is prepended so it stays visible and selected — otherwise the browser
+// would silently reassign the select to its first option on load.
+function selectOptions(
+  field: CatalogActionField,
+  current: string,
+): { value: string; label: string }[] {
+  const options = field.options ?? []
+  if (current !== '' && !options.some((o) => o.value === current)) {
+    return [{ value: current, label: `${current} (current)` }, ...options]
+  }
+  return options
+}
+
 // Seed a freshly-chosen action's config with its catalog defaults, so what the
 // form shows is what gets saved.
-function defaultConfig(action: CatalogAction | undefined): Record<string, string> {
-  const config: Record<string, string> = {}
+function defaultConfig(action: CatalogAction | undefined): Config {
+  const config: Config = {}
   for (const field of action?.config_fields ?? []) {
     if (field.default != null) config[field.name] = field.default
   }
@@ -129,7 +186,7 @@ export default function OrchestrationPage() {
   const [triggerKey, setTriggerKey] = useState('')
   const [triggerQuery, setTriggerQuery] = useState('')
   const [actionType, setActionType] = useState('')
-  const [config, setConfig] = useState<Record<string, string>>({})
+  const [config, setConfig] = useState<Config>({})
   const [filterRows, setFilterRows] = useState<FilterRow[]>([])
   const [enabled, setEnabled] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -218,7 +275,9 @@ export default function OrchestrationPage() {
     const [trigger_source, trigger_detail_type] = triggerKey.split('|')
     // Save only the fields that apply, so switching e.g. WhatsApp text →
     // template doesn't leave the abandoned branch's values in action_config.
-    const fields = selectedAction?.config_fields ?? []
+    // configFieldsFor (not raw config_fields) so the injected tools multiselect
+    // is recognised and its list value round-trips.
+    const fields = configFieldsFor(selectedAction)
     const applicable = Object.fromEntries(
       Object.entries(config).filter((entry) =>
         fields.some((f) => f.name === entry[0] && fieldApplies(fields, config, f)),
@@ -439,58 +498,108 @@ export default function OrchestrationPage() {
             </button>
           </fieldset>
 
-          {selectedAction != null && (
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              {selectedAction.config_fields
-                .filter((field) => fieldApplies(selectedAction.config_fields, config, field))
-                .map((field) => (
-                  <label
-                    key={field.name}
-                    className={`flex flex-col text-xs text-gray-600 ${
-                      field.type === 'textarea' ? 'sm:col-span-2' : ''
-                    }`}
-                  >
-                    {field.label}
-                    {field.type === 'textarea' ? (
-                      <textarea
-                        value={config[field.name] ?? ''}
-                        required={field.required}
-                        onChange={(e) => {
-                          setConfig((c) => ({ ...c, [field.name]: e.target.value }))
-                        }}
-                        rows={3}
-                        className={inputClass}
-                      />
-                    ) : field.type === 'select' ? (
-                      <select
-                        aria-label={field.label}
-                        value={effectiveValue(selectedAction.config_fields, config, field.name)}
-                        onChange={(e) => {
-                          setConfig((c) => ({ ...c, [field.name]: e.target.value }))
-                        }}
-                        className={inputClass}
-                      >
-                        {(field.options ?? []).map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input
-                        type={inputType(field.type)}
-                        value={config[field.name] ?? ''}
-                        required={field.required}
-                        onChange={(e) => {
-                          setConfig((c) => ({ ...c, [field.name]: e.target.value }))
-                        }}
-                        className={inputClass}
-                      />
+          {selectedAction != null &&
+            (() => {
+              const fields = configFieldsFor(selectedAction)
+              return (
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  {fields
+                    .filter((field) => fieldApplies(fields, config, field))
+                    .map((field) =>
+                      field.type === 'multiselect' ? (
+                        <fieldset
+                          key={field.name}
+                          aria-label={field.label}
+                          className="flex flex-col text-xs text-gray-600 sm:col-span-2"
+                        >
+                          <legend className="text-xs text-gray-600">{field.label}</legend>
+                          <div className="mt-1 space-y-1.5 rounded border px-2 py-2">
+                            {(field.options ?? []).map((option) => {
+                              const selected = asList(config[field.name])
+                              return (
+                                <label
+                                  key={option.value}
+                                  className="flex items-start gap-2 text-sm text-gray-800"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    className="mt-0.5"
+                                    checked={selected.includes(option.value)}
+                                    onChange={(e) => {
+                                      setConfig((c) => {
+                                        const current = asList(c[field.name])
+                                        const next = e.target.checked
+                                          ? [...current, option.value]
+                                          : current.filter((v) => v !== option.value)
+                                        return { ...c, [field.name]: next }
+                                      })
+                                    }}
+                                  />
+                                  <span>
+                                    <span className="font-medium">{option.value}</span>
+                                    {option.description != null && option.description !== '' && (
+                                      <span className="block text-xs text-gray-500">
+                                        {option.description}
+                                      </span>
+                                    )}
+                                  </span>
+                                </label>
+                              )
+                            })}
+                          </div>
+                        </fieldset>
+                      ) : (
+                        <label
+                          key={field.name}
+                          className={`flex flex-col text-xs text-gray-600 ${
+                            field.type === 'textarea' ? 'sm:col-span-2' : ''
+                          }`}
+                        >
+                          {field.label}
+                          {field.type === 'textarea' ? (
+                            <textarea
+                              value={asString(config[field.name])}
+                              required={field.required}
+                              onChange={(e) => {
+                                setConfig((c) => ({ ...c, [field.name]: e.target.value }))
+                              }}
+                              rows={3}
+                              className={inputClass}
+                            />
+                          ) : field.type === 'select' ? (
+                            <select
+                              aria-label={field.label}
+                              value={effectiveValue(fields, config, field.name)}
+                              onChange={(e) => {
+                                setConfig((c) => ({ ...c, [field.name]: e.target.value }))
+                              }}
+                              className={inputClass}
+                            >
+                              {selectOptions(field, effectiveValue(fields, config, field.name)).map(
+                                (option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ),
+                              )}
+                            </select>
+                          ) : (
+                            <input
+                              type={inputType(field.type)}
+                              value={asString(config[field.name])}
+                              required={field.required}
+                              onChange={(e) => {
+                                setConfig((c) => ({ ...c, [field.name]: e.target.value }))
+                              }}
+                              className={inputClass}
+                            />
+                          )}
+                        </label>
+                      ),
                     )}
-                  </label>
-                ))}
-            </div>
-          )}
+                </div>
+              )
+            })()}
 
           <div className="mt-4 flex gap-2">
             <button

@@ -111,6 +111,13 @@ export async function runOwnershipCheck(argv: string[]): Promise<void> {
     )
     return
   }
+  if (result.skipped === 'convergence-trailer') {
+    console.log(
+      `✓ core ownership guard: allowed by Core-Convergence (reverting toward the template): ` +
+        `${result.convergenceReason ?? ''}`,
+    )
+    return
+  }
   if (result.blocked.length === 0) {
     console.log('✓ core ownership guard: no template-owned paths changed.')
     return
@@ -138,13 +145,22 @@ ${BOLD}What to do instead${OFF}
 ${
   result.blocked.some((p) => deletedFiles.includes(p))
     ? `${BOLD}Some of these are deletions${OFF}
-  Deleting a template-owned file is not a smaller change than editing one — a
-  core upgrade will not restore it (#395), so the instance loses it silently and
-  for ever. If the file genuinely should not exist, delete it in biffo-template.
+  Deleting a template-owned file is drift like any other: the next
+  \`biffo core upgrade\` will restore it (#395) unless you declare the path an
+  intentional divergence. If the file genuinely should not exist, delete it in
+  biffo-template so every instance drops it.
 
 `
     : ''
-}${BOLD}If the divergence is deliberate${OFF}
+}${BOLD}If this REMOVES divergence (reverting toward the template)${OFF}
+  Reverting a template-owned file to the template's own content, or deleting a
+  file the template no longer ships, leaves the instance strictly closer to the
+  template. Record that it converges — it is allowed, and kept distinct from a
+  divergence so it never reads as drift to chase later (#385):
+
+    ${DIM}Core-Convergence: <what this reverts toward the template>${OFF}
+
+${BOLD}If the divergence is deliberate${OFF}
   Record it in the commit message and it is allowed:
 
     ${DIM}Core-Divergence: <why this instance must differ from the template>${OFF}

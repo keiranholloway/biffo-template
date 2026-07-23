@@ -22,16 +22,16 @@ function userWithSession(session: unknown, err: Error | null = null) {
   }
 }
 
-// The env vars are the TRANSITIONAL fallback (#403 Stage 3 removes them). The
-// document is now the preferred source, so most tests set env AND control
-// `fetch` to prove which one wins.
-function configureCognitoEnv() {
-  vi.stubEnv('NEXT_PUBLIC_CORE_COGNITO_USER_POOL_ID', 'us-east-1_TESTPOOL')
-  vi.stubEnv('NEXT_PUBLIC_CORE_COGNITO_CLIENT_ID', 'testclientid')
+// The sibling is DOC-ONLY (#403 Stage 3): it NEVER reads NEXT_PUBLIC_CORE_COGNITO_*.
+// This helper only exists to set BOGUS env values in the "env is ignored" tests,
+// proving the pool is never built from env even when it is present.
+function stubBogusCognitoEnv() {
+  vi.stubEnv('NEXT_PUBLIC_CORE_COGNITO_USER_POOL_ID', 'us-east-1_BOGUSENV')
+  vi.stubEnv('NEXT_PUBLIC_CORE_COGNITO_CLIENT_ID', 'bogusenvclientid')
 }
 
-// A `fetch` returning a valid identity document. The ids differ from the env
-// values on purpose so a test can prove the DOCUMENT wins over baked env.
+// A `fetch` returning a valid identity document. The ids are what the pool must
+// be built from — the ONLY source of Cognito coordinates now.
 function mockFetchDocument(overrides: Record<string, unknown> = {}) {
   const body = {
     userPoolId: 'us-east-1_DOCPOOL',
@@ -45,7 +45,8 @@ function mockFetchDocument(overrides: Record<string, unknown> = {}) {
   }) as unknown as typeof fetch
 }
 
-// A `fetch` that rejects (network error) — drives the env fallback path.
+// A `fetch` that rejects (network error) — the document is unreachable, so the
+// sibling resolves to null (no env fallback).
 function mockFetchUnreachable() {
   global.fetch = vi.fn().mockRejectedValue(new Error('network down')) as unknown as typeof fetch
 }
@@ -53,7 +54,7 @@ function mockFetchUnreachable() {
 // Each test re-imports the module fresh: both the pool (auth.ts) and the
 // resolved-identity Promise (identity.ts) are memoised at module scope, so a
 // module instance left over from a previous test would carry that test's
-// document/env into the next one.
+// document into the next one.
 async function loadAuth() {
   vi.resetModules()
   return await import('@/lib/auth')
@@ -62,11 +63,9 @@ async function loadAuth() {
 describe('getCurrentSession', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    configureCognitoEnv()
-    // Default: document unreachable, so these behaviour tests build the pool
-    // from the env fallback (us-east-1_TESTPOOL / testclientid) exactly as the
-    // pre-runtime version did.
-    mockFetchUnreachable()
+    // The document is reachable, so these behaviour tests build the pool from
+    // the DOCUMENT (us-east-1_DOCPOOL / docclientid) — never from env.
+    mockFetchDocument()
   })
 
   afterEach(() => {
@@ -100,9 +99,9 @@ describe('getCurrentSession', () => {
   })
 })
 
-// The core now publishes its Cognito coordinates at runtime; the sibling
-// prefers that document over its baked env vars (#403/#400). These tests pin
-// which source wins under each condition.
+// The core publishes its Cognito coordinates at runtime; the sibling is
+// DOC-ONLY (#403 Stage 3) and resolves them from that document alone. These
+// tests pin that the document is the sole source — env is never consulted.
 describe('runtime core identity resolution', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -113,9 +112,9 @@ describe('runtime core identity resolution', () => {
     vi.restoreAllMocks()
   })
 
-  it('builds the pool from the published document, not from env', async () => {
-    // Env is set to DIFFERENT values so a pass proves the document won.
-    configureCognitoEnv()
+  it('builds the pool from the published document', async () => {
+    // Bogus env is set to prove the document — not env — is the source.
+    stubBogusCognitoEnv()
     mockFetchDocument()
     const { getCurrentSession } = await loadAuth()
     getCurrentUser.mockReturnValue(null)
@@ -131,55 +130,44 @@ describe('runtime core identity resolution', () => {
     })
   })
 
-  it('falls back to env and warns when the document is unreachable', async () => {
-    configureCognitoEnv()
+  it('resolves null and never builds the pool from env when the document is unreachable', async () => {
+    // Env is present but BOGUS: a DOC-ONLY sibling must ignore it entirely.
+    stubBogusCognitoEnv()
     mockFetchUnreachable()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { getCurrentSession } = await loadAuth()
     getCurrentUser.mockReturnValue(null)
 
-    await getCurrentSession()
-
-    expect(poolConstructor).toHaveBeenCalledWith({
-      UserPoolId: 'us-east-1_TESTPOOL',
-      ClientId: 'testclientid',
-    })
+    await expect(getCurrentSession()).resolves.toBeNull()
+    // Proves env is ignored: the pool was never constructed from the bogus env.
+    expect(poolConstructor).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalledOnce()
-    expect(warn.mock.calls[0]?.[0]).toContain('DEGRADED')
   })
 
-  it('falls back to env when the document is served but missing ids', async () => {
-    configureCognitoEnv()
+  it('resolves null and never builds the pool when the document is served but missing ids', async () => {
+    stubBogusCognitoEnv()
     // ok:true but the body lacks a clientId — treated as unusable.
     mockFetchDocument({ clientId: '' })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { getCurrentSession } = await loadAuth()
     getCurrentUser.mockReturnValue(null)
 
-    await getCurrentSession()
-
-    expect(poolConstructor).toHaveBeenCalledWith({
-      UserPoolId: 'us-east-1_TESTPOOL',
-      ClientId: 'testclientid',
-    })
+    await expect(getCurrentSession()).resolves.toBeNull()
+    expect(poolConstructor).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalledOnce()
   })
 
-  it('resolves null and never constructs the pool when both document and env are absent', async () => {
-    vi.stubEnv('NEXT_PUBLIC_CORE_COGNITO_USER_POOL_ID', '')
-    vi.stubEnv('NEXT_PUBLIC_CORE_COGNITO_CLIENT_ID', '')
+  it('resolves null when the document is unreachable', async () => {
     mockFetchUnreachable()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { getCurrentSession } = await loadAuth()
 
     await expect(getCurrentSession()).resolves.toBeNull()
     expect(poolConstructor).not.toHaveBeenCalled()
-    // No document AND no env is an unconfigured build, not degradation — quiet.
-    expect(warn).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledOnce()
   })
 
   it('fetches the document at most once across multiple session reads (memoised)', async () => {
-    configureCognitoEnv()
     mockFetchDocument()
     const { getCurrentSession } = await loadAuth()
     getCurrentUser.mockReturnValue(null)
@@ -210,14 +198,12 @@ describe('lazy pool construction', () => {
   })
 
   it('does not construct the pool merely by importing the module', async () => {
-    configureCognitoEnv()
+    mockFetchDocument()
     await loadAuth()
     expect(poolConstructor).not.toHaveBeenCalled()
   })
 
-  it('imports cleanly with no Cognito env vars set and no fetch available', async () => {
-    vi.stubEnv('NEXT_PUBLIC_CORE_COGNITO_USER_POOL_ID', '')
-    vi.stubEnv('NEXT_PUBLIC_CORE_COGNITO_CLIENT_ID', '')
+  it('imports cleanly with no fetch available (next build prerender)', async () => {
     // Simulate `next build` prerendering `/` in Node with no fetch in scope.
     const originalFetch = global.fetch
     // @ts-expect-error deliberately remove fetch to mimic the Node prerender.
@@ -230,16 +216,14 @@ describe('lazy pool construction', () => {
     }
   })
 
-  it('resolves null instead of throwing when Cognito env vars are absent', async () => {
-    vi.stubEnv('NEXT_PUBLIC_CORE_COGNITO_USER_POOL_ID', '')
-    vi.stubEnv('NEXT_PUBLIC_CORE_COGNITO_CLIENT_ID', '')
+  it('resolves null instead of throwing when the document is unreachable', async () => {
     const { getCurrentSession } = await loadAuth()
     await expect(getCurrentSession()).resolves.toBeNull()
     expect(poolConstructor).not.toHaveBeenCalled()
   })
 
-  it('constructs the pool once, on first session read, from the env fallback', async () => {
-    configureCognitoEnv()
+  it('constructs the pool once, on first session read, from the document', async () => {
+    mockFetchDocument()
     const { getCurrentSession } = await loadAuth()
     getCurrentUser.mockReturnValue(null)
 
@@ -248,8 +232,8 @@ describe('lazy pool construction', () => {
 
     expect(poolConstructor).toHaveBeenCalledTimes(1)
     expect(poolConstructor).toHaveBeenCalledWith({
-      UserPoolId: 'us-east-1_TESTPOOL',
-      ClientId: 'testclientid',
+      UserPoolId: 'us-east-1_DOCPOOL',
+      ClientId: 'docclientid',
     })
   })
 })

@@ -79,6 +79,10 @@ export const coreUpgradeCommand = new Command('upgrade')
     '--acknowledge-breaking',
     'With --apply, proceed even though this upgrade crosses a documented breaking change',
   )
+  .option(
+    '--allow-dirty',
+    'Compute the plan even with uncommitted changes in the instance tree (they become part of the merge)',
+  )
   .option('--base <branch>', 'Base branch for the PR (defaults to the repo’s default branch)')
   .option('--remote <name>', 'Git remote to push to and open the PR on (default: origin)')
   .action(
@@ -91,6 +95,7 @@ export const coreUpgradeCommand = new Command('upgrade')
       apply?: boolean
       allowConflicts?: boolean
       acknowledgeBreaking?: boolean
+      allowDirty?: boolean
       base?: string
       remote?: string
     }) => {
@@ -100,6 +105,7 @@ export const coreUpgradeCommand = new Command('upgrade')
         apply: options.apply ?? false,
         allowConflicts: options.allowConflicts ?? false,
         acknowledgeBreaking: options.acknowledgeBreaking ?? false,
+        allowDirty: options.allowDirty ?? false,
       }
       if (options.templateRepo) runOptions.templateRepo = resolve(options.templateRepo)
       if (options.to) runOptions.toVersion = options.to
@@ -131,6 +137,8 @@ export interface CoreUpgradeOptions {
   toVersion?: string
   apply?: boolean
   allowConflicts?: boolean
+  /** Compute the plan despite uncommitted changes in the instance tree (#394). */
+  allowDirty?: boolean
   /** Proceed with --apply even though the upgrade crosses a documented
    * breaking change. Deliberate keystroke, not a default. */
   acknowledgeBreaking?: boolean
@@ -142,6 +150,12 @@ export interface CoreUpgradeOptions {
 export interface CoreUpgradeGit {
   isGitRepo(cwd: string): Promise<boolean>
   hasUncommittedChanges(cwd: string): Promise<boolean>
+  /** Checked-out branch name; git reports the literal "HEAD" when detached. */
+  currentBranch(cwd: string): Promise<string>
+  /** Best-effort fetch of the tracking remote (never throws on offline). */
+  fetch(cwd: string, remote?: string): Promise<void>
+  /** HEAD vs its upstream; hasUpstream is false when nothing is tracked. */
+  aheadBehind(cwd: string): Promise<{ ahead: number; behind: number; hasUpstream: boolean }>
   getRemoteUrl(cwd: string, remote?: string): Promise<string>
   createBranch(cwd: string, branch: string): Promise<void>
   add(cwd: string, paths: string[]): Promise<void>
@@ -216,11 +230,56 @@ export async function runCoreUpgrade(
   }
 }
 
+/**
+ * Refuse to compute a plan against an instance tree whose identity is not
+ * established (#394). The instance tree is the merge's "ours" side, so a stale,
+ * diverged, dirty or detached checkout silently produces a wrong three-way merge
+ * and a PR that looks authoritative. Same principle as the migration carry's
+ * fail-closed `validateChain` (#366), one level up: establish the tree first.
+ */
+async function checkInstanceCurrency(
+  git: CoreUpgradeGit,
+  cwd: string,
+  allowDirty: boolean,
+): Promise<void> {
+  // Not a git repo: identity cannot be established from history. The apply path
+  // already refuses a non-repo; a dry run against loose files stays allowed.
+  if (!(await git.isGitRepo(cwd))) return
+
+  const branch = await git.currentBranch(cwd)
+  if (branch === 'HEAD' || branch === '') {
+    throw new Error(
+      `${cwd} has a detached HEAD, so the tree the plan would merge as "ours" has no branch ` +
+        `identity. Check out the integration branch first (#394).`,
+    )
+  }
+
+  await git.fetch(cwd)
+  const { ahead, behind, hasUpstream } = await git.aheadBehind(cwd)
+  if (hasUpstream && behind > 0) {
+    const diverged = ahead > 0 ? ` and ${ahead} ahead (diverged)` : ''
+    throw new Error(
+      `${cwd} is ${behind} commit(s) behind its upstream${diverged}. The plan would merge onto a ` +
+        `stale tree and propose reintroducing superseded content. Run \`git pull\` first, or fix the ` +
+        `divergence, then re-run (#394).`,
+    )
+  }
+
+  if (!allowDirty && (await git.hasUncommittedChanges(cwd))) {
+    throw new Error(
+      `${cwd} has uncommitted changes, which would silently become part of the merge's "ours" side. ` +
+        `Commit or stash them, or pass --allow-dirty to accept them deliberately (#394).`,
+    )
+  }
+}
+
 async function runCoreUpgradeResolved(
   options: CoreUpgradeOptions,
   deps: CoreUpgradeDeps,
   cleanups: Array<() => void>,
 ): Promise<void> {
+  await checkInstanceCurrency(deps.git, options.cwd, options.allowDirty ?? false)
+
   const materialize = deps.materialize ?? materializeTemplateAtTag
   const templateRepo = options.templateRepo
     ? resolve(options.templateRepo)
@@ -365,9 +424,6 @@ async function applyAndOpenPr(
 
   if (!(await git.isGitRepo(options.cwd))) {
     throw new Error(`${options.cwd} is not a git repository.`)
-  }
-  if (await git.hasUncommittedChanges(options.cwd)) {
-    throw new Error('The working tree has uncommitted changes. Commit or stash them first.')
   }
 
   const branch = upgradeBranchName(fromVersion, toVersion)

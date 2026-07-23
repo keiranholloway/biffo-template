@@ -5,6 +5,7 @@ requires-python = ">=3.13"
 [manifest]
 members = [
     "biffo-api",
+    "biffo-cognito-auth",
     "biffo-plugin-agent-runtime",
     "biffo-plugin-orchestrator",
     "biffo-plugin-sdk",
@@ -151,6 +152,7 @@ dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
     { name = "aws-lambda-powertools", extra = ["tracer"] },
+    { name = "biffo-cognito-auth" },
     { name = "boto3" },
     { name = "email-validator" },
     { name = "fastapi" },
@@ -181,6 +183,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.14.0" },
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "aws-lambda-powertools", extras = ["tracer"], specifier = ">=3.4.0" },
+    { name = "biffo-cognito-auth", editable = "packages/cognito-auth" },
     { name = "boto3", specifier = ">=1.35.98" },
     { name = "email-validator", specifier = ">=2.2.0" },
     { name = "fastapi", specifier = ">=0.115.6" },
@@ -207,11 +210,45 @@ dev = [
 ]
 
 [[package]]
+name = "biffo-cognito-auth"
+version = "0.1.0"
+source = { editable = "packages/cognito-auth" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pyjwt", extra = ["crypto"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "cryptography" },
+    { name = "pyright" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "cryptography", specifier = ">=44.0.0" },
+    { name = "pyright", specifier = ">=1.1.0" },
+    { name = "pytest", specifier = ">=8.3.4" },
+    { name = "pytest-asyncio", specifier = ">=0.25.2" },
+    { name = "ruff", specifier = ">=0.8.0" },
+]
+
+[[package]]
 name = "biffo-plugin-agent-runtime"
 version = "0.1.0"
 source = { virtual = "services/_plugins/agent-runtime" }
 dependencies = [
     { name = "aws-lambda-powertools", extra = ["tracer"] },
+    { name = "biffo-cognito-auth" },
     { name = "biffo-plugin-sdk" },
     { name = "boto3" },
     { name = "httpx" },
@@ -228,6 +265,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aws-lambda-powertools", extras = ["tracer"], specifier = ">=3.4.0" },
+    { name = "biffo-cognito-auth", editable = "packages/cognito-auth" },
     { name = "biffo-plugin-sdk", editable = "packages/python-sdk" },
     { name = "boto3", specifier = ">=1.35.0" },
     { name = "httpx", specifier = ">=0.28.1" },

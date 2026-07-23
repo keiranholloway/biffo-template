@@ -16,6 +16,12 @@ dependencies = [
   "aws-lambda-powertools[tracer]>=3.4.0",
   "pyjwt[crypto]>=2.10.0",
   "httpx>=0.28.1",
+  # Shared Cognito JWT verification (ADR-0016 §7). Core's middleware/auth.py
+  # calls verify_cognito_jwt from this foundation package; the agent runtime
+  # imports the same one. Bundled into the Core Lambda by deploy-app.yml (like
+  # biffo-plugin-sdk is for the pr-signer/plugins), since the api artifact ships
+  # only services/api/ itself.
+  "biffo-cognito-auth",
 ]
 
 [dependency-groups]
@@ -31,3 +37,6 @@ dev = [
   "pyright>=1.1.0",
   "aiosqlite>=0.20.0",
 ]
+
+[tool.uv.sources]
+biffo-cognito-auth = { workspace = true }

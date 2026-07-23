@@ -355,6 +355,31 @@ async def list_definitions(db: AsyncSession, *, tenant_id: str) -> list[Workflow
     return list(result.scalars().all())
 
 
+#: The ``action_type`` that binds a trigger to an agentic worker (ADR-0014 §4).
+#: The value the workflow builder's "Run an agent" action stores (see
+#: ``schemas.orchestration.WORKFLOW_ACTIONS``).
+AGENT_ACTION_TYPE = "agent"
+
+
+async def list_agent_definitions(db: AsyncSession, *, tenant_id: str) -> list[WorkflowDefinition]:
+    """The tenant's agent-worker definitions — the ``action_type == "agent"`` subset.
+
+    The same tenant-scoped definition query as :func:`list_definitions`, narrowed
+    to agentic workers at the database. This is the reusable read the prompt
+    assistant folds into its library-aware context (ADR-0016 §5): the existing
+    agents an author might suggest reusing or building on.
+    """
+    result = await db.execute(
+        select(WorkflowDefinition)
+        .where(
+            WorkflowDefinition.tenant_id == tenant_id,
+            WorkflowDefinition.action_type == AGENT_ACTION_TYPE,
+        )
+        .order_by(WorkflowDefinition.created_at)
+    )
+    return list(result.scalars().all())
+
+
 async def get_definition(
     db: AsyncSession, *, tenant_id: str, definition_id: str
 ) -> WorkflowDefinition | None:

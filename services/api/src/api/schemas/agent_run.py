@@ -60,6 +60,29 @@ class AgentRunResponse(BiffoBaseSchema):
     completed_at: datetime | None = None
 
 
+class AgentRunSummary(BiffoBaseSchema):
+    """A run as an admin list view shows it: enough to scan and triage, none of
+    the heavy content.
+
+    Deliberately omits ``messages``, ``result``, ``input_payload`` and
+    ``definition_snapshot`` — the transcript and triggering payload are unbounded
+    and potentially PII-adjacent, and returning them on a list would make it
+    expensive and leak more than a scan needs. ``model`` is lifted out of the
+    definition snapshot because it is the one snapshot field worth showing per
+    row (it drives cost); it is ``None`` when the snapshot did not record one.
+    Fetch the full record from the detail endpoint (``AgentRunResponse``).
+    """
+
+    agent_name: str
+    status: str
+    model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
 class CompleteAgentRunRequest(BaseModel):
     """The runtime's terminal report for one run.
 

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { coreTag, materializeTemplateAtTag } from './core-template-trees.js'
+import { coreTag, materializeTemplateAtTag, workingTreeMatchesTag } from './core-template-trees.js'
 
 describe('coreTag', () => {
   it('builds the tag for a semver', () => {
@@ -63,5 +63,53 @@ describe('materializeTemplateAtTag — success path (real git repo)', () => {
 
     tree.cleanup()
     expect(existsSync(tree.dir)).toBe(false)
+  })
+})
+
+describe('workingTreeMatchesTag — the #471 stale-working-tree gate (real git repo)', () => {
+  let repo: string
+  let g: (args: string[]) => string
+
+  beforeEach(() => {
+    repo = mkdtempSync(join(tmpdir(), 'biffo-tpl-match-'))
+    g = (args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' })
+    g(['init', '-q'])
+    g(['config', 'user.email', 'test@example.com'])
+    g(['config', 'user.name', 'Test'])
+    writeFileSync(join(repo, 'ci.yml'), 'name: Release Guards\n')
+    g(['add', '-A'])
+    g(['commit', '-qm', 'v0.9.0'])
+    g(['tag', 'core-v0.9.0'])
+  })
+
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('is true when HEAD is the tag commit and the tracked tree is clean', () => {
+    expect(workingTreeMatchesTag(repo, '0.9.0')).toBe(true)
+  })
+
+  it('is FALSE when the checkout has moved past the tag (the #471 scenario)', () => {
+    // Simulate release PRs merged on the remote but not reflected at the tag:
+    // HEAD advances beyond core-v0.9.0, so the working tree is NOT that version.
+    writeFileSync(join(repo, 'ci.yml'), 'name: Core Version Guard\n')
+    g(['add', '-A'])
+    g(['commit', '-qm', 'later work'])
+    expect(workingTreeMatchesTag(repo, '0.9.0')).toBe(false)
+  })
+
+  it('is FALSE when a tracked file is modified in the working tree', () => {
+    writeFileSync(join(repo, 'ci.yml'), 'name: tampered\n')
+    expect(workingTreeMatchesTag(repo, '0.9.0')).toBe(false)
+  })
+
+  it('ignores untracked files — they are not part of the tracked tree', () => {
+    writeFileSync(join(repo, 'scratch.local'), 'ignore me')
+    expect(workingTreeMatchesTag(repo, '0.9.0')).toBe(true)
+  })
+
+  it('is FALSE (not a throw) when the tag does not exist', () => {
+    expect(workingTreeMatchesTag(repo, '1.2.3')).toBe(false)
   })
 })

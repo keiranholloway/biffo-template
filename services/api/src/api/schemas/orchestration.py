@@ -103,14 +103,31 @@ class WorkflowRunSummary(BiffoBaseSchema):
 # (services/_plugins/orchestrator/.../actions.py); extend WORKFLOW_ACTIONS to offer a new
 # action in the UI.
 #
-# A config field may carry two optional keys beyond name/label/type/required:
+# A config field may carry three optional keys beyond name/label/type/required:
 #   ``default``      — value assumed when the field is absent from action_config.
 #   ``visible_when`` — ``{"field": ..., "equals": ...}``; the field only applies
 #                      when that sibling's effective value matches. A field that
 #                      does not apply is neither shown by the portal nor
 #                      required/format-checked here (see ``_field_applies``).
+#   ``secret``       — ``True`` marks the value a credential (#432). It is never
+#                      returned in clear: reads (HTTP responses AND the state-change
+#                      events emitted to the bus) redact a stored value to
+#                      ``SECRET_SENTINEL``, and writes treat that sentinel as
+#                      "keep what is stored" rather than overwriting the secret with
+#                      the placeholder. Redaction and merge are the single points
+#                      (``redact_secrets`` here, the router's write path) so a new
+#                      read path cannot forget — the bug class this closes.
 # ``type: "select"`` fields carry ``options`` (value/label pairs) and accept only
 # those values.
+
+# What a redacted secret reads back as. A fixed, recognisable placeholder rather
+# than an empty string: the portal shows "set, unchanged", and a write echoing it
+# back is understood as "keep the stored value" (see the router's merge). It must
+# never be accepted as a real secret value, or a read could round-trip into a
+# persisted "secret" that is actually the sentinel (rejected in ``_validate_action``
+# and the router's create path).
+SECRET_SENTINEL = "__biffo_secret_set__"  # noqa: S105 — not a credential; a redaction marker
+
 
 WORKFLOW_ACTIONS: list[dict[str, Any]] = [
     {
@@ -133,6 +150,9 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 "label": "Webhook URL",
                 "type": "url",
                 "required": True,
+                # A Google Chat incoming-webhook URL embeds its own bearer token,
+                # so the whole string is a credential (#432).
+                "secret": True,
             },
             {
                 "name": "message",
@@ -218,12 +238,19 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
             },
             # Per-worker model choice, so alternatives can be compared without a
             # code change (§1). The value is an OpenRouter model slug.
+            # The default is deliberately a low-cost model (#414). A defaulted
+            # required field is silently satisfied by `_effective()` returning the
+            # default, so leaving the field untouched runs whatever this default
+            # names. It used to be `anthropic/claude-opus-4-8`, so an untouched
+            # field ran — and billed — the priciest model; defaulting to a cheap
+            # option instead means the do-nothing path is the frugal one, while an
+            # author is still free to pick a costlier model explicitly.
             {
                 "name": "model",
                 "label": "Model",
                 "type": "text",
                 "required": True,
-                "default": "anthropic/claude-opus-4-8",
+                "default": "moonshotai/kimi-k3",
             },
             # A hard stop on the turn loop — §8 bounds cost in the framework
             # rather than by convention. Tools and read scope are deliberately
@@ -268,6 +295,81 @@ def _field_applies(
     if condition is None:
         return True
     return _effective(config_fields, config, condition["field"]) == condition["equals"]
+
+
+def _secret_field_names(action_type: str) -> set[str]:
+    """Names of the ``secret: True`` config fields for an action (empty if none)."""
+    action = next((a for a in WORKFLOW_ACTIONS if a["type"] == action_type), None)
+    if action is None:
+        return set()
+    return {f["name"] for f in action["config_fields"] if f.get("secret")}
+
+
+def redact_secrets(action_type: str, action_config: dict[str, Any]) -> dict[str, Any]:
+    """A copy of ``action_config`` with every stored secret value masked (#432).
+
+    The one place reads are made safe. Every path that turns a definition into a
+    response or an event payload runs through here, so a webhook token never
+    leaves the admin boundary in clear — not on the HTTP response, and not on the
+    ``WORKFLOW_DEFINITION_*`` events, which carry the full row onto the bus to
+    every subscriber, archive and replay (the wider surface #432 exists for).
+
+    A secret with a non-empty stored value becomes ``SECRET_SENTINEL``; one that
+    is absent or empty is left exactly as-is (absent stays absent), so the portal
+    can tell "set" from "not set". Non-secret fields are untouched. The input is
+    never mutated.
+    """
+    secrets = _secret_field_names(action_type)
+    if not secrets:
+        return dict(action_config)
+    return {
+        name: (
+            SECRET_SENTINEL
+            if name in secrets and isinstance(value, str) and value.strip()
+            else value
+        )
+        for name, value in action_config.items()
+    }
+
+
+def resolve_write_secrets(
+    action_type: str, submitted: dict[str, Any], stored: dict[str, Any]
+) -> dict[str, Any]:
+    """Resolve secret fields on a write, merging against what is stored (#432).
+
+    The counterpart to :func:`redact_secrets`. A ``PUT`` replaces the whole
+    ``action_config``, and the portal round-trips whatever a read gave it — so an
+    unchanged save submits the sentinel, and a naive replace would write the
+    placeholder over the real secret. Here, for each secret field: a submitted
+    sentinel (or absence) keeps the stored value; a genuinely new value overwrites.
+
+    Unified across create and update by the caller passing ``stored={}`` for a
+    create: a sentinel then has nothing to keep and is rejected, which is exactly
+    right — a create cannot "keep" a secret that was never stored, and the sentinel
+    must never persist as a value. Raises ``ValueError`` in that case; the router
+    maps it to 422. The input dicts are not mutated.
+    """
+    secrets = _secret_field_names(action_type)
+    if not secrets:
+        return dict(submitted)
+    result = dict(submitted)
+    for name in secrets:
+        value = submitted.get(name)
+        if value != SECRET_SENTINEL and value is not None:
+            continue  # a real new value — overwrite as given
+        kept = stored.get(name)
+        if isinstance(kept, str) and kept.strip():
+            result[name] = kept  # keep the stored secret unchanged
+        elif value == SECRET_SENTINEL:
+            # Sentinel submitted with nothing to fall back to: a create, or a
+            # first-time secret on update. Refuse rather than persist the marker.
+            raise ValueError(
+                f"action_config.{name} is the redaction placeholder, but no secret "
+                "is stored to keep — provide the actual value."
+            )
+        # value is None with nothing stored: leave absent. A required secret in
+        # that state was already rejected by WorkflowDefinitionBody._validate_action.
+    return result
 
 
 class WorkflowCatalog(BaseModel):
@@ -319,6 +421,15 @@ class WorkflowDefinitionBody(BaseModel):
             if not _field_applies(config_fields, self.action_config, field):
                 continue
             value = self.action_config.get(field["name"])
+            # A secret echoed back as the redaction sentinel means "keep the stored
+            # value" (#432). The real value is resolved and checked in the router's
+            # write path, against what is already stored — this body validator
+            # cannot see that, and has no create/update context — so accept the
+            # placeholder here rather than format-checking or rejecting it. The
+            # router rejects a sentinel with nothing to fall back to (a create, or a
+            # first-time secret on update).
+            if field.get("secret") and value == SECRET_SENTINEL:
+                continue
             if (
                 field["type"] == "select"
                 and isinstance(value, str)

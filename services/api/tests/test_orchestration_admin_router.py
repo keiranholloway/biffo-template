@@ -531,7 +531,10 @@ def test_catalog_offers_the_agent_action_with_its_m1_fields(client: TestClient):
     # Deliberately minimal in M1 — tools and read scope are M2/M3.
     assert set(fields) == {"agent_name", "instructions", "model", "max_turns"}
     assert fields["agent_name"]["required"] and fields["instructions"]["required"]
-    assert fields["model"]["default"]
+    # The model default is deliberately a low-cost model (#414). Assert the exact
+    # slug so a future silent switch back to an expensive default is caught here.
+    assert fields["model"]["required"]
+    assert fields["model"]["default"] == "moonshotai/kimi-k3"
     assert fields["max_turns"]["default"] == 1
 
 
@@ -555,4 +558,160 @@ def test_agent_workflow_requires_instructions(client: TestClient):
         _BASE,
         json=_valid_body(action_type="agent", action_config={"agent_name": "demo-enricher"}),
     )
+    assert resp.status_code == 422
+
+
+def test_agent_workflow_omitting_model_resolves_to_the_low_cost_default():
+    """Omitting ``model`` still validates — the required field is satisfied by the
+    catalog default (#414) — and resolves to the low-cost model, never Anthropic.
+
+    Constructs the schema body directly so the assertion is on the model that a
+    blank field resolves to, not merely on the 2xx the router returns.
+    """
+    from api.schemas.orchestration import (
+        WORKFLOW_ACTIONS,
+        WorkflowDefinitionBody,
+        _effective,
+    )
+
+    body = WorkflowDefinitionBody(
+        name="Enrich demo",
+        trigger_source="biffo.core",
+        trigger_detail_type="demo.requested",
+        action_type="agent",
+        action_config={"agent_name": "demo-enricher", "instructions": "Enrich {company}."},
+    )
+
+    agent_action = next(a for a in WORKFLOW_ACTIONS if a["type"] == "agent")
+    resolved = _effective(agent_action["config_fields"], body.action_config, "model")
+    assert resolved == "moonshotai/kimi-k3"
+    assert "anthropic" not in resolved
+
+
+def test_agent_workflow_accepts_an_explicit_model():
+    """An explicitly chosen model validates cleanly and wins over the default."""
+    from api.schemas.orchestration import (
+        WORKFLOW_ACTIONS,
+        WorkflowDefinitionBody,
+        _effective,
+    )
+
+    body = WorkflowDefinitionBody(
+        name="Enrich demo",
+        trigger_source="biffo.core",
+        trigger_detail_type="demo.requested",
+        action_type="agent",
+        action_config={
+            "agent_name": "demo-enricher",
+            "instructions": "Enrich {company}.",
+            "model": "anthropic/claude-opus-4-8",
+        },
+    )
+
+    agent_action = next(a for a in WORKFLOW_ACTIONS if a["type"] == "agent")
+    resolved = _effective(agent_action["config_fields"], body.action_config, "model")
+    assert resolved == "anthropic/claude-opus-4-8"
+
+
+# ── Secret redaction (#432) ──────────────────────────────────────────────────
+#
+# A Google Chat webhook URL embeds its own bearer token, so the whole string is a
+# credential. It must never leave the admin boundary in clear — not on a response,
+# and above all not on the WORKFLOW_DEFINITION_* events, which carry the row onto
+# the bus to every subscriber. And an unchanged save (which round-trips the
+# redaction sentinel) must keep the stored secret rather than overwrite it.
+
+from api.schemas.orchestration import SECRET_SENTINEL  # noqa: E402
+
+_REAL_WEBHOOK = "https://chat.googleapis.com/v1/spaces/AAA/messages?key=k&token=REAL-SECRET"
+
+
+def _gchat_body(**over) -> dict:
+    body = _valid_body(
+        action_type="google_chat",
+        action_config={"webhook_url": _REAL_WEBHOOK, "message": "New demo"},
+    )
+    body.update(over)
+    return body
+
+
+def _stored_webhook(session_factory, definition_id: str) -> str | None:
+    """The webhook as actually persisted — unredacted — read straight from the row,
+    since every API read masks it."""
+
+    async def _read() -> str | None:
+        async with session_factory() as session:
+            row = await session.get(WorkflowDefinition, definition_id)
+            assert row is not None
+            return row.action_config.get("webhook_url")
+
+    return asyncio.run(_read())
+
+
+def test_secret_redacted_on_read(client: TestClient):
+    created = client.post(_BASE, json=_gchat_body())
+    assert created.status_code == 201
+    row = created.json()
+    # The secret is masked; the non-secret sibling is untouched.
+    assert row["action_config"]["webhook_url"] == SECRET_SENTINEL
+    assert row["action_config"]["message"] == "New demo"
+
+    got = client.get(f"{_BASE}/{row['id']}").json()
+    assert got["action_config"]["webhook_url"] == SECRET_SENTINEL
+    listed = client.get(_BASE).json()
+    assert listed[0]["action_config"]["webhook_url"] == SECRET_SENTINEL
+
+
+def test_secret_redacted_in_emitted_event(app):
+    # The path that matters most: the row is emitted onto the bus, and the token
+    # must not ride along to every subscriber, archive and replay.
+    fastapi, _ = app
+    client = TestClient(fastapi)
+    client.post(_BASE, json=_gchat_body())
+    published = fastapi.state.published
+    created_events = [e for e in published if e.detail_type.endswith("workflow_definition.created")]
+    assert created_events, "expected a WORKFLOW_DEFINITION_CREATED event"
+    assert created_events[-1].payload["action_config"]["webhook_url"] == SECRET_SENTINEL
+    assert _REAL_WEBHOOK not in str(created_events[-1].payload)
+
+
+def test_unchanged_update_keeps_stored_secret(app):
+    fastapi, session_factory = app
+    client = TestClient(fastapi)
+    row = client.post(_BASE, json=_gchat_body()).json()
+    # The portal round-trips what a read gave it: the sentinel, not the real URL.
+    redacted_body = _gchat_body(
+        name="Renamed",
+        action_config={"webhook_url": SECRET_SENTINEL, "message": "Changed"},
+    )
+    updated = client.put(f"{_BASE}/{row['id']}", json=redacted_body)
+    assert updated.status_code == 200
+    # The non-secret change landed; the secret was kept, not clobbered.
+    assert updated.json()["action_config"]["message"] == "Changed"
+    assert _stored_webhook(session_factory, row["id"]) == _REAL_WEBHOOK
+
+
+def test_update_with_new_secret_overwrites(app):
+    fastapi, session_factory = app
+    client = TestClient(fastapi)
+    row = client.post(_BASE, json=_gchat_body()).json()
+    new_url = "https://chat.googleapis.com/v1/spaces/BBB/messages?key=k2&token=ROTATED"
+    client.put(
+        f"{_BASE}/{row['id']}",
+        json=_gchat_body(action_config={"webhook_url": new_url, "message": "New demo"}),
+    )
+    assert _stored_webhook(session_factory, row["id"]) == new_url
+
+
+def test_create_rejects_the_sentinel_as_a_secret(client: TestClient):
+    # The marker must never be accepted as a real value — nothing is stored to keep.
+    resp = client.post(
+        _BASE,
+        json=_gchat_body(action_config={"webhook_url": SECRET_SENTINEL, "message": "x"}),
+    )
+    assert resp.status_code == 422
+
+
+def test_create_requires_the_secret(client: TestClient):
+    resp = client.post(_BASE, json=_gchat_body(action_config={"message": "no webhook"}))
     assert resp.status_code == 422

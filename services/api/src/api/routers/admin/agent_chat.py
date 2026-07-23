@@ -42,7 +42,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...agent_assistant import (
-    ASSISTANT_AGENT_NAME,
+    ASSISTANT_AGENT_KEY,
     LambdaRuntimeInvoker,
     RuntimeInvocationError,
     RuntimeInvoker,
@@ -50,6 +50,7 @@ from ...agent_assistant import (
     library_reference_message,
 )
 from ...agent_runs import complete_run, create_run, list_thread_runs
+from ...chat_agents import get_chat_agent
 from ...config import settings
 from ...database import get_db
 from ...dependencies import require_admin
@@ -91,6 +92,12 @@ async def prompt_assistant_chat(
     # deployment's canonical id when known, else the verified Cognito subject.
     run_as_user_id = caller.user_id or caller.sub
 
+    # Resolve this endpoint's chat agent from the registry (ADR-0017 §1): its system
+    # prompt, model, and turn bounds. The prompt assistant is registered under
+    # ``prompt-assistant``; the endpoint stays admin-gated (Phase 1 — the agent's
+    # required_group drives the generic ingress in Phase 2).
+    agent = get_chat_agent(ASSISTANT_AGENT_KEY)
+
     # Continue the given thread, or mint a new one. History is the prior runs'
     # conversational messages, tenant-scoped (ADR-0016 §2).
     thread_id = body.thread_id or str(uuid.uuid4())
@@ -103,16 +110,16 @@ async def prompt_assistant_chat(
             prior_messages.extend(run.messages or [])
 
     definition_snapshot = {
-        "agent_name": ASSISTANT_AGENT_NAME,
+        "agent_name": agent.agent_name,
         "instructions": "(built-in prompt-assistant system prompt — see api.agent_assistant)",
-        "model": settings.agent_assistant_model,
+        "model": agent.model,
     }
     # A user-invoked run in a thread (ADR-0014 §6). No workflow, no event: the
     # synchronous path is request -> run, so this does not emit agent.run.requested.
     run = await create_run(
         db,
         tenant_id=caller.tenant_id,
-        agent_name=ASSISTANT_AGENT_NAME,
+        agent_name=agent.agent_name,
         definition_snapshot=definition_snapshot,
         input_payload={"message": body.message},
         max_depth=settings.agent_max_run_depth,
@@ -139,16 +146,16 @@ async def prompt_assistant_chat(
     messages = assemble_messages(
         prior_messages,
         body.message,
-        limit=settings.agent_assistant_max_history_messages,
+        limit=agent.max_history_messages,
         library_message=library_message,
     )
 
     try:
         turn = invoker.invoke_chat_turn(
-            model=settings.agent_assistant_model,
+            model=agent.model,
             messages=messages,
-            max_output_tokens=settings.agent_assistant_max_output_tokens,
-            timeout_seconds=settings.agent_assistant_timeout_seconds,
+            max_output_tokens=agent.max_output_tokens,
+            timeout_seconds=agent.timeout_seconds,
         )
     except RuntimeInvocationError as exc:
         # Record the failed run (the transcript so far travels with it) so the run

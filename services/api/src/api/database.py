@@ -105,10 +105,23 @@ def app_role_credentials() -> tuple[str, str] | None:
 #    multiplies idle connections against the proxy's own limit without adding
 #    anything — the proxy already absorbs the per-connection setup cost that an
 #    application pool exists to amortise.
+def _connect_args_for(search_path: str) -> dict[str, object]:
+    """asyncpg connect args for the engine. When a schema search_path is
+    configured (settings.db_search_path), apply it via ``server_settings`` so it
+    is set at connection startup — every connection gets it, unlike a one-off
+    ``SET``/``ALTER ROLE``. Needed for ADR-0005 DDL-imported tables mapped by bare
+    name in another schema; empty by default so the base template is unaffected
+    (#458, backported from tabsii)."""
+    if search_path:
+        return {"server_settings": {"search_path": search_path}}
+    return {}
+
+
 engine = create_async_engine(
     resolve_app_database_url(),
     echo=settings.environment == "dev",
     poolclass=NullPool,
+    connect_args=_connect_args_for(settings.db_search_path),
 )
 
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)

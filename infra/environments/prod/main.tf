@@ -29,6 +29,37 @@ locals {
   cors_origins = jsonencode(local.cors_origins_list)
 }
 
+# ---------------------------------------------------------------------------
+# Shared CloudWatch Logs CMK (#445)
+#
+# One customer-managed key encrypts every CloudWatch Log group in this
+# environment, instead of each compute/events/api-gateway module
+# self-provisioning its own. Consolidates prod from 3 CMKs to 1. Zero
+# security-posture change: log encryption stays customer-managed. Wired into the
+# modules below via cloudwatch_kms_key_id.
+# ---------------------------------------------------------------------------
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
+resource "aws_kms_key" "logs" {
+  description             = "Shared CMK for ${var.project_name} ${local.environment} CloudWatch logs"
+  enable_key_rotation     = true
+  deletion_window_in_days = 7
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Sid = "EnableRoot", Effect = "Allow", Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }, Action = "kms:*", Resource = "*" },
+      { Sid = "AllowCloudWatchLogs", Effect = "Allow", Principal = { Service = "logs.${data.aws_region.current.name}.amazonaws.com" }, Action = ["kms:Encrypt*", "kms:Decrypt*", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:Describe*"], Resource = "*", Condition = { ArnLike = { "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:*" } } }
+    ]
+  })
+  tags = local.tags
+}
+
+resource "aws_kms_alias" "logs" {
+  name          = "alias/${var.project_name}-${local.environment}-logs"
+  target_key_id = aws_kms_key.logs.key_id
+}
+
 # ADR-0009 — which IAM principals may call /api/v1/internal/* on the Core API.
 #
 # The glob format, the aws_caller_identity lookup and the fail-closed empty-list
@@ -108,10 +139,11 @@ module "auth" {
 }
 
 module "events" {
-  source       = "../../../modules/cloud/aws/events"
-  project_name = var.project_name
-  environment  = local.environment
-  tags         = local.tags
+  source                = "../../../modules/cloud/aws/events"
+  project_name          = var.project_name
+  environment           = local.environment
+  cloudwatch_kms_key_id = aws_kms_key.logs.arn
+  tags                  = local.tags
 }
 
 module "core_api" {
@@ -120,6 +152,7 @@ module "core_api" {
   environment               = local.environment
   function_name             = "core-api"
   handler                   = "src.api.main.lambda_handler"
+  cloudwatch_kms_key_id     = aws_kms_key.logs.arn
   memory_size               = 1024
   timeout                   = 30
   enable_vpc_access         = true
@@ -178,16 +211,17 @@ module "database" {
 }
 
 module "api_gateway" {
-  source               = "../../../modules/cloud/aws/api-gateway"
-  project_name         = var.project_name
-  environment          = local.environment
-  lambda_function_arn  = module.core_api.function_arn
-  lambda_function_name = module.core_api.function_name
-  cognito_user_pool_id = module.auth.user_pool_id
-  cognito_client_id    = module.auth.client_id
-  aws_region           = var.aws_region
-  cors_origins         = local.cors_origins_list
-  tags                 = local.tags
+  source                = "../../../modules/cloud/aws/api-gateway"
+  project_name          = var.project_name
+  environment           = local.environment
+  lambda_function_arn   = module.core_api.function_arn
+  lambda_function_name  = module.core_api.function_name
+  cognito_user_pool_id  = module.auth.user_pool_id
+  cognito_client_id     = module.auth.client_id
+  aws_region            = var.aws_region
+  cors_origins          = local.cors_origins_list
+  cloudwatch_kms_key_id = aws_kms_key.logs.arn
+  tags                  = local.tags
 }
 
 output "api_gateway_url" { value = module.api_gateway.api_endpoint }

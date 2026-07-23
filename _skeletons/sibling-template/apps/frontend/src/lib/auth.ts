@@ -4,6 +4,8 @@ import {
   type ICognitoUserPoolData,
 } from 'amazon-cognito-identity-js'
 
+import { resolveCoreIdentity } from './identity'
+
 // ---------------------------------------------------------------------------
 // SHARED-SESSION INVARIANT — read this before changing anything below.
 //
@@ -29,28 +31,38 @@ import {
 // portal too.
 // ---------------------------------------------------------------------------
 // Module-private on purpose: the pool is an implementation detail of
-// getCurrentSession(), not part of this sibling's auth surface.
+// getCurrentSession(), not part of this sibling's auth surface. Its Cognito
+// coordinates now come from resolveCoreIdentity() (identity.ts), which prefers
+// the core's runtime-published /.well-known/biffo-identity.json document and
+// only falls back to the baked NEXT_PUBLIC_CORE_COGNITO_* env vars when that
+// document is unreachable — see identity.ts for why runtime resolution kills
+// the stale-baked-pool bug class (#403/#400).
 //
 // Constructed LAZILY, on first session read — never at module scope. The
 // CognitoUserPool constructor throws ("Both UserPoolId and ClientId are
 // required") when either value is missing, and `next build` prerenders `/` in
 // Node, which imports this module. Constructing eagerly therefore made the
-// whole app un-buildable without the real Cognito env vars in scope — a build
-// is not a sign-in, and it has no business needing pool credentials. Deferring
+// whole app un-buildable without a resolvable identity in scope — a build is
+// not a sign-in, and it has no business needing pool credentials. Deferring
 // keeps `pnpm run build` (and any import of this module) working with no env
-// configured, while an actual session read in a misconfigured deployment
-// surfaces as "signed out" rather than a hard crash.
+// and no reachable document, while an actual session read in a misconfigured
+// deployment surfaces as "signed out" rather than a hard crash.
+//
+// The pool itself is memoised: resolveCoreIdentity() is memoised too, but the
+// CognitoUserPool wrapper is built here exactly once so repeated session reads
+// reuse one instance (and its localStorage view of the shared session).
 let userPool: CognitoUserPool | null = null
 
-function getUserPool(): CognitoUserPool | null {
+async function getUserPool(): Promise<CognitoUserPool | null> {
   if (userPool) return userPool
 
-  const poolData: ICognitoUserPoolData = {
-    UserPoolId: process.env['NEXT_PUBLIC_CORE_COGNITO_USER_POOL_ID'] ?? '',
-    ClientId: process.env['NEXT_PUBLIC_CORE_COGNITO_CLIENT_ID'] ?? '',
-  }
-  if (!poolData.UserPoolId || !poolData.ClientId) return null
+  const identity = await resolveCoreIdentity()
+  if (!identity) return null
 
+  const poolData: ICognitoUserPoolData = {
+    UserPoolId: identity.userPoolId,
+    ClientId: identity.clientId,
+  }
   userPool = new CognitoUserPool(poolData)
   return userPool
 }
@@ -62,15 +74,15 @@ function getUserPool(): CognitoUserPool | null {
  * (see `createApiClient`, which takes a `getIdToken` callback). A null result
  * means "redirect the user to the portal's login".
  */
-export function getCurrentSession(): Promise<CognitoUserSession | null> {
+export async function getCurrentSession(): Promise<CognitoUserSession | null> {
+  // Resolving the pool is now async because the core identity is fetched at
+  // runtime (identity.ts). A null pool means no resolvable core Cognito config,
+  // which is indistinguishable from "not signed in" as far as callers are
+  // concerned — the semantics are unchanged from the env-only version.
+  const pool = await getUserPool()
+  if (!pool) return null
+
   return new Promise((resolve) => {
-    // No pool means no core Cognito config, which is indistinguishable from
-    // "not signed in" as far as callers are concerned.
-    const pool = getUserPool()
-    if (!pool) {
-      resolve(null)
-      return
-    }
     const user = pool.getCurrentUser()
     if (!user) {
       resolve(null)

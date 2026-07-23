@@ -9,6 +9,7 @@ import type {
   WorkflowRun,
 } from '@/lib/orchestration-api'
 import type { PromptComponent } from '@/lib/prompt-components-api'
+import { HANDOFF_KEY } from '@/lib/prompt-handoff'
 
 vi.mock('@/context/auth-context', () => ({
   useAuth: () => ({ getIdToken: () => 'fake-token' }),
@@ -213,6 +214,24 @@ const catalogParts: WorkflowCatalog = {
   ),
 }
 
+// Like catalogParts, but the agent action ALSO carries a `goals` parts field —
+// the real Phase-2/3 shape (instructions + goals). Used to exercise the goals
+// handoff target.
+const catalogPartsWithGoals: WorkflowCatalog = {
+  triggers: catalog.triggers,
+  actions: catalogParts.actions.map((a) =>
+    a.type === 'agent'
+      ? {
+          ...a,
+          config_fields: [
+            ...a.config_fields,
+            { name: 'goals', label: 'Goals', type: 'textarea', required: false, parts: true },
+          ],
+        }
+      : a,
+  ),
+}
+
 // An agent stored with a model that is NOT among the curated options.
 const offListAgent: WorkflowDefinition = {
   id: 'wfa',
@@ -291,6 +310,7 @@ describe('OrchestrationPage', () => {
     fetchCatalog.mockResolvedValue(catalog)
     fetchRuns.mockResolvedValue([])
     fetchPromptComponents.mockResolvedValue([])
+    window.sessionStorage.clear()
   })
 
   it('renders workflows with name, trigger label, action and status', async () => {
@@ -879,5 +899,46 @@ describe('OrchestrationPage', () => {
 
     // The pre-library string renders as one inline part carrying its text.
     expect(screen.getByLabelText('Instructions part 1 text')).toHaveValue('Enrich {company}.')
+  })
+
+  // ── "Use this" handoff consumption (ADR-0016 Phase 3) ──────────────────────
+
+  it('consumes an agent-instructions handoff: selects the agent action and seeds an inline part', async () => {
+    fetchCatalog.mockResolvedValue(catalogParts)
+    fetchWorkflows.mockResolvedValue([])
+    window.sessionStorage.setItem(
+      HANDOFF_KEY,
+      JSON.stringify({ target: 'agent-instructions', text: 'Triage inbound leads by intent.' }),
+    )
+
+    render(<OrchestrationPage />)
+
+    // The agent action is selected and the handed-off text is the first
+    // instructions part.
+    await waitFor(() => {
+      expect(screen.getByLabelText('Action')).toHaveValue('agent')
+    })
+    expect(screen.getByLabelText('Instructions part 1 text')).toHaveValue(
+      'Triage inbound leads by intent.',
+    )
+    // Consumed exactly once.
+    expect(window.sessionStorage.getItem(HANDOFF_KEY)).toBeNull()
+  })
+
+  it('consumes an agent-goals handoff into the goals parts field', async () => {
+    fetchCatalog.mockResolvedValue(catalogPartsWithGoals)
+    fetchWorkflows.mockResolvedValue([])
+    window.sessionStorage.setItem(
+      HANDOFF_KEY,
+      JSON.stringify({ target: 'agent-goals', text: 'Maximise qualified pipeline.' }),
+    )
+
+    render(<OrchestrationPage />)
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Action')).toHaveValue('agent')
+    })
+    expect(screen.getByLabelText('Goals part 1 text')).toHaveValue('Maximise qualified pipeline.')
+    expect(window.sessionStorage.getItem(HANDOFF_KEY)).toBeNull()
   })
 })

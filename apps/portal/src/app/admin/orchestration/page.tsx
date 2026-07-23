@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '@/context/auth-context'
 import { createApiClient } from '@/lib/api-client'
 import {
@@ -28,6 +28,7 @@ import {
 } from '@/lib/trigger-catalog'
 import { fetchPromptComponents, type PromptComponent } from '@/lib/prompt-components-api'
 import { normalizeParts, type PromptPart } from '@/lib/prompt-parts'
+import { consumeHandoff, type PromptHandoff } from '@/lib/prompt-handoff'
 import { PartsField } from './parts-field'
 
 function errorMessage(err: unknown): string {
@@ -216,6 +217,16 @@ export default function OrchestrationPage() {
   const [enabled, setEnabled] = useState(true)
   const [busy, setBusy] = useState(false)
 
+  // A pending "Use this" handoff from the prompt assistant (ADR-0016 Phase 3).
+  // Read (and cleared from sessionStorage) exactly once during the first render
+  // — the `undefined` sentinel makes it idempotent under React's double-invoked
+  // renders. Held in a ref so the catalog-load callback below reads the value
+  // captured at mount regardless of when that async load resolves.
+  const handoffRef = useRef<PromptHandoff | null | undefined>(undefined)
+  if (handoffRef.current === undefined) {
+    handoffRef.current = consumeHandoff(['agent-instructions', 'agent-goals'])
+  }
+
   const resetForm = useCallback((cat: WorkflowCatalog | null) => {
     setEditingId(null)
     setName('')
@@ -233,6 +244,27 @@ export default function OrchestrationPage() {
       .then((cat) => {
         setCatalog(cat)
         resetForm(cat)
+        // A pending prompt-assistant "Use this" handoff (ADR-0016 Phase 3) is
+        // applied here, right after the form is initialised, so it deterministically
+        // wins over resetForm rather than racing it from a separate effect: select
+        // the agent action on a fresh definition and seed the handed-off text as an
+        // inline part of instructions/goals.
+        const handoff = handoffRef.current
+        if (handoff != null) {
+          const agent = cat.actions.find((a) => a.type === 'agent')
+          if (agent != null) {
+            const field = handoff.target === 'agent-goals' ? 'goals' : 'instructions'
+            setEditingId(null)
+            setActionType('agent')
+            setConfig(() => {
+              const base = defaultConfig(agent)
+              return {
+                ...base,
+                [field]: [...normalizeParts(base[field]), { inline: handoff.text }],
+              }
+            })
+          }
+        }
       })
       .catch((err: unknown) => {
         setError(errorMessage(err))

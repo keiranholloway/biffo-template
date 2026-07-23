@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     # for why that fallback exists and how it is surfaced.
     app_database_url: str = ""
     app_db_secret_arn: str = ""
+
+    # Postgres search_path applied at connection startup, e.g. "public,acme".
+    # Empty by default so the base template is unaffected. Needed only when a
+    # deployment maps ADR-0005 DDL-imported tables by bare name in a non-public
+    # schema — those are unreachable without it (#458, backported from tabsii).
+    db_search_path: str = ""
     # Must match the `username` in the app credential; db-init cross-checks.
     app_role_name: str = "biffo_app"
     # Comma-separated schemas to grant the app role. Empty (the default) grants

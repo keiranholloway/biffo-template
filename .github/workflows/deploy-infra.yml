@@ -92,6 +92,16 @@ jobs:
           TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
           TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
+          # Endpoint control plane / PR-signer (ADR-0008). All default to empty
+          # or false, so a deployment that has not set these GitHub variables is
+          # unaffected — but without passing them, an instance could not enable
+          # the feature the template already ships (#458, backported from tabsii).
+          TF_VAR_enable_pr_signer: ${{ vars.ENABLE_PR_SIGNER || 'false' }}
+          TF_VAR_pr_signer_github_app_id: ${{ vars.PR_SIGNER_GITHUB_APP_ID }}
+          TF_VAR_pr_signer_github_installation_id: ${{ vars.PR_SIGNER_GITHUB_INSTALLATION_ID }}
+          TF_VAR_pr_signer_repo_owner: ${{ vars.PR_SIGNER_REPO_OWNER }}
+          TF_VAR_pr_signer_repo_name: ${{ vars.PR_SIGNER_REPO_NAME }}
+          TF_VAR_pr_signer_base_branch: ${{ vars.PR_SIGNER_BASE_BRANCH || 'dev' }}
 
       # Refuse a plan that destroys stateful infrastructure without saying so
       # (#387). Runs in the PLAN job, before Apply, so a refusal costs nothing —
@@ -145,6 +155,16 @@ jobs:
           TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
           TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
+          # Endpoint control plane / PR-signer (ADR-0008). All default to empty
+          # or false, so a deployment that has not set these GitHub variables is
+          # unaffected — but without passing them, an instance could not enable
+          # the feature the template already ships (#458, backported from tabsii).
+          TF_VAR_enable_pr_signer: ${{ vars.ENABLE_PR_SIGNER || 'false' }}
+          TF_VAR_pr_signer_github_app_id: ${{ vars.PR_SIGNER_GITHUB_APP_ID }}
+          TF_VAR_pr_signer_github_installation_id: ${{ vars.PR_SIGNER_GITHUB_INSTALLATION_ID }}
+          TF_VAR_pr_signer_repo_owner: ${{ vars.PR_SIGNER_REPO_OWNER }}
+          TF_VAR_pr_signer_repo_name: ${{ vars.PR_SIGNER_REPO_NAME }}
+          TF_VAR_pr_signer_base_branch: ${{ vars.PR_SIGNER_BASE_BRANCH || 'dev' }}
       - name: Export outputs to GitHub Actions variables
         env:
           GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
@@ -212,6 +232,16 @@ jobs:
           TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
           TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
+          # Endpoint control plane / PR-signer (ADR-0008). All default to empty
+          # or false, so a deployment that has not set these GitHub variables is
+          # unaffected — but without passing them, an instance could not enable
+          # the feature the template already ships (#458, backported from tabsii).
+          TF_VAR_enable_pr_signer: ${{ vars.ENABLE_PR_SIGNER || 'false' }}
+          TF_VAR_pr_signer_github_app_id: ${{ vars.PR_SIGNER_GITHUB_APP_ID }}
+          TF_VAR_pr_signer_github_installation_id: ${{ vars.PR_SIGNER_GITHUB_INSTALLATION_ID }}
+          TF_VAR_pr_signer_repo_owner: ${{ vars.PR_SIGNER_REPO_OWNER }}
+          TF_VAR_pr_signer_repo_name: ${{ vars.PR_SIGNER_REPO_NAME }}
+          TF_VAR_pr_signer_base_branch: ${{ vars.PR_SIGNER_BASE_BRANCH || 'dev' }}
 
       # Refuse a plan that destroys stateful infrastructure without saying so
       # (#387). Runs in the PLAN job, before Apply, so a refusal costs nothing —
@@ -265,6 +295,16 @@ jobs:
           TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
           TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
+          # Endpoint control plane / PR-signer (ADR-0008). All default to empty
+          # or false, so a deployment that has not set these GitHub variables is
+          # unaffected — but without passing them, an instance could not enable
+          # the feature the template already ships (#458, backported from tabsii).
+          TF_VAR_enable_pr_signer: ${{ vars.ENABLE_PR_SIGNER || 'false' }}
+          TF_VAR_pr_signer_github_app_id: ${{ vars.PR_SIGNER_GITHUB_APP_ID }}
+          TF_VAR_pr_signer_github_installation_id: ${{ vars.PR_SIGNER_GITHUB_INSTALLATION_ID }}
+          TF_VAR_pr_signer_repo_owner: ${{ vars.PR_SIGNER_REPO_OWNER }}
+          TF_VAR_pr_signer_repo_name: ${{ vars.PR_SIGNER_REPO_NAME }}
+          TF_VAR_pr_signer_base_branch: ${{ vars.PR_SIGNER_BASE_BRANCH || 'dev' }}
       - name: Export outputs to GitHub Actions variables
         env:
           GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
@@ -339,6 +379,16 @@ jobs:
           TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
           TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
+          # Endpoint control plane / PR-signer (ADR-0008). All default to empty
+          # or false, so a deployment that has not set these GitHub variables is
+          # unaffected — but without passing them, an instance could not enable
+          # the feature the template already ships (#458, backported from tabsii).
+          TF_VAR_enable_pr_signer: ${{ vars.ENABLE_PR_SIGNER || 'false' }}
+          TF_VAR_pr_signer_github_app_id: ${{ vars.PR_SIGNER_GITHUB_APP_ID }}
+          TF_VAR_pr_signer_github_installation_id: ${{ vars.PR_SIGNER_GITHUB_INSTALLATION_ID }}
+          TF_VAR_pr_signer_repo_owner: ${{ vars.PR_SIGNER_REPO_OWNER }}
+          TF_VAR_pr_signer_repo_name: ${{ vars.PR_SIGNER_REPO_NAME }}
+          TF_VAR_pr_signer_base_branch: ${{ vars.PR_SIGNER_BASE_BRANCH || 'dev' }}
 
       # Refuse a plan that destroys stateful infrastructure without saying so
       # (#387). Runs in the PLAN job, before Apply, so a refusal costs nothing —
@@ -393,6 +443,16 @@ jobs:
           TF_VAR_custom_domain: ${{ vars.CUSTOM_DOMAIN }}
           TF_VAR_acm_certificate_arn: ${{ vars.ACM_CERTIFICATE_ARN }}
           TF_VAR_hosted_zone_id: ${{ vars.HOSTED_ZONE_ID }}
+          # Endpoint control plane / PR-signer (ADR-0008). All default to empty
+          # or false, so a deployment that has not set these GitHub variables is
+          # unaffected — but without passing them, an instance could not enable
+          # the feature the template already ships (#458, backported from tabsii).
+          TF_VAR_enable_pr_signer: ${{ vars.ENABLE_PR_SIGNER || 'false' }}
+          TF_VAR_pr_signer_github_app_id: ${{ vars.PR_SIGNER_GITHUB_APP_ID }}
+          TF_VAR_pr_signer_github_installation_id: ${{ vars.PR_SIGNER_GITHUB_INSTALLATION_ID }}
+          TF_VAR_pr_signer_repo_owner: ${{ vars.PR_SIGNER_REPO_OWNER }}
+          TF_VAR_pr_signer_repo_name: ${{ vars.PR_SIGNER_REPO_NAME }}
+          TF_VAR_pr_signer_base_branch: ${{ vars.PR_SIGNER_BASE_BRANCH || 'dev' }}
       - name: Export outputs to GitHub Actions variables
         env:
           GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}

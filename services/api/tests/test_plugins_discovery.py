@@ -67,3 +67,16 @@ class TestDiscoverPluginManifests:
         manifests = discover_plugin_manifests(tmp_path)
         assert len(manifests) == 1
         assert manifests[0]["name"] == "ok"
+
+    def test_real_agent_runtime_manifest_parses_with_its_declared_tools(self):
+        """The shipped agent-runtime manifest round-trips through the real parser,
+        carrying its `tools` array (ADR-0014 §7). This is the parse path Core's
+        orchestration catalog reads; a strict parser rejecting the new field would
+        silently drop the plugin from discovery, so guard the happy path directly.
+        """
+        # No services_root override -> scans the monorepo's real services/ tree.
+        manifests = discover_plugin_manifests()
+        runtime = next((m for m in manifests if m.get("name") == "agent-runtime"), None)
+        assert runtime is not None, "agent-runtime manifest was not discovered"
+        tool_names = {t["name"] for t in runtime.get("tools", [])}
+        assert "web_search" in tool_names

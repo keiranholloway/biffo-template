@@ -11,6 +11,7 @@ from .plugin import (
     RouteDef,
     TableDefinition,
     TablePermissions,
+    ToolDeclaration,
     load_manifest,
     register_plugin,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "SignedCoreClient",
     "TableDefinition",
     "TablePermissions",
+    "ToolDeclaration",
     "create_core_client",
     "create_event_handler",
     "load_manifest",

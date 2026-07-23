@@ -46,6 +46,7 @@ from ..orchestration import (
     update_definition,
 )
 from ..permissions import get_permissions_registry
+from ..plugins import discover_plugin_manifests
 from ..schemas.orchestration import (
     WORKFLOW_ACTIONS,
     ActionLogEntry,
@@ -61,6 +62,53 @@ from ..schemas.orchestration import (
 
 router = APIRouter(prefix="/orchestration/workflows", tags=["orchestration"])
 runs_router = APIRouter(prefix="/orchestration/runs", tags=["orchestration"])
+
+# The first-party runtime whose declared tools drive the agent action's picker.
+# Its manifest carries the tool declarations (ADR-0014 §7); Core reads them off
+# the manifest — it never imports the runtime's Python (ADR-0002).
+_AGENT_RUNTIME_PLUGIN = "agent-runtime"
+
+
+def _agent_runtime_tools() -> list[dict[str, Any]]:
+    """The agent runtime's declared tools, read live from its discovered manifest.
+
+    Pure declaration — ``{name, description, parameters}`` per tool — surfaced so
+    the workflow builder (a later change) can offer a tool picker whose options
+    come from the runtime's own registry, with no cross-service drift. Returns an
+    empty list if the runtime is not installed. This is deliberately **not** a
+    ``config_field`` on the agent action: the builder renders ``config_fields`` by
+    type and does not yet understand a tool picker, so the tools ride as separate
+    data the current builder ignores.
+    """
+    for manifest in discover_plugin_manifests():
+        if manifest.get("name") != _AGENT_RUNTIME_PLUGIN:
+            continue
+        return [
+            {
+                "name": tool.get("name"),
+                "description": tool.get("description"),
+                "parameters": tool.get("parameters", {}),
+            }
+            for tool in manifest.get("tools", [])
+        ]
+    return []
+
+
+def _actions_with_available_tools() -> list[dict[str, Any]]:
+    """``WORKFLOW_ACTIONS`` with the agent action carrying its ``available_tools``.
+
+    Copies each action shallowly and attaches ``available_tools`` to the ``agent``
+    action only, so the module-level ``WORKFLOW_ACTIONS`` (which also drives
+    request validation) is never mutated and every action's ``config_fields`` are
+    left byte-for-byte unchanged.
+    """
+    actions: list[dict[str, Any]] = []
+    for action in WORKFLOW_ACTIONS:
+        if action["type"] == "agent":
+            actions.append({**action, "available_tools": _agent_runtime_tools()})
+        else:
+            actions.append(action)
+    return actions
 
 
 @router.get("/catalog", response_model=WorkflowCatalog)
@@ -134,7 +182,7 @@ async def get_catalog(
         )
         seen.add(key)
 
-    return WorkflowCatalog(triggers=triggers, actions=WORKFLOW_ACTIONS)
+    return WorkflowCatalog(triggers=triggers, actions=_actions_with_available_tools())
 
 
 def _redacted(definition: WorkflowDefinition) -> WorkflowDefinitionResponse:

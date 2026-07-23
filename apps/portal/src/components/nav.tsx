@@ -38,6 +38,12 @@ export function Nav() {
         <Link href="/admin/agent-runs/" className="text-sm text-gray-600 hover:text-gray-900">
           Agent runs
         </Link>
+        <Link
+          href="/admin/prompt-components/"
+          className="text-sm text-gray-600 hover:text-gray-900"
+        >
+          Prompt library
+        </Link>
       </div>
       <div className="flex items-center gap-4">
         {email != null && <span className="text-sm text-gray-600">{email}</span>}

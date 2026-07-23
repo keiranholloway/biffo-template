@@ -19,6 +19,7 @@ from .routers.admin import agent_runs as admin_agent_runs
 from .routers.admin import endpoints as admin_endpoints
 from .routers.admin import groups as admin_groups
 from .routers.admin import plugins as admin_plugins
+from .routers.admin import prompt_components as admin_prompt_components
 from .routers.admin import users as admin_users
 from .routing.core_crud_router import build_core_crud_router
 from .routing.plugin_router import build_plugin_router
@@ -52,6 +53,10 @@ app.include_router(admin_users.router, prefix="/api/v1")
 # tenant-scoped, read-only, under /api/v1/admin/agent-runs. Runs are written
 # only through the internal SigV4 API above; this is the operator/portal reader.
 app.include_router(admin_agent_runs.router, prefix="/api/v1")
+# Prompt-library component CRUD (ADR-0015 Phase 1): Cognito-authed, admin-gated,
+# tenant-scoped, under /api/v1/admin/prompt-components. The authoring surface for
+# reusable prompt components until the Phase-2 portal UI.
+app.include_router(admin_prompt_components.router, prefix="/api/v1")
 # Internal service-only orchestration API (ADR-0009): reachable only by an
 # allowlisted IAM principal (the engine plugin), under /api/v1/internal/*.
 app.include_router(internal_orchestration.router, prefix="/api/v1")

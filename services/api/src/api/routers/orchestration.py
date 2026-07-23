@@ -47,6 +47,8 @@ from ..orchestration import (
 )
 from ..permissions import get_permissions_registry
 from ..plugins import discover_plugin_manifests
+from ..prompt_library import validate_agent_prompts
+from ..prompt_parts import PromptPartsError
 from ..schemas.orchestration import (
     WORKFLOW_ACTIONS,
     ActionLogEntry,
@@ -229,6 +231,26 @@ async def _require_known_trigger(
         )
 
 
+async def _require_resolvable_agent_prompts(
+    db: AsyncSession, *, tenant_id: str, action_type: str, action_config: dict[str, Any]
+) -> None:
+    """422 unless an agent action's prompt parts resolve against the library (§6).
+
+    The parts' *shape* was already validated by the body schema; this is the
+    DB-backed half: every referenced component exists and its supplied values
+    match its declared variables. Non-agent actions carry no prompt parts, so
+    this is a no-op for them.
+    """
+    if action_type != "agent":
+        return
+    try:
+        await validate_agent_prompts(db, tenant_id=tenant_id, action_config=action_config)
+    except PromptPartsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+
+
 @router.get("", response_model=list[WorkflowDefinitionResponse])
 async def list_workflows(
     caller: AuthenticatedUser = Depends(require_admin),
@@ -253,6 +275,9 @@ async def create_workflow(
     # No stored config to merge against on a create, so the sentinel has nothing to
     # keep and is refused rather than persisted as a "secret" (#432).
     action_config = _write_secrets(body.action_type, body.action_config, stored={})
+    await _require_resolvable_agent_prompts(
+        db, tenant_id=caller.tenant_id, action_type=body.action_type, action_config=action_config
+    )
     definition = await create_definition(
         db,
         tenant_id=caller.tenant_id,
@@ -307,6 +332,9 @@ async def update_workflow(
     if existing is None:
         raise _not_found()
     action_config = _write_secrets(body.action_type, body.action_config, existing.action_config)
+    await _require_resolvable_agent_prompts(
+        db, tenant_id=caller.tenant_id, action_type=body.action_type, action_config=action_config
+    )
     definition = await update_definition(
         db,
         tenant_id=caller.tenant_id,

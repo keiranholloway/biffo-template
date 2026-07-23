@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
 from .models.agent_run import TERMINAL_AGENT_RUN_STATUSES, AgentRun
+from .prompt_library import resolve_definition_snapshot
 
 
 class DepthLimitExceededError(Exception):
@@ -98,11 +99,26 @@ async def create_run(
 ) -> AgentRun:
     """Record a requested run in ``pending``, refusing anything past the ceiling.
 
+    The prompt library resolves here (ADR-0015 §3/§4): the snapshot's ordered
+    ``instructions``/``goals`` parts are composed and variable-substituted into
+    final strings *before* they enter the run, so the ``definition_snapshot``
+    stored — and what the runtime later reads — is the resolved prompt. The
+    runtime never sees a component. A plain-string prompt (the pre-library shape)
+    round-trips unchanged. Resolution runs *after* the depth check, the cheapest
+    guard, so a runaway chain is refused without a component fetch.
+
     Raises:
         DepthLimitExceededError: when ``depth`` is greater than ``max_depth``.
+        PromptPartsError / PromptComponentMissingError: when a referenced
+            component is missing or a required variable is unsupplied — the run
+            is aborted loudly rather than created with a broken prompt (§6).
     """
     if depth > max_depth:
         raise DepthLimitExceededError(depth, max_depth)
+
+    resolved_snapshot = await resolve_definition_snapshot(
+        db, tenant_id=tenant_id, snapshot=definition_snapshot
+    )
 
     run = AgentRun(
         tenant_id=tenant_id,
@@ -113,7 +129,7 @@ async def create_run(
         thread_id=thread_id,
         causation_id=causation_id,
         depth=depth,
-        definition_snapshot=definition_snapshot,
+        definition_snapshot=resolved_snapshot,
         input_payload=input_payload or {},
         messages=[],
         workflow_run_id=workflow_run_id,

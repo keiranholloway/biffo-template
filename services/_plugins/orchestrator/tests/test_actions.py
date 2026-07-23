@@ -355,7 +355,9 @@ async def test_snapshot_fills_catalog_defaults_for_absent_fields():
     )
 
     snapshot = core.agent_run_posts()[0]["definition_snapshot"]
-    assert snapshot["model"] == "anthropic/claude-opus-4-8"
+    # The catalog default is a deliberately low-cost model (#414) — assert the
+    # exact slug so a future silent switch back to an expensive default is caught.
+    assert snapshot["model"] == "moonshotai/kimi-k3"
     assert snapshot["max_turns"] == 1
 
 

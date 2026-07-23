@@ -351,9 +351,12 @@ _AGENT_RUNS_PATH = "/api/v1/internal/agent-runs"
 # definition predates a field or leaves it blank. Mirrors the ``default`` values
 # in the Core builder catalog (schemas/orchestration.WORKFLOW_ACTIONS) — a run
 # must record what it actually executed, not what the config happened to spell
-# out (ADR-0014 §10).
+# out (ADR-0014 §10). The ``model`` default is a deliberately low-cost model
+# (#414), so a definition that leaves it blank runs the cheap option rather than
+# the priciest one. These two sites must stay in step (#364 tracks the drift
+# hazard of duplicating the default across the package boundary).
 AGENT_CONFIG_DEFAULTS: dict[str, Any] = {
-    "model": "anthropic/claude-opus-4-8",
+    "model": "moonshotai/kimi-k3",
     "max_turns": 1,
 }
 

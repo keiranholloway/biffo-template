@@ -238,12 +238,19 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
             },
             # Per-worker model choice, so alternatives can be compared without a
             # code change (§1). The value is an OpenRouter model slug.
+            # The default is deliberately a low-cost model (#414). A defaulted
+            # required field is silently satisfied by `_effective()` returning the
+            # default, so leaving the field untouched runs whatever this default
+            # names. It used to be `anthropic/claude-opus-4-8`, so an untouched
+            # field ran — and billed — the priciest model; defaulting to a cheap
+            # option instead means the do-nothing path is the frugal one, while an
+            # author is still free to pick a costlier model explicitly.
             {
                 "name": "model",
                 "label": "Model",
                 "type": "text",
                 "required": True,
-                "default": "anthropic/claude-opus-4-8",
+                "default": "moonshotai/kimi-k3",
             },
             # A hard stop on the turn loop — §8 bounds cost in the framework
             # rather than by convention. Tools and read scope are deliberately

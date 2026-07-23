@@ -531,7 +531,10 @@ def test_catalog_offers_the_agent_action_with_its_m1_fields(client: TestClient):
     # Deliberately minimal in M1 — tools and read scope are M2/M3.
     assert set(fields) == {"agent_name", "instructions", "model", "max_turns"}
     assert fields["agent_name"]["required"] and fields["instructions"]["required"]
-    assert fields["model"]["default"]
+    # The model default is deliberately a low-cost model (#414). Assert the exact
+    # slug so a future silent switch back to an expensive default is caught here.
+    assert fields["model"]["required"]
+    assert fields["model"]["default"] == "moonshotai/kimi-k3"
     assert fields["max_turns"]["default"] == 1
 
 
@@ -556,3 +559,55 @@ def test_agent_workflow_requires_instructions(client: TestClient):
         json=_valid_body(action_type="agent", action_config={"agent_name": "demo-enricher"}),
     )
     assert resp.status_code == 422
+
+
+def test_agent_workflow_omitting_model_resolves_to_the_low_cost_default():
+    """Omitting ``model`` still validates — the required field is satisfied by the
+    catalog default (#414) — and resolves to the low-cost model, never Anthropic.
+
+    Constructs the schema body directly so the assertion is on the model that a
+    blank field resolves to, not merely on the 2xx the router returns.
+    """
+    from api.schemas.orchestration import (
+        WORKFLOW_ACTIONS,
+        WorkflowDefinitionBody,
+        _effective,
+    )
+
+    body = WorkflowDefinitionBody(
+        name="Enrich demo",
+        trigger_source="biffo.core",
+        trigger_detail_type="demo.requested",
+        action_type="agent",
+        action_config={"agent_name": "demo-enricher", "instructions": "Enrich {company}."},
+    )
+
+    agent_action = next(a for a in WORKFLOW_ACTIONS if a["type"] == "agent")
+    resolved = _effective(agent_action["config_fields"], body.action_config, "model")
+    assert resolved == "moonshotai/kimi-k3"
+    assert "anthropic" not in resolved
+
+
+def test_agent_workflow_accepts_an_explicit_model():
+    """An explicitly chosen model validates cleanly and wins over the default."""
+    from api.schemas.orchestration import (
+        WORKFLOW_ACTIONS,
+        WorkflowDefinitionBody,
+        _effective,
+    )
+
+    body = WorkflowDefinitionBody(
+        name="Enrich demo",
+        trigger_source="biffo.core",
+        trigger_detail_type="demo.requested",
+        action_type="agent",
+        action_config={
+            "agent_name": "demo-enricher",
+            "instructions": "Enrich {company}.",
+            "model": "anthropic/claude-opus-4-8",
+        },
+    )
+
+    agent_action = next(a for a in WORKFLOW_ACTIONS if a["type"] == "agent")
+    resolved = _effective(agent_action["config_fields"], body.action_config, "model")
+    assert resolved == "anthropic/claude-opus-4-8"

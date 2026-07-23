@@ -529,9 +529,7 @@ class WorkflowDefinitionBody(BaseModel):
         except PromptPartsError as exc:
             raise ValueError(str(exc)) from exc
         if field["required"] and not parts:
-            raise ValueError(
-                f"action_config.{name} is required for the {self.action_type} action"
-            )
+            raise ValueError(f"action_config.{name} is required for the {self.action_type} action")
 
 
 class CreateWorkflowDefinitionRequest(WorkflowDefinitionBody):

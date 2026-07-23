@@ -198,9 +198,7 @@ async def delete_component(
 # ── Resolution (Core-side, run-creation — ADR-0015 §3/§4) ────────────────────
 
 
-async def resolve_prompt_field(
-    db: AsyncSession, *, tenant_id: str, raw: Any, field: str
-) -> str:
+async def resolve_prompt_field(db: AsyncSession, *, tenant_id: str, raw: Any, field: str) -> str:
     """Resolve one prompt field (``instructions``/``goals``) to its final string.
 
     Normalises the ordered parts, and for each part either takes its inline text
@@ -225,8 +223,7 @@ async def resolve_prompt_field(
         component = await get_component_by_name(db, tenant_id=tenant_id, name=name)
         if component is None:
             raise PromptComponentMissingError(
-                f"{field} references prompt component {name!r}, which does not exist "
-                "in this tenant"
+                f"{field} references prompt component {name!r}, which does not exist in this tenant"
             )
         resolved = resolve_values(
             component.variables or [],

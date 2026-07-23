@@ -22,9 +22,7 @@ from api.prompt_parts import (
 
 
 def test_a_plain_string_becomes_one_inline_part():
-    assert normalize_parts("do the thing", field="instructions") == [
-        {INLINE_KEY: "do the thing"}
-    ]
+    assert normalize_parts("do the thing", field="instructions") == [{INLINE_KEY: "do the thing"}]
 
 
 def test_none_and_blank_string_normalise_to_no_parts():

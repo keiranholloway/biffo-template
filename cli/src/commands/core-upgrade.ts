@@ -29,7 +29,11 @@ import {
   planCoreUpgrade,
   upgradeBranchName,
 } from '../lib/core-upgrade.js'
-import { type MaterializedTree, materializeTemplateAtTag } from '../lib/core-template-trees.js'
+import {
+  type MaterializedTree,
+  materializeTemplateAtTag,
+  workingTreeMatchesTag,
+} from '../lib/core-template-trees.js'
 import {
   type BreakingChange,
   UPGRADE_GUIDE_PATH,
@@ -183,6 +187,10 @@ export interface CoreUpgradeDeps {
   /** Materialize the template tree at a core version's tag. Injectable so the
    * auto-resolution path is testable without a real tagged repo. */
   materialize?: (repo: string, version: string) => MaterializedTree
+  /** Whether the template checkout's working tree faithfully equals a version's
+   * tag. Gates the working-tree fast path (#471). Injectable so the fallback is
+   * testable without a real tagged repo. */
+  workingTreeMatchesTag?: (repo: string, version: string) => boolean
   /** Runs a lockfile-regeneration command in the instance. Injectable so the
    * refresh is testable without pnpm or uv on the machine. */
   runCommand?: RunCommandFn
@@ -194,6 +202,7 @@ function defaultDeps(): CoreUpgradeDeps {
     makeGitHub: (token) => new GitHubAdapter(token),
     resolveToken: resolveGitHubToken,
     materialize: materializeTemplateAtTag,
+    workingTreeMatchesTag,
   }
 }
 
@@ -283,6 +292,7 @@ async function runCoreUpgradeResolved(
   await checkInstanceCurrency(deps.git, options.cwd, options.allowDirty ?? false)
 
   const materialize = deps.materialize ?? materializeTemplateAtTag
+  const treeMatchesTag = deps.workingTreeMatchesTag ?? workingTreeMatchesTag
   const templateRepo = options.templateRepo
     ? resolve(options.templateRepo)
     : resolveTemplateRoot({ guidance: MISSING_TEMPLATE_ROOT_GUIDANCE })
@@ -305,9 +315,17 @@ async function runCoreUpgradeResolved(
     // between concurrent PRs, which is what made the file churn.
     const workingVersion = latestCoreVersion(templateRepo)
     toVersion = options.toVersion ?? workingVersion
-    if (toVersion === workingVersion) {
+    if (toVersion === workingVersion && treeMatchesTag(templateRepo, toVersion)) {
+      // Fast path: the checkout is exactly the target tag's commit with a clean
+      // tracked tree, so its working files ARE the tagged tree — use them
+      // directly and skip the extract.
       theirsDir = templateRepo
     } else {
+      // The target isn't the latest, OR the checkout has drifted from the tag
+      // (behind/ahead/dirty/detached — e.g. release PRs merged on the remote but
+      // not pulled locally). Extract the tag's canonical tree so a stale working
+      // tree can't silently ship an incomplete upgrade that still reports the
+      // right version number (#471).
       const t = materialize(templateRepo, toVersion)
       cleanups.push(t.cleanup)
       theirsDir = t.dir

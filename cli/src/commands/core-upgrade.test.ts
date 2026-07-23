@@ -34,6 +34,10 @@ function fakeDeps(over: Partial<ReturnType<typeof fakeGit>> = {}) {
     git,
     makeGitHub: () => ({ createPullRequest, defaultBranch }),
     resolveToken: () => 'TOKEN',
+    // Default: the template checkout faithfully matches the target tag, so the
+    // working-tree fast path is taken. Tests that exercise a drifted checkout
+    // (#471) override this to false.
+    workingTreeMatchesTag: () => true,
   }
   return { deps, git, createPullRequest, defaultBranch }
 }
@@ -166,6 +170,42 @@ describe('runCoreUpgrade --apply', () => {
     expect(createPullRequest).toHaveBeenCalledWith(
       expect.objectContaining({ title: expect.stringContaining('0.1.0 → 0.2.0') }),
     )
+  })
+
+  it('extracts the TARGET tag instead of the working tree when the checkout has drifted (#471)', async () => {
+    // The bug: when target == latest, the template's working tree was used as
+    // `theirs` directly. A checkout behind/ahead of the tag then silently shipped
+    // stale content as the upgrade target while still reporting the right
+    // version. With the gate returning false, the target must be MATERIALIZED
+    // from its tag, not read from the working tree.
+    const { deps } = fakeDeps()
+    const cleanup = vi.fn()
+    // A separate, CORRECT target tree at 0.2.0 (what the tag would extract),
+    // distinct from `theirs` — proving the extract, not the working dir, is used.
+    const taggedTarget = mkdtempSync(join(tmpdir(), 'tagged-'))
+    writeFileSync(join(taggedTarget, 'core.version'), '0.2.0\n')
+    writeFileSync(join(taggedTarget, 'core-manifest.json'), JSON.stringify(MANIFEST))
+    w(taggedTarget, 'services/api/main.py', 'v2-from-tag')
+    w(taggedTarget, 'services/api/added.py', 'NEW')
+
+    const materialize = vi.fn((_repo: string, version: string) => {
+      if (version === '0.1.0') return { dir: base, cleanup }
+      if (version === '0.2.0') return { dir: taggedTarget, cleanup }
+      throw new Error(`unexpected version ${version}`)
+    })
+
+    await runCoreUpgrade(
+      { cwd: instance, templateRepo: theirs, apply: true },
+      { ...deps, materialize, workingTreeMatchesTag: () => false },
+    )
+
+    // Both base AND target were extracted from their tags (the fix): the drifted
+    // working tree was never trusted as the target.
+    expect(materialize).toHaveBeenCalledWith(theirs, '0.2.0')
+    // The applied content came from the TAGGED target, not `theirs`' working tree.
+    expect(readFileSync(join(instance, 'services/api/main.py'), 'utf8')).toBe('v2-from-tag')
+
+    rmSync(taggedTarget, { recursive: true, force: true })
   })
 
   it('errors when the instance version is unknown and no --from-template is given', async () => {

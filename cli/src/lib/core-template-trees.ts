@@ -30,6 +30,40 @@ export type GitRunner = (args: string[]) => string
 
 const defaultGit: GitRunner = (args) => execFileSync('git', args, { encoding: 'utf8' })
 
+/**
+ * Whether `repo`'s working tree faithfully represents the `core-v<version>` tag:
+ * HEAD is exactly the tag's commit *and* there are no tracked modifications, so
+ * every tracked file on disk equals the tagged tree.
+ *
+ * This gates the one place `biffo core upgrade` reads a template *version* from a
+ * working directory instead of extracting the tag (the "target == latest" fast
+ * path). Without the gate, a checkout that is behind/ahead/dirty/detached — e.g.
+ * a repo where release PRs were merged on the remote but never pulled locally —
+ * is silently used as the upgrade *target*, shipping an incomplete upgrade that
+ * still reports the right version number (#471). Untracked files are ignored:
+ * they are not part of the tracked tree the merge reads.
+ */
+export function workingTreeMatchesTag(
+  repo: string,
+  version: string,
+  git: GitRunner = defaultGit,
+): boolean {
+  const tag = coreTag(version)
+  try {
+    const head = git(['-C', repo, 'rev-parse', 'HEAD']).trim()
+    const tagCommit = git(['-C', repo, 'rev-parse', `${tag}^{commit}`]).trim()
+    if (!head || head !== tagCommit) return false
+    // Only tracked changes matter: untracked files never alter what `git
+    // archive <tag>` would have produced for a template-owned path.
+    const dirty = git(['-C', repo, 'status', '--porcelain', '--untracked-files=no']).trim()
+    return dirty === ''
+  } catch {
+    // No git, detached with no HEAD, missing tag — treat as "does not match" so
+    // the caller falls back to extracting the tag (the safe path).
+    return false
+  }
+}
+
 function tagExists(repo: string, tag: string, git: GitRunner): boolean {
   try {
     git(['-C', repo, 'rev-parse', '-q', '--verify', `refs/tags/${tag}`])

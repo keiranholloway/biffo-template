@@ -2,7 +2,12 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import OrchestrationPage from './page'
 import type * as OrchestrationApiModule from '@/lib/orchestration-api'
-import type { WorkflowCatalog, WorkflowDefinition, WorkflowRun } from '@/lib/orchestration-api'
+import type {
+  WorkflowCatalog,
+  WorkflowDefinition,
+  WorkflowInput,
+  WorkflowRun,
+} from '@/lib/orchestration-api'
 
 vi.mock('@/context/auth-context', () => ({
   useAuth: () => ({ getIdToken: () => 'fake-token' }),
@@ -126,7 +131,72 @@ const catalog: WorkflowCatalog = {
         },
       ],
     },
+    {
+      type: 'agent',
+      label: 'Run an agent',
+      available_tools: [
+        {
+          name: 'web_search',
+          description: 'Search the public web and return the top results.',
+          parameters: { type: 'object' },
+        },
+        {
+          name: 'fetch_url',
+          description: 'Fetch a URL and return its text.',
+          parameters: { type: 'object' },
+        },
+      ],
+      config_fields: [
+        { name: 'agent_name', label: 'Agent name', type: 'text', required: true },
+        { name: 'instructions', label: 'Instructions', type: 'textarea', required: true },
+        {
+          name: 'model',
+          label: 'Model',
+          type: 'select',
+          required: true,
+          default: 'moonshotai/kimi-k3',
+          options: [
+            { value: 'moonshotai/kimi-k3', label: 'Kimi K3 (low-cost default)' },
+            { value: 'moonshotai/kimi-k3:online', label: 'Kimi K3 (web-connected)' },
+            { value: 'anthropic/claude-opus-4-8', label: 'Claude Opus 4.8 (premium)' },
+          ],
+        },
+        {
+          name: 'max_turns',
+          label: 'Maximum turns',
+          type: 'number',
+          required: false,
+          default: '1',
+        },
+      ],
+    },
   ],
+}
+
+// An agent action whose runtime registered no tools — the picker must not render.
+const catalogNoTools: WorkflowCatalog = {
+  triggers: catalog.triggers,
+  actions: catalog.actions.map((a) => (a.type === 'agent' ? { ...a, available_tools: [] } : a)),
+}
+
+// An agent stored with a model that is NOT among the curated options.
+const offListAgent: WorkflowDefinition = {
+  id: 'wfa',
+  tenant_id: 'default',
+  created_at: null,
+  updated_at: null,
+  name: 'Enrich lead',
+  trigger_source: 'biffo.core',
+  trigger_detail_type: 'lead.captured',
+  trigger_filter: null,
+  action_type: 'agent',
+  action_config: {
+    agent_name: 'enricher',
+    instructions: 'Enrich {company}.',
+    model: 'some-vendor/experimental-v9',
+    tools: ['web_search'],
+  },
+  enabled: true,
 }
 
 const notify: WorkflowDefinition = {
@@ -568,5 +638,95 @@ describe('OrchestrationPage', () => {
     render(<OrchestrationPage />)
 
     expect(await screen.findByText('Nothing has run yet')).toBeInTheDocument()
+  })
+
+  // ── agent action: tools multiselect + curated model dropdown (ADR-0014) ─────
+
+  it('offers a tools multiselect from available_tools and writes a list', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    createWorkflow.mockResolvedValue(notify)
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByPlaceholderText('Notify the sales team'), {
+      target: { value: 'Enrich' },
+    })
+    fireEvent.change(screen.getByLabelText('Action'), { target: { value: 'agent' } })
+
+    // Options mirror the runtime's declared tools, with descriptions as help text.
+    expect(screen.getByRole('checkbox', { name: /web_search/ })).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /fetch_url/ })).toBeInTheDocument()
+    expect(
+      screen.getByText('Search the public web and return the top results.'),
+    ).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'enricher' } })
+    fireEvent.change(screen.getByLabelText('Instructions'), { target: { value: 'Enrich it' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /web_search/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add workflow' }))
+
+    await waitFor(() => {
+      expect(createWorkflow).toHaveBeenCalled()
+    })
+    const body = createWorkflow.mock.calls.at(0)?.[1] as WorkflowInput | undefined
+    expect(body?.action_type).toBe('agent')
+    // A genuine list, not a scalar — and the unchecked tool is absent.
+    expect(body?.action_config.tools).toEqual(['web_search'])
+  })
+
+  it('renders cleanly with no tools picker when available_tools is empty', async () => {
+    fetchCatalog.mockResolvedValue(catalogNoTools)
+    fetchWorkflows.mockResolvedValue([])
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
+
+    // The rest of the agent form still renders — no crash.
+    expect(screen.getByLabelText('Agent name')).toBeInTheDocument()
+    // No tools picker at all.
+    expect(screen.queryByText('Tools')).not.toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: /web_search/ })).not.toBeInTheDocument()
+  })
+
+  it('offers the curated model options in a dropdown', async () => {
+    fetchWorkflows.mockResolvedValue([])
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
+
+    const model = screen.getByLabelText('Model')
+    const values = Array.from(model.querySelectorAll('option')).map((o) => o.value)
+    expect(values).toEqual([
+      'moonshotai/kimi-k3',
+      'moonshotai/kimi-k3:online',
+      'anthropic/claude-opus-4-8',
+    ])
+    // The default is preselected.
+    expect(model).toHaveValue('moonshotai/kimi-k3')
+  })
+
+  it('keeps an off-list stored model selectable and preserves it on save', async () => {
+    fetchWorkflows.mockResolvedValue([offListAgent])
+    updateWorkflow.mockResolvedValue(offListAgent)
+
+    render(<OrchestrationPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+
+    // The stored model — not among the curated options — is shown and selected,
+    // so loading the agent does not silently reassign it to the first option.
+    const model = screen.getByLabelText('Model')
+    expect(model).toHaveValue('some-vendor/experimental-v9')
+    const values = Array.from(model.querySelectorAll('option')).map((o) => o.value)
+    expect(values).toContain('some-vendor/experimental-v9')
+
+    // Save without touching the field: the off-list model round-trips unchanged.
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => {
+      expect(updateWorkflow).toHaveBeenCalled()
+    })
+    const [, id, body] = updateWorkflow.mock.calls.at(0) as [unknown, string, WorkflowInput]
+    expect(id).toBe('wfa')
+    expect(body.action_config.model).toBe('some-vendor/experimental-v9')
+    expect(body.action_config.tools).toEqual(['web_search'])
   })
 })

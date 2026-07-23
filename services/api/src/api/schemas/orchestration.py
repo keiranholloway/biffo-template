@@ -118,7 +118,13 @@ class WorkflowRunSummary(BiffoBaseSchema):
 #                      (``redact_secrets`` here, the router's write path) so a new
 #                      read path cannot forget — the bug class this closes.
 # ``type: "select"`` fields carry ``options`` (value/label pairs) and accept only
-# those values.
+# those values — unless the field also sets ``open: True``, which makes the options
+# a *suggestion list*: the portal offers them in a dropdown but any value is
+# accepted (the agent action's ``model`` uses this, so an author is never locked
+# out of a model that isn't among the curated slugs).
+# ``type: "multiselect"`` is a portal-only field type (the builder injects the agent
+# action's tool picker from ``available_tools``); Core never declares one, so no
+# value validation for it lives here.
 
 # What a redacted secret reads back as. A fixed, recognisable placeholder rather
 # than an empty string: the portal shows "set, unchanged", and a write echoing it
@@ -245,12 +251,27 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
             # field ran — and billed — the priciest model; defaulting to a cheap
             # option instead means the do-nothing path is the frugal one, while an
             # author is still free to pick a costlier model explicitly.
+            #
+            # A curated `select` of tested slugs for discoverability — but ``open:
+            # True`` marks the options a *suggestion list, not an allowlist*: the
+            # value validator does not reject an off-list slug (see
+            # ``_validate_action``). An author is free to run any OpenRouter model,
+            # and — crucially — an agent stored with a model that predates this list
+            # is never rejected on a later save, so editing it cannot silently drop
+            # its model. Enforcement of what a run may actually use lives in the
+            # runtime, not here.
             {
                 "name": "model",
                 "label": "Model",
-                "type": "text",
+                "type": "select",
                 "required": True,
                 "default": "moonshotai/kimi-k3",
+                "open": True,
+                "options": [
+                    {"value": "moonshotai/kimi-k3", "label": "Kimi K3 (low-cost default)"},
+                    {"value": "moonshotai/kimi-k3:online", "label": "Kimi K3 (web-connected)"},
+                    {"value": "anthropic/claude-opus-4-8", "label": "Claude Opus 4.8 (premium)"},
+                ],
             },
             # A hard stop on the turn loop — §8 bounds cost in the framework
             # rather than by convention. Tools and read scope are deliberately
@@ -432,6 +453,7 @@ class WorkflowDefinitionBody(BaseModel):
                 continue
             if (
                 field["type"] == "select"
+                and not field.get("open")
                 and isinstance(value, str)
                 and value
                 and value not in {o["value"] for o in field["options"]}

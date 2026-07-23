@@ -48,16 +48,17 @@ env:
 # silently skips.
 
 jobs:
-  # Job id and `name` are load-bearing: "Core Version Guard" is a REQUIRED
-  # status check in this repo's branch protection and in every instance's, and
-  # `biffo core upgrade` cannot update branch protection. Renaming it here would
-  # ship a workflow that reports a check name no instance requires, leaving every
-  # instance PR waiting forever on a check that never arrives. The name is now a
-  # misnomer — since #423 there is no version to bump, and the job carries two
-  # guards — but fixing it needs a coordinated protection update across the
-  # template and every instance, tracked separately.
-  core-version-guard:
-    name: Core Version Guard
+  # Job `name` is load-bearing: "Release Guards" is a REQUIRED status check in
+  # this repo's branch protection and in every instance's, and `biffo core
+  # upgrade` cannot update branch protection. Renaming it ships a workflow that
+  # reports a check name the protection must already require — so any rename MUST
+  # be paired with a protection update on the template AND every instance, in the
+  # same window the upgrade PR merges there, or instance PRs wait forever on a
+  # check that never arrives (#433). It was "Core Version Guard" until #433; the
+  # name was a misnomer once #423 removed the version bump, leaving only the two
+  # release guards below.
+  release-guards:
+    name: Release Guards
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     if: github.event_name == 'pull_request'
     steps:

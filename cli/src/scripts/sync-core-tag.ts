@@ -29,7 +29,7 @@
  * tests drive it.
  *
  * Instance-safe: an instance (detected by `biffo.core.json`, the same marker
- * the Core Version Guard uses) exits immediately. `core-v*` is the template's
+ * the Release Guards job uses) exits immediately. `core-v*` is the template's
  * tag namespace, never an instance's.
  */
 import { existsSync, appendFileSync } from 'node:fs'

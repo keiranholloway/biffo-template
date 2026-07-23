@@ -34,12 +34,12 @@ const SKELETON_CI = join(repoRoot, '_skeletons/sibling-template/.github/workflow
  * Jobs that deliberately are NOT required status checks. Every entry must still
  * exist as a job (asserted below) so this list cannot rot into a silent excuse.
  *
- * - `Core Version Guard`: template-only (ADR-0006). It runs in instances but
- *   short-circuits to a pass as soon as it sees `biffo.core.json`, so making it
- *   a required context in a scaffolded repo would gate merges on a check that
- *   is meaningless there.
+ * - `Release Guards` (was `Core Version Guard` until #433): template-only
+ *   (ADR-0006). It runs in instances but short-circuits to a pass as soon as it
+ *   sees `biffo.core.json`, so making it a required context in a scaffolded repo
+ *   would gate merges on a check that is meaningless there.
  */
-const NOT_REQUIRED = new Set(['Core Version Guard'])
+const NOT_REQUIRED = new Set(['Release Guards'])
 
 /**
  * Extract the `name:` of every top-level job in a GitHub Actions workflow.

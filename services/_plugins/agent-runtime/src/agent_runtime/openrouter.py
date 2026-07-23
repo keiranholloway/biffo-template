@@ -116,6 +116,7 @@ class LLMClient(Protocol):
         messages: list[dict[str, Any]],
         timeout: float,
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse: ...
 
 
@@ -185,8 +186,18 @@ class OpenRouterClient:
         messages: list[dict[str, Any]],
         timeout: float,
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
-        """One chat completion. Raises :class:`LLMError` for anything non-2xx."""
+        """One chat completion. Raises :class:`LLMError` for anything non-2xx.
+
+        ``max_tokens`` is optional and bounds the reply length. The async worker
+        path (the agent loop) never sets it and produces a request byte-identical
+        to before; the synchronous chat turn (ADR-0016 §8, the amendment's ~29s API
+        Gateway window) uses it as a hard output cap. It is declared on the
+        :class:`LLMClient` Protocol as an optional keyword so both consumers speak
+        one client, and omitted from the request body when ``None`` so the worker
+        path is unchanged.
+        """
         headers = {
             "Authorization": f"Bearer {self._resolve_api_key()}",
             "Content-Type": "application/json",
@@ -203,6 +214,8 @@ class OpenRouterClient:
         # since some providers treat an empty `tools` array as malformed.
         if tools:
             body["tools"] = tools
+        if max_tokens is not None:
+            body["max_tokens"] = max_tokens
         try:
             response = await self._http.post(
                 f"{self._base_url}/chat/completions",

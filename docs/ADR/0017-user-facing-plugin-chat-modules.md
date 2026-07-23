@@ -1,6 +1,6 @@
 # ADR-0017: User-facing plugin chat modules — generalising the buffered chat spine
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-23
 **Deciders:** Keiran Holloway (Technical Architect)
 
@@ -333,10 +333,9 @@ telling the affected owners when it cannot.
   that alters observable behaviour requires a capability major bump + a deprecation
   window, enforced in review (a CHANGELOG/registry check, not just convention).
 
-## Decisions to ratify
+## Decisions ratified
 
-The chosen options above are recommendations grounded in the stated constraints;
-they are the load-bearing calls to confirm before build:
+The load-bearing calls, ratified on acceptance:
 
 1. **Orchestration placement → Option B** (plugin Lambda, not plugin-code-in-Core).
 2. **Founder identity → Option B** (forward + re-verify the Cognito token).

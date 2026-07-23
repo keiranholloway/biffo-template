@@ -238,6 +238,7 @@ async def test_search_then_submit_across_turns():
 
     assert tool.calls == [{"text": "research"}]  # the real tool ran on turn 1
     assert outcome.status == COMPLETED
+    assert outcome.result is not None
     assert outcome.result["arguments"] == {"score": 5}
     assert outcome.result["turns"] == 2
 

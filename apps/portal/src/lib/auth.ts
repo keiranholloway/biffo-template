@@ -3,21 +3,48 @@ import {
   CognitoUser,
   CognitoUserPool,
   type CognitoUserSession,
-  type ICognitoUserPoolData,
 } from 'amazon-cognito-identity-js'
+import { resolveCoreIdentity } from './identity'
 
-const poolData: ICognitoUserPoolData = {
-  UserPoolId: process.env['NEXT_PUBLIC_COGNITO_USER_POOL_ID'] ?? '',
-  ClientId: process.env['NEXT_PUBLIC_COGNITO_CLIENT_ID'] ?? '',
+// The pool is built LAZILY and ASYNCHRONOUSLY, from the identity resolved at
+// runtime (see identity.ts, #403) — never at module scope from process.env.
+//
+// Two reasons it must be lazy: (1) the identity now comes from an async fetch,
+// which a module-level constant cannot be; (2) `next build` prerenders pages in
+// Node, importing this module — and the CognitoUserPool constructor throws when
+// UserPoolId/ClientId are empty, so building eagerly made the app un-buildable
+// without real Cognito values in scope. A build is not a sign-in.
+//
+// Memoised: one pool per page load. Returns null when no identity is available
+// (document unreachable AND no baked fallback) — the same "no config" state the
+// module used to crash on, now surfaced as "signed out" rather than a throw.
+let poolPromise: Promise<CognitoUserPool | null> | null = null
+
+function getUserPool(): Promise<CognitoUserPool | null> {
+  poolPromise ??= resolveCoreIdentity().then((id) =>
+    id.userPoolId && id.clientId
+      ? new CognitoUserPool({ UserPoolId: id.userPoolId, ClientId: id.clientId })
+      : null,
+  )
+  return poolPromise
 }
 
-export const userPool = new CognitoUserPool(poolData)
+/** Test seam: drop the memoised pool so a test can re-resolve. */
+export function resetUserPoolForTests(): void {
+  poolPromise = null
+}
 
 export type SignInResult =
   | { kind: 'success'; session: CognitoUserSession }
   | { kind: 'new_password_required'; user: CognitoUser; userAttributes: Record<string, string> }
 
-export function signIn(username: string, password: string): Promise<SignInResult> {
+const NO_IDENTITY = new Error(
+  'Cognito identity is unavailable — the core identity document could not be resolved and no baked fallback is configured.',
+)
+
+export async function signIn(username: string, password: string): Promise<SignInResult> {
+  const userPool = await getUserPool()
+  if (!userPool) throw NO_IDENTITY
   return new Promise((resolve, reject) => {
     const user = new CognitoUser({ Username: username, Pool: userPool })
     const authDetails = new AuthenticationDetails({ Username: username, Password: password })
@@ -51,7 +78,9 @@ export function completeNewPassword(
   })
 }
 
-export function requestPasswordReset(username: string): Promise<void> {
+export async function requestPasswordReset(username: string): Promise<void> {
+  const userPool = await getUserPool()
+  if (!userPool) throw NO_IDENTITY
   return new Promise((resolve, reject) => {
     const user = new CognitoUser({ Username: username, Pool: userPool })
     user.forgotPassword({
@@ -63,11 +92,13 @@ export function requestPasswordReset(username: string): Promise<void> {
   })
 }
 
-export function confirmPasswordReset(
+export async function confirmPasswordReset(
   username: string,
   code: string,
   newPassword: string,
 ): Promise<void> {
+  const userPool = await getUserPool()
+  if (!userPool) throw NO_IDENTITY
   return new Promise((resolve, reject) => {
     const user = new CognitoUser({ Username: username, Pool: userPool })
     user.confirmPassword(code, newPassword, {
@@ -79,14 +110,17 @@ export function confirmPasswordReset(
   })
 }
 
-export function signOut(): void {
-  const user = userPool.getCurrentUser()
-  user?.signOut()
+export async function signOut(): Promise<void> {
+  const userPool = await getUserPool()
+  userPool?.getCurrentUser()?.signOut()
 }
 
-export function getCurrentSession(): Promise<CognitoUserSession | null> {
+export async function getCurrentSession(): Promise<CognitoUserSession | null> {
+  const userPool = await getUserPool()
   return new Promise((resolve) => {
-    const user = userPool.getCurrentUser()
+    // No pool means no resolvable identity, which is indistinguishable from
+    // "not signed in" as far as callers are concerned.
+    const user = userPool?.getCurrentUser()
     if (!user) {
       resolve(null)
       return

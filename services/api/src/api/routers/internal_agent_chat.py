@@ -29,9 +29,8 @@ forwarded-user group gate.
 from __future__ import annotations
 
 from aws_lambda_powertools import Logger
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..agent_chat_service import _get_runtime_invoker, run_chat_turn
@@ -43,37 +42,19 @@ from ..chat_agents import (
 )
 from ..chat_engine import RuntimeInvoker
 from ..database import get_db
-from ..middleware.auth import AuthenticatedUser, identity_from_token
+from ..middleware.auth import AuthenticatedUser
+from ..middleware.forwarded_user import (  # re-exported: existing tests reference these here
+    FORWARDED_USER_HEADER,
+    require_forwarded_user,
+)
 from ..middleware.service_auth import ServicePrincipal, require_service_principal
 from ..schemas.agent_chat import AgentChatRequest, AgentChatResponse
 
 logger = Logger()
 
-#: The header the plugin forwards the founder's Cognito access token in. Distinct
-#: from ``Authorization`` (which carries the caller's SigV4 signature on this route).
-FORWARDED_USER_HEADER = "X-Biffo-User-Token"
+__all__ = ["FORWARDED_USER_HEADER", "require_forwarded_user", "router"]
 
 router = APIRouter(prefix="/internal/agent-chat", tags=["internal:agents"])
-
-
-def require_forwarded_user(
-    forwarded_token: str | None = Header(default=None, alias=FORWARDED_USER_HEADER),
-) -> AuthenticatedUser:
-    """Resolve the founder from the forwarded, re-verified Cognito token.
-
-    A 401 when the header is absent or the token fails verification — Core is the
-    authority on the user's identity, so a plugin cannot act for a founder without
-    a token that verifies here.
-    """
-    if not forwarded_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"A forwarded user token ({FORWARDED_USER_HEADER}) is required.",
-        )
-    # Reuses Core's own token->identity mapping; verification failures raise 401.
-    return identity_from_token(
-        HTTPAuthorizationCredentials(scheme="Bearer", credentials=forwarded_token)
-    )
 
 
 @router.post("/{agent_key}", response_model=AgentChatResponse)

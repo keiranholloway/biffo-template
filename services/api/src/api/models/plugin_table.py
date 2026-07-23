@@ -187,6 +187,52 @@ class TablePermissions(BaseModel):
     delete: PermissionRule = Field(default_factory=PermissionRule)
 
 
+class OwnerScopedServiceAccess(BaseModel):
+    """Opts a CRUD-closed table into service-auth, owner-scoped access (ADR-0017 §5).
+
+    A plugin's own Lambda may read/write this table's rows through Core's internal
+    owner-scoped data API — but only when **both** hold:
+
+    - it authenticates as an allowed service principal (SigV4, ADR-0009), and
+    - it acts on behalf of a **forwarded, re-verified founder** (ADR-0017 §3).
+
+    Core scopes every row to that founder via ``owner_column`` and takes the owner
+    from the verified token, **never from the request**. This is a third, distinct
+    axis: separate from ``permissions`` (tenant CRUD) and from
+    ``PermissionRule.allowed_principals`` (the ADR-0014 §7 agent *read* ceiling). A
+    table can therefore be closed to tenants and to agents yet still be managed by
+    its owning module for its own user. Default-deny: absent means no such access.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    owner_column: str = Field(
+        description="The column holding the owner's Cognito sub. Every row is scoped "
+        "to the forwarded founder on this column; it is never settable from a request."
+    )
+    allowed_principals: list[str] = Field(
+        description="'system:<name>' service principals (the owning module's Lambda) "
+        "permitted to manage rows. Empty is rejected — an opt-in with no principal "
+        "grants nothing and is dead config."
+    )
+
+    @field_validator("allowed_principals")
+    @classmethod
+    def _validate_allowed_principals(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError(
+                "owner_scoped_service.allowed_principals must name at least one "
+                "'system:<name>' principal (ADR-0017 §5)."
+            )
+        for entry in value:
+            if not entry.startswith("system:") or len(entry) <= len("system:"):
+                raise ValueError(
+                    f"allowed_principals entry {entry!r} must be a non-empty "
+                    "'system:<name>' string (ADR-0014 §7)."
+                )
+        return value
+
+
 # Shared auto-column definitions — kept in sync with TenantScopedModel in base.py.
 # If TenantScopedModel gains a new column, update this list too.
 _AUTO_COLUMNS: list[ColumnDefinition] = [
@@ -224,6 +270,12 @@ class PluginTableDefinition(BaseModel):
         description="Declarative per-operation generic-CRUD permissions "
         "(ADR-0004). Absent means fully denied — the table is invisible to the "
         "generic CRUD layer until an operation is explicitly allowed.",
+    )
+    owner_scoped_service: OwnerScopedServiceAccess | None = Field(
+        default=None,
+        description="Opt this table into service-auth, owner-scoped access for its "
+        "owning module's Lambda (ADR-0017 §5). Independent of `permissions`; a table "
+        "may be CRUD-closed to tenants yet managed here by its owner.",
     )
 
     @model_validator(mode="before")
@@ -270,6 +322,22 @@ class PluginTableDefinition(BaseModel):
                         f"Index '{idx.name}' references unknown column '{col}'. "
                         f"Valid columns: {valid_cols}"
                     )
+
+        # The owner-scope column must be a real, non-auto column: scoping on a
+        # missing column would fail-open (no filter) and scoping on tenant_id/id
+        # would mean the row's owner is not the founder (ADR-0017 §5).
+        if self.owner_scoped_service is not None:
+            owner_column = self.owner_scoped_service.owner_column
+            if owner_column in _AUTO_COLUMN_NAMES:
+                raise ValueError(
+                    f"owner_scoped_service.owner_column '{owner_column}' may not be an "
+                    "auto-managed column; declare a column that holds the owner's sub."
+                )
+            if owner_column not in valid_cols:
+                raise ValueError(
+                    f"owner_scoped_service.owner_column '{owner_column}' is not a declared "
+                    f"column. Valid columns: {sorted(valid_cols)}"
+                )
         return self
 
     def to_sqlalchemy_model(self) -> type[Any]:

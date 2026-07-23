@@ -120,19 +120,16 @@ locals {
 # Rewrites clean URLs to their index.html equivalents so Next.js static export
 # routes work on direct access and page refresh. Without this, S3 returns 403
 # for /admin and CloudFront falls back to /index.html (the wrong page).
+# Viewer-request rewrite: self-heals the static-export "raw RSC payload"
+# navigation (build-id skew → Next hard-navigates the browser to `<route>/
+# index.txt`) and maps directory routes to index.html. The body lives in
+# rewrite.js so it can be unit-tested; see that file's header for the full
+# rationale and cli/src/lib/cdn-rewrite-function.test.ts for coverage.
 resource "aws_cloudfront_function" "rewrite" {
   name    = "${local.name_prefix}-rewrite"
   runtime = "cloudfront-js-2.0"
   publish = true
-  code    = <<-EOF
-    function handler(event) {
-      var uri = event.request.uri;
-      if (!uri.includes('.')) {
-        event.request.uri = uri.replace(/\/?$/, '/index.html');
-      }
-      return event.request;
-    }
-  EOF
+  code    = file("${path.module}/rewrite.js")
 }
 
 resource "aws_cloudfront_origin_access_control" "portal" {

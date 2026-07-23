@@ -34,6 +34,7 @@ from typing import Any, cast
 
 from sqlalchemy import CursorResult, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from .models.agent_run import TERMINAL_AGENT_RUN_STATUSES, AgentRun
 
@@ -120,6 +121,55 @@ async def create_run(
     db.add(run)
     await db.flush()
     return run
+
+
+async def list_runs(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    agent_name: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[AgentRun]:
+    """Runs for the admin inspection list, newest first, tenant-scoped (ADR-0001).
+
+    Loads only the summary columns — never ``messages``/``result``/
+    ``input_payload``, which are unbounded and are exactly why CloudWatch
+    truncates. ``definition_snapshot`` is loaded because ``model`` is lifted out
+    of it for the summary; it is far smaller than the transcript. The deferred
+    heavy columns are never touched here, so serializing an ``AgentRunSummary``
+    triggers no lazy IO.
+
+    ``agent_name`` and ``status`` are optional equality filters. Paginated by
+    ``limit``/``offset``; the caller bounds ``limit``.
+    """
+    stmt = (
+        select(AgentRun)
+        .options(
+            load_only(
+                AgentRun.id,
+                AgentRun.tenant_id,
+                AgentRun.created_at,
+                AgentRun.updated_at,
+                AgentRun.agent_name,
+                AgentRun.status,
+                AgentRun.definition_snapshot,
+                AgentRun.input_tokens,
+                AgentRun.output_tokens,
+                AgentRun.cost_usd,
+                AgentRun.started_at,
+                AgentRun.completed_at,
+            )
+        )
+        .where(AgentRun.tenant_id == tenant_id)
+    )
+    if agent_name is not None:
+        stmt = stmt.where(AgentRun.agent_name == agent_name)
+    if status is not None:
+        stmt = stmt.where(AgentRun.status == status)
+    stmt = stmt.order_by(AgentRun.created_at.desc(), AgentRun.id.desc()).limit(limit).offset(offset)
+    return list((await db.scalars(stmt)).all())
 
 
 async def get_run(db: AsyncSession, *, tenant_id: str, run_id: str) -> AgentRun | None:

@@ -9,15 +9,32 @@ import type {
   WorkflowRun,
 } from '@/lib/orchestration-api'
 import type { PromptComponent } from '@/lib/prompt-components-api'
-import { HANDOFF_KEY } from '@/lib/prompt-handoff'
+import type * as ApiClientModule from '@/lib/api-client'
+import type * as AgentChatApiModule from '@/lib/agent-chat-api'
 
+// A stable getIdToken identity across renders, mirroring the real context's
+// `useCallback` — otherwise `client` (a useMemo of it) would change every render
+// and re-fire the catalog-load effect, resetting the form mid-test.
+const { getIdToken } = vi.hoisted(() => ({ getIdToken: () => 'fake-token' }))
 vi.mock('@/context/auth-context', () => ({
-  useAuth: () => ({ getIdToken: () => 'fake-token' }),
+  useAuth: () => ({ getIdToken }),
 }))
 
-vi.mock('@/lib/api-client', () => ({
-  createApiClient: () => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() }),
-}))
+// Preserve the real ApiError — the AssistantDrawer (rendered by this page) does
+// `err instanceof ApiError`; stub only the client factory.
+vi.mock('@/lib/api-client', async () => {
+  const actual = await vi.importActual<typeof ApiClientModule>('@/lib/api-client')
+  return {
+    ...actual,
+    createApiClient: () => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() }),
+  }
+})
+
+const { sendAgentChat } = vi.hoisted(() => ({ sendAgentChat: vi.fn() }))
+vi.mock('@/lib/agent-chat-api', async () => {
+  const actual = await vi.importActual<typeof AgentChatApiModule>('@/lib/agent-chat-api')
+  return { ...actual, sendAgentChat }
+})
 
 const {
   fetchWorkflows,
@@ -307,10 +324,10 @@ describe('OrchestrationPage', () => {
     ]) {
       fn.mockReset()
     }
+    sendAgentChat.mockReset()
     fetchCatalog.mockResolvedValue(catalog)
     fetchRuns.mockResolvedValue([])
     fetchPromptComponents.mockResolvedValue([])
-    window.sessionStorage.clear()
   })
 
   it('renders workflows with name, trigger label, action and status', async () => {
@@ -901,44 +918,64 @@ describe('OrchestrationPage', () => {
     expect(screen.getByLabelText('Instructions part 1 text')).toHaveValue('Enrich {company}.')
   })
 
-  // ── "Use this" handoff consumption (ADR-0016 Phase 3) ──────────────────────
+  // ── In-context "✨ Draft with AI" drawer → in-place fill (ADR-0016) ─────────
 
-  it('consumes an agent-instructions handoff: selects the agent action and seeds an inline part', async () => {
+  it('inserts an accepted AI draft as a new inline instructions part', async () => {
     fetchCatalog.mockResolvedValue(catalogParts)
+    fetchPromptComponents.mockResolvedValue([])
     fetchWorkflows.mockResolvedValue([])
-    window.sessionStorage.setItem(
-      HANDOFF_KEY,
-      JSON.stringify({ target: 'agent-instructions', text: 'Triage inbound leads by intent.' }),
-    )
+    sendAgentChat.mockResolvedValue({
+      thread_id: 'th-1',
+      run_id: 'r1',
+      reply: 'Triage inbound leads by intent.',
+    })
 
     render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'triage' } })
 
-    // The agent action is selected and the handed-off text is the first
-    // instructions part.
-    await waitFor(() => {
-      expect(screen.getByLabelText('Action')).toHaveValue('agent')
-    })
-    expect(screen.getByLabelText('Instructions part 1 text')).toHaveValue(
+    // The manual parts editor is present; the AI button is additive.
+    fireEvent.click(screen.getByRole('button', { name: '✨ Draft Instructions with AI' }))
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'help me' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Use this draft' }))
+
+    // The reply lands in-place as the first inline part — no navigation, no
+    // sessionStorage handoff.
+    expect(await screen.findByLabelText('Instructions part 1 text')).toHaveValue(
       'Triage inbound leads by intent.',
     )
-    // Consumed exactly once.
-    expect(window.sessionStorage.getItem(HANDOFF_KEY)).toBeNull()
+    // The drawer closed on accept.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    // The drawer seeded the agent context onto the first (and only) turn.
+    const firstCall = sendAgentChat.mock.calls[0]?.[1] as { message: string }
+    expect(firstCall.message).toContain('instructions for agent “triage”')
   })
 
-  it('consumes an agent-goals handoff into the goals parts field', async () => {
+  it('drafts into the goals parts field with the goals context', async () => {
     fetchCatalog.mockResolvedValue(catalogPartsWithGoals)
+    fetchPromptComponents.mockResolvedValue([])
     fetchWorkflows.mockResolvedValue([])
-    window.sessionStorage.setItem(
-      HANDOFF_KEY,
-      JSON.stringify({ target: 'agent-goals', text: 'Maximise qualified pipeline.' }),
-    )
+    sendAgentChat.mockResolvedValue({
+      thread_id: 'th-1',
+      run_id: 'r1',
+      reply: 'Maximise qualified pipeline.',
+    })
 
     render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'pipeline' } })
 
-    await waitFor(() => {
-      expect(screen.getByLabelText('Action')).toHaveValue('agent')
-    })
-    expect(screen.getByLabelText('Goals part 1 text')).toHaveValue('Maximise qualified pipeline.')
-    expect(window.sessionStorage.getItem(HANDOFF_KEY)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '✨ Draft Goals with AI' }))
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'help me' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Use this draft' }))
+
+    expect(await screen.findByLabelText('Goals part 1 text')).toHaveValue(
+      'Maximise qualified pipeline.',
+    )
+    const firstCall = sendAgentChat.mock.calls[0]?.[1] as { message: string }
+    expect(firstCall.message).toContain('goals for agent “pipeline”')
   })
 })

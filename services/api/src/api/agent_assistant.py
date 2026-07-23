@@ -1,85 +1,89 @@
-"""The prompt assistant — Core's half of the synchronous chat spine (ADR-0016).
+"""The prompt assistant — the first registered chat agent (ADR-0016; ADR-0017 §1).
 
-The prompt assistant helps an author draft and refine agent ``instructions`` and
-``goals`` and reusable prompt components. Per the ADR's *buffered* amendment, Core
-is the ingress: it authenticates the user (existing API Gateway + Cognito),
-assembles the turn's messages under the user's authority, synchronously invokes
-the agent-runtime Lambda for the LLM turn, and persists the turn as a *run in a
-thread* (ADR-0014 §6.4). The runtime stays a pure internal service — it never
-touches the database (ADR-0002) and is not a public ingress.
+The agent-agnostic turn machinery now lives in :mod:`api.chat_engine` (fencing,
+history, assembly, the runtime invoke) and the registry in :mod:`api.chat_agents`.
+This module is what is *specific* to the prompt assistant:
 
-This module owns three things, each load-bearing for the ADR's security model:
+1. **Its built-in system prompt (the instruction channel).** A platform constant,
+   *not* user-authored — authoring the authoring-assistant would be circular
+   (ADR-0016 §1). Registered under ``prompt-assistant`` so the engine resolves it by
+   key, never from the request.
 
-1. **The built-in system prompt (the instruction channel).** It is a platform
-   constant, *not* user-authored — authoring the authoring-assistant would be
-   circular (ADR-0016 §1). It is the only trusted instruction the model gets.
+2. **The library-aware reference block (ADR-0016 §5, Phase 2).** A bounded summary
+   of the tenant's existing prompt components and agent definitions, assembled under
+   the caller's admin authority and passed to the engine as first-party *context*
+   data — delineated and kept OUT of the instruction channel.
 
-2. **Fencing the user's message as untrusted data (ADR-0014 §5 / ADR-0016 §7).**
-   The user's typed text is untrusted content, never part of the instruction
-   channel. It goes in a separate ``user`` message wrapped in the same fence
-   markers the runtime uses for a worker's triggering payload, and any marker the
-   text itself contains is neutralised so it cannot close its own fence and
-   impersonate the trusted side. The markers deliberately match
-   ``agent_runtime.messages`` so a run transcript reads identically whichever path
-   produced it; Core cannot import that plugin module (separate package), so the
-   correspondence is by convention — keep the two in step.
+3. **A same-signature ``assemble_messages`` wrapper** that wires the engine with this
+   agent's system prompt and the library-block drop predicate, so the endpoint and
+   the unit tests keep a stable call.
 
-3. **The thread of runs.** A chat is a sequence of runs sharing a ``thread_id``;
-   history is the prior runs' conversational messages (ADR-0016 §2). Phase 1 reads
-   NO library/Core business data — it drafts from the conversation alone.
-
-The synchronous invoke seam is a ``Protocol`` (``RuntimeInvoker``) so the endpoint
-stays testable without boto3 or a live Lambda, mirroring ``endpoint_control.py``.
+Engine names the endpoint and tests still import from here are re-exported below.
 """
 
 from __future__ import annotations
 
-import json
 import re
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING
 
-from aws_lambda_powertools import Logger
+from .chat_agents import ChatAgent, register_chat_agent
+from .chat_engine import (
+    ASSISTANT,
+    NEUTRALISED_MARKER,
+    SYSTEM,
+    UNTRUSTED_CLOSE,
+    UNTRUSTED_OPEN,
+    USER,
+    ChatTurnResult,
+    LambdaRuntimeInvoker,
+    Message,
+    RuntimeInvocationError,
+    RuntimeInvoker,
+    assemble_turn,
+    neutralise_markers,
+)
+from .config import settings
 
 if TYPE_CHECKING:
     from .models.orchestration import WorkflowDefinition
     from .models.prompt_component import PromptComponent
 
-logger = Logger()
+# Re-exported for the endpoint and the existing tests, which import the engine's
+# public names from here (the prompt assistant's module) as before the extraction.
+__all__ = [
+    "ASSISTANT",
+    "ASSISTANT_AGENT_KEY",
+    "ASSISTANT_AGENT_NAME",
+    "ASSISTANT_SYSTEM_PROMPT",
+    "LIBRARY_CLOSE",
+    "LIBRARY_OPEN",
+    "SYSTEM",
+    "UNTRUSTED_CLOSE",
+    "UNTRUSTED_OPEN",
+    "USER",
+    "ChatTurnResult",
+    "LambdaRuntimeInvoker",
+    "RuntimeInvocationError",
+    "RuntimeInvoker",
+    "assemble_messages",
+    "library_reference_message",
+]
 
-Message = dict[str, Any]
-
-#: The run's ``agent_name`` for every prompt-assistant run — the handle the admin
-#: run inspector (ADR-0014 §10) groups these under.
+#: The registry key and the run's ``agent_name`` for every prompt-assistant run.
+ASSISTANT_AGENT_KEY = "prompt-assistant"
 ASSISTANT_AGENT_NAME = "prompt-assistant"
-
-#: Discriminator + wire contract for the direct chat-turn invoke of the runtime.
-#: Mirrors ``agent_runtime.chat_turn.CHAT_TURN_KIND`` — keep in step.
-CHAT_TURN_KIND = "agent.chat.turn"
-
-SYSTEM = "system"
-USER = "user"
-ASSISTANT = "assistant"
-
-#: Fence markers around untrusted content — identical to
-#: ``agent_runtime.messages.UNTRUSTED_OPEN`` / ``UNTRUSTED_CLOSE``.
-UNTRUSTED_OPEN = "<untrusted-context>"
-UNTRUSTED_CLOSE = "</untrusted-context>"
 
 #: Delineation markers around the library-aware reference block (ADR-0016 §5
 #: Phase 2). Distinct from the untrusted fence: this content is *first-party*,
-#: admin-authored authoring data read under the caller's own admin authority, so
-#: it gets a lighter "reference-data" delineation rather than the full
-#: untrusted-input treatment (see ``library_reference_message``). The invariant it
-#: still honours is non-negotiable: it lives OUTSIDE the system/instruction channel
-#: and is framed as data, so a stray imperative in a component description cannot be
-#: read as an instruction (ADR-0016 §1/§7).
+#: admin-authored authoring data read under the caller's own admin authority, so it
+#: gets a lighter "reference-data" delineation. The invariant it still honours is
+#: non-negotiable: it lives OUTSIDE the system/instruction channel and is framed as
+#: data, so a stray imperative in a component description cannot be read as an
+#: instruction (ADR-0016 §1/§7).
 LIBRARY_OPEN = "<library-reference>"
 LIBRARY_CLOSE = "</library-reference>"
 
-_MARKER_PATTERN = re.compile(r"</?untrusted-(?:context|tool-result)\b[^>]*>", re.IGNORECASE)
 _LIBRARY_MARKER_PATTERN = re.compile(r"</?library-reference\b[^>]*>", re.IGNORECASE)
-_NEUTRALISED_MARKER = "[neutralised-marker]"
 
 #: The built-in system prompt — the instruction channel. A platform constant, not
 #: user-authored (ADR-0016 §1). Ends with the fixed untrusted-input framing so the
@@ -112,69 +116,26 @@ ASSISTANT_SYSTEM_PROMPT = (
 )
 
 
-def _neutralise_markers(body: str) -> str:
-    """Strip anything that looks like a fence marker out of untrusted content."""
-    return _MARKER_PATTERN.sub(_NEUTRALISED_MARKER, body)
-
-
-def _neutralise_library_field(value: Any) -> str:
+def _neutralise_library_field(value: object) -> str:
     """Sanitise one first-party library string before it enters the reference block.
 
     Neutralises anything resembling *either* delineation marker (the library block's
     own, and the untrusted fence's) so a component's name/description or an agent's
     fields cannot close the block and impersonate the trusted side — the same
-    defensive move :func:`_neutralise_markers` makes for the untrusted fence, applied
-    proportionately to first-party data. Newlines are collapsed so one field stays
-    one bullet line and cannot forge extra structure.
+    defensive move the engine makes for the untrusted fence, applied proportionately
+    to first-party data. Newlines are collapsed so one field stays one bullet line
+    and cannot forge extra structure.
     """
     text = "" if value is None else str(value)
-    text = _LIBRARY_MARKER_PATTERN.sub(_NEUTRALISED_MARKER, text)
-    text = _MARKER_PATTERN.sub(_NEUTRALISED_MARKER, text)
+    text = _LIBRARY_MARKER_PATTERN.sub(NEUTRALISED_MARKER, text)
+    text = neutralise_markers(text)
     return " ".join(text.split())
-
-
-def system_message() -> Message:
-    """The instruction channel: the built-in system prompt. Not user-authored."""
-    return {"role": SYSTEM, "content": ASSISTANT_SYSTEM_PROMPT}
-
-
-def user_turn_message(text: str) -> Message:
-    """The user's turn as *untrusted data*, fenced and marker-neutralised.
-
-    The author's text is never concatenated into the system/instruction channel;
-    it is its own ``user`` message wrapped in the untrusted fence (ADR-0014 §5 /
-    ADR-0016 §7), with any embedded fence marker neutralised first.
-    """
-    body = _neutralise_markers(text)
-    return {"role": USER, "content": f"{UNTRUSTED_OPEN}\n{body}\n{UNTRUSTED_CLOSE}"}
 
 
 def _is_library_message(message: Message) -> bool:
     """True for a persisted library-reference block — dropped and re-derived on replay."""
     content = message.get("content")
     return isinstance(content, str) and content.lstrip().startswith(LIBRARY_OPEN)
-
-
-def thread_history(prior_messages: list[Message], *, limit: int) -> list[Message]:
-    """The conversational history to replay, drawn from prior runs' transcripts.
-
-    Prior runs each persisted the full array they sent (system + optional library
-    reference + fenced user + assistant). History drops the per-run system message
-    *and* any per-run library-reference block — Core re-adds the single built-in
-    system prompt and a *fresh* library summary each turn, so a continued thread
-    reflects the current library rather than a stale snapshot — and keeps the
-    ``user``/``assistant`` exchange in order. Bounded to the most recent *limit*
-    messages (ADR-0016 §8 thread-length bound); the oldest are dropped first so the
-    newest context survives.
-    """
-    conversational = [
-        m
-        for m in prior_messages
-        if m.get("role") in (USER, ASSISTANT) and not _is_library_message(m)
-    ]
-    if limit >= 0:
-        conversational = conversational[-limit:] if limit else []
-    return conversational
 
 
 def _summarise_component(component: PromptComponent) -> str:
@@ -286,122 +247,32 @@ def assemble_messages(
     limit: int,
     library_message: Message | None = None,
 ) -> list[Message]:
-    """The full message array for one turn: system + [library] + history + fenced user.
-
-    This is what Core hands the runtime (ADR-0016 §5: Core assembles the context;
-    the runtime receives it assembled). The system prompt is trusted and first; the
-    optional library-reference block is first-party reference data sitting *between*
-    the instruction channel and the conversation; the new user turn is untrusted and
-    last. ``library_message`` is ``None`` when the library is empty — no block is
-    added, so an empty library assembles cleanly.
-    """
-    messages: list[Message] = [system_message()]
-    if library_message is not None:
-        messages.append(library_message)
-    messages.extend(thread_history(prior_messages, limit=limit))
-    messages.append(user_turn_message(user_text))
-    return messages
-
-
-@dataclass(frozen=True)
-class ChatTurnResult:
-    """The runtime's reply to one buffered chat turn (ADR-0016)."""
-
-    content: str
-    model: str | None = None
-    finish_reason: str | None = None
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    cost_usd: float | None = None
-
-
-class RuntimeInvocationError(RuntimeError):
-    """The runtime Lambda could not be invoked, or returned an unusable reply."""
-
-
-class RuntimeInvoker(Protocol):
-    """Synchronously invokes the agent runtime for one chat turn and returns its reply."""
-
-    def invoke_chat_turn(
-        self, *, model: str, messages: list[Message], max_output_tokens: int, timeout_seconds: float
-    ) -> ChatTurnResult: ...
-
-
-class LambdaRuntimeInvoker:
-    """Default :class:`RuntimeInvoker` — invokes the runtime Lambda over IAM.
-
-    The internal Core->runtime interaction from ADR-0016's amendment: IAM-authed,
-    ``RequestResponse``, not EventBridge and not a public surface. boto3 is imported
-    lazily (provided by the Lambda runtime) and the client is reused across warm
-    invocations, matching ``endpoint_control.LambdaSignerInvoker``.
-    """
-
-    def __init__(self, function_name: str, client: Any = None) -> None:
-        self._function_name = function_name
-        self._client = client
-
-    def invoke_chat_turn(
-        self, *, model: str, messages: list[Message], max_output_tokens: int, timeout_seconds: float
-    ) -> ChatTurnResult:
-        if self._client is None:
-            import boto3
-
-            self._client = boto3.client("lambda")
-        payload = {
-            "kind": CHAT_TURN_KIND,
-            "model": model,
-            "messages": messages,
-            "max_output_tokens": max_output_tokens,
-            "timeout_seconds": timeout_seconds,
-        }
-        response = self._client.invoke(
-            FunctionName=self._function_name,
-            InvocationType="RequestResponse",
-            Payload=json.dumps(payload).encode("utf-8"),
-        )
-        if response.get("FunctionError"):
-            logger.error(
-                "Agent runtime returned an unhandled error on a chat turn",
-                extra={"function_error": response["FunctionError"]},
-            )
-            raise RuntimeInvocationError("the agent runtime failed to process the turn")
-        body = response["Payload"].read()
-        try:
-            result = json.loads(body)
-        except (ValueError, TypeError) as exc:
-            raise RuntimeInvocationError("the agent runtime returned an unreadable reply") from exc
-        return _result_from_payload(result)
-
-
-def _result_from_payload(result: Any) -> ChatTurnResult:
-    """Normalise the runtime's returned dict into a :class:`ChatTurnResult`.
-
-    The runtime returns a *structured* failure (``{"ok": False, "error": ...}``)
-    rather than raising, so a provider error becomes a clean failed run rather than
-    an opaque Lambda ``FunctionError``. Both that and any malformed reply raise
-    :class:`RuntimeInvocationError` here — the endpoint records the run as failed.
-    """
-    if not isinstance(result, dict):
-        raise RuntimeInvocationError("the agent runtime returned an unexpected reply")
-    if not result.get("ok"):
-        raise RuntimeInvocationError(str(result.get("error") or "the agent runtime turn failed"))
-    return ChatTurnResult(
-        content=str(result.get("content") or ""),
-        model=_opt_str(result.get("model")),
-        finish_reason=_opt_str(result.get("finish_reason")),
-        input_tokens=_opt_int(result.get("input_tokens")),
-        output_tokens=_opt_int(result.get("output_tokens")),
-        cost_usd=_opt_float(result.get("cost_usd")),
+    """The prompt assistant's turn assembly — the generic engine (:func:`assemble_turn`)
+    wired with this agent's built-in system prompt, its library block as the
+    first-party context message, and the stale-library drop predicate. Same
+    signature the endpoint and the unit tests have always called."""
+    return assemble_turn(
+        ASSISTANT_SYSTEM_PROMPT,
+        prior_messages,
+        user_text,
+        limit=limit,
+        context_message=library_message,
+        drop=_is_library_message,
     )
 
 
-def _opt_str(value: Any) -> str | None:
-    return value if isinstance(value, str) else None
+def _prompt_assistant_agent() -> ChatAgent:
+    """Resolve the prompt-assistant agent from settings (read live)."""
+    return ChatAgent(
+        agent_key=ASSISTANT_AGENT_KEY,
+        agent_name=ASSISTANT_AGENT_NAME,
+        system_prompt=ASSISTANT_SYSTEM_PROMPT,
+        model=settings.agent_assistant_model,
+        required_group="admin",
+        max_history_messages=settings.agent_assistant_max_history_messages,
+        max_output_tokens=settings.agent_assistant_max_output_tokens,
+        timeout_seconds=settings.agent_assistant_timeout_seconds,
+    )
 
 
-def _opt_int(value: Any) -> int | None:
-    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
-
-
-def _opt_float(value: Any) -> float | None:
-    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+register_chat_agent(ASSISTANT_AGENT_KEY, _prompt_assistant_agent)

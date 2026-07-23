@@ -22,6 +22,7 @@
     ".prettierignore",
     ".husky/commit-msg",
     ".husky/pre-commit",
+    ".husky/pre-push",
     "infra/environments/dev/plugins.core.tf"
   ],
   "userOwned": [

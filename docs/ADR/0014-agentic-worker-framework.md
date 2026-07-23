@@ -79,7 +79,7 @@ Agent authoring is a genuinely novel UI — a prompt editor, a read-scope picker
 
 The argument above was re-examined the day this ADR was accepted, and it had a hole worth recording rather than quietly patching.
 
-**The hole.** §1 places the authoring and run-inspection UI in `apps/portal/`. `apps/` is **user-owned** in `core-manifest.json`, so that half does **not** travel with `biffo core upgrade` — it reaches an instance by manual PR copy-in (AGENTS.md §9). The original reasoning leaned implicitly on core solving distribution. It does not, and the choice needed re-deriving rather than defending.
+**The hole — and a correction to it (2026-07-23).** This amendment originally claimed a second hole: that the UI half does not distribute because `apps/` is user-owned, so it would need manual copy-in. **That was wrong.** #306 added `apps/portal/` to `templateOwned` as a single prefix, and longest-prefix-wins (len 12) beats `apps/` in userOwned (len 5) — so the entire portal, admin pages included, already travels with `biffo core upgrade`. The claim was written without re-checking the manifest against a `main` that had moved. It is struck here rather than quietly edited, because an Accepted ADR asserting a false gap is exactly the drift this project keeps catching elsewhere. The genuine re-derivation below never depended on it.
 
 **Two of the three stated blockers were overstated.** Honestly assessed against ADR-0013's contract:
 
@@ -93,9 +93,7 @@ So the plugin path is materially more viable than this ADR originally implied, a
 
 The UI-expressiveness argument stands, but it is now the secondary reason, not the load-bearing one.
 
-**The distribution gap is real and is being closed separately.** Carving `apps/portal/src/app/admin/` as a template-owned subtree — structurally identical to what #243 did for `services/_plugins/` — makes core admin UI distribute with the core it belongs to. This is not special pleading for agents: six core-capability admin surfaces already sit in that user-owned tree (`orchestration`, `marketplace`, `endpoints`, `users`, `microservices`, `plugins`), each needing manual copy-in and each able to drift per instance undetected. `core-manifest.json`'s own note anticipates it: the exclusion of `apps/` is *"conservative … for now; that boundary can widen later."*
-
-Until that lands, the agent UI reaches instances by copy-in, like the orchestration builder it sits beside.
+**There is no distribution gap.** The portal — including its `admin/` pages and the M5 run-inspector once it lands — distributes via `biffo core upgrade` today, because `apps/portal/` is template-owned (#306). #360, which this amendment originally cited as the fix-in-progress, was closed as already-resolved-by-#306; the narrow sub-path carve it proposed is the shape `cli/src/lib/portal-ownership.test.ts` forbids (it reintroduces the #279 trap of proposing to delete user code under the portal). The decision below rests on **optionality alone** — which was always the real reason.
 
 ---
 
@@ -312,7 +310,7 @@ The first intended worker enriches inbound demo requests, and it demonstrates th
 - **Core carries the framework unconditionally**, used or not.
 - **Two-step authoring** (§4), pending the resolution of open question 1.
 - **User-delegated authority is designed but unexercised** in v1 (§7). Two of the three permission layers are live from the first run; the third stays unvalidated until a worker runs under a user's authority.
-- **The portal half does not distribute with core upgrade** until `apps/portal/src/app/admin/` is carved template-owned. Until then the agent UI reaches instances by manual copy-in and can drift per instance, exactly as the six admin surfaces already there can.
+- **The portal half distributes via core upgrade** (`apps/portal/` is template-owned, #306) — no manual copy-in, contrary to an earlier draft of this ADR's amendment, which was corrected on 2026-07-23.
 - **The ceiling is deliberately inconvenient to widen.** Granting agents a new table means a PR and a deploy, not an admin screen. That is the point, and it will still be irritating the first time a worker needs a table nobody anticipated.
 - **Async-only** rules out conversational agents until the sync edges are built.
 - **Event delivery is best-effort, not guaranteed** (§5). A committed run whose event fails to publish is lost silently. Harmless while nothing subscribes; an outbox is required before anything does.

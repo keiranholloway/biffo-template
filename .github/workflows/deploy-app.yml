@@ -39,6 +39,13 @@ on:
       - 'modules/plugins/**'
       - 'infra/environments/*/main.tf'
       - 'infra/environments/*/plugins.generated.tf'
+      # First-party plugins are wired in the template-owned plugins.core.tf
+      # (#406), a distinct file from main.tf and plugins.generated.tf. Without it
+      # here, provisioning a first-party plugin fires Deploy Infrastructure (which
+      # creates the Lambda) but never this workflow, so the plugin serves the
+      # compute placeholder for ever — the exact failure this comment block warns
+      # about, reintroduced by the #406 file itself.
+      - 'infra/environments/*/plugins.core.tf'
   workflow_dispatch:
     inputs:
       environment:

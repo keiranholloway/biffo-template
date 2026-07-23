@@ -20,7 +20,10 @@ helpful one looks like.
    multiplies both the token bill §8 cares about *and* the volume of
    attacker-authored text reaching a primed model — for enrichment work the
    snippet is what gets used anyway.
-4. **A free tier that is enough.** Enrichment is a handful of queries per run.
+4. **Priced per query, on a plan you sign up for.** Brave Search API has no free
+   tier — factor a subscription in before wiring this up. Enrichment is a handful
+   of queries per run, so volume is not the concern; having *an* account is.
+   Reasons 1–3 are why this provider, not the price.
 
 Swapping provider is a change to this file: the tool's name, description and
 parameter schema are the contract, and nothing above it knows what answers.

@@ -188,6 +188,33 @@ async def list_runs(
     return list((await db.scalars(stmt)).all())
 
 
+async def list_thread_runs(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    thread_id: str,
+    limit: int = 100,
+) -> list[AgentRun]:
+    """The runs of one thread, oldest first, tenant-scoped (ADR-0001, ADR-0016 §2).
+
+    A *thread* is the sequence of runs sharing ``thread_id``; the prompt assistant
+    assembles the next turn's history from these prior runs' transcripts. Ordered
+    oldest-first (``created_at`` ascending) so the conversation replays in the order
+    it happened. Unlike ``list_runs`` this loads the full row — the ``messages``
+    transcript is exactly what history is built from.
+
+    ``limit`` bounds how many runs are read; the assistant separately bounds the
+    replayed *message* count (ADR-0016 §8).
+    """
+    stmt = (
+        select(AgentRun)
+        .where(AgentRun.tenant_id == tenant_id, AgentRun.thread_id == thread_id)
+        .order_by(AgentRun.created_at.asc(), AgentRun.id.asc())
+        .limit(limit)
+    )
+    return list((await db.scalars(stmt)).all())
+
+
 async def get_run(db: AsyncSession, *, tenant_id: str, run_id: str) -> AgentRun | None:
     """One run, tenant-scoped. The runtime reads its definition and input here —
     the triggering event carries only the id (§5)."""

@@ -15,6 +15,7 @@ from .routers import (
     orchestration,
     users,
 )
+from .routers.admin import agent_chat as admin_agent_chat
 from .routers.admin import agent_runs as admin_agent_runs
 from .routers.admin import endpoints as admin_endpoints
 from .routers.admin import groups as admin_groups
@@ -53,6 +54,10 @@ app.include_router(admin_users.router, prefix="/api/v1")
 # tenant-scoped, read-only, under /api/v1/admin/agent-runs. Runs are written
 # only through the internal SigV4 API above; this is the operator/portal reader.
 app.include_router(admin_agent_runs.router, prefix="/api/v1")
+# Prompt assistant (ADR-0016): Cognito-authed, admin-gated synchronous chat spine
+# under /api/v1/admin/agent-chat. Core assembles the turn under the user's
+# authority and synchronously invokes the agent-runtime Lambda for the LLM turn.
+app.include_router(admin_agent_chat.router, prefix="/api/v1")
 # Prompt-library component CRUD (ADR-0015 Phase 1): Cognito-authed, admin-gated,
 # tenant-scoped, under /api/v1/admin/prompt-components. The authoring surface for
 # reusable prompt components until the Phase-2 portal UI.

@@ -34,6 +34,21 @@ locals {
     ["https://${module.cdn.distribution_domain}", "http://localhost:3000"],
   )
   cors_origins = jsonencode(local.cors_origins_list)
+
+  # The agent-runtime plugin's function name/ARN, derived by CONVENTION rather
+  # than read from module.plugin_agent_runtime's output (ADR-0016 sync invoke).
+  #
+  # Core synchronously invokes this Lambda for a prompt-assistant turn, so the
+  # Core API role needs lambda:InvokeFunction on it and the function name must
+  # reach Core as config. But wiring the plugin's own output into module.core_api
+  # would close the cycle core_api -> api_gateway -> plugin_agent_runtime ->
+  # core_api (the plugin depends on api_gateway's endpoint/execution_arn). The
+  # compute module names every function "<project>-<env>-<function>" and the
+  # plugin passes function = "plugin-agent-runtime", so the name is predictable —
+  # the same name-derived-not-output-derived approach the plugin-allowlist module
+  # uses to break the very same cycle (issue #201).
+  agent_runtime_function_name = "${var.project_name}-${local.environment}-plugin-agent-runtime"
+  agent_runtime_function_arn  = "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.agent_runtime_function_name}"
 }
 
 # ---------------------------------------------------------------------------
@@ -210,12 +225,20 @@ module "core_api" {
   # Runtime reachability is provided by the cognito-idp interface VPC endpoint
   # the networking module creates in this NAT-less environment.
   cognito_user_pool_arn = module.auth.user_pool_arn
-  # Lets the Core API invoke the isolated PR-signer over IAM (ADR-0008). The
-  # signer, not the Core API, holds the GitHub App credential. Empty (no grant)
-  # unless enable_pr_signer is set.
-  invoke_function_arns = var.enable_pr_signer ? [module.pr_signer[0].function_arn] : []
+  # Lets the Core API invoke, over IAM: the isolated PR-signer (ADR-0008; the
+  # signer, not the Core API, holds the GitHub App credential) and the agent
+  # runtime for a synchronous prompt-assistant turn (ADR-0016). Each grant is
+  # present only when its target is provisioned.
+  invoke_function_arns = concat(
+    var.enable_pr_signer ? [module.pr_signer[0].function_arn] : [],
+    var.enable_core_plugins ? [local.agent_runtime_function_arn] : [],
+  )
   environment_variables = {
     BIFFO_ENVIRONMENT = local.environment
+    # The agent-runtime Lambda Core synchronously invokes for a prompt-assistant
+    # turn (ADR-0016). Empty when core plugins are disabled; Core then treats the
+    # assistant as not configured (the /admin/agent-chat endpoint returns 503).
+    BIFFO_AGENT_RUNTIME_FUNCTION_NAME = var.enable_core_plugins ? local.agent_runtime_function_name : ""
     # Name of the PR-signer Lambda to invoke for endpoint permission changes
     # (ADR-0008). Empty when the signer isn't provisioned; the Core API treats
     # an empty value as "endpoint control plane not configured".

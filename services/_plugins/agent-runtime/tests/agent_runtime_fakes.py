@@ -159,9 +159,16 @@ class FakeLLM:
         messages: list[dict[str, Any]],
         timeout: float,
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         self.calls.append(
-            {"model": model, "messages": messages, "timeout": timeout, "tools": tools}
+            {
+                "model": model,
+                "messages": messages,
+                "timeout": timeout,
+                "tools": tools,
+                "max_tokens": max_tokens,
+            }
         )
         if self.on_call is not None:
             self.on_call()

@@ -99,6 +99,26 @@ class Settings(BaseSettings):
     # permits two further generations of agent-triggered-by-agent.
     agent_max_run_depth: int = 2
 
+    # Prompt assistant (ADR-0016, buffered amendment) — the synchronous chat spine.
+    #
+    # Core fronts the turn through its existing API Gateway + Cognito auth, then
+    # synchronously invokes the agent-runtime Lambda (RequestResponse) for the LLM
+    # turn. This is the runtime's function NAME to invoke; empty means the assistant
+    # is not wired on this deployment (the endpoint then returns 503). Set by
+    # Terraform from the agent-runtime plugin's derived function name.
+    agent_runtime_function_name: str = ""
+    # The assistant's model — a platform config value, not per-user (ADR-0016 §4).
+    # Any OpenRouter model slug; the runtime resolves the one OpenRouter key.
+    agent_assistant_model: str = "anthropic/claude-sonnet-4"
+    # Hard turn bounds sized for the API Gateway ~29s integration cap the amendment
+    # accepts (ADR-0016 §8). The runtime clamps to its own ceilings too; these are
+    # what Core asks for.
+    agent_assistant_max_output_tokens: int = 1024
+    agent_assistant_timeout_seconds: float = 20.0
+    # How much prior conversation to replay as history (ADR-0016 §2, §8 thread
+    # length bound). Counts prior turns (user+assistant messages), newest kept.
+    agent_assistant_max_history_messages: int = 40
+
     # How long a run may sit in `running` before the reaper fails it (ADR-0014
     # §5, issue #402). A run only reaches `running` by being claimed, so one
     # that stays there past any possible invocation is a runtime that died

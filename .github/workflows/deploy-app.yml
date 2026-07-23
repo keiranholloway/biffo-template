@@ -269,10 +269,28 @@ jobs:
             --exclude "*" \
             --include "*.txt"
       - name: Invalidate CloudFront
+        # A cache invalidation must never block or abort the functional deploy
+        # (Lambda / DB schema / DDL imports) that follows. create-invalidation is
+        # fire-and-forget and normally returns in seconds, but a stalled AWS API
+        # call once timed out the whole job at this step and skipped every deploy
+        # step after it, leaving a portal-updated-but-backend-stale promotion
+        # (#478). So: bound each call (CLI timeouts), retry transient stalls, and
+        # never fail the job on it — a missed invalidation self-heals via
+        # CloudFront TTLs and the static-export edge redirect (#468).
+        continue-on-error: true
+        timeout-minutes: 3
         run: |
-          aws cloudfront create-invalidation \
-            --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
-            --paths "/*"
+          for attempt in 1 2 3; do
+            if aws cloudfront create-invalidation \
+              --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
+              --paths "/*" \
+              --cli-read-timeout 20 --cli-connect-timeout 10; then
+              exit 0
+            fi
+            echo "CloudFront invalidation attempt ${attempt} failed; retrying..." >&2
+            sleep 5
+          done
+          echo "::warning::CloudFront invalidation did not succeed; deploy continues (cache self-heals via TTL and the #468 edge redirect)."
       - uses: actions/download-artifact@v5
         with:
           name: api-service-dev
@@ -692,10 +710,28 @@ jobs:
             --exclude "*" \
             --include "*.txt"
       - name: Invalidate CloudFront
+        # A cache invalidation must never block or abort the functional deploy
+        # (Lambda / DB schema / DDL imports) that follows. create-invalidation is
+        # fire-and-forget and normally returns in seconds, but a stalled AWS API
+        # call once timed out the whole job at this step and skipped every deploy
+        # step after it, leaving a portal-updated-but-backend-stale promotion
+        # (#478). So: bound each call (CLI timeouts), retry transient stalls, and
+        # never fail the job on it — a missed invalidation self-heals via
+        # CloudFront TTLs and the static-export edge redirect (#468).
+        continue-on-error: true
+        timeout-minutes: 3
         run: |
-          aws cloudfront create-invalidation \
-            --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
-            --paths "/*"
+          for attempt in 1 2 3; do
+            if aws cloudfront create-invalidation \
+              --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
+              --paths "/*" \
+              --cli-read-timeout 20 --cli-connect-timeout 10; then
+              exit 0
+            fi
+            echo "CloudFront invalidation attempt ${attempt} failed; retrying..." >&2
+            sleep 5
+          done
+          echo "::warning::CloudFront invalidation did not succeed; deploy continues (cache self-heals via TTL and the #468 edge redirect)."
       - uses: actions/download-artifact@v5
         with:
           name: api-service-staging
@@ -1127,10 +1163,28 @@ jobs:
             --exclude "*" \
             --include "*.txt"
       - name: Invalidate CloudFront
+        # A cache invalidation must never block or abort the functional deploy
+        # (Lambda / DB schema / DDL imports) that follows. create-invalidation is
+        # fire-and-forget and normally returns in seconds, but a stalled AWS API
+        # call once timed out the whole job at this step and skipped every deploy
+        # step after it, leaving a portal-updated-but-backend-stale promotion
+        # (#478). So: bound each call (CLI timeouts), retry transient stalls, and
+        # never fail the job on it — a missed invalidation self-heals via
+        # CloudFront TTLs and the static-export edge redirect (#468).
+        continue-on-error: true
+        timeout-minutes: 3
         run: |
-          aws cloudfront create-invalidation \
-            --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
-            --paths "/*"
+          for attempt in 1 2 3; do
+            if aws cloudfront create-invalidation \
+              --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
+              --paths "/*" \
+              --cli-read-timeout 20 --cli-connect-timeout 10; then
+              exit 0
+            fi
+            echo "CloudFront invalidation attempt ${attempt} failed; retrying..." >&2
+            sleep 5
+          done
+          echo "::warning::CloudFront invalidation did not succeed; deploy continues (cache self-heals via TTL and the #468 edge redirect)."
       - uses: actions/download-artifact@v5
         with:
           name: api-service-prod

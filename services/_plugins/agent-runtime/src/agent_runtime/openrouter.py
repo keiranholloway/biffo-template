@@ -27,18 +27,27 @@ WhatsApp credentials, so both plugin third-party credentials are fetched the
 same way. A SecureString holding one key is a plain string, which is why nothing
 here unwraps JSON.
 
-The client is deliberately thin — no retries, no streaming. It passes tool
-schemas through and normalises tool calls back (M3), but it neither decides what
-tools exist (``tools.py``) nor executes one (``loop.py``): this file is a
-translation layer between the runtime's vocabulary and one provider's wire
-format, and staying that way is what makes a second provider a new file rather
-than a fork.
+The client is deliberately thin — no retries. It passes tool schemas through and
+normalises tool calls back (M3), but it neither decides what tools exist
+(``tools.py``) nor executes one (``loop.py``): this file is a translation layer
+between the runtime's vocabulary and one provider's wire format, and staying that
+way is what makes a second provider a new file rather than a fork.
+
+**Streaming (ADR-0016 §4).** Alongside the full-response :meth:`~OpenRouterClient.complete`
+the async workers use, the client exposes :meth:`~OpenRouterClient.stream`, which
+issues the same chat completion with ``stream: true`` and yields the incremental
+text as OpenRouter's SSE ``data:`` frames arrive. It is the *same* client, key,
+base URL and model handling — one integration, one credential (ADR-0016 §4) — not
+a second LLM path. Streaming is a consumer of this client (the synchronous prompt
+assistant), so it lives here as a method rather than in the :class:`LLMClient`
+Protocol the agent loop depends on: the loop still speaks only ``complete``.
 """
 
 from __future__ import annotations
 
 import json
 import os
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -210,6 +219,88 @@ class OpenRouterClient:
             raise LLMError(f"OpenRouter returned {response.status_code}: {response.text[:500]}")
 
         return _parse_completion(response.json(), fallback_model=model)
+
+    async def stream(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        timeout: float,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream one chat completion, yielding incremental text as it arrives.
+
+        The request is identical to :meth:`complete` — same credential, base URL,
+        model and tool handling — save for ``stream: true``; the response is an
+        SSE body whose ``data:`` frames each carry a ``choices[0].delta.content``
+        fragment, yielded in order. OpenRouter keep-alive comment lines and the
+        terminal ``data: [DONE]`` sentinel carry no text and are skipped.
+
+        Raises :class:`LLMError` on a non-2xx status or a transport failure,
+        mirroring :meth:`complete`; as there, the request headers (which carry the
+        key) are never echoed into the message.
+        """
+        headers = {
+            "Authorization": f"Bearer {self._resolve_api_key()}",
+            "Content-Type": "application/json",
+        }
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "usage": {"include": True},
+        }
+        if tools:
+            body["tools"] = tools
+        try:
+            async with self._http.stream(
+                "POST",
+                f"{self._base_url}/chat/completions",
+                headers=headers,
+                json=body,
+                timeout=timeout,
+            ) as response:
+                if response.status_code >= 400:
+                    # A streamed response's body is not read yet; pull it in full
+                    # so the provider's message (not the key-bearing request) is
+                    # what lands in the error.
+                    detail = (await response.aread()).decode(errors="replace")
+                    raise LLMError(f"OpenRouter returned {response.status_code}: {detail[:500]}")
+                async for line in response.aiter_lines():
+                    chunk = _parse_sse_delta(line)
+                    if chunk:
+                        yield chunk
+        except httpx.HTTPError as exc:
+            raise LLMError(f"OpenRouter request failed: {exc}") from exc
+
+
+def _parse_sse_delta(line: str) -> str:
+    """The incremental text carried by one SSE line, or ``""`` if it carries none.
+
+    OpenRouter streams Server-Sent Events: ``data:`` frames holding a JSON chunk,
+    ``: `` comment lines for keep-alive, blank separators, and a final
+    ``data: [DONE]``. Only a frame with a string ``choices[0].delta.content``
+    yields text; everything else (comments, blanks, the sentinel, tool-call-only
+    deltas, malformed JSON) yields ``""`` and is skipped by the caller.
+    """
+    line = line.strip()
+    if not line.startswith("data:"):
+        return ""
+    data = line[len("data:") :].strip()
+    if not data or data == "[DONE]":
+        return ""
+    try:
+        parsed = json.loads(data)
+    except ValueError:
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    choices = parsed.get("choices") or []
+    if not choices:
+        return ""
+    delta = (choices[0] or {}).get("delta") or {}
+    content = delta.get("content")
+    return content if isinstance(content, str) else ""
 
 
 def _parse_completion(data: Any, *, fallback_model: str) -> LLMResponse:

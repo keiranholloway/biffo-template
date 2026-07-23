@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -91,6 +92,20 @@ class LLMResponse:
     output_tokens: int | None = None
     cost_usd: float | None = None
     tool_calls: tuple[ToolCall, ...] = ()
+
+
+@dataclass(frozen=True)
+class StreamChunk:
+    """One event from a streamed completion (ADR-0016 §4).
+
+    Either an incremental piece of text (``delta``), or — on the final chunk —
+    the completed :class:`LLMResponse` (``done``) carrying the full accumulated
+    content plus usage/cost, so the synchronous consumer records the same run
+    accounting the async ``complete()`` path does. Exactly one of the two is set.
+    """
+
+    delta: str = ""
+    done: LLMResponse | None = None
 
 
 class LLMClient(Protocol):
@@ -210,6 +225,91 @@ class OpenRouterClient:
             raise LLMError(f"OpenRouter returned {response.status_code}: {response.text[:500]}")
 
         return _parse_completion(response.json(), fallback_model=model)
+
+    async def stream(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        timeout: float,
+    ) -> AsyncIterator[StreamChunk]:
+        """Stream a chat completion as Server-Sent Events: yield text deltas as
+        they arrive, then a final :class:`StreamChunk` carrying the completed
+        :class:`LLMResponse` (full content + usage). Same credential, model
+        handling and cost accounting as :meth:`complete`; raises
+        :class:`LLMError` for anything non-2xx.
+
+        Text-only by design (ADR-0016 Phase 1 drafts "from the conversation
+        alone"): the tool-calling turn loop stays on :meth:`complete`.
+        """
+        headers = {
+            "Authorization": f"Bearer {self._resolve_api_key()}",
+            "Content-Type": "application/json",
+        }
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            # Include usage on the final SSE chunk so cost accounting lands on the
+            # run record exactly as complete() does.
+            "usage": {"include": True},
+        }
+
+        parts: list[str] = []
+        usage: dict[str, Any] = {}
+        model_name = model
+        finish_reason = "stop"
+        try:
+            async with self._http.stream(
+                "POST",
+                f"{self._base_url}/chat/completions",
+                headers=headers,
+                json=body,
+                timeout=timeout,
+            ) as response:
+                if response.status_code >= 400:
+                    text = (await response.aread()).decode(errors="replace")
+                    raise LLMError(f"OpenRouter returned {response.status_code}: {text[:500]}")
+                async for raw_line in response.aiter_lines():
+                    line = raw_line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[len("data:") :].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except ValueError:
+                        continue
+                    if not isinstance(chunk, dict):
+                        continue
+                    if chunk.get("model"):
+                        model_name = str(chunk["model"])
+                    if isinstance(chunk.get("usage"), dict):
+                        usage = chunk["usage"]
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    choice = choices[0] or {}
+                    piece = (choice.get("delta") or {}).get("content")
+                    if piece:
+                        parts.append(str(piece))
+                        yield StreamChunk(delta=str(piece))
+                    if choice.get("finish_reason"):
+                        finish_reason = str(choice["finish_reason"])
+        except httpx.HTTPError as exc:
+            raise LLMError(f"OpenRouter request failed: {exc}") from exc
+
+        yield StreamChunk(
+            done=LLMResponse(
+                content="".join(parts),
+                model=str(model_name),
+                finish_reason=str(finish_reason),
+                input_tokens=_as_int(usage.get("prompt_tokens")),
+                output_tokens=_as_int(usage.get("completion_tokens")),
+                cost_usd=_as_float(usage.get("cost")),
+            )
+        )
 
 
 def _parse_completion(data: Any, *, fallback_model: str) -> LLMResponse:

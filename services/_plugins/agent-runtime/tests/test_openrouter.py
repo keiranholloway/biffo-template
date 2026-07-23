@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 import pytest
-from agent_runtime.openrouter import LLMError, OpenRouterClient
+from agent_runtime.openrouter import LLMError, OpenRouterClient, StreamChunk
 from agent_runtime.tools import TOOL_REGISTRY
 from agent_runtime_fakes import FakeSsm
 
@@ -255,3 +255,77 @@ async def test_a_malformed_tool_call_is_skipped_rather_than_failing_the_turn(mon
     # Unparseable arguments survive as an empty object and are then rejected by
     # the tool's own schema, which is where argument validation belongs.
     assert [(c.id, c.arguments) for c in response.tool_calls] == [("c3", {})]
+
+
+# --- streaming (ADR-0016 §4) -------------------------------------------------
+
+
+def _sse(*events: str):
+    """A MockTransport handler serving the given JSON strings as SSE `data:`
+    frames, plus the terminal `[DONE]`."""
+    body = ("".join(f"data: {e}\n\n" for e in events) + "data: [DONE]\n\n").encode()
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=body)
+
+    return handler, seen
+
+
+async def _drain(client: OpenRouterClient) -> tuple[list[str], StreamChunk | None]:
+    deltas: list[str] = []
+    done: StreamChunk | None = None
+    async for chunk in client.stream(
+        model="m", messages=[{"role": "user", "content": "hi"}], timeout=5.0
+    ):
+        if chunk.done is not None:
+            done = chunk
+        else:
+            deltas.append(chunk.delta)
+    return deltas, done
+
+
+async def test_stream_yields_text_deltas_then_a_final_response(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, seen = _sse(
+        '{"model": "router/model", "choices": [{"delta": {"content": "Hel"}}]}',
+        '{"choices": [{"delta": {"content": "lo"}}]}',
+        '{"choices": [{"delta": {}, "finish_reason": "stop"}],'
+        ' "usage": {"prompt_tokens": 3, "completion_tokens": 2, "cost": 0.001}}',
+    )
+    deltas, done = await _drain(_client(handler))
+
+    assert deltas == ["Hel", "lo"]
+    assert done is not None and done.done is not None
+    final = done.done
+    assert final.content == "Hello"  # accumulated
+    assert final.model == "router/model"
+    assert final.finish_reason == "stop"
+    assert final.output_tokens == 2
+    assert final.cost_usd == 0.001
+    # It asked the provider to stream and to include usage.
+    assert json.loads(seen[0].content)["stream"] is True
+
+
+async def test_stream_ignores_keepalives_and_unparseable_frames(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, _ = _sse(
+        "",  # keepalive / blank
+        "not-json",
+        '{"choices": [{"delta": {"content": "ok"}}]}',
+    )
+    deltas, done = await _drain(_client(handler))
+    assert deltas == ["ok"]
+    assert done is not None and done.done is not None and done.done.content == "ok"
+
+
+async def test_stream_maps_provider_error_to_llmerror(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, content=b'{"error": "rate limited"}')
+
+    with pytest.raises(LLMError):
+        async for _ in _client(handler).stream(model="m", messages=[], timeout=5.0):
+            pass

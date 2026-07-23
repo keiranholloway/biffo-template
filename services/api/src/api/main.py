@@ -25,6 +25,7 @@ from .routers.admin import plugins as admin_plugins
 from .routers.admin import prompt_components as admin_prompt_components
 from .routers.admin import users as admin_users
 from .routing.core_crud_router import build_core_crud_router
+from .routing.owner_data_router import build_owner_data_router
 from .routing.plugin_router import build_plugin_router
 
 logger = Logger()
@@ -84,6 +85,11 @@ app.include_router(orchestration.runs_router, prefix="/api/v1")
 # docstring for how each installed plugin's manifest reaches the deployed
 # Lambda.
 app.include_router(build_plugin_router(), prefix="/api/v1")
+# Owner-scoped, service-authenticated data routes (ADR-0017 §5) for plugin tables
+# that declare `owner_scoped_service`, under /api/v1/internal/owner-data/<table>.
+# Empty in the base deployment (no plugin installed); the owning module's Lambda
+# manages its own CRUD-closed rows here, dual-authed and owner-scoped.
+app.include_router(build_owner_data_router(), prefix="/api/v1")
 # Generic CRUD for opt-in core tables (ADR-0004): core TenantScopedModel
 # subclasses declaring __crud_permissions__ are served under /api/v1/data/
 # <table>. Empty in the base deployment (no core table opts in yet).

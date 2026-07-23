@@ -16,6 +16,7 @@ import pytest
 from api.chat_agents import ChatAgent, register_chat_agent
 from api.chat_engine import ChatTurnResult
 from api.database import get_db
+from api.middleware import forwarded_user
 from api.middleware.auth import AuthenticatedUser
 from api.middleware.service_auth import ServicePrincipal, require_service_principal
 from api.models.agent_run import AgentRun  # noqa: F401 — registers the table on Base.metadata
@@ -161,12 +162,12 @@ def test_an_unknown_agent_is_404():
     asyncio.run(engine.dispose())
 
 
-# ── the forwarded-user dependency itself ────────────────────────────────────────
+# ── the forwarded-user dependency itself (shared middleware, ADR-0017 §3/§5) ─────
 
 
 def test_a_missing_forwarded_token_is_401():
     with pytest.raises(HTTPException) as exc:
-        internal_agent_chat.require_forwarded_user(forwarded_token=None)
+        forwarded_user.require_forwarded_user(forwarded_token=None)
     assert exc.value.status_code == 401
 
 
@@ -177,9 +178,9 @@ def test_the_forwarded_token_is_verified_via_cores_own_mapping(monkeypatch):
         seen["token"] = credentials.credentials
         return _founder(roles=["founder"])
 
-    monkeypatch.setattr(internal_agent_chat, "identity_from_token", _fake_identity_from_token)
+    monkeypatch.setattr(forwarded_user, "identity_from_token", _fake_identity_from_token)
 
-    user = internal_agent_chat.require_forwarded_user(forwarded_token="a.b.c")
+    user = forwarded_user.require_forwarded_user(forwarded_token="a.b.c")
 
     assert seen["token"] == "a.b.c"  # the header value is what gets verified
     assert user.sub == "founder-sub-abc"

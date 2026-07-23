@@ -11,6 +11,7 @@ from .routers import (
     agent_chat,
     auth,
     health,
+    internal_agent_chat,
     internal_agents,
     internal_orchestration,
     orchestration,
@@ -70,6 +71,7 @@ app.include_router(internal_orchestration.router, prefix="/api/v1")
 # Internal service-only agent-run API (ADR-0009 / ADR-0014): the agent runtime
 # requests, reads and completes runs here, under /api/v1/internal/*.
 app.include_router(internal_agents.router, prefix="/api/v1")
+app.include_router(internal_agent_chat.router, prefix="/api/v1")
 # User-facing orchestration workflow CRUD (the portal builder): Cognito-authed,
 # admin-gated, under /api/v1/orchestration/workflows, plus the read-only run
 # history under /api/v1/orchestration/runs.

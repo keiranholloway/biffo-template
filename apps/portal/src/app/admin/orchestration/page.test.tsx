@@ -8,6 +8,7 @@ import type {
   WorkflowInput,
   WorkflowRun,
 } from '@/lib/orchestration-api'
+import type { PromptComponent } from '@/lib/prompt-components-api'
 
 vi.mock('@/context/auth-context', () => ({
   useAuth: () => ({ getIdToken: () => 'fake-token' }),
@@ -25,6 +26,7 @@ const {
   updateWorkflow,
   setWorkflowEnabled,
   deleteWorkflow,
+  fetchPromptComponents,
 } = vi.hoisted(() => ({
   fetchWorkflows: vi.fn(),
   fetchRuns: vi.fn(),
@@ -33,6 +35,7 @@ const {
   updateWorkflow: vi.fn(),
   setWorkflowEnabled: vi.fn(),
   deleteWorkflow: vi.fn(),
+  fetchPromptComponents: vi.fn(),
 }))
 
 vi.mock('@/lib/orchestration-api', async () => {
@@ -48,6 +51,8 @@ vi.mock('@/lib/orchestration-api', async () => {
     deleteWorkflow,
   }
 })
+
+vi.mock('@/lib/prompt-components-api', () => ({ fetchPromptComponents }))
 
 const catalog: WorkflowCatalog = {
   triggers: [
@@ -179,6 +184,35 @@ const catalogNoTools: WorkflowCatalog = {
   actions: catalog.actions.map((a) => (a.type === 'agent' ? { ...a, available_tools: [] } : a)),
 }
 
+// A library component the parts editor can reference (ADR-0015).
+const leadScorerComponent: PromptComponent = {
+  id: 'pc-2',
+  tenant_id: 'default',
+  created_at: '2026-07-20T09:30:00Z',
+  updated_at: '2026-07-20T09:30:00Z',
+  name: 'lead-scorer',
+  description: 'Score leads for a region',
+  body: 'Score leads for {{region}}.',
+  variables: [{ name: 'region', description: 'Target region', required: true }],
+}
+
+// The real Phase-2 catalog: the agent action's `instructions` field carries
+// `parts: true` (ADR-0015), so the builder renders the ordered-parts editor
+// rather than a plain textarea.
+const catalogParts: WorkflowCatalog = {
+  triggers: catalog.triggers,
+  actions: catalog.actions.map((a) =>
+    a.type === 'agent'
+      ? {
+          ...a,
+          config_fields: a.config_fields.map((f) =>
+            f.name === 'instructions' ? { ...f, parts: true } : f,
+          ),
+        }
+      : a,
+  ),
+}
+
 // An agent stored with a model that is NOT among the curated options.
 const offListAgent: WorkflowDefinition = {
   id: 'wfa',
@@ -250,11 +284,13 @@ describe('OrchestrationPage', () => {
       updateWorkflow,
       setWorkflowEnabled,
       deleteWorkflow,
+      fetchPromptComponents,
     ]) {
       fn.mockReset()
     }
     fetchCatalog.mockResolvedValue(catalog)
     fetchRuns.mockResolvedValue([])
+    fetchPromptComponents.mockResolvedValue([])
   })
 
   it('renders workflows with name, trigger label, action and status', async () => {
@@ -785,5 +821,63 @@ describe('OrchestrationPage', () => {
     fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'email' } })
 
     expect(screen.queryByText(REDUNDANT_WARNING)).not.toBeInTheDocument()
+  })
+
+  // ── Ordered-parts editor for a `parts: true` field (ADR-0015 Phase 2) ──────
+
+  it('renders `instructions` as an ordered-parts editor and writes parts JSON', async () => {
+    fetchCatalog.mockResolvedValue(catalogParts)
+    fetchPromptComponents.mockResolvedValue([leadScorerComponent])
+    fetchWorkflows.mockResolvedValue([])
+    createWorkflow.mockResolvedValue(notify)
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByPlaceholderText('Notify the sales team'), {
+      target: { value: 'Score midlands leads' },
+    })
+    fireEvent.change(screen.getByLabelText('Action'), { target: { value: 'agent' } })
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'scorer' } })
+
+    // No plain Instructions textarea — a parts editor instead.
+    expect(screen.queryByRole('textbox', { name: 'Instructions' })).not.toBeInTheDocument()
+
+    // Add a component reference and fill its declared variable.
+    fireEvent.click(screen.getByRole('button', { name: 'Add component' }))
+    fireEvent.change(screen.getByLabelText('Instructions part 1 component'), {
+      target: { value: 'lead-scorer' },
+    })
+    fireEvent.change(screen.getByLabelText('Instructions part 1 value for region'), {
+      target: { value: 'Midlands' },
+    })
+    // Add an inline part after it.
+    fireEvent.click(screen.getByRole('button', { name: 'Add text' }))
+    fireEvent.change(screen.getByLabelText('Instructions part 2 text'), {
+      target: { value: 'Be concise.' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add workflow' }))
+
+    await waitFor(() => {
+      expect(createWorkflow).toHaveBeenCalled()
+    })
+    const body = createWorkflow.mock.calls.at(0)?.[1] as WorkflowInput | undefined
+    expect(body?.action_config.instructions).toEqual([
+      { component: 'lead-scorer', values: { region: 'Midlands' } },
+      { inline: 'Be concise.' },
+    ])
+  })
+
+  it('loads a plain-string `instructions` as a single inline part (backward shape)', async () => {
+    fetchCatalog.mockResolvedValue(catalogParts)
+    fetchPromptComponents.mockResolvedValue([])
+    fetchWorkflows.mockResolvedValue([
+      { ...offListAgent, action_config: { ...offListAgent.action_config, tools: [] } },
+    ])
+
+    render(<OrchestrationPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+
+    // The pre-library string renders as one inline part carrying its text.
+    expect(screen.getByLabelText('Instructions part 1 text')).toHaveValue('Enrich {company}.')
   })
 })

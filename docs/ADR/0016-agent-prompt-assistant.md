@@ -2,6 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-07-23
+**Amended:** 2026-07-23 — see *Amendment: buffered, not streamed (Python-runtime reality)*
 **Deciders:** Keiran Holloway (Technical Architect)
 
 ---
@@ -34,6 +35,60 @@ foundations: **§6** (the synchronous, streaming path), **§7 / #452**
 output is prompt-library content). That convergence is the value — one concrete
 feature validates all three — and the reason it must be phased rather than built
 at once.
+
+## Amendment: buffered, not streamed (Python-runtime reality) — 2026-07-23
+
+Before any code, implementation surfaced a hard fact that invalidates a premise
+of §3 and §4 below, so they are corrected here rather than left to mislead.
+
+**The finding (verified against AWS docs).** Lambda response streaming is
+supported only on **Node.js managed runtimes**; for Python you must use a *custom
+runtime* or the *Lambda Web Adapter*. The agent runtime is managed `python3.13`,
+so it **cannot stream a response at all** — regardless of ingress. (A related
+correction: streaming *can* now traverse API Gateway too, not only a Function URL
+as §3 assumed — but that is moot, since the blocker is the Python runtime, not
+the ingress.)
+
+So real streaming would require re-architecting the runtime (custom runtime or
+LWA) on a security-critical public path — a large, novel-infra change bought for a
+*nicety* on an authoring assistant.
+
+**The decision: buffered request-response, no streaming (for now).** Each user
+turn is one request returning the full reply. This changes the ingress
+architecture in §3 as follows, and is a net simplification:
+
+- **Ingress is Core's existing API Gateway, with its existing Cognito auth** —
+  **not** a new Function URL on the runtime. This eliminates the new public
+  surface, in-runtime JWT verification, CORS, and the custom-runtime problem
+  entirely. It also aligns with §5: Core already authenticates the user and
+  assembles context; it now also fronts the turn.
+- **Core synchronously invokes the runtime** (`lambda:InvokeFunction`,
+  RequestResponse) for the LLM turn. The runtime keeps the **same OpenRouter
+  client** (§4) but uses its existing full-response `complete()`, not streaming.
+  The runtime gains an internal *direct-invoke* dispatch case alongside its
+  EventBridge subscription — both AWS-internal, neither public.
+- The runtime therefore **stays a pure internal service** (invoked by EventBridge
+  or by Core), never a public ingress. ADR-0009 (service identity) and ADR-0002
+  (runtime never touches the DB) are untouched.
+
+**New constraint this accepts:** API Gateway caps integration at ~29s, so a turn
+must complete within it. The §8 cost ceilings (bounded output, wall-clock) are
+sized to fit. If a turn ever legitimately needs longer, the fallback is a
+*buffered* (non-streaming) Function URL on the runtime — 15-minute timeout — at
+the cost of a new public surface and in-runtime auth (which is why it is the
+fallback, not the default).
+
+**Effect on the Stage-1 work already merged:** the streaming path added to the
+OpenRouter client (#489) is dormant, kept for a future streaming revisit; the
+shared `biffo-cognito-auth` verifier (#492) remains valid as a clean extraction
+Core uses, though its runtime-side verification motivation is removed by
+Core-as-ingress. Neither is reverted.
+
+§3 and §4 below are read through this amendment: "Function URL" → "Core API
+Gateway ingress + sync invoke of the runtime"; "streaming" → "buffered
+`complete()`". §1, §2, §5, §6, §7 (minus the Function-URL specifics), §8 stand.
+
+---
 
 ## Decision
 

@@ -318,6 +318,39 @@ resource "aws_cloudfront_distribution" "portal" {
     }
   }
 
+  # The core's runtime identity document (#403), served from the portal bucket
+  # root at /.well-known/biffo-identity.json. Every app on this origin fetches it
+  # at runtime instead of baking a Cognito pool/client id into its bundle, so a
+  # pool replacement no longer strands siblings pointing at a dead pool (#400).
+  #
+  # A SEPARATE behaviour, deliberately not folded into local.portal_cache_behaviors:
+  #   - Short TTL (max 60s), the OPPOSITE of the immutable, year-long caching the
+  #     hashed portal assets get — the whole point is that a replacement
+  #     propagates in ~a minute, not that it is cached hard.
+  #   - No rewrite function: the doc is a real file (it has a dot, so the rewrite
+  #     would pass it through untouched anyway) and must never be turned into an
+  #     index.html or a redirect.
+  #   - Points at the portal S3 origin, where deploy-infra writes the object.
+  # It must be its own behaviour so it does not fall through to
+  # default_cache_behavior, which belongs to the root application sibling.
+  ordered_cache_behavior {
+    path_pattern           = ".well-known/*"
+    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
+    cached_methods         = ["GET", "HEAD"]
+    target_origin_id       = "S3-${var.portal_bucket_name}"
+    viewer_protocol_policy = "redirect-to-https"
+    compress               = true
+
+    forwarded_values {
+      query_string = false
+      cookies { forward = "none" }
+    }
+
+    min_ttl     = 0
+    default_ttl = 60
+    max_ttl     = 60
+  }
+
   # SPA routing: serve index.html for 403/404
   custom_error_response {
     error_code            = 403

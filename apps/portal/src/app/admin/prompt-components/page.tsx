@@ -12,7 +12,7 @@ import {
   type PromptComponentInput,
   type PromptVariable,
 } from '@/lib/prompt-components-api'
-import { consumeHandoff } from '@/lib/prompt-handoff'
+import { AssistantDrawer } from '@/components/assistant-drawer'
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error'
@@ -69,6 +69,8 @@ export default function PromptComponentsPage() {
   const [body, setBody] = useState('')
   const [variableRows, setVariableRows] = useState<VariableRow[]>([])
   const [busy, setBusy] = useState(false)
+  // The "✨ Draft with AI" drawer for the Body field.
+  const [assistOpen, setAssistOpen] = useState(false)
 
   const resetForm = useCallback(() => {
     setEditingId(null)
@@ -91,14 +93,6 @@ export default function PromptComponentsPage() {
   useEffect(() => {
     void reload()
   }, [reload])
-
-  // "Use this" handoff from the prompt assistant (ADR-0016 Phase 3): if a body
-  // was stashed for us, pre-fill the New-component form's body once on mount and
-  // clear the handoff so a reload does not re-apply it.
-  useEffect(() => {
-    const handoff = consumeHandoff('prompt-component-body')
-    if (handoff != null) setBody(handoff.text)
-  }, [])
 
   function loadForEdit(c: PromptComponent) {
     setEditingId(c.id)
@@ -212,6 +206,17 @@ export default function PromptComponentsPage() {
               className={inputClass}
             />
           </label>
+          <div className="sm:col-span-2">
+            <button
+              type="button"
+              onClick={() => {
+                setAssistOpen(true)
+              }}
+              className="rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+            >
+              ✨ Draft body with AI
+            </button>
+          </div>
         </div>
 
         <fieldset className="mt-4 rounded-lg border border-gray-200 p-3">
@@ -314,6 +319,20 @@ export default function PromptComponentsPage() {
           )}
         </div>
       </form>
+
+      {assistOpen && (
+        <AssistantDrawer
+          open
+          onClose={() => {
+            setAssistOpen(false)
+          }}
+          context={{ kind: 'component-body', componentName: name.trim() || undefined }}
+          onAccept={(text) => {
+            setBody(text)
+            setAssistOpen(false)
+          }}
+        />
+      )}
 
       {components == null && error == null && (
         <div className="mt-6 space-y-2" aria-label="Loading prompt components">

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/context/auth-context'
 import { createApiClient } from '@/lib/api-client'
 import {
@@ -28,7 +28,7 @@ import {
 } from '@/lib/trigger-catalog'
 import { fetchPromptComponents, type PromptComponent } from '@/lib/prompt-components-api'
 import { normalizeParts, type PromptPart } from '@/lib/prompt-parts'
-import { consumeHandoff, type PromptHandoff } from '@/lib/prompt-handoff'
+import { AssistantDrawer } from '@/components/assistant-drawer'
 import { PartsField } from './parts-field'
 
 function errorMessage(err: unknown): string {
@@ -217,15 +217,9 @@ export default function OrchestrationPage() {
   const [enabled, setEnabled] = useState(true)
   const [busy, setBusy] = useState(false)
 
-  // A pending "Use this" handoff from the prompt assistant (ADR-0016 Phase 3).
-  // Read (and cleared from sessionStorage) exactly once during the first render
-  // — the `undefined` sentinel makes it idempotent under React's double-invoked
-  // renders. Held in a ref so the catalog-load callback below reads the value
-  // captured at mount regardless of when that async load resolves.
-  const handoffRef = useRef<PromptHandoff | null | undefined>(undefined)
-  if (handoffRef.current === undefined) {
-    handoffRef.current = consumeHandoff(['agent-instructions', 'agent-goals'])
-  }
+  // Which agent parts field the "✨ Draft with AI" drawer is open for, if any
+  // (the config field name, e.g. 'instructions' | 'goals'). null = closed.
+  const [assistField, setAssistField] = useState<string | null>(null)
 
   const resetForm = useCallback((cat: WorkflowCatalog | null) => {
     setEditingId(null)
@@ -244,27 +238,6 @@ export default function OrchestrationPage() {
       .then((cat) => {
         setCatalog(cat)
         resetForm(cat)
-        // A pending prompt-assistant "Use this" handoff (ADR-0016 Phase 3) is
-        // applied here, right after the form is initialised, so it deterministically
-        // wins over resetForm rather than racing it from a separate effect: select
-        // the agent action on a fresh definition and seed the handed-off text as an
-        // inline part of instructions/goals.
-        const handoff = handoffRef.current
-        if (handoff != null) {
-          const agent = cat.actions.find((a) => a.type === 'agent')
-          if (agent != null) {
-            const field = handoff.target === 'agent-goals' ? 'goals' : 'instructions'
-            setEditingId(null)
-            setActionType('agent')
-            setConfig(() => {
-              const base = defaultConfig(agent)
-              return {
-                ...base,
-                [field]: [...normalizeParts(base[field]), { inline: handoff.text }],
-              }
-            })
-          }
-        }
       })
       .catch((err: unknown) => {
         setError(errorMessage(err))
@@ -579,16 +552,26 @@ export default function OrchestrationPage() {
                     .filter((field) => fieldApplies(fields, config, field))
                     .map((field) =>
                       field.parts === true ? (
-                        <PartsField
-                          key={field.name}
-                          label={field.label}
-                          required={field.required}
-                          components={components}
-                          value={normalizeParts(config[field.name])}
-                          onChange={(parts) => {
-                            setConfig((c) => ({ ...c, [field.name]: parts }))
-                          }}
-                        />
+                        <div key={field.name} className="sm:col-span-2">
+                          <PartsField
+                            label={field.label}
+                            required={field.required}
+                            components={components}
+                            value={normalizeParts(config[field.name])}
+                            onChange={(parts) => {
+                              setConfig((c) => ({ ...c, [field.name]: parts }))
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAssistField(field.name)
+                            }}
+                            className="mt-2 rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+                          >
+                            ✨ Draft {field.label} with AI
+                          </button>
+                        </div>
                       ) : field.type === 'multiselect' ? (
                         <fieldset
                           key={field.name}
@@ -714,6 +697,28 @@ export default function OrchestrationPage() {
             )}
           </div>
         </form>
+      )}
+
+      {selectedAction?.type === 'agent' && assistField != null && (
+        <AssistantDrawer
+          open
+          onClose={() => {
+            setAssistField(null)
+          }}
+          context={{
+            kind: assistField === 'goals' ? 'agent-goals' : 'agent-instructions',
+            agentName: asString(config.agent_name) || undefined,
+            model: asString(config.model) || undefined,
+          }}
+          onAccept={(text) => {
+            const field = assistField
+            setConfig((c) => ({
+              ...c,
+              [field]: [...normalizeParts(c[field]), { inline: text }],
+            }))
+            setAssistField(null)
+          }}
+        />
       )}
 
       {workflows == null && error == null && (

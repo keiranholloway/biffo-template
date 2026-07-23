@@ -1,7 +1,7 @@
 import type { createApiClient } from './api-client'
 
 /**
- * The prompt-assistant chat turn (ADR-0016 Phase 3). Buffered — not streaming.
+ * The prompt-authoring assistant chat turn (ADR-0016). Buffered — not streaming.
  * Mirrors the Core request body of `POST /api/v1/admin/agent-chat`: a `message`
  * (1..16000 chars, validated server-side) and an optional `thread_id`. Omit
  * `thread_id` to start a new conversation; echo back the one the first response
@@ -34,7 +34,7 @@ const BASE = '/api/v1/admin/agent-chat'
 /**
  * Run one buffered chat turn. Resolves with the assistant reply and the
  * `thread_id` to thread onto the next turn. Rejects with an `ApiError` carrying
- * the HTTP status — the page distinguishes 502 (transient runtime failure, let
+ * the HTTP status — the drawer distinguishes 502 (transient runtime failure, let
  * the user retry) from 503 (assistant not configured on this deployment).
  */
 export function sendAgentChat(

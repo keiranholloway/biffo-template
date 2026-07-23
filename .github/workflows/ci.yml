@@ -124,6 +124,25 @@ jobs:
       - name: Type check
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run typecheck
+      # The portal is a Next.js static export (output: 'export'). lint/type/test
+      # all pass on a page that has quietly become dynamic and can no longer be
+      # prerendered — that only blows up at `next build`, i.e. at deploy time,
+      # never in CI (#382). Build it here so an export regression fails the PR.
+      # No real config is wired: these NEXT_PUBLIC_* values are public,
+      # client-embedded identifiers (not secrets) and the ones below are obvious
+      # placeholders. They must be NON-EMPTY, though — lib/auth.ts constructs a
+      # CognitoUserPool at module load and its constructor throws on empty
+      # UserPoolId/ClientId, which would fail the prerender for a config reason
+      # rather than a real export regression. The goal is to catch a build
+      # FAILURE, not to validate config, so any parseable placeholder does.
+      - name: Build portal
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm --filter @biffo/portal build
+        env:
+          NEXT_PUBLIC_COGNITO_USER_POOL_ID: us-east-1_ciplaceholder
+          NEXT_PUBLIC_COGNITO_CLIENT_ID: ciplaceholderclientid00000
+          NEXT_PUBLIC_API_URL: http://localhost
+          NEXT_PUBLIC_REGISTRY_URL: http://localhost
       - name: Test
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run test

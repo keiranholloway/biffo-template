@@ -55,6 +55,8 @@ from ..schemas.orchestration import (
     WorkflowCatalog,
     WorkflowDefinitionResponse,
     WorkflowRunSummary,
+    redact_secrets,
+    resolve_write_secrets,
 )
 
 router = APIRouter(prefix="/orchestration/workflows", tags=["orchestration"])
@@ -135,9 +137,37 @@ async def get_catalog(
     return WorkflowCatalog(triggers=triggers, actions=WORKFLOW_ACTIONS)
 
 
+def _redacted(definition: WorkflowDefinition) -> WorkflowDefinitionResponse:
+    """A response for ``definition`` with secret config values masked (#432).
+
+    The single read funnel. Every path that turns a definition into a response or
+    an event payload goes through here, so a secret (a Google Chat webhook token
+    today) never leaves the admin boundary in clear — not on an HTTP response, and
+    not on the ``WORKFLOW_DEFINITION_*`` events, which carry the whole row onto the
+    bus. Routing all reads through one function is the point: the bug class is a
+    *new* read path forgetting to redact.
+    """
+    response = WorkflowDefinitionResponse.model_validate(definition)
+    return response.model_copy(
+        update={"action_config": redact_secrets(definition.action_type, response.action_config)}
+    )
+
+
 def _definition_payload(definition: WorkflowDefinition) -> dict[str, Any]:
-    """Full-row, JSON-safe payload for a workflow-definition state-change event."""
-    return WorkflowDefinitionResponse.model_validate(definition).model_dump(mode="json")
+    """Full-row, JSON-safe, secret-redacted payload for a state-change event (#432)."""
+    return _redacted(definition).model_dump(mode="json")
+
+
+def _write_secrets(
+    action_type: str, submitted: dict[str, Any], stored: dict[str, Any]
+) -> dict[str, Any]:
+    """Resolve secret fields for a write, mapping the refusal to 422 (#432)."""
+    try:
+        return resolve_write_secrets(action_type, submitted, stored)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
 
 
 async def _require_known_trigger(
@@ -157,7 +187,7 @@ async def list_workflows(
     db: AsyncSession = Depends(get_db),
 ) -> list[WorkflowDefinitionResponse]:
     definitions = await list_definitions(db, tenant_id=caller.tenant_id)
-    return [WorkflowDefinitionResponse.model_validate(d) for d in definitions]
+    return [_redacted(d) for d in definitions]
 
 
 @router.post("", response_model=WorkflowDefinitionResponse, status_code=status.HTTP_201_CREATED)
@@ -172,6 +202,9 @@ async def create_workflow(
         source=body.trigger_source,
         detail_type=body.trigger_detail_type,
     )
+    # No stored config to merge against on a create, so the sentinel has nothing to
+    # keep and is refused rather than persisted as a "secret" (#432).
+    action_config = _write_secrets(body.action_type, body.action_config, stored={})
     definition = await create_definition(
         db,
         tenant_id=caller.tenant_id,
@@ -180,7 +213,7 @@ async def create_workflow(
         trigger_detail_type=body.trigger_detail_type,
         trigger_filter=body.trigger_filter,
         action_type=body.action_type,
-        action_config=body.action_config,
+        action_config=action_config,
         enabled=body.enabled,
     )
     emit_event(
@@ -189,7 +222,7 @@ async def create_workflow(
         _definition_payload(definition),
         tenant_id=caller.tenant_id,
     )
-    return WorkflowDefinitionResponse.model_validate(definition)
+    return _redacted(definition)
 
 
 @router.get("/{definition_id}", response_model=WorkflowDefinitionResponse)
@@ -201,7 +234,7 @@ async def get_workflow(
     definition = await get_definition(db, tenant_id=caller.tenant_id, definition_id=definition_id)
     if definition is None:
         raise _not_found()
-    return WorkflowDefinitionResponse.model_validate(definition)
+    return _redacted(definition)
 
 
 @router.put("/{definition_id}", response_model=WorkflowDefinitionResponse)
@@ -217,6 +250,15 @@ async def update_workflow(
         source=body.trigger_source,
         detail_type=body.trigger_detail_type,
     )
+    # Fetch first, to merge secrets against what is stored: a PUT replaces the whole
+    # action_config, and the portal round-trips the redacted sentinel, so an
+    # unchanged save must keep the real secret rather than write the placeholder
+    # over it (#432). Merge keys on the *submitted* action_type — changing the
+    # action legitimately drops the old action's secrets.
+    existing = await get_definition(db, tenant_id=caller.tenant_id, definition_id=definition_id)
+    if existing is None:
+        raise _not_found()
+    action_config = _write_secrets(body.action_type, body.action_config, existing.action_config)
     definition = await update_definition(
         db,
         tenant_id=caller.tenant_id,
@@ -226,7 +268,7 @@ async def update_workflow(
         trigger_detail_type=body.trigger_detail_type,
         trigger_filter=body.trigger_filter,
         action_type=body.action_type,
-        action_config=body.action_config,
+        action_config=action_config,
         enabled=body.enabled,
     )
     if definition is None:
@@ -237,7 +279,7 @@ async def update_workflow(
         _definition_payload(definition),
         tenant_id=caller.tenant_id,
     )
-    return WorkflowDefinitionResponse.model_validate(definition)
+    return _redacted(definition)
 
 
 @router.post("/{definition_id}/enabled", response_model=WorkflowDefinitionResponse)
@@ -262,7 +304,7 @@ async def set_workflow_enabled(
         _definition_payload(definition),
         tenant_id=caller.tenant_id,
     )
-    return WorkflowDefinitionResponse.model_validate(definition)
+    return _redacted(definition)
 
 
 @router.delete("/{definition_id}", status_code=status.HTTP_204_NO_CONTENT)

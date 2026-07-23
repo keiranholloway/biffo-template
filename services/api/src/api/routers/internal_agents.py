@@ -47,6 +47,7 @@ from ..agent_runs import (
     create_run,
     get_run,
     reap_stale_runs,
+    thread_messages,
 )
 from ..config import settings
 from ..database import get_db
@@ -59,6 +60,7 @@ from ..schemas.agent_run import (
     AgentRunResponse,
     CompleteAgentRunRequest,
     CreateAgentRunRequest,
+    ThreadMessagesResponse,
 )
 
 logger = Logger()
@@ -125,6 +127,22 @@ async def request_agent_run(
 
     emit_event(db, AGENT_RUN_REQUESTED, _reference_payload(run), tenant_id=principal.tenant_id)
     return AgentRunResponse.model_validate(run)
+
+
+# Declared before the single-segment /{run_id} route: a three-segment path can't
+# collide, but keeping the more specific route first makes the intent obvious.
+@router.get("/threads/{thread_id}/messages", response_model=ThreadMessagesResponse)
+async def read_thread_messages(
+    thread_id: str,
+    principal: ServicePrincipal = Depends(require_service_principal),
+    db: AsyncSession = Depends(get_db),
+) -> ThreadMessagesResponse:
+    """A thread's conversation history — the ordered user/assistant messages across
+    every run sharing ``thread_id`` (ADR-0016 §2). The synchronous entry point reads
+    this to assemble context for the next turn. An unknown thread is an empty
+    conversation, not a 404 — a first turn has no prior runs."""
+    history = await thread_messages(db, tenant_id=principal.tenant_id, thread_id=thread_id)
+    return ThreadMessagesResponse(thread_id=thread_id, messages=history)
 
 
 @router.get("/{run_id}", response_model=AgentRunResponse)

@@ -196,6 +196,50 @@ async def get_run(db: AsyncSession, *, tenant_id: str, run_id: str) -> AgentRun 
     )
 
 
+# A chat is a thread of runs; the thread history is the ordered user/assistant
+# messages across every run sharing a ``thread_id`` (ADR-0016 §2). Tool and
+# system messages are per-run machinery, not conversation, so they are excluded
+# from the history that seeds the next turn.
+_HISTORY_ROLES: tuple[str, ...] = ("user", "assistant")
+
+
+async def thread_messages(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    thread_id: str,
+    roles: tuple[str, ...] = _HISTORY_ROLES,
+) -> list[dict[str, Any]]:
+    """Assemble a thread's conversation history — the ordered ``user``/``assistant``
+    messages across every run sharing ``thread_id`` — as the context for the next
+    turn (ADR-0016 §2). Oldest-first.
+
+    Unlike :func:`list_runs`, this loads the ``messages`` transcript: a thread is a
+    bounded conversation (a handful of turns), not the unbounded run firehose §6.3
+    keeps out of summaries. It reads whatever the runtime wrote, filtering to the
+    conversation roles, so it is robust to the per-run transcript also carrying
+    system/tool messages.
+    """
+    transcripts = (
+        (
+            await db.execute(
+                select(AgentRun.messages)
+                .where(AgentRun.tenant_id == tenant_id, AgentRun.thread_id == thread_id)
+                .order_by(AgentRun.created_at.asc(), AgentRun.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    history: list[dict[str, Any]] = []
+    for transcript in transcripts:
+        for message in transcript or []:
+            if isinstance(message, dict) and message.get("role") in roles:
+                history.append(message)
+    return history
+
+
 async def claim_run(db: AsyncSession, *, tenant_id: str, run_id: str) -> AgentRun | None:
     """Take ownership of a ``pending`` run, moving it to ``running`` (ADR-0014 §5).
 

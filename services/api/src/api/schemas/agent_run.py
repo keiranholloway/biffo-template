@@ -37,6 +37,15 @@ class CreateAgentRunRequest(BaseModel):
     thread_id: str | None = Field(default=None, max_length=36)
 
 
+class ThreadMessagesResponse(BaseModel):
+    """A thread's assembled conversation history — the ordered user/assistant
+    messages across every run sharing ``thread_id`` (ADR-0016 §2), the context a
+    synchronous next turn builds on."""
+
+    thread_id: str
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class AgentRunResponse(BiffoBaseSchema):
     """A full run record — what the runtime reads before executing (§5)."""
 

@@ -47,6 +47,7 @@ function makeOctokitMock() {
       listWorkflowRuns: vi.fn(),
       createWorkflowDispatch: vi.fn(),
     },
+    request: vi.fn(),
   }
 }
 
@@ -975,5 +976,46 @@ describe('fastForwardBranch', () => {
     await expect(
       adapter().fastForwardBranch('acme', 'my-app', 'staging', 'sharedsha'),
     ).rejects.toThrow('Update is not a fast forward')
+  })
+})
+
+// ─── getEnvVariable ───────────────────────────────────────────────────────────
+
+describe('getEnvVariable', () => {
+  it('returns the value of an environment-scoped variable', async () => {
+    octokitMock.request.mockResolvedValueOnce({
+      data: { name: 'CORE_COGNITO_USER_POOL_ID', value: 'eu-west-1_LIVE' },
+    })
+
+    const value = await adapter().getEnvVariable('acme', 'crm', 'dev', 'CORE_COGNITO_USER_POOL_ID')
+
+    expect(value).toBe('eu-west-1_LIVE')
+    expect(octokitMock.request).toHaveBeenCalledWith(
+      'GET /repos/{owner}/{repo}/environments/{environment_name}/variables/{variable_name}',
+      {
+        owner: 'acme',
+        repo: 'crm',
+        environment_name: 'dev',
+        variable_name: 'CORE_COGNITO_USER_POOL_ID',
+      },
+    )
+  })
+
+  it('returns null when the variable is not set (404)', async () => {
+    octokitMock.request.mockRejectedValueOnce(
+      Object.assign(new Error('Not Found'), { status: 404 }),
+    )
+
+    const value = await adapter().getEnvVariable('acme', 'crm', 'dev', 'CORE_COGNITO_USER_POOL_ID')
+
+    expect(value).toBeNull()
+  })
+
+  it('rethrows non-404 errors instead of masking them as unset', async () => {
+    octokitMock.request.mockRejectedValueOnce(Object.assign(new Error('boom'), { status: 500 }))
+
+    await expect(
+      adapter().getEnvVariable('acme', 'crm', 'dev', 'CORE_COGNITO_USER_POOL_ID'),
+    ).rejects.toThrow('boom')
   })
 })

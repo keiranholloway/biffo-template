@@ -659,6 +659,34 @@ export class GitHubAdapter {
     }
   }
 
+  /**
+   * Read an environment-scoped Actions variable's value, or `null` if it isn't
+   * set (a 404). The counterpart to `setEnvVariable`, used by
+   * `biffo sibling check-identity` to read each sibling's baked-in
+   * `CORE_COGNITO_USER_POOL_ID` and compare it against the core's live pool
+   * (#400/#496). A 404 means the variable was never set on that environment,
+   * which is a real, reportable state — not an error — so it maps to `null`.
+   */
+  async getEnvVariable(
+    org: string,
+    repo: string,
+    env: string,
+    name: string,
+  ): Promise<string | null> {
+    try {
+      const { data } = await this.octokit.request(
+        'GET /repos/{owner}/{repo}/environments/{environment_name}/variables/{variable_name}',
+        { owner: org, repo, environment_name: env, variable_name: name },
+      )
+      return data.value
+    } catch (err: unknown) {
+      if ((err as { status?: number }).status === 404) {
+        return null
+      }
+      throw err
+    }
+  }
+
   async setRepoVariable(org: string, repo: string, name: string, value: string): Promise<void> {
     log.info(`Setting variable: ${name}`)
     // GitHub variables API has no upsert endpoint — PATCH updates, POST creates.

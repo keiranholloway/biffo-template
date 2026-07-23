@@ -107,20 +107,36 @@ export function readDivergenceConfig(repoRoot: string): DivergenceConfig {
 }
 
 /**
- * Extract the reason from a `Core-Divergence:` trailer, or null.
+ * Extract the reason from a `Core-<Key>:` trailer, or null.
  *
  * Anchored per-line (`m`) rather than searched loosely, so the trailer must be
  * its own line — a passing mention of the words inside prose is not an opt-out.
  */
-export function parseDivergenceTrailer(commitMessage: string): string | null {
+function parseTrailer(commitMessage: string, key: 'Divergence' | 'Convergence'): string | null {
   // Comment lines are git's own scissors/help text in the editor buffer, never
   // part of the recorded message.
   const body = commitMessage
     .split('\n')
     .filter((line) => !line.startsWith('#'))
     .join('\n')
-  const match = /^Core-Divergence:[ \t]*(\S.*?)[ \t]*$/m.exec(body)
+  const match = new RegExp(String.raw`^Core-${key}:[ \t]*(\S.*?)[ \t]*$`, 'm').exec(body)
   return match?.[1] ?? null
+}
+
+/** Reason from a `Core-Divergence:` trailer (the instance MUST differ), or null. */
+export function parseDivergenceTrailer(commitMessage: string): string | null {
+  return parseTrailer(commitMessage, 'Divergence')
+}
+
+/**
+ * Reason from a `Core-Convergence:` trailer (this reverts template-owned files
+ * TOWARD the template — strictly less divergence), or null. Kept distinct from
+ * `Core-Divergence:` so history and audits can tell the two apart: a convergence
+ * is drift being removed, not added, and must not read as a divergence to chase
+ * (#385).
+ */
+export function parseConvergenceTrailer(commitMessage: string): string | null {
+  return parseTrailer(commitMessage, 'Convergence')
 }
 
 /**
@@ -173,7 +189,8 @@ export function parseNameStatus(stdout: string): { changed: string[]; deleted: s
   return { changed, deleted }
 }
 
-export type OwnershipSkipReason = 'template' | 'upgrade-branch' | 'divergence-trailer'
+export type OwnershipSkipReason =
+  'template' | 'upgrade-branch' | 'divergence-trailer' | 'convergence-trailer'
 
 export interface OwnershipCheckInput {
   changedFiles: string[]
@@ -202,6 +219,9 @@ export interface OwnershipCheckResult {
   warned: { path: string; entry: DivergenceEntry }[]
   /** Reason from the `Core-Divergence:` trailer, when one allowed the change. */
   divergenceReason: string | null
+  /** Reason from the `Core-Convergence:` trailer, when one allowed the change
+   * (drift being reverted toward the template, #385). */
+  convergenceReason: string | null
 }
 
 export function checkCoreOwnership({
@@ -212,7 +232,7 @@ export function checkCoreOwnership({
   commitMessage = '',
   warnOnly = [],
 }: OwnershipCheckInput): OwnershipCheckResult {
-  const empty = { blocked: [], warned: [], divergenceReason: null }
+  const empty = { blocked: [], warned: [], divergenceReason: null, convergenceReason: null }
 
   // The template owns these paths; editing them is its purpose.
   if (!isInstance) return { skipped: 'template', ...empty }
@@ -240,12 +260,39 @@ export function checkCoreOwnership({
     else offending.push(path)
   }
 
-  // The explicit, recorded opt-out. Warnings still surface — the trailer excuses
-  // the block, it does not make the drift stop existing.
+  // Two explicit, recorded opt-outs, kept separate so history can tell drift
+  // being ADDED from drift being REMOVED. Warnings still surface either way — a
+  // trailer excuses the block, it does not make the change stop existing.
   const divergenceReason = parseDivergenceTrailer(commitMessage)
-  if (offending.length > 0 && divergenceReason !== null) {
-    return { skipped: 'divergence-trailer', blocked: [], warned, divergenceReason }
+  const convergenceReason = parseConvergenceTrailer(commitMessage)
+  if (offending.length > 0) {
+    // Divergence wins if both are present: a commit that adds any drift is
+    // recorded as a divergence, not laundered as a convergence.
+    if (divergenceReason !== null) {
+      return {
+        skipped: 'divergence-trailer',
+        blocked: [],
+        warned,
+        divergenceReason,
+        convergenceReason: null,
+      }
+    }
+    if (convergenceReason !== null) {
+      return {
+        skipped: 'convergence-trailer',
+        blocked: [],
+        warned,
+        divergenceReason: null,
+        convergenceReason,
+      }
+    }
   }
 
-  return { skipped: null, blocked: offending, warned, divergenceReason: null }
+  return {
+    skipped: null,
+    blocked: offending,
+    warned,
+    divergenceReason: null,
+    convergenceReason: null,
+  }
 }

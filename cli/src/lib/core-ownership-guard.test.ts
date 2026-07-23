@@ -8,6 +8,7 @@ import {
   DIVERGENCE_FILE,
   type DivergenceEntry,
   checkCoreOwnership,
+  parseConvergenceTrailer,
   parseDivergenceTrailer,
   parseNameStatus,
   readDivergenceConfig,
@@ -103,6 +104,44 @@ describe('checkCoreOwnership — what it lets through', () => {
     expect(result.skipped).toBe('divergence-trailer')
     expect(result.blocked).toEqual([])
     expect(result.divergenceReason).toBe('upstream cannot express this yet')
+    expect(result.convergenceReason).toBeNull()
+  })
+
+  it('allows a Core-Convergence trailer, kept DISTINCT from divergence (#385)', () => {
+    // Reverting a template-owned file to the template's own content is strictly
+    // less divergence — the case the guard used to force a false Core-Divergence
+    // trailer onto.
+    const result = check({
+      changedFiles: ['apps/portal/src/app/layout.tsx'],
+      commitMessage:
+        'chore: adopt the portal split\n\nCore-Convergence: revert layout.tsx to the template\n',
+    })
+    expect(result.skipped).toBe('convergence-trailer')
+    expect(result.blocked).toEqual([])
+    expect(result.convergenceReason).toBe('revert layout.tsx to the template')
+    expect(result.divergenceReason).toBeNull()
+  })
+
+  it('records a commit as divergence, not convergence, when BOTH trailers are present', () => {
+    // A commit that adds any drift must not be laundered as a convergence.
+    const result = check({
+      changedFiles: ['packages/ui/src/index.ts'],
+      commitMessage:
+        'chore: mixed\n\nCore-Divergence: instance needs X\nCore-Convergence: also reverts Y\n',
+    })
+    expect(result.skipped).toBe('divergence-trailer')
+    expect(result.divergenceReason).toBe('instance needs X')
+    expect(result.convergenceReason).toBeNull()
+  })
+
+  it('a Core-Convergence trailer does not excuse a change with no template-owned paths', () => {
+    // Nothing to excuse — user-owned changes were never blocked.
+    const result = check({
+      changedFiles: ['db/seed.sql'],
+      commitMessage: 'x\n\nCore-Convergence: n/a\n',
+    })
+    expect(result.skipped).toBeNull()
+    expect(result.blocked).toEqual([])
   })
 })
 
@@ -178,6 +217,35 @@ describe('parseDivergenceTrailer', () => {
     expect(parseDivergenceTrailer('fix: x\n\n# Core-Divergence: example from the template\n')).toBe(
       null,
     )
+  })
+
+  it('does not confuse Core-Convergence for Core-Divergence', () => {
+    expect(parseDivergenceTrailer('x\n\nCore-Convergence: reverting\n')).toBeNull()
+  })
+})
+
+describe('parseConvergenceTrailer', () => {
+  it('extracts the reason from a Core-Convergence trailer on its own line', () => {
+    expect(parseConvergenceTrailer('chore: revert\n\nCore-Convergence: back to template\n')).toBe(
+      'back to template',
+    )
+  })
+
+  it('requires the trailer on its own line, not mentioned in prose', () => {
+    expect(parseConvergenceTrailer('fix: discuss Core-Convergence: later maybe')).toBeNull()
+  })
+
+  it('requires a reason and trims whitespace', () => {
+    expect(parseConvergenceTrailer('x\n\nCore-Convergence:\n')).toBeNull()
+    expect(parseConvergenceTrailer('x\n\nCore-Convergence:   back   \n')).toBe('back')
+  })
+
+  it('ignores a trailer inside a comment line git will strip', () => {
+    expect(parseConvergenceTrailer('x\n\n# Core-Convergence: example\n')).toBeNull()
+  })
+
+  it('does not confuse Core-Divergence for Core-Convergence', () => {
+    expect(parseConvergenceTrailer('x\n\nCore-Divergence: needs it\n')).toBeNull()
   })
 })
 

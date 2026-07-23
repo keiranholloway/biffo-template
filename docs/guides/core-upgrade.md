@@ -49,11 +49,19 @@ So the same ownership rule runs as a guard:
 
 It is inert in `biffo-template` itself, where changing these paths is the entire point.
 
-Four ways past, in order of preference:
+Five ways past, in order of preference:
 
 1. **Put the change in a user-owned path.** Usually the right answer.
 2. **Make it upstream** in `biffo-template` and take it with `biffo core upgrade`. The answer whenever the change is genuinely core.
-3. **A `Core-Divergence:` trailer** in the commit message, when the instance genuinely must differ:
+3. **A `Core-Convergence:` trailer**, when the change REMOVES divergence — reverting a template-owned file to the template's own content, or deleting one the template no longer ships:
+
+   ```
+   Core-Convergence: <what this reverts toward the template>
+   ```
+
+   The guard cannot see file content (it runs in a commit hook with no template checkout), so it cannot tell a revert-toward-template from any other edit. This trailer says so explicitly, and is kept **distinct from `Core-Divergence:`** so a convergence never reads as drift to chase later — it is drift being removed, not added.
+
+4. **A `Core-Divergence:` trailer** in the commit message, when the instance genuinely must differ:
 
    ```
    Core-Divergence: <why this instance must differ from the template>
@@ -61,7 +69,7 @@ Four ways past, in order of preference:
 
    The commit is allowed and the exception lands in history rather than being argued about later. Raise an upstream issue alongside it.
 
-4. **A warn-only prefix in `biffo.divergence.json`**, for a boundary you knowingly sit astride while an upstream fix is pending:
+5. **A warn-only prefix in `biffo.divergence.json`**, for a boundary you knowingly sit astride while an upstream fix is pending:
 
    ```json
    {
@@ -135,7 +143,7 @@ The guard is deliberately narrow — it ignores Lambdas, roles, security groups 
 
 `orchestrator` and `agent-runtime` are **first-party** plugins: their Terraform lives in the template-owned `services/_plugins/<name>/terraform/` and rides `biffo core upgrade` like any other core file.
 
-Until now it was also *copied* to `modules/plugins/<name>/` at install time, and that copy is what Terraform read. The copy was never re-synced, so **an upgrade updated the source and left the deployed module frozen at install time** — silently. Measured in a live instance right after a clean upgrade: `agent-runtime` 53 lines adrift, `orchestrator` 15.
+Until now it was also _copied_ to `modules/plugins/<name>/` at install time, and that copy is what Terraform read. The copy was never re-synced, so **an upgrade updated the source and left the deployed module frozen at install time** — silently. Measured in a live instance right after a clean upgrade: `agent-runtime` 53 lines adrift, `orchestrator` 15.
 
 New instances need nothing: `biffo plugin install` now sources first-party plugins from their real path.
 
@@ -157,7 +165,7 @@ git rm -r modules/plugins/agent-runtime modules/plugins/orchestrator
 
 Order does not matter and nothing breaks mid-migration: each directory's internal module reference matches its own location, so the old copy keeps working until you stop pointing at it.
 
-Third-party plugins are unaffected — for them the copy *is* the delivery mechanism, since their source comes from a registry repo rather than this tree.
+Third-party plugins are unaffected — for them the copy _is_ the delivery mechanism, since their source comes from a registry repo rather than this tree.
 
 Most of an upgrade is additive. A few changes **destroy data or require manual
 work**, and Terraform will apply them without ceremony — a Cognito pool
@@ -191,7 +199,7 @@ What you must do:
 3. **Tell your users first.** Their existing password stops working the moment
    the deploy lands.
 
-Why it is worth the cost: the pool previously had a username *and* an email
+Why it is worth the cost: the pool previously had a username _and_ an email
 that had to agree, and that split leaked through the whole product — the sign-in
 field asked for "Username or email", the invite email had to explain "this is
 your username, not your email address", and the admin create-user API defaulted

@@ -1,3 +1,6 @@
+import os
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -104,8 +107,15 @@ class Settings(BaseSettings):
     # Core fronts the turn through its existing API Gateway + Cognito auth, then
     # synchronously invokes the agent-runtime Lambda (RequestResponse) for the LLM
     # turn. This is the runtime's function NAME to invoke; empty means the assistant
-    # is not wired on this deployment (the endpoint then returns 503). Set by
-    # Terraform from the agent-runtime plugin's derived function name.
+    # is not wired on this deployment (the endpoint then returns 503).
+    #
+    # Not set by Terraform. It is derived by CONVENTION at startup from the Lambda's
+    # own AWS_LAMBDA_FUNCTION_NAME (see the model validator below), the same
+    # derive-by-convention philosophy the template uses for the runtime ARN. This
+    # is what lets the Core->runtime sync-invoke wiring be distributed
+    # template-owned (ADR-0016): no per-instance BIFFO_AGENT_RUNTIME_FUNCTION_NAME
+    # env var to hand-wire, so an upgraded or freshly-init'd instance gets a live
+    # assistant instead of a 503. An explicit value still wins as an override.
     agent_runtime_function_name: str = ""
     # The assistant's model — a platform config value, not per-user (ADR-0016 §4).
     # Any OpenRouter model slug; the runtime resolves the one OpenRouter key.
@@ -145,6 +155,31 @@ class Settings(BaseSettings):
     environment: str = "dev"
     log_level: str = "INFO"
     cors_origins: list[str] = ["http://localhost:3000"]
+
+    @model_validator(mode="after")
+    def _derive_agent_runtime_function_name(self) -> "Settings":
+        """Derive the agent-runtime function name by convention (ADR-0016).
+
+        An explicitly-set value always wins. Otherwise derive it from this
+        Lambda's own name: the compute module names every function
+        ``<project>-<env>-<function>``, so the Core API is
+        ``<project>-<env>-core-api`` and the agent-runtime plugin is
+        ``<project>-<env>-plugin-agent-runtime``. Swapping the trailing
+        ``core-api`` for ``plugin-agent-runtime`` on ``AWS_LAMBDA_FUNCTION_NAME``
+        yields the runtime to invoke, with no per-instance Terraform env var.
+
+        Only fires when the name actually ends in ``core-api``; if it doesn't (a
+        differently-named function) or ``AWS_LAMBDA_FUNCTION_NAME`` is absent
+        (local/tests), the value stays empty and the endpoint returns 503 —
+        unchanged behaviour.
+        """
+        if self.agent_runtime_function_name:
+            return self
+        own_name = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "")
+        suffix = "core-api"
+        if own_name.endswith(suffix):
+            self.agent_runtime_function_name = own_name[: -len(suffix)] + "plugin-agent-runtime"
+        return self
 
 
 settings = Settings()

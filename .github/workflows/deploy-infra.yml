@@ -191,6 +191,25 @@ jobs:
           gh variable set PORTAL_URL \
             --body "$(terraform output -raw portal_url)" \
             --env dev
+      - name: Publish runtime identity document (#403)
+        # The core's identity, resolved at RUNTIME by the portal and every sibling
+        # instead of baked into their bundles — so a Cognito pool replacement no
+        # longer strands siblings on a dead pool (#400). Written from Terraform
+        # outputs (the source of truth) to the portal bucket root; CloudFront
+        # serves it from the short-TTL .well-known/* behaviour. Nothing here is
+        # secret: every value already ships in plaintext in today's bundles.
+        run: |
+          IDENTITY="$(jq -n \
+            --arg userPoolId "$(terraform output -raw cognito_user_pool_id)" \
+            --arg clientId "$(terraform output -raw cognito_client_id)" \
+            --arg region "${AWS_REGION:-us-east-1}" \
+            --arg apiUrl "$(terraform output -raw api_gateway_url)" \
+            --arg portalUrl "$(terraform output -raw portal_url)" \
+            '{userPoolId: $userPoolId, clientId: $clientId, region: $region, apiUrl: $apiUrl, portalUrl: $portalUrl}')"
+          echo "$IDENTITY" | aws s3 cp - \
+            "s3://$(terraform output -raw portal_bucket_name)/.well-known/biffo-identity.json" \
+            --content-type application/json \
+            --cache-control "max-age=60"
 
   # ─── STAGING ─────────────────────────────────────────────────────────────────
   # Auto-deploys on push to staging branch; manual via workflow_dispatch.
@@ -331,6 +350,20 @@ jobs:
           gh variable set PORTAL_URL \
             --body "$(terraform output -raw portal_url)" \
             --env staging
+      - name: Publish runtime identity document (#403)
+        # See the dev job above for the rationale.
+        run: |
+          IDENTITY="$(jq -n \
+            --arg userPoolId "$(terraform output -raw cognito_user_pool_id)" \
+            --arg clientId "$(terraform output -raw cognito_client_id)" \
+            --arg region "${AWS_REGION:-us-east-1}" \
+            --arg apiUrl "$(terraform output -raw api_gateway_url)" \
+            --arg portalUrl "$(terraform output -raw portal_url)" \
+            '{userPoolId: $userPoolId, clientId: $clientId, region: $region, apiUrl: $apiUrl, portalUrl: $portalUrl}')"
+          echo "$IDENTITY" | aws s3 cp - \
+            "s3://$(terraform output -raw portal_bucket_name)/.well-known/biffo-identity.json" \
+            --content-type application/json \
+            --cache-control "max-age=60"
 
   # ─── PROD ────────────────────────────────────────────────────────────────────
   # Auto-deploys on push to main branch; manual via workflow_dispatch.
@@ -479,3 +512,17 @@ jobs:
           gh variable set PORTAL_URL \
             --body "$(terraform output -raw portal_url)" \
             --env prod
+      - name: Publish runtime identity document (#403)
+        # See the dev job above for the rationale.
+        run: |
+          IDENTITY="$(jq -n \
+            --arg userPoolId "$(terraform output -raw cognito_user_pool_id)" \
+            --arg clientId "$(terraform output -raw cognito_client_id)" \
+            --arg region "${AWS_REGION:-us-east-1}" \
+            --arg apiUrl "$(terraform output -raw api_gateway_url)" \
+            --arg portalUrl "$(terraform output -raw portal_url)" \
+            '{userPoolId: $userPoolId, clientId: $clientId, region: $region, apiUrl: $apiUrl, portalUrl: $portalUrl}')"
+          echo "$IDENTITY" | aws s3 cp - \
+            "s3://$(terraform output -raw portal_bucket_name)/.well-known/biffo-identity.json" \
+            --content-type application/json \
+            --cache-control "max-age=60"

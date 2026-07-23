@@ -94,3 +94,44 @@ module "plugin_agent_runtime" {
 
   tags = local.tags
 }
+
+# Core -> agent-runtime synchronous invoke grant (ADR-0016).
+#
+# The prompt-assistant endpoint (POST /api/v1/admin/agent-chat) fronts a chat
+# turn through Core's existing API Gateway + Cognito, then synchronously invokes
+# the agent-runtime Lambda (RequestResponse) for the LLM turn. So the Core API's
+# execution role needs lambda:InvokeFunction on that function.
+#
+# This lives HERE, template-owned, rather than as an argument to module.core_api
+# in the user-owned main.tf, so it rides `biffo core upgrade` — the same reason
+# the plugin module blocks above are carved out. When it lived in main.tf, a
+# freshly-init'd or upgraded instance got a Core role with no invoke permission
+# (and, before the convention-derivation in services/api, no function name) and a
+# dead assistant returning 503. Gated on the same var.enable_core_plugins as the
+# plugin itself, so it appears only when the runtime it targets does.
+#
+# This is a LEAF resource: it depends on both module.core_api (role) and
+# module.plugin_agent_runtime (target ARN), but neither of those depends on it,
+# so it does NOT create the core_api -> api_gateway -> plugin -> core_api cycle
+# that issue #201 warns about (which comes from feeding a plugin's output back
+# INTO module.core_api's inputs). The function name Core needs is derived by
+# convention in services/api (config.py), not from a module output, for the same
+# reason. Verified with `terraform validate`.
+resource "aws_iam_role_policy" "core_api_invoke_agent_runtime" {
+  for_each = var.enable_core_plugins ? { "agent-runtime" = true } : {}
+
+  name = "invoke-agent-runtime"
+  role = module.core_api.role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "InvokeAgentRuntime"
+        Effect   = "Allow"
+        Action   = "lambda:InvokeFunction"
+        Resource = module.plugin_agent_runtime[each.key].function_arn
+      }
+    ]
+  })
+}

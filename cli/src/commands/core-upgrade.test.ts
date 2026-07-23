@@ -425,14 +425,17 @@ describe('runCoreUpgrade — lockfile refresh is driven by what landed (#393)', 
    * deleted, so nothing is invalidated. This is the assertion the exclusion
    * alone cannot make.
    */
-  it('does not refresh for a removed manifest that was already absent', async () => {
+  it('restores a template-owned manifest the instance deleted, and refreshes (#395)', async () => {
     w(base, 'services/api/pyproject.toml', '[project]\nname = "api"\n')
     w(theirs, 'services/api/pyproject.toml', '[project]\nname = "api"\n')
-    // ...and the instance does not have it, so the deletion is a no-op.
+    // The instance deleted a template-owned manifest — drift. The upgrade
+    // restores it (#395), which changes dependency resolution, so the lockfile
+    // refresh runs (it is no longer a silent no-op).
 
     await upgrade()
 
-    expect(runCommand).not.toHaveBeenCalled()
+    expect(existsSync(join(instance, 'services/api/pyproject.toml'))).toBe(true)
+    expect(runCommand).toHaveBeenCalled()
   })
 
   it('still refreshes when a real root manifest is rewritten', async () => {

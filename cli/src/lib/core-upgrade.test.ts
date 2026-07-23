@@ -138,6 +138,48 @@ describe('planCoreUpgrade (classification)', () => {
     expect(p.conflicts).toHaveLength(1)
   })
 
+  it('restored when the instance deleted a template-owned file the template still ships (#395)', async () => {
+    w(base, 'services/api/guard.py', 'v1')
+    w(theirs, 'services/api/guard.py', 'v1')
+    // absent from ours — the instance deleted a template-owned file.
+    const p = await plan()
+    const e = p.entries.find((x) => x.path === 'services/api/guard.py')
+    expect(e?.status).toBe('restored')
+    expect(e?.content).toBe('v1')
+    expect(p.summary.restored).toBe(1)
+    expect(p.divergenceSkips).toEqual([])
+  })
+
+  it('restores the TARGET content even when upstream also changed the deleted file (#395)', async () => {
+    w(base, 'services/api/guard.py', 'v1')
+    w(theirs, 'services/api/guard.py', 'v2')
+    const p = await plan()
+    const e = p.entries.find((x) => x.path === 'services/api/guard.py')
+    expect(e?.status).toBe('restored')
+    expect(e?.content).toBe('v2')
+  })
+
+  it('does NOT restore a deleted file the instance declared divergent, and reports the skip (#395)', async () => {
+    w(base, 'services/api/guard.py', 'v1')
+    w(theirs, 'services/api/guard.py', 'v1')
+    // absent from ours, but the instance declares the prefix an intentional
+    // divergence — the governed way to keep a template-owned path deleted.
+    w(
+      ours,
+      'biffo.divergence.json',
+      JSON.stringify({
+        warnOnly: [
+          { prefix: 'services/api/guard.py', reason: 'deliberately dropped', upstream: '#395' },
+        ],
+      }),
+    )
+    const p = await plan()
+    const e = p.entries.find((x) => x.path === 'services/api/guard.py')
+    expect(e?.status).toBe('removed')
+    expect(p.summary.restored).toBe(0)
+    expect(p.divergenceSkips).toEqual(['services/api/guard.py'])
+  })
+
   it('ignores user-owned files entirely', async () => {
     w(base, 'services/acme-crm/p.json', '1')
     w(ours, 'services/acme-crm/p.json', '2')

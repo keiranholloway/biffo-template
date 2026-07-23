@@ -407,6 +407,13 @@ async function runCoreUpgradeResolved(
       `${chalk.bold(String(migrations.entries.length))} new core migration(s), ` +
       `${plan.conflicts.length > 0 ? chalk.red(`${plan.conflicts.length} conflict(s)`) : chalk.green('0 conflicts')}.`,
   )
+  if (plan.divergenceSkips && plan.divergenceSkips.length > 0) {
+    console.log(
+      chalk.dim(
+        `  ${plan.divergenceSkips.length} deleted template-owned file(s) left absent — declared divergent in biffo.divergence.json.`,
+      ),
+    )
+  }
 
   if (!options.apply) {
     if (plan.conflicts.length > 0) {
@@ -588,8 +595,16 @@ export function buildPrBody(
     `- merged: ${plan.summary.merged}`,
     `- take-theirs: ${plan.summary['take-theirs']}`,
     `- added: ${plan.summary.added}`,
+    `- restored: ${plan.summary.restored}`,
     `- removed: ${plan.summary.removed}`,
   )
+  if (plan.divergenceSkips && plan.divergenceSkips.length > 0) {
+    lines.push(
+      '',
+      `> ${plan.divergenceSkips.length} template-owned file(s) the instance deleted were left absent ` +
+        `because \`biffo.divergence.json\` declares the path an intentional divergence (not restored).`,
+    )
+  }
   if (migrations.entries.length > 0) {
     lines.push(
       '',
@@ -694,6 +709,7 @@ const STATUS_COLOR: Record<string, (s: string) => string> = {
   merged: chalk.yellow,
   'take-theirs': chalk.green,
   added: chalk.green,
+  restored: chalk.green,
   removed: chalk.red,
   'keep-ours': chalk.dim,
 }

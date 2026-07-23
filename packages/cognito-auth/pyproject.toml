@@ -1,0 +1,42 @@
+[project]
+name = "biffo-cognito-auth"
+# Independent of the template's core version. This is a small, internal shared
+# library (a foundation package both Core and the agent-runtime import), not a
+# published third-party contract like biffo-plugin-sdk — but it keeps its own
+# semver rather than borrowing core.version, which moves on every template-owned
+# change (ADR-0006) for reasons unrelated to whether this verifier's API changed.
+version = "0.1.0"
+description = "Biffo shared Cognito JWT verification — a pure, dependency-light RS256 verifier used by the Core API and the agent runtime"
+readme = "README.md"
+requires-python = ">=3.13"
+authors = [{ name = "Keiran Holloway", email = "keiran@tabsii.com" }]
+dependencies = [
+  # PyJWT with the crypto extra for RS256/RSAAlgorithm; httpx for the JWKS fetch.
+  # Deliberately NO database client and NO FastAPI: this module is pure and safe
+  # to import anywhere (ADR-0002 / TID251), and callers map its exceptions onto
+  # their own transport (Core → HTTPException).
+  "pyjwt[crypto]>=2.10.0",
+  "httpx>=0.28.1",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3.4",
+  "pytest-asyncio>=0.25.2",
+  "cryptography>=44.0.0",
+  "ruff>=0.8.0",
+  "pyright>=1.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Explicit rather than relying on hatchling's name-matching heuristic: the
+# distribution name (`biffo-cognito-auth`) and the import name
+# (`biffo_cognito_auth`) differ.
+[tool.hatch.build.targets.wheel]
+packages = ["src/biffo_cognito_auth"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/biffo_cognito_auth", "tests", "README.md", "pyproject.toml"]

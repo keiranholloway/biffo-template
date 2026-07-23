@@ -295,6 +295,51 @@ class TestTablePermissions:
         with pytest.raises(ValidationError):
             TablePermissions.model_validate({"read": {"allowed": True, "role": ["a"]}})
 
+    def test_allowed_principals_defaults_empty(self):
+        # ADR-0014 §7 thin-by-default: a rule grants agents nothing until it
+        # names a principal.
+        rule = PermissionRule()
+        assert rule.allowed_principals == []
+
+    def test_allowed_principals_parses(self):
+        table = PluginTableDefinition.model_validate(
+            {
+                "name": "leads",
+                "permissions": {
+                    "read": {"allowed": True, "allowed_principals": ["system:agent-runtime"]}
+                },
+            }
+        )
+        assert table.permissions.read.allowed_principals == ["system:agent-runtime"]
+        # It is a distinct axis from required_role, which stays empty here.
+        assert table.permissions.read.required_role == []
+
+    def test_allowed_principals_is_independent_of_required_role(self):
+        # Regression: the existing required_role path is unaffected by the new
+        # field — declaring one must not populate or require the other.
+        rule = PermissionRule.model_validate({"allowed": True, "required_role": ["admin"]})
+        assert rule.required_role == ["admin"]
+        assert rule.allowed_principals == []
+
+    def test_allowed_principals_rejects_missing_system_prefix(self):
+        # An entry without the system: prefix is unmatchable dead config and
+        # must fail loudly (ADR-0014 §7).
+        with pytest.raises(ValidationError):
+            PermissionRule.model_validate(
+                {"allowed": True, "allowed_principals": ["agent-runtime"]}
+            )
+
+    def test_allowed_principals_rejects_bare_prefix(self):
+        with pytest.raises(ValidationError):
+            PermissionRule.model_validate({"allowed": True, "allowed_principals": ["system:"]})
+
+    def test_typod_allowed_principals_key_is_rejected(self):
+        # extra="forbid" must still catch a typo'd key on this security surface.
+        with pytest.raises(ValidationError):
+            PermissionRule.model_validate(
+                {"allowed": True, "allowed_principal": ["system:agent-runtime"]}
+            )
+
     def test_full_block_round_trips_through_json(self):
         block = {
             op: {"allowed": True, "required_role": [f"{op}-role"]}
@@ -302,4 +347,7 @@ class TestTablePermissions:
         }
         table = PluginTableDefinition.model_validate({"name": "roles", "permissions": block})
         dumped = table.model_dump(mode="json")["permissions"]
-        assert dumped == block
+        # allowed_principals (ADR-0014 §7) defaults to [] on every rule and is
+        # emitted by model_dump even though the source block omits it.
+        expected = {op: {**rule, "allowed_principals": []} for op, rule in block.items()}
+        assert dumped == expected

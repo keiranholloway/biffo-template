@@ -7,6 +7,17 @@ authors (that package can't import this module — it's installed outside
 the Core API's own deployment), and again in cli/src/lib/plugin-manifest.ts
 (zod) for install-time validation. If any side's fields, defaults, or
 validators change, update the others.
+
+**Exception — ``PermissionRule.allowed_principals`` is intentionally NOT
+mirrored.** It is the ADR-0014 §7 agent read-scope ceiling, and §7 places that
+ceiling on Core model classes only: a table is reachable by agents solely by
+having a Core model that names a principal, while plugin-authored and
+DDL-imported tables are deliberately invisible to agents. A plugin manifest has
+no reason to carry the field, and the CLI zod's ``.strict()`` correctly rejects
+it at install time. Core's ``PermissionRule`` becoming a strict superset of the
+plugin-facing schema keeps the CLI's guarantee intact (a manifest that passes
+zod still parses here); the reverse divergence — Core rejecting what the CLI
+accepts — is what the mirror exists to prevent, and it does not occur.
 """
 
 from __future__ import annotations
@@ -14,7 +25,7 @@ from __future__ import annotations
 import ast
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
 
 # Module-level constant — built once, not on every _resolve_sa_type call.
@@ -98,6 +109,17 @@ class PermissionRule(BaseModel):
     generic layer regardless of this rule and is deliberately not configurable
     here.
 
+    ``allowed_principals`` is a **separate** allow-list on a distinct axis
+    (ADR-0014 §7): the agent read-scope ceiling. It is evaluated **only** for
+    ADR-0009 service principals (the ``require_service_crud_permission`` guard),
+    never for ``AuthenticatedUser`` — and ``required_role`` is likewise never
+    consulted for a service principal. The two fields are deliberately kept
+    apart because folding the agent grant into ``required_role`` would let a
+    Cognito group literally named ``agent-runtime`` — creatable out-of-band via
+    the AWS console/CLI — silently confer agent read access. The ``system:``
+    prefix is legibility; the security property is that this is a field a
+    Cognito group cannot populate at all.
+
     ``extra="forbid"`` so a typo'd key (e.g. ``role`` for ``required_role``)
     fails loudly rather than being silently ignored on a security surface.
     """
@@ -112,6 +134,36 @@ class PermissionRule(BaseModel):
         default_factory=list,
         description="Any-of role allow-list; empty means any authenticated caller.",
     )
+    allowed_principals: list[str] = Field(
+        default_factory=list,
+        description=(
+            "ADR-0014 §7 agent read-scope ceiling: service-principal logical "
+            "names (e.g. 'system:agent-runtime') permitted to read this "
+            "operation. Empty by default — thin-by-default, a table grants "
+            "agents nothing until it names one. Evaluated only for ADR-0009 "
+            "service principals, never for authenticated Cognito users."
+        ),
+    )
+
+    @field_validator("allowed_principals")
+    @classmethod
+    def _validate_allowed_principals(cls, value: list[str]) -> list[str]:
+        """Every entry must be a non-empty ``system:<name>`` string.
+
+        The ``system:`` prefix is legibility per ADR-0014 §7, but enforcing it
+        here is fail-loud hygiene on a security surface: the only values that
+        can ever match a derived principal name are ``system:<name>`` (see
+        ``ServicePrincipal.logical_names``), so an entry without the prefix — or
+        an empty one — is unmatchable dead config that should be rejected at
+        parse time rather than silently never granting anything.
+        """
+        for entry in value:
+            if not entry.startswith("system:") or len(entry) <= len("system:"):
+                raise ValueError(
+                    f"allowed_principals entry {entry!r} must be a non-empty "
+                    "'system:<name>' string (ADR-0014 §7)."
+                )
+        return value
 
 
 class TablePermissions(BaseModel):

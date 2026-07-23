@@ -427,6 +427,147 @@ describe('runCoreUpgrade — lockfile refresh is driven by what landed (#393)', 
   })
 })
 
+/**
+ * Issue #434: an instance may still carry an orphaned `core.version` inherited
+ * before #423 retired it from the template. An upgrade deletes it, but only when
+ * it is provably the un-repurposed inherited value — one known instance
+ * repurposed the file as its own app-release lineage, and deleting that would
+ * destroy real data. The decision fails closed toward keeping the file.
+ */
+describe('runCoreUpgrade — orphaned core.version cleanup (#434)', () => {
+  let base: string
+  let theirs: string
+  let instance: string
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    base = mkdtempSync(join(tmpdir(), 'cv-base-'))
+    theirs = mkdtempSync(join(tmpdir(), 'cv-theirs-'))
+    instance = mkdtempSync(join(tmpdir(), 'cv-inst-'))
+    // base @ 0.1.0, theirs @ 0.2.0 — something changes so the upgrade is not a no-op.
+    writeFileSync(join(base, 'core.version'), '0.1.0\n')
+    writeFileSync(join(base, 'core-manifest.json'), JSON.stringify(MANIFEST))
+    w(base, 'services/api/main.py', 'v1')
+    writeFileSync(join(theirs, 'core.version'), '0.2.0\n')
+    writeFileSync(join(theirs, 'core-manifest.json'), JSON.stringify(MANIFEST))
+    w(theirs, 'services/api/main.py', 'v2')
+    // instance @ 0.1.0 per biffo.core.json, unmodified main.py.
+    writeFileSync(join(instance, 'biffo.core.json'), JSON.stringify({ version: '0.1.0' }))
+    w(instance, 'services/api/main.py', 'v1')
+  })
+  afterEach(() => {
+    for (const d of [base, theirs, instance]) rmSync(d, { recursive: true, force: true })
+  })
+
+  async function apply(): Promise<ReturnType<typeof fakeDeps>> {
+    const deps = fakeDeps()
+    await runCoreUpgrade(
+      { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs, apply: true },
+      deps.deps,
+    )
+    return deps
+  }
+
+  it('deletes core.version when it matches the version biffo.core.json records', async () => {
+    // Inherited copy still equals what biffo.core.json records (0.1.0) — the
+    // pristine post-init shape, un-repurposed.
+    writeFileSync(join(instance, 'core.version'), '0.1.0\n')
+
+    const { createPullRequest } = await apply()
+
+    expect(existsSync(join(instance, 'core.version'))).toBe(false)
+    // The deletion is surfaced, not silent.
+    expect(vi.mocked(log.info).mock.calls.map((c) => String(c[0]))).toContainEqual(
+      expect.stringContaining('core.version'),
+    )
+    // ...and explained in the PR body.
+    expect(createPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('removed orphaned') }),
+    )
+  })
+
+  it('keeps core.version when it differs from biffo.core.json (looks repurposed)', async () => {
+    // The instance repurposed core.version as its own app-release lineage; it no
+    // longer tracks the inherited core version (which biffo.core.json records as
+    // 0.1.0). Deleting it would destroy real data.
+    writeFileSync(join(instance, 'core.version'), '4.7.2\n')
+
+    const { createPullRequest } = await apply()
+
+    expect(existsSync(join(instance, 'core.version'))).toBe(true)
+    expect(readFileSync(join(instance, 'core.version'), 'utf8')).toBe('4.7.2\n')
+    expect(createPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.not.stringContaining('removed orphaned') }),
+    )
+  })
+
+  it('keeps a core.version repurposed to a non-semver string', async () => {
+    writeFileSync(join(instance, 'core.version'), 'internal-build-42\n')
+
+    await apply()
+
+    expect(existsSync(join(instance, 'core.version'))).toBe(true)
+  })
+
+  it('keeps core.version when biffo.core.json is absent (no authority to check)', async () => {
+    // Supply the merge base explicitly so the upgrade can still run without
+    // biffo.core.json — otherwise the instance version cannot be resolved.
+    rmSync(join(instance, 'biffo.core.json'))
+    writeFileSync(join(instance, 'core.version'), '0.1.0\n')
+
+    const deps = fakeDeps()
+    await runCoreUpgrade(
+      {
+        cwd: instance,
+        templateRepo: theirs,
+        baseDir: base,
+        theirsDir: theirs,
+        toVersion: '0.2.0',
+        apply: true,
+      },
+      deps.deps,
+    )
+
+    // No biffo.core.json to compare against — fail closed, keep the file.
+    expect(existsSync(join(instance, 'core.version'))).toBe(true)
+  })
+
+  it('keeps core.version when biffo.core.json is present but unparseable', async () => {
+    writeFileSync(join(instance, 'biffo.core.json'), '{ not valid json')
+    writeFileSync(join(instance, 'core.version'), '0.1.0\n')
+
+    // A malformed biffo.core.json throws when read as the instance version, so
+    // supply the merge base explicitly to keep the run focused on the cleanup.
+    const deps = fakeDeps()
+    await expect(
+      runCoreUpgrade(
+        {
+          cwd: instance,
+          templateRepo: theirs,
+          baseDir: base,
+          theirsDir: theirs,
+          toVersion: '0.2.0',
+          apply: true,
+        },
+        deps.deps,
+      ),
+    ).rejects.toThrow()
+    // The upgrade aborts on the malformed record before any cleanup — the file
+    // is untouched, which is the safe direction.
+    expect(existsSync(join(instance, 'core.version'))).toBe(true)
+  })
+
+  it('leaves the instance alone when there is no core.version file at all', async () => {
+    await apply()
+    expect(existsSync(join(instance, 'core.version'))).toBe(false)
+    // Nothing was created, and nothing claims a cleanup happened.
+    expect(vi.mocked(log.info).mock.calls.map((c) => String(c[0]))).not.toContainEqual(
+      expect.stringContaining('Deleted orphaned'),
+    )
+  })
+})
+
 describe('buildPrBody — global workflow promotion note (issue #328)', () => {
   function emptySummary(): Record<MergeStatus, number> {
     return {

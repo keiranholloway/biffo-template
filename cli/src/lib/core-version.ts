@@ -236,6 +236,80 @@ export function readInstanceCoreVersion(cwd: string): string | null {
 }
 
 /**
+ * Whether an instance's orphaned `core.version` file can be safely removed by an
+ * upgrade (#434).
+ *
+ * Since #423 the template ships no `core.version`, but instances scaffolded
+ * before that inherited a copy through GitHub template generation. It is
+ * user-owned (absent from both lists in `core-manifest.json`), so no upgrade
+ * removes it, yet nothing reads it as an authority — `biffo.core.json` wins every
+ * lookup. It survives only as a fallback in `deploy.ts` and `core-upgrade.ts`.
+ *
+ * An upgrade may delete it, but only when it is provably the un-repurposed
+ * inherited value, because one known instance repurposed `core.version` as its
+ * own app-release lineage — deleting that would destroy real data. The check is
+ * therefore conservative and fails closed toward keeping the file:
+ *
+ *   - `biffo.core.json` (the authority) must be present and parseable. Without
+ *     it there is nothing to compare against, so the file stays.
+ *   - The `core.version` content must equal the version `biffo.core.json`
+ *     records. At `biffo init` both files are written with the same version, so
+ *     an untouched inherited copy still matches. A value that differs — an
+ *     app-release string, or a non-semver — looks repurposed and is kept.
+ *
+ * The equal-to-authority test means an instance that has upgraded since init
+ * (its `biffo.core.json` moved forward while `core.version` did not) keeps the
+ * file rather than risk a wrong deletion — the safe direction. Returns null when
+ * there is no `core.version` file to consider.
+ */
+export type CoreVersionKeepReason = 'repurposed' | 'no-authority'
+
+export interface CoreVersionCleanup {
+  /** Absolute path to the instance's `core.version` file. */
+  path: string
+  /** Remove it (inherited, un-repurposed) or keep it (repurposed / no authority). */
+  action: 'delete' | 'keep'
+  /** The `core.version` file's trimmed content, for reporting. */
+  found: string
+  /** Present only when action === 'keep'. */
+  reason?: CoreVersionKeepReason
+}
+
+export function planCoreVersionCleanup(cwd: string): CoreVersionCleanup | null {
+  const path = join(cwd, CORE_VERSION_FILE)
+  if (!existsSync(path)) return null
+  const found = readFileSync(path, 'utf8').trim()
+
+  // `biffo.core.json` is the authority. Require it explicitly rather than via
+  // readInstanceCoreVersion, which falls back to core.version when it is absent
+  // — that fallback would compare the file against itself.
+  if (!existsSync(join(cwd, INSTANCE_CORE_FILE))) {
+    return { path, action: 'keep', found, reason: 'no-authority' }
+  }
+  let authority: string | null
+  try {
+    authority = readInstanceCoreVersion(cwd)
+  } catch {
+    // Malformed biffo.core.json — no trustworthy authority, so keep the file.
+    return { path, action: 'keep', found, reason: 'no-authority' }
+  }
+  if (authority !== null && coreVersionsEqual(found, authority)) {
+    return { path, action: 'delete', found }
+  }
+  return { path, action: 'keep', found, reason: 'repurposed' }
+}
+
+/** Semver-equal, tolerant of a non-semver `a` (a repurposed core.version can be
+ * any string): an unparseable value simply is not equal to a core version. */
+function coreVersionsEqual(a: string, b: string): boolean {
+  try {
+    return compareCoreVersions(a, b) === 0
+  } catch {
+    return false
+  }
+}
+
+/**
  * Serialise a `biffo.core.json` body recording `version`, validating the semver
  * first. Shared by `writeInstanceCoreVersion` (local filesystem write, used by
  * `biffo core upgrade`) and `biffo init`, which commits the same bytes into the

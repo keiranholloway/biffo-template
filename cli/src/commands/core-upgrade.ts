@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import chalk from 'chalk'
 import { execa } from 'execa'
@@ -9,7 +9,9 @@ import { GitHubAdapter } from '../adapters/source-control/github/index.js'
 import { readCoreManifest, resolveTemplateRoot } from '../lib/core-manifest.js'
 import {
   CORE_VERSION_FILE,
+  type CoreVersionCleanup,
   latestCoreVersionFromTags,
+  planCoreVersionCleanup,
   readCoreVersionFile,
   readInstanceCoreVersion,
   writeInstanceCoreVersion,
@@ -354,6 +356,14 @@ async function runCoreUpgradeResolved(
   // instance chain aborts loudly instead of producing a half-described plan.
   const migrations = planMigrationCarry({ templateDir: theirsDir, instanceDir: options.cwd })
 
+  // An instance may still carry an orphaned `core.version` file inherited before
+  // #423 retired it from the template. Nothing reads it as an authority, so an
+  // upgrade can clean it up — but only when it is provably the un-repurposed
+  // inherited value (issue #434). This is a user-owned path, so the decision and
+  // any deletion are surfaced, never silent. It rides along with a real upgrade
+  // rather than opening a PR of its own.
+  const coreVersionCleanup = planCoreVersionCleanup(options.cwd)
+
   if (plan.changes.length === 0 && migrations.entries.length === 0) {
     log.success('Nothing to upgrade — the instance already matches the target for all core files.')
     return
@@ -372,6 +382,7 @@ async function runCoreUpgradeResolved(
 
   printPlan(plan)
   printMigrationCarry(migrations)
+  printCoreVersionCleanup(coreVersionCleanup, options.apply === true)
   warnStaleFirstPartyCopies(options.cwd)
   console.log(
     `\n  ${chalk.bold(String(plan.changes.length))} change(s), ` +
@@ -389,7 +400,17 @@ async function runCoreUpgradeResolved(
     return
   }
 
-  await applyAndOpenPr(options, deps, plan, migrations, fromVersion, toVersion, breaking, theirsDir)
+  await applyAndOpenPr(
+    options,
+    deps,
+    plan,
+    migrations,
+    fromVersion,
+    toVersion,
+    breaking,
+    theirsDir,
+    coreVersionCleanup,
+  )
 }
 
 async function applyAndOpenPr(
@@ -402,6 +423,8 @@ async function applyAndOpenPr(
   breaking: BreakingChange[],
   /** Upstream tree the plan was built from — read for file modes on write. */
   theirsDir: string,
+  /** Orphaned `core.version` cleanup decision, if the instance has one (#434). */
+  coreVersionCleanup: CoreVersionCleanup | null,
 ): Promise<void> {
   if (breaking.length > 0 && !options.acknowledgeBreaking) {
     throw new Error(
@@ -434,10 +457,24 @@ async function applyAndOpenPr(
   const applied = applyUpgradePlan(options.cwd, plan, theirsDir)
   const carried = applyMigrationCarry(options.cwd, migrations)
   writeInstanceCoreVersion(options.cwd, toVersion)
+
+  // Remove the orphaned core.version file when it is provably inherited (#434).
+  // Staged by the `git add -A` below and surfaced in the PR body. Only ever the
+  // delete case reaches here; a repurposed or unauthoritative file is left alone.
+  const cleanedCoreVersion = coreVersionCleanup?.action === 'delete'
+  if (cleanedCoreVersion && existsSync(coreVersionCleanup.path)) {
+    rmSync(coreVersionCleanup.path)
+    log.info(
+      `Deleted orphaned ${CORE_VERSION_FILE} (inherited copy recording ${coreVersionCleanup.found}, ` +
+        `superseded by biffo.core.json) — nothing reads it as an authority (#434).`,
+    )
+  }
+
   log.step(
     2,
     4,
-    `Applied ${applied.written.length} change(s), ${applied.deleted.length} deletion(s), ` +
+    `Applied ${applied.written.length} change(s), ` +
+      `${applied.deleted.length + (cleanedCoreVersion ? 1 : 0)} deletion(s), ` +
       `${carried.length} new migration(s)`,
   )
 
@@ -479,7 +516,16 @@ async function applyAndOpenPr(
     head: branch,
     base,
     title: `Upgrade Biffo core ${fromVersion} → ${toVersion}`,
-    body: buildPrBody(fromVersion, toVersion, plan, migrations, base, lockfiles, breaking),
+    body: buildPrBody(
+      fromVersion,
+      toVersion,
+      plan,
+      migrations,
+      base,
+      lockfiles,
+      breaking,
+      cleanedCoreVersion ? coreVersionCleanup : null,
+    ),
   })
 
   if (plan.conflicts.length > 0) {
@@ -497,6 +543,8 @@ export function buildPrBody(
   base = GLOBAL_DISPATCH_REF,
   lockfiles: LockfileRefreshOutcome[] = [],
   breaking: BreakingChange[] = [],
+  /** Orphaned core.version cleanup that this upgrade performed, if any (#434). */
+  coreVersionCleanup: CoreVersionCleanup | null = null,
 ): string {
   const lines: string[] = []
   if (breaking.length > 0) {
@@ -543,6 +591,20 @@ export function buildPrBody(
       ),
       '',
       'Review the DDL before merging: merging this PR runs these migrations against the database on the next deploy.',
+    )
+  }
+  if (coreVersionCleanup && coreVersionCleanup.action === 'delete') {
+    lines.push(
+      '',
+      '## Cleanup — removed orphaned `core.version`',
+      '',
+      `This instance still carried a \`${CORE_VERSION_FILE}\` file (recording ` +
+        `\`${coreVersionCleanup.found}\`), inherited through GitHub template generation before ` +
+        `the template retired it (#423). It matched the version \`biffo.core.json\` records, so ` +
+        `it was the un-repurposed inherited copy, and nothing reads it as an authority — ` +
+        `\`biffo.core.json\` wins every lookup. This upgrade **deleted it** (#434). The fallback ` +
+        `readers in \`deploy.ts\` and \`core-upgrade.ts\` still read \`${CORE_VERSION_FILE}\` when ` +
+        `it is present elsewhere; only this orphaned instance copy was removed.`,
     )
   }
   // Issue #328: some template workflows are dispatched by `biffo deploy` from a
@@ -638,6 +700,31 @@ function printMigrationCarry(migrations: MigrationCarryPlan): void {
       : chalk.dim(` (revision ${e.revision}; revises ${e.downRevision ?? 'base'})`)
     console.log(`  ${chalk.green('migration'.padEnd(15))} ${e.path}${suffix}`)
   }
+}
+
+/**
+ * Report the orphaned `core.version` decision (#434).
+ *
+ * A user-owned path is involved, so both the deletion and the reason for
+ * declining one are visible rather than silent: a `delete` line so the operator
+ * sees the file go, and a dim note when it is kept so they see *why* an inherited
+ * file the docs mention was left in place (repurposed, or no authority to check).
+ */
+function printCoreVersionCleanup(cleanup: CoreVersionCleanup | null, applying: boolean): void {
+  if (cleanup === null) return
+  if (cleanup.action === 'delete') {
+    const verb = applying ? 'delete' : 'will delete'
+    console.log(
+      `  ${chalk.red('cleanup'.padEnd(15))} ${CORE_VERSION_FILE} ` +
+        chalk.dim(`(orphaned inherited copy recording ${cleanup.found}) — ${verb}`),
+    )
+    return
+  }
+  const why =
+    cleanup.reason === 'repurposed'
+      ? `does not match biffo.core.json — looks repurposed, keeping ${CORE_VERSION_FILE}`
+      : `biffo.core.json absent or unparseable — no authority to check, keeping ${CORE_VERSION_FILE}`
+  console.log(`  ${chalk.dim('cleanup'.padEnd(15))} ${chalk.dim(`${cleanup.found}: ${why}`)}`)
 }
 
 function printPlan(plan: UpgradePlan): void {

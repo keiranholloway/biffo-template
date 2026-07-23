@@ -73,4 +73,18 @@ locals {
     for name in var.enabled_plugins :
     "arn:aws:sts::${data.aws_caller_identity.current.account_id}:assumed-role/${var.project_name}-${var.environment}-plugin-${name}-role/*"
   ]
+
+  # First-party plugins (ADR-0014) are core capability, provisioned by the
+  # template-owned infra/environments/<env>/plugins.core.tf and always
+  # allowlisted here — with no edit to the user-owned root config that calls this
+  # module, so a fresh instance's agents can reach the internal API out of the
+  # box. Same glob as above (the drift guard checks that one loop); listing a
+  # core plugin an instance has disabled is harmless, since its role ARN then
+  # matches no principal.
+  core_service_principal_arns = [
+    for name in var.core_plugins :
+    "arn:aws:sts::${data.aws_caller_identity.current.account_id}:assumed-role/${var.project_name}-${var.environment}-plugin-${name}-role/*"
+  ]
+
+  all_service_principal_arns = distinct(concat(local.core_service_principal_arns, local.service_principal_arns))
 }

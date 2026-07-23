@@ -7,6 +7,7 @@ import {
   findCoreVersionUpward,
   isInstanceRepo,
   parseCoreVersion,
+  planCoreVersionCleanup,
   readCoreVersionFile,
   readInstanceCoreVersion,
 } from './core-version.js'
@@ -93,6 +94,65 @@ describe('readInstanceCoreVersion', () => {
   it('throws when version is missing or not semver', () => {
     writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: '1.2' }))
     expect(() => readInstanceCoreVersion(dir)).toThrow(/invalid/)
+  })
+})
+
+describe('planCoreVersionCleanup (#434)', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'biffo-cleanup-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('returns null when there is no core.version file', () => {
+    writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: '0.3.0' }))
+    expect(planCoreVersionCleanup(dir)).toBeNull()
+  })
+
+  it('deletes when core.version equals the version biffo.core.json records', () => {
+    writeFileSync(join(dir, 'core.version'), '0.3.0\n')
+    writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: '0.3.0' }))
+    expect(planCoreVersionCleanup(dir)).toEqual({
+      path: join(dir, 'core.version'),
+      action: 'delete',
+      found: '0.3.0',
+    })
+  })
+
+  it('treats equality semver-wise, tolerating surrounding whitespace', () => {
+    writeFileSync(join(dir, 'core.version'), '  0.3.0  \n')
+    writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: '0.3.0' }))
+    expect(planCoreVersionCleanup(dir)?.action).toBe('delete')
+  })
+
+  it('keeps a repurposed core.version that differs from biffo.core.json', () => {
+    writeFileSync(join(dir, 'core.version'), '4.7.2\n')
+    writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: '0.3.0' }))
+    expect(planCoreVersionCleanup(dir)).toEqual({
+      path: join(dir, 'core.version'),
+      action: 'keep',
+      found: '4.7.2',
+      reason: 'repurposed',
+    })
+  })
+
+  it('keeps a core.version repurposed to a non-semver string', () => {
+    writeFileSync(join(dir, 'core.version'), 'internal-build-42\n')
+    writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: '0.3.0' }))
+    expect(planCoreVersionCleanup(dir)).toMatchObject({ action: 'keep', reason: 'repurposed' })
+  })
+
+  it('keeps core.version when biffo.core.json is absent (no authority)', () => {
+    writeFileSync(join(dir, 'core.version'), '0.3.0\n')
+    expect(planCoreVersionCleanup(dir)).toMatchObject({ action: 'keep', reason: 'no-authority' })
+  })
+
+  it('keeps core.version when biffo.core.json is present but unparseable', () => {
+    writeFileSync(join(dir, 'core.version'), '0.3.0\n')
+    writeFileSync(join(dir, 'biffo.core.json'), '{ not json')
+    expect(planCoreVersionCleanup(dir)).toMatchObject({ action: 'keep', reason: 'no-authority' })
   })
 })
 

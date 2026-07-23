@@ -36,6 +36,39 @@ locals {
   cors_origins = jsonencode(local.cors_origins_list)
 }
 
+# ---------------------------------------------------------------------------
+# Shared CloudWatch Logs CMK (#445)
+#
+# One customer-managed key encrypts every CloudWatch Log group in this
+# environment, instead of each compute/events/api-gateway module
+# self-provisioning its own. Consolidates dev from 6 CMKs to 3 (this shared key
+# plus the two plugins, which deliberately keep self-provisioning — see
+# plugins.core.tf, which must not depend on this user-owned resource). Zero
+# security-posture change: log encryption stays customer-managed. Wired into the
+# modules below via cloudwatch_kms_key_id.
+# ---------------------------------------------------------------------------
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
+resource "aws_kms_key" "logs" {
+  description             = "Shared CMK for ${var.project_name} ${local.environment} CloudWatch logs"
+  enable_key_rotation     = true
+  deletion_window_in_days = 7
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Sid = "EnableRoot", Effect = "Allow", Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }, Action = "kms:*", Resource = "*" },
+      { Sid = "AllowCloudWatchLogs", Effect = "Allow", Principal = { Service = "logs.${data.aws_region.current.name}.amazonaws.com" }, Action = ["kms:Encrypt*", "kms:Decrypt*", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:Describe*"], Resource = "*", Condition = { ArnLike = { "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:*" } } }
+    ]
+  })
+  tags = local.tags
+}
+
+resource "aws_kms_alias" "logs" {
+  name          = "alias/${var.project_name}-${local.environment}-logs"
+  target_key_id = aws_kms_key.logs.key_id
+}
+
 # ADR-0009 — which IAM principals may call /api/v1/internal/* on the Core API.
 #
 # The glob format, the aws_caller_identity lookup and the fail-closed empty-list
@@ -129,9 +162,10 @@ data "http" "cognito_jwks" {
 module "events" {
   source = "../../../modules/cloud/aws/events"
 
-  project_name = var.project_name
-  environment  = local.environment
-  tags         = local.tags
+  project_name          = var.project_name
+  environment           = local.environment
+  cloudwatch_kms_key_id = aws_kms_key.logs.arn
+  tags                  = local.tags
 }
 
 module "database" {
@@ -152,10 +186,11 @@ module "database" {
 module "core_api" {
   source = "../../../modules/cloud/aws/compute"
 
-  project_name  = var.project_name
-  environment   = local.environment
-  function_name = "core-api"
-  handler       = "src.api.main.lambda_handler"
+  project_name          = var.project_name
+  environment           = local.environment
+  function_name         = "core-api"
+  handler               = "src.api.main.lambda_handler"
+  cloudwatch_kms_key_id = aws_kms_key.logs.arn
   # Bumped from the compute module's 30s default: a DDL import batch
   # (biffo:ddl-import, ADR-0005) runs one or more .sql files on a single
   # connection and is expected to comfortably finish well under this, but a
@@ -222,15 +257,16 @@ module "core_api" {
 module "api_gateway" {
   source = "../../../modules/cloud/aws/api-gateway"
 
-  project_name         = var.project_name
-  environment          = local.environment
-  lambda_function_arn  = module.core_api.function_arn
-  lambda_function_name = module.core_api.function_name
-  cognito_user_pool_id = module.auth.user_pool_id
-  cognito_client_id    = module.auth.client_id
-  aws_region           = var.aws_region
-  cors_origins         = local.cors_origins_list
-  tags                 = local.tags
+  project_name          = var.project_name
+  environment           = local.environment
+  lambda_function_arn   = module.core_api.function_arn
+  lambda_function_name  = module.core_api.function_name
+  cognito_user_pool_id  = module.auth.user_pool_id
+  cognito_client_id     = module.auth.client_id
+  aws_region            = var.aws_region
+  cors_origins          = local.cors_origins_list
+  cloudwatch_kms_key_id = aws_kms_key.logs.arn
+  tags                  = local.tags
 }
 
 # ---------------------------------------------------------------------------
@@ -272,11 +308,12 @@ module "pr_signer" {
   source = "../../../modules/cloud/aws/compute"
   count  = var.enable_pr_signer ? 1 : 0
 
-  project_name  = var.project_name
-  environment   = local.environment
-  function_name = "pr-signer"
-  handler       = "src.pr_signer.handler.handler"
-  timeout       = 30
+  project_name          = var.project_name
+  environment           = local.environment
+  function_name         = "pr-signer"
+  handler               = "src.pr_signer.handler.handler"
+  timeout               = 30
+  cloudwatch_kms_key_id = aws_kms_key.logs.arn
   # No VPC: the signer calls the public GitHub API and touches no database
   # (ADR-0002). In this NAT-less env a VPC-attached Lambda couldn't reach GitHub.
   enable_vpc_access    = false

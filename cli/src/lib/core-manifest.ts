@@ -62,7 +62,7 @@ const HARD_EXCLUDED_DIRS: ReadonlySet<string> = new Set([
  * upgrade` would then resolve the instance as its own upgrade source. The
  * marker used to be a `core.version` file beside the manifest, which instances
  * also carry, so it never actually drew that line; `biffo.core.json` is the
- * same instance discriminator the Core Version Guard and the tag job use.
+ * same instance discriminator the Release Guards job and the tag job use.
  */
 export function findTemplateRoot(startDir: string): string | null {
   let dir = startDir

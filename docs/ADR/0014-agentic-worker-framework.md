@@ -322,6 +322,39 @@ The first intended worker enriches inbound demo requests, and it demonstrates th
 
 ---
 
+## Amendment: first-party plugin infrastructure is template-owned (2026-07-23, closes #406)
+
+§1 places `agent-runtime` in `services/_plugins/`, template-owned, distributed by
+`biffo core upgrade`. That carried the plugin's *source* and its `terraform/`
+module — but not the **instantiation**: the `module "plugin_<name>"` block that
+actually creates the Lambda. `biffo plugin install` generates those for
+third-party plugins, into the user-owned `plugins.generated.tf`; first-party
+plugins had no equivalent, so the blocks were hand-wired per instance in the
+user-owned `infra/environments/<env>/main.tf` and drifted (#406). One instance
+had them and ran agents; a fresh instance had nothing, its agentic features were
+dead, and every deploy still paid to look for the missing Lambdas.
+
+This ADR already settles the ownership question — agentic capability is core, not
+optional — so the instantiation is core's to distribute. A single template-owned
+file, `infra/environments/dev/plugins.core.tf`, provisions the first-party
+plugins (a carve-out inside the otherwise user-owned `infra/`, the same shape as
+`apps/portal/` inside `apps/`). It depends only on the template-seeded shape every
+instance has (`var.project_name`, `local.environment`, `local.tags`,
+`module.events`, `module.api_gateway`) and passes the OpenRouter credential by
+SSM-path convention (`/<project>/<env>/agent-runtime/openrouter-api-key`) rather
+than a per-instance variable, so it upgrades cleanly into an older instance whose
+`variables.tf` never gained the plugin vars. The plugin-allowlist module's
+`core_plugins` default lists the same set, so the runtimes reach
+`/api/v1/internal/*` with no edit to any user-owned root config. `enable_core_plugins`
+(default true) is the deliberate opt-out for a deployment that runs no agents.
+
+Consequence: every instance — present and future — gets the agentic plugins wired
+identically, in parity by construction. Adding a first-party plugin is one block
+in `plugins.core.tf` plus its name in the allowlist default; a drift guard
+(`cli/src/lib/core-plugins-sync.test.ts`) fails the build if the two disagree.
+
+---
+
 ## Related Decisions
 
 - [ADR-0002](0002-api-only-data-integration-pattern.md) — why the runtime reaches Core over HTTP and never touches the database.

@@ -17,3 +17,15 @@ variable "enabled_plugins" {
   type        = list(string)
   default     = []
 }
+
+variable "core_plugins" {
+  description = <<-EOT
+    First-party plugin names, always allowlisted (ADR-0014). These are core
+    capability provisioned by the template-owned plugins.core.tf, so they are
+    granted access to /api/v1/internal/* without the root config having to list
+    them. Kept in step with plugins.core.tf's module blocks; adding a first-party
+    plugin means adding it in both places.
+  EOT
+  type        = list(string)
+  default     = ["orchestrator", "agent-runtime"]
+}

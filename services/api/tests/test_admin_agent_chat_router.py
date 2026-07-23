@@ -18,15 +18,20 @@ import pytest
 from api.agent_assistant import (
     ASSISTANT_AGENT_NAME,
     ASSISTANT_SYSTEM_PROMPT,
+    LIBRARY_CLOSE,
+    LIBRARY_OPEN,
     UNTRUSTED_CLOSE,
     UNTRUSTED_OPEN,
     ChatTurnResult,
     RuntimeInvocationError,
 )
+from api.config import settings
 from api.database import get_db
 from api.middleware.auth import AuthenticatedUser, require_auth
 from api.models.agent_run import AgentRun  # noqa: F401 — registers the table on Base.metadata
 from api.models.base import Base
+from api.models.orchestration import WorkflowDefinition  # noqa: F401 — registers the table
+from api.models.prompt_component import PromptComponent  # noqa: F401 — registers the table
 from api.routers.admin import agent_chat as admin_agent_chat
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -280,3 +285,211 @@ async def _all_runs(session_factory: async_sessionmaker) -> list[AgentRun]:
 
     async with session_factory() as session:
         return list((await session.scalars(select(AgentRun))).all())
+
+
+# ── library-aware context (ADR-0016 §5, Phase 2) ────────────────────────────────
+
+
+async def _seed(
+    session_factory: async_sessionmaker,
+    *,
+    tenant_id: str,
+    components: list[dict] | None = None,
+    definitions: list[dict] | None = None,
+) -> None:
+    async with session_factory() as session:
+        for c in components or []:
+            session.add(
+                PromptComponent(
+                    tenant_id=tenant_id,
+                    name=c["name"],
+                    description=c.get("description"),
+                    body=c.get("body", f"BODY OF {c['name']}"),
+                    variables=c.get("variables", []),
+                )
+            )
+        for d in definitions or []:
+            session.add(
+                WorkflowDefinition(
+                    tenant_id=tenant_id,
+                    name=d["name"],
+                    trigger_source="biffo.core",
+                    trigger_detail_type="thing.created",
+                    action_type=d.get("action_type", "agent"),
+                    action_config=d.get("action_config", {}),
+                    enabled=True,
+                )
+            )
+        await session.commit()
+
+
+def _library_block(invoker: FakeInvoker) -> str | None:
+    """The single library-reference message from the last assembled turn, if any."""
+    messages = invoker.calls[-1]["messages"]
+    blocks = [m for m in messages if m["content"].lstrip().startswith(LIBRARY_OPEN)]
+    assert len(blocks) <= 1, "at most one library block per turn"
+    return blocks[0]["content"] if blocks else None
+
+
+def test_the_turn_includes_a_summary_of_components_and_agent_definitions(app, client):
+    _, session_factory, invoker = app
+    asyncio.run(
+        _seed(
+            session_factory,
+            tenant_id="default",
+            components=[
+                {
+                    "name": "house-tone",
+                    "description": "The standard brand voice.",
+                    "body": "SECRET COMPONENT BODY",
+                    "variables": [{"name": "audience"}],
+                }
+            ],
+            definitions=[
+                {
+                    "name": "Lead enricher",
+                    "action_config": {"agent_name": "enricher", "model": "x/y"},
+                }
+            ],
+        )
+    )
+
+    client.post(_BASE, json={"message": "What can I reuse?"})
+
+    block = _library_block(invoker)
+    assert block is not None
+    # Components summarised: name, description, variable names.
+    assert "house-tone" in block
+    assert "The standard brand voice." in block
+    assert "audience" in block
+    # Agent definitions summarised: name + agent/model précis.
+    assert "Lead enricher" in block
+    assert "enricher" in block
+    # A summary, not a dump: the component body never appears.
+    assert "SECRET COMPONENT BODY" not in block
+
+
+def test_the_library_block_is_reference_data_not_the_system_prompt(app, client):
+    _, session_factory, invoker = app
+    asyncio.run(_seed(session_factory, tenant_id="default", components=[{"name": "greeting"}]))
+
+    client.post(_BASE, json={"message": "hi"})
+
+    messages = invoker.calls[-1]["messages"]
+    # The instruction channel is the built-in system prompt, verbatim — the library
+    # summary is nowhere in it.
+    assert messages[0]["role"] == "system"
+    assert messages[0]["content"] == ASSISTANT_SYSTEM_PROMPT
+    assert "greeting" not in messages[0]["content"]  # no library data in the system prompt
+    assert not messages[0]["content"].lstrip().startswith(LIBRARY_OPEN)  # not itself a block
+    # The library block is delineated and on a non-system role.
+    block_msg = next(m for m in messages if m["content"].lstrip().startswith(LIBRARY_OPEN))
+    assert block_msg["role"] != "system"
+    assert block_msg["content"].rstrip().endswith(LIBRARY_CLOSE)
+
+
+def test_only_agent_action_definitions_appear(app, client):
+    _, session_factory, invoker = app
+    asyncio.run(
+        _seed(
+            session_factory,
+            tenant_id="default",
+            definitions=[
+                {"name": "An agent worker", "action_config": {"agent_name": "worker"}},
+                {"name": "An email rule", "action_type": "email", "action_config": {}},
+            ],
+        )
+    )
+
+    client.post(_BASE, json={"message": "list them"})
+
+    block = _library_block(invoker)
+    assert block is not None
+    assert "An agent worker" in block
+    assert "An email rule" not in block  # non-agent action filtered out
+
+
+def test_the_summary_is_bounded_and_overflow_disclosed(app, client, monkeypatch):
+    _, session_factory, invoker = app
+    monkeypatch.setattr(settings, "agent_assistant_max_library_items", 2)
+    asyncio.run(
+        _seed(
+            session_factory,
+            tenant_id="default",
+            components=[{"name": f"comp-{i}"} for i in range(5)],
+        )
+    )
+
+    client.post(_BASE, json={"message": "reuse?"})
+
+    block = _library_block(invoker)
+    assert block is not None
+    assert "Prompt components (5)" in block  # true total disclosed
+    # Exactly the cap's worth of component bullets are shown (order is the DB's, so
+    # assert the count, not which two) ...
+    assert block.count("- component") == 2
+    # ... and the overflow is disclosed, not silently truncated.
+    assert "3 more not shown" in block
+
+
+def test_another_tenants_library_never_appears(app, client):
+    _, session_factory, invoker = app
+    # Caller is tenant "default"; seed a DIFFERENT tenant's library too.
+    asyncio.run(
+        _seed(
+            session_factory,
+            tenant_id="default",
+            components=[{"name": "mine-component"}],
+            definitions=[{"name": "mine-agent", "action_config": {"agent_name": "a"}}],
+        )
+    )
+    asyncio.run(
+        _seed(
+            session_factory,
+            tenant_id="other-tenant",
+            components=[{"name": "their-component"}],
+            definitions=[{"name": "their-agent", "action_config": {"agent_name": "b"}}],
+        )
+    )
+
+    client.post(_BASE, json={"message": "what exists?"})
+
+    block = _library_block(invoker)
+    assert block is not None
+    assert "mine-component" in block and "mine-agent" in block
+    assert "their-component" not in block
+    assert "their-agent" not in block
+
+
+def test_an_empty_library_injects_no_block(app, client):
+    _, _, invoker = app
+    # Nothing seeded.
+    client.post(_BASE, json={"message": "fresh"})
+
+    messages = invoker.calls[-1]["messages"]
+    # system + user only; no empty or broken library block.
+    assert [m["role"] for m in messages] == ["system", "user"]
+    assert _library_block(invoker) is None
+
+
+def test_continuing_a_thread_reinjects_fresh_library_without_duplication(app, client):
+    _, session_factory, invoker = app
+    asyncio.run(_seed(session_factory, tenant_id="default", components=[{"name": "first-comp"}]))
+
+    first = client.post(_BASE, json={"message": "turn one"}).json()
+    thread_id = first["thread_id"]
+
+    # A component is added between turns; the next turn must see the CURRENT library.
+    asyncio.run(_seed(session_factory, tenant_id="default", components=[{"name": "second-comp"}]))
+
+    client.post(_BASE, json={"message": "turn two", "thread_id": thread_id})
+
+    second_messages = invoker.calls[-1]["messages"]
+    blocks = [m for m in second_messages if m["content"].lstrip().startswith(LIBRARY_OPEN)]
+    # Exactly one library block — the stale one from turn 1's replayed history is
+    # dropped and a single fresh one re-injected.
+    assert len(blocks) == 1
+    assert "first-comp" in blocks[0]["content"]
+    assert "second-comp" in blocks[0]["content"]  # reflects the current library
+    # History still replays the prior conversational turn.
+    assert any("turn one" in m["content"] for m in second_messages)

@@ -118,6 +118,13 @@ class Settings(BaseSettings):
     # How much prior conversation to replay as history (ADR-0016 §2, §8 thread
     # length bound). Counts prior turns (user+assistant messages), newest kept.
     agent_assistant_max_history_messages: int = 40
+    # The cap on how many library items (each of prompt components and agent
+    # definitions) Core summarises into the turn's library-aware context (ADR-0016
+    # §5 Phase 2). A bounded *summary* — name/description/variable-names per
+    # component, name/agent/model per definition — not the full bodies, so the
+    # context (and the ~29s API Gateway turn budget) stays bounded as the library
+    # grows. Overflow is disclosed to the model, not silently dropped.
+    agent_assistant_max_library_items: int = 50
 
     # How long a run may sit in `running` before the reaper fails it (ADR-0014
     # §5, issue #402). A run only reaches `running` by being claimed, so one

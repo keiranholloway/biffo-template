@@ -12,15 +12,20 @@ The flow for one turn:
    a ``thread_id`` (minted for a new chat, reused to continue one). Reuses the
    ``agent_runs`` model/table — a chat is a *thread of runs* (ADR-0014 §6.4).
 3. Assemble the turn: the built-in system prompt (trusted instruction channel) +
-   the thread's prior conversational messages (history) + the new user message
-   *fenced as untrusted* (ADR-0014 §5). **Phase 1 reads no library/Core business
-   data — it drafts from the conversation alone.**
+   a *library-aware reference block* (the tenant's existing prompt components and
+   agent definitions, summarised — ADR-0016 §5, Phase 2) + the thread's prior
+   conversational messages (history) + the new user message *fenced as untrusted*
+   (ADR-0014 §5). The library block is first-party reference data, delineated and
+   kept OUT of the instruction channel (ADR-0016 §1).
 4. Synchronously invoke the runtime (IAM, RequestResponse) for the buffered LLM
-   turn. The runtime touches no database (ADR-0002) and is not a public surface.
+   turn. The runtime touches no database (ADR-0002) and is not a public surface —
+   it receives the assembled context and is unchanged from Phase 1.
 5. Persist the turn onto the run and return the reply.
 
-``run_as: user`` here is identity/audit only in Phase 1: it records *who* ran the
-turn. It does not yet gate any library read — that is the ADR's Phase 2.
+``run_as: user`` here means the authority for the library reads is the caller's:
+Core performs them under the admin caller's own permissions (the endpoint is
+``require_admin``, and components/definitions are admin authoring resources), so
+being library-aware needs no §452 generic read route (ADR-0016 §5).
 
 The Core->runtime invoke is a seam (``RuntimeInvoker``) so this route is testable
 without boto3 or a live Lambda; the real sync invoke is only exercisable on a
@@ -42,12 +47,15 @@ from ...agent_assistant import (
     RuntimeInvocationError,
     RuntimeInvoker,
     assemble_messages,
+    library_reference_message,
 )
 from ...agent_runs import complete_run, create_run, list_thread_runs
 from ...config import settings
 from ...database import get_db
 from ...dependencies import require_admin
 from ...middleware.auth import AuthenticatedUser
+from ...orchestration import list_agent_definitions
+from ...prompt_library import list_components
 from ...schemas.agent_chat import AgentChatRequest, AgentChatResponse
 
 logger = Logger()
@@ -113,10 +121,26 @@ async def prompt_assistant_chat(
         run_as_user_id=run_as_user_id,
     )
 
+    # Library-aware context (ADR-0016 §5, Phase 2). Read the tenant's existing prompt
+    # components and agent definitions under the admin caller's own authority — the
+    # endpoint is already require_admin and these are admin authoring resources, so no
+    # §452 generic read route and no new permission plumbing is needed. Both reads are
+    # tenant-scoped (ADR-0001). Core folds a *bounded summary* of them into the turn as
+    # delineated reference data — never the instruction channel (ADR-0016 §1) — so the
+    # assistant can suggest reusing what already exists.
+    components = await list_components(db, tenant_id=caller.tenant_id)
+    agent_definitions = await list_agent_definitions(db, tenant_id=caller.tenant_id)
+    library_message = library_reference_message(
+        components,
+        agent_definitions,
+        max_items=settings.agent_assistant_max_library_items,
+    )
+
     messages = assemble_messages(
         prior_messages,
         body.message,
         limit=settings.agent_assistant_max_history_messages,
+        library_message=library_message,
     )
 
     try:

@@ -93,16 +93,18 @@ describe('real repo core-manifest.json', () => {
     expect(manifest.templateOwned).not.toContain('core.version')
   })
 
-  it('owns the two hooks it wires, but not the .husky/ directory (#370)', () => {
+  it('owns the hooks it wires, but not the .husky/ directory (#370, #374)', () => {
     const manifest = readCoreManifest(repoRoot)
-    // The template wires commitlint, lint-staged and the core-ownership guard,
-    // so those two files must reach instances — a guard that stays in the repo
-    // that does not need it guards nothing.
+    // The template wires commitlint, lint-staged, the core-ownership guard and
+    // (since #374) whole-project pyright on pre-push, so those files must reach
+    // instances — a guard that stays in the repo that does not need it guards
+    // nothing.
     expect(isTemplateOwned('.husky/commit-msg', manifest)).toBe(true)
     expect(isTemplateOwned('.husky/pre-commit', manifest)).toBe(true)
+    expect(isTemplateOwned('.husky/pre-push', manifest)).toBe(true)
     // ...but a hook the INSTANCE adds is its own. Owning the directory would
-    // make an upgrade propose deleting it — the #279 part-1 trap.
-    expect(isTemplateOwned('.husky/pre-push', manifest)).toBe(false)
+    // make an upgrade propose deleting it — the #279 part-1 trap. Each wired
+    // hook is an EXACT-file entry; an unwired one stays the instance's.
     expect(isTemplateOwned('.husky/post-merge', manifest)).toBe(false)
     expect(manifest.templateOwned).not.toContain('.husky/')
   })

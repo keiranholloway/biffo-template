@@ -1,0 +1,5 @@
+# Whole-project pyright before a push (#374). lint-staged runs ruff per-file at
+# commit time, but pyright is a whole-project check -- a change in a.py can break
+# b.py, which per-file checking misses -- so it runs here, once, at the point the
+# CI round-trip is about to be paid anyway. CI runs the same check.
+uv run pyright

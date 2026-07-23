@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { execa } from 'execa'
 import { type CoreManifest, listTemplateOwnedFiles } from './core-manifest.js'
+import { readDivergenceConfig } from './core-ownership-guard.js'
 
 /**
  * The three-way merge engine for `biffo core upgrade` (ADR-0006 Phase 3).
@@ -35,6 +36,7 @@ export type MergeStatus =
   | 'conflict' // ours and theirs changed and overlap — needs human resolution
   | 'added' // new upstream file, absent in the instance
   | 'add-conflict' // both sides added the path with different content
+  | 'restored' // template-owned file the instance deleted — re-added (#395)
   | 'removed' // upstream removed it and the instance hadn't touched it
   | 'remove-conflict' // upstream removed it but the instance had modified it
 
@@ -44,8 +46,8 @@ export interface MergeEntry {
   /** Whether this entry needs human resolution before the upgrade is safe. */
   conflicted: boolean
   /** Resolved content to write for the upgrade, when the status produces one
-   * (take-theirs / merged / conflict / added / add-conflict). Undefined for
-   * unchanged / keep-ours (leave the instance file as-is) and removed (delete). */
+   * (take-theirs / merged / conflict / added / add-conflict / restored). Undefined
+   * for unchanged / keep-ours (leave the instance file as-is) and removed (delete). */
   content?: string
 }
 
@@ -55,6 +57,10 @@ export interface UpgradePlan {
   changes: MergeEntry[]
   conflicts: MergeEntry[]
   summary: Record<MergeStatus, number>
+  /** Template-owned files the instance deleted that would have been restored
+   * (#395) but were left absent because the instance declared the path an
+   * intentional divergence in `biffo.divergence.json`. Reported, not acted on. */
+  divergenceSkips?: string[]
 }
 
 /** Runs a three-way merge of three file contents, returning the merged text and
@@ -124,6 +130,7 @@ const EMPTY_SUMMARY: () => Record<MergeStatus, number> = () => ({
   conflict: 0,
   added: 0,
   'add-conflict': 0,
+  restored: 0,
   removed: 0,
   'remove-conflict': 0,
 })
@@ -139,11 +146,25 @@ export async function planCoreUpgrade(options: PlanCoreUpgradeOptions): Promise<
   const ours = new Set(listTemplateOwnedFiles(options.oursDir, options.manifest))
   const theirs = new Set(listTemplateOwnedFiles(options.theirsDir, options.manifest))
 
+  // A template-owned file the instance deleted is drift (#370 blocks instances
+  // from editing these paths), so an upgrade restores it (#395) — unless the
+  // instance declared that path an intentional divergence, which is the governed
+  // way to keep it deleted. Reuse the same biffo.divergence.json the ownership
+  // guard reads; a malformed file throws here too, which is the right failure.
+  const divergentPrefixes = readDivergenceConfig(options.oursDir).warnOnly.map((e) => e.prefix)
+  const isDeclaredDivergent = (path: string): boolean =>
+    divergentPrefixes.some((prefix) => path.startsWith(prefix))
+
   const paths = [...new Set([...base, ...ours, ...theirs])].sort()
   const entries: MergeEntry[] = []
+  const divergenceSkips: string[] = []
 
   for (const path of paths) {
-    entries.push(await classify(path, base, ours, theirs, options, mergeFile))
+    entries.push(
+      await classify(path, base, ours, theirs, options, mergeFile, isDeclaredDivergent, (p) =>
+        divergenceSkips.push(p),
+      ),
+    )
   }
 
   const summary = EMPTY_SUMMARY()
@@ -151,7 +172,7 @@ export async function planCoreUpgrade(options: PlanCoreUpgradeOptions): Promise<
 
   const changes = entries.filter((e) => e.status !== 'unchanged' && e.status !== 'keep-ours')
   const conflicts = entries.filter((e) => e.conflicted)
-  return { entries, changes, conflicts, summary }
+  return { entries, changes, conflicts, summary, divergenceSkips }
 }
 
 async function classify(
@@ -161,6 +182,8 @@ async function classify(
   theirs: Set<string>,
   opts: PlanCoreUpgradeOptions,
   mergeFile: MergeFileFn,
+  isDeclaredDivergent: (path: string) => boolean,
+  noteDivergenceSkip: (path: string) => void,
 ): Promise<MergeEntry> {
   const inBase = base.has(path)
   const inOurs = ours.has(path)
@@ -194,15 +217,23 @@ async function classify(
     return { path, status: 'remove-conflict', conflicted: true }
   }
 
-  // In base and theirs. (If also not in ours, the instance deleted a core file;
-  // treat that like an unmodified take of theirs is wrong — respect the deletion
-  // unless theirs changed it, in which case re-add theirs for review.)
+  // In base and theirs.
   const baseContent = read(opts.baseDir, path)
   const theirsContent = read(opts.theirsDir, path)
 
   if (!inOurs) {
-    if (baseContent === theirsContent) return { path, status: 'removed', conflicted: false }
-    return { path, status: 'added', conflicted: false, content: theirsContent }
+    // The instance deleted a template-owned file the template still ships. That
+    // is drift by definition — the ownership boundary says the template owns this
+    // path and #370 stops instances from editing it — so restore it (#395),
+    // listed distinctly so it is visible in the PR rather than silently absent.
+    // The one exception: a path the instance declared an intentional divergence
+    // in biffo.divergence.json is deliberately kept deleted; record the skip so
+    // the state is reported, not invisible.
+    if (isDeclaredDivergent(path)) {
+      noteDivergenceSkip(path)
+      return { path, status: 'removed', conflicted: false }
+    }
+    return { path, status: 'restored', conflicted: false, content: theirsContent }
   }
 
   const oursContent = read(opts.oursDir, path)

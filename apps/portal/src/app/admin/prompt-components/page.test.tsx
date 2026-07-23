@@ -3,15 +3,32 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import PromptComponentsPage from './page'
 import type * as PromptComponentsApiModule from '@/lib/prompt-components-api'
 import type { PromptComponent } from '@/lib/prompt-components-api'
-import { HANDOFF_KEY } from '@/lib/prompt-handoff'
+import type * as ApiClientModule from '@/lib/api-client'
+import type * as AgentChatApiModule from '@/lib/agent-chat-api'
 
+// A stable getIdToken identity across renders, mirroring the real context's
+// `useCallback` — otherwise `client` (a useMemo of it) would change every render
+// and re-fire the load effect mid-test.
+const { getIdToken } = vi.hoisted(() => ({ getIdToken: () => 'fake-token' }))
 vi.mock('@/context/auth-context', () => ({
-  useAuth: () => ({ getIdToken: () => 'fake-token' }),
+  useAuth: () => ({ getIdToken }),
 }))
 
-vi.mock('@/lib/api-client', () => ({
-  createApiClient: () => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() }),
-}))
+// Preserve the real ApiError — the AssistantDrawer (rendered by this page) does
+// `err instanceof ApiError`; stub only the client factory.
+vi.mock('@/lib/api-client', async () => {
+  const actual = await vi.importActual<typeof ApiClientModule>('@/lib/api-client')
+  return {
+    ...actual,
+    createApiClient: () => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() }),
+  }
+})
+
+const { sendAgentChat } = vi.hoisted(() => ({ sendAgentChat: vi.fn() }))
+vi.mock('@/lib/agent-chat-api', async () => {
+  const actual = await vi.importActual<typeof AgentChatApiModule>('@/lib/agent-chat-api')
+  return { ...actual, sendAgentChat }
+})
 
 const {
   fetchPromptComponents,
@@ -66,7 +83,7 @@ describe('PromptComponentsPage', () => {
     createPromptComponent.mockReset()
     updatePromptComponent.mockReset()
     deletePromptComponent.mockReset()
-    window.sessionStorage.clear()
+    sendAgentChat.mockReset()
   })
 
   it('renders components from the mocked client', async () => {
@@ -163,33 +180,31 @@ describe('PromptComponentsPage', () => {
     expect(screen.getByLabelText('Name')).toHaveValue('house-style')
   })
 
-  it('consumes a prompt-component-body handoff, pre-filling Body and clearing it', async () => {
+  it('fills the Body textarea from an accepted AI draft (in-context drawer)', async () => {
     fetchPromptComponents.mockResolvedValue([])
-    window.sessionStorage.setItem(
-      HANDOFF_KEY,
-      JSON.stringify({ target: 'prompt-component-body', text: 'A handed-off clause.' }),
-    )
-    render(<PromptComponentsPage />)
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('Body')).toHaveValue('A handed-off clause.')
+    sendAgentChat.mockResolvedValue({
+      thread_id: 'th-1',
+      run_id: 'r1',
+      reply: 'State confidence per claim. Cite sources.',
     })
-    // Consumed exactly once — the key is cleared so a reload does not re-apply it.
-    expect(window.sessionStorage.getItem(HANDOFF_KEY)).toBeNull()
-  })
-
-  it('ignores a handoff targeted at another surface', async () => {
-    fetchPromptComponents.mockResolvedValue([])
-    window.sessionStorage.setItem(
-      HANDOFF_KEY,
-      JSON.stringify({ target: 'agent-goals', text: 'For the orchestration page.' }),
-    )
     render(<PromptComponentsPage />)
     await screen.findByText('No prompt components yet')
 
-    // Body is untouched, and the handoff is left in place for the page that owns it.
-    expect(screen.getByLabelText('Body')).toHaveValue('')
-    expect(window.sessionStorage.getItem(HANDOFF_KEY)).not.toBeNull()
+    // Name flows into the drawer context; the manual Body field is unchanged.
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'house-style' } })
+    fireEvent.click(screen.getByRole('button', { name: '✨ Draft body with AI' }))
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'draft a house style' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Use this draft' }))
+
+    // The reply fills Body in place; the drawer closes.
+    await waitFor(() => {
+      expect(screen.getByLabelText('Body')).toHaveValue('State confidence per claim. Cite sources.')
+    })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    const firstCall = sendAgentChat.mock.calls[0]?.[1] as { message: string }
+    expect(firstCall.message).toContain('prompt component “house-style”')
   })
 
   it('surfaces a server 422 variable-shape error', async () => {

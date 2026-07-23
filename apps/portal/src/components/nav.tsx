@@ -44,9 +44,6 @@ export function Nav() {
         >
           Prompt library
         </Link>
-        <Link href="/admin/prompt-assistant/" className="text-sm text-gray-600 hover:text-gray-900">
-          Prompt assistant
-        </Link>
       </div>
       <div className="flex items-center gap-4">
         {email != null && <span className="text-sm text-gray-600">{email}</span>}

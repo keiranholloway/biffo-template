@@ -15,6 +15,7 @@ from biffo_plugin_sdk import (
     RouteDef,
     TableDefinition,
     TablePermissions,
+    ToolDeclaration,
     load_manifest,
     register_plugin,
 )
@@ -59,6 +60,32 @@ class TestPluginManifestModel:
         assert manifest.tables == []
         assert manifest.api_routes == []
         assert manifest.required_core_version == ">=0.0.0"
+        assert manifest.tools == []
+
+    def test_tools_declaration_is_parsed_and_preserved(self):
+        # A runtime plugin declares the tools it exposes to agentic workers
+        # (ADR-0014 §7): name/description/parameters, no executor. The model must
+        # accept and retain them so Core can surface them in the workflow catalog.
+        manifest = PluginManifest(
+            name="agent-runtime",
+            version="0.1.0",
+            tools=[
+                ToolDeclaration(
+                    name="web_search",
+                    description="Search the public web.",
+                    parameters={
+                        "type": "object",
+                        "properties": {"query": {"type": "string", "maxLength": 256}},
+                        "required": ["query"],
+                    },
+                )
+            ],
+        )
+        assert [t.name for t in manifest.tools] == ["web_search"]
+        assert manifest.tools[0].parameters["required"] == ["query"]
+        # And it round-trips through the serialisable dump Core reads.
+        dumped = manifest.model_dump_serializable()
+        assert dumped["tools"][0]["name"] == "web_search"
 
     def test_full_manifest_with_multiple_tables(self):
         manifest = PluginManifest(

@@ -284,6 +284,29 @@
       },
       "description": "Portal UI elements the plugin adds."
     },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "description"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Registered tool name, matching the runtime's in-code tool registry key (ADR-0014 §7)."
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable summary shown in the workflow builder's tool picker."
+          },
+          "parameters": {
+            "type": "object",
+            "description": "JSON Schema for the tool's arguments, as sent to the model provider."
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "Tools this plugin's agent runtime exposes to agentic workers — pure declaration (name/description/parameters), mirroring the runtime's in-code registry minus the executor and availability predicate. Core surfaces these in the orchestration catalog; the registry stays the ceiling (ADR-0014 §7)."
+    },
     "dependencies": {
       "type": "object",
       "additionalProperties": { "type": "string" },

@@ -212,6 +212,49 @@ def test_catalog_offers_chat_actions(client: TestClient):
     assert {"email", "google_chat", "whatsapp"} <= types
 
 
+# ── agent action surfaces the runtime's declared tools (ADR-0014 §7) ──────────
+
+
+def _agent_action(client: TestClient) -> dict:
+    body = client.get(f"{_BASE}/catalog").json()
+    return next(a for a in body["actions"] if a["type"] == "agent")
+
+
+def test_catalog_surfaces_agent_runtime_tools_as_available_tools(client: TestClient):
+    # The agent runtime's manifest declares web_search; Core reads it off the
+    # discovered manifest (never importing the runtime) and surfaces it so Part B
+    # can build a tool picker from the runtime's own registry.
+    agent = _agent_action(client)
+    tools = agent["available_tools"]
+    by_name = {t["name"]: t for t in tools}
+    assert "web_search" in by_name
+    assert by_name["web_search"]["description"]
+    # Parameters ride along so the picker can label/describe the tool fully.
+    assert by_name["web_search"]["parameters"]["type"] == "object"
+
+
+def test_available_tools_is_not_a_config_field(client: TestClient):
+    # The builder renders config_fields by type and does not yet understand a tool
+    # picker; the tools must ride as SEPARATE data it ignores, never a config_field
+    # (a multiselect field arrives in Part B). If this regresses, the builder page
+    # could render nothing for the unknown field type.
+    agent = _agent_action(client)
+    field_names = {f["name"] for f in agent["config_fields"]}
+    assert "tools" not in field_names
+    assert "available_tools" not in field_names
+
+
+def test_agent_config_fields_are_unchanged_by_surfacing_tools(client: TestClient):
+    # Regression: surfacing available_tools must leave the agent action's
+    # config_fields byte-for-byte identical to WORKFLOW_ACTIONS, so the current
+    # builder behaviour is unaffected.
+    from api.schemas.orchestration import WORKFLOW_ACTIONS
+
+    canonical = next(a for a in WORKFLOW_ACTIONS if a["type"] == "agent")
+    agent = _agent_action(client)
+    assert agent["config_fields"] == canonical["config_fields"]
+
+
 def test_create_google_chat_workflow(client: TestClient):
     resp = client.post(
         _BASE,

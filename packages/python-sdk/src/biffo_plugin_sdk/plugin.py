@@ -258,6 +258,26 @@ class RouteDef(BaseModel):
         return self
 
 
+class ToolDeclaration(BaseModel):
+    """A tool a plugin's runtime exposes to an agentic worker (ADR-0014 §7).
+
+    Pure *declaration* — ``name``, ``description`` and the JSON-Schema
+    ``parameters`` — mirroring what the runtime's in-code tool registry holds,
+    minus the executor and availability predicate (those stay in the plugin's
+    Python and are never on the wire). Core reads these off the manifest to
+    populate the workflow builder's tool picker without importing the runtime.
+    The registry remains the ceiling: a declared tool a build does not register
+    fails the run (see the runtime's ``tools.py``).
+    """
+
+    name: str = Field(description="Registered tool name, matching the runtime's registry key.")
+    description: str = Field(description="Human-readable summary shown in the tool picker.")
+    parameters: dict[str, Any] = Field(
+        default_factory=dict,
+        description="JSON Schema for the tool's arguments, as sent to the model provider.",
+    )
+
+
 class PluginManifest(BaseModel):
     """Validated manifest for a Biffo plugin.
 
@@ -273,6 +293,7 @@ class PluginManifest(BaseModel):
     tables: list[TableDefinition] = []
     api_routes: list[RouteDef] = []
     required_core_version: str = ">=0.0.0"
+    tools: list[ToolDeclaration] = []
 
     @model_validator(mode="after")
     def _validate_routes_reference_declared_tables(self) -> PluginManifest:

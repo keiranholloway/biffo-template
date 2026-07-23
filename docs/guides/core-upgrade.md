@@ -198,6 +198,28 @@ What you must do:
    re-invited user gets a new `sub`. Reconcile or clear those tables.
 3. **Tell your users first.** Their existing password stops working the moment
    the deploy lands.
+4. **Redeploy every dependent sibling.** A sibling's API validates core-issued
+   tokens against the core pool's _issuer_, baked into its API Gateway JWT
+   authorizer and its Lambda at deploy time (ADR-0007). A replaced pool has a new
+   issuer, so each sibling 401s otherwise-valid tokens until it redeploys. This
+   staleness is deliberate, not a gap to close with runtime discovery: a trusted
+   issuer is a security declaration and belongs in static, version-controlled
+   config, not in a document an authorizer fetches at request time. Its frontend
+   already self-heals (it resolves the core's _non-secret_ client config at
+   runtime, #403); its backend does not, because redeploying infrastructure is
+   the correct response to a changed dependency. So after the core deploy lands,
+   trigger each registered sibling's Deploy workflow. Then run `biffo sibling
+   check-identity` from the core: it compares every sibling's baked pool id (and
+   the published identity document) against the live pool and fails loudly on any
+   still pointing at the old one (#400), so you can confirm they have all caught
+   up rather than discovering a stale sibling as a 401 days later.
+
+This is the general shape of **any** pool replacement, not just this upgrade —
+Cognito forces a replace on any change to an immutable attribute
+(`username_attributes`, `alias_attributes`, `schema`). It is a rare, deliberate,
+destructive event (you are re-inviting every user regardless), so the runbook
+above — redeploy dependents, then verify with the detection net — is the
+intended path, not automation papering over a routine occurrence.
 
 Why it is worth the cost: the pool previously had a username _and_ an email
 that had to agree, and that split leaked through the whole product — the sign-in

@@ -127,8 +127,13 @@ class TestSerialize:
         assert dumped["widgets"]["read"] == {
             "allowed": True,
             "required_role": ["admin"],
+            "allowed_principals": [],
         }
-        assert dumped["widgets"]["list"] == {"allowed": False, "required_role": []}
+        assert dumped["widgets"]["list"] == {
+            "allowed": False,
+            "required_role": [],
+            "allowed_principals": [],
+        }
 
 
 class TestLookup:

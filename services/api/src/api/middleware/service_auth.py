@@ -21,6 +21,7 @@ allowlist, means no service caller is accepted.
 from __future__ import annotations
 
 import fnmatch
+import re
 from dataclasses import dataclass, field
 
 from aws_lambda_powertools import Logger
@@ -29,6 +30,37 @@ from fastapi import HTTPException, Request, status
 from ..config import settings
 
 logger = Logger()
+
+# STS issues assumed-role ARNs shaped
+# ``arn:aws:sts::<account>:assumed-role/<role-name>/<session>``.
+_ASSUMED_ROLE_ARN = re.compile(r"^arn:aws:sts::\d{12}:assumed-role/(?P<role>[^/]+)/.+$")
+
+# The compute-module role-naming convention (ADR-0009, guarded by #266 via
+# cli/src/lib/plugin-allowlist-convention.ts):
+#     <project>-<env>-plugin-<name>-role
+# We anchor on the ``-plugin-`` segment and the ``-role`` suffix and take
+# ``<name>`` from between them. The leading ``.+`` is greedy, so a project/env
+# that itself contains the literal "plugin" binds to the *last* ``-plugin-``
+# occurrence — matching how the name sits immediately before ``-role``.
+_PLUGIN_ROLE_NAME = re.compile(r"^.+-plugin-(?P<name>.+)-role$")
+
+
+def _logical_names_from_arn(principal_arn: str) -> frozenset[str]:
+    """Derive the ADR-0014 §7 logical principal name(s) from an assumed-role ARN.
+
+    Fails closed: an ARN that is not an assumed-role ARN, or whose role name
+    does not match the ``<project>-<env>-plugin-<name>-role`` convention,
+    resolves to the empty set — a non-plugin caller, a future differently-shaped
+    principal or a malformed ARN can therefore read nothing. A name is never
+    guessed from a non-conforming ARN.
+    """
+    arn_match = _ASSUMED_ROLE_ARN.match(principal_arn)
+    if arn_match is None:
+        return frozenset()
+    role_match = _PLUGIN_ROLE_NAME.match(arn_match.group("role"))
+    if role_match is None:
+        return frozenset()
+    return frozenset({f"system:{role_match.group('name')}"})
 
 
 @dataclass(frozen=True)
@@ -43,6 +75,18 @@ class ServicePrincipal:
     principal_arn: str
     tenant_id: str = "default"
     roles: list[str] = field(default_factory=list)
+
+    @property
+    def logical_names(self) -> frozenset[str]:
+        """The ADR-0014 §7 logical name(s) this principal reads Core data as.
+
+        Derived from ``principal_arn`` per the compute-module role-naming
+        convention (``…assumed-role/<project>-<env>-plugin-<name>-role/<session>``
+        -> ``{"system:<name>"}``). A principal whose ARN does not conform
+        resolves to an empty set and can satisfy no ``allowed_principals`` grant
+        — the fail-closed security property the read-scope ceiling depends on.
+        """
+        return _logical_names_from_arn(self.principal_arn)
 
 
 def _iam_principal_from_request(request: Request) -> str | None:

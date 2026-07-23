@@ -177,7 +177,8 @@ def build_permissions_registry(
 
 def serialize_registry(registry: PermissionsRegistry) -> dict[str, Any]:
     """Render the registry as a plain JSON-able dict:
-    ``{table: {operation: {allowed, required_role}}}`` — for logging/auditing."""
+    ``{table: {operation: {allowed, required_role, allowed_principals}}}`` — for
+    logging/auditing."""
     return {name: perms.model_dump(mode="json") for name, perms in registry.items()}
 
 

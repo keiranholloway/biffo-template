@@ -67,15 +67,16 @@ jobs:
       - name: Test
         if: ${{ !cancelled() }}
         run: pnpm run test
-      # Deliberately run with NO NEXT_PUBLIC_CORE_COGNITO_* in scope (issue
-      # #286). `next build` prerenders `/`, which imports src/lib/auth.ts; when
-      # that module built its Cognito pool eagerly the build blew up on any
-      # machine without the real pool ids exported, and nothing in CI caught it
-      # — the first person to find out was whoever had just scaffolded the
-      # sibling, debugging template code they did not write. A sibling's build
-      # must not need auth credentials, so this step is the assertion of that.
-      # Provide the real values in deploy.yml, where they are inlined into the
-      # artifact that actually ships.
+      # Run with NO NEXT_PUBLIC_CORE_COGNITO_* in scope — this is now the
+      # PERMANENT state, not a build-guard quirk. The frontend NEVER reads those
+      # vars: it resolves the core's Cognito identity at runtime from
+      # /.well-known/biffo-identity.json (#403 Stage 3), so nothing is baked into
+      # the bundle and deploy.yml no longer sets them either. `next build`
+      # prerenders `/`, which imports src/lib/auth.ts; that module builds its
+      # Cognito pool lazily (never at module scope) so the build succeeds with no
+      # identity in scope. Originally added as a guard for the eager-construction
+      # crash (issue #286); it now simply asserts a sibling's build needs no auth
+      # credentials at all.
       - name: Build
         if: ${{ !cancelled() }}
         run: pnpm run build

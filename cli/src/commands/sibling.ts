@@ -1,4 +1,5 @@
 import { Command } from 'commander'
+import { siblingCheckIdentityCommand } from './sibling-check-identity.js'
 import { siblingCreateCommand } from './sibling-create.js'
 
 export const siblingCommand = new Command('sibling').description(
@@ -6,3 +7,4 @@ export const siblingCommand = new Command('sibling').description(
 )
 
 siblingCommand.addCommand(siblingCreateCommand)
+siblingCommand.addCommand(siblingCheckIdentityCommand)

@@ -662,11 +662,13 @@ def test_secret_redacted_on_read(client: TestClient):
     assert listed[0]["action_config"]["webhook_url"] == SECRET_SENTINEL
 
 
-def test_secret_redacted_in_emitted_event(client: TestClient):
+def test_secret_redacted_in_emitted_event(app):
     # The path that matters most: the row is emitted onto the bus, and the token
     # must not ride along to every subscriber, archive and replay.
+    fastapi, _ = app
+    client = TestClient(fastapi)
     client.post(_BASE, json=_gchat_body())
-    published = client.app.state.published
+    published = fastapi.state.published
     created_events = [e for e in published if e.detail_type.endswith("workflow_definition.created")]
     assert created_events, "expected a WORKFLOW_DEFINITION_CREATED event"
     assert created_events[-1].payload["action_config"]["webhook_url"] == SECRET_SENTINEL

@@ -34,6 +34,9 @@ export function Nav() {
         <Link href="/admin/orchestration/" className="text-sm text-gray-600 hover:text-gray-900">
           Workflows
         </Link>
+        <Link href="/admin/agent-runs/" className="text-sm text-gray-600 hover:text-gray-900">
+          Agent runs
+        </Link>
       </div>
       <div className="flex items-center gap-4">
         {email != null && <span className="text-sm text-gray-600">{email}</span>}

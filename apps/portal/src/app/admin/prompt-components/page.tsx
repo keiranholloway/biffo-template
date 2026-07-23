@@ -12,6 +12,7 @@ import {
   type PromptComponentInput,
   type PromptVariable,
 } from '@/lib/prompt-components-api'
+import { consumeHandoff } from '@/lib/prompt-handoff'
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error'
@@ -90,6 +91,14 @@ export default function PromptComponentsPage() {
   useEffect(() => {
     void reload()
   }, [reload])
+
+  // "Use this" handoff from the prompt assistant (ADR-0016 Phase 3): if a body
+  // was stashed for us, pre-fill the New-component form's body once on mount and
+  // clear the handoff so a reload does not re-apply it.
+  useEffect(() => {
+    const handoff = consumeHandoff('prompt-component-body')
+    if (handoff != null) setBody(handoff.text)
+  }, [])
 
   function loadForEdit(c: PromptComponent) {
     setEditingId(c.id)

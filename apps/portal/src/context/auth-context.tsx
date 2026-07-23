@@ -38,7 +38,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const logout = useCallback(() => {
-    cognitoSignOut()
+    // Clear the UI immediately; the Cognito sign-out (which must first resolve
+    // the pool) completes in the background — fire-and-forget by design.
+    void cognitoSignOut()
     setSession(null)
   }, [])
 

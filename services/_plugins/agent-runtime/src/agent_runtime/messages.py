@@ -96,9 +96,29 @@ CONTEXT_FRAMING = (
 )
 
 
-def system_message(instructions: str) -> Message:
-    """The instruction channel: the worker's own instructions, plus the framing."""
-    return {"role": SYSTEM, "content": f"{instructions.strip()}\n\n{CONTEXT_FRAMING}"}
+#: Header introducing the authored goals as acceptance criteria, distinct from the
+#: task in the instructions. Emitted only when goals are present and non-blank —
+#: see ``system_message`` for why an empty header is worse than none.
+GOALS_HEADER = "Success criteria:"
+
+
+def system_message(instructions: str, goals: str | None = None) -> Message:
+    """The instruction channel: the worker's own instructions, its goals (if any),
+    then the fixed framing.
+
+    ``goals`` is optional and, crucially, backward-compatible: a run whose snapshot
+    predates the field carries no ``goals`` at all, and a blank or whitespace-only
+    value is treated identically to absent. In both cases the assembled content is
+    byte-identical to the pre-goals assembly — no empty ``Success criteria:`` header
+    with nothing under it. The section is added *between* instructions and the
+    framing, so ``CONTEXT_FRAMING`` stays last and unchanged (it is the
+    non-authorable untrusted-input framing a worker cannot opt out of).
+    """
+    body = instructions.strip()
+    goals_text = (goals or "").strip()
+    if goals_text:
+        body = f"{body}\n\n{GOALS_HEADER}\n{goals_text}"
+    return {"role": SYSTEM, "content": f"{body}\n\n{CONTEXT_FRAMING}"}
 
 
 def untrusted_context_message(payload: dict[str, Any]) -> Message:
@@ -114,9 +134,11 @@ def untrusted_context_message(payload: dict[str, Any]) -> Message:
     }
 
 
-def build_messages(instructions: str, input_payload: dict[str, Any]) -> list[Message]:
-    """The opening message array for a run: instructions, then untrusted context."""
-    return [system_message(instructions), untrusted_context_message(input_payload)]
+def build_messages(
+    instructions: str, input_payload: dict[str, Any], goals: str | None = None
+) -> list[Message]:
+    """The opening message array for a run: instructions (plus goals), then context."""
+    return [system_message(instructions, goals), untrusted_context_message(input_payload)]
 
 
 def assistant_message(content: str, tool_calls: Sequence[dict[str, Any]] | None = None) -> Message:

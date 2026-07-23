@@ -571,9 +571,18 @@ def test_catalog_offers_the_agent_action_with_its_m1_fields(client: TestClient):
     body = client.get(f"{_BASE}/catalog").json()
     action = next(a for a in body["actions"] if a["type"] == "agent")
     fields = {f["name"]: f for f in action["config_fields"]}
-    # Deliberately minimal in M1 — tools and read scope are M2/M3.
-    assert set(fields) == {"agent_name", "instructions", "model", "max_turns"}
+    # Deliberately minimal in M1 — tools and read scope are M2/M3. `goals` (ADR-0014)
+    # is the one optional acceptance-criteria field folded into the system prompt.
+    assert set(fields) == {"agent_name", "instructions", "goals", "model", "max_turns"}
     assert fields["agent_name"]["required"] and fields["instructions"]["required"]
+    # goals is an OPTIONAL textarea — a simple agent must be definable without it,
+    # and its teaching label is the only affordance today (no catalog placeholder).
+    assert fields["goals"]["type"] == "textarea"
+    assert fields["goals"]["required"] is False
+    assert fields["goals"]["label"]
+    # goals sits right after instructions in the field order.
+    order = [f["name"] for f in action["config_fields"]]
+    assert order.index("goals") == order.index("instructions") + 1
     # The model default is deliberately a low-cost model (#414). Assert the exact
     # slug so a future silent switch back to an expensive default is caught here.
     assert fields["model"]["required"]

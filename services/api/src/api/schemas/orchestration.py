@@ -242,6 +242,18 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 "type": "textarea",
                 "required": True,
             },
+            # Optional acceptance criteria, folded into the system prompt after the
+            # instructions by the runtime (ADR-0014). The label does the teaching:
+            # there is no catalog placeholder/help support today.
+            {
+                "name": "goals",
+                "label": (
+                    "Goals — what does a good result look like? "
+                    "(e.g. a confidence-rated verdict on each dimension you were asked to assess)"
+                ),
+                "type": "textarea",
+                "required": False,
+            },
             # Per-worker model choice, so alternatives can be compared without a
             # code change (§1). The value is an OpenRouter model slug.
             # The default is deliberately a low-cost model (#414). A defaulted

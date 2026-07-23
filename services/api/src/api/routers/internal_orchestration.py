@@ -12,12 +12,14 @@ Cognito identity and are gated by ``require_service_principal``, not
 
 from __future__ import annotations
 
+from aws_lambda_powertools import Logger
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..middleware.service_auth import ServicePrincipal, require_service_principal
-from ..models.orchestration import WorkflowRun
+from ..models.orchestration import WorkflowDefinition, WorkflowRun
 from ..orchestration import dispatch_event, record_result
 from ..schemas.orchestration import (
     ClaimedRun,
@@ -26,6 +28,8 @@ from ..schemas.orchestration import (
     RecordResultRequest,
     WorkflowRunResponse,
 )
+
+logger = Logger()
 
 router = APIRouter(prefix="/internal/orchestration", tags=["internal:orchestration"])
 
@@ -49,6 +53,36 @@ async def dispatch_incoming_event(
         idempotency_key=body.idempotency_key,
         event=body.event,
     )
+    # #418: a workflow disabled by accident silently drops every matching event —
+    # no run, no error, no log, only an absence you have to notice. When nothing
+    # was claimed, distinguish "a definition exists for this trigger but none
+    # enabled matched (disabled, or excluded by trigger_filter)" from the normal
+    # "no definition for this trigger at all" (most events have no workflow —
+    # logging those would be pure noise). Only the former is a signal; log it at
+    # WARNING so the received-but-dropped event becomes visible. This extra count
+    # query runs *only* in the zero-match branch, so the happy path pays nothing.
+    if not claimed:
+        dropped = (
+            await db.execute(
+                select(func.count())
+                .select_from(WorkflowDefinition)
+                .where(
+                    WorkflowDefinition.tenant_id == principal.tenant_id,
+                    WorkflowDefinition.trigger_source == body.source,
+                    WorkflowDefinition.trigger_detail_type == body.detail_type,
+                )
+            )
+        ).scalar_one()
+        if dropped:
+            logger.warning(
+                "Orchestration event received but no enabled definition ran it "
+                "(matching definitions are disabled or filtered out)",
+                extra={
+                    "source": body.source,
+                    "detail_type": body.detail_type,
+                    "definitions_not_dispatched": dropped,
+                },
+            )
     return DispatchEventResponse(
         runs=[
             ClaimedRun(

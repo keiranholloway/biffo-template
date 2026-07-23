@@ -9,6 +9,7 @@ test_core_crud_router.py.
 
 import asyncio
 from collections.abc import AsyncGenerator, Generator
+from unittest.mock import patch
 
 import pytest
 from api.database import get_db
@@ -133,6 +134,56 @@ def test_dispatch_no_match_returns_empty(client):
 
     assert resp.status_code == 200
     assert resp.json()["runs"] == []
+
+
+# #418: an accidentally-disabled definition silently drops every matching event.
+# The router must turn that absence into an explicit WARNING — but only when a
+# definition for the trigger actually exists (disabled/filtered out), never for
+# the common "no workflow for this event" case, which would be pure log noise.
+# The powertools Logger doesn't propagate to caplog, so we patch the module
+# logger and assert on the call (source, detail_type, and the dropped count).
+
+
+def test_dispatch_disabled_definition_warns(orchestration_app, client):
+    _, session_factory = orchestration_app
+    # A definition exists for this exact trigger but is disabled — the accident
+    # #418 is about: the matching event is received and dropped without a run.
+    _seed(session_factory, enabled=False)
+
+    with patch("api.routers.internal_orchestration.logger") as mock_logger:
+        resp = client.post(_EVENTS, json=_event_body())
+
+    assert resp.status_code == 200
+    assert resp.json()["runs"] == []  # nothing dispatched
+    mock_logger.warning.assert_called_once()
+    extra = mock_logger.warning.call_args.kwargs["extra"]
+    assert extra["source"] == "biffo.core"
+    assert extra["detail_type"] == "demo.requested"
+    assert extra["definitions_not_dispatched"] == 1
+
+
+def test_dispatch_no_definition_does_not_warn(client):
+    # No definition for this trigger at all — the normal case for most events.
+    # Silence is correct; a warning here would be noise.
+    with patch("api.routers.internal_orchestration.logger") as mock_logger:
+        resp = client.post(_EVENTS, json=_event_body())
+
+    assert resp.status_code == 200
+    assert resp.json()["runs"] == []
+    mock_logger.warning.assert_not_called()
+
+
+def test_dispatch_enabled_match_does_not_warn(orchestration_app, client):
+    # Happy path: an enabled definition matches, dispatches, and stays silent.
+    _, session_factory = orchestration_app
+    _seed(session_factory)
+
+    with patch("api.routers.internal_orchestration.logger") as mock_logger:
+        resp = client.post(_EVENTS, json=_event_body())
+
+    assert resp.status_code == 200
+    assert len(resp.json()["runs"]) == 1
+    mock_logger.warning.assert_not_called()
 
 
 def test_record_result_sets_status(orchestration_app, client):

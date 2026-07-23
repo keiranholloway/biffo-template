@@ -153,8 +153,12 @@ jobs:
           NEXT_PUBLIC_SIBLING_PATH_PREFIX: ${{ vars.PATH_PREFIX && format('/{0}', vars.PATH_PREFIX) || '' }}
           NEXT_PUBLIC_BASE_PATH: ${{ vars.PATH_PREFIX && format('/{0}', vars.PATH_PREFIX) || '' }}
           NEXT_PUBLIC_CORE_PORTAL_URL: ${{ vars.CORE_PORTAL_URL }}
-          NEXT_PUBLIC_CORE_COGNITO_USER_POOL_ID: ${{ vars.CORE_COGNITO_USER_POOL_ID }}
-          NEXT_PUBLIC_CORE_COGNITO_CLIENT_ID: ${{ vars.CORE_COGNITO_CLIENT_ID }}
+          # The frontend no longer bakes NEXT_PUBLIC_CORE_COGNITO_* into the
+          # bundle: it resolves the core's Cognito identity at RUNTIME from the
+          # core-published /.well-known/biffo-identity.json document (#403), so
+          # the build no longer needs the pool/client ids. (The BACKEND still
+          # consumes CORE_COGNITO_* via TF_VAR for JWT validation — see the
+          # deploy-infra job above; that is deliberately unchanged.)
           NEXT_PUBLIC_API_URL: ${{ vars.API_URL }}
         run: pnpm run build
       - uses: aws-actions/configure-aws-credentials@v6

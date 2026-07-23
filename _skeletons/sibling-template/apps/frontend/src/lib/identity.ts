@@ -29,12 +29,13 @@
 //   this exactly ONE network request per page load, shared by every caller,
 //   rather than one per session read.
 //
-// The env fallback below is TRANSITIONAL (Stage 3 of #403 removes it). It lets
-// an instance whose core has not yet started publishing the document keep
-// working off its baked env vars, so instances can upgrade at their own pace.
-// A baked value that shadows a live document is precisely the stale-copy bug
-// we are removing, so falling back because the document was UNREACHABLE is a
-// degraded path and warns loudly.
+// A sibling is DOC-ONLY (#403 Stage 3): it carries NO CORE_COGNITO_* env vars —
+// `biffo sibling create` no longer sets them and this module no longer reads
+// them. When the document is unreachable, resolution returns null, and the
+// caller (getCurrentSession) treats that as "no session" — the sibling redirects
+// to the portal's login rather than trusting a stale baked value, because a
+// stale value is exactly the bug (#400) this removes. A clean redirect beats a
+// silent point at a dead pool.
 // ---------------------------------------------------------------------------
 
 export interface CoreIdentity {
@@ -53,16 +54,6 @@ const IDENTITY_DOCUMENT_PATH = '/.well-known/biffo-identity.json'
 // at most once. Storing the Promise (not the resolved value) means concurrent
 // callers before the fetch settles also coalesce onto the one request.
 let cached: Promise<CoreIdentity | null> | null = null
-
-// Read the transitional env fallback. Returns a valid CoreIdentity only when
-// BOTH ids are present; otherwise null (an unconfigured build has neither a
-// document nor env, and that is not an error to shout about).
-function identityFromEnv(): CoreIdentity | null {
-  const userPoolId = process.env['NEXT_PUBLIC_CORE_COGNITO_USER_POOL_ID'] ?? ''
-  const clientId = process.env['NEXT_PUBLIC_CORE_COGNITO_CLIENT_ID'] ?? ''
-  if (!userPoolId || !clientId) return null
-  return { userPoolId, clientId }
-}
 
 // A parsed document counts only when it carries both ids non-empty; a document
 // missing either is treated as unusable and triggers the fallback.
@@ -90,38 +81,31 @@ async function fetchCoreIdentity(): Promise<CoreIdentity | null> {
       const identity = identityFromDocument(await res.json())
       if (identity) return identity
     }
-    // Reached here => the document was served but unusable (non-ok status or
-    // missing ids). Fall through to the degraded env fallback below.
+    // Served but unusable (non-ok status or missing ids). Fall through to null.
   } catch {
     // Network error, or `fetch` not available (e.g. `next build` prerendering
-    // `/` in Node with no fetch). Fall through to the env fallback.
+    // in Node with no fetch — though resolution is lazy and never runs there).
+    // Fall through to null.
   }
 
-  // DEGRADED path: the document was unreachable/unusable, so we lean on the
-  // baked env vars. If those exist, warn once — a stale baked value silently
-  // shadowing a live document is the #403/#400 bug. If they DON'T exist, this
-  // is simply an unconfigured build (no document, no env) — not degradation,
-  // so stay quiet.
-  const fallback = identityFromEnv()
-  if (fallback) {
-    console.warn(
-      '[biffo] DEGRADED: could not resolve the core identity document at ' +
-        `${IDENTITY_DOCUMENT_PATH}; falling back to baked ` +
-        'NEXT_PUBLIC_CORE_COGNITO_* env vars. This is transitional (#403) and ' +
-        'risks pointing at a stale/dead Cognito pool — ensure the core is ' +
-        'publishing the runtime identity document.',
-    )
-  }
-  return fallback
+  // The document was unreachable or unusable. A sibling has NO baked fallback
+  // (#403 Stage 3), so this resolves to null and the caller treats it as
+  // "signed out" — a clean redirect to the portal login beats trusting a stale
+  // local pool id, which is the exact bug (#400) this removes.
+  console.warn(
+    `[biffo] could not resolve the core identity document at ${IDENTITY_DOCUMENT_PATH}; ` +
+      'treating the visitor as signed out. If this persists, confirm the core is publishing it.',
+  )
+  return null
 }
 
 /**
- * Resolve the core's Cognito identity at runtime, preferring the published
- * `/.well-known/biffo-identity.json` document and falling back to baked
- * `NEXT_PUBLIC_CORE_COGNITO_*` env vars when the document is unreachable.
+ * Resolve the core's Cognito identity at runtime from the published
+ * `/.well-known/biffo-identity.json` document. A sibling has no env fallback
+ * (#403 Stage 3).
  *
  * Memoised: at most one fetch per page load, shared by every caller. Returns
- * null when neither the document nor the env vars supply both ids.
+ * null when the document is unreachable or does not supply both ids.
  */
 export function resolveCoreIdentity(): Promise<CoreIdentity | null> {
   cached ??= fetchCoreIdentity()

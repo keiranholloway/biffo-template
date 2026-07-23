@@ -198,14 +198,21 @@ part of the install, so its lifecycle scripts never run.)
 
 ## The build must not need Cognito credentials
 
-`pnpm run build` has to succeed with **no** `NEXT_PUBLIC_CORE_COGNITO_*` set,
-and `.github/workflows/ci.yml` runs it that way on every PR to keep it that
-way. `next build` prerenders `/` in Node, which imports `src/lib/auth.ts`; that
-module therefore constructs its Cognito user pool lazily, on first session
-read, never at module scope (the `CognitoUserPool` constructor throws outright
-when either id is missing). If you add module-scope code that requires real
-core config, the build breaks for everyone who has not exported the pool ids —
-starting with CI. Read config inside the function that needs it.
+The frontend resolves the core's Cognito identity at **runtime** from the
+core-published `/.well-known/biffo-identity.json` document (#403) — it never
+bakes `NEXT_PUBLIC_CORE_COGNITO_*` into the bundle. So `pnpm run build` succeeds
+with **no** `NEXT_PUBLIC_CORE_COGNITO_*` set, and `.github/workflows/ci.yml`
+runs it that way on every PR to keep it that way. `next build` prerenders `/` in
+Node, which imports `src/lib/auth.ts`; that module constructs its Cognito user
+pool lazily, on first session read, never at module scope (the `CognitoUserPool`
+constructor throws outright when either id is missing). If you add module-scope
+code that requires real core config, the build breaks for everyone — starting
+with CI. Read config inside the function that needs it.
+
+(The sibling's **backend** still receives the core pool/client ids at deploy
+time via `TF_VAR_core_cognito_*` — its Terraform builds a JWKS URL from the pool
+id to validate JWTs. That is a separate concern from the frontend bundle and is
+deliberately unchanged.)
 
 ## The two-phase CDN registration
 
@@ -267,12 +274,19 @@ this repo's own `statusChecks` list — see that method's third parameter):
 
 1. Rename `biffo.sibling.json`'s `name`/`core_project`/`path_prefix`.
 2. Copy `apps/frontend/.env.example` to `.env.local` and fill in your core
-   project's real Cognito/API values for local dev.
+   project's real API/portal values for local dev. No Cognito values are
+   needed: the frontend resolves the core's Cognito identity at runtime from
+   `/.well-known/biffo-identity.json` (#403). A locally-run frontend with no
+   reachable document just treats the visitor as signed-out.
 3. `cd infra && terraform init -backend-config=backend.hcl && terraform apply`
    (generate `backend.hcl` yourself for local use — CI generates it inline,
    see `deploy.yml`).
 4. Wire the GitHub Environment variables/secrets `deploy.yml` reads
    (`CORE_COGNITO_USER_POOL_ID`, `CORE_COGNITO_CLIENT_ID`, `CORE_API_URL`,
-   `CORE_PORTAL_URL`, `SIBLING_OIDC_ROLE_ARN`, `TF_STATE_BUCKET`, etc.).
+   `CORE_PORTAL_URL`, `SIBLING_OIDC_ROLE_ARN`, `TF_STATE_BUCKET`, etc.). The
+   `CORE_COGNITO_*` variables are still required: the **backend** consumes them
+   via `TF_VAR_core_cognito_*` for JWT validation (its Terraform derives a JWKS
+   URL from the pool id). They are no longer inlined into the frontend bundle —
+   the frontend resolves the core's Cognito identity at runtime (#403).
 5. Open the registration PR against your core project (`infra/siblings.auto.tfvars.json`)
    yourself, or let `biffo sibling create` do it for you.

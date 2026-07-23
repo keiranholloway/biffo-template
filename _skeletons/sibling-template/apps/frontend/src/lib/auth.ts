@@ -32,11 +32,12 @@ import { resolveCoreIdentity } from './identity'
 // ---------------------------------------------------------------------------
 // Module-private on purpose: the pool is an implementation detail of
 // getCurrentSession(), not part of this sibling's auth surface. Its Cognito
-// coordinates now come from resolveCoreIdentity() (identity.ts), which prefers
-// the core's runtime-published /.well-known/biffo-identity.json document and
-// only falls back to the baked NEXT_PUBLIC_CORE_COGNITO_* env vars when that
-// document is unreachable — see identity.ts for why runtime resolution kills
-// the stale-baked-pool bug class (#403/#400).
+// coordinates come from resolveCoreIdentity() (identity.ts), which resolves the
+// core's runtime-published /.well-known/biffo-identity.json document. The
+// sibling is now DOC-ONLY (#403 Stage 3): there is NO NEXT_PUBLIC_CORE_COGNITO_*
+// env fallback. An unreachable document resolves to null → the caller treats it
+// as "signed out" — see identity.ts for why runtime resolution kills the
+// stale-baked-pool bug class (#403/#400).
 //
 // Constructed LAZILY, on first session read — never at module scope. The
 // CognitoUserPool constructor throws ("Both UserPoolId and ClientId are

@@ -8,6 +8,7 @@ from mangum import Mangum
 
 from .config import settings
 from .routers import (
+    agent_chat,
     auth,
     health,
     internal_agents,
@@ -58,6 +59,7 @@ app.include_router(admin_agent_runs.router, prefix="/api/v1")
 # under /api/v1/admin/agent-chat. Core assembles the turn under the user's
 # authority and synchronously invokes the agent-runtime Lambda for the LLM turn.
 app.include_router(admin_agent_chat.router, prefix="/api/v1")
+app.include_router(agent_chat.router, prefix="/api/v1")
 # Prompt-library component CRUD (ADR-0015 Phase 1): Cognito-authed, admin-gated,
 # tenant-scoped, under /api/v1/admin/prompt-components. The authoring surface for
 # reusable prompt components until the Phase-2 portal UI.

@@ -26,7 +26,12 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from .chat_agents import ChatAgent, register_chat_agent
+from .chat_agents import (
+    ChatAgent,
+    TurnContext,
+    register_chat_agent,
+    register_chat_context,
+)
 from .chat_engine import (
     ASSISTANT,
     NEUTRALISED_MARKER,
@@ -43,8 +48,12 @@ from .chat_engine import (
     neutralise_markers,
 )
 from .config import settings
+from .orchestration import list_agent_definitions
+from .prompt_library import list_components
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from .models.orchestration import WorkflowDefinition
     from .models.prompt_component import PromptComponent
 
@@ -276,3 +285,23 @@ def _prompt_assistant_agent() -> ChatAgent:
 
 
 register_chat_agent(ASSISTANT_AGENT_KEY, _prompt_assistant_agent)
+
+
+async def _prompt_assistant_context(db: AsyncSession, *, tenant_id: str) -> TurnContext:
+    """The prompt assistant's first-party context (ADR-0016 §5, Phase 2): a bounded
+    summary of the tenant's existing prompt components and agent definitions, read
+    under the caller's own admin authority (both reads are tenant-scoped). Delivered
+    as delineated reference data — never the instruction channel — and paired with
+    the drop predicate that keeps a stale block out of replayed history.
+    """
+    components = await list_components(db, tenant_id=tenant_id)
+    agent_definitions = await list_agent_definitions(db, tenant_id=tenant_id)
+    message = library_reference_message(
+        components,
+        agent_definitions,
+        max_items=settings.agent_assistant_max_library_items,
+    )
+    return TurnContext(message=message, drop=_is_library_message)
+
+
+register_chat_context(ASSISTANT_AGENT_KEY, _prompt_assistant_context)

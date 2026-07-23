@@ -16,8 +16,32 @@ record can resolve *that* — both behind the same :func:`get_chat_agent` seam.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Any
+
+Message = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class TurnContext:
+    """An agent's optional first-party context for one turn (ADR-0016 §5).
+
+    ``message`` is an extra message placed between the system prompt and the
+    conversation (e.g. the prompt assistant's library-reference block), or ``None``.
+    ``drop`` marks messages the agent re-derives each turn so a *stale* copy in the
+    replayed history is not sent again (e.g. an old library block). An agent with no
+    special context uses the default empty context and the engine runs a plain turn.
+    """
+
+    message: Message | None = None
+    drop: Callable[[Message], bool] | None = None
+
+
+#: An agent's context assembler: resolves its :class:`TurnContext` under the caller's
+#: authority for one turn. Async and DB-taking (the prompt assistant reads the
+#: library); an agent without one just gets the empty context.
+ContextAssembler = Callable[..., Awaitable[TurnContext]]
 
 
 @dataclass(frozen=True)
@@ -67,3 +91,18 @@ def get_chat_agent(agent_key: str) -> ChatAgent:
 def registered_agent_keys() -> frozenset[str]:
     """The keys currently registered — for diagnostics and tests."""
     return frozenset(_BUILDERS)
+
+
+_CONTEXT_ASSEMBLERS: dict[str, ContextAssembler] = {}
+
+
+def register_chat_context(agent_key: str, assembler: ContextAssembler) -> None:
+    """Register an optional first-party context assembler for ``agent_key`` (e.g.
+    the prompt assistant's library reference). An agent without one runs a plain
+    turn. Idempotent by key."""
+    _CONTEXT_ASSEMBLERS[agent_key] = assembler
+
+
+def get_chat_context(agent_key: str) -> ContextAssembler | None:
+    """The registered context assembler for ``agent_key``, or ``None``."""
+    return _CONTEXT_ASSEMBLERS.get(agent_key)

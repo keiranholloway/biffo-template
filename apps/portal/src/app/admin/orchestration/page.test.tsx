@@ -675,8 +675,12 @@ describe('OrchestrationPage', () => {
 
     render(<OrchestrationPage />)
 
+    // "Recent runs" is a STATIC header, rendered on mount before fetchRuns
+    // resolves — so awaiting it does not guarantee the run row is in the DOM.
+    // Wait for the run's own outcome, which only appears once the history loads,
+    // rather than reading it synchronously (the #487 flake).
     expect(await screen.findByText('Recent runs')).toBeInTheDocument()
-    expect(screen.getByText('succeeded')).toBeInTheDocument()
+    expect(await screen.findByText('succeeded')).toBeInTheDocument()
   })
 
   it('shows the error of a failed run', async () => {

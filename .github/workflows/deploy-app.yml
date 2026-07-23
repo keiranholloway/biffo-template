@@ -444,12 +444,30 @@ jobs:
             [ -d "modules/plugins/$name" ] || [ -d "$plugin_dir/terraform" ] || { echo "skip $name (no terraform module)"; continue; }
             fn="${prefix}-plugin-${name}"
             echo "::group::plugin $name -> $fn"
-            found=""
-            for i in $(seq 1 30); do
-              if aws lambda get-function --function-name "$fn" >/dev/null 2>&1; then found=1; break; fi
-              echo "waiting for $fn to exist ($i/30)"; sleep 10
-            done
-            if [ -z "$found" ]; then echo "$fn not found (plugin not enabled this env?); skipping"; echo "::endgroup::"; continue; fi
+            # Ground truth for "provisioned in this env" is whether the Lambda
+            # exists, so check once and skip immediately if it does not (#449).
+            #
+            # This used to wait 30×10s for the function to appear, on the theory
+            # that a concurrent infra deploy was creating it. But a first-party
+            # plugin's terraform ships to every instance while its Lambda exists
+            # only where the env wired `module "plugin_<name>"` into its
+            # (user-owned) infra — so for any instance not running that plugin,
+            # the wait always ran out the full ~5.5 min per plugin, on every
+            # deploy, for a function that would never appear (observed on
+            # biffo-platform: ~11 min/deploy, then skipped anyway).
+            #
+            # The race barely exists in practice: enabling a plugin edits
+            # infra/environments/** only, so it triggers Deploy Infrastructure —
+            # not this app workflow — and infra creates the Lambda with a
+            # placeholder zip (compute module, ignore_changes on the code). Its
+            # real code is loaded by the next app deploy regardless. Waiting here
+            # is what the "this job never runs infra and must not wait for it"
+            # contract above already says it should not do.
+            if ! aws lambda get-function --function-name "$fn" >/dev/null 2>&1; then
+              echo "$fn does not exist — plugin not provisioned in this env; skipping."
+              echo "(If you just enabled it, its infra apply creates the Lambda; re-run this deploy to load its code.)"
+              echo "::endgroup::"; continue
+            fi
             pkg_name="$(sed -n 's/^name *= *"\(.*\)".*/\1/p' "$plugin_dir/pyproject.toml" | head -1)"
             rm -rf "plugin-$name-package"
             uv export --package "$pkg_name" --no-dev --frozen \
@@ -849,12 +867,30 @@ jobs:
             [ -d "modules/plugins/$name" ] || [ -d "$plugin_dir/terraform" ] || { echo "skip $name (no terraform module)"; continue; }
             fn="${prefix}-plugin-${name}"
             echo "::group::plugin $name -> $fn"
-            found=""
-            for i in $(seq 1 30); do
-              if aws lambda get-function --function-name "$fn" >/dev/null 2>&1; then found=1; break; fi
-              echo "waiting for $fn to exist ($i/30)"; sleep 10
-            done
-            if [ -z "$found" ]; then echo "$fn not found (plugin not enabled this env?); skipping"; echo "::endgroup::"; continue; fi
+            # Ground truth for "provisioned in this env" is whether the Lambda
+            # exists, so check once and skip immediately if it does not (#449).
+            #
+            # This used to wait 30×10s for the function to appear, on the theory
+            # that a concurrent infra deploy was creating it. But a first-party
+            # plugin's terraform ships to every instance while its Lambda exists
+            # only where the env wired `module "plugin_<name>"` into its
+            # (user-owned) infra — so for any instance not running that plugin,
+            # the wait always ran out the full ~5.5 min per plugin, on every
+            # deploy, for a function that would never appear (observed on
+            # biffo-platform: ~11 min/deploy, then skipped anyway).
+            #
+            # The race barely exists in practice: enabling a plugin edits
+            # infra/environments/** only, so it triggers Deploy Infrastructure —
+            # not this app workflow — and infra creates the Lambda with a
+            # placeholder zip (compute module, ignore_changes on the code). Its
+            # real code is loaded by the next app deploy regardless. Waiting here
+            # is what the "this job never runs infra and must not wait for it"
+            # contract above already says it should not do.
+            if ! aws lambda get-function --function-name "$fn" >/dev/null 2>&1; then
+              echo "$fn does not exist — plugin not provisioned in this env; skipping."
+              echo "(If you just enabled it, its infra apply creates the Lambda; re-run this deploy to load its code.)"
+              echo "::endgroup::"; continue
+            fi
             pkg_name="$(sed -n 's/^name *= *"\(.*\)".*/\1/p' "$plugin_dir/pyproject.toml" | head -1)"
             rm -rf "plugin-$name-package"
             uv export --package "$pkg_name" --no-dev --frozen \
@@ -1266,12 +1302,30 @@ jobs:
             [ -d "modules/plugins/$name" ] || [ -d "$plugin_dir/terraform" ] || { echo "skip $name (no terraform module)"; continue; }
             fn="${prefix}-plugin-${name}"
             echo "::group::plugin $name -> $fn"
-            found=""
-            for i in $(seq 1 30); do
-              if aws lambda get-function --function-name "$fn" >/dev/null 2>&1; then found=1; break; fi
-              echo "waiting for $fn to exist ($i/30)"; sleep 10
-            done
-            if [ -z "$found" ]; then echo "$fn not found (plugin not enabled this env?); skipping"; echo "::endgroup::"; continue; fi
+            # Ground truth for "provisioned in this env" is whether the Lambda
+            # exists, so check once and skip immediately if it does not (#449).
+            #
+            # This used to wait 30×10s for the function to appear, on the theory
+            # that a concurrent infra deploy was creating it. But a first-party
+            # plugin's terraform ships to every instance while its Lambda exists
+            # only where the env wired `module "plugin_<name>"` into its
+            # (user-owned) infra — so for any instance not running that plugin,
+            # the wait always ran out the full ~5.5 min per plugin, on every
+            # deploy, for a function that would never appear (observed on
+            # biffo-platform: ~11 min/deploy, then skipped anyway).
+            #
+            # The race barely exists in practice: enabling a plugin edits
+            # infra/environments/** only, so it triggers Deploy Infrastructure —
+            # not this app workflow — and infra creates the Lambda with a
+            # placeholder zip (compute module, ignore_changes on the code). Its
+            # real code is loaded by the next app deploy regardless. Waiting here
+            # is what the "this job never runs infra and must not wait for it"
+            # contract above already says it should not do.
+            if ! aws lambda get-function --function-name "$fn" >/dev/null 2>&1; then
+              echo "$fn does not exist — plugin not provisioned in this env; skipping."
+              echo "(If you just enabled it, its infra apply creates the Lambda; re-run this deploy to load its code.)"
+              echo "::endgroup::"; continue
+            fi
             pkg_name="$(sed -n 's/^name *= *"\(.*\)".*/\1/p' "$plugin_dir/pyproject.toml" | head -1)"
             rm -rf "plugin-$name-package"
             uv export --package "$pkg_name" --no-dev --frozen \

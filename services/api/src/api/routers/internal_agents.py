@@ -54,6 +54,7 @@ from ..events import emit_event
 from ..events.registry import AGENT_RUN_COMPLETED, AGENT_RUN_REQUESTED
 from ..middleware.service_auth import ServicePrincipal, require_service_principal
 from ..models.agent_run import AgentRun
+from ..prompt_parts import PromptPartsError
 from ..schemas.agent_run import (
     AgentRunResponse,
     CompleteAgentRunRequest,
@@ -92,6 +93,11 @@ async def request_agent_run(
     Refuses with 409 past the configured depth ceiling — the one point in the
     cycle ``run -> event -> run`` where an unbounded loop can still be stopped
     before it spends anything (ADR-0014 §8).
+
+    Refuses with 422 when the snapshot's prompt parts cannot be resolved — a
+    referenced component was since deleted, or a required variable is unsupplied
+    (ADR-0015 §6). The run is aborted rather than created with a broken or
+    half-substituted prompt, the same fail-loud posture as the depth ceiling.
     """
     try:
         run = await create_run(
@@ -108,6 +114,14 @@ async def request_agent_run(
         )
     except DepthLimitExceededError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except PromptPartsError as exc:
+        logger.warning(
+            "Agent run creation aborted: unresolvable prompt (ADR-0015 §6)",
+            extra={"agent": body.agent_name, "error": str(exc)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
 
     emit_event(db, AGENT_RUN_REQUESTED, _reference_payload(run), tenant_id=principal.tenant_id)
     return AgentRunResponse.model_validate(run)

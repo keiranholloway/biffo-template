@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+from ..prompt_parts import PromptPartsError, normalize_parts
 from .base import BiffoBaseSchema
 
 
@@ -236,15 +237,24 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
         "label": "Run an agent",
         "config_fields": [
             {"name": "agent_name", "label": "Agent name", "type": "text", "required": True},
+            # instructions/goals accept EITHER a plain string (a single inline
+            # part — the pre-library shape, unchanged) OR an ordered list of parts
+            # for the prompt library (ADR-0015 §2): each part is
+            # {"inline": "<text>"} or {"component": "<name>", "values": {…}}.
+            # ``parts: True`` tells the validator (and the Phase-2 builder) to
+            # treat the field as ordered parts rather than a plain textarea; the
+            # string case still validates because a string is one inline part.
+            # References are resolved to a final string Core-side at run-creation
+            # (§4), so the runtime still reads a plain string from the snapshot.
             {
                 "name": "instructions",
                 "label": "Instructions",
                 "type": "textarea",
                 "required": True,
+                "parts": True,
             },
             # Optional acceptance criteria, folded into the system prompt after the
-            # instructions by the runtime (ADR-0014). The label does the teaching:
-            # there is no catalog placeholder/help support today.
+            # instructions by the runtime (ADR-0014). Also composable from parts.
             {
                 "name": "goals",
                 "label": (
@@ -253,6 +263,7 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 ),
                 "type": "textarea",
                 "required": False,
+                "parts": True,
             },
             # Per-worker model choice, so alternatives can be compared without a
             # code change (§1). The value is an OpenRouter model slug.
@@ -453,6 +464,13 @@ class WorkflowDefinitionBody(BaseModel):
         for field in config_fields:
             if not _field_applies(config_fields, self.action_config, field):
                 continue
+            # A prompt-library field (instructions/goals) is EITHER a plain string
+            # or an ordered list of parts (ADR-0015 §2). Validate the shape here —
+            # component existence and value/variable matching need the DB and are
+            # checked in the router — then skip the plain-textarea checks below.
+            if field.get("parts"):
+                self._validate_parts_field(field)
+                continue
             value = self.action_config.get(field["name"])
             # A secret echoed back as the redaction sentinel means "keep the stored
             # value" (#432). The real value is resolved and checked in the router's
@@ -496,6 +514,24 @@ class WorkflowDefinitionBody(BaseModel):
             ):
                 raise ValueError(f"action_config.{field['name']} must be an https URL")
         return self
+
+    def _validate_parts_field(self, field: dict[str, Any]) -> None:
+        """Validate an ordered-parts prompt field's shape (ADR-0015 §2).
+
+        Accepts a plain string (one inline part) or a list of inline/component
+        parts. A required field must resolve to at least one part — a component
+        reference counts, so this passes even when the text lives entirely in the
+        library; whether that component *exists* is a DB check the router runs.
+        """
+        name = field["name"]
+        try:
+            parts = normalize_parts(self.action_config.get(name), field=f"action_config.{name}")
+        except PromptPartsError as exc:
+            raise ValueError(str(exc)) from exc
+        if field["required"] and not parts:
+            raise ValueError(
+                f"action_config.{name} is required for the {self.action_type} action"
+            )
 
 
 class CreateWorkflowDefinitionRequest(WorkflowDefinitionBody):

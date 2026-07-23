@@ -43,6 +43,8 @@ function fakeGit(over: Record<string, unknown> = {}) {
     isGitRepo: vi.fn().mockResolvedValue(true),
     hasUncommittedChanges: vi.fn().mockResolvedValue(false),
     currentBranch: vi.fn().mockResolvedValue('main'),
+    fetch: vi.fn().mockResolvedValue(undefined),
+    aheadBehind: vi.fn().mockResolvedValue({ ahead: 0, behind: 0, hasUpstream: true }),
     getRemoteUrl: vi.fn().mockResolvedValue('git@github.com:acme/instance.git'),
     createBranch: vi.fn().mockResolvedValue(undefined),
     add: vi.fn().mockResolvedValue(undefined),
@@ -219,6 +221,67 @@ describe('runCoreUpgrade --apply', () => {
       ),
     ).rejects.toThrow(/uncommitted/i)
     expect(git.createBranch).not.toHaveBeenCalled()
+  })
+
+  // #394 — currency of the instance tree ("ours") is established BEFORE any plan
+  // is computed, since a stale/detached tree silently produces a wrong merge.
+
+  it('refuses a detached HEAD before planning', async () => {
+    const { deps } = fakeDeps({ currentBranch: vi.fn().mockResolvedValue('HEAD') })
+    await expect(
+      runCoreUpgrade(
+        { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs },
+        deps,
+      ),
+    ).rejects.toThrow(/detached HEAD/i)
+  })
+
+  it('refuses a branch that is behind its upstream', async () => {
+    const { deps } = fakeDeps({
+      aheadBehind: vi.fn().mockResolvedValue({ ahead: 0, behind: 3, hasUpstream: true }),
+    })
+    await expect(
+      runCoreUpgrade(
+        { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs },
+        deps,
+      ),
+    ).rejects.toThrow(/behind its upstream/i)
+  })
+
+  it('fetches before the ahead/behind check', async () => {
+    const { deps, git } = fakeDeps()
+    await runCoreUpgrade(
+      { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs },
+      deps,
+    )
+    expect(git.fetch).toHaveBeenCalledWith(instance)
+  })
+
+  it('allows a dirty tree with --allow-dirty', async () => {
+    const { deps, createPullRequest } = fakeDeps({
+      hasUncommittedChanges: vi.fn().mockResolvedValue(true),
+    })
+    await runCoreUpgrade(
+      {
+        cwd: instance,
+        templateRepo: theirs,
+        baseDir: base,
+        theirsDir: theirs,
+        apply: true,
+        allowDirty: true,
+      },
+      deps,
+    )
+    expect(createPullRequest).toHaveBeenCalled()
+  })
+
+  it('does not check currency when the tree is not a git repo (dry run on loose files)', async () => {
+    const { deps, git } = fakeDeps({ isGitRepo: vi.fn().mockResolvedValue(false) })
+    await runCoreUpgrade(
+      { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs },
+      deps,
+    )
+    expect(git.fetch).not.toHaveBeenCalled()
   })
 
   it('dry run (no --apply) never touches git or the working tree', async () => {

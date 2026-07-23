@@ -121,6 +121,31 @@ export class GitAdapter {
     return stdout.trim().length > 0
   }
 
+  /** Best-effort fetch of the tracking remote, so the ahead/behind check below
+   * compares against reality rather than a stale local ref (#394). Never throws:
+   * offline or a missing remote must not block an upgrade on its own — the
+   * ahead/behind check that follows simply works from whatever is local. */
+  async fetch(cwd: string, remote = 'origin'): Promise<void> {
+    await execa('git', ['fetch', '--quiet', remote], { cwd, reject: false })
+  }
+
+  /** HEAD's position relative to its upstream. `hasUpstream` is false when the
+   * branch tracks nothing (or HEAD is detached), in which case currency cannot
+   * be established and ahead/behind are 0 (#394). */
+  async aheadBehind(cwd: string): Promise<{ ahead: number; behind: number; hasUpstream: boolean }> {
+    const { stdout, exitCode } = await execa(
+      'git',
+      ['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'],
+      { cwd, reject: false },
+    )
+    if (exitCode !== 0) return { ahead: 0, behind: 0, hasUpstream: false }
+    const [ahead, behind] = stdout
+      .trim()
+      .split(/\s+/)
+      .map((n) => Number.parseInt(n, 10))
+    return { ahead: ahead ?? 0, behind: behind ?? 0, hasUpstream: true }
+  }
+
   /** The fetch URL of a remote (default "origin"). */
   async getRemoteUrl(cwd: string, remote = 'origin'): Promise<string> {
     const { stdout } = await execa('git', ['remote', 'get-url', remote], { cwd })

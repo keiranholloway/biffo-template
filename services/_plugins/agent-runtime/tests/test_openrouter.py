@@ -163,6 +163,128 @@ async def test_an_empty_choices_list_is_an_error_not_an_empty_answer(monkeypatch
         await _client(handler).complete(model="m", messages=[], timeout=5.0)
 
 
+# ── Streaming (ADR-0016 §4) ──────────────────────────────────────────────────
+
+
+def _sse(*chunks: str, extra_lines: list[str] | None = None):
+    """A faked OpenRouter SSE body: one `data:` frame per chunk, a keep-alive
+    comment, and the terminal `[DONE]` sentinel — served as one `text/event-stream`
+    response so `aiter_lines()` sees the real frame layout."""
+    lines: list[str] = []
+    for chunk in chunks:
+        lines.append(f"data: {json.dumps({'choices': [{'delta': {'content': chunk}}]})}")
+        lines.append("")  # SSE frame separator
+    lines.append(": OPENROUTER PROCESSING")  # keep-alive comment — carries no text
+    lines.extend(extra_lines or [])
+    lines.append("data: [DONE]")
+    payload = "\n".join(lines).encode()
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=payload, headers={"content-type": "text/event-stream"})
+
+    return handler, seen
+
+
+async def test_stream_yields_chunks_in_order_and_sends_stream_true(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, seen = _sse("Hel", "lo, ", "world")
+
+    got = [
+        chunk
+        async for chunk in _client(handler).stream(
+            model="anthropic/claude-opus-4-8",
+            messages=[{"role": "system", "content": "Go"}],
+            timeout=30.0,
+        )
+    ]
+
+    assert got == ["Hel", "lo, ", "world"]
+    request = seen[0]
+    body = json.loads(request.content)
+    assert body["stream"] is True
+    assert body["model"] == "anthropic/claude-opus-4-8"
+    assert request.url.path.endswith("/chat/completions")
+    assert request.headers["authorization"] == f"Bearer {_FAKE_KEY}"
+
+
+async def test_stream_skips_comments_blanks_the_sentinel_and_toolcall_only_deltas(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    # A tool-call-only delta (no `content`) and a role-open delta carry no text.
+    handler, _ = _sse(
+        "one",
+        "two",
+        extra_lines=[
+            'data: {"choices": [{"delta": {"role": "assistant"}}]}',
+            'data: {"choices": [{"delta": {"tool_calls": [{"index": 0}]}}]}',
+            "data: not-json",
+        ],
+    )
+
+    got = [chunk async for chunk in _client(handler).stream(model="m", messages=[], timeout=5.0)]
+
+    assert got == ["one", "two"]
+
+
+async def test_stream_omits_tools_when_none_declared_and_sends_them_when_declared(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, seen = _sse("x")
+
+    async def drain(**kwargs):
+        async for _ in _client(handler).stream(model="m", messages=[], timeout=5.0, **kwargs):
+            pass
+
+    await drain(tools=None)
+    await drain(tools=[])
+    await drain(tools=[{"type": "function", "function": {"name": "web_search"}}])
+
+    assert "tools" not in json.loads(seen[0].content)
+    assert "tools" not in json.loads(seen[1].content)
+    assert json.loads(seen[2].content)["tools"] == [
+        {"type": "function", "function": {"name": "web_search"}}
+    ]
+
+
+async def test_stream_provider_error_becomes_an_llm_error_without_the_key(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY_PARAMETER", _PARAMETER)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, text="unauthorized")
+
+    client = _client(handler, ssm_client=FakeSsm({_PARAMETER: _FAKE_KEY}))
+    with pytest.raises(LLMError) as exc:
+        async for _ in client.stream(model="m", messages=[], timeout=5.0):
+            pass
+
+    assert "401" in str(exc.value)
+    # The credential must never travel in an error that lands on a run record.
+    assert _FAKE_KEY not in str(exc.value)
+
+
+async def test_stream_transport_failure_becomes_an_llm_error(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("dns")
+
+    with pytest.raises(LLMError, match="OpenRouter request failed"):
+        async for _ in _client(handler).stream(model="m", messages=[], timeout=5.0):
+            pass
+
+
+async def test_complete_does_not_request_streaming(monkeypatch):
+    """Regression: the streaming addition must not change the full-response path —
+    `complete` still sends a request with no `stream` flag."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    handler, seen = _ok()
+
+    await _client(handler).complete(model="m", messages=[], timeout=5.0)
+
+    assert "stream" not in json.loads(seen[0].content)
+
+
 # ── Tools on the wire (M3) ───────────────────────────────────────────────────
 
 

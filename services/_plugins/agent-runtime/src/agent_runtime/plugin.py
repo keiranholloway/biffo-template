@@ -226,6 +226,11 @@ class AgentRuntimePlugin(BiffoPluginBase):
         """Run the turn loop. Returns an outcome; never raises."""
         snapshot = run.get("definition_snapshot") or {}
         instructions = str(snapshot.get("instructions") or "").strip()
+        # Optional acceptance criteria, read from the SAME snapshot source as
+        # instructions. Snapshots predating the field carry no `goals` key; the
+        # runtime folds it into the system prompt only when present and non-blank
+        # (messages.py), so a missing key is byte-identical to the old behaviour.
+        goals = str(snapshot.get("goals") or "").strip()
         model = str(snapshot.get("model") or "").strip()
         if not instructions:
             return failure("definition_snapshot carries no instructions for this run.")
@@ -261,6 +266,7 @@ class AgentRuntimePlugin(BiffoPluginBase):
                     input_payload=payload if isinstance(payload, dict) else {"input": payload},
                     limits=limits,
                     tools=tools,
+                    goals=goals,
                 )
             )
         except Exception as exc:  # noqa: BLE001 — an abandoned run is worse than a failed one

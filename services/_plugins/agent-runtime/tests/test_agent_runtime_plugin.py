@@ -69,6 +69,28 @@ async def test_the_model_comes_from_the_run_snapshot():
     assert llm.calls[0]["model"] == "openai/gpt-5"
 
 
+async def test_goals_from_the_snapshot_reach_the_system_message():
+    # goals is read from the SAME snapshot source as instructions and folded into
+    # the system prompt (ADR-0014). A snapshot that predates the field carries none.
+    core = FakeCore(make_run(goals="A confidence-rated verdict per dimension."))
+    llm = FakeLLM()
+
+    await _plugin(core, llm).events.dispatch(_event())
+
+    system = llm.calls[0]["messages"][0]["content"]
+    assert "A confidence-rated verdict per dimension." in system
+    assert "Success criteria:" in system
+
+
+async def test_a_snapshot_without_goals_omits_the_goals_section():
+    core = FakeCore(make_run())  # no goals key at all — the backward-compat path
+    llm = FakeLLM()
+
+    await _plugin(core, llm).events.dispatch(_event())
+
+    assert "Success criteria:" not in llm.calls[0]["messages"][0]["content"]
+
+
 async def test_an_llm_failure_completes_the_run_as_failed_rather_than_abandoning_it():
     # ADR-0014 §5: a subscriber must be able to tell "failed" from "still
     # running". A silently abandoned run is the stranding gap the ADR records.

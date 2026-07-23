@@ -180,9 +180,10 @@ class AgentLoop:
         input_payload: dict[str, Any],
         limits: RunLimits,
         tools: Sequence[ToolDefinition] = (),
+        goals: str | None = None,
     ) -> AsyncIterator[TurnEvent]:
         """Yield the run's turn events, ending with exactly one ``run.finished``."""
-        messages = build_messages(instructions, input_payload)
+        messages = build_messages(instructions, input_payload, goals)
         offered = {tool.name: tool for tool in tools}
         schemas = [tool.to_provider_schema() for tool in tools] or None
         yield TurnEvent(

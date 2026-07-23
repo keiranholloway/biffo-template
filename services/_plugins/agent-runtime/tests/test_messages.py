@@ -7,6 +7,7 @@ import json
 from agent_runtime.messages import (
     ASSISTANT,
     CONTEXT_FRAMING,
+    GOALS_HEADER,
     SYSTEM,
     TOOL,
     UNTRUSTED_CLOSE,
@@ -16,6 +17,7 @@ from agent_runtime.messages import (
     USER,
     assistant_message,
     build_messages,
+    system_message,
     tool_result_message,
 )
 from agent_runtime.redaction import EMAIL_PLACEHOLDER
@@ -78,6 +80,50 @@ def test_an_assistant_message_carries_its_tool_calls_verbatim():
     # Replayed on the next request, and a tool result is only accepted alongside
     # the call it answers — so the wire shape travels unchanged.
     assert message["tool_calls"] == [call]
+
+
+# ── Goals: acceptance criteria folded in, backward-compatibly ────────────────
+
+
+def test_goals_are_folded_in_between_instructions_and_the_framing():
+    system = system_message("Assess the lead.", goals="A confidence-rated verdict per dimension.")
+    content = system["content"]
+
+    # All three present...
+    assert "Assess the lead." in content
+    assert GOALS_HEADER in content
+    assert "A confidence-rated verdict per dimension." in content
+    assert CONTEXT_FRAMING in content
+    # ...and in order: instructions -> goals section -> framing (last, unchanged).
+    assert (
+        content.index("Assess the lead.")
+        < content.index(GOALS_HEADER)
+        < content.index("A confidence-rated verdict per dimension.")
+        < content.index(CONTEXT_FRAMING)
+    )
+    assert content.endswith(CONTEXT_FRAMING)
+
+
+def test_goals_absent_is_byte_identical_to_the_pre_goals_assembly():
+    # The backward-compat trap: a run whose snapshot predates the field passes no
+    # goals at all. The assembled system message must be exactly what it was before
+    # goals existed — instructions, blank line, framing.
+    expected = {"role": SYSTEM, "content": f"Enrich this lead.\n\n{CONTEXT_FRAMING}"}
+
+    assert system_message("Enrich this lead.") == expected
+    assert system_message("Enrich this lead.", goals=None) == expected
+    assert build_messages("Enrich this lead.", {})[0] == expected
+
+
+def test_blank_or_whitespace_goals_emit_no_header():
+    # Present-but-blank must behave exactly like absent — no empty "Success
+    # criteria:" header with nothing under it.
+    baseline = system_message("Do the thing.")
+
+    for blank in ("", "   ", "\n\t  \n"):
+        result = system_message("Do the thing.", goals=blank)
+        assert result == baseline
+        assert GOALS_HEADER not in result["content"]
 
 
 # ── Tool results: the same fence, and a stricter framing ─────────────────────

@@ -48,7 +48,7 @@ from typing import Any
 from .messages import Message, assistant_message, build_messages, tool_result_message
 from .openrouter import LLMClient, LLMError, LLMResponse, ToolCall
 from .state import COMPLETED, FAILED
-from .tools import ToolDefinition, ToolError
+from .tools import OutputTool, ToolDefinition, ToolError
 
 # The platform ceiling §8 names: "A Lambda invocation is capped at 15 minutes, so
 # a multi-turn loop must either finish inside one invocation or be resumable
@@ -180,12 +180,21 @@ class AgentLoop:
         input_payload: dict[str, Any],
         limits: RunLimits,
         tools: Sequence[ToolDefinition] = (),
+        output_tools: Sequence[OutputTool] = (),
         goals: str | None = None,
     ) -> AsyncIterator[TurnEvent]:
         """Yield the run's turn events, ending with exactly one ``run.finished``."""
         messages = build_messages(instructions, input_payload, goals)
         offered = {tool.name: tool for tool in tools}
-        schemas = [tool.to_provider_schema() for tool in tools] or None
+        # Output tools are offered to the model alongside executable tools, but the
+        # loop never runs them: calling one is how the model *submits* its result
+        # (see the terminal check below). They carry no executor, so they are kept
+        # apart from `offered`.
+        output_offered = {tool.name for tool in output_tools}
+        schemas = (
+            [tool.to_provider_schema() for tool in tools]
+            + [tool.to_provider_schema() for tool in output_tools]
+        ) or None
         yield TurnEvent(
             RUN_STARTED,
             0,
@@ -194,6 +203,7 @@ class AgentLoop:
                 "max_turns": limits.max_turns,
                 "timeout_seconds": limits.timeout_seconds,
                 "tools": sorted(offered),
+                "output_tools": sorted(output_offered),
             },
         )
         for message in messages:
@@ -257,6 +267,27 @@ class AgentLoop:
                     "tool_calls": [call.name for call in response.tool_calls],
                 },
             )
+
+            # Output tool = the model submitting its structured result (ADR-0017
+            # §5). It is terminal: the arguments ARE the answer and are already in
+            # the transcript (the assistant message above), so the loop does not
+            # execute anything and does not go round again. Checked before the tool
+            # seam so a submit call is never mistaken for an executable one; if the
+            # model both submits and calls a tool in one message, submitting wins.
+            submitted = _output_tool_call(response.tool_calls, output_offered)
+            if submitted is not None:
+                yield _finished(
+                    turn,
+                    COMPLETED,
+                    result={
+                        "output_tool": submitted.name,
+                        "arguments": submitted.arguments,
+                        "model": response.model,
+                        "turns": turn,
+                        "finish_reason": response.finish_reason,
+                    },
+                )
+                return
 
             # The tool seam. Results are appended to the same array the next turn
             # replays, each one fenced and redacted on the way in (messages.py) —
@@ -373,6 +404,14 @@ async def _execute_call(call: ToolCall, offered: dict[str, ToolDefinition]) -> s
         return f"Tool {call.name} could not run: {exc}"
     except Exception as exc:  # noqa: BLE001 — a failing tool degrades a run, never ends it
         return f"Tool {call.name} failed: {exc}"
+
+
+def _output_tool_call(calls: Sequence[ToolCall], output_tool_names: set[str]) -> ToolCall | None:
+    """The first call to an offered output tool, if any — the model's submission."""
+    for call in calls:
+        if call.name in output_tool_names:
+            return call
+    return None
 
 
 def _wants_another_turn(response: LLMResponse) -> bool:

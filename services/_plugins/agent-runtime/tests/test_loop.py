@@ -19,6 +19,7 @@ from agent_runtime.loop import (
 from agent_runtime.messages import TOOL, UNTRUSTED_TOOL_CLOSE, UNTRUSTED_TOOL_OPEN
 from agent_runtime.openrouter import LLMResponse
 from agent_runtime.state import COMPLETED, FAILED
+from agent_runtime.tools import OutputTool
 from agent_runtime_fakes import (
     FakeClock,
     FakeLLM,
@@ -141,6 +142,104 @@ async def test_the_tool_schema_is_offered_to_the_provider():
     await _stream(AgentLoop(llm), tools=[tool.definition])
 
     assert llm.calls[0]["tools"] == [tool.definition.to_provider_schema()]
+
+
+# ── output tools: terminal, structured submission (ADR-0017 §5) ──────────────────
+
+
+_SUBMIT = OutputTool(
+    name="submit_report",
+    description="Submit the structured result.",
+    parameters={
+        "type": "object",
+        "properties": {"score": {"type": "integer"}, "notes": {"type": "array"}},
+        "required": ["score"],
+    },
+)
+
+
+async def test_calling_an_output_tool_completes_the_run_with_its_arguments():
+    report = {"score": 4, "notes": ["a", "b"]}
+    # One model call that submits — even with max_turns=1, submission is terminal.
+    llm = FakeLLM(tool_call_response("submit_report", report))
+
+    outcome = await collect(
+        AgentLoop(llm).stream(
+            model="m",
+            instructions="Assess it.",
+            input_payload={},
+            limits=_limits(max_turns=1),
+            output_tools=[_SUBMIT],
+        )
+    )
+
+    assert outcome.status == COMPLETED
+    assert outcome.result is not None
+    assert outcome.result["output_tool"] == "submit_report"
+    # the structured (nested) arguments are the result, verbatim
+    assert outcome.result["arguments"] == report
+    # exactly one model call — the loop did not go round again
+    assert len(llm.calls) == 1
+    # the submission is in the transcript as the assistant's tool call
+    assert outcome.messages[-1]["role"] == "assistant"
+
+
+async def test_an_output_tool_is_offered_alongside_executable_tools():
+    tool = RecordingTool("echo")
+    llm = FakeLLM(LLMResponse(content="done", model="m", finish_reason="stop"))
+
+    await _stream(AgentLoop(llm), tools=[tool.definition], output_tools=[_SUBMIT])
+
+    offered = llm.calls[0]["tools"]
+    names = [t["function"]["name"] for t in offered]
+    assert names == ["echo", "submit_report"]
+
+
+async def test_an_output_tool_is_never_executed():
+    # The output tool is NOT in the executable set, so nothing runs it; the run
+    # ends on submission. RecordingTool would record a call if it were executed.
+    tool = RecordingTool("echo")
+    llm = FakeLLM(tool_call_response("submit_report", {"score": 1}))
+
+    outcome = await collect(
+        AgentLoop(llm).stream(
+            model="m",
+            instructions="Go",
+            input_payload={},
+            limits=_limits(max_turns=3),
+            tools=[tool.definition],
+            output_tools=[_SUBMIT],
+        )
+    )
+
+    assert tool.calls == []  # never executed
+    assert outcome.status == COMPLETED
+    # no tool-result message — submission is terminal, not a round-trip
+    assert TOOL not in [m["role"] for m in outcome.messages]
+
+
+async def test_search_then_submit_across_turns():
+    tool = RecordingTool("echo", result="found context")
+    llm = FakeLLM(
+        tool_call_response("echo", {"text": "research"}),  # turn 1: a real tool
+        tool_call_response("submit_report", {"score": 5}),  # turn 2: submit
+    )
+
+    outcome = await collect(
+        AgentLoop(llm).stream(
+            model="m",
+            instructions="Research then report.",
+            input_payload={},
+            limits=_limits(max_turns=5),
+            tools=[tool.definition],
+            output_tools=[_SUBMIT],
+        )
+    )
+
+    assert tool.calls == [{"text": "research"}]  # the real tool ran on turn 1
+    assert outcome.status == COMPLETED
+    assert outcome.result["arguments"] == {"score": 5}
+    assert outcome.result["turns"] == 2
 
 
 async def test_a_tool_result_reaches_the_model_fenced_and_redacted():

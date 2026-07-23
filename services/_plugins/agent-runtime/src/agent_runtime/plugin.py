@@ -63,7 +63,7 @@ from .loop import AgentLoop, RunLimits, RunOutcome, collect, failure
 from .manifest import MANIFEST_PATH
 from .openrouter import LLMClient, OpenRouterClient
 from .state import PENDING, RunState, RunStateError
-from .tools import ToolError, declared_tools, resolve_tools
+from .tools import ToolError, declared_tools, output_tools, resolve_tools
 
 logger = Logger()
 
@@ -243,6 +243,11 @@ class AgentRuntimePlugin(BiffoPluginBase):
         # tool it was offered, which is undiagnosable from the transcript.
         try:
             tools = resolve_tools(declared_tools(snapshot))
+            # Inline output tools the run carries (ADR-0017 §5): offered to the
+            # model, never executed — calling one submits the run's result. A
+            # malformed one fails the run here, before any spend, exactly as an
+            # unregistered tool name does.
+            submit_tools = output_tools(snapshot)
         except ToolError as exc:
             return failure(str(exc))
 
@@ -266,6 +271,7 @@ class AgentRuntimePlugin(BiffoPluginBase):
                     input_payload=payload if isinstance(payload, dict) else {"input": payload},
                     limits=limits,
                     tools=tools,
+                    output_tools=submit_tools,
                     goals=goals,
                 )
             )

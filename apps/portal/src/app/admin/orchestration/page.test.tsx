@@ -729,4 +729,61 @@ describe('OrchestrationPage', () => {
     expect(body.action_config.model).toBe('some-vendor/experimental-v9')
     expect(body.action_config.tools).toEqual(['web_search'])
   })
+
+  // ── redundant-web-search guidance (non-blocking, agent action only) ─────────
+
+  const REDUNDANT_WARNING = /already performs web search/
+
+  it('warns when a :online model and the web_search tool are both selected', async () => {
+    fetchWorkflows.mockResolvedValue([])
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
+
+    // No warning yet: default model is not web-connected and no tool is picked.
+    expect(screen.queryByText(REDUNDANT_WARNING)).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Model'), {
+      target: { value: 'moonshotai/kimi-k3:online' },
+    })
+    fireEvent.click(screen.getByRole('checkbox', { name: /web_search/ }))
+
+    // Both conditions now hold — the hint appears, and the Add button stays
+    // enabled (guidance, not a save-blocking gate).
+    expect(screen.getByText(REDUNDANT_WARNING)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add workflow' })).not.toBeDisabled()
+  })
+
+  it('does not warn for a :online model when no web_search tool is selected', async () => {
+    fetchWorkflows.mockResolvedValue([])
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
+    fireEvent.change(screen.getByLabelText('Model'), {
+      target: { value: 'moonshotai/kimi-k3:online' },
+    })
+
+    expect(screen.queryByText(REDUNDANT_WARNING)).not.toBeInTheDocument()
+  })
+
+  it('does not warn for web_search with a non-online model', async () => {
+    fetchWorkflows.mockResolvedValue([])
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
+    // Default model 'moonshotai/kimi-k3' is not web-connected.
+    fireEvent.click(screen.getByRole('checkbox', { name: /web_search/ }))
+
+    expect(screen.queryByText(REDUNDANT_WARNING)).not.toBeInTheDocument()
+  })
+
+  it('never warns for a non-agent action', async () => {
+    fetchWorkflows.mockResolvedValue([])
+
+    render(<OrchestrationPage />)
+    // Email action has neither a model nor a tools picker.
+    fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'email' } })
+
+    expect(screen.queryByText(REDUNDANT_WARNING)).not.toBeInTheDocument()
+  })
 })

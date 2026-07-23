@@ -90,6 +90,46 @@ Gateway ingress + sync invoke of the runtime"; "streaming" → "buffered
 
 ---
 
+## Amendment: the sync-invoke wiring is distributed template-owned — 2026-07-23
+
+The Core→runtime sync invoke needs two pieces of wiring: (a) `lambda:InvokeFunction`
+on the Core API role targeting the agent-runtime function, and (b) the runtime's
+function name reaching Core as config. Both first shipped as arguments to
+`module "core_api"` in the **user-owned** `infra/environments/dev/main.tf` (an
+`invoke_function_arns` entry and a `BIFFO_AGENT_RUNTIME_FUNCTION_NAME` env var,
+with the name/ARN derived by convention in a `locals` block).
+
+That location is wrong: `biffo core upgrade` cannot carry user-owned paths
+(`core-manifest.json`), so a freshly-`init`'d or upgraded instance got a Core
+role with no invoke permission and no function name — a **dead assistant
+returning 503**, the exact failure mode `core-manifest.json` records as the
+reason `plugins.core.tf` was carved out template-owned.
+
+**Superseding decision:** distribute both pieces via template-owned paths, so
+every instance gets them through `biffo core upgrade`:
+
+- **IAM invoke — `infra/environments/dev/plugins.core.tf`.** A standalone
+  `aws_iam_role_policy` on the Core API role (`module.core_api.role_name`, a new
+  compute-module output) granting `lambda:InvokeFunction` on
+  `module.plugin_agent_runtime["agent-runtime"].function_arn`, gated on the same
+  `var.enable_core_plugins` as the plugin. It is a **leaf** resource depending on
+  both modules; neither depends on it, so it does not recreate the
+  `core_api → api_gateway → plugin → core_api` cycle of issue #201 (verified with
+  `terraform validate`).
+- **Function name — convention-derivation in Core (`services/api/config.py`).**
+  No Terraform env var. `Settings` derives it from the Lambda's own
+  `AWS_LAMBDA_FUNCTION_NAME` by swapping a trailing `core-api` for
+  `plugin-agent-runtime` (the compute module's `<project>-<env>-<function>`
+  naming), leaving it empty (→ 503, unchanged) when the name doesn't match or the
+  env var is absent. An explicit value still wins. This is the same
+  derive-by-convention approach the template already used for the runtime ARN.
+
+The redundant `main.tf` wiring is removed so there is a single source of truth
+and the template models the proper pattern. `plugins.core.tf` is already
+template-owned in `core-manifest.json`, so no manifest change is needed.
+
+---
+
 ## Decision
 
 **The prompt assistant is a synchronous, streaming *thread of agent runs*,

@@ -5,4 +5,5 @@ output "security_group_id" {
   value       = var.vpc_id != "" ? aws_security_group.lambda[0].id : null
 }
 output "role_arn" { value = aws_iam_role.lambda.arn }
+output "role_name" { value = aws_iam_role.lambda.name }
 output "dlq_arn" { value = aws_sqs_queue.dlq.arn }

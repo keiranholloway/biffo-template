@@ -23,6 +23,7 @@ An ADR captures a significant architectural decision: the context that forced it
 | [ADR-0013](0013-plugin-extension-contract.md)                         | Plugin extension contract — declare, review, enforce        | Proposed | 2026-07-19 |
 | [ADR-0014](0014-agentic-worker-framework.md)                          | Agentic workers — framework is code, workers are data       | Accepted | 2026-07-21 |
 | [ADR-0015](0015-prompt-library.md)                                    | Prompt library — composable, parameterised prompt components | Proposed | 2026-07-23 |
+| [ADR-0016](0016-agent-prompt-assistant.md)                          | Prompt assistant — a synchronous, streaming prompt-authoring agent | Proposed | 2026-07-23 |
 
 ## Format
 

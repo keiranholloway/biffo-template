@@ -70,9 +70,7 @@ async def test_principal_not_in_allowed_principals_is_404():
 
 async def test_empty_allowed_principals_is_404():
     # Thin-by-default: a table that names nobody grants no agent anything.
-    guard = require_service_crud_permission(
-        "widgets", "read", _registry(allowed_principals=[])
-    )
+    guard = require_service_crud_permission("widgets", "read", _registry(allowed_principals=[]))
     with pytest.raises(HTTPException) as exc:
         await guard(principal=_principal())
     assert exc.value.status_code == 404
@@ -201,9 +199,7 @@ def test_granted_service_principal_passes_end_to_end(monkeypatch):
     derived name is granted flows through require_service_principal and the
     guard to the handler."""
     monkeypatch.setattr(settings, "service_principal_arn_allowlist", list(ALLOWLIST))
-    app = _app(
-        _registry(allowed_principals=["system:agent-runtime"]), inject_arn=AGENT_ARN
-    )
+    app = _app(_registry(allowed_principals=["system:agent-runtime"]), inject_arn=AGENT_ARN)
 
     resp = TestClient(app).get("/probe")
 
@@ -216,9 +212,7 @@ def test_allowlisted_but_ungranted_principal_is_404_end_to_end(monkeypatch):
     derived name is not in allowed_principals gets 404 from the guard — not 403,
     and not 200."""
     monkeypatch.setattr(settings, "service_principal_arn_allowlist", list(ALLOWLIST))
-    app = _app(
-        _registry(allowed_principals=["system:some-other-agent"]), inject_arn=AGENT_ARN
-    )
+    app = _app(_registry(allowed_principals=["system:some-other-agent"]), inject_arn=AGENT_ARN)
 
     resp = TestClient(app).get("/probe")
 

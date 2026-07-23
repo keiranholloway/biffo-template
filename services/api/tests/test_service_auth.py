@@ -120,17 +120,13 @@ class TestLogicalNames:
         # A conforming assumed-role ARN whose role is not a plugin role (no
         # "-plugin-<name>-role" shape) grants nothing. Fail closed.
         principal = ServicePrincipal(
-            principal_arn=(
-                "arn:aws:sts::123456789012:assumed-role/acme-dev-core-api-role/session"
-            )
+            principal_arn=("arn:aws:sts::123456789012:assumed-role/acme-dev-core-api-role/session")
         )
         assert principal.logical_names == frozenset()
 
     def test_non_assumed_role_arn_resolves_to_empty(self):
         # An IAM user ARN (not an STS assumed-role ARN) grants nothing.
-        principal = ServicePrincipal(
-            principal_arn="arn:aws:iam::123456789012:user/some-user"
-        )
+        principal = ServicePrincipal(principal_arn="arn:aws:iam::123456789012:user/some-user")
         assert principal.logical_names == frozenset()
 
     def test_malformed_arn_resolves_to_empty(self):

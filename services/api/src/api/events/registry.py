@@ -16,7 +16,9 @@ discovery in ``main.py``), a downstream repo adds events without editing this fi
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel
 
 from .base import BiffoEvent
 
@@ -46,17 +48,38 @@ class EventType:
     """A platform event a workflow can trigger on.
 
     ``source``/``detail_type`` are the EventBridge identity; ``label``/
-    ``description`` are the human copy the builder UI shows. ``fields`` optionally
-    describes the payload so the builder can offer real field dropdowns for the
-    "Only when…" conditions (#505); it defaults to empty, so existing
-    registrations are unaffected and a field-less event still works (free text).
+    ``description`` are the human copy the builder UI shows.
+
+    The builder's "Only when…" field dropdowns and seeded sample (#505) come from
+    the payload's shape. **Declare that shape once, as ``payload_model``** — a
+    Pydantic model of the event's payload — and the fields are *derived* from it
+    (``payload_fields()``), exactly as a generic-CRUD event derives its fields
+    from the table's columns. There is deliberately no second list to hand-write
+    and keep in sync with the emit site. ``fields`` remains only as an escape
+    hatch for an event whose payload genuinely cannot be modelled; prefer
+    ``payload_model``. An event with neither degrades to free text — and the
+    registry-fields guard test refuses a new event that declares neither (so the
+    metadata can never be silently forgotten).
     """
 
     source: str
     detail_type: str
     label: str
     description: str = ""
+    payload_model: type[BaseModel] | None = None
     fields: tuple[EventField, ...] = ()
+
+    def payload_fields(self) -> tuple[EventField, ...]:
+        """The builder fields for this event: explicit ``fields`` if given, else
+        derived from ``payload_model``. Empty when neither is set (free text)."""
+        if self.fields:
+            return self.fields
+        if self.payload_model is not None:
+            # Deferred import: event_fields imports this module for EventField.
+            from .event_fields import fields_for_payload_model
+
+            return tuple(fields_for_payload_model(self.payload_model))
+        return ()
 
     def build(
         self,
@@ -109,6 +132,69 @@ def find_event(source: str, detail_type: str) -> EventType | None:
     return _REGISTRY.get((source, detail_type))
 
 
+# ── Canonical Core event payloads ────────────────────────────────────────────
+# One Pydantic model per event describes its payload. The builder's fields are
+# DERIVED from these (EventType.payload_fields → fields_for_payload_model), so the
+# emit site's dict and the builder metadata share a single source — add a field
+# here and the "Only when…" dropdown and the seeded sample follow automatically.
+# Keep each model's fields === the keys the emit site actually publishes.
+
+
+class DemoRequestedPayload(BaseModel):
+    demo_request_id: str
+    email: str
+    company: str
+
+
+class LeadCapturedPayload(BaseModel):
+    lead_id: str
+    brand_id: str
+    brand_slug: str
+    pipeline_stage_id: str
+    source: str
+    status: str
+
+
+class UserCreatedPayload(BaseModel):
+    user_id: str
+    cognito_sub: str
+    email: str
+    username: str
+
+
+class UserLifecyclePayload(BaseModel):
+    """Shared by user.suspended / user.reactivated / user.deleted — the Cognito
+    action fires with a best-effort DB mirror, so only these three keys travel."""
+
+    cognito_sub: str
+    username: str
+    email: str
+
+
+class WorkflowDefinitionEventPayload(BaseModel):
+    """The filterable, scalar subset of the redacted definition payload. ``id`` is
+    dropped as an auto-managed field; the nested ``trigger_filter``/``action_config``
+    are not scalar conditions, so they are intentionally absent."""
+
+    id: str
+    name: str
+    trigger_source: str
+    trigger_detail_type: str
+    action_type: str
+    enabled: bool
+
+
+class AgentRunEventPayload(BaseModel):
+    """Reference payload only (ADR-0014 §5): the transcript/output stay behind an
+    authenticated fetch. ``status`` is the AgentRun state machine → a value dropdown."""
+
+    run_id: str
+    agent: str
+    status: Literal["pending", "running", "completed", "failed"]
+    causation_id: str | None
+    depth: int
+
+
 # ── Canonical Core events ────────────────────────────────────────────────────
 # The reference events the Biffo template ships. An instance adds its own domain
 # events by calling ``register_event(...)`` from the router that emits them.
@@ -119,11 +205,7 @@ DEMO_REQUESTED = register_event(
         detail_type="demo.requested",
         label="Demo requested",
         description='Someone submits the "Book a demo" form.',
-        fields=(
-            EventField(name="demo_request_id", label="Demo request ID"),
-            EventField(name="email", label="Email"),
-            EventField(name="company", label="Company"),
-        ),
+        payload_model=DemoRequestedPayload,
     )
 )
 
@@ -133,14 +215,7 @@ LEAD_CAPTURED = register_event(
         detail_type="lead.captured",
         label="Lead captured",
         description="A lead comes in from the website or marketplace.",
-        fields=(
-            EventField(name="lead_id", label="Lead ID"),
-            EventField(name="brand_id", label="Brand ID"),
-            EventField(name="brand_slug", label="Brand slug"),
-            EventField(name="pipeline_stage_id", label="Pipeline stage ID"),
-            EventField(name="source", label="Source"),
-            EventField(name="status", label="Status"),
-        ),
+        payload_model=LeadCapturedPayload,
     )
 )
 
@@ -150,12 +225,7 @@ USER_CREATED = register_event(
         detail_type="user.created",
         label="User created",
         description="A user record is first created in Core, on their first authenticated request.",
-        fields=(
-            EventField(name="user_id", label="User ID"),
-            EventField(name="cognito_sub", label="Cognito sub"),
-            EventField(name="email", label="Email"),
-            EventField(name="username", label="Username"),
-        ),
+        payload_model=UserCreatedPayload,
     )
 )
 
@@ -165,11 +235,7 @@ USER_SUSPENDED = register_event(
         detail_type="user.suspended",
         label="User suspended",
         description="An admin disables a user (Cognito disable + global sign-out).",
-        fields=(
-            EventField(name="cognito_sub", label="Cognito sub"),
-            EventField(name="username", label="Username"),
-            EventField(name="email", label="Email"),
-        ),
+        payload_model=UserLifecyclePayload,
     )
 )
 
@@ -179,11 +245,7 @@ USER_REACTIVATED = register_event(
         detail_type="user.reactivated",
         label="User reactivated",
         description="An admin re-enables a previously suspended user.",
-        fields=(
-            EventField(name="cognito_sub", label="Cognito sub"),
-            EventField(name="username", label="Username"),
-            EventField(name="email", label="Email"),
-        ),
+        payload_model=UserLifecyclePayload,
     )
 )
 
@@ -194,11 +256,7 @@ USER_DELETED = register_event(
         label="User deleted",
         description="An admin deletes a user from Cognito (their DB row is "
         "deactivated, not removed).",
-        fields=(
-            EventField(name="cognito_sub", label="Cognito sub"),
-            EventField(name="username", label="Username"),
-            EventField(name="email", label="Email"),
-        ),
+        payload_model=UserLifecyclePayload,
     )
 )
 
@@ -211,16 +269,7 @@ WORKFLOW_DEFINITION_CREATED = register_event(
         detail_type="workflow_definition.created",
         label="Workflow created",
         description="An admin creates an orchestration workflow definition.",
-        # Scalar subset of the redacted definition payload (the nested
-        # ``trigger_filter``/``action_config`` objects are not filterable fields).
-        fields=(
-            EventField(name="id", label="Workflow ID"),
-            EventField(name="name", label="Name"),
-            EventField(name="trigger_source", label="Trigger source"),
-            EventField(name="trigger_detail_type", label="Trigger detail type"),
-            EventField(name="action_type", label="Action type"),
-            EventField(name="enabled", label="Enabled", type="boolean"),
-        ),
+        payload_model=WorkflowDefinitionEventPayload,
     )
 )
 
@@ -230,14 +279,7 @@ WORKFLOW_DEFINITION_UPDATED = register_event(
         detail_type="workflow_definition.updated",
         label="Workflow updated",
         description="An admin edits a workflow definition or toggles it enabled/disabled.",
-        fields=(
-            EventField(name="id", label="Workflow ID"),
-            EventField(name="name", label="Name"),
-            EventField(name="trigger_source", label="Trigger source"),
-            EventField(name="trigger_detail_type", label="Trigger detail type"),
-            EventField(name="action_type", label="Action type"),
-            EventField(name="enabled", label="Enabled", type="boolean"),
-        ),
+        payload_model=WorkflowDefinitionEventPayload,
     )
 )
 
@@ -247,14 +289,7 @@ WORKFLOW_DEFINITION_DELETED = register_event(
         detail_type="workflow_definition.deleted",
         label="Workflow deleted",
         description="An admin deletes a workflow definition.",
-        fields=(
-            EventField(name="id", label="Workflow ID"),
-            EventField(name="name", label="Name"),
-            EventField(name="trigger_source", label="Trigger source"),
-            EventField(name="trigger_detail_type", label="Trigger detail type"),
-            EventField(name="action_type", label="Action type"),
-            EventField(name="enabled", label="Enabled", type="boolean"),
-        ),
+        payload_model=WorkflowDefinitionEventPayload,
     )
 )
 
@@ -271,20 +306,7 @@ AGENT_RUN_REQUESTED = register_event(
         detail_type="agent.run.requested",
         label="Agent run requested",
         description="An agent run is created and waiting for the runtime to execute it.",
-        # Reference payload only (§5): the transcript/output stay behind an
-        # authenticated fetch. ``status`` is the AgentRun state machine.
-        fields=(
-            EventField(name="run_id", label="Run ID"),
-            EventField(name="agent", label="Agent"),
-            EventField(
-                name="status",
-                label="Status",
-                type="enum",
-                values=("pending", "running", "completed", "failed"),
-            ),
-            EventField(name="causation_id", label="Causation ID"),
-            EventField(name="depth", label="Depth", type="number"),
-        ),
+        payload_model=AgentRunEventPayload,
     )
 )
 
@@ -295,17 +317,6 @@ AGENT_RUN_COMPLETED = register_event(
         label="Agent run completed",
         description="An agent run reaches a terminal state; the payload's "
         "``status`` distinguishes completed from failed.",
-        fields=(
-            EventField(name="run_id", label="Run ID"),
-            EventField(name="agent", label="Agent"),
-            EventField(
-                name="status",
-                label="Status",
-                type="enum",
-                values=("pending", "running", "completed", "failed"),
-            ),
-            EventField(name="causation_id", label="Causation ID"),
-            EventField(name="depth", label="Depth", type="number"),
-        ),
+        payload_model=AgentRunEventPayload,
     )
 )

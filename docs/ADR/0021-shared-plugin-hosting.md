@@ -194,6 +194,40 @@ production bugs.
 The **backend seam (§1/§1a) has no such open questions** and is where the
 migration starts.
 
+## Packaging — how the host Lambda gets plugin code
+
+The shared plugin host is one Lambda whose deployment artifact bundles the host
+runtime, every installed user-facing plugin's package, and the union of their
+dependencies. Three facts make this a small step rather than a new system:
+
+- **Dependency resolution is already solved.** Installed plugins are uv workspace
+  members (`services/<name>/`), so the instance's single `uv.lock` resolves all of
+  their dependencies together into one coherent set. Two plugins with incompatible
+  dependencies fail at *install* time — loudly and locally, the right place — and
+  `isolated: true` is the escape hatch for a plugin that genuinely needs its own
+  set.
+- **The build mechanism already exists.** The host deploys exactly like the Core
+  API does today: a placeholder Lambda in Terraform (`ignore_changes = [filename]`)
+  whose real code is pushed by the "Deploy Application" step. That step is
+  *extended* to build the host artifact (host + plugin packages + resolved deps),
+  not a new pipeline.
+- **Discovery is deterministic.** The build generates one `installed-plugins.json`
+  (`name → app_ref, required_group`) by scanning `services/*/biffo.plugin.json` for
+  a `user_ingress`, and bundles it into the artifact. The host reads that registry
+  — no runtime filesystem scan, no ambiguity about what is installed. (`discover.py`
+  already models exactly this data.)
+
+Installing or removing a user-facing plugin changes the host bundle; the next
+Deploy Application rebuilds and updates the *one* host Lambda. No per-plugin
+infrastructure, no two-apply, no wire step.
+
+**Chosen: a single zip, reusing the Core-API deploy mechanism.** Rejected — a
+container image (heavier CI/ECR, slower cold start; kept as the fallback if the
+250 MB zip limit is ever reached) and Lambda layers (same dependency-merge problem,
+tighter size limit, more moving parts). The zip is correct for the target scale
+(tens of first-party wrappers); the container fallback and `isolated: true` cover
+the tail.
+
 ## Migration
 
 1. Build the shared plugin host + the `/api/v1/plugins/*` route and manifest

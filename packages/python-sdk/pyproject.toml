@@ -53,13 +53,15 @@ Documentation = "https://github.com/keiranholloway/biffo-template/blob/main/docs
 [project.optional-dependencies]
 sigv4 = ["botocore>=1.35.0"]
 # Authenticated user-facing serving (ADR-0018 §1): the founder-gated Lambda ingress.
-# FastAPI + Mangum are bundled by the plugin (not in the Lambda runtime); the
-# Cognito verifier is the shared pure package. Imports are lazy, so the SDK loads
-# without these unless `require_group`/`authorize` are used.
+# FastAPI + Mangum are bundled by the plugin (not in the Lambda runtime). JWT
+# verification is the SDK's self-contained `_cognito` (pyjwt[crypto] for RS256;
+# httpx is already a core dep) — NOT the internal biffo_cognito_auth workspace
+# package, which is unpublished and would make this extra un-installable from PyPI.
+# Imports are lazy, so the SDK loads without these unless the gate is used.
 user-serving = [
   "fastapi>=0.115.0",
   "mangum>=0.19.0",
-  "biffo-cognito-auth",
+  "pyjwt[crypto]>=2.8.0",
 ]
 
 [dependency-groups]
@@ -68,7 +70,7 @@ dev = [
   "pytest-asyncio>=0.25.2",
   "botocore>=1.35.0",
   "fastapi>=0.115.0",
-  "biffo-cognito-auth",
+  "pyjwt[crypto]>=2.8.0",
   "ruff>=0.8.0",
   "pyright>=1.1.0",
 ]
@@ -90,8 +92,3 @@ packages = ["src/biffo_plugin_sdk"]
 # the repo is.
 [tool.hatch.build.targets.sdist]
 include = ["src/biffo_plugin_sdk", "tests", "README.md", "LICENSE", "pyproject.toml"]
-
-# biffo-cognito-auth is a workspace package (packages/cognito-auth), used by the
-# user-serving extra's JWT verification; resolve it from the workspace, not PyPI.
-[tool.uv.sources]
-biffo-cognito-auth = { workspace = true }

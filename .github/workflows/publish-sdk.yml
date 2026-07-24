@@ -158,6 +158,27 @@ jobs:
           assert sdk.SignedCoreClient and sdk.create_core_client
           "
 
+      # The user-serving extra (ADR-0018) must resolve and import from PyPI-only
+      # deps — no unpublished workspace package. Installs the extra into a clean env
+      # and exercises the gate against a fake verifier, proving it is self-contained.
+      - name: Smoke-test the user-serving extra in a clean environment
+        if: steps.guard.outputs.is_template == 'true'
+        run: |
+          set -euo pipefail
+          uv venv /tmp/smoke-user
+          wheel="$(ls dist/*.whl)"
+          VIRTUAL_ENV=/tmp/smoke-user uv pip install --no-cache "${wheel}[user-serving]"
+          VIRTUAL_ENV=/tmp/smoke-user uv run --no-project python -c "
+          from biffo_plugin_sdk import require_group, authorize, CognitoConfig
+          from biffo_plugin_sdk._cognito import verify_cognito_jwt  # self-contained verifier
+          import fastapi, mangum, jwt  # the extra's deps are all present
+          cfg = CognitoConfig(user_pool_id='p', region='r', client_id='c')
+          user = authorize('tok', required_group='founder', config=cfg,
+                           verify=lambda t, **k: {'sub': 'x', 'cognito:groups': ['founder']})
+          assert user.sub == 'x' and user.token == 'tok'
+          print('user-serving extra OK')
+          "
+
       - uses: actions/upload-artifact@v4
         if: steps.guard.outputs.is_template == 'true'
         with:

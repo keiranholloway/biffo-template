@@ -7,9 +7,11 @@ This module is that gate, reusable by any user-facing plugin.
 
 The security logic lives in the pure :func:`authorize` (no web framework, an
 injectable verifier), so it is fully testable without FastAPI or a real token;
-:func:`require_group` is a thin FastAPI dependency over it. FastAPI and the Cognito
+:func:`require_group` is a thin FastAPI dependency over it. FastAPI and the JWT
 verifier are imported lazily, so ``import biffo_plugin_sdk`` never requires them —
-install ``biffo-plugin-sdk[user-serving]`` to use this module.
+install ``biffo-plugin-sdk[user-serving]`` to use this module. The verifier is the
+SDK's self-contained ``_cognito`` (a published SDK cannot depend on the internal
+``biffo_cognito_auth`` workspace package; ``_cognito`` mirrors it).
 
 The verified founder carries its **raw token** so the handler can forward it to
 Core in the ``X-Biffo-User-Token`` header — Core re-verifies identity and
@@ -80,7 +82,7 @@ Verifier = Callable[..., dict[str, Any]]
 
 
 def _default_verifier() -> Verifier:
-    from biffo_cognito_auth import verify_cognito_jwt
+    from ._cognito import verify_cognito_jwt
 
     return verify_cognito_jwt
 
@@ -101,7 +103,7 @@ def authorize(
     if not token:
         raise UnauthorizedError("No bearer token.")
     verify = verify or _default_verifier()
-    from biffo_cognito_auth import CognitoJWTError
+    from ._cognito import CognitoJWTError
 
     try:
         claims = verify(

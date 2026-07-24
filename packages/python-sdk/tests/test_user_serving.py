@@ -33,7 +33,7 @@ def _verifier(claims: dict) -> Verifier:
 
 
 def _raising_verifier() -> Verifier:
-    from biffo_cognito_auth import TokenVerificationError
+    from biffo_plugin_sdk._cognito import TokenVerificationError
 
     def verify(token, **kwargs):
         raise TokenVerificationError("bad token")

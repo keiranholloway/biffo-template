@@ -40,6 +40,50 @@ function validManifest() {
   }
 }
 
+describe('validateManifest — user-facing surfaces (ADR-0018)', () => {
+  it('accepts and defaults a user_ingress + user_frontend', () => {
+    const manifest = validateManifest({
+      name: 'ideation',
+      version: '1.0.0',
+      user_ingress: { required_group: 'founder', handler: 'ideation.app.handler' },
+      user_frontend: { dir: 'web/dist', required_group: 'founder' },
+    })
+    expect(manifest.user_ingress?.path).toBe('api') // defaulted
+    expect(manifest.user_ingress?.handler).toBe('ideation.app.handler')
+    expect(manifest.user_frontend?.dir).toBe('web/dist')
+  })
+
+  it('is absent on an ordinary plugin', () => {
+    const manifest = validateManifest({ name: 'rbac', version: '1.0.0' })
+    expect(manifest.user_ingress).toBeUndefined()
+    expect(manifest.user_frontend).toBeUndefined()
+  })
+
+  it('rejects a non-dotted handler, a bad path segment, and an unknown key', () => {
+    expect(() =>
+      validateManifest({
+        name: 'x',
+        version: '1.0.0',
+        user_ingress: { required_group: 'founder', handler: 'nodots' },
+      }),
+    ).toThrow(/dotted import path/)
+    expect(() =>
+      validateManifest({
+        name: 'x',
+        version: '1.0.0',
+        user_ingress: { required_group: 'founder', handler: 'a.b', path: 'Bad/Seg' },
+      }),
+    ).toThrow(/path segment/)
+    expect(() =>
+      validateManifest({
+        name: 'x',
+        version: '1.0.0',
+        user_frontend: { dir: 'web/dist', required_group: 'founder', extra: true },
+      }),
+    ).toThrow()
+  })
+})
+
 describe('validateManifest — happy path', () => {
   it('accepts a well-formed manifest', () => {
     const manifest = validateManifest(validManifest())

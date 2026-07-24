@@ -41,16 +41,43 @@ function validManifest() {
 }
 
 describe('validateManifest — user-facing surfaces (ADR-0018)', () => {
-  it('accepts and defaults a user_ingress + user_frontend', () => {
+  it('accepts an ADR-0021 app-ref ingress (shared host) + user_frontend', () => {
+    const manifest = validateManifest({
+      name: 'ideation',
+      version: '1.0.0',
+      user_ingress: { required_group: 'founder', app: 'ideation.app:app' },
+      user_frontend: { dir: 'web/dist', required_group: 'founder' },
+    })
+    expect(manifest.user_ingress?.app).toBe('ideation.app:app')
+    expect(manifest.user_ingress?.handler).toBeUndefined()
+    expect(manifest.user_frontend?.dir).toBe('web/dist')
+  })
+
+  it('still accepts a legacy handler ingress', () => {
     const manifest = validateManifest({
       name: 'ideation',
       version: '1.0.0',
       user_ingress: { required_group: 'founder', handler: 'ideation.app.handler' },
-      user_frontend: { dir: 'web/dist', required_group: 'founder' },
     })
-    expect(manifest.user_ingress?.path).toBe('api') // defaulted
     expect(manifest.user_ingress?.handler).toBe('ideation.app.handler')
-    expect(manifest.user_frontend?.dir).toBe('web/dist')
+    expect(manifest.user_ingress?.path).toBe('api') // defaulted
+  })
+
+  it('rejects a user_ingress with neither app nor handler, and a malformed app-ref', () => {
+    expect(() =>
+      validateManifest({
+        name: 'x',
+        version: '1.0.0',
+        user_ingress: { required_group: 'founder' },
+      }),
+    ).toThrow(/app.*or.*handler/)
+    expect(() =>
+      validateManifest({
+        name: 'x',
+        version: '1.0.0',
+        user_ingress: { required_group: 'founder', app: 'nocolon' },
+      }),
+    ).toThrow(/app reference/)
   })
 
   it('is absent on an ordinary plugin', () => {

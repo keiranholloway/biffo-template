@@ -149,6 +149,45 @@ describe('syncPluginTerraform', () => {
     expect(tf).not.toContain('.role_arn')
   })
 
+  it('sources the user-facing plugin inputs (Cognito + CDN) when the module declares them', () => {
+    makeEnvironment('dev')
+    // A user-facing plugin (ADR-0018) declares the extra ingress/frontend inputs.
+    makePluginModule('ideation', [
+      'project_name',
+      'environment',
+      'plugin_name',
+      'handler',
+      'event_bus_name',
+      'core_api_url',
+      'core_api_execution_arn',
+      'cognito_user_pool_id',
+      'cognito_client_id',
+      'cognito_region',
+      'cdn_distribution_arn',
+      'tags',
+    ])
+
+    syncPluginTerraform(cwd)
+    const tf = generatedTf('dev')
+
+    // Alignment-agnostic: renderArguments pads keys to the widest one.
+    expect(tf).toMatch(/cognito_user_pool_id\s+= module\.auth\.user_pool_id/)
+    expect(tf).toMatch(/cognito_client_id\s+= module\.auth\.client_id/)
+    expect(tf).toMatch(/cognito_region\s+= var\.aws_region/)
+    expect(tf).toMatch(/cdn_distribution_arn\s+= module\.cdn\.distribution_arn/)
+  })
+
+  it('does not source the Cognito/CDN inputs for a plugin that does not declare them', () => {
+    makeEnvironment('dev')
+    makePluginModule('widgets') // event-only plugin: STANDARD_VARIABLES, no user-facing inputs
+
+    syncPluginTerraform(cwd)
+    const tf = generatedTf('dev')
+
+    expect(tf).not.toContain('cognito_user_pool_id')
+    expect(tf).not.toContain('cdn_distribution_arn')
+  })
+
   it('omits arguments a plugin module does not declare, so older modules still validate', () => {
     makeEnvironment('dev')
     // A module predating PR #260's core_api_execution_arn variable.

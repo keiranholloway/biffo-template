@@ -96,6 +96,15 @@ function standardArguments(pluginName: string, handler: string): Array<[string, 
     ['event_bus_name', 'module.events.event_bus_name'],
     ['core_api_url', 'module.api_gateway.api_endpoint'],
     ['core_api_execution_arn', 'module.api_gateway.execution_arn'],
+    // User-facing plugin inputs (ADR-0018 §1): the shared-Cognito coordinates its
+    // Lambda verifies the founder's JWT against, and the CloudFront distribution
+    // ARN its frontend bucket policy grants read to. Emitted ONLY for a plugin whose
+    // module declares them (declaredVariables gate), so an event-only plugin is
+    // unaffected — same graceful-degradation contract as core_api_execution_arn.
+    ['cognito_user_pool_id', 'module.auth.user_pool_id'],
+    ['cognito_client_id', 'module.auth.client_id'],
+    ['cognito_region', 'var.aws_region'],
+    ['cdn_distribution_arn', 'module.cdn.distribution_arn'],
     ['tags', 'local.tags'],
   ]
 }

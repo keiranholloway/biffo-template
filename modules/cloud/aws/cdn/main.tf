@@ -223,6 +223,31 @@ data "aws_cloudfront_origin_request_policy" "all_viewer_except_host" {
   name = "Managed-AllViewerExceptHostHeader"
 }
 
+# Origin request policy for user-facing plugin api origins (ADR-0018). It must NOT
+# forward Host (a custom origin needs its own Host) or Authorization — under OAC,
+# CloudFront sets Authorization to the SigV4 origin signature, and forwarding the
+# viewer's would break signing (this is why the managed AllViewerExceptHostHeader,
+# which forwards Authorization, cannot be used with OAC). So forward only what the
+# plugin ingress actually reads: the founder JWT (X-Biffo-Founder-Token) and the
+# content type, plus all query strings. Cookies are unused by the ingress.
+resource "aws_cloudfront_origin_request_policy" "plugin_api" {
+  count   = length(var.plugin_api_origins) > 0 ? 1 : 0
+  name    = "${local.name_prefix}-plugin-api"
+  comment = "OAC-compatible: forwards the founder token + content type, never Host or Authorization"
+  cookies_config {
+    cookie_behavior = "none"
+  }
+  query_strings_config {
+    query_string_behavior = "all"
+  }
+  headers_config {
+    header_behavior = "whitelist"
+    headers {
+      items = ["x-biffo-founder-token", "content-type"]
+    }
+  }
+}
+
 resource "aws_cloudfront_distribution" "portal" {
   #checkov:skip=CKV_AWS_310:Single static S3 origin; no secondary origin exists to fail over to. Failover origin block stays optional/config-driven.
   #checkov:skip=CKV_AWS_374:Public franchise marketplace must serve all geographies; geo-restriction would break the product.
@@ -351,7 +376,7 @@ resource "aws_cloudfront_distribution" "portal" {
       cached_methods           = ["GET", "HEAD"]
       compress                 = true
       cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
-      origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
+      origin_request_policy_id = aws_cloudfront_origin_request_policy.plugin_api[0].id
     }
   }
 

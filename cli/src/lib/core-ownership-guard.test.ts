@@ -438,9 +438,9 @@ describe('deleting a template-owned file is drift (#411)', () => {
 
   it('still lets a recorded divergence through', () => {
     const result = check({
-      changedFiles: ['modules/plugins/orchestrator/main.tf'],
+      changedFiles: ['modules/cloud/aws/cdn/main.tf'],
       commitMessage:
-        'chore: drop the dead copy\n\nCore-Divergence: install-time copy, not in the template\n',
+        'chore: tweak the CDN module\n\nCore-Divergence: this instance needs a bespoke CDN behaviour\n',
     })
     expect(result.skipped).toBe('divergence-trailer')
   })

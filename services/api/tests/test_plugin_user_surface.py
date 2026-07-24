@@ -38,9 +38,7 @@ def test_user_ingress_rejects_unknown_keys():
     # extra="forbid": a typo'd key on a security surface fails loudly. Built via a
     # dict so the deliberately-unknown key isn't a static type error.
     with pytest.raises(ValidationError):
-        UserIngress.model_validate(
-            {"required_group": "founder", "handler": "x.y", "public": True}
-        )
+        UserIngress.model_validate({"required_group": "founder", "handler": "x.y", "public": True})
 
 
 # ── user_frontend ────────────────────────────────────────────────────────────────

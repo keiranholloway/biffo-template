@@ -402,6 +402,36 @@ export async function runPluginInstall(
     console.log('  Push and redeploy to apply its migration and register its routes:')
     console.log(chalk.dim(`    git push`))
     console.log(chalk.dim(`    biffo deploy <environment> --app-only\n`))
+
+    // A user-facing plugin (ADR-0018) is an authenticated sibling: its Function
+    // URL host and frontend bucket domain only exist *after* its own module
+    // applies, so the CDN behaviours are registered between two applies, and the
+    // built frontend is synced to the bucket that first apply creates. Spell out
+    // that flow — `biffo plugin install` cannot do it in one shot.
+    if (manifest.user_ingress || manifest.user_frontend) {
+      const group = manifest.user_ingress?.required_group ?? manifest.user_frontend?.required_group
+      console.log(chalk.bold(`  "${pluginName}" is a user-facing plugin (ADR-0018).`))
+      console.log(
+        `  It serves an authenticated${group ? ` ${group}-gated` : ''} app at ` +
+          `<base>/${pluginName}/ and an api at <base>/${pluginName}/api/*.`,
+      )
+      console.log(
+        '  Two more steps route it onto the shared CloudFront (apply is pipeline-only):\n',
+      )
+      console.log(
+        '    1. After the deploy above applies, register its CDN origins from the ' +
+          'plugin module outputs, then redeploy so the CDN gains its behaviours:',
+      )
+      console.log(chalk.dim(`         biffo plugin wire ${pluginName} <environment>`))
+      console.log(chalk.dim(`         git push  &&  biffo deploy <environment>`))
+      console.log('    2. Build and sync its frontend to the bucket that first apply created')
+      console.log(
+        chalk.dim(
+          `         (the plugin's own deploy workflow does this — see ` +
+            `${relTargetDir}/.github/workflows/).\n`,
+        ),
+      )
+    }
   } finally {
     source!.cleanup()
   }

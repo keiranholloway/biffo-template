@@ -11,8 +11,10 @@ import {
   fetchWorkflows,
   setWorkflowEnabled,
   updateWorkflow,
+  type ActionConfigValue,
   type CatalogAction,
   type CatalogActionField,
+  type DeliveryConfigValue,
   type WorkflowCatalog,
   type WorkflowDefinition,
   type CatalogTrigger,
@@ -118,6 +120,12 @@ function runError(run: WorkflowRun): string | null {
   return last?.error ?? null
 }
 
+// The redaction sentinel Core returns for a stored secret (#432): a set-but-hidden
+// credential (e.g. a Slack/Google Chat webhook URL) reads back as this, and echoing
+// it unchanged on write is understood as "keep the stored value". Must match Core's
+// `SECRET_SENTINEL` exactly.
+const SECRET_SENTINEL = '__biffo_secret_set__'
+
 // Config-field type -> HTML <input type>. Anything else falls back to text.
 function inputType(fieldType: string): string {
   if (fieldType === 'email') return 'email'
@@ -127,11 +135,22 @@ function inputType(fieldType: string): string {
 }
 
 // action_config values are strings for scalar fields, string lists for a
-// `multiselect`, and an ordered-parts list for a `parts: true` prompt field
-// (ADR-0015). These coerce a value to the shape a given control expects,
-// without asserting a type the data may not have.
-type ConfigValue = string | string[] | PromptPart[]
+// `multiselect`, an ordered-parts list for a `parts: true` prompt field
+// (ADR-0015), and a structured delivery sub-config for the agent action's
+// `delivery` field (ADR-0020). These coerce a value to the shape a given control
+// expects, without asserting a type the data may not have.
+type ConfigValue = ActionConfigValue
 type Config = Record<string, ConfigValue>
+
+// The agent action's delivery sub-config, if this value is one. A bare (non-list)
+// object with `type`+`config` is a delivery; everything else (strings, tool
+// lists, parts lists) reads as "no delivery" here.
+function asDelivery(value: ConfigValue | undefined): DeliveryConfigValue | null {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return null
+  // A non-array object is the only delivery-shaped member of the union; the
+  // runtime guards stay as defence against malformed stored data.
+  return typeof value.type === 'string' && typeof value.config === 'object' ? value : null
+}
 
 function asString(value: ConfigValue | undefined): string {
   return typeof value === 'string' ? value : ''
@@ -161,6 +180,30 @@ function fieldApplies(
   const condition = field.visible_when
   if (condition == null) return true
   return effectiveValue(fields, config, condition.field) === condition.equals
+}
+
+// The destinations an agent-action delivery may target (ADR-0020, #527), in the
+// order the selector offers them. Each is a standalone destination action; the
+// delivery sub-form is driven by that action's own `config_fields` — reused, not
+// duplicated. `''` is the default "None" (no delivery) selection.
+const DELIVERY_TYPES = ['email', 'slack', 'google_chat', 'whatsapp'] as const
+const DELIVERY_LABEL: Record<string, string> = {
+  email: 'Email',
+  slack: 'Slack',
+  google_chat: 'Google Chat',
+  whatsapp: 'WhatsApp',
+}
+
+// How a config-field control reads and writes its value. The agent/other-action
+// forms bind this to the top-level `config`; the delivery sub-form binds it to
+// `config.delivery.config`, so one renderer serves both without a second copy.
+interface FieldContext {
+  config: Config
+  fields: CatalogActionField[]
+  setField: (name: string, update: (prev: ConfigValue | undefined) => ConfigValue) => void
+  // The "✨ Draft with AI" affordance only makes sense for the agent's top-level
+  // prompt parts — never inside a delivery sub-config.
+  allowAssist: boolean
 }
 
 // The synthetic config field name the tool picker writes into action_config.
@@ -397,6 +440,31 @@ export default function OrchestrationPage() {
   )
   const isAgent = selectedAction?.type === 'agent'
 
+  // ── Delivery (ADR-0020, #527) ──────────────────────────────────────────────
+  // The agent action's optional deliver-on-completion sub-config field, if this
+  // catalog declares one (absent on a Core predating Phase 3). Its value is a
+  // structured { type, config }; the sub-form is driven by the chosen
+  // destination action's own config_fields — reused, never duplicated.
+  const deliveryField = selectedAction?.config_fields.find((f) => f.type === 'delivery')
+  const delivery = deliveryField != null ? asDelivery(config[deliveryField.name]) : null
+  const deliveryAction = catalog?.actions.find((a) => a.type === delivery?.type)
+  const deliveryFields = deliveryAction?.config_fields ?? []
+  const deliveryConfig: Config = delivery?.config ?? {}
+
+  // A selected delivery is valid only when every applicable required field is
+  // filled — except `output_body`, which is optional in a delivery (defaults to
+  // `{output}`). A secret's redaction sentinel counts as filled (kept-on-save),
+  // and a catalog default satisfies a required field, mirroring standalone-action
+  // validation. No destination selected ⇒ trivially valid.
+  const deliveryValid =
+    delivery == null ||
+    (deliveryAction != null &&
+      deliveryFields.every((f) => {
+        if (!fieldApplies(deliveryFields, deliveryConfig, f)) return true
+        if (!f.required || f.output_body === true) return true
+        return effectiveValue(deliveryFields, deliveryConfig, f.name).trim() !== ''
+      }))
+
   const selectedTrigger: CatalogTrigger | undefined = catalog?.triggers.find(
     (t) => triggerKeyOf(t) === triggerKey,
   )
@@ -446,8 +514,11 @@ export default function OrchestrationPage() {
     asString(config.agent_name).trim() !== '' &&
     promptHasContent(config.instructions)
 
+  // Testing is a no-side-effect output preview and never performs delivery
+  // (ADR-0020), so delivery validity is deliberately NOT part of `canTest` —
+  // only of `canEnable`, the gate on actually turning the workflow on.
   const canTest = isAgent && agentRequiredValid && !testing
-  const canEnable = isAgent && agentRequiredValid && testPassed && !busy
+  const canEnable = isAgent && agentRequiredValid && deliveryValid && testPassed && !busy
 
   function loadForEdit(w: WorkflowDefinition) {
     setEditingId(w.id)
@@ -476,6 +547,21 @@ export default function OrchestrationPage() {
         fields.some((f) => f.name === entry[0] && fieldApplies(fields, config, f)),
       ),
     )
+    // Prune abandoned conditional branches from a delivery sub-config too, so
+    // switching e.g. WhatsApp text → template inside a delivery doesn't leave the
+    // old branch's values behind — the same filter the top-level config gets.
+    if (deliveryField != null && delivery != null) {
+      applicable[deliveryField.name] = {
+        type: delivery.type,
+        config: Object.fromEntries(
+          Object.entries(delivery.config).filter(([key]) =>
+            deliveryFields.some(
+              (f) => f.name === key && fieldApplies(deliveryFields, delivery.config, f),
+            ),
+          ),
+        ),
+      }
+    }
     const body: WorkflowInput = {
       name: name.trim(),
       trigger_source: trigger_source ?? '',
@@ -573,12 +659,15 @@ export default function OrchestrationPage() {
     return `When ${when}, run ${who} and preview the result before it goes live.`
   })()
 
-  // ── one config-field control, shared by the non-agent form and the agent
-  //    journey's Outcome/Advanced sections. `labelOverride` gives the agent
-  //    journey its task-oriented labels without changing the saved field name. ──
-  function fieldControl(field: CatalogActionField, labelOverride?: string) {
+  // ── one config-field control, shared by the non-agent form, the agent
+  //    journey's Outcome/Advanced sections, AND the delivery sub-form. `ctx`
+  //    binds it to a config source (top-level `config`, or the nested delivery
+  //    config) so the same renderer serves every case without a second copy.
+  //    `labelOverride` gives the agent journey its task-oriented labels without
+  //    changing the saved field name. ──
+  function fieldControl(field: CatalogActionField, ctx: FieldContext, labelOverride?: string) {
     const label = labelOverride ?? field.label
-    const fields = configFieldsFor(selectedAction)
+    const { config: cfg, fields, setField } = ctx
     if (field.parts === true) {
       return (
         <div key={field.name} className="sm:col-span-2">
@@ -586,20 +675,22 @@ export default function OrchestrationPage() {
             label={label}
             required={field.required}
             components={components}
-            value={normalizeParts(config[field.name])}
+            value={normalizeParts(cfg[field.name])}
             onChange={(parts) => {
-              setConfig((c) => ({ ...c, [field.name]: parts }))
+              setField(field.name, () => parts)
             }}
           />
-          <button
-            type="button"
-            onClick={() => {
-              setAssistField(field.name)
-            }}
-            className="mt-2 rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
-          >
-            ✨ Draft {label} with AI
-          </button>
+          {ctx.allowAssist && (
+            <button
+              type="button"
+              onClick={() => {
+                setAssistField(field.name)
+              }}
+              className="mt-2 rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+            >
+              ✨ Draft {label} with AI
+            </button>
+          )}
         </div>
       )
     }
@@ -613,7 +704,7 @@ export default function OrchestrationPage() {
           <legend className="text-xs text-gray-600">{label}</legend>
           <div className="mt-1 space-y-1.5 rounded border px-2 py-2">
             {(field.options ?? []).map((option) => {
-              const selected = asList(config[field.name])
+              const selected = asList(cfg[field.name])
               return (
                 <label key={option.value} className="flex items-start gap-2 text-sm text-gray-800">
                   <input
@@ -621,12 +712,11 @@ export default function OrchestrationPage() {
                     className="mt-0.5"
                     checked={selected.includes(option.value)}
                     onChange={(e) => {
-                      setConfig((c) => {
-                        const current = asList(c[field.name])
-                        const next = e.target.checked
+                      setField(field.name, (prev) => {
+                        const current = asList(prev)
+                        return e.target.checked
                           ? [...current, option.value]
                           : current.filter((v) => v !== option.value)
-                        return { ...c, [field.name]: next }
                       })
                     }}
                   />
@@ -653,10 +743,10 @@ export default function OrchestrationPage() {
         {label}
         {field.type === 'textarea' ? (
           <textarea
-            value={asString(config[field.name])}
+            value={asString(cfg[field.name])}
             required={field.required}
             onChange={(e) => {
-              setConfig((c) => ({ ...c, [field.name]: e.target.value }))
+              setField(field.name, () => e.target.value)
             }}
             rows={3}
             className={inputClass}
@@ -664,13 +754,13 @@ export default function OrchestrationPage() {
         ) : field.type === 'select' ? (
           <select
             aria-label={label}
-            value={effectiveValue(fields, config, field.name)}
+            value={effectiveValue(fields, cfg, field.name)}
             onChange={(e) => {
-              setConfig((c) => ({ ...c, [field.name]: e.target.value }))
+              setField(field.name, () => e.target.value)
             }}
             className={inputClass}
           >
-            {selectOptions(field, effectiveValue(fields, config, field.name)).map((option) => (
+            {selectOptions(field, effectiveValue(fields, cfg, field.name)).map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
@@ -678,17 +768,35 @@ export default function OrchestrationPage() {
           </select>
         ) : (
           <input
-            type={inputType(field.type)}
-            value={asString(config[field.name])}
+            // While a secret field still shows the redaction sentinel, relax the
+            // input to plain text: an opaque marker (or an unchanged webhook) must
+            // not be rejected by url/email client validation, so it round-trips
+            // untouched and Core keeps the stored secret (#432).
+            type={
+              field.secret === true && asString(cfg[field.name]) === SECRET_SENTINEL
+                ? 'text'
+                : inputType(field.type)
+            }
+            value={asString(cfg[field.name])}
             required={field.required}
             onChange={(e) => {
-              setConfig((c) => ({ ...c, [field.name]: e.target.value }))
+              setField(field.name, () => e.target.value)
             }}
             className={inputClass}
           />
         )}
       </label>
     )
+  }
+
+  // The top-level config context: reads/writes the workflow's own action_config.
+  const mainFieldContext: FieldContext = {
+    config,
+    fields: configFieldsFor(selectedAction),
+    setField: (name, update) => {
+      setConfig((c) => ({ ...c, [name]: update(c[name]) }))
+    },
+    allowAssist: true,
   }
 
   // The "Only when…" condition editor (trigger-aware, #505). Shared by both
@@ -823,10 +931,56 @@ export default function OrchestrationPage() {
   const agentNameField = agentFields.find((f) => f.name === 'agent_name')
   // Any other task-shaped agent field the catalog might grow: rendered in the
   // Outcome section (not Advanced) so it is never silently dropped from the UI.
+  // `delivery` is excluded here — it has its own Delivery section, and must never
+  // fall through to a generic text input.
   const otherOutcomeFields = agentFields.filter(
-    (f) => !AGENT_ADVANCED_FIELDS.has(f.name) && f.name !== 'goals' && f.name !== 'agent_name',
+    (f) =>
+      !AGENT_ADVANCED_FIELDS.has(f.name) &&
+      f.name !== 'goals' &&
+      f.name !== 'agent_name' &&
+      f.type !== 'delivery',
   )
   const redundantWebSearch = isAgent && webSearchIsRedundant(config)
+
+  // The delivery sub-form's config context: reads/writes `config.delivery.config`
+  // through the very same field renderer the top-level form uses (never a second
+  // copy). A no-op when no delivery is selected — the fields simply aren't shown.
+  const deliveryFieldContext: FieldContext = {
+    config: deliveryConfig,
+    fields: deliveryFields,
+    setField: (fieldName, update) => {
+      const name = deliveryField?.name
+      if (name == null) return
+      setConfig((c) => {
+        const current = asDelivery(c[name])
+        if (current == null) return c
+        return {
+          ...c,
+          [name]: {
+            ...current,
+            config: { ...current.config, [fieldName]: update(current.config[fieldName]) },
+          },
+        }
+      })
+    },
+    allowAssist: false,
+  }
+
+  // Choose (or clear) the delivery destination. "None" (`''`) removes the whole
+  // sub-config so a read sees no delivery; a destination seeds that action's
+  // catalog defaults, so what the sub-form shows is what gets saved.
+  function selectDelivery(type: string) {
+    const name = deliveryField?.name
+    if (name == null) return
+    if (type === '') {
+      // Drop the delivery key entirely so a read sees no delivery (absent, not an
+      // empty object). Rebuilt without the key rather than a dynamic `delete`.
+      setConfig((c) => Object.fromEntries(Object.entries(c).filter(([k]) => k !== name)))
+      return
+    }
+    const dest = catalog?.actions.find((a) => a.type === type)
+    setConfig((c) => ({ ...c, [name]: { type, config: defaultConfig(dest) } }))
+  }
 
   // Apply a guided preset: seed starter instructions + result the author refines.
   function applyPreset(presetId: string) {
@@ -1074,8 +1228,10 @@ export default function OrchestrationPage() {
                 </div>
 
                 <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  {agentNameField != null && fieldControl(agentNameField)}
-                  {otherOutcomeFields.map((field) => fieldControl(field, agentLabel(field)))}
+                  {agentNameField != null && fieldControl(agentNameField, mainFieldContext)}
+                  {otherOutcomeFields.map((field) =>
+                    fieldControl(field, mainFieldContext, agentLabel(field)),
+                  )}
                 </div>
 
                 {/* "What should the result contain?" — the relabelled goals field. */}
@@ -1089,21 +1245,87 @@ export default function OrchestrationPage() {
                       agent and is how you’ll judge a good result.
                     </p>
                     <div className="mt-2 grid gap-3 sm:grid-cols-2">
-                      {fieldControl(goalsField, agentLabel(goalsField))}
+                      {fieldControl(goalsField, mainFieldContext, agentLabel(goalsField))}
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* ── Delivery (honest Phase-3 placeholder — no logic) ──────── */}
-              <div className="mt-4 rounded-lg border border-dashed border-gray-300 bg-gray-50 p-3">
-                <h3 className="text-sm font-semibold text-gray-700">Delivery</h3>
-                <p className="mt-1 text-xs text-gray-500">
-                  Routing the result to Slack, email, a CRM or an inbox is coming next (Phase 3).
-                  Today the agent’s output <em>is</em> the result — preview it below, or deliver it
-                  with a separate workflow action for now.
-                </p>
-              </div>
+              {/* ── Delivery (ADR-0020, #527) ─────────────────────────────── */}
+              {deliveryField != null && (
+                <div className="mt-4 rounded-lg border border-gray-200 p-3">
+                  <h3 className="text-sm font-semibold text-gray-900">
+                    Where should the result go?
+                  </h3>
+                  <p className="mt-0.5 text-xs text-gray-500">
+                    On a successful run, deliver the agent’s result to one destination. Optional —
+                    leave it on “None” and the result is just the preview below.
+                  </p>
+
+                  <label className="mt-3 flex flex-col text-xs text-gray-600">
+                    Destination
+                    <select
+                      aria-label="Destination"
+                      value={delivery?.type ?? ''}
+                      onChange={(e) => {
+                        selectDelivery(e.target.value)
+                      }}
+                      className={inputClass}
+                    >
+                      <option value="">None</option>
+                      {DELIVERY_TYPES.filter((t) => catalog.actions.some((a) => a.type === t)).map(
+                        (t) => (
+                          <option key={t} value={t}>
+                            {DELIVERY_LABEL[t] ?? t}
+                          </option>
+                        ),
+                      )}
+                    </select>
+                  </label>
+
+                  {delivery != null && deliveryAction != null && (
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      {deliveryFields
+                        .filter((field) => fieldApplies(deliveryFields, deliveryConfig, field))
+                        .map((field) => {
+                          // The message/body field is REQUIRED on the standalone
+                          // action but OPTIONAL in a delivery: it defaults to the
+                          // `{output}` placeholder server-side. Present it as such,
+                          // with a hint and the available placeholders.
+                          if (field.output_body === true) {
+                            return (
+                              <div key={field.name} className="sm:col-span-2">
+                                {fieldControl(
+                                  { ...field, required: false },
+                                  deliveryFieldContext,
+                                  `${field.label} (optional)`,
+                                )}
+                                <p className="mt-1 text-xs text-gray-500">
+                                  Leave blank to send the agent’s result as-is, or use{' '}
+                                  <code className="rounded bg-gray-100 px-1">{'{output}'}</code> to
+                                  include it in your own message. Placeholders:{' '}
+                                  <code className="rounded bg-gray-100 px-1">{'{output}'}</code>{' '}
+                                  <code className="rounded bg-gray-100 px-1">{'{agent}'}</code>{' '}
+                                  <code className="rounded bg-gray-100 px-1">{'{run_id}'}</code>{' '}
+                                  <code className="rounded bg-gray-100 px-1">{'{status}'}</code>.
+                                </p>
+                              </div>
+                            )
+                          }
+                          return fieldControl(field, deliveryFieldContext)
+                        })}
+                      {!deliveryValid && (
+                        <p
+                          role="status"
+                          className="rounded bg-amber-50 px-3 py-2 text-xs text-amber-800 sm:col-span-2"
+                        >
+                          Fill in the destination’s required fields to enable this workflow.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* ── Test & review (Phase 2) ───────────────────────────────── */}
               <div className="mt-4 rounded-lg border border-gray-200 p-3">
@@ -1215,7 +1437,9 @@ export default function OrchestrationPage() {
                       workflows never need to change these.
                     </p>
                     <div className="mt-2 grid gap-3 sm:grid-cols-2">
-                      {advancedFields.map((field) => fieldControl(field, agentLabel(field)))}
+                      {advancedFields.map((field) =>
+                        fieldControl(field, mainFieldContext, agentLabel(field)),
+                      )}
                       {redundantWebSearch && (
                         <p
                           role="status"
@@ -1240,7 +1464,7 @@ export default function OrchestrationPage() {
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               {configFieldsFor(selectedAction)
                 .filter((field) => fieldApplies(configFieldsFor(selectedAction), config, field))
-                .map((field) => fieldControl(field))}
+                .map((field) => fieldControl(field, mainFieldContext))}
             </div>
           )}
 
@@ -1276,9 +1500,11 @@ export default function OrchestrationPage() {
                   title={
                     !agentRequiredValid
                       ? 'Add a name, agent name and instructions first.'
-                      : !testPassed
-                        ? 'Run a passing test to enable this workflow.'
-                        : undefined
+                      : !deliveryValid
+                        ? 'Fill in the delivery destination’s required fields first.'
+                        : !testPassed
+                          ? 'Run a passing test to enable this workflow.'
+                          : undefined
                   }
                 >
                   Enable workflow

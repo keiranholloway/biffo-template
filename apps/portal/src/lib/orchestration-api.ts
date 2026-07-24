@@ -8,7 +8,19 @@ import type { PromptPart } from './prompt-parts'
  * accepts a plain string there too (one inline part) — that arrives typed as a
  * string, the pre-library shape.
  */
-export type ActionConfigValue = string | string[] | PromptPart[]
+export type ActionConfigValue = string | string[] | PromptPart[] | DeliveryConfigValue
+
+/**
+ * The agent action's optional deliver-on-completion sub-config (ADR-0020, #527).
+ * `type` names a destination action (`email`/`slack`/`google_chat`/`whatsapp`)
+ * and `config` is that destination's own config, keyed by its `config_fields`.
+ * Absent from `action_config` ⇒ no delivery (unchanged behaviour). It nests the
+ * same value type recursively — a destination's config is itself action config.
+ */
+export interface DeliveryConfigValue {
+  type: string
+  config: Record<string, ActionConfigValue>
+}
 
 /**
  * An orchestration workflow definition as surfaced by the Core API
@@ -94,8 +106,36 @@ export interface CatalogActionField {
    * stores a list of the chosen values into action_config. Anything unknown is
    * rendered as a plain text input.
    */
-  type: 'email' | 'text' | 'textarea' | 'url' | 'tel' | 'number' | 'select' | 'multiselect'
+  type:
+    | 'email'
+    | 'text'
+    | 'textarea'
+    | 'url'
+    | 'tel'
+    | 'number'
+    | 'select'
+    | 'multiselect'
+    // The agent action's optional deliver-on-completion sub-config (ADR-0020,
+    // #527). Rendered by the builder's Delivery section, never as a plain input.
+    | 'delivery'
   required: boolean
+  /**
+   * `true` marks the value a credential (#432): a Slack/Google Chat webhook URL.
+   * Reads redact it to a sentinel and writes echoing the sentinel keep the stored
+   * value — the builder round-trips the sentinel and never has to see the secret.
+   */
+  secret?: boolean
+  /**
+   * `true` marks the one field carrying the human message (email → `body`, the
+   * webhook channels → `message`). In a *delivery* it becomes optional and
+   * defaults to the `{output}` placeholder server-side (ADR-0020).
+   */
+  output_body?: boolean
+  /**
+   * On a `select`, marks its `options` a suggestion list rather than an
+   * allowlist — any value is accepted (the agent action's `model` uses this).
+   */
+  open?: boolean
   /**
    * `true` on a prompt field composed from ordered parts (ADR-0015 §2) —
    * `instructions`/`goals` on the agent action. The builder renders these with

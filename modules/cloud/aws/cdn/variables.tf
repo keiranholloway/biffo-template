@@ -143,3 +143,9 @@ variable "plugin_api_origins" {
     error_message = "Plugin api names must be lowercase kebab-case starting with a letter — they become URL path segments and CloudFront origin ids."
   }
 }
+
+variable "plugin_host_api_domain" {
+  description = "Regional domain of the shared API Gateway that fronts the plugin host (ADR-0021), e.g. \"abc123.execute-api.eu-west-1.amazonaws.com\" — NO scheme, NO path. When set, this module adds one custom origin for it and one ordered_cache_behavior matching \"api/v1/plugins/*\", so baseurl.com/api/v1/plugins/<plugin>/* routes same-origin to the shared host. Like plugin_api_origins it forwards all viewer headers except Host (so the founder's Authorization JWT reaches the gateway's Cognito authorizer) and disables caching. Unlike plugin_api_origins, it is ONE shared route for EVERY user-facing plugin — the per-plugin ADR-0018 ingresses it supersedes. Empty by default (no route); typically wired to module.api_gateway's endpoint host in the root config."
+  type        = string
+  default     = ""
+}

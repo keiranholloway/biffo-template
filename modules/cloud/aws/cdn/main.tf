@@ -290,6 +290,23 @@ resource "aws_cloudfront_distribution" "portal" {
     }
   }
 
+  # The shared plugin host (ADR-0021) — ONE origin (the Core API Gateway) fronting
+  # every user-facing plugin, replacing the per-plugin plugin_api_origins above.
+  # Present only when plugin_host_api_domain is set.
+  dynamic "origin" {
+    for_each = var.plugin_host_api_domain == "" ? [] : [var.plugin_host_api_domain]
+    content {
+      domain_name = origin.value
+      origin_id   = "plugin-host"
+      custom_origin_config {
+        http_port              = 80
+        https_port             = 443
+        origin_protocol_policy = "https-only"
+        origin_ssl_protocols   = ["TLSv1.2"]
+      }
+    }
+  }
+
   # The ROOT behavior — the user-application sibling's, when one is registered,
   # and the portal bucket as a placeholder when none is. See
   # local.default_target_origin_id for why this is a conditional rather than a
@@ -313,6 +330,28 @@ resource "aws_cloudfront_distribution" "portal" {
     function_association {
       event_type   = "viewer-request"
       function_arn = aws_cloudfront_function.rewrite.arn
+    }
+  }
+
+  # The shared plugin host ingress (ADR-0021), emitted FIRST — the single
+  # "api/v1/plugins/*" route to the Core API Gateway that fronts every user-facing
+  # plugin. Same treatment as the per-plugin API behaviours below: every method,
+  # caching disabled, all viewer headers except Host forwarded so the founder's
+  # Authorization JWT reaches the gateway's Cognito authorizer, and NO rewrite
+  # function (that rewrites clean URLs to index.html for static export and must
+  # never touch an API request). Its prefix (api/v1/plugins/*) is disjoint from the
+  # "<name>/*" frontend prefixes, so ordering against them is immaterial.
+  dynamic "ordered_cache_behavior" {
+    for_each = var.plugin_host_api_domain == "" ? {} : { "api/v1/plugins/*" = "plugin-host" }
+    content {
+      path_pattern             = ordered_cache_behavior.key
+      target_origin_id         = ordered_cache_behavior.value
+      viewer_protocol_policy   = "redirect-to-https"
+      allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+      cached_methods           = ["GET", "HEAD"]
+      compress                 = true
+      cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
+      origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
     }
   }
 

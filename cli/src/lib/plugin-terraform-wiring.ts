@@ -189,16 +189,27 @@ export function pluginModuleSource(cwd: string, name: string): string {
 }
 
 /**
- * Every plugin that should get a module block: the copied ones under
- * `modules/plugins/`, plus first-party plugins carried in `services/_plugins/`.
+ * Every plugin that should get a module block in the generated file: the
+ * **third-party** copies under `modules/plugins/`, and only those.
  *
- * Union, not either/or. A first-party plugin whose stale copy is still present
- * must appear exactly once — and referenced at its real source, not the copy.
+ * First-party plugins (`services/_plugins/<name>/`) are deliberately excluded.
+ * They are provisioned by `infra/environments/<env>/plugins.core.tf` (ADR-0014,
+ * template-owned), which *superseded* #406's approach of wiring them through this
+ * generated file ("closing #406", per core-manifest.json). Emitting a block for
+ * one here would produce a second `module "plugin_<name>"` for a plugin
+ * plugins.core.tf already declares — a duplicate-module error that fails
+ * `terraform validate` on every current instance (reproduced installing a
+ * third-party plugin onto biffo-platform, which collided on
+ * `module "plugin_orchestrator"`).
+ *
+ * A first-party plugin that still has a *stale* copy under `modules/plugins/` is
+ * excluded here too (so it is never wired), and surfaced separately by
+ * `staleFirstPartyCopies` for deletion.
  */
 export function listWireablePlugins(cwd: string): string[] {
-  const copied = listPluginModules(cwd)
-  const firstParty = firstPartyPluginNames(cwd)
-  return [...new Set([...copied, ...firstParty])].sort()
+  return listPluginModules(cwd)
+    .filter((name) => !isFirstPartyPlugin(cwd, name))
+    .sort()
 }
 
 /** First-party plugin names — directories under `services/_plugins/` that ship
@@ -502,19 +513,16 @@ export function renderGeneratedTfvars(pluginNames: string[]): string {
  * that never installs a plugin carries no CLI-owned Terraform at all.
  */
 export function syncPluginTerraform(cwd: string): PluginTerraformSyncResult {
-  // Union of copied and first-party plugins (#406). A first-party plugin is
-  // wired even with no copy under modules/plugins/, and if a stale copy is
-  // still present it appears once, sourced from its real location.
+  // Third-party plugin copies under modules/plugins/ only. First-party plugins
+  // are provisioned by plugins.core.tf (ADR-0014), not this generated file — see
+  // listWireablePlugins for why wiring them here duplicates module "plugin_<name>".
   const plugins = listWireablePlugins(cwd)
   const environments = listEnvironments(cwd)
   const skippedEnvironments = listUnwirableEnvironments(cwd)
   const changedPaths: string[] = []
 
   const rendered = plugins.map((name) => {
-    const firstParty = isFirstPartyPlugin(cwd, name)
-    const moduleDir = firstParty
-      ? join(cwd, 'services', '_plugins', name, 'terraform')
-      : join(cwd, 'modules', 'plugins', name)
+    const moduleDir = join(cwd, 'modules', 'plugins', name)
     return {
       name,
       declaredVariables: declaredVariables(moduleDir),

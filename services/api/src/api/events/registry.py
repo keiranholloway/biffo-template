@@ -119,6 +119,11 @@ DEMO_REQUESTED = register_event(
         detail_type="demo.requested",
         label="Demo requested",
         description='Someone submits the "Book a demo" form.',
+        fields=(
+            EventField(name="demo_request_id", label="Demo request ID"),
+            EventField(name="email", label="Email"),
+            EventField(name="company", label="Company"),
+        ),
     )
 )
 
@@ -128,6 +133,14 @@ LEAD_CAPTURED = register_event(
         detail_type="lead.captured",
         label="Lead captured",
         description="A lead comes in from the website or marketplace.",
+        fields=(
+            EventField(name="lead_id", label="Lead ID"),
+            EventField(name="brand_id", label="Brand ID"),
+            EventField(name="brand_slug", label="Brand slug"),
+            EventField(name="pipeline_stage_id", label="Pipeline stage ID"),
+            EventField(name="source", label="Source"),
+            EventField(name="status", label="Status"),
+        ),
     )
 )
 
@@ -137,6 +150,12 @@ USER_CREATED = register_event(
         detail_type="user.created",
         label="User created",
         description="A user record is first created in Core, on their first authenticated request.",
+        fields=(
+            EventField(name="user_id", label="User ID"),
+            EventField(name="cognito_sub", label="Cognito sub"),
+            EventField(name="email", label="Email"),
+            EventField(name="username", label="Username"),
+        ),
     )
 )
 
@@ -146,6 +165,11 @@ USER_SUSPENDED = register_event(
         detail_type="user.suspended",
         label="User suspended",
         description="An admin disables a user (Cognito disable + global sign-out).",
+        fields=(
+            EventField(name="cognito_sub", label="Cognito sub"),
+            EventField(name="username", label="Username"),
+            EventField(name="email", label="Email"),
+        ),
     )
 )
 
@@ -155,6 +179,11 @@ USER_REACTIVATED = register_event(
         detail_type="user.reactivated",
         label="User reactivated",
         description="An admin re-enables a previously suspended user.",
+        fields=(
+            EventField(name="cognito_sub", label="Cognito sub"),
+            EventField(name="username", label="Username"),
+            EventField(name="email", label="Email"),
+        ),
     )
 )
 
@@ -165,6 +194,11 @@ USER_DELETED = register_event(
         label="User deleted",
         description="An admin deletes a user from Cognito (their DB row is "
         "deactivated, not removed).",
+        fields=(
+            EventField(name="cognito_sub", label="Cognito sub"),
+            EventField(name="username", label="Username"),
+            EventField(name="email", label="Email"),
+        ),
     )
 )
 
@@ -177,6 +211,16 @@ WORKFLOW_DEFINITION_CREATED = register_event(
         detail_type="workflow_definition.created",
         label="Workflow created",
         description="An admin creates an orchestration workflow definition.",
+        # Scalar subset of the redacted definition payload (the nested
+        # ``trigger_filter``/``action_config`` objects are not filterable fields).
+        fields=(
+            EventField(name="id", label="Workflow ID"),
+            EventField(name="name", label="Name"),
+            EventField(name="trigger_source", label="Trigger source"),
+            EventField(name="trigger_detail_type", label="Trigger detail type"),
+            EventField(name="action_type", label="Action type"),
+            EventField(name="enabled", label="Enabled", type="boolean"),
+        ),
     )
 )
 
@@ -186,6 +230,14 @@ WORKFLOW_DEFINITION_UPDATED = register_event(
         detail_type="workflow_definition.updated",
         label="Workflow updated",
         description="An admin edits a workflow definition or toggles it enabled/disabled.",
+        fields=(
+            EventField(name="id", label="Workflow ID"),
+            EventField(name="name", label="Name"),
+            EventField(name="trigger_source", label="Trigger source"),
+            EventField(name="trigger_detail_type", label="Trigger detail type"),
+            EventField(name="action_type", label="Action type"),
+            EventField(name="enabled", label="Enabled", type="boolean"),
+        ),
     )
 )
 
@@ -195,6 +247,14 @@ WORKFLOW_DEFINITION_DELETED = register_event(
         detail_type="workflow_definition.deleted",
         label="Workflow deleted",
         description="An admin deletes a workflow definition.",
+        fields=(
+            EventField(name="id", label="Workflow ID"),
+            EventField(name="name", label="Name"),
+            EventField(name="trigger_source", label="Trigger source"),
+            EventField(name="trigger_detail_type", label="Trigger detail type"),
+            EventField(name="action_type", label="Action type"),
+            EventField(name="enabled", label="Enabled", type="boolean"),
+        ),
     )
 )
 
@@ -211,6 +271,20 @@ AGENT_RUN_REQUESTED = register_event(
         detail_type="agent.run.requested",
         label="Agent run requested",
         description="An agent run is created and waiting for the runtime to execute it.",
+        # Reference payload only (§5): the transcript/output stay behind an
+        # authenticated fetch. ``status`` is the AgentRun state machine.
+        fields=(
+            EventField(name="run_id", label="Run ID"),
+            EventField(name="agent", label="Agent"),
+            EventField(
+                name="status",
+                label="Status",
+                type="enum",
+                values=("pending", "running", "completed", "failed"),
+            ),
+            EventField(name="causation_id", label="Causation ID"),
+            EventField(name="depth", label="Depth", type="number"),
+        ),
     )
 )
 
@@ -221,5 +295,17 @@ AGENT_RUN_COMPLETED = register_event(
         label="Agent run completed",
         description="An agent run reaches a terminal state; the payload's "
         "``status`` distinguishes completed from failed.",
+        fields=(
+            EventField(name="run_id", label="Run ID"),
+            EventField(name="agent", label="Agent"),
+            EventField(
+                name="status",
+                label="Status",
+                type="enum",
+                values=("pending", "running", "completed", "failed"),
+            ),
+            EventField(name="causation_id", label="Causation ID"),
+            EventField(name="depth", label="Depth", type="number"),
+        ),
     )
 )

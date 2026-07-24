@@ -29,8 +29,21 @@ function sampleValue(field: CatalogTriggerField): unknown {
     case 'boolean':
       return true
     case 'string':
-      return `example ${field.name}`
+      return sampleString(field.name)
   }
+}
+
+// A believable placeholder for a string field, inferred from its name so the
+// seeded payload is usable as-is (an agent reading `email` gets a real address,
+// not the literal "example email"). Everything here is editable — best-effort.
+function sampleString(name: string): string {
+  const n = name.toLowerCase()
+  if (n === 'email' || n.endsWith('_email')) return 'user@example.com'
+  if (n === 'company') return 'Acme Inc'
+  if (n === 'name' || n.endsWith('_name') || n === 'username') return 'Example Name'
+  if (n === 'slug' || n.endsWith('_slug')) return 'example-slug'
+  if (n === 'id' || n.endsWith('_id') || n === 'cognito_sub') return `example-${name}-1`
+  return `example ${name}`
 }
 
 /** Pretty-print a sample event for the editable JSON textarea. */

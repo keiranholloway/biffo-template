@@ -1318,6 +1318,28 @@ describe('OrchestrationPage', () => {
     fireEvent.change(screen.getByLabelText('Instructions'), { target: { value: 'Enrich it.' } })
   }
 
+  it('keeps Test clickable when required fields are missing and says what to add', async () => {
+    fetchWorkflows.mockResolvedValue([])
+
+    render(<OrchestrationPage />)
+    // Pick the agent action but leave name/agent/instructions blank.
+    fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
+
+    // The button is not disabled — a dead button leaves the author guessing.
+    const testBtn = screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement
+    expect(testBtn).not.toBeDisabled()
+
+    fireEvent.click(testBtn)
+
+    // It names exactly what is missing and never hits the API.
+    expect(
+      await screen.findByText(
+        /Add a workflow name, an agent name and instructions to run the test/,
+      ),
+    ).toBeInTheDocument()
+    expect(runWorkflowDryRun).not.toHaveBeenCalled()
+  })
+
   it('runs the dry-run and previews the returned output', async () => {
     fetchWorkflows.mockResolvedValue([])
     runWorkflowDryRun.mockResolvedValue({

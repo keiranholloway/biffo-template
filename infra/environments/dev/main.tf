@@ -135,6 +135,7 @@ module "cdn" {
   acm_certificate_arn           = var.acm_certificate_arn
   hosted_zone_id                = var.hosted_zone_id
   sibling_origins               = var.sibling_origins
+  plugin_api_origins            = var.plugin_api_origins
   tags                          = local.tags
 }
 

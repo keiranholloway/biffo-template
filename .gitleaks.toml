@@ -13,6 +13,15 @@ regexes = [
   "\\{\\{AWS_ACCOUNT_ID\\}\\}",  # placeholder in template files
   "123456789012",                  # canonical example account ID used in tests
   "999999999999",                  # canonical wrong-account ID used in error-path tests
+  # The fck-nat AMI vendor's PUBLIC AWS account id (modules/cloud/aws/networking).
+  # An `aws_ami` data source filters by `owners`, so the publisher's account id
+  # must appear literally — it is how AMI ownership lookup works and cannot not.
+  # It is not secret: it is published in fck-nat's docs (fck-nat.dev) and the
+  # RaJiska/fck-nat Terraform module, and is the same value in every fck-nat
+  # deployment worldwide. Same spirit as the siblings carve-out below: narrow a
+  # bare-12-digit heuristic away from a value it structurally must match, scoped
+  # to this rule only — the rule still fires on every other 12-digit number.
+  "568608671756",
 ]
 paths = [
   "docs/",

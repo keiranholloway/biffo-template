@@ -51,3 +51,37 @@ resource "aws_iam_role_policy" "plugin_host_core_calls" {
   role   = module.plugin_host.role_name
   policy = data.aws_iam_policy_document.plugin_host_core_calls.json
 }
+
+# The user-facing plugin ingress: ANY /api/v1/plugins/{proxy+} on the shared API
+# Gateway routes to the host. The gateway's Cognito JWT authorizer authenticates
+# the founder here (same authorizer as every other route, via the module output);
+# the host then enforces each plugin's declared group (ADR-0011) and dispatches to
+# its router. This route is more specific than the API's $default route (which
+# targets Core), so plugin traffic reaches the host and everything else Core.
+#
+# Defined here, not in the api-gateway module, so all of the host's wiring lives in
+# this one template-owned file and rides `biffo core upgrade` — no instance has to
+# edit its user-owned root module to provision the host.
+resource "aws_apigatewayv2_integration" "plugin_host" {
+  api_id                 = module.api_gateway.api_id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = module.plugin_host.function_arn
+  payload_format_version = "2.0"
+  timeout_milliseconds   = 29000
+}
+
+resource "aws_apigatewayv2_route" "plugins" {
+  api_id             = module.api_gateway.api_id
+  route_key          = "ANY /api/v1/plugins/{proxy+}"
+  target             = "integrations/${aws_apigatewayv2_integration.plugin_host.id}"
+  authorization_type = "JWT"
+  authorizer_id      = module.api_gateway.cognito_authorizer_id
+}
+
+resource "aws_lambda_permission" "plugin_host_api_gateway" {
+  statement_id  = "AllowAPIGatewayInvokePluginHost"
+  action        = "lambda:InvokeFunction"
+  function_name = module.plugin_host.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${module.api_gateway.execution_arn}/*/*"
+}

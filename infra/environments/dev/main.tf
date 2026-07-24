@@ -271,19 +271,16 @@ module "core_api" {
 module "api_gateway" {
   source = "../../../modules/cloud/aws/api-gateway"
 
-  project_name         = var.project_name
-  environment          = local.environment
-  lambda_function_arn  = module.core_api.function_arn
-  lambda_function_name = module.core_api.function_name
-  # The shared plugin host (ADR-0021) — routes /api/v1/plugins/* to it.
-  plugin_host_function_arn  = module.plugin_host.function_arn
-  plugin_host_function_name = module.plugin_host.function_name
-  cognito_user_pool_id      = module.auth.user_pool_id
-  cognito_client_id         = module.auth.client_id
-  aws_region                = var.aws_region
-  cors_origins              = local.cors_origins_list
-  cloudwatch_kms_key_id     = aws_kms_key.logs.arn
-  tags                      = local.tags
+  project_name          = var.project_name
+  environment           = local.environment
+  lambda_function_arn   = module.core_api.function_arn
+  lambda_function_name  = module.core_api.function_name
+  cognito_user_pool_id  = module.auth.user_pool_id
+  cognito_client_id     = module.auth.client_id
+  aws_region            = var.aws_region
+  cors_origins          = local.cors_origins_list
+  cloudwatch_kms_key_id = aws_kms_key.logs.arn
+  tags                  = local.tags
 }
 
 # ---------------------------------------------------------------------------

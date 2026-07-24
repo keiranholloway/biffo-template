@@ -44,14 +44,3 @@ variable "cloudwatch_kms_key_id" {
   default     = ""
 }
 
-variable "plugin_host_function_arn" {
-  description = "ARN of the shared plugin-host Lambda (ADR-0021). Empty disables the /api/v1/plugins/* route."
-  type        = string
-  default     = ""
-}
-
-variable "plugin_host_function_name" {
-  description = "Name of the shared plugin-host Lambda, for the API Gateway invoke permission. Empty disables it."
-  type        = string
-  default     = ""
-}

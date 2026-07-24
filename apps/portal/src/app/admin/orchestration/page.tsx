@@ -156,6 +156,14 @@ function asString(value: ConfigValue | undefined): string {
   return typeof value === 'string' ? value : ''
 }
 
+// "a, b and c" — for the "Add … to run the test" hint. Deliberately simple and
+// deterministic (no Intl.ListFormat) so the copy is stable across locales/tests.
+function listToProse(items: string[]): string {
+  if (items.length <= 1) return items.join('')
+  const last = items[items.length - 1] ?? ''
+  return `${items.slice(0, -1).join(', ')} and ${last}`
+}
+
 function asList(value: ConfigValue | undefined): string[] {
   // Only the string members of a list (the multiselect/tools case). A parts
   // list is never read through here — parts fields render via their own branch.
@@ -509,15 +517,22 @@ export default function OrchestrationPage() {
 
   // Agent required-field validity for the gate: a name, an agent name, and some
   // instructions. (Model has a catalog default; the sample is optional.)
-  const agentRequiredValid =
-    name.trim() !== '' &&
-    asString(config.agent_name).trim() !== '' &&
-    promptHasContent(config.instructions)
+  const missingForTest = [
+    name.trim() === '' ? 'a workflow name' : null,
+    asString(config.agent_name).trim() === '' ? 'an agent name' : null,
+    !promptHasContent(config.instructions) ? 'instructions' : null,
+  ].filter((m): m is string => m != null)
+  const agentRequiredValid = missingForTest.length === 0
 
+  // "Test workflow" stays clickable even when required fields are missing — a
+  // dead button leaves the author guessing. `runTest` short-circuits with a
+  // message naming exactly what to add (issue #527 UX). Only `isAgent` (a
+  // non-agent action has no dry-run) and `!testing` gate the click itself.
+  //
   // Testing is a no-side-effect output preview and never performs delivery
   // (ADR-0020), so delivery validity is deliberately NOT part of `canTest` —
   // only of `canEnable`, the gate on actually turning the workflow on.
-  const canTest = isAgent && agentRequiredValid && !testing
+  const canTest = isAgent && !testing
   const canEnable = isAgent && agentRequiredValid && deliveryValid && testPassed && !busy
 
   function loadForEdit(w: WorkflowDefinition) {
@@ -599,6 +614,14 @@ export default function OrchestrationPage() {
   // current definition snapshot as tested, which is what unlocks Enable.
   async function runTest() {
     if (testing) return
+    // Clickable-but-incomplete: tell the author exactly what to add rather than
+    // silently doing nothing (issue #527 UX).
+    if (!agentRequiredValid) {
+      setDryRunError(`Add ${listToProse(missingForTest)} to run the test.`)
+      setDryRunResult(null)
+      setDryRunUnavailable(null)
+      return
+    }
     const parsed = parseSampleEvent(sampleEventText)
     if (parsed.error != null) {
       setDryRunError(parsed.error)

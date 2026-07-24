@@ -13,8 +13,25 @@ describe('buildSampleEvent', () => {
     expect(buildSampleEvent(fields)).toEqual({
       status: 'new', // first enum value
       score: 42,
-      company: 'example company',
+      company: 'Acme Inc', // string value inferred from the field name
       vip: true,
+    })
+  })
+
+  it('infers a believable string value from the field name', () => {
+    const fields: CatalogTriggerField[] = [
+      { name: 'email', label: 'Email', type: 'string', values: [] },
+      { name: 'demo_request_id', label: 'Demo request ID', type: 'string', values: [] },
+      { name: 'username', label: 'Username', type: 'string', values: [] },
+      { name: 'brand_slug', label: 'Brand slug', type: 'string', values: [] },
+      { name: 'notes', label: 'Notes', type: 'string', values: [] },
+    ]
+    expect(buildSampleEvent(fields)).toEqual({
+      email: 'user@example.com',
+      demo_request_id: 'example-demo_request_id-1',
+      username: 'Example Name',
+      brand_slug: 'example-slug',
+      notes: 'example notes', // no rule matched → generic placeholder
     })
   })
 

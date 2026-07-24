@@ -122,23 +122,48 @@ def authorize(
     return ForwardedUser(sub=str(claims["sub"]), groups=groups, token=token)
 
 
+#: The header a user-facing plugin's founder JWT travels in (ADR-0018). NOT
+#: ``Authorization``: behind CloudFront OAC the Function URL is invoked with SigV4,
+#: which claims the ``Authorization`` header for its signature, so the bearer token
+#: must ride a header CloudFront does not touch.
+FOUNDER_TOKEN_HEADER = "X-Biffo-Founder-Token"  # noqa: S105 - a header name, not a secret
+
+
+def _extract_bearer(value: str | None) -> str:
+    """The raw JWT from a header value, tolerating a ``Bearer `` prefix or a bare token."""
+    if not value:
+        return ""
+    if value.lower().startswith("bearer "):
+        return value.split(" ", 1)[1].strip()
+    return value.strip()
+
+
 def require_group(
     group: str,
     *,
     config: CognitoConfig | None = None,
     verify: Verifier | None = None,
 ) -> Callable[..., ForwardedUser]:
-    """A FastAPI dependency: verify the ``Authorization: Bearer`` JWT and require
-    ``group``, returning the :class:`ForwardedUser`. 401 on a missing/invalid token,
-    403 on the wrong group. ``config`` defaults to :meth:`CognitoConfig.from_env`
-    (resolved per request)."""
+    """A FastAPI dependency: verify the founder JWT and require ``group``, returning
+    the :class:`ForwardedUser`. 401 on a missing/invalid token, 403 on the wrong
+    group. ``config`` defaults to :meth:`CognitoConfig.from_env` (resolved per
+    request).
+
+    The token is read from the ``X-Biffo-Founder-Token`` header (see
+    :data:`FOUNDER_TOKEN_HEADER`) — behind CloudFront OAC the ``Authorization``
+    header is consumed by SigV4 signing (ADR-0018). ``Authorization: Bearer`` is
+    still accepted as a fallback for direct/local invocation without OAC."""
     from fastapi import Header, HTTPException
 
     def dependency(
+        x_biffo_founder_token: str | None = Header(default=None, alias=FOUNDER_TOKEN_HEADER),
         authorization: str | None = Header(default=None, alias="Authorization"),
     ) -> ForwardedUser:
-        token = ""
-        if authorization and authorization.lower().startswith("bearer "):
+        # The custom header carries the raw JWT (optionally "Bearer "-prefixed).
+        # Authorization is a strict-Bearer fallback only — a non-Bearer scheme
+        # (e.g. "Basic …") is not a founder token and is ignored.
+        token = _extract_bearer(x_biffo_founder_token)
+        if not token and authorization and authorization.lower().startswith("bearer "):
             token = authorization.split(" ", 1)[1].strip()
         try:
             return authorize(

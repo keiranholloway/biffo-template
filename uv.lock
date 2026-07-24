@@ -328,10 +328,17 @@ dependencies = [
 sigv4 = [
     { name = "botocore" },
 ]
+user-serving = [
+    { name = "biffo-cognito-auth" },
+    { name = "fastapi" },
+    { name = "mangum" },
+]
 
 [package.dev-dependencies]
 dev = [
+    { name = "biffo-cognito-auth" },
     { name = "botocore" },
+    { name = "fastapi" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -341,15 +348,20 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aws-lambda-powertools", specifier = ">=3.4.0" },
+    { name = "biffo-cognito-auth", marker = "extra == 'user-serving'", editable = "packages/cognito-auth" },
     { name = "botocore", marker = "extra == 'sigv4'", specifier = ">=1.35.0" },
+    { name = "fastapi", marker = "extra == 'user-serving'", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "mangum", marker = "extra == 'user-serving'", specifier = ">=0.19.0" },
     { name = "pydantic", specifier = ">=2.10.4" },
 ]
-provides-extras = ["sigv4"]
+provides-extras = ["sigv4", "user-serving"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "biffo-cognito-auth", editable = "packages/cognito-auth" },
     { name = "botocore", specifier = ">=1.35.0" },
+    { name = "fastapi", specifier = ">=0.115.0" },
     { name = "pyright", specifier = ">=1.1.0" },
     { name = "pytest", specifier = ">=8.3.4" },
     { name = "pytest-asyncio", specifier = ">=0.25.2" },

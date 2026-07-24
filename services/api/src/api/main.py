@@ -21,6 +21,7 @@ from .routers.admin import agent_chat as admin_agent_chat
 from .routers.admin import agent_runs as admin_agent_runs
 from .routers.admin import endpoints as admin_endpoints
 from .routers.admin import groups as admin_groups
+from .routers.admin import orchestration as admin_orchestration
 from .routers.admin import plugins as admin_plugins
 from .routers.admin import prompt_components as admin_prompt_components
 from .routers.admin import users as admin_users
@@ -78,6 +79,10 @@ app.include_router(internal_agent_chat.router, prefix="/api/v1")
 # history under /api/v1/orchestration/runs.
 app.include_router(orchestration.router, prefix="/api/v1")
 app.include_router(orchestration.runs_router, prefix="/api/v1")
+# No-side-effect workflow dry-run (issue #527): Cognito-authed, admin-gated,
+# tenant-scoped, under /api/v1/admin/orchestration/test. Previews one agent turn
+# for a draft workflow via the ADR-0016 sync-invoke seam; persists/emits nothing.
+app.include_router(admin_orchestration.router, prefix="/api/v1")
 # Auto-register plugin-declared routes (ADR-0003 chunk 6 / issue #19), after
 # the native routers so they group after them in the OpenAPI/Swagger docs.
 # Scans services/*/biffo.plugin.json at import time (build_plugin_router

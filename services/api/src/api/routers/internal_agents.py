@@ -46,6 +46,7 @@ from ..agent_runs import (
     complete_run,
     create_run,
     get_run,
+    list_thread_runs,
     reap_stale_runs,
 )
 from ..config import settings
@@ -59,6 +60,7 @@ from ..schemas.agent_run import (
     AgentRunResponse,
     CompleteAgentRunRequest,
     CreateAgentRunRequest,
+    ThreadMessagesResponse,
 )
 
 logger = Logger()
@@ -125,6 +127,36 @@ async def request_agent_run(
 
     emit_event(db, AGENT_RUN_REQUESTED, _reference_payload(run), tenant_id=principal.tenant_id)
     return AgentRunResponse.model_validate(run)
+
+
+_CONVERSATION_ROLES = ("user", "assistant")
+
+
+# Declared before /{run_id}: a three-segment path cannot collide with a single
+# segment, but keeping the more specific route first makes the intent obvious.
+@router.get("/threads/{thread_id}/messages", response_model=ThreadMessagesResponse)
+async def read_thread_messages(
+    thread_id: str,
+    principal: ServicePrincipal = Depends(require_service_principal),
+    db: AsyncSession = Depends(get_db),
+) -> ThreadMessagesResponse:
+    """A thread's conversation — the ordered user/assistant messages across every
+    run sharing ``thread_id`` (ADR-0016 §2), tenant-scoped.
+
+    The consumer is a module driving an **async** run over a chat it held on the
+    synchronous spine: the buffered chat assembles history in-process, but a
+    separate async run (e.g. the Ideation analyst) builds from its ``input_payload``
+    and so must be handed the conversation to reason over. System/tool messages are
+    per-run machinery, not conversation, and are excluded. An unknown thread is an
+    empty conversation, not a 404."""
+    runs = await list_thread_runs(db, tenant_id=principal.tenant_id, thread_id=thread_id)
+    messages = [
+        message
+        for run in runs
+        for message in (run.messages or [])
+        if isinstance(message, dict) and message.get("role") in _CONVERSATION_ROLES
+    ]
+    return ThreadMessagesResponse(thread_id=thread_id, messages=messages)
 
 
 @router.get("/{run_id}", response_model=AgentRunResponse)

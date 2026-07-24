@@ -285,6 +285,7 @@ name = "biffo-plugin-host"
 version = "0.1.0"
 source = { editable = "services/_plugin-host" }
 dependencies = [
+    { name = "biffo-plugin-sdk", extra = ["user-serving"] },
     { name = "mangum" },
     { name = "starlette" },
 ]
@@ -299,6 +300,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "biffo-plugin-sdk", extras = ["user-serving"], editable = "packages/python-sdk" },
     { name = "mangum", specifier = ">=0.19.0" },
     { name = "starlette", specifier = ">=0.37.0" },
 ]

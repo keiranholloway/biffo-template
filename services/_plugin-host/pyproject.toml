@@ -6,6 +6,7 @@ requires-python = ">=3.13"
 dependencies = [
   "starlette>=0.37.0",
   "mangum>=0.19.0",
+  "biffo-plugin-sdk[user-serving]>=1.2,<2.0",
 ]
 
 [dependency-groups]
@@ -20,3 +21,8 @@ packages = ["src/plugin_host"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+
+# biffo-plugin-sdk is a workspace member — resolve it from the workspace, like the
+# first-party plugins under services/_plugins/.
+[tool.uv.sources]
+biffo-plugin-sdk = { workspace = true }

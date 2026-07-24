@@ -381,7 +381,7 @@ describe('syncPluginTerraform', () => {
   })
 })
 
-describe('first-party plugins are referenced in place (#406)', () => {
+describe('first-party plugins are owned by plugins.core.tf, not the generated file (ADR-0014)', () => {
   let cwd: string
   beforeEach(() => {
     cwd = mkdtempSync(join(tmpdir(), 'biffo-fp-'))
@@ -416,34 +416,35 @@ describe('first-party plugins are referenced in place (#406)', () => {
     expect(pluginModuleSource(cwd, 'acme-crm')).toBe('../../../modules/plugins/acme-crm')
   })
 
-  it('wires a first-party plugin that was never copied at all', () => {
+  it('does NOT wire a first-party plugin — plugins.core.tf (ADR-0014) provisions it', () => {
     firstParty('orchestrator')
-    expect(listWireablePlugins(cwd)).toEqual(['orchestrator'])
+    // Excluded from the generated file: wiring it would duplicate the
+    // module "plugin_orchestrator" that plugins.core.tf already declares.
+    expect(listWireablePlugins(cwd)).toEqual([])
+  })
+
+  it('wires third-party plugins but never a first-party one, even side by side', () => {
+    firstParty('orchestrator')
+    copied('acme-crm')
+    expect(listWireablePlugins(cwd)).toEqual(['acme-crm'])
   })
 
   /**
-   * The regression this whole issue is: an upgrade updates
-   * services/_plugins/<name>/terraform/ and leaves modules/plugins/<name>/
-   * frozen, so sourcing the copy deploys stale infrastructure. With both
-   * present the real source must win, and the plugin must appear exactly once.
+   * A first-party plugin left with a *stale* copy under modules/plugins/ must
+   * still be excluded (plugins.core.tf owns it), so the generated file never
+   * emits a colliding module "plugin_<name>" — and the copy is flagged for
+   * deletion by staleFirstPartyCopies.
    */
-  it('prefers the real source when a stale copy is also present', () => {
+  it('excludes a first-party plugin even when a stale copy is present, and never emits its block', () => {
     firstParty('agent-runtime')
     copied('agent-runtime')
 
-    expect(listWireablePlugins(cwd)).toEqual(['agent-runtime'])
-    expect(pluginModuleSource(cwd, 'agent-runtime')).toContain('services/_plugins/')
+    expect(listWireablePlugins(cwd)).toEqual([])
 
     const tf = syncPluginTerraform(cwd)
-    const generated = readFileSync(
-      join(cwd, 'infra', 'environments', 'dev', GENERATED_TF_FILE),
-      'utf8',
-    )
-    expect(tf.plugins).toEqual(['agent-runtime'])
-    expect(generated).toContain('source   = "../../../services/_plugins/agent-runtime/terraform"')
-    expect(generated).not.toContain('modules/plugins/agent-runtime')
-    // Exactly one block, not one per location.
-    expect(generated.match(/module "plugin_agent-runtime"/g)).toHaveLength(1)
+    expect(tf.plugins).toEqual([])
+    // no generated file is written when only first-party (stale-copied) plugins exist
+    expect(existsSync(join(cwd, 'infra', 'environments', 'dev', GENERATED_TF_FILE))).toBe(false)
   })
 
   it('reports a stale copy so it can be deleted deliberately', () => {
@@ -460,15 +461,10 @@ describe('first-party plugins are referenced in place (#406)', () => {
     expect(staleFirstPartyCopies(cwd)).toEqual([])
   })
 
-  it('reads variables from whichever directory it sources', () => {
-    // A first-party plugin's declared variables must come from its real
-    // terraform/, not from a stale copy that may predate a variable.
-    firstParty('agent-runtime')
-    const dir = join(cwd, 'modules', 'plugins', 'agent-runtime')
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, 'main.tf'), 'variable "project_name" {}\n')
+  it('reads a THIRD-party plugin variables from its copy under modules/plugins/', () => {
+    copied('acme-crm')
     writeFileSync(
-      join(cwd, 'services', '_plugins', 'agent-runtime', 'terraform', 'main.tf'),
+      join(cwd, 'modules', 'plugins', 'acme-crm', 'main.tf'),
       'variable "project_name" {}\nvariable "tags" {}\n',
     )
 

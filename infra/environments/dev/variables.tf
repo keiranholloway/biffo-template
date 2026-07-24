@@ -178,3 +178,18 @@ variable "plugin_api_origins" {
     error_message = "plugin_api_origins names must be lowercase alphanumeric with hyphens (matching the baseurl.com/<name>/api/ path segment)."
   }
 }
+
+variable "plugin_host_api_domain" {
+  description = <<-EOT
+    Regional domain of the Core API Gateway that fronts the shared plugin host
+    (ADR-0021), e.g. "abc123.execute-api.eu-west-1.amazonaws.com" — NO scheme, NO
+    path. When set, CloudFront routes baseurl.com/api/v1/plugins/* same-origin to
+    the shared host (which mounts every user-facing plugin), superseding the
+    per-plugin plugin_api_origins ingresses. Fed via a tfvar rather than a live
+    module.api_gateway reference to avoid a cdn<->api_gateway cycle (the gateway's
+    CORS already references the CloudFront domain); the value is the api_gateway
+    module's api_domain output, stable across applies. Empty by default (no route).
+  EOT
+  type        = string
+  default     = ""
+}

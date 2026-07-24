@@ -126,6 +126,21 @@ class WorkflowRunSummary(BiffoBaseSchema):
 # ``type: "multiselect"`` is a portal-only field type (the builder injects the agent
 # action's tool picker from ``available_tools``); Core never declares one, so no
 # value validation for it lives here.
+# ``output_body`` — ``True`` marks the one field of a *destination* action that
+#                   carries the human message (email → ``body``, the webhook
+#                   channels → ``message``). It changes nothing for a standalone
+#                   action, but when that action is reused as an agent-action
+#                   *delivery* (ADR-0020) the field becomes optional and defaults
+#                   to the ``{output}`` placeholder — so a delivery with no template
+#                   sends the agent's raw result.
+# ``type: "delivery"`` is the agent action's optional deliver-on-completion
+#                   sub-config (ADR-0020, #527). Its value is a structured
+#                   ``{"type": <destination>, "config": {…}}`` where ``type`` is one
+#                   of ``DELIVERY_ACTION_TYPES`` and ``config`` is validated against
+#                   that destination's own ``config_fields`` (reused, not
+#                   duplicated). Absent ⇒ no delivery (today's behaviour). The
+#                   orchestrator renders ``{output}`` — the agent's result — into the
+#                   destination's ``output_body`` field on ``agent.run.completed``.
 
 # What a redacted secret reads back as. A fixed, recognisable placeholder rather
 # than an empty string: the portal shows "set, unchanged", and a write echoing it
@@ -144,7 +159,13 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
             {"name": "from", "label": "From", "type": "email", "required": True},
             {"name": "to", "label": "To", "type": "email", "required": True},
             {"name": "subject", "label": "Subject", "type": "text", "required": True},
-            {"name": "body", "label": "Body", "type": "textarea", "required": True},
+            {
+                "name": "body",
+                "label": "Body",
+                "type": "textarea",
+                "required": True,
+                "output_body": True,
+            },
         ],
     },
     {
@@ -166,6 +187,29 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 "label": "Message",
                 "type": "textarea",
                 "required": True,
+                "output_body": True,
+            },
+        ],
+    },
+    {
+        "type": "slack",
+        "label": "Slack message",
+        "config_fields": [
+            # A Slack incoming-webhook URL embeds its own secret token, so — like
+            # the Google Chat webhook — the whole string is a credential (#432).
+            {
+                "name": "webhook_url",
+                "label": "Webhook URL",
+                "type": "url",
+                "required": True,
+                "secret": True,
+            },
+            {
+                "name": "message",
+                "label": "Message",
+                "type": "textarea",
+                "required": True,
+                "output_body": True,
             },
         ],
     },
@@ -199,6 +243,7 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 "label": "Message",
                 "type": "textarea",
                 "required": True,
+                "output_body": True,
                 "visible_when": {"field": "message_type", "equals": "text"},
             },
             # The template must already exist and be approved in WhatsApp
@@ -306,9 +351,27 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 "required": False,
                 "default": 1,
             },
+            # ADR-0020 (#527): optional deliver-the-result-on-completion sub-config.
+            # A structured {"type": <destination>, "config": {…}} validated against
+            # the destination's own config_fields; absent ⇒ no delivery. The
+            # orchestrator reacts to `agent.run.completed` for a *succeeded* run and
+            # renders {output} into the destination's message. It is deliberately a
+            # sub-config of the agent action rather than a second workflow step:
+            # one workflow, one run, delivery as a property of the agent.
+            {
+                "name": "delivery",
+                "label": "Deliver the result on completion",
+                "type": "delivery",
+                "required": False,
+            },
         ],
     },
 ]
+
+# The destinations an agent-action delivery may target (ADR-0020, #527). Each is a
+# standalone action above whose executor the orchestrator reuses; a delivery's
+# ``config`` is validated against that action's own ``config_fields``.
+DELIVERY_ACTION_TYPES: tuple[str, ...] = ("email", "slack", "google_chat", "whatsapp")
 
 # Deliberately permissive — enough to reject obvious typos in the form, not a
 # full RFC 5322 validator (avoids a new email-validator dependency).
@@ -362,11 +425,14 @@ def redact_secrets(action_type: str, action_config: dict[str, Any]) -> dict[str,
     is absent or empty is left exactly as-is (absent stays absent), so the portal
     can tell "set" from "not set". Non-secret fields are untouched. The input is
     never mutated.
+
+    An agent action's ``delivery`` sub-config is redacted recursively against its
+    declared destination type (ADR-0020): a Slack or Google Chat webhook stored
+    inside ``delivery.config`` is a credential too, and must not leak on a read or
+    onto the bus any more than a top-level one.
     """
     secrets = _secret_field_names(action_type)
-    if not secrets:
-        return dict(action_config)
-    return {
+    result = {
         name: (
             SECRET_SENTINEL
             if name in secrets and isinstance(value, str) and value.strip()
@@ -374,6 +440,15 @@ def redact_secrets(action_type: str, action_config: dict[str, Any]) -> dict[str,
         )
         for name, value in action_config.items()
     }
+    delivery = result.get("delivery")
+    if isinstance(delivery, dict) and isinstance(delivery.get("config"), dict):
+        delivery_type = delivery.get("type")
+        if delivery_type in DELIVERY_ACTION_TYPES:
+            result["delivery"] = {
+                **delivery,
+                "config": redact_secrets(str(delivery_type), delivery["config"]),
+            }
+    return result
 
 
 def resolve_write_secrets(
@@ -392,10 +467,14 @@ def resolve_write_secrets(
     right — a create cannot "keep" a secret that was never stored, and the sentinel
     must never persist as a value. Raises ``ValueError`` in that case; the router
     maps it to 422. The input dicts are not mutated.
+
+    An agent action's ``delivery`` sub-config is resolved recursively against its
+    destination type (ADR-0020), so a webhook stored inside ``delivery.config`` is
+    kept-on-unchanged the same way a top-level secret is. A delivery whose ``type``
+    differs from what is stored has no stored secret to keep for the new type, so a
+    sentinel there is refused — the author must supply the new destination's secret.
     """
     secrets = _secret_field_names(action_type)
-    if not secrets:
-        return dict(submitted)
     result = dict(submitted)
     for name in secrets:
         value = submitted.get(name)
@@ -413,7 +492,138 @@ def resolve_write_secrets(
             )
         # value is None with nothing stored: leave absent. A required secret in
         # that state was already rejected by WorkflowDefinitionBody._validate_action.
+    submitted_delivery = submitted.get("delivery")
+    if isinstance(submitted_delivery, dict) and isinstance(submitted_delivery.get("config"), dict):
+        delivery_type = submitted_delivery.get("type")
+        if delivery_type in DELIVERY_ACTION_TYPES:
+            stored_delivery = stored.get("delivery")
+            stored_config: dict[str, Any] = {}
+            if (
+                isinstance(stored_delivery, dict)
+                and stored_delivery.get("type") == delivery_type
+                and isinstance(stored_delivery.get("config"), dict)
+            ):
+                stored_config = stored_delivery["config"]
+            result["delivery"] = {
+                **submitted_delivery,
+                "config": resolve_write_secrets(
+                    str(delivery_type), submitted_delivery["config"], stored_config
+                ),
+            }
     return result
+
+
+def _validate_parts_field(
+    action_type: str, action_config: dict[str, Any], field: dict[str, Any]
+) -> None:
+    """Validate an ordered-parts prompt field's shape (ADR-0015 §2).
+
+    Accepts a plain string (one inline part) or a list of inline/component
+    parts. A required field must resolve to at least one part — a component
+    reference counts, so this passes even when the text lives entirely in the
+    library; whether that component *exists* is a DB check the router runs.
+    """
+    name = field["name"]
+    try:
+        parts = normalize_parts(action_config.get(name), field=f"action_config.{name}")
+    except PromptPartsError as exc:
+        raise ValueError(str(exc)) from exc
+    if field["required"] and not parts:
+        raise ValueError(f"action_config.{name} is required for the {action_type} action")
+
+
+def _validate_action_config(
+    action_type: str, action_config: dict[str, Any], *, body_optional: bool = False
+) -> None:
+    """Validate ``action_config`` against ``action_type``'s catalog config_fields.
+
+    The single per-action validator, reused for a top-level workflow action and —
+    with ``body_optional=True`` — for an agent-action *delivery* sub-config
+    (ADR-0020). ``body_optional`` relaxes the ``required`` check on the destination's
+    ``output_body`` field only: in a delivery it defaults to ``{output}`` (the agent's
+    result), so the author need not supply a message. Raises ``ValueError`` on the
+    first problem; the caller (a pydantic validator) surfaces it as a 422.
+    """
+    action = next((a for a in WORKFLOW_ACTIONS if a["type"] == action_type), None)
+    if action is None:
+        raise ValueError(f"Unknown action_type: {action_type}")
+
+    config_fields = action["config_fields"]
+    for field in config_fields:
+        if not _field_applies(config_fields, action_config, field):
+            continue
+        # The agent action's optional deliver-on-completion sub-config (ADR-0020).
+        if field["type"] == "delivery":
+            _validate_delivery(action_config.get(field["name"]))
+            continue
+        # A prompt-library field (instructions/goals) is EITHER a plain string or an
+        # ordered list of parts (ADR-0015 §2). Validate the shape here — component
+        # existence and value/variable matching need the DB and are checked in the
+        # router — then skip the plain-textarea checks below.
+        if field.get("parts"):
+            _validate_parts_field(action_type, action_config, field)
+            continue
+        value = action_config.get(field["name"])
+        # A secret echoed back as the redaction sentinel means "keep the stored
+        # value" (#432). The real value is resolved and checked in the router's write
+        # path, against what is already stored — this validator cannot see that — so
+        # accept the placeholder here. The router rejects a sentinel with nothing to
+        # fall back to (a create, or a first-time secret on update).
+        if field.get("secret") and value == SECRET_SENTINEL:
+            continue
+        if (
+            field["type"] == "select"
+            and not field.get("open")
+            and isinstance(value, str)
+            and value
+            and value not in {o["value"] for o in field["options"]}
+        ):
+            raise ValueError(
+                f"action_config.{field['name']} must be one of: "
+                + ", ".join(o["value"] for o in field["options"])
+            )
+        # "Required" means the value must *resolve* to something — a field with a
+        # catalog default therefore always satisfies it. An ``output_body`` field is
+        # not required in a delivery: it defaults to the {output} placeholder.
+        required = field["required"] and not (body_optional and field.get("output_body"))
+        resolved = _effective(config_fields, action_config, field["name"])
+        if required and not (isinstance(resolved, str) and resolved.strip()):
+            raise ValueError(
+                f"action_config.{field['name']} is required for the {action_type} action"
+            )
+        if field["type"] == "email" and isinstance(value, str) and value:
+            if not _EMAIL_RE.match(value):
+                raise ValueError(f"action_config.{field['name']} must be a valid email address")
+        if field["type"] == "url" and isinstance(value, str) and value:
+            if not _URL_RE.match(value):
+                raise ValueError(f"action_config.{field['name']} must be an https URL")
+
+
+def _validate_delivery(value: Any) -> None:
+    """Validate an agent-action ``delivery`` sub-config (ADR-0020, #527).
+
+    Absent/empty ⇒ no delivery, which is valid (today's behaviour). Otherwise it
+    must be ``{"type": <destination>, "config": {…}}`` with ``type`` one of
+    :data:`DELIVERY_ACTION_TYPES` and ``config`` well-formed for that destination —
+    reusing the destination's own ``config_fields`` (``body_optional``, since the
+    message defaults to ``{output}``). Raises ``ValueError`` on any problem.
+    """
+    if value in (None, "", {}):
+        return
+    if not isinstance(value, dict):
+        raise ValueError("action_config.delivery must be an object with 'type' and 'config'")
+    delivery_type = value.get("type")
+    if delivery_type not in DELIVERY_ACTION_TYPES:
+        raise ValueError(
+            "action_config.delivery.type must be one of: " + ", ".join(DELIVERY_ACTION_TYPES)
+        )
+    config = value.get("config")
+    if not isinstance(config, dict):
+        raise ValueError("action_config.delivery.config must be an object")
+    try:
+        _validate_action_config(str(delivery_type), config, body_optional=True)
+    except ValueError as exc:
+        raise ValueError(f"action_config.delivery.config is invalid: {exc}") from exc
 
 
 class WorkflowCatalog(BaseModel):
@@ -456,80 +666,8 @@ class WorkflowDefinitionBody(BaseModel):
 
     @model_validator(mode="after")
     def _validate_action(self) -> WorkflowDefinitionBody:
-        action = next((a for a in WORKFLOW_ACTIONS if a["type"] == self.action_type), None)
-        if action is None:
-            raise ValueError(f"Unknown action_type: {self.action_type}")
-
-        config_fields = action["config_fields"]
-        for field in config_fields:
-            if not _field_applies(config_fields, self.action_config, field):
-                continue
-            # A prompt-library field (instructions/goals) is EITHER a plain string
-            # or an ordered list of parts (ADR-0015 §2). Validate the shape here —
-            # component existence and value/variable matching need the DB and are
-            # checked in the router — then skip the plain-textarea checks below.
-            if field.get("parts"):
-                self._validate_parts_field(field)
-                continue
-            value = self.action_config.get(field["name"])
-            # A secret echoed back as the redaction sentinel means "keep the stored
-            # value" (#432). The real value is resolved and checked in the router's
-            # write path, against what is already stored — this body validator
-            # cannot see that, and has no create/update context — so accept the
-            # placeholder here rather than format-checking or rejecting it. The
-            # router rejects a sentinel with nothing to fall back to (a create, or a
-            # first-time secret on update).
-            if field.get("secret") and value == SECRET_SENTINEL:
-                continue
-            if (
-                field["type"] == "select"
-                and not field.get("open")
-                and isinstance(value, str)
-                and value
-                and value not in {o["value"] for o in field["options"]}
-            ):
-                raise ValueError(
-                    f"action_config.{field['name']} must be one of: "
-                    + ", ".join(o["value"] for o in field["options"])
-                )
-            # "Required" means the value must *resolve* to something — a field
-            # with a catalog default therefore always satisfies it.
-            resolved = _effective(config_fields, self.action_config, field["name"])
-            if field["required"] and not (isinstance(resolved, str) and resolved.strip()):
-                raise ValueError(
-                    f"action_config.{field['name']} is required for the {self.action_type} action"
-                )
-            if (
-                field["type"] == "email"
-                and isinstance(value, str)
-                and value
-                and not _EMAIL_RE.match(value)
-            ):
-                raise ValueError(f"action_config.{field['name']} must be a valid email address")
-            if (
-                field["type"] == "url"
-                and isinstance(value, str)
-                and value
-                and not _URL_RE.match(value)
-            ):
-                raise ValueError(f"action_config.{field['name']} must be an https URL")
+        _validate_action_config(self.action_type, self.action_config)
         return self
-
-    def _validate_parts_field(self, field: dict[str, Any]) -> None:
-        """Validate an ordered-parts prompt field's shape (ADR-0015 §2).
-
-        Accepts a plain string (one inline part) or a list of inline/component
-        parts. A required field must resolve to at least one part — a component
-        reference counts, so this passes even when the text lives entirely in the
-        library; whether that component *exists* is a DB check the router runs.
-        """
-        name = field["name"]
-        try:
-            parts = normalize_parts(self.action_config.get(name), field=f"action_config.{name}")
-        except PromptPartsError as exc:
-            raise ValueError(str(exc)) from exc
-        if field["required"] and not parts:
-            raise ValueError(f"action_config.{name} is required for the {self.action_type} action")
 
 
 class CreateWorkflowDefinitionRequest(WorkflowDefinitionBody):

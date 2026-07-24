@@ -33,11 +33,16 @@ class FakeCore:
         agent_run_id: str = "agent-run-1",
         agent_run_status: int = 201,
         agent_run_detail: str = "Agent run refused",
+        agent_run_record: dict[str, Any] | None = None,
     ) -> None:
         self._runs = runs
         self._agent_run_id = agent_run_id
         self._agent_run_status = agent_run_status
         self._agent_run_detail = agent_run_detail
+        # The full run record served by GET /agent-runs/{id} — what the
+        # deliver-on-completion handler (ADR-0020) fetches to read a run's output
+        # and its delivery snapshot (the completion event carries only a reference).
+        self._agent_run_record = agent_run_record
         self.requests: list[tuple[str, str, dict[str, Any]]] = []
 
     def client(self) -> SignedCoreClient:
@@ -58,9 +63,23 @@ class FakeCore:
     def agent_run_posts(self) -> list[dict[str, Any]]:
         return [body for method, path, body in self.requests if path.endswith("/agent-runs")]
 
+    def agent_run_gets(self) -> list[str]:
+        """The run ids fetched via GET /agent-runs/{id} (delivery-on-completion)."""
+        return [
+            path.rsplit("/", 1)[-1]
+            for method, path, _ in self.requests
+            if method == "GET" and "/agent-runs/" in path
+        ]
+
     def _handle(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content or b"{}")
         self.requests.append((request.method, request.url.path, body))
+
+        # GET /agent-runs/{id}: the full run record the delivery handler reads.
+        if request.method == "GET" and "/agent-runs/" in request.url.path:
+            if self._agent_run_record is None:
+                return httpx.Response(404, json={"detail": "Agent run not found"})
+            return httpx.Response(200, json=self._agent_run_record)
 
         if request.url.path.endswith("/agent-runs"):
             if self._agent_run_status >= 400:

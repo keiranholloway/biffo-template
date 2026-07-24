@@ -650,7 +650,19 @@ def test_catalog_offers_the_agent_action_with_its_m1_fields(client: TestClient):
     fields = {f["name"]: f for f in action["config_fields"]}
     # Deliberately minimal in M1 — tools and read scope are M2/M3. `goals` (ADR-0014)
     # is the one optional acceptance-criteria field folded into the system prompt.
-    assert set(fields) == {"agent_name", "instructions", "goals", "model", "max_turns"}
+    # `delivery` (ADR-0020) is the optional deliver-on-completion sub-config.
+    assert set(fields) == {
+        "agent_name",
+        "instructions",
+        "goals",
+        "model",
+        "max_turns",
+        "delivery",
+    }
+    # The delivery field is optional and structured (type "delivery"): absent ⇒ no
+    # delivery, which is today's behaviour.
+    assert fields["delivery"]["type"] == "delivery"
+    assert fields["delivery"]["required"] is False
     assert fields["agent_name"]["required"] and fields["instructions"]["required"]
     # goals is an OPTIONAL textarea — a simple agent must be definable without it,
     # and its teaching label is the only affordance today (no catalog placeholder).
@@ -892,3 +904,277 @@ def test_create_rejects_the_sentinel_as_a_secret(client: TestClient):
 def test_create_requires_the_secret(client: TestClient):
     resp = client.post(_BASE, json=_gchat_body(action_config={"message": "no webhook"}))
     assert resp.status_code == 422
+
+
+# ── Standalone Slack action (ADR-0020, #527) ─────────────────────────────────
+
+
+def test_create_slack_workflow(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="slack",
+            action_config={
+                "webhook_url": "https://hooks.slack.com/services/T/B/x",
+                "message": "New demo from {company}",
+            },
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["action_type"] == "slack"
+
+
+def test_slack_requires_webhook_url(client: TestClient):
+    resp = client.post(
+        _BASE, json=_valid_body(action_type="slack", action_config={"message": "hi"})
+    )
+    assert resp.status_code == 422
+
+
+def test_slack_rejects_non_https_webhook(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="slack",
+            action_config={"webhook_url": "http://insecure/x", "message": "hi"},
+        ),
+    )
+    assert resp.status_code == 422
+
+
+# ── Agent-action delivery sub-config (ADR-0020, #527) ────────────────────────
+#
+# `delivery` is an optional `{ type, config }` on the agent action. Absent ⇒ no
+# delivery (today's behaviour). Present ⇒ well-formed for its declared destination
+# type, validated against that destination's own config_fields — the message field
+# optional (it defaults to {output}), the address/webhook fields still required.
+
+
+def _agent_body(action_config: dict, **over) -> dict:
+    base = {"agent_name": "demo-enricher", "instructions": "Enrich {company}."}
+    base.update(action_config)
+    return _valid_body(action_type="agent", action_config=base, **over)
+
+
+def test_agent_workflow_without_delivery_still_valid(client: TestClient):
+    """Absent delivery is the norm — an agent that delivers nothing."""
+    resp = client.post(_BASE, json=_agent_body({}))
+    assert resp.status_code == 201, resp.text
+    assert "delivery" not in resp.json()["action_config"]
+
+
+def test_agent_delivery_email_round_trips(client: TestClient):
+    delivery = {
+        "type": "email",
+        "config": {
+            "from": "no-reply@example.com",
+            "to": "sales@example.com",
+            "subject": "Result",
+            "body": "The agent said: {output}",
+        },
+    }
+    resp = client.post(_BASE, json=_agent_body({"delivery": delivery}))
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["action_config"]["delivery"] == delivery
+
+
+def test_agent_delivery_body_is_optional_defaults_to_output(client: TestClient):
+    """The destination's message/body is optional in a delivery — it defaults to
+    {output} at render time — but the address fields are still required."""
+    resp = client.post(
+        _BASE,
+        json=_agent_body(
+            {
+                "delivery": {
+                    "type": "email",
+                    "config": {
+                        "from": "no-reply@example.com",
+                        "to": "sales@example.com",
+                        "subject": "Result",
+                    },
+                }
+            }
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+
+
+def test_agent_delivery_email_missing_recipient_rejected(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_agent_body(
+            {"delivery": {"type": "email", "config": {"from": "no-reply@example.com"}}}
+        ),
+    )
+    assert resp.status_code == 422
+
+
+def test_agent_delivery_rejects_unknown_type(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_agent_body({"delivery": {"type": "carrier-pigeon", "config": {}}}),
+    )
+    assert resp.status_code == 422
+
+
+def test_agent_delivery_rejects_non_object_config(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_agent_body({"delivery": {"type": "slack", "config": "not-an-object"}}),
+    )
+    assert resp.status_code == 422
+
+
+def test_agent_delivery_slack_requires_webhook(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_agent_body({"delivery": {"type": "slack", "config": {"message": "{output}"}}}),
+    )
+    assert resp.status_code == 422
+
+
+def test_agent_delivery_slack_rejects_non_https_webhook(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_agent_body({"delivery": {"type": "slack", "config": {"webhook_url": "http://x/y"}}}),
+    )
+    assert resp.status_code == 422
+
+
+def test_agent_delivery_survives_in_definition_snapshot():
+    """`delivery` is preserved verbatim when the run snapshot is resolved — it is
+    not a prompt field, so ``resolve_definition_snapshot`` leaves it untouched, and
+    the orchestrator's snapshot (built from action_config) carries it (ADR-0020)."""
+    from api.agent_runs import create_run
+    from api.models.agent_run import AgentRun  # noqa: F401 — registers table
+    from sqlalchemy.ext.asyncio import create_async_engine as _cae
+
+    engine = _cae(
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+    delivery = {"type": "slack", "config": {"webhook_url": "https://hooks.slack.com/x"}}
+    snapshot = {"model": "m", "instructions": "do it", "delivery": delivery}
+
+    async def _run() -> dict:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with session_factory() as session:
+            run = await create_run(
+                session,
+                tenant_id="default",
+                agent_name="a",
+                definition_snapshot=snapshot,
+                max_depth=8,
+            )
+            await session.commit()
+            return run.definition_snapshot
+
+    stored = asyncio.run(_run())
+    asyncio.run(engine.dispose())
+    assert stored["delivery"] == delivery
+
+
+# ── Nested delivery secret redaction (#432, ADR-0020) ────────────────────────
+#
+# A delivery to Slack/Google Chat carries a webhook credential inside
+# delivery.config. It is redacted on every read and kept-on-unchanged exactly like
+# a top-level secret — the #432 bug class must not reopen through the nested seam.
+
+_REAL_SLACK = "https://hooks.slack.com/services/T/B/REAL-SECRET-TOKEN"
+
+
+def _agent_slack_delivery_body(webhook: str = _REAL_SLACK, **over) -> dict:
+    return _agent_body(
+        {"delivery": {"type": "slack", "config": {"webhook_url": webhook, "message": "{output}"}}},
+        **over,
+    )
+
+
+def _stored_delivery_webhook(session_factory, definition_id: str) -> str | None:
+    async def _read() -> str | None:
+        async with session_factory() as session:
+            row = await session.get(WorkflowDefinition, definition_id)
+            assert row is not None
+            return row.action_config["delivery"]["config"].get("webhook_url")
+
+    return asyncio.run(_read())
+
+
+def test_delivery_secret_redacted_on_read(client: TestClient):
+    created = client.post(_BASE, json=_agent_slack_delivery_body())
+    assert created.status_code == 201, created.text
+    config = created.json()["action_config"]["delivery"]["config"]
+    assert config["webhook_url"] == SECRET_SENTINEL
+    assert config["message"] == "{output}"
+
+
+def test_delivery_secret_redacted_in_emitted_event(app):
+    fastapi, _ = app
+    client = TestClient(fastapi)
+    client.post(_BASE, json=_agent_slack_delivery_body())
+    created_events = [
+        e for e in fastapi.state.published if e.detail_type.endswith("workflow_definition.created")
+    ]
+    assert created_events
+    assert _REAL_SLACK not in str(created_events[-1].payload)
+
+
+def test_delivery_unchanged_update_keeps_stored_secret(app):
+    fastapi, session_factory = app
+    client = TestClient(fastapi)
+    row = client.post(_BASE, json=_agent_slack_delivery_body()).json()
+    # The portal round-trips the sentinel it was given on read.
+    redacted = _agent_slack_delivery_body(webhook=SECRET_SENTINEL, name="Renamed")
+    updated = client.put(f"{_BASE}/{row['id']}", json=redacted)
+    assert updated.status_code == 200, updated.text
+    assert _stored_delivery_webhook(session_factory, row["id"]) == _REAL_SLACK
+
+
+def test_delivery_update_with_new_secret_overwrites(app):
+    fastapi, session_factory = app
+    client = TestClient(fastapi)
+    row = client.post(_BASE, json=_agent_slack_delivery_body()).json()
+    rotated = "https://hooks.slack.com/services/T/B/ROTATED"
+    client.put(f"{_BASE}/{row['id']}", json=_agent_slack_delivery_body(webhook=rotated))
+    assert _stored_delivery_webhook(session_factory, row["id"]) == rotated
+
+
+def test_delivery_create_rejects_the_sentinel_as_a_secret(client: TestClient):
+    resp = client.post(_BASE, json=_agent_slack_delivery_body(webhook=SECRET_SENTINEL))
+    assert resp.status_code == 422
+
+
+def test_delivery_workflow_is_tenant_isolated(app, client: TestClient):
+    """A delivery-bearing definition (webhook and all) rides on a tenant-scoped
+    row — another tenant never reads it, so its delivery secret cannot leak
+    cross-tenant either (ADR-0001)."""
+    _, session_factory = app
+
+    async def _seed_other_tenant() -> None:
+        async with session_factory() as session:
+            session.add(
+                WorkflowDefinition(
+                    tenant_id="other-tenant",
+                    name="Other tenant delivery",
+                    trigger_source="biffo.core",
+                    trigger_detail_type="demo.requested",
+                    action_type="agent",
+                    action_config={
+                        "agent_name": "a",
+                        "instructions": "go",
+                        "delivery": {
+                            "type": "slack",
+                            "config": {"webhook_url": _REAL_SLACK, "message": "{output}"},
+                        },
+                    },
+                    enabled=True,
+                )
+            )
+            await session.commit()
+
+    asyncio.run(_seed_other_tenant())
+    # Caller is tenant "default" — the other tenant's delivery row is invisible.
+    assert client.get(_BASE).json() == []

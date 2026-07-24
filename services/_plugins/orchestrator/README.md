@@ -1,13 +1,26 @@
 # Orchestrator plugin
 
 Event-driven orchestration engine (ADR-0003 plugin). It subscribes to platform
-EventBridge events and dispatches actions (email, Google Chat, WhatsApp today;
-more channels later) based on **workflow definitions stored in the Core API**.
+EventBridge events and dispatches actions (email, Slack, Google Chat, WhatsApp
+today; more channels later) based on **workflow definitions stored in the Core
+API**.
 
 Actions are registered in `src/orchestrator/actions.py` (`ACTION_HANDLERS`) and
 must have a matching entry in the Core builder catalog
 (`services/api/.../schemas/orchestration.WORKFLOW_ACTIONS`) so they can be
 configured in the portal.
+
+## Deliver an agent's result on completion (ADR-0020)
+
+The agent action's `action_config` may carry an optional `delivery` sub-config —
+`{ "type": <email|slack|google_chat|whatsapp>, "config": { … } }`. On
+`agent.run.completed` for a **succeeded** run whose fetched `definition_snapshot`
+carries a `delivery`, the engine renders the run's `{output}` into the destination
+and invokes the **same** executor a standalone action uses. The completion event is
+a reference only (ADR-0014 §5), so the run — output and delivery snapshot — is
+fetched over the internal API. No delivery config, or a failed run, delivers
+nothing (failure notification is a deferred seam). The destination's message field
+is optional in a delivery and defaults to the `{output}` placeholder.
 
 ### WhatsApp credentials come from SSM
 

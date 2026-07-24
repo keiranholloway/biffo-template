@@ -26,6 +26,8 @@ An ADR captures a significant architectural decision: the context that forced it
 | [ADR-0016](0016-agent-prompt-assistant.md)                          | Prompt assistant — a synchronous, streaming prompt-authoring agent | Proposed | 2026-07-23 |
 | [ADR-0017](0017-user-facing-plugin-chat-modules.md)                 | User-facing plugin chat modules — generalising the buffered chat spine | Accepted | 2026-07-23 |
 | [ADR-0018](0018-user-facing-plugin-hosting.md)                      | User-facing plugin hosting — a marketplace plugin as an authenticated sibling | Accepted | 2026-07-24 |
+| [ADR-0019](0019-dev-staging-nat-instance-egress.md)                 | dev/staging egress defaults to a fck-nat NAT instance | Accepted | 2026-07-24 |
+| [ADR-0020](0020-agent-result-delivery-on-completion.md)             | Deliver an agent's result on completion (agent-action sub-config) | Accepted | 2026-07-24 |
 
 ## Format
 

@@ -411,3 +411,145 @@ async def test_retries_a_5xx_from_core_on_the_agent_action(monkeypatch):
     result = core.result_posts()[0]
     assert result["status"] == "failed"
     assert "after 3 attempts" in result["error"]
+
+
+# ── Deliver an agent's result on completion (ADR-0020, #527) ─────────────────
+#
+# The engine reacts to `agent.run.completed` for a *succeeded* run whose fetched
+# definition_snapshot carries a `delivery` sub-config: it renders {output} into the
+# destination and invokes the matching executor. The completion event is a
+# reference only (§5), so the run — output + delivery snapshot — is fetched over
+# the internal API. A failed run, or one with no delivery, delivers nothing.
+
+
+def _completed_event(status: str = "completed", run_id: str = "agent-run-9") -> BiffoEvent:
+    return BiffoEvent(
+        source="biffo.core",
+        detail_type="agent.run.completed",
+        payload={"run_id": run_id, "agent": "demo-enricher", "status": status, "depth": 0},
+    )
+
+
+def _run_record(
+    *, status: str = "completed", delivery: dict | None = None, output: str = "the verdict"
+) -> dict:
+    snapshot: dict = {"model": "m", "instructions": "go"}
+    if delivery is not None:
+        snapshot["delivery"] = delivery
+    return {
+        "id": "agent-run-9",
+        "agent_name": "demo-enricher",
+        "status": status,
+        "result": {"output": output},
+        "definition_snapshot": snapshot,
+    }
+
+
+_SLACK_DELIVERY = {
+    "type": "slack",
+    "config": {
+        "webhook_url": "https://hooks.slack.com/services/T/B/x",
+        "message": "Result: {output}",
+    },
+}
+
+
+async def test_succeeded_run_with_delivery_invokes_the_executor():
+    core = FakeCore([], agent_run_record=_run_record(delivery=_SLACK_DELIVERY))
+    http = FakeHttp(status_code=200)
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes(), http_client=http)
+
+    await plugin.events.dispatch(_completed_event())
+
+    # The run was fetched (the completion event carries only a reference)…
+    assert core.agent_run_gets() == ["agent-run-9"]
+    # …and the Slack webhook was posted with {output} rendered from the run result.
+    assert len(http.calls) == 1
+    assert http.calls[0]["url"] == "https://hooks.slack.com/services/T/B/x"
+    assert http.calls[0]["json"] == {"text": "Result: the verdict"}
+
+
+async def test_delivery_defaults_body_to_raw_output_when_no_template():
+    delivery = {"type": "slack", "config": {"webhook_url": "https://hooks.slack.com/x"}}
+    core = FakeCore([], agent_run_record=_run_record(delivery=delivery, output="just this"))
+    http = FakeHttp(status_code=200)
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes(), http_client=http)
+
+    await plugin.deliver_on_completion(_completed_event())
+
+    assert http.calls[0]["json"] == {"text": "just this"}
+
+
+async def test_no_delivery_config_delivers_nothing():
+    core = FakeCore([], agent_run_record=_run_record(delivery=None))
+    http = FakeHttp(status_code=200)
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes(), http_client=http)
+
+    await plugin.deliver_on_completion(_completed_event())
+
+    # The run is still fetched, but nothing is dispatched.
+    assert core.agent_run_gets() == ["agent-run-9"]
+    assert http.calls == []
+
+
+async def test_failed_run_delivers_nothing():
+    """MVP delivers only on a succeeded run — the failure-notify seam is deferred."""
+    core = FakeCore([], agent_run_record=_run_record(status="failed", delivery=_SLACK_DELIVERY))
+    http = FakeHttp(status_code=200)
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes(), http_client=http)
+
+    await plugin.deliver_on_completion(_completed_event(status="failed"))
+
+    # A failed run is not even fetched — the status gate short-circuits first.
+    assert core.agent_run_gets() == []
+    assert http.calls == []
+
+
+async def test_delivery_email_uses_ses():
+    delivery = {
+        "type": "email",
+        "config": {
+            "from": "no-reply@example.com",
+            "to": "sales@example.com",
+            "subject": "Agent result",
+            "body": "Outcome: {output}",
+        },
+    }
+    core = FakeCore([], agent_run_record=_run_record(delivery=delivery, output="shipped"))
+    ses = FakeSes()
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=ses, http_client=FakeHttp())
+
+    await plugin.deliver_on_completion(_completed_event())
+
+    assert len(ses.calls) == 1
+    assert ses.calls[0]["Message"]["Body"]["Text"]["Data"] == "Outcome: shipped"
+
+
+async def test_delivery_permanent_failure_does_not_raise(monkeypatch):
+    """A bad webhook is logged, not retried, and never crashes the invocation —
+    there is no workflow run to record the outcome against."""
+    monkeypatch.setattr(plugin_module.asyncio, "sleep", _no_sleep)
+    core = FakeCore([], agent_run_record=_run_record(delivery=_SLACK_DELIVERY))
+    http = FakeHttp(status_code=403, text="revoked")
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes(), http_client=http)
+
+    await plugin.deliver_on_completion(_completed_event())
+
+    # 403 is permanent — one attempt, no retry, no exception out.
+    assert len(http.calls) == 1
+
+
+async def test_completed_event_reaches_delivery_through_dispatch():
+    """The `agent.run.completed` subscription is wired: dispatching the event runs
+    the delivery handler (alongside the wildcard forwarder, which posts to Core)."""
+    core = FakeCore([], agent_run_record=_run_record(delivery=_SLACK_DELIVERY))
+    http = FakeHttp(status_code=200)
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes(), http_client=http)
+
+    await plugin.events.dispatch(_completed_event())
+
+    # Delivery fired (the specific handler) …
+    assert len(http.calls) == 1
+    # … and the wildcard forwarder still posted the event to Core for workflow
+    # matching (agent chaining), unchanged.
+    assert core.event_posts()[0]["detail_type"] == "agent.run.completed"

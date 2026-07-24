@@ -140,20 +140,6 @@ resource "aws_cloudfront_origin_access_control" "portal" {
   signing_protocol                  = "sigv4"
 }
 
-# One OAC per user-facing plugin api origin (ADR-0018). Signs CloudFront's origin
-# requests to the plugin's Lambda Function URL with SigV4, so the Function URL can
-# be AWS_IAM-auth (never public — governed accounts block public Function URLs)
-# and only this distribution can invoke it. The plugin's Terraform grants
-# cloudfront.amazonaws.com invoke on its Function URL scoped to this distribution.
-resource "aws_cloudfront_origin_access_control" "plugin_api" {
-  for_each                          = { for p in var.plugin_api_origins : p.name => p }
-  name                              = "${local.name_prefix}-plugin-api-${each.key}"
-  description                       = "OAC for the ${each.key} plugin's Lambda Function URL"
-  origin_access_control_origin_type = "lambda"
-  signing_behavior                  = "always"
-  signing_protocol                  = "sigv4"
-}
-
 # Dedicated log-delivery bucket for CloudFront access logs (CKV_AWS_86).
 resource "aws_s3_bucket" "cf_logs" {
   #checkov:skip=CKV_AWS_18:This IS the log-delivery bucket; logging it to itself is circular.
@@ -223,31 +209,6 @@ data "aws_cloudfront_origin_request_policy" "all_viewer_except_host" {
   name = "Managed-AllViewerExceptHostHeader"
 }
 
-# Origin request policy for user-facing plugin api origins (ADR-0018). It must NOT
-# forward Host (a custom origin needs its own Host) or Authorization — under OAC,
-# CloudFront sets Authorization to the SigV4 origin signature, and forwarding the
-# viewer's would break signing (this is why the managed AllViewerExceptHostHeader,
-# which forwards Authorization, cannot be used with OAC). So forward only what the
-# plugin ingress actually reads: the founder JWT (X-Biffo-Founder-Token) and the
-# content type, plus all query strings. Cookies are unused by the ingress.
-resource "aws_cloudfront_origin_request_policy" "plugin_api" {
-  count   = length(var.plugin_api_origins) > 0 ? 1 : 0
-  name    = "${local.name_prefix}-plugin-api"
-  comment = "OAC-compatible: forwards the founder token + content type, never Host or Authorization"
-  cookies_config {
-    cookie_behavior = "none"
-  }
-  query_strings_config {
-    query_string_behavior = "all"
-  }
-  headers_config {
-    header_behavior = "whitelist"
-    headers {
-      items = ["x-biffo-founder-token", "content-type"]
-    }
-  }
-}
-
 resource "aws_cloudfront_distribution" "portal" {
   #checkov:skip=CKV_AWS_310:Single static S3 origin; no secondary origin exists to fail over to. Failover origin block stays optional/config-driven.
   #checkov:skip=CKV_AWS_374:Public franchise marketplace must serve all geographies; geo-restriction would break the product.
@@ -307,22 +268,19 @@ resource "aws_cloudfront_distribution" "portal" {
 
   # Authenticated user-facing plugin ingresses (ADR-0018 §1) — one CUSTOM origin
   # per plugin, pointing at that plugin's Lambda Function URL (HTTPS only). Unlike
-  # a sibling's S3 origin, there is no OAC: the Function URL is reached over the
-  # public internet and the plugin's Lambda authenticates every request itself
-  # (verifying the shared-Cognito JWT). The Function URL and its resource policy
-  # are the plugin's own Terraform's responsibility; this module only routes.
+  # a sibling's S3 origin, there is no OAC: the ingress is a public HTTPS API
+  # Gateway reached over the internet, and the plugin's Lambda authenticates every
+  # request itself (verifying the shared-Cognito founder JWT). The api origin and
+  # its permissions are the plugin's own Terraform's responsibility; this module
+  # only routes. (The ingress is an API Gateway, not a Lambda Function URL: a
+  # governed account blocks public Function URLs, and OAC-signed Function URLs
+  # can't serve browser POSTs — CloudFront OAC needs the client to sign the body
+  # hash. `function_url_domain` is the api origin host, now an execute-api domain.)
   dynamic "origin" {
     for_each = var.plugin_api_origins
     content {
       domain_name = origin.value.function_url_domain
       origin_id   = "plugin-api-${origin.value.name}"
-      # Sign every origin request to the Function URL with SigV4 (ADR-0018). The
-      # Function URL is AWS_IAM-auth and NEVER public — a governed account blocks
-      # public (NONE) Function URLs — so only this distribution, via OAC, can
-      # invoke it. CloudFront uses the Authorization header for the signature, so
-      # a plugin's own auth token must travel in a different header (the SDK reads
-      # the founder JWT from X-Biffo-Founder-Token, not Authorization).
-      origin_access_control_id = aws_cloudfront_origin_access_control.plugin_api[origin.value.name].id
       custom_origin_config {
         http_port              = 80
         https_port             = 443
@@ -376,7 +334,7 @@ resource "aws_cloudfront_distribution" "portal" {
       cached_methods           = ["GET", "HEAD"]
       compress                 = true
       cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
-      origin_request_policy_id = aws_cloudfront_origin_request_policy.plugin_api[0].id
+      origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
     }
   }
 

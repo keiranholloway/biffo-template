@@ -11,6 +11,8 @@
  *     `ColumnDefinition` / `IndexDefinition` / `PermissionRule` /
  *     `TablePermissions` / `PluginTableDefinition`
  *   - `services/api/src/api/models/plugin_route.py`'s `RouteDefinition`
+ *   - `services/api/src/api/models/plugin_user_surface.py`'s
+ *     `UserIngress` / `UserFrontend` (ADR-0018)
  *
  * NOT the older `_skeletons/registry/registry-schema.json` shape, which
  * (as of writing) still requires an `api_routes[].handler` free-form
@@ -196,6 +198,40 @@ const RouteDefSchema = z
     }
   })
 
+// Mirrors plugin_user_surface.py (ADR-0018). Both are authenticated security
+// surfaces, so `.strict()` mirrors their `extra="forbid"`. Parsed (not dropped
+// as unknown keys) so `biffo plugin install` can recognise a user-facing plugin
+// and surface the two-apply register + frontend-sync flow it needs.
+const USER_PATH_SEGMENT = /^[a-z][a-z0-9_-]*$/
+const HANDLER_IMPORT_PATH = /^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)+$/
+const REL_DIR = /^[\w][\w./-]*$/
+const NON_EMPTY_GROUP = 'required_group must be a non-empty Cognito group name.'
+
+const UserIngressSchema = z
+  .object({
+    path: z
+      .string()
+      .regex(USER_PATH_SEGMENT, 'must be a single lowercase path segment, e.g. api')
+      .default('api'),
+    required_group: z.string().min(1, NON_EMPTY_GROUP),
+    handler: z
+      .string()
+      .regex(HANDLER_IMPORT_PATH, "must be a dotted import path, e.g. 'ideation.app.handler'"),
+  })
+  .strict()
+
+const UserFrontendSchema = z
+  .object({
+    dir: z
+      .string()
+      .regex(
+        REL_DIR,
+        'must be a repo-relative path with no leading slash or traversal, e.g. web/dist',
+      ),
+    required_group: z.string().min(1, NON_EMPTY_GROUP),
+  })
+  .strict()
+
 export const PluginManifestSchema = z
   .object({
     name: z.string().regex(/^[a-z][a-z0-9-]*$/, 'must be a lowercase kebab-case slug'),
@@ -214,6 +250,10 @@ export const PluginManifestSchema = z
       .array(z.object({ source: z.string(), detail_type: z.string() }).passthrough())
       .default([]),
     required_core_version: z.string().default('>=0.0.0'),
+    // ADR-0018 user-facing surfaces. Optional: a plugin without them is an
+    // ordinary (data/event/CRUD) plugin.
+    user_ingress: UserIngressSchema.optional(),
+    user_frontend: UserFrontendSchema.optional(),
   })
   .superRefine((manifest, ctx) => {
     const tableNames = new Set(manifest.tables.map((t) => t.name))

@@ -96,6 +96,62 @@ export function registerUserFacingPlugin(
 }
 
 /**
+ * The Terraform outputs a user-facing plugin's own module must surface for the
+ * register step. `function_url_domain` and `frontend_bucket_regional_domain` become
+ * the CDN origins; `frontend_bucket_name` is the target the built `web/dist` is
+ * synced to by the frontend-deploy step.
+ */
+export const REQUIRED_PLUGIN_OUTPUTS = [
+  'function_url_domain',
+  'frontend_bucket_regional_domain',
+  'frontend_bucket_name',
+] as const
+
+export interface PluginDeployTargets {
+  /** Repo-relative tfvars paths written (feed the apply-2 commit). */
+  registeredPaths: string[]
+  /** The frontend bucket the built `web/dist` is synced to. */
+  frontendBucketName: string
+}
+
+/**
+ * The post-apply glue between a user-facing plugin's Terraform outputs and its CDN
+ * registration — the "register" step of the two-apply flow:
+ *
+ *   apply 1  →  the plugin module creates the Lambda + Function URL + frontend bucket
+ *   register →  THIS: read the module's outputs, upsert the origins into the two tfvars
+ *   apply 2  →  the cdn module gains the `<name>/api/*` and `<name>/*` behaviours
+ *
+ * `outputs` is the flat map produced by `readTerraformOutputs` / a parsed
+ * `terraform output -json`. Mirrors `coreWiringFromOutputs`: fail closed if the apply
+ * did not expose the origins, because a registration written without them routes the
+ * CDN behaviours at nothing (the frontend 403s, the api 502s). Returns the tfvars paths
+ * to commit and the bucket name the frontend-deploy step syncs to.
+ */
+export function wireUserFacingPluginFromOutputs(
+  cwd: string,
+  environment: string,
+  name: string,
+  outputs: Record<string, string>,
+): PluginDeployTargets {
+  const missing = REQUIRED_PLUGIN_OUTPUTS.filter((k) => !outputs[k]?.trim())
+  if (missing.length > 0) {
+    throw new Error(
+      `Cannot register the user-facing plugin "${name}" for ${environment}: its Terraform ` +
+        `apply did not expose ${missing.join(', ')}. A registration written without these would ` +
+        `route ${name}/api/* and ${name}/* at nothing (the frontend 403s, the api 502s). ` +
+        `Confirm the plugin module applied for ${environment} before wiring.`,
+    )
+  }
+  const registeredPaths = registerUserFacingPlugin(cwd, environment, {
+    name,
+    functionUrlDomain: outputs['function_url_domain']!,
+    bucketRegionalDomain: outputs['frontend_bucket_regional_domain']!,
+  })
+  return { registeredPaths, frontendBucketName: outputs['frontend_bucket_name']! }
+}
+
+/**
  * Remove a user-facing plugin's origins from an environment's tfvars (uninstall).
  * Leaves the files in place (possibly with empty lists) so a re-register is a
  * clean upsert, and returns the paths written.

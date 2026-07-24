@@ -324,6 +324,70 @@ export function declaredVariables(moduleDir: string): Set<string> {
   return names
 }
 
+/**
+ * The user-facing plugin-module outputs (ADR-0018) the register step reads
+ * *between* the two applies. Each, when the module actually declares it, is
+ * surfaced at the environment root as `plugin_<name>_<output>` so a post-apply-1
+ * `terraform output` exposes it — otherwise the Function URL host and bucket
+ * domain, only known after apply, would be unreadable and the CDN behaviours
+ * could never be registered. Emitted with `try(..., null)` and gated on the
+ * module having declared the output, because referencing a non-existent module
+ * output is a static error `try()` cannot suppress.
+ */
+export const USER_FACING_PLUGIN_OUTPUTS = [
+  'function_url_domain',
+  'frontend_bucket_regional_domain',
+  'frontend_bucket_name',
+] as const
+
+/** The environment-root output name a user-facing plugin output is surfaced under. */
+export function rootPluginOutputName(pluginName: string, output: string): string {
+  return `plugin_${pluginName}_${output}`
+}
+
+/**
+ * Extract the flat `{function_url_domain, ...}` map `wireUserFacingPluginFromOutputs`
+ * expects from an environment's `terraform output` map, undoing the
+ * `plugin_<name>_<output>` root-surfacing above. Only keys actually present are
+ * returned, so the register step's own fail-closed check reports what the apply
+ * did not expose.
+ */
+export function pluginOutputsFromRoot(
+  pluginName: string,
+  rootOutputs: Record<string, string>,
+): Record<string, string> {
+  const flat: Record<string, string> = {}
+  for (const key of USER_FACING_PLUGIN_OUTPUTS) {
+    const value = rootOutputs[rootPluginOutputName(pluginName, key)]
+    if (value !== undefined) flat[key] = value
+  }
+  return flat
+}
+
+/** Scan a module directory for the `output "<name>"` blocks it declares. */
+export function declaredOutputs(moduleDir: string): Set<string> {
+  const names = new Set<string>()
+  let entries
+  try {
+    entries = readdirSync(moduleDir, { withFileTypes: true })
+  } catch {
+    return names
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.tf')) continue
+    let contents: string
+    try {
+      contents = readFileSync(join(moduleDir, entry.name), 'utf8')
+    } catch {
+      continue
+    }
+    for (const match of contents.matchAll(/^\s*output\s+"([^"]+)"/gm)) {
+      names.add(match[1]!)
+    }
+  }
+  return names
+}
+
 /** Renders `key = value` lines with `=` aligned, as `terraform fmt` requires. */
 function renderArguments(args: Array<[string, string]>, indent: string): string {
   const width = Math.max(...args.map(([key]) => key.length))
@@ -335,22 +399,45 @@ function renderModuleBlock(
   declared: Set<string>,
   handler: string,
   source: string,
+  declaredOutputNames: Set<string>,
 ): string {
   const args = standardArguments(pluginName, handler).filter(([key]) => declared.has(key))
   const quoted = JSON.stringify(pluginName)
-  return [
+  const outputBlock = (name: string, description: string, attr: string): string[] => [
+    '',
+    `output "${name}" {`,
+    `  description = "${description}"`,
+    `  value       = try(module.plugin_${pluginName}[${quoted}].${attr}, null)`,
+    '}',
+  ]
+  const lines = [
     `module "plugin_${pluginName}" {`,
     `  source   = "${source}"`,
     `  for_each = contains(var.enabled_plugins, ${quoted}) ? { ${quoted} = true } : {}`,
     '',
     renderArguments(args, '  '),
     '}',
-    '',
-    `output "plugin_${pluginName}_function_arn" {`,
-    `  description = "Lambda ARN of the ${pluginName} plugin, or null when it is not in enabled_plugins."`,
-    `  value       = try(module.plugin_${pluginName}[${quoted}].function_arn, null)`,
-    '}',
-  ].join('\n')
+    ...outputBlock(
+      `plugin_${pluginName}_function_arn`,
+      `Lambda ARN of the ${pluginName} plugin, or null when it is not in enabled_plugins.`,
+      'function_arn',
+    ),
+  ]
+  // A user-facing plugin (ADR-0018) additionally surfaces the outputs the
+  // register step reads between the two applies — but only those its module
+  // actually declares, since a `try()` cannot suppress a reference to a
+  // non-existent module output.
+  for (const output of USER_FACING_PLUGIN_OUTPUTS) {
+    if (!declaredOutputNames.has(output)) continue
+    lines.push(
+      ...outputBlock(
+        rootPluginOutputName(pluginName, output),
+        `${output.replace(/_/g, ' ')} of the ${pluginName} plugin (ADR-0018 register step), or null when it is not enabled.`,
+        output,
+      ),
+    )
+  }
+  return lines.join('\n')
 }
 
 const GENERATED_HEADER = `# ---------------------------------------------------------------------------
@@ -381,6 +468,9 @@ export function renderGeneratedTerraform(
   plugins: Array<{
     name: string
     declaredVariables: Set<string>
+    /** The module's declared outputs — drives the user-facing (ADR-0018)
+     * output passthroughs. Defaults to empty (a non-user-facing plugin). */
+    declaredOutputs?: Set<string>
     handler?: string
     /** Defaults to the copied `modules/plugins/<name>` path, which is correct
      * for a third-party plugin; a first-party one passes its real source. */
@@ -393,6 +483,7 @@ export function renderGeneratedTerraform(
       p.declaredVariables,
       p.handler ?? DEFAULT_PLUGIN_HANDLER,
       p.source ?? THIRD_PARTY_TERRAFORM(p.name),
+      p.declaredOutputs ?? new Set(),
     ),
   )
   return `${GENERATED_HEADER}\n${blocks.join('\n\n')}\n`
@@ -427,6 +518,7 @@ export function syncPluginTerraform(cwd: string): PluginTerraformSyncResult {
     return {
       name,
       declaredVariables: declaredVariables(moduleDir),
+      declaredOutputs: declaredOutputs(moduleDir),
       source: pluginModuleSource(cwd, name),
     }
   })

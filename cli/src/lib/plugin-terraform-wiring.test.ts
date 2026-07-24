@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  declaredOutputs,
   declaredVariables,
   GENERATED_TF_FILE,
   GENERATED_TFVARS_FILE,
@@ -11,6 +12,9 @@ import {
   listUnwirableEnvironments,
   listWireablePlugins,
   pluginModuleSource,
+  pluginOutputsFromRoot,
+  renderGeneratedTerraform,
+  rootPluginOutputName,
   staleFirstPartyCopies,
   syncPluginTerraform,
 } from './plugin-terraform-wiring.js'
@@ -108,6 +112,66 @@ describe('declaredVariables', () => {
     writeFileSync(join(dir, 'extra.tf'), 'variable "memory_size" {\n  type = number\n}\n')
 
     expect([...declaredVariables(dir)].sort()).toEqual(['memory_size', 'project_name', 'tags'])
+  })
+})
+
+describe('declaredOutputs', () => {
+  it('parses output blocks from every .tf file in the module', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'biffo-outputs-'))
+    writeFileSync(
+      join(dir, 'outputs.tf'),
+      'output "function_url_domain" {\n  value = ""\n}\noutput "frontend_bucket_name" {\n  value = ""\n}\n',
+    )
+    expect([...declaredOutputs(dir)].sort()).toEqual([
+      'frontend_bucket_name',
+      'function_url_domain',
+    ])
+    rmSync(dir, { recursive: true, force: true })
+  })
+})
+
+describe('user-facing plugin output surfacing (ADR-0018)', () => {
+  it('emits a root output only for the user-facing outputs the module declares', () => {
+    const tf = renderGeneratedTerraform([
+      {
+        name: 'ideation',
+        declaredVariables: new Set(['project_name']),
+        declaredOutputs: new Set(['function_url_domain', 'frontend_bucket_regional_domain']),
+      },
+    ])
+    // function_arn is always surfaced
+    expect(tf).toContain('output "plugin_ideation_function_arn"')
+    // the two declared user-facing outputs are surfaced...
+    expect(tf).toContain('output "plugin_ideation_function_url_domain"')
+    expect(tf).toContain('try(module.plugin_ideation["ideation"].function_url_domain, null)')
+    expect(tf).toContain('output "plugin_ideation_frontend_bucket_regional_domain"')
+    // ...but frontend_bucket_name (not declared here) is NOT, so no dangling ref
+    expect(tf).not.toContain('plugin_ideation_frontend_bucket_name')
+  })
+
+  it('emits no user-facing outputs for a plugin that declares none', () => {
+    const tf = renderGeneratedTerraform([
+      { name: 'crm', declaredVariables: new Set(['project_name']) },
+    ])
+    expect(tf).toContain('output "plugin_crm_function_arn"')
+    expect(tf).not.toContain('function_url_domain')
+  })
+
+  it('pluginOutputsFromRoot inverts the root surfacing, keeping only present keys', () => {
+    const root = {
+      [rootPluginOutputName('ideation', 'function_url_domain')]: 'abc.lambda-url.on.aws',
+      [rootPluginOutputName('ideation', 'frontend_bucket_regional_domain')]: 'b.s3.amazonaws.com',
+      [rootPluginOutputName('ideation', 'frontend_bucket_name')]: 'proj-dev-ideation-web',
+      plugin_ideation_function_arn: 'arn:aws:lambda:...',
+      unrelated: 'x',
+    }
+    expect(pluginOutputsFromRoot('ideation', root)).toEqual({
+      function_url_domain: 'abc.lambda-url.on.aws',
+      frontend_bucket_regional_domain: 'b.s3.amazonaws.com',
+      frontend_bucket_name: 'proj-dev-ideation-web',
+    })
+    // a plugin the outputs don't mention yields an empty map (register fails closed)
+    expect(pluginOutputsFromRoot('other', root)).toEqual({})
   })
 })
 

@@ -1,0 +1,22 @@
+[project]
+name = "biffo-plugin-host"
+version = "0.1.0"
+description = "The shared plugin-host runtime (ADR-0021): one Lambda mounts every user-facing plugin's API."
+requires-python = ">=3.13"
+dependencies = [
+  "starlette>=0.37.0",
+  "mangum>=0.19.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3.4", "httpx>=0.28.1", "ruff>=0.8.0", "pyright>=1.1.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/plugin_host"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

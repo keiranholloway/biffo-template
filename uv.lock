@@ -7,6 +7,7 @@ members = [
     "biffo-api",
     "biffo-cognito-auth",
     "biffo-plugin-agent-runtime",
+    "biffo-plugin-host",
     "biffo-plugin-orchestrator",
     "biffo-plugin-sdk",
     "biffo-pr-signer",
@@ -280,6 +281,37 @@ dev = [
 ]
 
 [[package]]
+name = "biffo-plugin-host"
+version = "0.1.0"
+source = { editable = "services/_plugin-host" }
+dependencies = [
+    { name = "mangum" },
+    { name = "starlette" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pyright" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mangum", specifier = ">=0.19.0" },
+    { name = "starlette", specifier = ">=0.37.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "pyright", specifier = ">=1.1.0" },
+    { name = "pytest", specifier = ">=8.3.4" },
+    { name = "ruff", specifier = ">=0.8.0" },
+]
+
+[[package]]
 name = "biffo-plugin-orchestrator"
 version = "0.1.0"
 source = { virtual = "services/_plugins/orchestrator" }
@@ -316,7 +348,7 @@ dev = [
 
 [[package]]
 name = "biffo-plugin-sdk"
-version = "1.0.0"
+version = "1.2.0"
 source = { editable = "packages/python-sdk" }
 dependencies = [
     { name = "aws-lambda-powertools" },

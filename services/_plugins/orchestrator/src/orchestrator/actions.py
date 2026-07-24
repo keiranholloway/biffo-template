@@ -20,6 +20,7 @@ registered identically.
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -236,6 +237,34 @@ def send_google_chat(
     response = _post(http_client, "Google Chat webhook", url, json={"text": text})
     if response.status_code >= 400:
         raise _http_failure("Google Chat webhook", response)
+    return {"status_code": response.status_code}
+
+
+def send_slack(
+    config: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    http_client: HttpClient,
+    **_: Any,
+) -> dict[str, Any]:
+    """Post a message to Slack via an incoming webhook.
+
+    Mirrors :func:`send_google_chat`: ``config`` keys are ``webhook_url`` (the
+    Slack incoming-webhook URL, which embeds its own secret token — required) and
+    ``message`` (a ``{field}`` template filled from the event payload). Posts the
+    minimal ``{"text": ...}`` body Slack's incoming webhooks accept; a non-2xx
+    response is recorded as a failed run.
+
+    The webhook URL is the credential (never an account token in the environment),
+    the same shape Google Chat uses — a workflow definition carries it as a
+    ``secret: True`` config field, redacted on every read (#432).
+    """
+    url = _require(config, "slack", "webhook_url")
+    text = _render(config.get("message", ""), payload)
+
+    response = _post(http_client, "Slack webhook", url, json={"text": text})
+    if response.status_code >= 400:
+        raise _http_failure("Slack webhook", response)
     return {"status_code": response.status_code}
 
 
@@ -464,6 +493,77 @@ async def request_agent_run(
 ACTION_HANDLERS: dict[str, Any] = {
     "email": send_email,
     "google_chat": send_google_chat,
+    "slack": send_slack,
     "whatsapp": send_whatsapp,
     "agent": request_agent_run,
 }
+
+
+# ── Deliver an agent's result on completion (ADR-0020, #527) ─────────────────
+#
+# An agent action's `action_config` may carry an optional `delivery` sub-config,
+# snapshotted onto the run. On `agent.run.completed` for a *succeeded* run the
+# orchestrator renders the run's output into the destination and reuses the
+# executor above — so the same code serves a standalone action and delivery.
+
+# The one field of each destination that carries the human message. When a
+# delivery leaves it unset it defaults to the {output} placeholder, so the raw
+# agent result is sent. Mirrors the Core catalog's `output_body: True` markers.
+DELIVERY_BODY_FIELDS: dict[str, str] = {
+    "email": "body",
+    "slack": "message",
+    "google_chat": "message",
+    "whatsapp": "message",
+}
+
+
+def _delivery_output(run: dict[str, Any]) -> str:
+    """The agent result to render as ``{output}``.
+
+    A completed run's ``result`` is ``{"output": <text>, …}`` (the model's final
+    content) or, on the submit-tool path, a structured dict with no ``output`` key.
+    Prefer the plain ``output`` string; otherwise serialise the whole result so a
+    tool-shaped result still delivers something legible rather than nothing.
+    """
+    result = run.get("result")
+    if isinstance(result, dict):
+        output = result.get("output")
+        if isinstance(output, str):
+            return output
+        if output is not None:
+            return json.dumps(output)
+        return json.dumps(result)
+    if result is None:
+        return ""
+    return str(result)
+
+
+def prepare_delivery(
+    delivery: Any, run: dict[str, Any]
+) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
+    """Resolve a run's ``delivery`` sub-config into an executable dispatch.
+
+    Returns ``(action_type, config, payload)`` — the destination's action type, a
+    config whose ``output_body`` field is defaulted to ``{output}`` when the author
+    gave no template, and the render payload exposing ``{output}`` plus a little run
+    metadata (``{agent}``/``{run_id}``/``{status}``). Returns ``None`` when there is
+    nothing to deliver: no delivery config, a malformed one, or an unknown type.
+    The message is rendered by the executor itself (via ``_render``), so a template
+    such as ``"Result: {output}"`` fills exactly as an event-payload template does.
+    """
+    if not isinstance(delivery, dict):
+        return None
+    action_type = delivery.get("type")
+    if action_type not in DELIVERY_BODY_FIELDS or action_type not in ACTION_HANDLERS:
+        return None
+    config = dict(delivery.get("config") or {})
+    body_field = DELIVERY_BODY_FIELDS[action_type]
+    if not (isinstance(config.get(body_field), str) and config[body_field].strip()):
+        config[body_field] = "{output}"
+    payload = {
+        "output": _delivery_output(run),
+        "agent": run.get("agent_name"),
+        "run_id": run.get("id"),
+        "status": run.get("status"),
+    }
+    return str(action_type), config, payload

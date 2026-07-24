@@ -87,10 +87,11 @@ describe('WORKFLOW_ACTIONS and ACTION_HANDLERS stay in step across the package b
     ).toEqual({ missingHandler: [], missingCatalog: [] })
   })
 
-  it('is the expected action set today (email, google_chat, whatsapp, agent)', () => {
+  it('is the expected action set today (email, slack, google_chat, whatsapp, agent)', () => {
     // A change here is intentional and should move with a real action addition,
-    // edited in lockstep across both files above.
-    const expected = ['agent', 'email', 'google_chat', 'whatsapp']
+    // edited in lockstep across both files above. `slack` was added with the
+    // deliver-on-completion work (ADR-0020, #527).
+    const expected = ['agent', 'email', 'google_chat', 'slack', 'whatsapp']
     expect(catalogActionTypes()).toEqual(expected)
     expect(handlerActionTypes()).toEqual(expected)
   })

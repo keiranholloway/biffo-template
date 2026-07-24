@@ -29,12 +29,23 @@ from biffo_plugin_sdk import (
     load_manifest,
 )
 
-from .actions import ACTION_HANDLERS, TransientActionError, WhatsAppSettings
+from .actions import (
+    ACTION_HANDLERS,
+    TransientActionError,
+    WhatsAppSettings,
+    prepare_delivery,
+)
 from .manifest import MANIFEST_PATH
 
 logger = Logger()
 
 _INTERNAL_BASE = "/api/v1/internal/orchestration"
+# The internal agent-run API (ADR-0009). The completion event carries only a
+# reference (ADR-0014 §5), so delivery-on-completion (ADR-0020) fetches the run —
+# its output and its delivery snapshot — over the authenticated internal API.
+_AGENT_RUNS_BASE = "/api/v1/internal/agent-runs"
+# The detail_type the deliver-on-completion handler reacts to.
+_AGENT_RUN_COMPLETED = "agent.run.completed"
 # Bounded in-process retry for transient action failures. Worst case is
 # 3 × the 10s HTTP timeout plus 1.5s of backoff — comfortably inside the
 # engine Lambda's 60s timeout, with room for the Core API calls either side.
@@ -130,6 +141,16 @@ class OrchestratorPlugin(BiffoPluginBase):
         async def _forward(event: BiffoEvent) -> None:
             await self.process_event(event)
 
+        # Deliver an agent's result on completion (ADR-0020, #527). A dedicated
+        # subscription for `agent.run.completed`, additional to the wildcard
+        # forwarder above: the dispatcher runs detail-type handlers *and* wildcard
+        # handlers, so this reacts to the completion event without disturbing the
+        # generic forwarding that lets a workflow trigger on the same event (agent
+        # chaining). No change to event dispatch was needed.
+        @self.subscribe(_AGENT_RUN_COMPLETED)
+        async def _deliver(event: BiffoEvent) -> None:
+            await self.deliver_on_completion(event)
+
     def on_install(self) -> None:
         """No-op: workflow definitions are seeded out-of-band (DDL import), not
         via an API this plugin owns — orchestration tables are Core-owned and not
@@ -159,6 +180,100 @@ class OrchestratorPlugin(BiffoPluginBase):
                 )
                 continue
             await self._execute_run(run, event)
+
+    async def deliver_on_completion(self, event: BiffoEvent) -> None:
+        """Deliver a *succeeded* agent run's result to its destination (ADR-0020).
+
+        Reacts to ``agent.run.completed``. The completion event is a reference only
+        (ADR-0014 §5) — the output and the ``definition_snapshot`` that carries the
+        delivery config are LLM-derived and stay behind the authenticated fetch — so
+        the run is read over the internal API. When the snapshot carries a
+        ``delivery`` sub-config, ``{output}`` is rendered into the destination and
+        the matching executor (the same one a standalone action uses) is invoked.
+
+        Delivers **nothing** when: the run did not succeed (see the failure-notify
+        seam below), there is no delivery config, or the delivery config is
+        unusable. Delivery is best-effort and out-of-band — there is no workflow run
+        to record against — so its outcome is logged, not written to the audit log.
+        """
+        payload = event.payload
+        # ── Failure-notify seam (ADR-0020, deferred) ────────────────────────────
+        # The MVP delivers only on a succeeded run. When failure notification lands
+        # it branches here — a `delivery` may then declare an on-failure destination
+        # or template — *before* the succeeded-only gate. Until then a failed (or
+        # reaped) run is a deliberate no-op.
+        if payload.get("status") != "completed":
+            return
+        run_id = payload.get("run_id")
+        if not run_id:
+            return
+
+        run = await self.api.get(f"{_AGENT_RUNS_BASE}/{run_id}")
+        snapshot = (run or {}).get("definition_snapshot") or {}
+        prepared = prepare_delivery(snapshot.get("delivery"), run or {})
+        if prepared is None:
+            # No delivery configured, or a delivery this engine can't dispatch —
+            # today's behaviour: the run completes and nothing else happens.
+            return
+
+        action_type, config, delivery_payload = prepared
+        await self._deliver(str(run_id), action_type, config, delivery_payload)
+
+    async def _deliver(
+        self,
+        run_id: str,
+        action_type: str,
+        config: dict[str, Any],
+        payload: dict[str, Any],
+    ) -> None:
+        """Invoke a delivery destination's executor, retrying transient failures.
+
+        Reuses the action executors (``ACTION_HANDLERS``) and the same transient/
+        permanent split and bounded in-process retry as ``_execute_run``; unlike a
+        workflow action there is no claimed run to record the outcome against, so a
+        failure is logged rather than recorded. A permanent failure (a bad webhook,
+        a rejected recipient) is not retried.
+        """
+        handler = ACTION_HANDLERS.get(action_type)
+        if handler is None:
+            logger.warning(
+                "Delivery skipped: no executor for destination",
+                extra={"run_id": run_id, "delivery_type": action_type},
+            )
+            return
+
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                result = handler(
+                    config,
+                    payload,
+                    ses_client=self._ses,
+                    http_client=self._http,
+                    core_client=self.api,
+                    whatsapp=self._whatsapp,
+                )
+                if inspect.isawaitable(result):
+                    result = await result
+            except TransientActionError:
+                if attempt == _MAX_ATTEMPTS:
+                    logger.warning(
+                        "Delivery failed after retries",
+                        extra={"run_id": run_id, "delivery_type": action_type, "attempts": attempt},
+                    )
+                    return
+                await asyncio.sleep(_BACKOFF_SECONDS[attempt - 1])
+                continue
+            except Exception:  # noqa: BLE001 — permanent: log, don't retry or crash
+                logger.exception(
+                    "Delivery failed",
+                    extra={"run_id": run_id, "delivery_type": action_type},
+                )
+                return
+            logger.info(
+                "Delivered agent result on completion",
+                extra={"run_id": run_id, "delivery_type": action_type, "attempts": attempt},
+            )
+            return
 
     async def _execute_run(self, run: dict[str, Any], event: BiffoEvent) -> None:
         run_id = run["run_id"]

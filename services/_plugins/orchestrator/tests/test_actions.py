@@ -8,9 +8,11 @@ from orchestrator.actions import (
     ActionError,
     TransientActionError,
     WhatsAppSettings,
+    prepare_delivery,
     request_agent_run,
     send_email,
     send_google_chat,
+    send_slack,
     send_whatsapp,
 )
 from orchestrator_fakes import FakeCore, FakeHttp, FakeSes, FlakyHttp, FlakySes
@@ -93,6 +95,124 @@ def test_send_google_chat_non_2xx_is_action_error():
             {},
             http_client=http,
         )
+
+
+# ── Slack (ADR-0020): incoming-webhook POST, mirrors Google Chat ─────────────
+
+
+def test_send_slack_posts_rendered_text():
+    http = FakeHttp(status_code=200)
+
+    result = send_slack(
+        {
+            "webhook_url": "https://hooks.slack.com/services/T/B/x",
+            "message": "New demo from {company} ({email})",
+        },
+        {"company": "Acme", "email": "lead@acme.com"},
+        http_client=http,
+    )
+
+    assert result == {"status_code": 200}
+    call = http.calls[0]
+    assert call["url"] == "https://hooks.slack.com/services/T/B/x"
+    assert call["json"] == {"text": "New demo from Acme (lead@acme.com)"}
+
+
+def test_send_slack_requires_webhook_url():
+    with pytest.raises(ActionError, match="missing required key"):
+        send_slack({"message": "hi"}, {}, http_client=FakeHttp())
+
+
+def test_send_slack_non_2xx_is_action_error():
+    http = FakeHttp(status_code=404, text="no channel")
+    with pytest.raises(ActionError, match="Slack webhook failed: 404"):
+        send_slack(
+            {"webhook_url": "https://hooks.slack.com/x", "message": "hi"}, {}, http_client=http
+        )
+
+
+def test_slack_is_a_registered_action():
+    assert ACTION_HANDLERS["slack"] is send_slack
+
+
+# ── prepare_delivery (ADR-0020): render an agent result into a destination ───
+
+
+def _completed_run(result, delivery, **over):
+    run = {
+        "id": "agent-run-9",
+        "agent_name": "demo-enricher",
+        "status": "completed",
+        "result": result,
+        "definition_snapshot": {"delivery": delivery} if delivery else {},
+    }
+    run.update(over)
+    return run
+
+
+def test_prepare_delivery_defaults_body_to_output_placeholder():
+    delivery = {"type": "slack", "config": {"webhook_url": "https://hooks.slack.com/x"}}
+    run = _completed_run({"output": "the verdict"}, delivery)
+
+    prepared = prepare_delivery(delivery, run)
+    assert prepared is not None
+    action_type, config, payload = prepared
+    assert action_type == "slack"
+    # No message was configured, so it defaults to the {output} placeholder…
+    assert config["message"] == "{output}"
+    # …and the render payload carries the agent's output plus run metadata.
+    assert payload["output"] == "the verdict"
+    assert payload["agent"] == "demo-enricher"
+    assert payload["run_id"] == "agent-run-9"
+
+
+def test_prepare_delivery_keeps_an_authored_template():
+    delivery = {
+        "type": "slack",
+        "config": {"webhook_url": "https://hooks.slack.com/x", "message": "Result: {output}"},
+    }
+    run = _completed_run({"output": "done"}, delivery)
+    prepared = prepare_delivery(delivery, run)
+    assert prepared is not None
+    _, config, _ = prepared
+    assert config["message"] == "Result: {output}"
+
+
+def test_prepare_delivery_renders_through_the_executor():
+    """The executor renders {output} from the payload — the whole point of reusing
+    it: a delivery template fills exactly as an event-payload template does."""
+    delivery = {
+        "type": "slack",
+        "config": {"webhook_url": "https://hooks.slack.com/x", "message": "Result: {output}"},
+    }
+    run = _completed_run({"output": "42"}, delivery)
+    prepared = prepare_delivery(delivery, run)
+    assert prepared is not None
+    _, config, payload = prepared
+
+    http = FakeHttp(status_code=200)
+    send_slack(config, payload, http_client=http)
+    assert http.calls[0]["json"] == {"text": "Result: 42"}
+
+
+def test_prepare_delivery_serialises_a_tool_shaped_result():
+    """A submit-tool result has no plain `output`; the whole result is serialised
+    rather than delivering nothing."""
+    delivery = {"type": "slack", "config": {"webhook_url": "https://hooks.slack.com/x"}}
+    run = _completed_run({"output_tool": "submit", "arguments": {"verdict": "go"}}, delivery)
+    prepared = prepare_delivery(delivery, run)
+    assert prepared is not None
+    _, _, payload = prepared
+    assert "verdict" in payload["output"]
+
+
+def test_prepare_delivery_none_when_no_delivery():
+    assert prepare_delivery(None, _completed_run({"output": "x"}, None)) is None
+
+
+def test_prepare_delivery_none_for_unknown_type():
+    delivery = {"type": "carrier-pigeon", "config": {}}
+    assert prepare_delivery(delivery, _completed_run({"output": "x"}, delivery)) is None
 
 
 # ── WhatsApp ─────────────────────────────────────────────────────────────────
@@ -343,6 +463,22 @@ async def test_agent_action_creates_a_run_in_core():
     # is the run's input.
     assert posted[0]["definition_snapshot"] == _AGENT_CONFIG
     assert posted[0]["input_payload"] == {"demo_request_id": "d1", "company": "Acme"}
+
+
+async def test_delivery_travels_in_the_definition_snapshot():
+    """ADR-0020: the agent action snapshots its `delivery` sub-config onto the run,
+    so the orchestrator can read it back off `agent.run.completed`."""
+    core = FakeCore([])
+    delivery = {"type": "slack", "config": {"webhook_url": "https://hooks.slack.com/x"}}
+
+    await request_agent_run(
+        {**_AGENT_CONFIG, "delivery": delivery},
+        {"company": "Acme"},
+        core_client=core.client(),
+    )
+
+    snapshot = core.agent_run_posts()[0]["definition_snapshot"]
+    assert snapshot["delivery"] == delivery
 
 
 async def test_snapshot_fills_catalog_defaults_for_absent_fields():

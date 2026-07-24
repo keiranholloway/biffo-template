@@ -16,14 +16,26 @@ from .plugin import (
     register_plugin,
 )
 from .signed_client import SignedCoreClient, create_core_client
+from .user_serving import (
+    CognitoConfig,
+    ForbiddenError,
+    ForwardedUser,
+    UnauthorizedError,
+    UserAuthError,
+    authorize,
+    require_group,
+)
 
 __all__ = [
     "BiffoAPIClient",
     "BiffoAPIError",
     "BiffoEvent",
     "BiffoPluginBase",
+    "CognitoConfig",
     "ColumnDefinition",
     "EventSubscriber",
+    "ForbiddenError",
+    "ForwardedUser",
     "IndexDefinition",
     "PermissionRule",
     "PluginManifest",
@@ -32,8 +44,12 @@ __all__ = [
     "TableDefinition",
     "TablePermissions",
     "ToolDeclaration",
+    "UnauthorizedError",
+    "UserAuthError",
+    "authorize",
     "create_core_client",
     "create_event_handler",
     "load_manifest",
     "register_plugin",
+    "require_group",
 ]

@@ -57,6 +57,17 @@ describe('real repo core-manifest.json', () => {
     expect(isTemplateOwned('biffo.core.json', manifest)).toBe(false)
   })
 
+  it('owns .gitleaks.toml so Secret Scan rules + allowlists distribute to instances (#516)', () => {
+    const manifest = readCoreManifest(repoRoot)
+    // The template ships the scan rules and the code they must not flag, so it
+    // must be able to ship the allowlist that keeps them consistent (#514/#516).
+    // Exact file, like the .husky hooks (#370) and .prettierignore.
+    expect(isTemplateOwned('.gitleaks.toml', manifest)).toBe(true)
+    // Still an exact-file grant, not a root-wide one — a sibling root config a
+    // user might add stays their own.
+    expect(isTemplateOwned('.env', manifest)).toBe(false)
+  })
+
   it('carves out services/_plugins/ so first-party plugins are carried by core upgrade', () => {
     const manifest = readCoreManifest(repoRoot)
     // A first-party plugin lives in the template-owned carve-out, so

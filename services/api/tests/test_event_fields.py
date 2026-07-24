@@ -8,9 +8,11 @@ columns degrading to a bare type (free text in the UI).
 """
 
 import enum
+from typing import Literal
 
-from api.events.event_fields import fields_for_crud_table
+from api.events.event_fields import fields_for_crud_table, fields_for_payload_model
 from api.models.base import TenantScopedModel
+from pydantic import BaseModel
 from sqlalchemy import Boolean, Integer, String
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column
@@ -85,3 +87,68 @@ def test_labels_are_humanized():
 def test_unknown_table_yields_no_fields():
     # No locatable model → skip fields for it rather than crash the catalog.
     assert fields_for_crud_table("no_such_table_anywhere") == []
+
+
+# ── fields_for_payload_model: the declared-event source (mirrors CRUD above) ──
+
+
+class _NestedThing(BaseModel):
+    x: int
+
+
+class _Colour(enum.Enum):
+    red = "red"
+    green = "green"
+
+
+class _PayloadForFields(BaseModel):
+    """Exercises every branch of the annotation → field mapping."""
+
+    name: str
+    quantity: int
+    ratio: float
+    active: bool
+    colour: _Colour  # Python enum → enumerable
+    stage: Literal["draft", "shipped"]  # Literal → enumerable
+    note: str | None  # Optional[str] unwraps to string
+    # Skipped: auto-managed names, nested models, and containers.
+    id: str
+    tenant_id: str
+    created_at: str
+    payload_token: str  # sensitive substring ("token") → stripped
+    nested: _NestedThing
+    tags: list[str]
+    meta: dict[str, str]
+
+
+def _payload_by_name() -> dict:
+    return {f.name: f for f in fields_for_payload_model(_PayloadForFields)}
+
+
+def test_payload_model_derives_a_field_per_scalar_column():
+    fields = _payload_by_name()
+    assert {"name", "quantity", "ratio", "active", "colour", "stage", "note"} == set(fields)
+    # Auto-managed, sensitive, nested and container fields are all excluded.
+    for absent in ("id", "tenant_id", "created_at", "payload_token", "nested", "tags", "meta"):
+        assert absent not in fields
+
+
+def test_payload_model_maps_types_to_coarse_hints():
+    fields = _payload_by_name()
+    assert fields["name"].type == "string"
+    assert fields["quantity"].type == "number"
+    assert fields["ratio"].type == "number"
+    assert fields["active"].type == "boolean"
+    assert fields["note"].type == "string"  # Optional[str] unwrapped
+
+
+def test_payload_model_enum_and_literal_surface_values():
+    fields = _payload_by_name()
+    assert fields["colour"].type == "enum"
+    assert fields["colour"].values == ("red", "green")
+    assert fields["stage"].type == "enum"
+    assert fields["stage"].values == ("draft", "shipped")
+
+
+def test_payload_model_labels_are_humanized():
+    assert _payload_by_name()["name"].label == "Name"

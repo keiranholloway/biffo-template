@@ -278,6 +278,75 @@ const catalogPartsWithGoals: WorkflowCatalog = {
   ),
 }
 
+// The Phase-3 shape (ADR-0020, #527): the agent action carries an optional
+// `delivery` config field, and the destination actions expose `output_body`
+// (the message field, optional in a delivery) and `secret` (the webhook URL,
+// round-tripped via the redaction sentinel). Slack + Email are enough to drive
+// the delivery sub-form; the sub-form is built from *these* config_fields.
+const SECRET_SENTINEL = '__biffo_secret_set__'
+const catalogWithDelivery: WorkflowCatalog = {
+  triggers: catalog.triggers,
+  actions: [
+    {
+      type: 'email',
+      label: 'Send email',
+      config_fields: [
+        { name: 'from', label: 'From', type: 'email', required: true },
+        { name: 'to', label: 'To', type: 'email', required: true },
+        { name: 'subject', label: 'Subject', type: 'text', required: true },
+        { name: 'body', label: 'Body', type: 'textarea', required: true, output_body: true },
+      ],
+    },
+    {
+      type: 'slack',
+      label: 'Slack message',
+      config_fields: [
+        { name: 'webhook_url', label: 'Webhook URL', type: 'url', required: true, secret: true },
+        { name: 'message', label: 'Message', type: 'textarea', required: true, output_body: true },
+      ],
+    },
+    ...catalog.actions
+      .filter((a) => a.type === 'agent')
+      .map((a) => ({
+        ...a,
+        config_fields: [
+          ...a.config_fields,
+          {
+            name: 'delivery',
+            label: 'Deliver the result on completion',
+            type: 'delivery' as const,
+            required: false,
+          },
+        ],
+      })),
+  ],
+}
+
+// An agent workflow whose delivery targets Slack, with the webhook stored as the
+// redaction sentinel — exactly what a Core read returns (#432). Editing it must
+// round-trip the sentinel so the stored secret is kept.
+const agentWithDelivery: WorkflowDefinition = {
+  id: 'wf-del',
+  tenant_id: 'default',
+  created_at: null,
+  updated_at: null,
+  name: 'Enrich and notify',
+  trigger_source: 'biffo.core',
+  trigger_detail_type: 'lead.captured',
+  trigger_filter: null,
+  action_type: 'agent',
+  action_config: {
+    agent_name: 'enricher',
+    instructions: 'Enrich it.',
+    model: 'moonshotai/kimi-k3',
+    delivery: {
+      type: 'slack',
+      config: { webhook_url: SECRET_SENTINEL, message: 'Result: {output}' },
+    },
+  },
+  enabled: false,
+}
+
 // An agent stored with a model that is NOT among the curated options.
 const offListAgent: WorkflowDefinition = {
   id: 'wfa',
@@ -1166,6 +1235,7 @@ describe('OrchestrationPage', () => {
   // ── Outcome journey: sections, presets, Advanced disclosure (Phase 1) ──────
 
   it('renders the outcome-oriented sections for the agent action', async () => {
+    fetchCatalog.mockResolvedValue(catalogWithDelivery)
     fetchWorkflows.mockResolvedValue([])
 
     render(<OrchestrationPage />)
@@ -1174,11 +1244,13 @@ describe('OrchestrationPage', () => {
     expect(screen.getByText('When this happens (trigger)')).toBeInTheDocument()
     expect(screen.getByText('Conditions (optional)')).toBeInTheDocument()
     expect(screen.getByText('What should the agent do?')).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Delivery' })).toBeInTheDocument()
+    // Delivery is real now (ADR-0020) — a task-shaped destination question, not a
+    // Phase-3 placeholder. It starts on None, so no destination fields show yet.
+    expect(screen.getByRole('heading', { name: 'Where should the result go?' })).toBeInTheDocument()
+    expect(screen.getByLabelText<HTMLSelectElement>('Destination').value).toBe('')
+    expect(screen.queryByLabelText('Webhook URL')).not.toBeInTheDocument()
     expect(screen.getByText('Test & review')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Advanced settings' })).toBeInTheDocument()
-    // Delivery is an honest placeholder — it names Phase 3, not a fake integration.
-    expect(screen.getByText(/coming next \(Phase 3\)/)).toBeInTheDocument()
   })
 
   it('hides model, capabilities and the raw prompt until Advanced is expanded', async () => {
@@ -1361,5 +1433,148 @@ describe('OrchestrationPage', () => {
     expect(await screen.findByText(/could not complete this turn/)).toBeInTheDocument()
     expect(screen.queryByText('test passed')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Enable workflow' })).toBeDisabled()
+  })
+
+  // ── Delivery: destination sub-form, output_body, secrets, gating (Phase 3) ──
+
+  it('renders a chosen destination’s fields from the catalog and stores delivery', async () => {
+    fetchCatalog.mockResolvedValue(catalogWithDelivery)
+    fetchWorkflows.mockResolvedValue([])
+    runWorkflowDryRun.mockResolvedValue({ output: 'ok' })
+    createWorkflow.mockResolvedValue(agentWithDelivery)
+
+    render(<OrchestrationPage />)
+    await fillTestableAgent()
+
+    // Choosing Slack renders ITS config_fields — the standalone action's own,
+    // reused, not a second copy.
+    fireEvent.change(screen.getByLabelText('Destination'), { target: { value: 'slack' } })
+    expect(screen.getByLabelText('Webhook URL')).toBeInTheDocument()
+    // The output_body field is presented as optional.
+    expect(screen.getByLabelText('Message (optional)')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Webhook URL'), {
+      target: { value: 'https://hooks.slack.com/services/abc' },
+    })
+
+    // Test, then enable — delivery is stored under action_config.delivery.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement)
+    await screen.findByText('test passed')
+    fireEvent.click(screen.getByRole('button', { name: 'Enable workflow' }))
+
+    await waitFor(() => {
+      expect(createWorkflow).toHaveBeenCalled()
+    })
+    const body = createWorkflow.mock.calls.at(-1)?.[1] as WorkflowInput
+    expect(body.enabled).toBe(true)
+    expect(body.action_config.delivery).toEqual({
+      type: 'slack',
+      config: { webhook_url: 'https://hooks.slack.com/services/abc' },
+    })
+  })
+
+  it('clears the delivery sub-config when None is chosen', async () => {
+    fetchCatalog.mockResolvedValue(catalogWithDelivery)
+    fetchWorkflows.mockResolvedValue([])
+    runWorkflowDryRun.mockResolvedValue({ output: 'ok' })
+    createWorkflow.mockResolvedValue(agentWithDelivery)
+
+    render(<OrchestrationPage />)
+    await fillTestableAgent()
+
+    fireEvent.change(screen.getByLabelText('Destination'), { target: { value: 'slack' } })
+    expect(screen.getByLabelText('Webhook URL')).toBeInTheDocument()
+
+    // Back to None — the destination fields disappear and nothing is stored.
+    fireEvent.change(screen.getByLabelText('Destination'), { target: { value: '' } })
+    expect(screen.queryByLabelText('Webhook URL')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement)
+    await screen.findByText('test passed')
+    fireEvent.click(screen.getByRole('button', { name: 'Enable workflow' }))
+
+    await waitFor(() => {
+      expect(createWorkflow).toHaveBeenCalled()
+    })
+    const body = createWorkflow.mock.calls.at(-1)?.[1] as WorkflowInput
+    expect(body.action_config).not.toHaveProperty('delivery')
+  })
+
+  it('treats the delivery message as optional but enforces other required fields', async () => {
+    fetchCatalog.mockResolvedValue(catalogWithDelivery)
+    fetchWorkflows.mockResolvedValue([])
+    runWorkflowDryRun.mockResolvedValue({ output: 'ok' })
+
+    render(<OrchestrationPage />)
+    await fillTestableAgent()
+    fireEvent.change(screen.getByLabelText('Destination'), { target: { value: 'slack' } })
+
+    // The dry-run does not perform delivery, so the test passes even with the
+    // required webhook empty — but Enable stays gated on the half-filled delivery.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement)
+    await screen.findByText('test passed')
+    expect(screen.getByRole('button', { name: 'Enable workflow' })).toBeDisabled()
+
+    // Fill the required webhook (message left blank — optional in a delivery) and
+    // re-test: Enable now unlocks.
+    fireEvent.change(screen.getByLabelText('Webhook URL'), {
+      target: { value: 'https://hooks.slack.com/services/xyz' },
+    })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement)
+    await screen.findByText('test passed')
+    expect(screen.getByRole('button', { name: 'Enable workflow' })).not.toBeDisabled()
+  })
+
+  it('re-arms the Enable test-gate when the delivery config is edited', async () => {
+    fetchCatalog.mockResolvedValue(catalogWithDelivery)
+    fetchWorkflows.mockResolvedValue([])
+    runWorkflowDryRun.mockResolvedValue({ output: 'ok' })
+
+    render(<OrchestrationPage />)
+    await fillTestableAgent()
+    fireEvent.change(screen.getByLabelText('Destination'), { target: { value: 'slack' } })
+    fireEvent.change(screen.getByLabelText('Webhook URL'), {
+      target: { value: 'https://hooks.slack.com/services/xyz' },
+    })
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement)
+    await screen.findByText('test passed')
+    expect(screen.getByRole('button', { name: 'Enable workflow' })).not.toBeDisabled()
+
+    // Editing the delivery (its message) invalidates the passing test — since
+    // delivery lives in action_config, the snapshot changes and Enable re-locks.
+    fireEvent.change(screen.getByLabelText('Message (optional)'), {
+      target: { value: 'Done: {output}' },
+    })
+    expect(screen.queryByText('test passed')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Enable workflow' })).toBeDisabled()
+  })
+
+  it('round-trips a delivery secret via the redaction sentinel', async () => {
+    fetchCatalog.mockResolvedValue(catalogWithDelivery)
+    fetchWorkflows.mockResolvedValue([agentWithDelivery])
+    updateWorkflow.mockResolvedValue(agentWithDelivery)
+
+    render(<OrchestrationPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+
+    // The stored delivery is prefilled; the secret shows the sentinel, never a
+    // cleared field — identical to how the standalone action treats a secret.
+    expect(screen.getByLabelText<HTMLSelectElement>('Destination').value).toBe('slack')
+    expect(screen.getByLabelText<HTMLInputElement>('Webhook URL').value).toBe(SECRET_SENTINEL)
+
+    // Saving without touching the secret submits the sentinel back, so Core keeps
+    // the stored webhook rather than overwriting it.
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+    await waitFor(() => {
+      expect(updateWorkflow).toHaveBeenCalled()
+    })
+    const [, id, body] = updateWorkflow.mock.calls.at(-1) as [unknown, string, WorkflowInput]
+    expect(id).toBe('wf-del')
+    // The sentinel round-trips unchanged — Core keeps the stored webhook.
+    expect(body.action_config.delivery).toMatchObject({
+      type: 'slack',
+      config: { webhook_url: SECRET_SENTINEL },
+    })
   })
 })

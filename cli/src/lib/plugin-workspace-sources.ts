@@ -34,34 +34,32 @@ import { join } from 'node:path'
 export function readTomlStringArray(text: string, key: string): string[] {
   const open = new RegExp(`^${key}\\s*=\\s*\\[`, 'm').exec(text)
   if (!open) return []
-  const start = open.index + open[0].length
-  // Find the array's matching close bracket, ignoring brackets inside string
-  // literals (a dependency's extras — "pkg[extra]>=1" — contains a literal `]`)
-  // and any nested arrays.
+  // Single comment-aware, string-aware scan from just after the opening `[`: it
+  // both finds the array's matching close bracket and collects its top-level
+  // quoted strings. Comments (`# … the SDK's require_group … [maybe brackets]`)
+  // are skipped to end of line — a stray apostrophe or bracket in one must not be
+  // read as a string delimiter or nesting — and a `]`/`[` inside a string literal
+  // (a dependency's `[extra]`) does not change depth.
+  const strings: string[] = []
   let depth = 1
-  let inString = false
-  let quote = ''
-  let end = -1
-  for (let i = start; i < text.length; i++) {
+  let i = open.index + open[0].length
+  while (i < text.length && depth > 0) {
     const c = text[i]!
-    if (inString) {
-      if (c === quote) inString = false
+    if (c === '#') {
+      const nl = text.indexOf('\n', i)
+      i = nl === -1 ? text.length : nl
     } else if (c === '"' || c === "'") {
-      inString = true
-      quote = c
-    } else if (c === '[') {
-      depth++
-    } else if (c === ']') {
-      depth--
-      if (depth === 0) {
-        end = i
-        break
-      }
+      const close = text.indexOf(c, i + 1)
+      if (close === -1) break // unterminated string — give up rather than misparse
+      if (depth === 1) strings.push(text.slice(i + 1, close))
+      i = close + 1
+    } else {
+      if (c === '[') depth++
+      else if (c === ']') depth--
+      i++
     }
   }
-  if (end === -1) return []
-  const body = text.slice(start, end)
-  return [...body.matchAll(/["']([^"']+)["']/g)].map((m) => m[1]!)
+  return depth === 0 ? strings : []
 }
 
 /** The `[project] name = "..."` of a pyproject, or null. Scoped to the `[project]`

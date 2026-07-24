@@ -154,7 +154,7 @@ async def get_catalog(
                 "origin": "declared",
                 # Advisory field metadata for the "Only when…" editor (#505); an
                 # event that declares none serialises as [] (UI → free text).
-                "fields": _serialize_fields(e.fields),
+                "fields": _serialize_fields(e.payload_fields()),
             }
         )
         seen.add((e.source, e.detail_type))

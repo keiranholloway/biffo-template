@@ -35,8 +35,27 @@ def emit_event(
 ) -> None:
     """Buffer a declared state-change event for publication after this request
     commits. Does **not** publish here — never on an uncommitted transaction."""
+    _warn_on_payload_drift(event, payload)
     built = event.build(payload, tenant_id=tenant_id)
     db.info.setdefault(_BUFFER_KEY, []).append(built)
+
+
+def _warn_on_payload_drift(event: EventType, payload: dict[str, Any]) -> None:
+    """If a declared field the builder offers is missing from the emitted payload,
+    a workflow condition on it can never match — so log it. Advisory only: never
+    raises (a real request must not fail over builder metadata), and extra payload
+    keys are fine. Absent under load in practice; it exists to catch a payload_model
+    that has drifted from its emit site before it ships a silently-dead condition."""
+    model = event.payload_model
+    if model is None:
+        return
+    missing = [name for name in model.model_fields if name not in payload]
+    if missing:
+        logger.warning(
+            "Event payload is missing declared payload_model field(s); "
+            "a builder condition on them would never match.",
+            extra={"detail_type": event.detail_type, "missing": missing},
+        )
 
 
 def pending_events(db: AsyncSession) -> list[BiffoEvent]:

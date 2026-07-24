@@ -17,8 +17,12 @@ with empty ``values``.
 
 from __future__ import annotations
 
+import enum
+import types
+import typing
 from typing import Any
 
+from pydantic import BaseModel
 from sqlalchemy import Boolean, Float, Integer, Numeric
 from sqlalchemy import Enum as SqlEnum
 
@@ -88,6 +92,67 @@ def fields_for_crud_table(table: str) -> list[EventField]:
                 continue
             field_type, values = _map_column_type(col.type)
             out.append(EventField(name=name, label=_humanize(name), type=field_type, values=values))
+        return out
+    except Exception:  # noqa: BLE001 — advisory metadata must never break the catalog
+        return []
+
+
+def _map_annotation(annotation: Any) -> tuple[str, tuple[str, ...]] | None:
+    """Map a Python type annotation to a coarse ``(type, values)`` UI hint.
+
+    Mirrors ``_map_column_type`` for the Pydantic-model source. Returns ``None``
+    for anything that is not a scalar filter field (a nested model, a ``dict``/
+    ``list``, a ``datetime``, an ambiguous union) so it is skipped rather than
+    surfaced as an un-filterable condition. ``Optional[X]`` unwraps to ``X``;
+    ``Enum`` subclasses and ``Literal[...]`` become enumerable values.
+    """
+    origin = typing.get_origin(annotation)
+    args = typing.get_args(annotation)
+    if origin is typing.Union or origin is types.UnionType:
+        non_none = [a for a in args if a is not type(None)]
+        return _map_annotation(non_none[0]) if len(non_none) == 1 else None
+    if origin is typing.Literal:
+        return "enum", tuple(str(a) for a in args)
+    if isinstance(annotation, type):
+        if issubclass(annotation, enum.Enum):
+            return "enum", tuple(str(member.value) for member in annotation)
+        if issubclass(annotation, bool):  # bool before int — bool subclasses int
+            return "boolean", ()
+        if issubclass(annotation, (int, float)):
+            return "number", ()
+        if issubclass(annotation, str):
+            return "string", ()
+    return None
+
+
+def fields_for_payload_model(model: type[BaseModel]) -> list[EventField]:
+    """The :class:`EventField`s a declared event's payload exposes (#505).
+
+    The single source of truth for a hand-emitted event's fields: derive them
+    from the event's Pydantic payload model exactly as ``fields_for_crud_table``
+    derives them from a table's columns. Same exclusions (auto-managed and
+    sensitive-substring names) and same graceful degradation — a model field
+    whose type is not a scalar (nested object, ``dict``, ``datetime``) is simply
+    skipped, and any failure yields ``[]`` (UI falls back to free text) rather
+    than breaking the catalog.
+    """
+    try:
+        out: list[EventField] = []
+        for name, info in model.model_fields.items():
+            if name in AUTO_COLUMN_NAMES or any(s in name.lower() for s in _SENSITIVE_SUBSTRINGS):
+                continue
+            mapped = _map_annotation(info.annotation)
+            if mapped is None:
+                continue
+            field_type, values = mapped
+            out.append(
+                EventField(
+                    name=name,
+                    label=info.title or _humanize(name),
+                    type=field_type,
+                    values=values,
+                )
+            )
         return out
     except Exception:  # noqa: BLE001 — advisory metadata must never break the catalog
         return []

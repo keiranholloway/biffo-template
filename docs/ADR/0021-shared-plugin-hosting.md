@@ -80,6 +80,34 @@ reviewed plugins this is the right default. A plugin that genuinely needs its ow
 runtime declares `isolated: true` and gets a dedicated plugin-host Lambda (same
 contract, more cost) — congruent with ADR-0013's declare→review→enforce model.
 
+### 1a. Data authorization under a shared runtime
+
+Owner-scoped table access authorizes on two things: **which caller** may touch a
+table (`allowed_principals`, e.g. `system:ideation`, on the table's
+`owner_scoped_service` axis) and **whose rows** (the owner, derived from the
+forwarded founder token). With per-plugin Lambdas the *caller* was identified by
+its own IAM role (ADR-0009). A shared plugin host removes that signal — every
+plugin calls Core under the host's single role.
+
+So the IAM role changes meaning, and Core gains a second check:
+
+- **The IAM role authorizes "is this the plugin host at all"** — still the
+  ADR-0009 `BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST`, now one entry (the host's
+  role) instead of one per plugin. This keeps *non-platform* callers out.
+- **Which plugin is asserted by the host** as a trusted plugin-identity header on
+  each internal call. The host is platform code — it already enforces
+  group-gating and dispatches to the plugin's router, so it is the correct
+  authority to name the plugin it is running. Core enforces the table's
+  `allowed_principals` against that asserted identity (and the owner against the
+  forwarded founder token), exactly as before. This keeps *one plugin* out of
+  *another plugin's* tables.
+
+The trust root moves from "each plugin proves itself by its own IAM role" to "the
+platform host proves it is the host (IAM), and truthfully names the plugin it is
+running" — consistent with the host being the enforcement point for authorization
+generally (ADR-0011). An `isolated: true` plugin (its own host) keeps a distinct
+role and needs no asserted identity, so the strong-isolation path is unchanged.
+
 ### 2. Frontend — ONE shared app shell, plugins mount UI routes
 
 There is **one** founder-facing application shell (one origin, one S3 bucket, one
@@ -124,7 +152,7 @@ AWS resources — an afternoon, flat at plugin #30.
 | --- | --- |
 | 0002 (no DB outside Core) | The plugin host has no DB access; it calls Core over HTTP. |
 | 0007 (siblings) | SSO mechanic reused; siblings narrowed to standalone apps, not plugin UIs. |
-| 0009 (SigV4 inbound) | The plugin host is a SigV4 caller of Core `/internal/*`; still allow-listed per role. |
+| 0009 (SigV4 inbound) | The plugin host is a SigV4 caller of Core `/internal/*`, allow-listed by its role; per-plugin table access adds a host-asserted plugin identity (§1a). |
 | 0011 (authz is core) | Group-gating moves out of plugin code into platform enforcement from the manifest. |
 | 0013 (declare/review/enforce; no plugin code in Core) | Router/UI/group are declared and reviewed; enforcement is core; plugin code runs in the *plugin host*, never in Core. |
 | 0018 (superseded) | Replaces per-plugin authenticated-sibling hosting with shared hosting. |

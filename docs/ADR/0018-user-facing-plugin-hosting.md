@@ -1,6 +1,6 @@
 # ADR-0018: User-facing plugin hosting — a marketplace plugin as an authenticated sibling
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-24
 **Deciders:** Keiran Holloway (Technical Architect)
 

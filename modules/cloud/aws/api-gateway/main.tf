@@ -106,6 +106,13 @@ resource "aws_apigatewayv2_route" "internal" {
   authorization_type = "AWS_IAM"
 }
 
+# The user-facing plugin ingress (ADR-0021) — the ANY /api/v1/plugins/{proxy+}
+# route to the shared plugin host — is NOT defined here. It lives beside the host
+# itself in the template-owned infra/environments/*/plugin-host.core.tf, attached
+# to this API via the api_id / execution_arn / cognito_authorizer_id outputs. That
+# keeps the host's wiring in one distributable file (it rides `biffo core upgrade`)
+# and out of the user-owned root module, so no instance has to hand-wire it.
+
 # Catch-all — all other routes require a valid Cognito JWT
 resource "aws_apigatewayv2_route" "default" {
   api_id             = aws_apigatewayv2_api.main.id

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/context/auth-context'
-import { createApiClient } from '@/lib/api-client'
+import { ApiError, createApiClient } from '@/lib/api-client'
 import {
   createWorkflow,
   deleteWorkflow,
@@ -21,6 +21,11 @@ import {
   type WorkflowRun,
 } from '@/lib/orchestration-api'
 import {
+  runWorkflowDryRun,
+  type WorkflowDryRunRequest,
+  type WorkflowDryRunResponse,
+} from '@/lib/workflow-dryrun-api'
+import {
   filterTriggers,
   groupTriggersBySource,
   optionLabel,
@@ -28,12 +33,29 @@ import {
   triggerKeyOf,
 } from '@/lib/trigger-catalog'
 import { fetchPromptComponents, type PromptComponent } from '@/lib/prompt-components-api'
-import { normalizeParts, type PromptPart } from '@/lib/prompt-parts'
+import { isInlinePart, normalizeParts, type PromptPart } from '@/lib/prompt-parts'
 import { AssistantDrawer } from '@/components/assistant-drawer'
 import { PartsField } from './parts-field'
+import { OUTCOME_PRESETS } from './presets'
+import { buildSampleEvent, formatSampleEvent, parseSampleEvent } from './sample-event'
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error'
+}
+
+/** Pull the FastAPI `{detail}` out of an error body when there is one, else fall
+ *  back to the raw text — Core returns `{"detail": "…"}` for 502/503/422. */
+function detailOf(err: unknown): string {
+  if (err instanceof ApiError) {
+    try {
+      const parsed = JSON.parse(err.message) as { detail?: unknown }
+      if (typeof parsed.detail === 'string' && parsed.detail !== '') return parsed.detail
+    } catch {
+      // Body was not JSON — use it as-is.
+    }
+    return err.message === '' ? `Request failed (${String(err.status)})` : err.message
+  }
+  return errorMessage(err)
 }
 
 const inputClass = 'mt-1 rounded border px-2 py-1 text-sm'
@@ -212,6 +234,38 @@ function defaultConfig(action: CatalogAction | undefined): Config {
   return config
 }
 
+// The agent action's outcome journey (issue #527) reframes its config fields.
+// These names live under **Advanced settings** (models, turns, the raw prompt,
+// and the capability picker) — everything else is a task-shaped Outcome field.
+const AGENT_ADVANCED_FIELDS = new Set(['model', 'max_turns', 'instructions', TOOLS_FIELD])
+
+// Task-oriented display labels for the agent action's fields (the brief's
+// "Capabilities" not "Tools", "Result" not "Goals"). Anything not listed keeps
+// its catalog label.
+const AGENT_FIELD_LABEL: Record<string, string> = {
+  [TOOLS_FIELD]: 'Capabilities',
+  goals: 'Result',
+}
+
+function agentLabel(field: CatalogActionField): string {
+  return AGENT_FIELD_LABEL[field.name] ?? field.label
+}
+
+// A prompt field's value coerced for the dry-run request: a stored parts list
+// stays a parts list (dropping anything malformed); anything else is the plain
+// string (the pre-library shape). Core accepts either (ADR-0015 §2).
+function toPromptField(value: ConfigValue | undefined): string | PromptPart[] {
+  return Array.isArray(value) ? normalizeParts(value) : asString(value)
+}
+
+// Whether a prompt field carries at least one non-empty part — the required
+// check for "instructions" (and the test/enable gate) without asserting a shape.
+function promptHasContent(value: ConfigValue | undefined): boolean {
+  return normalizeParts(value).some((part) =>
+    isInlinePart(part) ? part.inline.trim() !== '' : part.component.trim() !== '',
+  )
+}
+
 export default function OrchestrationPage() {
   const { getIdToken } = useAuth()
   const client = useMemo(() => createApiClient(getIdToken), [getIdToken])
@@ -240,17 +294,56 @@ export default function OrchestrationPage() {
   // (the config field name, e.g. 'instructions' | 'goals'). null = closed.
   const [assistField, setAssistField] = useState<string | null>(null)
 
-  const resetForm = useCallback((cat: WorkflowCatalog | null) => {
-    setEditingId(null)
-    setName('')
-    const t = cat?.triggers[0]
-    setTriggerKey(t ? triggerKeyOf(t) : '')
-    setTriggerQuery('')
-    setActionType(cat?.actions[0]?.type ?? '')
-    setConfig(defaultConfig(cat?.actions[0]))
-    setFilterRows([])
-    setEnabled(true)
+  // Collapsible sections of the agent journey. Conditions and Advanced start
+  // collapsed — the outcome, not the architecture, leads.
+  const [conditionsOpen, setConditionsOpen] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+
+  // ── Test & review (Phase 2) ──────────────────────────────────────────────
+  // The editable sample event the dry-run runs against, as JSON text. Seeded
+  // from the selected trigger's declared fields (#505) and re-seeded when the
+  // trigger changes.
+  const [sampleEventText, setSampleEventText] = useState('{}')
+  const [testing, setTesting] = useState(false)
+  const [dryRunResult, setDryRunResult] = useState<WorkflowDryRunResponse | null>(null)
+  // A transient/retryable failure (502 runtime, 422 unresolvable parts, or a bad
+  // sample) — the author can fix and retry.
+  const [dryRunError, setDryRunError] = useState<string | null>(null)
+  // 503: the runtime/assistant is not wired up on this deployment. Testing is
+  // simply unavailable here — a distinct, non-retryable state.
+  const [dryRunUnavailable, setDryRunUnavailable] = useState<string | null>(null)
+  // The definition snapshot that last passed a test this session. The Enable
+  // gate holds only while the current definition still matches it — editing any
+  // config/trigger/condition invalidates the pass automatically (see below).
+  // NOTE: this is session-only. Persisting a `tested` flag on the definition is
+  // a future refinement; it would need a Core field and is out of scope here.
+  const [testedSnapshot, setTestedSnapshot] = useState<string | null>(null)
+
+  const clearTestState = useCallback(() => {
+    setTesting(false)
+    setDryRunResult(null)
+    setDryRunError(null)
+    setDryRunUnavailable(null)
+    setTestedSnapshot(null)
   }, [])
+
+  const resetForm = useCallback(
+    (cat: WorkflowCatalog | null) => {
+      setEditingId(null)
+      setName('')
+      const t = cat?.triggers[0]
+      setTriggerKey(t ? triggerKeyOf(t) : '')
+      setTriggerQuery('')
+      setActionType(cat?.actions[0]?.type ?? '')
+      setConfig(defaultConfig(cat?.actions[0]))
+      setFilterRows([])
+      setEnabled(true)
+      setConditionsOpen(false)
+      setAdvancedOpen(false)
+      clearTestState()
+    },
+    [clearTestState],
+  )
 
   useEffect(() => {
     fetchCatalog(client)
@@ -302,16 +395,27 @@ export default function OrchestrationPage() {
   const selectedAction: CatalogAction | undefined = catalog?.actions.find(
     (a) => a.type === actionType,
   )
+  const isAgent = selectedAction?.type === 'agent'
 
   const selectedTrigger: CatalogTrigger | undefined = catalog?.triggers.find(
     (t) => triggerKeyOf(t) === triggerKey,
   )
 
-  // The selected trigger's declared payload fields (#505). Drives the "Only
-  // when…" condition dropdowns; empty (observed events, or a Core API predating
-  // the metadata) falls back to today's free-text field + value inputs.
+  // The selected trigger's declared payload fields (#505). Drives both the "Only
+  // when…" condition dropdowns and the seeded sample event; empty (observed
+  // events, or a Core API predating the metadata) falls back to free text / an
+  // empty sample the author fills in.
   const triggerFields: CatalogTriggerField[] = selectedTrigger?.fields ?? []
   const hasTriggerFields = triggerFields.length > 0
+
+  // Re-seed the editable sample event whenever the selected trigger changes, so
+  // "Test workflow" starts from a realistic payload for that event (#505). The
+  // sample is test-only input — not persisted, and not part of the enable gate.
+  useEffect(() => {
+    // `selectedTrigger` is a stable reference from the catalog array, so this
+    // re-seeds only when the chosen trigger actually changes.
+    setSampleEventText(formatSampleEvent(buildSampleEvent(selectedTrigger?.fields ?? [])))
+  }, [selectedTrigger])
 
   // The filter narrows the dropdown but never drops the current selection —
   // otherwise the browser would silently reassign the select's value.
@@ -325,6 +429,26 @@ export default function OrchestrationPage() {
     [catalog, triggerQuery],
   )
 
+  // The identity of the workflow definition as it would be saved. The Enable
+  // gate is valid only while this still equals the snapshot that last passed a
+  // test — so any edit to the config/trigger/conditions invalidates the pass
+  // (the sample event is deliberately excluded: it is test input, not config).
+  const definitionSnapshot = useMemo(
+    () => JSON.stringify({ name, triggerKey, actionType, config, filterRows }),
+    [name, triggerKey, actionType, config, filterRows],
+  )
+  const testPassed = testedSnapshot != null && testedSnapshot === definitionSnapshot
+
+  // Agent required-field validity for the gate: a name, an agent name, and some
+  // instructions. (Model has a catalog default; the sample is optional.)
+  const agentRequiredValid =
+    name.trim() !== '' &&
+    asString(config.agent_name).trim() !== '' &&
+    promptHasContent(config.instructions)
+
+  const canTest = isAgent && agentRequiredValid && !testing
+  const canEnable = isAgent && agentRequiredValid && testPassed && !busy
+
   function loadForEdit(w: WorkflowDefinition) {
     setEditingId(w.id)
     setName(w.name)
@@ -334,9 +458,12 @@ export default function OrchestrationPage() {
     setConfig({ ...w.action_config })
     setFilterRows(toFilterRows(w.trigger_filter))
     setEnabled(w.enabled)
+    setConditionsOpen(Object.keys(w.trigger_filter ?? {}).length > 0)
+    setAdvancedOpen(false)
+    clearTestState()
   }
 
-  async function submitForm() {
+  async function submitForm(enabledValue: boolean) {
     if (busy) return
     const [trigger_source, trigger_detail_type] = triggerKey.split('|')
     // Save only the fields that apply, so switching e.g. WhatsApp text →
@@ -356,7 +483,7 @@ export default function OrchestrationPage() {
       trigger_filter: toTriggerFilter(filterRows),
       action_type: actionType,
       action_config: applicable,
-      enabled,
+      enabled: enabledValue,
     }
     setBusy(true)
     try {
@@ -373,11 +500,344 @@ export default function OrchestrationPage() {
     }
   }
 
+  // The Maximum-turns config value as a positive integer, or null when unset.
+  function maxTurnsValue(): number | null {
+    const raw = asString(config.max_turns).trim()
+    if (raw === '') return null
+    const n = Number.parseInt(raw, 10)
+    return Number.isFinite(n) && n >= 1 ? n : null
+  }
+
+  // "Test workflow" — the no-side-effect dry-run (Phase 2). Runs one agent turn
+  // against the sample event and previews the output; a success marks the
+  // current definition snapshot as tested, which is what unlocks Enable.
+  async function runTest() {
+    if (testing) return
+    const parsed = parseSampleEvent(sampleEventText)
+    if (parsed.error != null) {
+      setDryRunError(parsed.error)
+      setDryRunResult(null)
+      setDryRunUnavailable(null)
+      return
+    }
+    const [source, detail_type] = triggerKey.split('|')
+    const turns = maxTurnsValue()
+    const request: WorkflowDryRunRequest = {
+      agent_name: asString(config.agent_name),
+      instructions: toPromptField(config.instructions),
+      sample_event: parsed.event,
+      ...(config.goals != null ? { goals: toPromptField(config.goals) } : {}),
+      ...(asString(config.model) !== '' ? { model: asString(config.model) } : {}),
+      ...(turns != null ? { max_turns: turns } : {}),
+      ...(source != null && source !== '' && detail_type != null && detail_type !== ''
+        ? { trigger: { source, detail_type } }
+        : {}),
+    }
+    setTesting(true)
+    setDryRunError(null)
+    setDryRunUnavailable(null)
+    // Snapshot captured before the await so a passing test binds to the config
+    // that was actually tested.
+    const snapshotAtSend = definitionSnapshot
+    try {
+      const res = await runWorkflowDryRun(client, request)
+      setDryRunResult(res)
+      setTestedSnapshot(snapshotAtSend)
+    } catch (err: unknown) {
+      setDryRunResult(null)
+      if (err instanceof ApiError && err.status === 503) {
+        // Runtime not wired on this deployment — testing is unavailable here.
+        setDryRunUnavailable(detailOf(err))
+      } else {
+        // 502 (runtime turn failed — retryable) / 422 (unresolvable parts) / other.
+        setDryRunError(detailOf(err))
+      }
+    } finally {
+      setTesting(false)
+    }
+  }
+
   function triggerLabel(w: WorkflowDefinition): string {
     const match = catalog?.triggers.find(
       (t) => triggerKeyOf(t) === `${w.trigger_source}|${w.trigger_detail_type}`,
     )
     return match?.label ?? `${w.trigger_source} / ${w.trigger_detail_type}`
+  }
+
+  // Plain-language recap of what the workflow will do — shown in the action bar
+  // so the author always sees the whole in one sentence.
+  const planSummary = (() => {
+    const when = selectedTrigger?.label ?? 'a matching event happens'
+    const agentName = asString(config.agent_name).trim()
+    const who = agentName !== '' ? `“${agentName}”` : 'your agent'
+    return `When ${when}, run ${who} and preview the result before it goes live.`
+  })()
+
+  // ── one config-field control, shared by the non-agent form and the agent
+  //    journey's Outcome/Advanced sections. `labelOverride` gives the agent
+  //    journey its task-oriented labels without changing the saved field name. ──
+  function fieldControl(field: CatalogActionField, labelOverride?: string) {
+    const label = labelOverride ?? field.label
+    const fields = configFieldsFor(selectedAction)
+    if (field.parts === true) {
+      return (
+        <div key={field.name} className="sm:col-span-2">
+          <PartsField
+            label={label}
+            required={field.required}
+            components={components}
+            value={normalizeParts(config[field.name])}
+            onChange={(parts) => {
+              setConfig((c) => ({ ...c, [field.name]: parts }))
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              setAssistField(field.name)
+            }}
+            className="mt-2 rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+          >
+            ✨ Draft {label} with AI
+          </button>
+        </div>
+      )
+    }
+    if (field.type === 'multiselect') {
+      return (
+        <fieldset
+          key={field.name}
+          aria-label={label}
+          className="flex flex-col text-xs text-gray-600 sm:col-span-2"
+        >
+          <legend className="text-xs text-gray-600">{label}</legend>
+          <div className="mt-1 space-y-1.5 rounded border px-2 py-2">
+            {(field.options ?? []).map((option) => {
+              const selected = asList(config[field.name])
+              return (
+                <label key={option.value} className="flex items-start gap-2 text-sm text-gray-800">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={selected.includes(option.value)}
+                    onChange={(e) => {
+                      setConfig((c) => {
+                        const current = asList(c[field.name])
+                        const next = e.target.checked
+                          ? [...current, option.value]
+                          : current.filter((v) => v !== option.value)
+                        return { ...c, [field.name]: next }
+                      })
+                    }}
+                  />
+                  <span>
+                    <span className="font-medium">{option.value}</span>
+                    {option.description != null && option.description !== '' && (
+                      <span className="block text-xs text-gray-500">{option.description}</span>
+                    )}
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+        </fieldset>
+      )
+    }
+    return (
+      <label
+        key={field.name}
+        className={`flex flex-col text-xs text-gray-600 ${
+          field.type === 'textarea' ? 'sm:col-span-2' : ''
+        }`}
+      >
+        {label}
+        {field.type === 'textarea' ? (
+          <textarea
+            value={asString(config[field.name])}
+            required={field.required}
+            onChange={(e) => {
+              setConfig((c) => ({ ...c, [field.name]: e.target.value }))
+            }}
+            rows={3}
+            className={inputClass}
+          />
+        ) : field.type === 'select' ? (
+          <select
+            aria-label={label}
+            value={effectiveValue(fields, config, field.name)}
+            onChange={(e) => {
+              setConfig((c) => ({ ...c, [field.name]: e.target.value }))
+            }}
+            className={inputClass}
+          >
+            {selectOptions(field, effectiveValue(fields, config, field.name)).map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type={inputType(field.type)}
+            value={asString(config[field.name])}
+            required={field.required}
+            onChange={(e) => {
+              setConfig((c) => ({ ...c, [field.name]: e.target.value }))
+            }}
+            className={inputClass}
+          />
+        )}
+      </label>
+    )
+  }
+
+  // The "Only when…" condition editor (trigger-aware, #505). Shared by both
+  // layouts; the agent journey wraps it in a collapsed disclosure.
+  function conditionsEditor() {
+    return (
+      <div className="mt-2 space-y-2">
+        <p className="text-xs text-gray-500">
+          Narrow a broad trigger. Every condition must match the event exactly — leave empty to run
+          on every one.
+        </p>
+        <div className="space-y-2">
+          {filterRows.map((row, i) => {
+            const label = `Condition ${String(i + 1)}`
+            // When the trigger declares no fields, the field IS free text —
+            // never treat that as a "custom" escape from a known list.
+            const isKnownField =
+              hasTriggerFields && findTriggerField(triggerFields, row.field) != null
+            const chosenField = findTriggerField(triggerFields, row.field)
+            const setRow = (patch: Partial<FilterRow>) => {
+              setFilterRows((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+            }
+            return (
+              <div key={i} className="flex flex-wrap items-center gap-2">
+                {hasTriggerFields ? (
+                  <select
+                    aria-label={`${label} field`}
+                    value={isKnownField ? row.field : CUSTOM_FIELD}
+                    onChange={(e) => {
+                      if (e.target.value === CUSTOM_FIELD) {
+                        setRow({ field: '', value: '' })
+                        return
+                      }
+                      const next = findTriggerField(triggerFields, e.target.value)
+                      const keepValue =
+                        !isEnumerable(next) || (next?.values.includes(row.value) ?? false)
+                      setRow({ field: e.target.value, value: keepValue ? row.value : '' })
+                    }}
+                    className="rounded border px-2 py-1 text-sm"
+                  >
+                    {triggerFields.map((f) => (
+                      <option key={f.name} value={f.name}>
+                        {f.label}
+                      </option>
+                    ))}
+                    <option value={CUSTOM_FIELD}>Custom field…</option>
+                  </select>
+                ) : (
+                  <input
+                    aria-label={`${label} field`}
+                    value={row.field}
+                    onChange={(e) => {
+                      setRow({ field: e.target.value })
+                    }}
+                    placeholder="status"
+                    className="rounded border px-2 py-1 text-sm"
+                  />
+                )}
+                {hasTriggerFields && !isKnownField && (
+                  <input
+                    aria-label={`${label} custom field`}
+                    value={row.field}
+                    onChange={(e) => {
+                      setRow({ field: e.target.value })
+                    }}
+                    placeholder="field name"
+                    className="rounded border px-2 py-1 text-sm"
+                  />
+                )}
+                <span className="text-xs text-gray-400">is</span>
+                {isEnumerable(chosenField) ? (
+                  <select
+                    aria-label={`${label} value`}
+                    value={row.value}
+                    onChange={(e) => {
+                      setRow({ value: e.target.value })
+                    }}
+                    className="rounded border px-2 py-1 text-sm"
+                  >
+                    <option value="">Choose…</option>
+                    {chosenField?.values.map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                    {row.value !== '' && !(chosenField?.values.includes(row.value) ?? false) && (
+                      <option value={row.value}>{row.value} (current)</option>
+                    )}
+                  </select>
+                ) : (
+                  <input
+                    aria-label={`${label} value`}
+                    value={row.value}
+                    onChange={(e) => {
+                      setRow({ value: e.target.value })
+                    }}
+                    placeholder="won"
+                    className="rounded border px-2 py-1 text-sm"
+                  />
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilterRows((rows) => rows.filter((_, j) => j !== i))
+                  }}
+                  className="rounded border px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
+                >
+                  Remove
+                </button>
+              </div>
+            )
+          })}
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            // Seed a new row with the trigger's first field when it has any,
+            // so the dropdown starts on a real field rather than "custom".
+            setFilterRows((rows) => [...rows, { field: triggerFields[0]?.name ?? '', value: '' }])
+          }}
+          className="rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+        >
+          Add condition
+        </button>
+      </div>
+    )
+  }
+
+  const agentFields = configFieldsFor(selectedAction)
+  const advancedFields = agentFields.filter((f) => AGENT_ADVANCED_FIELDS.has(f.name))
+  const goalsField = agentFields.find((f) => f.name === 'goals')
+  const agentNameField = agentFields.find((f) => f.name === 'agent_name')
+  // Any other task-shaped agent field the catalog might grow: rendered in the
+  // Outcome section (not Advanced) so it is never silently dropped from the UI.
+  const otherOutcomeFields = agentFields.filter(
+    (f) => !AGENT_ADVANCED_FIELDS.has(f.name) && f.name !== 'goals' && f.name !== 'agent_name',
+  )
+  const redundantWebSearch = isAgent && webSearchIsRedundant(config)
+
+  // Apply a guided preset: seed starter instructions + result the author refines.
+  function applyPreset(presetId: string) {
+    const preset = OUTCOME_PRESETS.find((p) => p.id === presetId)
+    if (preset == null) return
+    setConfig((c) => ({
+      ...c,
+      instructions: [{ inline: preset.instructions }],
+      // Only seed the result when the action actually has a goals field.
+      ...(goalsField != null ? { goals: [{ inline: preset.result }] } : {}),
+    }))
   }
 
   return (
@@ -396,13 +856,17 @@ export default function OrchestrationPage() {
         <form
           onSubmit={(e) => {
             e.preventDefault()
-            void submitForm()
+            // The primary submit saves: a draft for the agent journey (Enable is
+            // its own gated button), or the enabled-checkbox value otherwise.
+            void submitForm(isAgent ? false : enabled)
           }}
           className="mt-6 rounded-xl border bg-white p-4 shadow-sm"
         >
           <h2 className="text-sm font-semibold text-gray-900">
             {editingId != null ? 'Edit workflow' : 'New workflow'}
           </h2>
+
+          {/* ── Workflow details ─────────────────────────────────────────── */}
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <label className="flex flex-col text-xs text-gray-600">
               Name
@@ -416,7 +880,56 @@ export default function OrchestrationPage() {
                 className={inputClass}
               />
             </label>
-            <div className="flex flex-col text-xs text-gray-600">
+            <label className="flex flex-col text-xs text-gray-600">
+              Do this (action)
+              <select
+                aria-label="Action"
+                value={actionType}
+                onChange={(e) => {
+                  setActionType(e.target.value)
+                  setConfig(defaultConfig(catalog.actions.find((a) => a.type === e.target.value)))
+                  setAdvancedOpen(false)
+                  clearTestState()
+                }}
+                className={inputClass}
+              >
+                {catalog.actions.map((a) => (
+                  <option key={a.type} value={a.type}>
+                    {a.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {isAgent ? (
+              <p className="self-end text-xs text-gray-500">
+                Status:{' '}
+                {editingId != null && enabled ? (
+                  <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-700">
+                    enabled
+                  </span>
+                ) : (
+                  <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600">draft</span>
+                )}
+                <span className="ml-1">— enable it below once a test passes.</span>
+              </p>
+            ) : (
+              <label className="flex items-center gap-2 self-end text-sm text-gray-800">
+                <input
+                  type="checkbox"
+                  checked={enabled}
+                  onChange={(e) => {
+                    setEnabled(e.target.checked)
+                  }}
+                />
+                Enabled
+              </label>
+            )}
+          </div>
+
+          {/* ── Trigger ──────────────────────────────────────────────────── */}
+          <div className="mt-4 rounded-lg border border-gray-200 p-3">
+            <h3 className="text-xs font-semibold text-gray-700">When this happens (trigger)</h3>
+            <div className="mt-2 flex flex-col text-xs text-gray-600">
               <label className="flex flex-col">
                 Filter triggers
                 <input
@@ -431,7 +944,7 @@ export default function OrchestrationPage() {
                 />
               </label>
               <label className="mt-2 flex flex-col">
-                When this happens (trigger)
+                Trigger
                 <select
                   aria-label="Trigger"
                   value={triggerKey}
@@ -477,327 +990,343 @@ export default function OrchestrationPage() {
                 </div>
               )}
             </div>
-            <label className="flex flex-col text-xs text-gray-600">
-              Do this (action)
-              <select
-                aria-label="Action"
-                value={actionType}
-                onChange={(e) => {
-                  setActionType(e.target.value)
-                  setConfig(defaultConfig(catalog.actions.find((a) => a.type === e.target.value)))
-                }}
-                className={inputClass}
-              >
-                {catalog.actions.map((a) => (
-                  <option key={a.type} value={a.type}>
-                    {a.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex items-center gap-2 self-end text-sm text-gray-800">
-              <input
-                type="checkbox"
-                checked={enabled}
-                onChange={(e) => {
-                  setEnabled(e.target.checked)
-                }}
-              />
-              Enabled
-            </label>
-          </div>
 
-          <fieldset className="mt-4 rounded-lg border border-gray-200 p-3">
-            <legend className="px-1 text-xs font-semibold text-gray-700">
-              Only when… (optional)
-            </legend>
-            <p className="text-xs text-gray-500">
-              Narrow a broad trigger. Every condition must match the event exactly — leave empty to
-              run on every one.
-            </p>
-            <div className="mt-2 space-y-2">
-              {filterRows.map((row, i) => {
-                const label = `Condition ${String(i + 1)}`
-                // When the trigger declares no fields, the field IS free text —
-                // never treat that as a "custom" escape from a known list.
-                const isKnownField =
-                  hasTriggerFields && findTriggerField(triggerFields, row.field) != null
-                const chosenField = findTriggerField(triggerFields, row.field)
-                const setRow = (patch: Partial<FilterRow>) => {
-                  setFilterRows((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
-                }
-                return (
-                  <div key={i} className="flex flex-wrap items-center gap-2">
-                    {hasTriggerFields ? (
-                      <select
-                        aria-label={`${label} field`}
-                        value={isKnownField ? row.field : CUSTOM_FIELD}
-                        onChange={(e) => {
-                          if (e.target.value === CUSTOM_FIELD) {
-                            // Reveal the free-text input; clear the known name.
-                            setRow({ field: '', value: '' })
-                            return
-                          }
-                          const next = findTriggerField(triggerFields, e.target.value)
-                          // Drop a stale value when switching to an enumerable
-                          // field it doesn't belong to (avoids an invalid option).
-                          const keepValue =
-                            !isEnumerable(next) || (next?.values.includes(row.value) ?? false)
-                          setRow({ field: e.target.value, value: keepValue ? row.value : '' })
-                        }}
-                        className="rounded border px-2 py-1 text-sm"
-                      >
-                        {triggerFields.map((f) => (
-                          <option key={f.name} value={f.name}>
-                            {f.label}
-                          </option>
-                        ))}
-                        <option value={CUSTOM_FIELD}>Custom field…</option>
-                      </select>
-                    ) : (
-                      <input
-                        aria-label={`${label} field`}
-                        value={row.field}
-                        onChange={(e) => {
-                          setRow({ field: e.target.value })
-                        }}
-                        placeholder="status"
-                        className="rounded border px-2 py-1 text-sm"
-                      />
-                    )}
-                    {hasTriggerFields && !isKnownField && (
-                      <input
-                        aria-label={`${label} custom field`}
-                        value={row.field}
-                        onChange={(e) => {
-                          setRow({ field: e.target.value })
-                        }}
-                        placeholder="field name"
-                        className="rounded border px-2 py-1 text-sm"
-                      />
-                    )}
-                    <span className="text-xs text-gray-400">is</span>
-                    {isEnumerable(chosenField) ? (
-                      <select
-                        aria-label={`${label} value`}
-                        value={row.value}
-                        onChange={(e) => {
-                          setRow({ value: e.target.value })
-                        }}
-                        className="rounded border px-2 py-1 text-sm"
-                      >
-                        <option value="">Choose…</option>
-                        {chosenField?.values.map((v) => (
-                          <option key={v} value={v}>
-                            {v}
-                          </option>
-                        ))}
-                        {row.value !== '' &&
-                          !(chosenField?.values.includes(row.value) ?? false) && (
-                            <option value={row.value}>{row.value} (current)</option>
-                          )}
-                      </select>
-                    ) : (
-                      <input
-                        aria-label={`${label} value`}
-                        value={row.value}
-                        onChange={(e) => {
-                          setRow({ value: e.target.value })
-                        }}
-                        placeholder="won"
-                        className="rounded border px-2 py-1 text-sm"
-                      />
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFilterRows((rows) => rows.filter((_, j) => j !== i))
-                      }}
-                      className="rounded border px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                )
-              })}
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                // Seed a new row with the trigger's first field when it has any,
-                // so the dropdown starts on a real field rather than "custom".
-                setFilterRows((rows) => [
-                  ...rows,
-                  { field: triggerFields[0]?.name ?? '', value: '' },
-                ])
-              }}
-              className="mt-2 rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
-            >
-              Add condition
-            </button>
-          </fieldset>
-
-          {selectedAction != null &&
-            (() => {
-              const fields = configFieldsFor(selectedAction)
-              // Agent action only: warn (never block) when a web-connected model
-              // and the web_search tool are both selected — they duplicate.
-              const redundantWebSearch =
-                selectedAction.type === 'agent' && webSearchIsRedundant(config)
-              return (
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  {fields
-                    .filter((field) => fieldApplies(fields, config, field))
-                    .map((field) =>
-                      field.parts === true ? (
-                        <div key={field.name} className="sm:col-span-2">
-                          <PartsField
-                            label={field.label}
-                            required={field.required}
-                            components={components}
-                            value={normalizeParts(config[field.name])}
-                            onChange={(parts) => {
-                              setConfig((c) => ({ ...c, [field.name]: parts }))
-                            }}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setAssistField(field.name)
-                            }}
-                            className="mt-2 rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
-                          >
-                            ✨ Draft {field.label} with AI
-                          </button>
-                        </div>
-                      ) : field.type === 'multiselect' ? (
-                        <fieldset
-                          key={field.name}
-                          aria-label={field.label}
-                          className="flex flex-col text-xs text-gray-600 sm:col-span-2"
-                        >
-                          <legend className="text-xs text-gray-600">{field.label}</legend>
-                          <div className="mt-1 space-y-1.5 rounded border px-2 py-2">
-                            {(field.options ?? []).map((option) => {
-                              const selected = asList(config[field.name])
-                              return (
-                                <label
-                                  key={option.value}
-                                  className="flex items-start gap-2 text-sm text-gray-800"
-                                >
-                                  <input
-                                    type="checkbox"
-                                    className="mt-0.5"
-                                    checked={selected.includes(option.value)}
-                                    onChange={(e) => {
-                                      setConfig((c) => {
-                                        const current = asList(c[field.name])
-                                        const next = e.target.checked
-                                          ? [...current, option.value]
-                                          : current.filter((v) => v !== option.value)
-                                        return { ...c, [field.name]: next }
-                                      })
-                                    }}
-                                  />
-                                  <span>
-                                    <span className="font-medium">{option.value}</span>
-                                    {option.description != null && option.description !== '' && (
-                                      <span className="block text-xs text-gray-500">
-                                        {option.description}
-                                      </span>
-                                    )}
-                                  </span>
-                                </label>
-                              )
-                            })}
-                          </div>
-                        </fieldset>
-                      ) : (
-                        <label
-                          key={field.name}
-                          className={`flex flex-col text-xs text-gray-600 ${
-                            field.type === 'textarea' ? 'sm:col-span-2' : ''
-                          }`}
-                        >
-                          {field.label}
-                          {field.type === 'textarea' ? (
-                            <textarea
-                              value={asString(config[field.name])}
-                              required={field.required}
-                              onChange={(e) => {
-                                setConfig((c) => ({ ...c, [field.name]: e.target.value }))
-                              }}
-                              rows={3}
-                              className={inputClass}
-                            />
-                          ) : field.type === 'select' ? (
-                            <select
-                              aria-label={field.label}
-                              value={effectiveValue(fields, config, field.name)}
-                              onChange={(e) => {
-                                setConfig((c) => ({ ...c, [field.name]: e.target.value }))
-                              }}
-                              className={inputClass}
-                            >
-                              {selectOptions(field, effectiveValue(fields, config, field.name)).map(
-                                (option) => (
-                                  <option key={option.value} value={option.value}>
-                                    {option.label}
-                                  </option>
-                                ),
-                              )}
-                            </select>
-                          ) : (
-                            <input
-                              type={inputType(field.type)}
-                              value={asString(config[field.name])}
-                              required={field.required}
-                              onChange={(e) => {
-                                setConfig((c) => ({ ...c, [field.name]: e.target.value }))
-                              }}
-                              className={inputClass}
-                            />
-                          )}
-                        </label>
-                      ),
-                    )}
-                  {redundantWebSearch && (
-                    <p
-                      role="status"
-                      className="rounded bg-amber-50 px-3 py-2 text-xs text-amber-800 sm:col-span-2"
-                    >
-                      This model is web-connected and already performs web search — the web_search
-                      tool is redundant here.
-                    </p>
-                  )}
-                </div>
-              )
-            })()}
-
-          <div className="mt-4 flex gap-2">
-            <button
-              type="submit"
-              disabled={busy}
-              className="rounded bg-gray-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-            >
-              {busy ? 'Saving…' : editingId != null ? 'Save changes' : 'Add workflow'}
-            </button>
-            {editingId != null && (
-              <button
-                type="button"
-                onClick={() => {
-                  resetForm(catalog)
-                }}
-                className="rounded border px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
-              >
-                Cancel
-              </button>
+            {/* Sample input data (agent journey): what an event of this trigger
+                looks like, seeded from its declared fields (#505). Editable in
+                Test & review below. */}
+            {isAgent && (
+              <div className="mt-3 rounded border border-gray-100 bg-gray-50 p-2">
+                <p className="text-xs font-medium text-gray-600">Sample input data</p>
+                {hasTriggerFields ? (
+                  <dl className="mt-1 space-y-0.5">
+                    {triggerFields.map((f) => (
+                      <div key={f.name} className="flex gap-2 text-xs">
+                        <dt className="font-mono text-gray-500">{f.name}</dt>
+                        <dd className="text-gray-700">
+                          {String(buildSampleEvent(triggerFields)[f.name])}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : (
+                  <p className="mt-1 text-xs text-gray-400">
+                    This trigger declares no fields — add your own sample below in Test &amp;
+                    review.
+                  </p>
+                )}
+              </div>
             )}
           </div>
+
+          {/* ── Conditions ───────────────────────────────────────────────── */}
+          {isAgent ? (
+            <div className="mt-4 rounded-lg border border-gray-200 p-3">
+              <button
+                type="button"
+                aria-expanded={conditionsOpen}
+                onClick={() => {
+                  setConditionsOpen((v) => !v)
+                }}
+                className="flex w-full items-center justify-between text-left text-xs font-semibold text-gray-700"
+              >
+                <span>Conditions (optional)</span>
+                <span aria-hidden="true" className="text-gray-400">
+                  {conditionsOpen ? '▲' : '▼'}
+                </span>
+              </button>
+              {conditionsOpen && conditionsEditor()}
+            </div>
+          ) : (
+            <fieldset className="mt-4 rounded-lg border border-gray-200 p-3">
+              <legend className="px-1 text-xs font-semibold text-gray-700">
+                Only when… (optional)
+              </legend>
+              {conditionsEditor()}
+            </fieldset>
+          )}
+
+          {/* ── Outcome (agent) / generic config (other actions) ─────────── */}
+          {selectedAction != null && isAgent && (
+            <>
+              <div className="mt-4 rounded-lg border border-gray-200 p-3">
+                <h3 className="text-sm font-semibold text-gray-900">What should the agent do?</h3>
+                <p className="mt-0.5 text-xs text-gray-500">
+                  Start from a template, then make it yours — by hand or with “✨ Draft with AI”.
+                </p>
+
+                {/* Guided presets */}
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {OUTCOME_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => {
+                        applyPreset(preset.id)
+                      }}
+                      className="rounded-lg border border-gray-200 p-3 text-left hover:border-gray-900 hover:bg-gray-50"
+                    >
+                      <span className="block text-sm font-medium text-gray-900">
+                        {preset.title}
+                      </span>
+                      <span className="mt-0.5 block text-xs text-gray-500">{preset.summary}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  {agentNameField != null && fieldControl(agentNameField)}
+                  {otherOutcomeFields.map((field) => fieldControl(field, agentLabel(field)))}
+                </div>
+
+                {/* "What should the result contain?" — the relabelled goals field. */}
+                {goalsField != null && (
+                  <div className="mt-4">
+                    <h4 className="text-xs font-semibold text-gray-700">
+                      What should the result contain?
+                    </h4>
+                    <p className="text-xs text-gray-500">
+                      Describe the output you expect — a brief, a reply, a summary. This guides the
+                      agent and is how you’ll judge a good result.
+                    </p>
+                    <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                      {fieldControl(goalsField, agentLabel(goalsField))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ── Delivery (honest Phase-3 placeholder — no logic) ──────── */}
+              <div className="mt-4 rounded-lg border border-dashed border-gray-300 bg-gray-50 p-3">
+                <h3 className="text-sm font-semibold text-gray-700">Delivery</h3>
+                <p className="mt-1 text-xs text-gray-500">
+                  Routing the result to Slack, email, a CRM or an inbox is coming next (Phase 3).
+                  Today the agent’s output <em>is</em> the result — preview it below, or deliver it
+                  with a separate workflow action for now.
+                </p>
+              </div>
+
+              {/* ── Test & review (Phase 2) ───────────────────────────────── */}
+              <div className="mt-4 rounded-lg border border-gray-200 p-3">
+                <h3 className="text-sm font-semibold text-gray-900">Test &amp; review</h3>
+                <p className="mt-0.5 text-xs text-gray-500">
+                  Run the agent once against sample data. This is a no-side-effect preview — nothing
+                  is sent, saved or delivered. A passing test is required before you can enable the
+                  workflow.
+                </p>
+
+                <label className="mt-3 flex flex-col text-xs text-gray-600">
+                  Sample input data
+                  <textarea
+                    aria-label="Sample input data"
+                    value={sampleEventText}
+                    onChange={(e) => {
+                      setSampleEventText(e.target.value)
+                    }}
+                    rows={5}
+                    spellCheck={false}
+                    className={`${inputClass} font-mono`}
+                  />
+                </label>
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void runTest()
+                    }}
+                    disabled={!canTest}
+                    className="rounded border border-gray-900 px-3 py-1.5 text-sm font-medium text-gray-900 hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    {testing ? 'Testing…' : 'Test workflow'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSampleEventText(formatSampleEvent(buildSampleEvent(triggerFields)))
+                    }}
+                    className="rounded border px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+                  >
+                    Reset sample
+                  </button>
+                  {testPassed && (
+                    <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-700">
+                      test passed
+                    </span>
+                  )}
+                </div>
+
+                {dryRunUnavailable != null && (
+                  <div
+                    role="alert"
+                    className="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800"
+                  >
+                    Testing is unavailable on this deployment. {dryRunUnavailable}
+                  </div>
+                )}
+                {dryRunError != null && (
+                  <div
+                    role="alert"
+                    className="mt-3 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700"
+                  >
+                    {dryRunError} You can adjust the sample or config and try again.
+                  </div>
+                )}
+                {dryRunResult != null && (
+                  <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/40 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                      Preview output
+                    </p>
+                    <pre className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-800">
+                      {dryRunResult.output}
+                    </pre>
+                    <div className="mt-2 flex flex-wrap gap-3 border-t border-emerald-100 pt-2 text-[11px] text-gray-500">
+                      {dryRunResult.model != null && dryRunResult.model !== '' && (
+                        <span>{dryRunResult.model}</span>
+                      )}
+                      {dryRunResult.cost_usd != null && (
+                        <span>${dryRunResult.cost_usd.toFixed(4)}</span>
+                      )}
+                      {dryRunResult.finish_reason != null && dryRunResult.finish_reason !== '' && (
+                        <span>finish: {dryRunResult.finish_reason}</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ── Advanced settings (collapsed) ─────────────────────────── */}
+              <div className="mt-4 rounded-lg border border-gray-200 p-3">
+                <button
+                  type="button"
+                  aria-expanded={advancedOpen}
+                  onClick={() => {
+                    setAdvancedOpen((v) => !v)
+                  }}
+                  className="flex w-full items-center justify-between text-left text-xs font-semibold text-gray-700"
+                >
+                  <span>Advanced settings</span>
+                  <span aria-hidden="true" className="text-gray-400">
+                    {advancedOpen ? '▲' : '▼'}
+                  </span>
+                </button>
+                {advancedOpen && (
+                  <div className="mt-2">
+                    <p className="text-xs text-gray-500">
+                      The model, turn budget, the raw prompt and the agent’s capabilities. Most
+                      workflows never need to change these.
+                    </p>
+                    <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                      {advancedFields.map((field) => fieldControl(field, agentLabel(field)))}
+                      {redundantWebSearch && (
+                        <p
+                          role="status"
+                          className="rounded bg-amber-50 px-3 py-2 text-xs text-amber-800 sm:col-span-2"
+                        >
+                          This model is web-connected and already performs web search — the
+                          web_search capability is redundant here.
+                        </p>
+                      )}
+                    </div>
+                    <p className="mt-3 rounded bg-gray-50 px-3 py-2 text-xs text-gray-500">
+                      Approval modes (suggest / approve / auto) and confidence fallbacks are coming
+                      in a later phase.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {selectedAction != null && !isAgent && (
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              {configFieldsFor(selectedAction)
+                .filter((field) => fieldApplies(configFieldsFor(selectedAction), config, field))
+                .map((field) => fieldControl(field))}
+            </div>
+          )}
+
+          {/* ── Persistent primary actions ───────────────────────────────── */}
+          {isAgent ? (
+            <div className="sticky bottom-0 -mx-4 -mb-4 mt-4 border-t bg-white/95 px-4 py-3 backdrop-blur">
+              <p className="text-xs text-gray-600">{planSummary}</p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <button
+                  type="submit"
+                  disabled={busy}
+                  className="rounded border px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  {busy ? 'Saving…' : 'Save draft'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void runTest()
+                  }}
+                  disabled={!canTest}
+                  className="rounded border border-gray-900 px-3 py-1.5 text-sm font-medium text-gray-900 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  {testing ? 'Testing…' : 'Test workflow'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void submitForm(true)
+                  }}
+                  disabled={!canEnable}
+                  className="rounded bg-gray-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+                  title={
+                    !agentRequiredValid
+                      ? 'Add a name, agent name and instructions first.'
+                      : !testPassed
+                        ? 'Run a passing test to enable this workflow.'
+                        : undefined
+                  }
+                >
+                  Enable workflow
+                </button>
+                {editingId != null && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      resetForm(catalog)
+                    }}
+                    className="rounded border px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                )}
+                {!testPassed && agentRequiredValid && (
+                  <span className="text-xs text-gray-500">
+                    Enable unlocks after a passing test.
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-4 flex gap-2">
+              <button
+                type="submit"
+                disabled={busy}
+                className="rounded bg-gray-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+              >
+                {busy ? 'Saving…' : editingId != null ? 'Save changes' : 'Add workflow'}
+              </button>
+              {editingId != null && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetForm(catalog)
+                  }}
+                  className="rounded border px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          )}
         </form>
       )}
 
-      {selectedAction?.type === 'agent' && assistField != null && (
+      {isAgent && assistField != null && (
         <AssistantDrawer
           open
           onClose={() => {

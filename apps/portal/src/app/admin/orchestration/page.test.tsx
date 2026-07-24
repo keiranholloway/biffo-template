@@ -11,6 +11,8 @@ import type {
 import type { PromptComponent } from '@/lib/prompt-components-api'
 import type * as ApiClientModule from '@/lib/api-client'
 import type * as AgentChatApiModule from '@/lib/agent-chat-api'
+import type * as WorkflowDryRunApiModule from '@/lib/workflow-dryrun-api'
+import { ApiError } from '@/lib/api-client'
 
 // A stable getIdToken identity across renders, mirroring the real context's
 // `useCallback` — otherwise `client` (a useMemo of it) would change every render
@@ -34,6 +36,12 @@ const { sendAgentChat } = vi.hoisted(() => ({ sendAgentChat: vi.fn() }))
 vi.mock('@/lib/agent-chat-api', async () => {
   const actual = await vi.importActual<typeof AgentChatApiModule>('@/lib/agent-chat-api')
   return { ...actual, sendAgentChat }
+})
+
+const { runWorkflowDryRun } = vi.hoisted(() => ({ runWorkflowDryRun: vi.fn() }))
+vi.mock('@/lib/workflow-dryrun-api', async () => {
+  const actual = await vi.importActual<typeof WorkflowDryRunApiModule>('@/lib/workflow-dryrun-api')
+  return { ...actual, runWorkflowDryRun }
 })
 
 const {
@@ -346,6 +354,7 @@ describe('OrchestrationPage', () => {
       fn.mockReset()
     }
     sendAgentChat.mockReset()
+    runWorkflowDryRun.mockReset()
     fetchCatalog.mockResolvedValue(catalog)
     fetchRuns.mockResolvedValue([])
     fetchPromptComponents.mockResolvedValue([])
@@ -872,7 +881,7 @@ describe('OrchestrationPage', () => {
 
   // ── agent action: tools multiselect + curated model dropdown (ADR-0014) ─────
 
-  it('offers a tools multiselect from available_tools and writes a list', async () => {
+  it('offers a capabilities multiselect from available_tools and writes a list', async () => {
     fetchWorkflows.mockResolvedValue([])
     createWorkflow.mockResolvedValue(notify)
 
@@ -881,6 +890,11 @@ describe('OrchestrationPage', () => {
       target: { value: 'Enrich' },
     })
     fireEvent.change(screen.getByLabelText('Action'), { target: { value: 'agent' } })
+    // Agent name lives in the Outcome section (visible without expanding).
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'enricher' } })
+
+    // Capabilities and the raw prompt live under Advanced settings.
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }))
 
     // Options mirror the runtime's declared tools, with descriptions as help text.
     expect(screen.getByRole('checkbox', { name: /web_search/ })).toBeInTheDocument()
@@ -889,10 +903,9 @@ describe('OrchestrationPage', () => {
       screen.getByText('Search the public web and return the top results.'),
     ).toBeInTheDocument()
 
-    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'enricher' } })
     fireEvent.change(screen.getByLabelText('Instructions'), { target: { value: 'Enrich it' } })
     fireEvent.click(screen.getByRole('checkbox', { name: /web_search/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Add workflow' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
 
     await waitFor(() => {
       expect(createWorkflow).toHaveBeenCalled()
@@ -912,8 +925,9 @@ describe('OrchestrationPage', () => {
 
     // The rest of the agent form still renders — no crash.
     expect(screen.getByLabelText('Agent name')).toBeInTheDocument()
-    // No tools picker at all.
-    expect(screen.queryByText('Tools')).not.toBeInTheDocument()
+    // No capabilities picker at all, even under Advanced.
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }))
+    expect(screen.queryByText('Capabilities')).not.toBeInTheDocument()
     expect(screen.queryByRole('checkbox', { name: /web_search/ })).not.toBeInTheDocument()
   })
 
@@ -922,6 +936,7 @@ describe('OrchestrationPage', () => {
 
     render(<OrchestrationPage />)
     fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }))
 
     const model = screen.getByLabelText('Model')
     const values = Array.from(model.querySelectorAll('option')).map((o) => o.value)
@@ -940,6 +955,7 @@ describe('OrchestrationPage', () => {
 
     render(<OrchestrationPage />)
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }))
 
     // The stored model — not among the curated options — is shown and selected,
     // so loading the agent does not silently reassign it to the first option.
@@ -949,7 +965,7 @@ describe('OrchestrationPage', () => {
     expect(values).toContain('some-vendor/experimental-v9')
 
     // Save without touching the field: the off-list model round-trips unchanged.
-    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
 
     await waitFor(() => {
       expect(updateWorkflow).toHaveBeenCalled()
@@ -969,6 +985,7 @@ describe('OrchestrationPage', () => {
 
     render(<OrchestrationPage />)
     fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }))
 
     // No warning yet: default model is not web-connected and no tool is picked.
     expect(screen.queryByText(REDUNDANT_WARNING)).not.toBeInTheDocument()
@@ -978,10 +995,10 @@ describe('OrchestrationPage', () => {
     })
     fireEvent.click(screen.getByRole('checkbox', { name: /web_search/ }))
 
-    // Both conditions now hold — the hint appears, and the Add button stays
+    // Both conditions now hold — the hint appears, and the Save button stays
     // enabled (guidance, not a save-blocking gate).
     expect(screen.getByText(REDUNDANT_WARNING)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Add workflow' })).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Save draft' })).not.toBeDisabled()
   })
 
   it('does not warn for a :online model when no web_search tool is selected', async () => {
@@ -989,6 +1006,7 @@ describe('OrchestrationPage', () => {
 
     render(<OrchestrationPage />)
     fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }))
     fireEvent.change(screen.getByLabelText('Model'), {
       target: { value: 'moonshotai/kimi-k3:online' },
     })
@@ -1001,6 +1019,7 @@ describe('OrchestrationPage', () => {
 
     render(<OrchestrationPage />)
     fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }))
     // Default model 'moonshotai/kimi-k3' is not web-connected.
     fireEvent.click(screen.getByRole('checkbox', { name: /web_search/ }))
 
@@ -1032,6 +1051,9 @@ describe('OrchestrationPage', () => {
     fireEvent.change(screen.getByLabelText('Action'), { target: { value: 'agent' } })
     fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'scorer' } })
 
+    // The raw prompt (parts editor) lives under Advanced settings.
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }))
+
     // No plain Instructions textarea — a parts editor instead.
     expect(screen.queryByRole('textbox', { name: 'Instructions' })).not.toBeInTheDocument()
 
@@ -1049,7 +1071,7 @@ describe('OrchestrationPage', () => {
       target: { value: 'Be concise.' },
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Add workflow' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
 
     await waitFor(() => {
       expect(createWorkflow).toHaveBeenCalled()
@@ -1070,6 +1092,7 @@ describe('OrchestrationPage', () => {
 
     render(<OrchestrationPage />)
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }))
 
     // The pre-library string renders as one inline part carrying its text.
     expect(screen.getByLabelText('Instructions part 1 text')).toHaveValue('Enrich {company}.')
@@ -1091,6 +1114,8 @@ describe('OrchestrationPage', () => {
     fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
     fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'triage' } })
 
+    // The raw prompt (and its AI-draft button) live under Advanced settings.
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }))
     // The manual parts editor is present; the AI button is additive.
     fireEvent.click(screen.getByRole('button', { name: '✨ Draft Instructions with AI' }))
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'help me' } })
@@ -1124,15 +1149,217 @@ describe('OrchestrationPage', () => {
     fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
     fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'pipeline' } })
 
-    fireEvent.click(screen.getByRole('button', { name: '✨ Draft Goals with AI' }))
+    // Goals is relabelled "Result" in the Outcome section (task-oriented).
+    fireEvent.click(screen.getByRole('button', { name: '✨ Draft Result with AI' }))
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'help me' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Use this draft' }))
 
-    expect(await screen.findByLabelText('Goals part 1 text')).toHaveValue(
+    expect(await screen.findByLabelText('Result part 1 text')).toHaveValue(
       'Maximise qualified pipeline.',
     )
+    // The drawer still seeds the *goals* context regardless of the display label.
     const firstCall = sendAgentChat.mock.calls[0]?.[1] as { message: string }
     expect(firstCall.message).toContain('goals for agent “pipeline”')
+  })
+
+  // ── Outcome journey: sections, presets, Advanced disclosure (Phase 1) ──────
+
+  it('renders the outcome-oriented sections for the agent action', async () => {
+    fetchWorkflows.mockResolvedValue([])
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
+
+    expect(screen.getByText('When this happens (trigger)')).toBeInTheDocument()
+    expect(screen.getByText('Conditions (optional)')).toBeInTheDocument()
+    expect(screen.getByText('What should the agent do?')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Delivery' })).toBeInTheDocument()
+    expect(screen.getByText('Test & review')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Advanced settings' })).toBeInTheDocument()
+    // Delivery is an honest placeholder — it names Phase 3, not a fake integration.
+    expect(screen.getByText(/coming next \(Phase 3\)/)).toBeInTheDocument()
+  })
+
+  it('hides model, capabilities and the raw prompt until Advanced is expanded', async () => {
+    fetchWorkflows.mockResolvedValue([])
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
+
+    // Collapsed by default.
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
+    expect(screen.queryByText('Capabilities')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Maximum turns')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }))
+
+    expect(screen.getByLabelText('Model')).toBeInTheDocument()
+    expect(screen.getByText('Capabilities')).toBeInTheDocument()
+    expect(screen.getByLabelText('Maximum turns')).toBeInTheDocument()
+  })
+
+  it('fills instructions and the result from a guided preset', async () => {
+    fetchCatalog.mockResolvedValue(catalogPartsWithGoals)
+    fetchWorkflows.mockResolvedValue([])
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
+
+    // Presets are outcome-shaped cards, not blank boxes.
+    fireEvent.click(screen.getByRole('button', { name: /Research a prospect/ }))
+
+    // The result (goals) field, in the Outcome section, is now seeded.
+    expect(screen.getByLabelText<HTMLTextAreaElement>('Result part 1 text').value).toMatch(
+      /prospect brief/i,
+    )
+
+    // …and the raw instructions under Advanced were seeded too.
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }))
+    expect(screen.getByLabelText<HTMLTextAreaElement>('Instructions part 1 text').value).toMatch(
+      /research inbound prospects/i,
+    )
+  })
+
+  it('seeds the sample input data from the trigger fields (#505)', async () => {
+    fetchCatalog.mockResolvedValue(catalogWithFields)
+    fetchWorkflows.mockResolvedValue([])
+
+    render(<OrchestrationPage />)
+    // First trigger (lead.updated) declares status(enum)+score(number).
+    fireEvent.change(await screen.findByLabelText('Action'), { target: { value: 'agent' } })
+
+    const sample = screen.getByLabelText<HTMLTextAreaElement>('Sample input data')
+    const parsed = JSON.parse(sample.value) as Record<string, unknown>
+    expect(parsed).toEqual({ status: 'new', score: 42 })
+  })
+
+  // ── Test & review: dry-run preview + the enable gate (Phase 2) ─────────────
+
+  const fillTestableAgent = async () => {
+    fireEvent.change(await screen.findByPlaceholderText('Notify the sales team'), {
+      target: { value: 'Enrich lead' },
+    })
+    fireEvent.change(screen.getByLabelText('Action'), { target: { value: 'agent' } })
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'enricher' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }))
+    fireEvent.change(screen.getByLabelText('Instructions'), { target: { value: 'Enrich it.' } })
+  }
+
+  it('runs the dry-run and previews the returned output', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    runWorkflowDryRun.mockResolvedValue({
+      output: 'Acme is a mid-market SaaS company.',
+      model: 'moonshotai/kimi-k3',
+      cost_usd: 0.0021,
+      finish_reason: 'stop',
+    })
+
+    render(<OrchestrationPage />)
+    await fillTestableAgent()
+
+    // "Test workflow" is persistent (panel + sticky action bar) — either runs it.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement)
+
+    expect(await screen.findByText('Acme is a mid-market SaaS company.')).toBeInTheDocument()
+    expect(screen.getByText('test passed')).toBeInTheDocument()
+    // The request carried the inline instructions and the agent name.
+    const body = runWorkflowDryRun.mock.calls.at(0)?.[1] as {
+      agent_name: string
+      instructions: unknown
+    }
+    expect(body.agent_name).toBe('enricher')
+    expect(body.instructions).toBe('Enrich it.')
+  })
+
+  it('disables Enable until a test passes, and re-disables it after an edit', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    runWorkflowDryRun.mockResolvedValue({ output: 'ok' })
+
+    render(<OrchestrationPage />)
+    await fillTestableAgent()
+
+    // Required fields are valid but no test has run — Enable is gated.
+    expect(screen.getByRole('button', { name: 'Enable workflow' })).toBeDisabled()
+
+    // "Test workflow" is persistent (panel + sticky action bar) — either runs it.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement)
+    await screen.findByText('test passed')
+    expect(screen.getByRole('button', { name: 'Enable workflow' })).not.toBeDisabled()
+
+    // Editing the config invalidates the passing test — Enable re-locks.
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Enrich it thoroughly.' },
+    })
+    expect(screen.queryByText('test passed')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Enable workflow' })).toBeDisabled()
+  })
+
+  it('enables the workflow (enabled=true) once a test has passed', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    runWorkflowDryRun.mockResolvedValue({ output: 'ok' })
+    createWorkflow.mockResolvedValue(notify)
+
+    render(<OrchestrationPage />)
+    await fillTestableAgent()
+    // "Test workflow" is persistent (panel + sticky action bar) — either runs it.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement)
+    await screen.findByText('test passed')
+    fireEvent.click(screen.getByRole('button', { name: 'Enable workflow' }))
+
+    await waitFor(() => {
+      expect(createWorkflow).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action_type: 'agent', enabled: true }),
+      )
+    })
+  })
+
+  it('saves a draft with enabled=false without a test', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    createWorkflow.mockResolvedValue(notify)
+
+    render(<OrchestrationPage />)
+    await fillTestableAgent()
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+
+    await waitFor(() => {
+      expect(createWorkflow).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action_type: 'agent', enabled: false }),
+      )
+    })
+  })
+
+  it('shows a distinct unavailable state on 503 and does not pass the test', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    runWorkflowDryRun.mockRejectedValue(
+      new ApiError(503, JSON.stringify({ detail: 'The runtime is not configured.' })),
+    )
+
+    render(<OrchestrationPage />)
+    await fillTestableAgent()
+    // "Test workflow" is persistent (panel + sticky action bar) — either runs it.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement)
+
+    expect(await screen.findByText(/Testing is unavailable on this deployment/)).toBeInTheDocument()
+    expect(screen.queryByText('test passed')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Enable workflow' })).toBeDisabled()
+  })
+
+  it('shows a retryable error on 502 and keeps Enable gated', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    runWorkflowDryRun.mockRejectedValue(
+      new ApiError(502, JSON.stringify({ detail: 'The agent could not complete this turn.' })),
+    )
+
+    render(<OrchestrationPage />)
+    await fillTestableAgent()
+    // "Test workflow" is persistent (panel + sticky action bar) — either runs it.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement)
+
+    expect(await screen.findByText(/could not complete this turn/)).toBeInTheDocument()
+    expect(screen.queryByText('test passed')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Enable workflow' })).toBeDisabled()
   })
 })

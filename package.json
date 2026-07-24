@@ -40,8 +40,8 @@
       "prettier --write"
     ],
     "*.py": [
-      "uv run ruff check --fix",
-      "uv run ruff format"
+      "uv run ruff check --fix --force-exclude",
+      "uv run ruff format --force-exclude"
     ]
   },
   "pnpm": {

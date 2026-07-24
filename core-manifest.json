@@ -25,7 +25,8 @@
     ".husky/commit-msg",
     ".husky/pre-commit",
     ".husky/pre-push",
-    "infra/environments/dev/plugins.core.tf"
+    "infra/environments/dev/plugins.core.tf",
+    "infra/environments/dev/plugin-host.core.tf"
   ],
   "userOwned": [
     "services/",

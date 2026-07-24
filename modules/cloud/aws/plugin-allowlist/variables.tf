@@ -27,5 +27,5 @@ variable "core_plugins" {
     plugin means adding it in both places.
   EOT
   type        = list(string)
-  default     = ["orchestrator", "agent-runtime"]
+  default     = ["orchestrator", "agent-runtime", "host"]
 }

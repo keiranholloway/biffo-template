@@ -37,6 +37,17 @@ class CreateAgentRunRequest(BaseModel):
     thread_id: str | None = Field(default=None, max_length=36)
 
 
+class ThreadMessagesResponse(BaseModel):
+    """A thread's assembled conversation — the ordered user/assistant messages
+    across every run sharing ``thread_id`` (ADR-0016 §2). Read by a module driving
+    an async run over a chat it held on the synchronous spine (e.g. the Ideation
+    analyst), which builds from its ``input_payload`` and so needs the conversation
+    handed to it."""
+
+    thread_id: str
+    messages: list[Any] = Field(default_factory=list)
+
+
 class AgentRunResponse(BiffoBaseSchema):
     """A full run record — what the runtime reads before executing (§5)."""
 

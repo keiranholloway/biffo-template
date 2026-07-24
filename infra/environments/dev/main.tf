@@ -102,11 +102,17 @@ module "plugin_allowlist" {
 module "networking" {
   source = "../../../modules/cloud/aws/networking"
 
-  project_name       = var.project_name
-  environment        = local.environment
-  enable_nat_gateway = false # no NAT Gateway — saves ~$33/month; see JWKS/DB approach below
-  single_nat_gateway = true  # irrelevant when enable_nat_gateway = false, kept for explicitness
-  tags               = local.tags
+  project_name = var.project_name
+  environment  = local.environment
+  # dev egress via a cheap fck-nat NAT instance (~$3-5/mo), not billed interface
+  # VPC endpoints (~$70/mo once ≥3 services need one) or a managed NAT gateway
+  # (~$35/mo). The instance also routes to the Lambda control-plane API, which the
+  # in-VPC Core needs to invoke the agent-runtime (ADR-0016/0019). enable_nat_gateway
+  # stays false — the two are mutually exclusive.
+  enable_nat_gateway  = false
+  enable_nat_instance = true
+  single_nat_gateway  = true # irrelevant unless enable_nat_gateway = true; kept for explicitness
+  tags                = local.tags
 }
 
 moved {

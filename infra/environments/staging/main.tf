@@ -92,11 +92,17 @@ module "plugin_allowlist" {
 }
 
 module "networking" {
-  source             = "../../../modules/cloud/aws/networking"
-  project_name       = var.project_name
-  environment        = local.environment
-  single_nat_gateway = false
-  tags               = local.tags
+  source       = "../../../modules/cloud/aws/networking"
+  project_name = var.project_name
+  environment  = local.environment
+  # staging egress via a cheap fck-nat NAT instance (~$3-5/mo, ADR-0019). A single
+  # auto-recovering instance replaces a managed NAT gateway here: staging is
+  # pre-prod, so the dev-grade SPOF trade is worth the cost saving. prod keeps its
+  # HA managed NAT gateway (see infra/environments/prod). The two NAT postures are
+  # mutually exclusive, so enable_nat_gateway is set false explicitly.
+  enable_nat_gateway  = false
+  enable_nat_instance = true
+  tags                = local.tags
 }
 
 moved {

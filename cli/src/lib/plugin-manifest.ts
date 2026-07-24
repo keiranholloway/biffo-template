@@ -207,18 +207,30 @@ const HANDLER_IMPORT_PATH = /^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)+$/
 const REL_DIR = /^[\w][\w./-]*$/
 const NON_EMPTY_GROUP = 'required_group must be a non-empty Cognito group name.'
 
+// Mirrors plugin_user_surface.py's UserIngress. ADR-0021: `app` names the ASGI app
+// the shared plugin host mounts (preferred); `handler` (ADR-0018 per-plugin Lambda)
+// is legacy/optional; a plugin must declare exactly one.
+const APP_REF = /^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)*:[a-zA-Z_]\w*$/
 const UserIngressSchema = z
   .object({
+    required_group: z.string().min(1, NON_EMPTY_GROUP),
+    app: z
+      .string()
+      .regex(APP_REF, "must be an ASGI app reference '<module>:<attr>', e.g. 'ideation.app:app'")
+      .optional(),
+    handler: z
+      .string()
+      .regex(HANDLER_IMPORT_PATH, "must be a dotted import path, e.g. 'ideation.app.handler'")
+      .optional(),
     path: z
       .string()
       .regex(USER_PATH_SEGMENT, 'must be a single lowercase path segment, e.g. api')
       .default('api'),
-    required_group: z.string().min(1, NON_EMPTY_GROUP),
-    handler: z
-      .string()
-      .regex(HANDLER_IMPORT_PATH, "must be a dotted import path, e.g. 'ideation.app.handler'"),
   })
   .strict()
+  .refine((ui) => Boolean(ui.app ?? ui.handler), {
+    message: 'user_ingress must declare `app` (ADR-0021, preferred) or `handler` (legacy)',
+  })
 
 const UserFrontendSchema = z
   .object({

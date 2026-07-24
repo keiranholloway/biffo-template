@@ -86,5 +86,21 @@ locals {
     "arn:aws:sts::${data.aws_caller_identity.current.account_id}:assumed-role/${var.project_name}-${var.environment}-plugin-${name}-role/*"
   ]
 
-  all_service_principal_arns = distinct(concat(local.core_service_principal_arns, local.service_principal_arns))
+  # The shared plugin host (ADR-0021) — one always-present Lambda that runs every
+  # user-facing plugin's API and calls Core's internal routes on their behalf,
+  # asserting each plugin's identity (ADR-0021 §1a). Its role follows the same
+  # compute-module convention (function_name "plugin-host" => role
+  # "<project>-<env>-plugin-host-role"), so the same glob applies. Listed
+  # unconditionally, like the core plugins, and harmless where no host is deployed
+  # (the ARN then matches no principal). It is deliberately NOT in core_plugins:
+  # that list is paired 1:1 with plugins.core.tf's `plugin_name` module blocks by
+  # the core-plugins-sync guard, and the host is infrastructure, not a first-party
+  # plugin — it has no such block.
+  host_service_principal_arn = "arn:aws:sts::${data.aws_caller_identity.current.account_id}:assumed-role/${var.project_name}-${var.environment}-plugin-host-role/*"
+
+  all_service_principal_arns = distinct(concat(
+    local.core_service_principal_arns,
+    local.service_principal_arns,
+    [local.host_service_principal_arn],
+  ))
 }

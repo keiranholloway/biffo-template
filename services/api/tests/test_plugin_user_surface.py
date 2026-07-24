@@ -34,6 +34,25 @@ def test_user_ingress_requires_a_group_and_a_dotted_handler():
             UserIngress(required_group="founder", handler=bad_handler)
 
 
+def test_user_ingress_accepts_an_app_ref_the_shared_host_mounts():
+    # ADR-0021: `app` names the ASGI app the shared plugin host mounts; no handler.
+    ingress = UserIngress(required_group="founder", app="ideation.app:app")
+    assert ingress.app == "ideation.app:app"
+    assert ingress.handler is None
+
+
+def test_user_ingress_rejects_a_malformed_app_ref():
+    for bad in ("nocolon", "mod:", ":attr", "1bad:app", "mod:1bad"):
+        with pytest.raises(ValidationError):
+            UserIngress(required_group="founder", app=bad)
+
+
+def test_user_ingress_requires_app_or_handler():
+    # neither declared → the plugin has no ingress the host can mount
+    with pytest.raises(ValidationError):
+        UserIngress(required_group="founder")
+
+
 def test_user_ingress_rejects_unknown_keys():
     # extra="forbid": a typo'd key on a security surface fails loudly. Built via a
     # dict so the deliberately-unknown key isn't a static type error.

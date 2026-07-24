@@ -20,7 +20,7 @@ name = "biffo-plugin-sdk"
 # CLI *is* the template. The SDK is not: it is consumed by repos the template
 # does not own, so it keeps its own independent semver and its own release tag
 # (`sdk-v*`, see .github/workflows/publish-sdk.yml).
-version = "1.1.0"
+version = "1.2.0"
 description = "Biffo Plugin SDK — manifest validation, Core API client, and event system for Biffo plugins"
 readme = "README.md"
 license = "MIT"

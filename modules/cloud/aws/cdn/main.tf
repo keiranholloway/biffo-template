@@ -140,6 +140,20 @@ resource "aws_cloudfront_origin_access_control" "portal" {
   signing_protocol                  = "sigv4"
 }
 
+# One OAC per user-facing plugin api origin (ADR-0018). Signs CloudFront's origin
+# requests to the plugin's Lambda Function URL with SigV4, so the Function URL can
+# be AWS_IAM-auth (never public — governed accounts block public Function URLs)
+# and only this distribution can invoke it. The plugin's Terraform grants
+# cloudfront.amazonaws.com invoke on its Function URL scoped to this distribution.
+resource "aws_cloudfront_origin_access_control" "plugin_api" {
+  for_each                          = { for p in var.plugin_api_origins : p.name => p }
+  name                              = "${local.name_prefix}-plugin-api-${each.key}"
+  description                       = "OAC for the ${each.key} plugin's Lambda Function URL"
+  origin_access_control_origin_type = "lambda"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
 # Dedicated log-delivery bucket for CloudFront access logs (CKV_AWS_86).
 resource "aws_s3_bucket" "cf_logs" {
   #checkov:skip=CKV_AWS_18:This IS the log-delivery bucket; logging it to itself is circular.
@@ -277,6 +291,13 @@ resource "aws_cloudfront_distribution" "portal" {
     content {
       domain_name = origin.value.function_url_domain
       origin_id   = "plugin-api-${origin.value.name}"
+      # Sign every origin request to the Function URL with SigV4 (ADR-0018). The
+      # Function URL is AWS_IAM-auth and NEVER public — a governed account blocks
+      # public (NONE) Function URLs — so only this distribution, via OAC, can
+      # invoke it. CloudFront uses the Authorization header for the signature, so
+      # a plugin's own auth token must travel in a different header (the SDK reads
+      # the founder JWT from X-Biffo-Founder-Token, not Authorization).
+      origin_access_control_id = aws_cloudfront_origin_access_control.plugin_api[origin.value.name].id
       custom_origin_config {
         http_port              = 80
         https_port             = 443

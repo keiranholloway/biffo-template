@@ -88,7 +88,27 @@ def _app(claims: dict) -> TestClient:
     return TestClient(app)
 
 
-def test_dependency_allows_a_founder_and_carries_the_token():
+def test_dependency_reads_the_founder_token_header_raw():
+    # ADR-0018: behind CloudFront OAC the JWT rides X-Biffo-Founder-Token (raw,
+    # no "Bearer " prefix), because Authorization is consumed by SigV4 signing.
+    client = _app({"sub": "alice", "cognito:groups": ["founder"]})
+    resp = client.get("/whoami", headers={"X-Biffo-Founder-Token": "tok-xyz"})
+    assert resp.status_code == 200
+    assert resp.json() == {"sub": "alice", "token": "tok-xyz"}
+
+
+def test_founder_token_header_takes_precedence_over_authorization():
+    client = _app({"sub": "alice", "cognito:groups": ["founder"]})
+    resp = client.get(
+        "/whoami",
+        headers={"X-Biffo-Founder-Token": "founder-tok", "Authorization": "Bearer sigv4-sig"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["token"] == "founder-tok"
+
+
+def test_dependency_allows_a_founder_via_authorization_fallback():
+    # Authorization: Bearer still works for direct/local invocation (no OAC).
     client = _app({"sub": "alice", "cognito:groups": ["founder"]})
     resp = client.get("/whoami", headers={"Authorization": "Bearer tok-xyz"})
     assert resp.status_code == 200

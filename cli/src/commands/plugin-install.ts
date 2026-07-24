@@ -9,6 +9,7 @@ import { log } from '../lib/logger.js'
 import { pluginDir } from '../lib/plugin-locations.js'
 import { validateManifest, type PluginManifest } from '../lib/plugin-manifest.js'
 import { syncPluginTerraform } from '../lib/plugin-terraform-wiring.js'
+import { ensureWorkspaceSources, workspaceMemberNames } from '../lib/plugin-workspace-sources.js'
 
 const TARGET_PATTERN = /^([a-z][a-z0-9-]*)@(\d+\.\d+)$/
 
@@ -320,6 +321,23 @@ export async function runPluginInstall(
         filter: (src) => !LOCAL_COPY_EXCLUDES.has(basename(src)),
       })
       log.success(`Installed plugin source at ${relTargetDir}/`)
+    }
+
+    // Wire the vendored plugin's deps to the instance's uv workspace. If the
+    // instance provides one of them as a member (e.g. biffo-plugin-sdk), uv
+    // refuses to resolve the plugin — and the migration step below is the first
+    // `uv run` to hit it — unless its pyproject sources that dep from the
+    // workspace. The standalone repo resolves it from PyPI; only the vendored
+    // copy needs this. (#biffo-plugin-install user-facing series.)
+    const pluginPyproject = join(targetDir, 'pyproject.toml')
+    if (existsSync(pluginPyproject)) {
+      const sourced = ensureWorkspaceSources(pluginPyproject, workspaceMemberNames(options.cwd))
+      if (sourced.length > 0) {
+        log.info(
+          `Sourced ${sourced.join(', ')} from the workspace in ${relTargetDir}/pyproject.toml ` +
+            '(the instance provides it as a workspace member).',
+        )
+      }
     }
 
     const stagePaths = [relTargetDir]

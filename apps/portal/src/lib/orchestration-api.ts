@@ -51,6 +51,21 @@ export interface WorkflowInput {
   enabled: boolean
 }
 
+/**
+ * One field of a trigger's event payload, described so the "Only when…"
+ * condition editor can offer real field names (and enumerable values) instead
+ * of un-guessable free text (#505). Advisory only — Core never rejects a
+ * `trigger_filter` on a field not listed here.
+ */
+export interface CatalogTriggerField {
+  name: string
+  label: string
+  /** Coarse UI hint. `enum` drives a value dropdown from `values`. */
+  type: 'string' | 'number' | 'boolean' | 'enum'
+  /** Selectable values for an enumerable field; empty means free-text value. */
+  values: string[]
+}
+
 export interface CatalogTrigger {
   source: string
   detail_type: string
@@ -63,6 +78,12 @@ export interface CatalogTrigger {
    * field; treat a missing value as `declared` (see `originOf`).
    */
   origin?: 'declared' | 'observed'
+  /**
+   * The trigger's payload fields, for the condition editor's dropdowns (#505).
+   * Optional so the portal still renders against a Core API predating it; a
+   * missing or empty list means "no known fields" → free-text conditions.
+   */
+  fields?: CatalogTriggerField[]
 }
 
 export interface CatalogActionField {

@@ -25,10 +25,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..dependencies import require_admin
 from ..events import emit_event
+from ..events.event_fields import fields_for_crud_table
 from ..events.registry import (
     WORKFLOW_DEFINITION_CREATED,
     WORKFLOW_DEFINITION_DELETED,
     WORKFLOW_DEFINITION_UPDATED,
+    EventField,
     registered_events,
 )
 from ..middleware.auth import AuthenticatedUser
@@ -69,6 +71,18 @@ runs_router = APIRouter(prefix="/orchestration/runs", tags=["orchestration"])
 # Its manifest carries the tool declarations (ADR-0014 §7); Core reads them off
 # the manifest — it never imports the runtime's Python (ADR-0002).
 _AGENT_RUNTIME_PLUGIN = "agent-runtime"
+
+
+def _serialize_fields(fields: tuple[EventField, ...] | list[EventField]) -> list[dict[str, Any]]:
+    """A trigger's payload fields as JSON dicts for the catalog (#505).
+
+    ``{name, label, type, values}`` per field; ``values`` is the list of choices
+    for an enumerable field and empty otherwise. Advisory metadata — it drives
+    the builder's condition dropdowns, never ``trigger_filter`` validation.
+    """
+    return [
+        {"name": f.name, "label": f.label, "type": f.type, "values": list(f.values)} for f in fields
+    ]
 
 
 def _agent_runtime_tools() -> list[dict[str, Any]]:
@@ -138,6 +152,9 @@ async def get_catalog(
                 "label": e.label,
                 "description": e.description,
                 "origin": "declared",
+                # Advisory field metadata for the "Only when…" editor (#505); an
+                # event that declares none serialises as [] (UI → free text).
+                "fields": _serialize_fields(e.fields),
             }
         )
         seen.add((e.source, e.detail_type))
@@ -163,6 +180,10 @@ async def get_catalog(
                     "label": f"{table} {verb}",
                     "description": f"A {table} row was {verb}.",
                     "origin": "declared",
+                    # A CRUD event's payload is the mutated row, so its fields are
+                    # the table's columns, introspected from the model (#505).
+                    # Empty when the table has no locatable model.
+                    "fields": _serialize_fields(fields_for_crud_table(table)),
                 }
             )
             seen.add(key)
@@ -180,6 +201,9 @@ async def get_catalog(
                 "label": observed.detail_type,
                 "description": "Seen on the event bus.",
                 "origin": "observed",
+                # An undeclared, observed event has no described payload — the UI
+                # falls back to free-text conditions (#505).
+                "fields": [],
             }
         )
         seen.add(key)

@@ -116,13 +116,20 @@ ships **UI routes/components** that the shell mounts at `<base>/<plugin>/*`. The
 is no per-plugin bucket, no per-plugin CloudFront behaviour, and no
 `sibling_origins`/`plugin_api_origins` registration for a plugin.
 
-Because there is a single SPA on a single origin, client-side routing owns every
-plugin path and API errors flow through the shared API path as JSON — **the
-distribution-wide `403/404 → index.html` custom-error-response conflict that broke
-ADR-0018's plugin APIs simply cannot occur.** The shared-session SSO mechanic from
-ADR-0007 §3 (same Cognito App Client → shared session on same origin, zero extra
-code) carries over unchanged and is in fact simpler here: one client, one origin,
-no per-sibling path client to reason about.
+With a single SPA on a single origin, client-side routing owns every plugin path.
+This removes the conflict that broke ADR-0018's plugin APIs — but **only if the
+SPA deep-link fallback stops using distribution-wide CloudFront custom-error
+responses.** Today the distribution maps `403/404 → /index.html (200)`; that is
+distribution-wide, so it rewrites a plugin API's JSON `403/404` into HTML (this is
+the live `Unexpected token '<'` bug). **Part of this seam is therefore replacing
+those custom-error responses with per-behaviour SPA routing** — a CloudFront
+Function (or S3 error document) scoped to the app-shell behaviour only, so the API
+behaviour's error responses are never rewritten. It does not disappear for free;
+it must be built.
+
+The shared-session SSO mechanic from ADR-0007 §3 (same Cognito App Client →
+shared session on same origin, zero extra code) carries over unchanged, and is
+simpler here: one client, one origin, no per-sibling path client to reason about.
 
 ### 3. The plugin contract becomes thin
 
@@ -140,6 +147,12 @@ Gateway / Function URL / OAC; the CDN `plugin_api_origins` routing and the
 `plugin wire` command; the two-apply install; per-plugin frontend buckets and
 `sibling_origins` entries for plugin UIs. ADR-0007 siblings remain **only** for
 genuinely standalone applications in separate repos, not for plugin UIs.
+
+**Shared-runtime bundle.** The plugin host packages every installed plugin's
+router and its dependencies, so its bundle and cold-start grow with plugin count.
+For the target scale (tens of first-party wrappers) this is a non-issue; if it
+ever bites, `isolated: true` peels a heavy plugin off into its own host, and the
+host can move to a container image. Worth measuring, not worth pre-optimising.
 
 **Marginal cost of a plugin** drops from "a production infrastructure project +
 ~30-min-per-mistake feedback loop" to "write a router (the prompts/logic that are
@@ -163,6 +176,23 @@ shared chat spine (ADR-0016/0017). Only the per-plugin infrastructure wrapper is
 removed. Migrating Ideation onto this ADR (mount its existing router + UI, tear
 down its Lambda/gateway/bucket) is the proof, and incidentally fixes its current
 production bugs.
+
+## Open decisions (resolve before the frontend seam)
+
+1. **Where the app shell lives.** It cannot be the admin portal — the portal is
+   strictly the `/admin` console (core-manifest / #306), and the instance's
+   product UI belongs elsewhere. Recommendation: a **new template-owned founder
+   app shell** — a single SPA served on the shared distribution at the founder
+   paths, gated to the founder group, distinct from both `/admin` (portal) and
+   `/` (the user's product sibling). This keeps the portal-is-admin boundary
+   intact. Needs a nod before building the frontend.
+2. **How plugin UI is delivered into the shell.** Build-time inclusion (the
+   shell's build vendors installed plugins' UI, one deploy) is simplest and
+   matches how the backend vendors routers; runtime module-federation is the
+   heavier alternative. Recommend build-time first.
+
+The **backend seam (§1/§1a) has no such open questions** and is where the
+migration starts.
 
 ## Migration
 

@@ -106,6 +106,30 @@ resource "aws_apigatewayv2_route" "internal" {
   authorization_type = "AWS_IAM"
 }
 
+# User-facing plugin ingress (ADR-0021). One shared plugin-host Lambda runs every
+# installed user-facing plugin's API, mounted at /api/v1/plugins/<name>/*. The
+# gateway's Cognito JWT authorizer authenticates the founder here; the host then
+# enforces each plugin's declared group and dispatches to its router. This replaces
+# ADR-0018's per-plugin Function URL / API Gateway / CloudFront routing. Inert
+# unless a plugin host is deployed (plugin_host_function_arn set).
+resource "aws_apigatewayv2_integration" "plugin_host" {
+  count                  = var.plugin_host_function_arn == "" ? 0 : 1
+  api_id                 = aws_apigatewayv2_api.main.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = var.plugin_host_function_arn
+  payload_format_version = "2.0"
+  timeout_milliseconds   = 29000
+}
+
+resource "aws_apigatewayv2_route" "plugins" {
+  count              = var.plugin_host_function_arn == "" ? 0 : 1
+  api_id             = aws_apigatewayv2_api.main.id
+  route_key          = "ANY /api/v1/plugins/{proxy+}"
+  target             = "integrations/${aws_apigatewayv2_integration.plugin_host[0].id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
 # Catch-all — all other routes require a valid Cognito JWT
 resource "aws_apigatewayv2_route" "default" {
   api_id             = aws_apigatewayv2_api.main.id
@@ -149,6 +173,17 @@ resource "aws_lambda_permission" "api_gateway" {
   statement_id  = "AllowAPIGatewayInvoke"
   action        = "lambda:InvokeFunction"
   function_name = var.lambda_function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.main.execution_arn}/*/*"
+}
+
+# Lets this API Gateway invoke the shared plugin host (ADR-0021). Inert unless a
+# host is deployed.
+resource "aws_lambda_permission" "plugin_host" {
+  count         = var.plugin_host_function_name == "" ? 0 : 1
+  statement_id  = "AllowAPIGatewayInvokePluginHost"
+  action        = "lambda:InvokeFunction"
+  function_name = var.plugin_host_function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.main.execution_arn}/*/*"
 }

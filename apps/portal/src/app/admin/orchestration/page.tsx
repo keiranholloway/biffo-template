@@ -16,6 +16,7 @@ import {
   type WorkflowCatalog,
   type WorkflowDefinition,
   type CatalogTrigger,
+  type CatalogTriggerField,
   type WorkflowInput,
   type WorkflowRun,
 } from '@/lib/orchestration-api'
@@ -55,6 +56,24 @@ function toTriggerFilter(rows: FilterRow[]): Record<string, string> | null {
 
 function toFilterRows(filter: Record<string, string> | null | undefined): FilterRow[] {
   return Object.entries(filter ?? {}).map(([field, value]) => ({ field, value }))
+}
+
+// The field-select sentinel that reveals the free-text "custom field" input —
+// the escape hatch so a trigger's undeclared field (and observed events with no
+// declared fields at all) can still be filtered on.
+const CUSTOM_FIELD = '__custom__'
+
+// A condition's chosen field definition, if it names one the trigger declares.
+function findTriggerField(
+  fields: CatalogTriggerField[],
+  name: string,
+): CatalogTriggerField | undefined {
+  return fields.find((f) => f.name === name)
+}
+
+// An enumerable field offers a value dropdown; anything else stays free text.
+function isEnumerable(field: CatalogTriggerField | undefined): boolean {
+  return field?.type === 'enum' && field.values.length > 0
 }
 
 // Run status -> badge colour. Terminal failure reads red, success green, and
@@ -288,6 +307,12 @@ export default function OrchestrationPage() {
     (t) => triggerKeyOf(t) === triggerKey,
   )
 
+  // The selected trigger's declared payload fields (#505). Drives the "Only
+  // when…" condition dropdowns; empty (observed events, or a Core API predating
+  // the metadata) falls back to today's free-text field + value inputs.
+  const triggerFields: CatalogTriggerField[] = selectedTrigger?.fields ?? []
+  const hasTriggerFields = triggerFields.length > 0
+
   // The filter narrows the dropdown but never drops the current selection —
   // otherwise the browser would silently reassign the select's value.
   const triggerGroups = useMemo(
@@ -491,47 +516,120 @@ export default function OrchestrationPage() {
               run on every one.
             </p>
             <div className="mt-2 space-y-2">
-              {filterRows.map((row, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <input
-                    aria-label={`Condition ${String(i + 1)} field`}
-                    value={row.field}
-                    onChange={(e) => {
-                      setFilterRows((rows) =>
-                        rows.map((r, j) => (j === i ? { ...r, field: e.target.value } : r)),
-                      )
-                    }}
-                    placeholder="status"
-                    className="rounded border px-2 py-1 text-sm"
-                  />
-                  <span className="text-xs text-gray-400">is</span>
-                  <input
-                    aria-label={`Condition ${String(i + 1)} value`}
-                    value={row.value}
-                    onChange={(e) => {
-                      setFilterRows((rows) =>
-                        rows.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)),
-                      )
-                    }}
-                    placeholder="won"
-                    className="rounded border px-2 py-1 text-sm"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFilterRows((rows) => rows.filter((_, j) => j !== i))
-                    }}
-                    className="rounded border px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
+              {filterRows.map((row, i) => {
+                const label = `Condition ${String(i + 1)}`
+                // When the trigger declares no fields, the field IS free text —
+                // never treat that as a "custom" escape from a known list.
+                const isKnownField =
+                  hasTriggerFields && findTriggerField(triggerFields, row.field) != null
+                const chosenField = findTriggerField(triggerFields, row.field)
+                const setRow = (patch: Partial<FilterRow>) => {
+                  setFilterRows((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+                }
+                return (
+                  <div key={i} className="flex flex-wrap items-center gap-2">
+                    {hasTriggerFields ? (
+                      <select
+                        aria-label={`${label} field`}
+                        value={isKnownField ? row.field : CUSTOM_FIELD}
+                        onChange={(e) => {
+                          if (e.target.value === CUSTOM_FIELD) {
+                            // Reveal the free-text input; clear the known name.
+                            setRow({ field: '', value: '' })
+                            return
+                          }
+                          const next = findTriggerField(triggerFields, e.target.value)
+                          // Drop a stale value when switching to an enumerable
+                          // field it doesn't belong to (avoids an invalid option).
+                          const keepValue =
+                            !isEnumerable(next) || (next?.values.includes(row.value) ?? false)
+                          setRow({ field: e.target.value, value: keepValue ? row.value : '' })
+                        }}
+                        className="rounded border px-2 py-1 text-sm"
+                      >
+                        {triggerFields.map((f) => (
+                          <option key={f.name} value={f.name}>
+                            {f.label}
+                          </option>
+                        ))}
+                        <option value={CUSTOM_FIELD}>Custom field…</option>
+                      </select>
+                    ) : (
+                      <input
+                        aria-label={`${label} field`}
+                        value={row.field}
+                        onChange={(e) => {
+                          setRow({ field: e.target.value })
+                        }}
+                        placeholder="status"
+                        className="rounded border px-2 py-1 text-sm"
+                      />
+                    )}
+                    {hasTriggerFields && !isKnownField && (
+                      <input
+                        aria-label={`${label} custom field`}
+                        value={row.field}
+                        onChange={(e) => {
+                          setRow({ field: e.target.value })
+                        }}
+                        placeholder="field name"
+                        className="rounded border px-2 py-1 text-sm"
+                      />
+                    )}
+                    <span className="text-xs text-gray-400">is</span>
+                    {isEnumerable(chosenField) ? (
+                      <select
+                        aria-label={`${label} value`}
+                        value={row.value}
+                        onChange={(e) => {
+                          setRow({ value: e.target.value })
+                        }}
+                        className="rounded border px-2 py-1 text-sm"
+                      >
+                        <option value="">Choose…</option>
+                        {chosenField?.values.map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                        {row.value !== '' &&
+                          !(chosenField?.values.includes(row.value) ?? false) && (
+                            <option value={row.value}>{row.value} (current)</option>
+                          )}
+                      </select>
+                    ) : (
+                      <input
+                        aria-label={`${label} value`}
+                        value={row.value}
+                        onChange={(e) => {
+                          setRow({ value: e.target.value })
+                        }}
+                        placeholder="won"
+                        className="rounded border px-2 py-1 text-sm"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFilterRows((rows) => rows.filter((_, j) => j !== i))
+                      }}
+                      className="rounded border px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )
+              })}
             </div>
             <button
               type="button"
               onClick={() => {
-                setFilterRows((rows) => [...rows, { field: '', value: '' }])
+                // Seed a new row with the trigger's first field when it has any,
+                // so the dropdown starts on a real field rather than "custom".
+                setFilterRows((rows) => [
+                  ...rows,
+                  { field: triggerFields[0]?.name ?? '', value: '' },
+                ])
               }}
               className="mt-2 rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
             >

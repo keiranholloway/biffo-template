@@ -493,6 +493,83 @@ def test_catalog_includes_declared_crud_events(client: TestClient, monkeypatch):
     assert "demo.requested" in by_dt
 
 
+# --- trigger-aware "Only when…" field metadata (#505) ------------------------
+
+
+def test_every_catalog_trigger_carries_a_fields_list(client: TestClient):
+    # Advisory metadata for the condition editor: present (possibly empty) on
+    # every trigger so the portal can always read it.
+    body = client.get(f"{_BASE}/catalog").json()
+    for t in body["triggers"]:
+        assert isinstance(t["fields"], list)
+
+
+def test_declared_event_fields_flow_through_the_catalog(client: TestClient):
+    from api.events.registry import EventField, EventType, register_event
+
+    register_event(
+        EventType(
+            source="test.core",
+            detail_type="order.placed",
+            label="Order placed",
+            fields=(
+                EventField(name="status", label="Status", type="enum", values=("new", "shipped")),
+                EventField(name="total", label="Total", type="number"),
+            ),
+        )
+    )
+
+    body = client.get(f"{_BASE}/catalog").json()
+    trigger = next(t for t in body["triggers"] if t["detail_type"] == "order.placed")
+    by_name = {f["name"]: f for f in trigger["fields"]}
+    assert by_name["status"] == {
+        "name": "status",
+        "label": "Status",
+        "type": "enum",
+        "values": ["new", "shipped"],
+    }
+    assert by_name["total"]["type"] == "number"
+    assert by_name["total"]["values"] == []
+
+
+def test_crud_trigger_fields_are_derived_from_the_table_columns(client: TestClient, monkeypatch):
+    # A CRUD trigger's fields are its model's columns. Use a real shipped model so
+    # the derivation runs against genuine SQLAlchemy metadata.
+    from api.models.plugin_table import PermissionRule, TablePermissions
+    from api.models.prompt_component import PromptComponent  # noqa: F401 — registers on Base
+
+    registry = {"prompt_components": TablePermissions(create=PermissionRule(allowed=True))}
+    monkeypatch.setattr("api.routers.orchestration.get_permissions_registry", lambda **_: registry)
+
+    body = client.get(f"{_BASE}/catalog").json()
+    trigger = next(t for t in body["triggers"] if t["detail_type"] == "prompt_components.created")
+    names = {f["name"] for f in trigger["fields"]}
+    # User columns are surfaced; auto-managed ones are not.
+    assert {"name", "body", "description"} <= names
+    assert not ({"id", "tenant_id", "created_at", "updated_at"} & names)
+
+
+def test_crud_trigger_with_no_locatable_model_yields_empty_fields(client: TestClient, monkeypatch):
+    # Degrade gracefully: a table with no model still lists as a trigger, just
+    # with no field metadata (UI falls back to free text) — never a crash.
+    from api.models.plugin_table import PermissionRule, TablePermissions
+
+    registry = {"widgets": TablePermissions(create=PermissionRule(allowed=True))}
+    monkeypatch.setattr("api.routers.orchestration.get_permissions_registry", lambda **_: registry)
+
+    body = client.get(f"{_BASE}/catalog").json()
+    trigger = next(t for t in body["triggers"] if t["detail_type"] == "widgets.created")
+    assert trigger["fields"] == []
+
+
+def test_trigger_filter_stays_permissive_for_undeclared_fields(client: TestClient):
+    # #505 is advisory UI metadata, NOT a new server constraint: a filter on a
+    # field the trigger does not declare must still be accepted, exactly as before.
+    resp = client.post(_BASE, json=_valid_body(trigger_filter={"not_a_declared_field": "x"}))
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["trigger_filter"] == {"not_a_declared_field": "x"}
+
+
 # --- workflow-definition state-change events (ADR-0002, #225) ----------------
 
 

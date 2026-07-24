@@ -22,17 +22,41 @@ from .base import BiffoEvent
 
 
 @dataclass(frozen=True)
+class EventField:
+    """A single field of an event's payload, described for the builder UI (#505).
+
+    Advisory metadata only — it drives the "Only when…" condition editor's
+    dropdowns (offer the real field names, and enumerable values where known)
+    instead of un-guessable free text. It never constrains what may be filtered
+    on: ``trigger_filter`` stays as permissive as before.
+
+    ``type`` is a coarse UI hint (``"string"``/``"number"``/``"boolean"``/
+    ``"enum"``). ``values`` is populated only for an enumerable field (``type ==
+    "enum"``); an empty tuple means "free-text value".
+    """
+
+    name: str
+    label: str
+    type: str = "string"
+    values: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class EventType:
     """A platform event a workflow can trigger on.
 
     ``source``/``detail_type`` are the EventBridge identity; ``label``/
-    ``description`` are the human copy the builder UI shows.
+    ``description`` are the human copy the builder UI shows. ``fields`` optionally
+    describes the payload so the builder can offer real field dropdowns for the
+    "Only when…" conditions (#505); it defaults to empty, so existing
+    registrations are unaffected and a field-less event still works (free text).
     """
 
     source: str
     detail_type: str
     label: str
     description: str = ""
+    fields: tuple[EventField, ...] = ()
 
     def build(
         self,

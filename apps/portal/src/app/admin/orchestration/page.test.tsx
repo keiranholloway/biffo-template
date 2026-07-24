@@ -196,6 +196,27 @@ const catalog: WorkflowCatalog = {
   ],
 }
 
+// A catalog whose FIRST trigger declares payload fields (#505), so the builder
+// loads straight into the trigger-aware "Only when…" dropdowns. It keeps the
+// field-less triggers too, to exercise the free-text fallback in one fixture.
+const catalogWithFields: WorkflowCatalog = {
+  triggers: [
+    {
+      source: 'biffo.core',
+      detail_type: 'lead.updated',
+      label: 'Lead updated',
+      description: 'A lead row changed.',
+      origin: 'declared',
+      fields: [
+        { name: 'status', label: 'Status', type: 'enum', values: ['new', 'won', 'lost'] },
+        { name: 'score', label: 'Score', type: 'number', values: [] },
+      ],
+    },
+    ...catalog.triggers,
+  ],
+  actions: catalog.actions,
+}
+
 // An agent action whose runtime registered no tools — the picker must not render.
 const catalogNoTools: WorkflowCatalog = {
   triggers: catalog.triggers,
@@ -667,6 +688,138 @@ describe('OrchestrationPage', () => {
     fetchWorkflows.mockResolvedValue([{ ...notify, trigger_filter: { status: 'won' } }])
     render(<OrchestrationPage />)
     expect(await screen.findByText('filtered')).toBeInTheDocument()
+  })
+
+  // ── trigger-aware conditions (#505) ───────────────────────────────────────
+
+  it('populates the field dropdown from the trigger fields', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    fetchCatalog.mockResolvedValue(catalogWithFields)
+
+    render(<OrchestrationPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Add condition' }))
+
+    const fieldSelect = screen.getByLabelText('Condition 1 field')
+    expect(fieldSelect.tagName).toBe('SELECT')
+    expect(Array.from(fieldSelect.querySelectorAll('option')).map((o) => o.textContent)).toEqual([
+      'Status',
+      'Score',
+      'Custom field…',
+    ])
+  })
+
+  it('shows a value dropdown for an enumerable field and submits the chosen value', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    fetchCatalog.mockResolvedValue(catalogWithFields)
+    createWorkflow.mockResolvedValue(notify)
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByPlaceholderText('Notify the sales team'), {
+      target: { value: 'Won leads' },
+    })
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: 'a@b.com' } })
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: 'c@d.com' } })
+    fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'Hi' } })
+    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'Hello' } })
+
+    // A new condition seeds to the trigger's first field (status, enum), so the
+    // value control is a dropdown of that field's values.
+    fireEvent.click(screen.getByRole('button', { name: 'Add condition' }))
+    const valueSelect = screen.getByLabelText('Condition 1 value')
+    expect(valueSelect.tagName).toBe('SELECT')
+    expect(Array.from(valueSelect.querySelectorAll('option')).map((o) => o.value)).toEqual([
+      '',
+      'new',
+      'won',
+      'lost',
+    ])
+    fireEvent.change(valueSelect, { target: { value: 'won' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add workflow' }))
+
+    await waitFor(() => {
+      expect(createWorkflow).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ trigger_filter: { status: 'won' } }),
+      )
+    })
+  })
+
+  it('keeps a free-text value for a non-enumerable declared field', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    fetchCatalog.mockResolvedValue(catalogWithFields)
+
+    render(<OrchestrationPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Add condition' }))
+    // Switch the field to the numeric (non-enumerable) one.
+    fireEvent.change(screen.getByLabelText('Condition 1 field'), { target: { value: 'score' } })
+    // The value control falls back to a free-text input.
+    expect(screen.getByLabelText('Condition 1 value').tagName).toBe('INPUT')
+  })
+
+  it('offers a custom-field escape hatch for an undeclared field', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    fetchCatalog.mockResolvedValue(catalogWithFields)
+    createWorkflow.mockResolvedValue(notify)
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByPlaceholderText('Notify the sales team'), {
+      target: { value: 'Advanced' },
+    })
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: 'a@b.com' } })
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: 'c@d.com' } })
+    fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'Hi' } })
+    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'Hello' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add condition' }))
+    fireEvent.change(screen.getByLabelText('Condition 1 field'), {
+      target: { value: '__custom__' },
+    })
+    // The free-text field-name input appears; type an undeclared field.
+    fireEvent.change(screen.getByLabelText('Condition 1 custom field'), {
+      target: { value: 'region' },
+    })
+    fireEvent.change(screen.getByLabelText('Condition 1 value'), { target: { value: 'emea' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add workflow' }))
+
+    await waitFor(() => {
+      expect(createWorkflow).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ trigger_filter: { region: 'emea' } }),
+      )
+    })
+  })
+
+  it('falls back to a free-text field input when the trigger has no fields', async () => {
+    // The default catalog's triggers declare no fields, so the condition editor
+    // stays exactly as before — a plain text field + value (no regression).
+    fetchWorkflows.mockResolvedValue([])
+
+    render(<OrchestrationPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Add condition' }))
+    expect(screen.getByLabelText('Condition 1 field').tagName).toBe('INPUT')
+    expect(screen.getByLabelText('Condition 1 value').tagName).toBe('INPUT')
+  })
+
+  it('loads an existing filter on an undeclared field via the custom escape hatch', async () => {
+    // Editing a definition whose stored filter names a field the trigger does
+    // not declare must round-trip: the field select shows "Custom field…" and
+    // the free-text input is prefilled.
+    fetchCatalog.mockResolvedValue(catalogWithFields)
+    fetchWorkflows.mockResolvedValue([
+      {
+        ...notify,
+        trigger_source: 'biffo.core',
+        trigger_detail_type: 'lead.updated',
+        trigger_filter: { region: 'emea' },
+      },
+    ])
+
+    render(<OrchestrationPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+
+    expect(screen.getByLabelText('Condition 1 field')).toHaveValue('__custom__')
+    expect(screen.getByLabelText('Condition 1 custom field')).toHaveValue('region')
+    expect(screen.getByLabelText('Condition 1 value')).toHaveValue('emea')
   })
 
   it('renders the run history with workflow name and outcome', async () => {

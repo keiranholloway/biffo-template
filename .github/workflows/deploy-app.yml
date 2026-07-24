@@ -46,6 +46,12 @@ on:
       # compute placeholder for ever — the exact failure this comment block warns
       # about, reintroduced by the #406 file itself.
       - 'infra/environments/*/plugins.core.tf'
+      # The shared plugin host (ADR-0021) is wired in its own template-owned file,
+      # like plugins.core.tf above. Wiring it touches only infra/, which otherwise
+      # fires Deploy Infrastructure (creating the placeholder Lambda) but never this
+      # workflow — so the host would serve the compute placeholder for ever. Same
+      # failure class the block above documents; keep this path here to avoid it.
+      - 'infra/environments/*/plugin-host.core.tf'
   workflow_dispatch:
     inputs:
       environment:
@@ -521,6 +527,78 @@ jobs:
             aws lambda wait function-updated --function-name "$fn"
             echo "::endgroup::"
           done
+      # Package and deploy the SHARED plugin host (ADR-0021, #545) — ONE Lambda
+      # that runs every installed user-facing plugin's API behind the shared API
+      # Gateway at /api/v1/plugins/*. It supersedes ADR-0018's per-plugin Lambda:
+      # a plugin that declares user_ingress.app is pure code mounted here, not its
+      # own function, so the per-plugin step above skips it (no terraform/ beside
+      # it). The host function is <project>-<env>-plugin-host, created by
+      # deploy-infra from the compute-module placeholder (ignore_changes on code);
+      # this step ships the real code. Skipped where the host is not provisioned.
+      - name: Package and deploy the shared plugin host
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          prefix='${{ vars.CORE_API_LAMBDA_NAME }}'
+          prefix="${prefix%-core-api}"
+          fn="${prefix}-plugin-host"
+          if ! aws lambda get-function --function-name "$fn" >/dev/null 2>&1; then
+            echo "$fn does not exist — the shared plugin host is not provisioned in this env; skipping."
+            exit 0
+          fi
+          pkg=plugin-host-package
+          rm -rf "$pkg"
+          # Host runtime: third-party deps from the workspace lock (workspace
+          # members excluded), the SDK from source, and the host's own package at
+          # the task root. The SDK[user-serving] extra's transitive deps (the JWT
+          # verification the founder gate needs) are NOT workspace members, so the
+          # export already carries them.
+          uv export --package biffo-plugin-host --no-dev --frozen \
+            --no-emit-workspace --no-emit-project \
+            --output-file host-requirements.txt
+          uv pip install -r host-requirements.txt --target "$pkg/"
+          uv pip install ./packages/python-sdk --target "$pkg/" --no-deps
+          cp -r services/_plugin-host/src/. "$pkg/"
+          # Each user-facing plugin (a manifest with user_ingress.app) becomes pure
+          # code inside the host: its package at the task root so load_app("<mod>:
+          # <attr>") imports it, and its manifest under services/<name>/ so
+          # discover_plugins() — which scans BIFFO_PLUGINS_ROOT=/var/task/services —
+          # mounts it. Both plugin channels are covered, keyed on plugin name like
+          # every other step here. A plugin's own workspace SDK dep is excluded from
+          # its export; the host already installed the SDK above.
+          mkdir -p "$pkg/services"
+          for manifest in services/*/biffo.plugin.json services/_plugins/*/biffo.plugin.json; do
+            jq -e '.user_ingress.app' "$manifest" >/dev/null 2>&1 || continue
+            plugin_dir="$(dirname "$manifest")"
+            name="$(basename "$plugin_dir")"
+            echo "::group::host mount: $name"
+            pkg_name="$(sed -n 's/^name *= *"\(.*\)".*/\1/p' "$plugin_dir/pyproject.toml" | head -1)"
+            uv export --package "$pkg_name" --no-dev --frozen \
+              --no-emit-workspace --no-emit-project \
+              --output-file "host-$name-requirements.txt"
+            uv pip install -r "host-$name-requirements.txt" --target "$pkg/"
+            cp -r "$plugin_dir"/src/. "$pkg/"
+            mkdir -p "$pkg/services/$name"
+            cp "$manifest" "$pkg/services/$name/biffo.plugin.json"
+            echo "::endgroup::"
+          done
+          # Trim runtime-provided and dead weight so the zip fits the direct
+          # update-function-code limit (see the Core API step for the rationale).
+          (
+            cd "$pkg"
+            rm -rf boto3 botocore s3transfer \
+                   boto3-*.dist-info botocore-*.dist-info s3transfer-*.dist-info
+            find . -type d -name __pycache__ -prune -exec rm -rf {} +
+            find . -type d -name tests -prune -exec rm -rf {} +
+          )
+          (cd "$pkg" && zip -rq ../plugin-host.zip .)
+          # --output text --query 'LastUpdateStatus' suppresses the default full
+          # function-config JSON (env vars in plaintext) — see #334.
+          aws lambda update-function-code \
+            --function-name "$fn" \
+            --zip-file fileb://plugin-host.zip \
+            --output text --query 'LastUpdateStatus'
+          aws lambda wait function-updated --function-name "$fn"
 
   # ─── STAGING ─────────────────────────────────────────────────────────────────
   # Manual only — run workflow_dispatch with environment=staging.
@@ -970,6 +1048,78 @@ jobs:
             aws lambda wait function-updated --function-name "$fn"
             echo "::endgroup::"
           done
+      # Package and deploy the SHARED plugin host (ADR-0021, #545) — ONE Lambda
+      # that runs every installed user-facing plugin's API behind the shared API
+      # Gateway at /api/v1/plugins/*. It supersedes ADR-0018's per-plugin Lambda:
+      # a plugin that declares user_ingress.app is pure code mounted here, not its
+      # own function, so the per-plugin step above skips it (no terraform/ beside
+      # it). The host function is <project>-<env>-plugin-host, created by
+      # deploy-infra from the compute-module placeholder (ignore_changes on code);
+      # this step ships the real code. Skipped where the host is not provisioned.
+      - name: Package and deploy the shared plugin host
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          prefix='${{ vars.CORE_API_LAMBDA_NAME }}'
+          prefix="${prefix%-core-api}"
+          fn="${prefix}-plugin-host"
+          if ! aws lambda get-function --function-name "$fn" >/dev/null 2>&1; then
+            echo "$fn does not exist — the shared plugin host is not provisioned in this env; skipping."
+            exit 0
+          fi
+          pkg=plugin-host-package
+          rm -rf "$pkg"
+          # Host runtime: third-party deps from the workspace lock (workspace
+          # members excluded), the SDK from source, and the host's own package at
+          # the task root. The SDK[user-serving] extra's transitive deps (the JWT
+          # verification the founder gate needs) are NOT workspace members, so the
+          # export already carries them.
+          uv export --package biffo-plugin-host --no-dev --frozen \
+            --no-emit-workspace --no-emit-project \
+            --output-file host-requirements.txt
+          uv pip install -r host-requirements.txt --target "$pkg/"
+          uv pip install ./packages/python-sdk --target "$pkg/" --no-deps
+          cp -r services/_plugin-host/src/. "$pkg/"
+          # Each user-facing plugin (a manifest with user_ingress.app) becomes pure
+          # code inside the host: its package at the task root so load_app("<mod>:
+          # <attr>") imports it, and its manifest under services/<name>/ so
+          # discover_plugins() — which scans BIFFO_PLUGINS_ROOT=/var/task/services —
+          # mounts it. Both plugin channels are covered, keyed on plugin name like
+          # every other step here. A plugin's own workspace SDK dep is excluded from
+          # its export; the host already installed the SDK above.
+          mkdir -p "$pkg/services"
+          for manifest in services/*/biffo.plugin.json services/_plugins/*/biffo.plugin.json; do
+            jq -e '.user_ingress.app' "$manifest" >/dev/null 2>&1 || continue
+            plugin_dir="$(dirname "$manifest")"
+            name="$(basename "$plugin_dir")"
+            echo "::group::host mount: $name"
+            pkg_name="$(sed -n 's/^name *= *"\(.*\)".*/\1/p' "$plugin_dir/pyproject.toml" | head -1)"
+            uv export --package "$pkg_name" --no-dev --frozen \
+              --no-emit-workspace --no-emit-project \
+              --output-file "host-$name-requirements.txt"
+            uv pip install -r "host-$name-requirements.txt" --target "$pkg/"
+            cp -r "$plugin_dir"/src/. "$pkg/"
+            mkdir -p "$pkg/services/$name"
+            cp "$manifest" "$pkg/services/$name/biffo.plugin.json"
+            echo "::endgroup::"
+          done
+          # Trim runtime-provided and dead weight so the zip fits the direct
+          # update-function-code limit (see the Core API step for the rationale).
+          (
+            cd "$pkg"
+            rm -rf boto3 botocore s3transfer \
+                   boto3-*.dist-info botocore-*.dist-info s3transfer-*.dist-info
+            find . -type d -name __pycache__ -prune -exec rm -rf {} +
+            find . -type d -name tests -prune -exec rm -rf {} +
+          )
+          (cd "$pkg" && zip -rq ../plugin-host.zip .)
+          # --output text --query 'LastUpdateStatus' suppresses the default full
+          # function-config JSON (env vars in plaintext) — see #334.
+          aws lambda update-function-code \
+            --function-name "$fn" \
+            --zip-file fileb://plugin-host.zip \
+            --output text --query 'LastUpdateStatus'
+          aws lambda wait function-updated --function-name "$fn"
 
   # ─── PROD ────────────────────────────────────────────────────────────────────
   # Manual only — run workflow_dispatch with environment=prod.
@@ -1431,3 +1581,75 @@ jobs:
             aws lambda wait function-updated --function-name "$fn"
             echo "::endgroup::"
           done
+      # Package and deploy the SHARED plugin host (ADR-0021, #545) — ONE Lambda
+      # that runs every installed user-facing plugin's API behind the shared API
+      # Gateway at /api/v1/plugins/*. It supersedes ADR-0018's per-plugin Lambda:
+      # a plugin that declares user_ingress.app is pure code mounted here, not its
+      # own function, so the per-plugin step above skips it (no terraform/ beside
+      # it). The host function is <project>-<env>-plugin-host, created by
+      # deploy-infra from the compute-module placeholder (ignore_changes on code);
+      # this step ships the real code. Skipped where the host is not provisioned.
+      - name: Package and deploy the shared plugin host
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          prefix='${{ vars.CORE_API_LAMBDA_NAME }}'
+          prefix="${prefix%-core-api}"
+          fn="${prefix}-plugin-host"
+          if ! aws lambda get-function --function-name "$fn" >/dev/null 2>&1; then
+            echo "$fn does not exist — the shared plugin host is not provisioned in this env; skipping."
+            exit 0
+          fi
+          pkg=plugin-host-package
+          rm -rf "$pkg"
+          # Host runtime: third-party deps from the workspace lock (workspace
+          # members excluded), the SDK from source, and the host's own package at
+          # the task root. The SDK[user-serving] extra's transitive deps (the JWT
+          # verification the founder gate needs) are NOT workspace members, so the
+          # export already carries them.
+          uv export --package biffo-plugin-host --no-dev --frozen \
+            --no-emit-workspace --no-emit-project \
+            --output-file host-requirements.txt
+          uv pip install -r host-requirements.txt --target "$pkg/"
+          uv pip install ./packages/python-sdk --target "$pkg/" --no-deps
+          cp -r services/_plugin-host/src/. "$pkg/"
+          # Each user-facing plugin (a manifest with user_ingress.app) becomes pure
+          # code inside the host: its package at the task root so load_app("<mod>:
+          # <attr>") imports it, and its manifest under services/<name>/ so
+          # discover_plugins() — which scans BIFFO_PLUGINS_ROOT=/var/task/services —
+          # mounts it. Both plugin channels are covered, keyed on plugin name like
+          # every other step here. A plugin's own workspace SDK dep is excluded from
+          # its export; the host already installed the SDK above.
+          mkdir -p "$pkg/services"
+          for manifest in services/*/biffo.plugin.json services/_plugins/*/biffo.plugin.json; do
+            jq -e '.user_ingress.app' "$manifest" >/dev/null 2>&1 || continue
+            plugin_dir="$(dirname "$manifest")"
+            name="$(basename "$plugin_dir")"
+            echo "::group::host mount: $name"
+            pkg_name="$(sed -n 's/^name *= *"\(.*\)".*/\1/p' "$plugin_dir/pyproject.toml" | head -1)"
+            uv export --package "$pkg_name" --no-dev --frozen \
+              --no-emit-workspace --no-emit-project \
+              --output-file "host-$name-requirements.txt"
+            uv pip install -r "host-$name-requirements.txt" --target "$pkg/"
+            cp -r "$plugin_dir"/src/. "$pkg/"
+            mkdir -p "$pkg/services/$name"
+            cp "$manifest" "$pkg/services/$name/biffo.plugin.json"
+            echo "::endgroup::"
+          done
+          # Trim runtime-provided and dead weight so the zip fits the direct
+          # update-function-code limit (see the Core API step for the rationale).
+          (
+            cd "$pkg"
+            rm -rf boto3 botocore s3transfer \
+                   boto3-*.dist-info botocore-*.dist-info s3transfer-*.dist-info
+            find . -type d -name __pycache__ -prune -exec rm -rf {} +
+            find . -type d -name tests -prune -exec rm -rf {} +
+          )
+          (cd "$pkg" && zip -rq ../plugin-host.zip .)
+          # --output text --query 'LastUpdateStatus' suppresses the default full
+          # function-config JSON (env vars in plaintext) — see #334.
+          aws lambda update-function-code \
+            --function-name "$fn" \
+            --zip-file fileb://plugin-host.zip \
+            --output text --query 'LastUpdateStatus'
+          aws lambda wait function-updated --function-name "$fn"

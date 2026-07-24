@@ -196,6 +196,19 @@ resource "aws_s3_bucket_versioning" "cf_logs" {
   }
 }
 
+# AWS-managed policies for the authenticated plugin API behaviours (ADR-0018).
+# CachingDisabled: an API response must never be cached. AllViewerExceptHostHeader:
+# forward every viewer header/query/cookie EXCEPT Host (so the founder's
+# Authorization JWT reaches the Lambda; a Function URL rejects a mismatched Host,
+# so Host must be dropped). Referenced by well-known name rather than hardcoded id.
+data "aws_cloudfront_cache_policy" "caching_disabled" {
+  name = "Managed-CachingDisabled"
+}
+
+data "aws_cloudfront_origin_request_policy" "all_viewer_except_host" {
+  name = "Managed-AllViewerExceptHostHeader"
+}
+
 resource "aws_cloudfront_distribution" "portal" {
   #checkov:skip=CKV_AWS_310:Single static S3 origin; no secondary origin exists to fail over to. Failover origin block stays optional/config-driven.
   #checkov:skip=CKV_AWS_374:Public franchise marketplace must serve all geographies; geo-restriction would break the product.
@@ -253,6 +266,26 @@ resource "aws_cloudfront_distribution" "portal" {
     }
   }
 
+  # Authenticated user-facing plugin ingresses (ADR-0018 §1) — one CUSTOM origin
+  # per plugin, pointing at that plugin's Lambda Function URL (HTTPS only). Unlike
+  # a sibling's S3 origin, there is no OAC: the Function URL is reached over the
+  # public internet and the plugin's Lambda authenticates every request itself
+  # (verifying the shared-Cognito JWT). The Function URL and its resource policy
+  # are the plugin's own Terraform's responsibility; this module only routes.
+  dynamic "origin" {
+    for_each = var.plugin_api_origins
+    content {
+      domain_name = origin.value.function_url_domain
+      origin_id   = "plugin-api-${origin.value.name}"
+      custom_origin_config {
+        http_port              = 80
+        https_port             = 443
+        origin_protocol_policy = "https-only"
+        origin_ssl_protocols   = ["TLSv1.2"]
+      }
+    }
+  }
+
   # The ROOT behavior — the user-application sibling's, when one is registered,
   # and the portal bucket as a placeholder when none is. See
   # local.default_target_origin_id for why this is a conditional rather than a
@@ -276,6 +309,28 @@ resource "aws_cloudfront_distribution" "portal" {
     function_association {
       event_type   = "viewer-request"
       function_arn = aws_cloudfront_function.rewrite.arn
+    }
+  }
+
+  # Authenticated plugin API ingresses (ADR-0018 §1), emitted FIRST — before the
+  # sibling/frontend behaviours below — because CloudFront evaluates
+  # ordered_cache_behavior blocks in config order, and "<name>/api/*" must be
+  # matched ahead of the plugin's own "<name>/*" frontend (which would otherwise
+  # shadow it). An API, not static content: every method is allowed, caching is
+  # disabled, and all viewer headers except Host are forwarded so the founder's
+  # Authorization JWT reaches the Lambda. NO rewrite function — that rewrites clean
+  # URLs to index.html for static export and must never touch an API request.
+  dynamic "ordered_cache_behavior" {
+    for_each = { for p in var.plugin_api_origins : "${p.name}/api/*" => p }
+    content {
+      path_pattern             = ordered_cache_behavior.key
+      target_origin_id         = "plugin-api-${ordered_cache_behavior.value.name}"
+      viewer_protocol_policy   = "redirect-to-https"
+      allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+      cached_methods           = ["GET", "HEAD"]
+      compress                 = true
+      cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
+      origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
     }
   }
 

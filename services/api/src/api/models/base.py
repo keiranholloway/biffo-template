@@ -39,11 +39,19 @@ class TenantScopedModel(Base):
     tenant_id: Mapped[str] = mapped_column(
         String(64), nullable=False, index=True, default="default"
     )
+    # Both a Python-side `default` AND a `server_default`. The server_default keeps
+    # the DDL self-describing; the `default` makes the ORM self-sufficient — it puts
+    # now() into the INSERT itself rather than relying on the column having a DB
+    # default. That matters for plugin tables (ADR-0003): their generated migrations
+    # created created_at/updated_at NOT NULL WITHOUT a DB default, so a server_default
+    # alone left every owner-data INSERT (which omits the timestamps) violating the
+    # NOT NULL constraint. With the `default`, the value is always supplied.
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        DateTime(timezone=True), default=func.now(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
+        default=func.now(),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,

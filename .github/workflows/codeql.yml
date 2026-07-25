@@ -2,12 +2,12 @@ name: 'CodeQL'
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   schedule:
     # Weekly catch-up scan (Tuesday 05:17 UTC) for issues that land outside
-    # PR review (e.g. direct merges onto main).
+    # PR review (e.g. direct merges onto the integration branch).
     - cron: '17 5 * * 2'
 
 jobs:

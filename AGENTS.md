@@ -21,6 +21,18 @@ it, this file wins.
 - `.worktrees/` is git-ignored and excluded from every linter/type-checker, so
   worktrees never get committed or double-scanned. Keep it that way when you add
   tooling.
+- **Always start from a freshly-fetched integration branch.** `git fetch origin`
+  first, then branch from `origin/<integration>` — never from a stale local ref.
+  A primary checkout that had drifted 10 commits behind `main` once produced a
+  whole audit against dead code (it "found" a feature missing that had shipped
+  weeks earlier). When in doubt, `git fetch` and confirm `git rev-list --count
+HEAD..origin/<integration>` is `0` before trusting a tree.
+- **Install dependencies in the new worktree before working** — `uv sync` and
+  `pnpm install`. The local gates run against whatever is installed here: the
+  whole-project `pyright` in `.husky/pre-push`, and `lint-staged` at commit time.
+  A stale post-upgrade `.venv` once made `pre-push pyright` fail and git reject a
+  push — the failure was then masked (§4) and the commits were squash-merged
+  missing.
 - **Clean up when the PR merges.** Remove the worktree, then let its branch be
   deleted:
 
@@ -31,6 +43,11 @@ it, this file wins.
   Note: `gh pr merge --delete-branch` cannot delete a branch that is still
   checked out in a worktree — remove the worktree first (or delete the branch
   after).
+
+- **Hygiene.** Keep `git worktree list` short and every entry live: once a PR
+  merges, `git worktree remove` it and delete its branch, and periodically
+  `git worktree prune` and clear merged local branches. Stale worktrees and dead
+  branches pile up into exactly the confusion this section exists to prevent.
 
 ### Working alongside other agents
 
@@ -53,15 +70,29 @@ Several agents often run concurrently in this repo. A worktree isolates your
 - **Do not remove or modify a worktree you did not create.** Pulling the ground
   out from under a running agent breaks it mid-flight.
 
-## 2. Branch from, and PR into, the repo's default branch
+## 2. Branch from, and PR into, the integration branch (`dev`)
 
-- Determine the integration branch with `gh repo view --json defaultBranchRef`.
-  It differs per repo (this template uses `main`; some instances use `dev`).
-  Branch from it, and open your PR back into it.
+- Branch from the integration branch and open your PR back into it. It is `dev`
+  in every Biffo repo (see below); `gh repo view --json defaultBranchRef`
+  confirms it.
 - Name branches by intent, tied to an issue where one exists:
   `feat/…`, `fix/…`, `docs/…`, `chore/…`, `ci/…`, `refactor/…`.
 - **All changes land via PR.** No direct commits to the integration branch, no
   force-pushes to it. Branch protection stays on.
+
+**The integration branch is `dev` in every repo** — template, instances, sibling
+apps, and plugin repos alike. There is one environment (dev) and no production,
+so there is one branch: you always branch from and PR into `dev`, everywhere.
+`main` is retired; a repo that still shows `main` as its default has not yet been
+migrated (see issue #559) — `gh repo view --json defaultBranchRef` is
+authoritative, and if it reports anything other than `dev`, flag it rather than
+working around it.
+
+- **Never leave a primary checkout parked on a feature or upgrade branch, and
+  never let one fall behind.** Keep the primary on `dev`, no more than a
+  `git fetch` behind, and do the actual work in worktrees (§1) — not in the
+  primary. A primary left sitting on a stale `core-upgrade` branch is how an
+  audit gets run against dead code and how pushed-looking commits get lost.
 
 ## 3. Commits
 
@@ -111,6 +142,21 @@ than treating merge as completion.
 `cmd | tail` reports `tail`'s status, not `cmd`'s — a failing command reads as
 success. Use `${PIPESTATUS[0]}`. This masked two real failures in one session,
 including a `teardown` that reported success while destroying nothing.
+
+### Push honestly, and verify the remote has your commit
+
+A push can fail and still look like it worked, and commits have been lost this
+way. `.husky/pre-push` runs the whole-project `pyright`; against a stale `.venv`
+(deps not re-synced after an upgrade — §1) it errors and git **rejects the
+push**. Combined with the piped-exit trap above, the rejection reads as success,
+and the dropped commits get squash-merged missing.
+
+- **Push with the exit status visible:** `git push origin HEAD; echo $?`. Never
+  trust a "pushed" message printed unconditionally after a pipe.
+- **Confirm the remote actually has the commit before you rely on it** —
+  especially before merging: `git log origin/<branch> -1`, or `git show
+origin/<branch>:<path>` for a specific change. A green PR page is not proof
+  your latest local commit reached it.
 
 ## 5. Merging — never merge red
 

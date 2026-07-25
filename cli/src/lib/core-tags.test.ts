@@ -292,12 +292,12 @@ describe('Core Version Tag workflow', () => {
   const workflow = readFileSync(join(repoRoot, '.github/workflows/core-tag.yml'), 'utf8')
   const trigger = workflow.split('permissions:')[0] ?? ''
 
-  it('is not path-filtered — it has to see every push to main', () => {
+  it('is not path-filtered — it has to see every push to dev', () => {
     expect(trigger).not.toMatch(/^\s*paths:/m)
   })
 
-  it('still runs on pushes to main and on manual dispatch', () => {
-    expect(trigger).toContain('branches: [main]')
+  it('still runs on pushes to dev and on manual dispatch', () => {
+    expect(trigger).toContain('branches: [dev]')
     expect(trigger).toContain('workflow_dispatch:')
   })
 

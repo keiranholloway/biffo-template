@@ -1,14 +1,15 @@
 name: Core Version Tag
 
-# Releases the template. On every push to `main` it derives the next core
-# version — the highest existing `core-v*` tag, bumped by the commit's
-# conventional type (#423) — and tags HEAD with it. That tag is what `biffo core
-# upgrade` resolves the template tree from (ADR-0006), and what `publish-cli.yml`
-# publishes `@biffo/cli@<version>` off.
+# Releases the template. On every push to `dev` — the single integration branch
+# (issue #559; `main` retired, there is one environment and one branch) — it
+# derives the next core version — the highest existing `core-v*` tag, bumped by
+# the commit's conventional type (#423) — and tags HEAD with it. That tag is what
+# `biffo core upgrade` resolves the template tree from (ADR-0006), and what
+# `publish-cli.yml` publishes `@biffo/cli@<version>` off.
 on:
   push:
-    branches: [main]
-    # Deliberately NOT path-filtered. Every push to main is a candidate
+    branches: [dev]
+    # Deliberately NOT path-filtered. Every push to dev is a candidate
     # release: the script itself decides, by diffing the template-owned tree
     # against the last tag, whether there is anything to release. A path filter
     # would have to encode the manifest's ownership boundary a second time, in a

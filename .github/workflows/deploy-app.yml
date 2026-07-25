@@ -253,11 +253,20 @@ jobs:
           #
           # Hashed assets under _next/static are genuinely immutable and keep
           # the long cache; HTML and RSC payloads must not.
+          # `.well-known/*` is EXCLUDED from this --delete pass. The runtime
+          # identity document (.well-known/biffo-identity.json, #403) is written to
+          # this same bucket by Deploy Infrastructure, NOT by the portal build — so
+          # it is absent from portal-dist/, and without this exclude the --delete
+          # here removes it. That strands every ROOT sibling (which resolves Cognito
+          # only from that document, no baked fallback) in a sign-in redirect loop.
+          # An App-only deploy (no concurrent Infra run to re-publish it) makes the
+          # deletion permanent. Excluding the prefix keeps the doc across syncs.
           aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
             --delete \
             --cache-control "public, max-age=31536000, immutable" \
             --exclude "*.html" \
-            --exclude "*.txt"
+            --exclude "*.txt" \
+            --exclude ".well-known/*"
           # `--include` only re-includes from an excluded set; on its own it is a
           # no-op, since everything is included by default. Without the explicit
           # `--exclude "*"` this pass would upload the .txt payloads too — as
@@ -774,11 +783,20 @@ jobs:
           #
           # Hashed assets under _next/static are genuinely immutable and keep
           # the long cache; HTML and RSC payloads must not.
+          # `.well-known/*` is EXCLUDED from this --delete pass. The runtime
+          # identity document (.well-known/biffo-identity.json, #403) is written to
+          # this same bucket by Deploy Infrastructure, NOT by the portal build — so
+          # it is absent from portal-dist/, and without this exclude the --delete
+          # here removes it. That strands every ROOT sibling (which resolves Cognito
+          # only from that document, no baked fallback) in a sign-in redirect loop.
+          # An App-only deploy (no concurrent Infra run to re-publish it) makes the
+          # deletion permanent. Excluding the prefix keeps the doc across syncs.
           aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
             --delete \
             --cache-control "public, max-age=31536000, immutable" \
             --exclude "*.html" \
-            --exclude "*.txt"
+            --exclude "*.txt" \
+            --exclude ".well-known/*"
           # `--include` only re-includes from an excluded set; on its own it is a
           # no-op, since everything is included by default. Without the explicit
           # `--exclude "*"` this pass would upload the .txt payloads too — as
@@ -1307,11 +1325,20 @@ jobs:
           #
           # Hashed assets under _next/static are genuinely immutable and keep
           # the long cache; HTML and RSC payloads must not.
+          # `.well-known/*` is EXCLUDED from this --delete pass. The runtime
+          # identity document (.well-known/biffo-identity.json, #403) is written to
+          # this same bucket by Deploy Infrastructure, NOT by the portal build — so
+          # it is absent from portal-dist/, and without this exclude the --delete
+          # here removes it. That strands every ROOT sibling (which resolves Cognito
+          # only from that document, no baked fallback) in a sign-in redirect loop.
+          # An App-only deploy (no concurrent Infra run to re-publish it) makes the
+          # deletion permanent. Excluding the prefix keeps the doc across syncs.
           aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
             --delete \
             --cache-control "public, max-age=31536000, immutable" \
             --exclude "*.html" \
-            --exclude "*.txt"
+            --exclude "*.txt" \
+            --exclude ".well-known/*"
           # `--include` only re-includes from an excluded set; on its own it is a
           # no-op, since everything is included by default. Without the explicit
           # `--exclude "*"` this pass would upload the .txt payloads too — as

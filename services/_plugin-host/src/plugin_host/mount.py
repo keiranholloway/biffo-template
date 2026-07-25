@@ -25,12 +25,13 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
+from biffo_plugin_sdk import acting_as_plugin
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
-#: The plugin whose router is handling the current request. Read by the outbound
-#: Core transport to assert plugin identity to Core (ADR-0021 §1a). None outside a
-#: gated plugin request.
+#: The plugin whose router is handling the current request. None outside a gated
+#: plugin request. Bound alongside the SDK's ``acting_as_plugin`` (which the
+#: outbound Core transport actually reads to assert plugin identity, ADR-0021 §1a).
 current_plugin: ContextVar[str | None] = ContextVar("current_plugin", default=None)
 
 
@@ -101,10 +102,15 @@ def group_gate(plugin: MountedPlugin, authorize: Authorizer) -> Callable:
             await _send_json(send, exc.status, {"detail": exc.detail})
             return
         reset = current_plugin.set(plugin.name)
+        # The SDK's SignedCoreClient reads this to stamp the X-Biffo-Plugin identity
+        # header on the plugin's outbound Core calls (ADR-0021 §1a), so Core grants
+        # `system:<plugin>` rather than the host's own role identity.
+        reset_sdk = acting_as_plugin.set(plugin.name)
         try:
             await plugin.app(scope, receive, send)
         finally:
             current_plugin.reset(reset)
+            acting_as_plugin.reset(reset_sdk)
 
     return gated
 

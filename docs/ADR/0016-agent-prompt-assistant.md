@@ -1,7 +1,8 @@
 # ADR-0016: The prompt assistant — a synchronous, streaming agent that helps author prompts
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-23
+**Accepted:** 2026-07-23
 **Amended:** 2026-07-23 — see *Amendment: buffered, not streamed (Python-runtime reality)*
 **Deciders:** Keiran Holloway (Technical Architect)
 
@@ -316,6 +317,14 @@ Deliberately phased so each step is a working increment:
 
 Phase 1 is the load-bearing one (it is where the new ingress, streaming, and
 `run_as: user` all first appear); Phases 2–3 layer capability onto it.
+
+## Implementation
+
+The synchronous agent assistant is fully implemented in `services/api/src/api/agent_assistant.py`
+(307 lines), which handles the sync-invoke path, thread management, and integration with
+the prompt library (ADR-0015). A dedicated test suite validates the assistant logic,
+context assembly, and thread handling in `services/api/test/test_agent_assistant_library.py`.
+The design is exercised in production as part of the authoring workflow.
 
 ## Related Decisions
 

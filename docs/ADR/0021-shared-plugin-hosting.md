@@ -110,18 +110,52 @@ So the IAM role changes meaning, and Core gains a second check:
   ADR-0009 `BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST`, now one entry (the host's
   role) instead of one per plugin. This keeps *non-platform* callers out.
 - **Which plugin is asserted by the host** as a trusted plugin-identity header on
-  each internal call. The host is platform code — it already enforces
-  group-gating and dispatches to the plugin's router, so it is the correct
-  authority to name the plugin it is running. Core enforces the table's
-  `allowed_principals` against that asserted identity (and the owner against the
-  forwarded founder token), exactly as before. This keeps *one plugin* out of
-  *another plugin's* tables.
+  each internal call. The host binds this identity once per request, in
+  `group_gate` (`services/_plugin-host/src/plugin_host/mount.py`), before
+  dispatching to the plugin's router, and the SDK's default `self.api` client
+  (`SignedCoreClient`, `packages/python-sdk/src/biffo_plugin_sdk/signed_client.py`)
+  reads it to stamp the outbound `X-Biffo-Plugin` header. Core enforces the
+  table's `allowed_principals` against that asserted identity (and the owner
+  against the forwarded founder token), exactly as before.
 
-The trust root moves from "each plugin proves itself by its own IAM role" to "the
-platform host proves it is the host (IAM), and truthfully names the plugin it is
-running" — consistent with the host being the enforcement point for authorization
-generally (ADR-0011). An `isolated: true` plugin (its own host) keeps a distinct
-role and needs no asserted identity, so the strong-isolation path is unchanged.
+**What this guarantee actually covers, and what it does not (corrected by
+[#563](https://github.com/keiranholloway/biffo-template/issues/563)).** For
+*well-behaved* plugin code that uses the SDK's default client as intended,
+`group_gate` correctly binds and asserts the right plugin's identity, and this
+keeps one plugin's ordinary CRUD calls out of another plugin's tables. But it is
+**not** a cryptographic or process-level isolation boundary against a plugin's
+own code that deliberately chooses to assert a different identity. The identity
+binding is an ordinary, mutable `ContextVar`: any code sharing the host process
+— including the mounted plugin's own request handler — can read or overwrite it
+before making its own outbound call. Worse, hardening that specific mechanism
+(e.g. binding identity in a closure instead of a module-level `ContextVar`)
+would not close the underlying gap either, because the *credentials* are the
+real shared resource: any code running in the shared host Lambda has access to
+the host's IAM role via the standard AWS SDK credential chain
+(`botocore.session.get_session().get_credentials()`, exactly what
+`SignedCoreClient` itself calls) and could hand-construct its own SigV4-signed
+request naming any plugin identity, independent of whatever in-process
+convenience wrapper the SDK offers.
+
+So the trust root is honestly: "the platform host proves it is the host (IAM),
+and — for plugin code that behaves — truthfully names the plugin it is
+running." That protects against accidental cross-plugin data access by
+ordinary, non-adversarial plugin code sharing the host. It does **not** protect
+against a plugin an operator does not trust: genuine isolation against a
+malicious or fully-untrusted plugin requires `isolated: true` — a dedicated
+Lambda with its own IAM role, where the caller's identity is the role itself,
+not a header the plugin's own process could rewrite. Consequently, **the shared
+host is an appropriate default only for plugins the operator trusts to the same
+degree as each other** — first-party plugins, or third-party plugins that have
+been through real code review — not as a security boundary between
+mutually-distrusting plugins. A future structural fix (per-plugin STS-scoped
+credentials assumed by the host immediately before dispatch, so a plugin's code
+never sees the host's full role) is tracked as a separate infrastructure
+decision in
+[#579](https://github.com/keiranholloway/biffo-template/issues/579); it is not
+implemented today. `isolated: true` (its own host, its own role) keeps a
+distinct role and needs no asserted identity, so the strong-isolation path is
+unchanged by any of the above.
 
 ### 2. Frontend — ONE shared app shell, plugins mount UI routes
 

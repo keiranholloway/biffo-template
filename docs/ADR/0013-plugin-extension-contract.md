@@ -105,6 +105,8 @@ A `config_schema` field marked `secret: true` is stored in AWS Secrets Manager, 
 
 A Stripe secret key must never be retrievable through the same endpoint that serves a tracking ID. The `secret` flag is the boundary, and read paths are separated by it rather than by convention.
 
+Note (documentation only, no design commitment): when this write path is built, it should consider reusing the isolated-credential pattern ADR-0008 already established for the PR-signer (`services/pr-signer/`, template-owned per issue #568) — a minimal, no-public-endpoint function that alone holds a sensitive credential and is invoked over IAM by the Core API, rather than the Core API holding the credential itself. A plugin secrets-write mechanism is arguably more security-sensitive than the permissions-block edit ADR-0008 isolates a credential for, so re-deriving a weaker mechanism from scratch here would be a regression, not a fresh design.
+
 ### 6. UI is declared as capabilities, rendered at runtime
 
 Plugins do not ship React. They declare **capabilities**, which the portal fetches from a core endpoint at runtime and renders generically:
@@ -210,3 +212,4 @@ Schema evolution (§8) is a constraint on all of the above rather than a separat
 - [ADR-0009](0009-internal-service-authentication.md) — how a plugin's Lambda authenticates to core; the enforcement path in §3.
 - [ADR-0011](0011-authorization-is-a-core-concern.md) — authorization is never a plugin. This ADR does not reopen that.
 - [ADR-0005](0005-ddl-import-module.md) — raw DDL import, the adjacent mechanism for hand-authored schema. A plugin declares and ships a module; a DDL import vendors SQL somebody else wrote. The overlap is real and worth watching: if an instance's need is schema-only and single-instance, DDL import is the lighter tool.
+- [ADR-0008](0008-endpoint-control-plane.md) — the isolated-credential pattern (PR-signer) §5's future secrets-write mechanism should consider reusing rather than re-deriving; see the note in §5.

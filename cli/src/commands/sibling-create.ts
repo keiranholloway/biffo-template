@@ -11,6 +11,7 @@ import { BiffoConfigSchema, type BiffoConfig } from '../config/schema.js'
 import { SiblingConfigSchema, type SiblingConfig } from '../config/sibling-schema.js'
 import { assertBuildIsFresh } from '../lib/build-freshness.js'
 import { parseGitHubRepo } from '../lib/core-upgrade.js'
+import { getLatestCoreVersion } from '../lib/core-version.js'
 import { resolveGithubToken } from '../lib/credentials.js'
 import { log } from '../lib/logger.js'
 import { resolveRepoIds } from '../lib/oidc.js'
@@ -536,6 +537,10 @@ async function pushSkeleton(
     writeSiblingTemplate(skeletonRoot, workDir, config, {
       coreProjectName: coreConfig.project.name,
       pathPrefix: resolvePathPrefix(config),
+      // The core template's version at scaffold time (issue #567) — visibility
+      // only, mirroring how `biffo init` stamps `biffo.core.json`. See the
+      // `template_version` field doc on `SiblingMarker` (lib/sibling-teardown.ts).
+      templateVersion: getLatestCoreVersion(),
     })
     await git.init(workDir, 'main')
     await git.addRemote(workDir, 'origin', cloneUrl)
@@ -559,7 +564,18 @@ export function writeSiblingTemplate(
   templateRoot: string,
   targetDir: string,
   config: SiblingConfig,
-  context: { coreProjectName: string; pathPrefix: string },
+  context: {
+    coreProjectName: string
+    pathPrefix: string
+    /**
+     * The core template's version this sibling is being scaffolded from
+     * (issue #567) — typically `getLatestCoreVersion()`. Stamped into
+     * `biffo.sibling.json` for drift *visibility* only: it does not power any
+     * upgrade mechanism today (see `SiblingMarker.template_version` in
+     * `lib/sibling-teardown.ts`).
+     */
+    templateVersion: string
+  },
 ): void {
   if (!existsSync(templateRoot)) {
     throw new Error(`Sibling template not found at ${templateRoot}`)
@@ -577,6 +593,8 @@ export function writeSiblingTemplate(
         name: config.project.name,
         core_project: context.coreProjectName,
         path_prefix: context.pathPrefix,
+        // Visibility only (issue #567) — see SiblingMarker.template_version.
+        template_version: context.templateVersion,
         ...(config.project.description ? { description: config.project.description } : {}),
         // Always written (even when empty) so the field is discoverable — declare
         // this sibling's notable routes here and they surface on the core's

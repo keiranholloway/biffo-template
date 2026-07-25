@@ -1,7 +1,8 @@
 # ADR-0015: Prompt library — composable, parameterised prompt components
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-23
+**Accepted:** 2026-07-23
 **Deciders:** Keiran Holloway (Technical Architect)
 
 ---
@@ -220,6 +221,14 @@ consumes, so the runtime is untouched. Chosen.
 - **Deferred / adjacent.** Cross-instance sharing (ADR-0014 §3). The #474
   authoring assistant could *generate* components, and a worker that *reads* the
   library would be a consumer of the ADR-0014 §7 read-scope ceiling (#452).
+
+## Implementation
+
+The design is fully implemented in `services/api/src/api/prompt_parts.py` (242 lines),
+which defines the `PromptComponent` model, composition logic, and live-resolution
+at run-creation. The module is imported by `internal_agents.py` and `orchestration.py`
+and is exercised in production code paths. A comprehensive test suite validates the
+model, resolution, and error cases in `services/api/test/test_prompt_parts.py`.
 
 ## Related Decisions
 

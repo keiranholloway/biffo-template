@@ -1,17 +1,26 @@
-"""Authenticated user-facing serving for a plugin's Lambda ingress (ADR-0018 §1).
+"""Founder JWT authorization for an ``isolated: true`` plugin's own Lambda ingress.
 
-A user-facing plugin's Lambda is reached by a **logged-in founder** through the
-shared CloudFront, so it must authenticate every request itself: verify the
-shared-Cognito JWT (the same verifier Core uses) and require a declared group.
-This module is that gate, reusable by any user-facing plugin.
+The pure :func:`authorize` (shared-Cognito JWT verification + group check, no web
+framework, an injectable verifier) is the platform's shared authorization
+primitive — the shared plugin-host's own authorizer (``plugin_host.authz``) wraps
+it to enforce group-gating for every plugin mounted in the host.
 
-The security logic lives in the pure :func:`authorize` (no web framework, an
-injectable verifier), so it is fully testable without FastAPI or a real token;
-:func:`require_group` is a thin FastAPI dependency over it. FastAPI and the JWT
-verifier are imported lazily, so ``import biffo_plugin_sdk`` never requires them —
-install ``biffo-plugin-sdk[user-serving]`` to use this module. The verifier is the
-SDK's self-contained ``_cognito`` (a published SDK cannot depend on the internal
-``biffo_cognito_auth`` workspace package; ``_cognito`` mirrors it).
+:func:`require_group` is a thin FastAPI dependency over :func:`authorize`, and
+exists **only** for a plugin that declares ``isolated: true`` (ADR-0021's escape
+hatch): it runs in its own dedicated Lambda, outside the shared host's
+``group_gate``, so nothing upstream authenticates its requests or enforces its
+declared group for it — the plugin must do that itself, and this is the gate for
+it. A plugin mounted in the shared plugin-host must **not** use
+:func:`require_group` — group-gating there is already enforced by the host
+itself, from the plugin's declared `api_ingress.required_group` (ADR-0011,
+ADR-0021 §1). A plugin shipping its own auth code in that context is redundant
+at best, and an unreviewed, divergent enforcement path at worst.
+
+FastAPI and the JWT verifier are imported lazily, so ``import biffo_plugin_sdk``
+never requires them — install ``biffo-plugin-sdk[user-serving]`` to use this
+module. The verifier is the SDK's self-contained ``_cognito`` (a published SDK
+cannot depend on the internal ``biffo_cognito_auth`` workspace package;
+``_cognito`` mirrors it).
 
 The verified founder carries its **raw token** so the handler can forward it to
 Core in the ``X-Biffo-User-Token`` header — Core re-verifies identity and
@@ -148,6 +157,10 @@ def require_group(
     the :class:`ForwardedUser`. 401 on a missing/invalid token, 403 on the wrong
     group. ``config`` defaults to :meth:`CognitoConfig.from_env` (resolved per
     request).
+
+    Only for ``isolated: true`` plugins running in their own Lambda. Do not use
+    this in a plugin mounted in the shared plugin-host — the host's
+    ``group_gate`` already enforces this (ADR-0021).
 
     The token is read from the ``X-Biffo-Founder-Token`` header (see
     :data:`FOUNDER_TOKEN_HEADER`) — behind CloudFront OAC the ``Authorization``

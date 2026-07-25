@@ -99,7 +99,9 @@ def test_gated_request_binds_the_sdk_acting_as_plugin_for_outbound_core_calls():
         return JSONResponse({"acting_as": acting_as_plugin.get()})
 
     app = Starlette(routes=[Route("/whoami", whoami)])
-    client = TestClient(build_host([MountedPlugin("ideation", app, "founder")], authorize=_authorizer))
+    client = TestClient(
+        build_host([MountedPlugin("ideation", app, "founder")], authorize=_authorizer)
+    )
 
     resp = client.get("/ideation/whoami", headers={"x-biffo-founder-token": "alice|founder"})
     assert resp.status_code == 200

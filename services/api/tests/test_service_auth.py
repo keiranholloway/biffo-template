@@ -158,7 +158,12 @@ def _request_with_iam_and_headers(user_arn: str, headers: dict[str, str]) -> Req
     """Like _request_with_iam but also carries request headers (for X-Biffo-Plugin)."""
     scope = {
         "type": "http",
-        "aws.event": {"requestContext": {"http": {"method": "POST"}, "authorizer": {"iam": {"userArn": user_arn}}}},
+        "aws.event": {
+            "requestContext": {
+                "http": {"method": "POST"},
+                "authorizer": {"iam": {"userArn": user_arn}},
+            }
+        },
         "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
     }
     return Request(scope)
@@ -175,9 +180,7 @@ async def test_host_asserting_a_plugin_identity_is_honoured(allowlist):
 
 @pytest.mark.asyncio
 async def test_host_without_assertion_keeps_its_own_identity(allowlist):
-    principal = await require_service_principal(
-        _request_with_iam_and_headers(HOST_ARN, {})
-    )
+    principal = await require_service_principal(_request_with_iam_and_headers(HOST_ARN, {}))
     assert principal.logical_names == frozenset({"system:host"})
 
 

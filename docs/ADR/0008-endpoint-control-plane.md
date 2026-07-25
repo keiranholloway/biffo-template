@@ -1,7 +1,8 @@
 # ADR-0008: Endpoint Control Plane (enable-via-PR)
 
-**Status:** Proposed  
+**Status:** Accepted  
 **Date:** 2026-07-03  
+**Accepted:** 2026-07-03  
 **Deciders:** Keiran Holloway (Technical Architect)
 
 ---
@@ -100,6 +101,34 @@ Every change is traceable end to end:
 - **Attributed to a human.** The PR title/body and commit record the **requesting admin's identity** (email/username from the verified JWT) — "Requested by `<email>` via the portal endpoints view" — so the git trail names a person, not a bot.
 - **Server-side audit log.** Each call emits a structured audit event (requester identity, source/plugin/table, operation, old→new `allowed`/`required_role`, timestamp, and the resulting PR URL) to the deployment's log/audit sink — a record independent of the repo, including of _attempts_.
 - **Two-person integrity.** Because it's PR→review→merge, the requester and the merger can be different people; the deploy that actually changes behavior is a separate, reviewed, logged step.
+
+## Implementation
+
+The control plane design was implemented in two components with supporting PRs:
+
+### Core admin endpoint (PR #130)
+
+`POST /api/v1/admin/endpoints/permission` validates the caller's admin status and
+permission change request, then invokes the PR-signer Lambda. Returns the PR URL
+to the portal.
+
+### PR-signer Lambda (PRs #133, #136)
+
+A dedicated AWS Lambda invocable only by the Core API (IAM-scoped `lambda:InvokeFunction`),
+holding the GitHub App private key. Reads the target file from the base branch,
+applies the single permission change, commits to a new branch, and opens a PR.
+
+### Refinements and live operation (PRs #137, #138, #140, #143, with follow-ups #163, #182, #184)
+
+Production deployment surfaced edge cases in error handling, branch naming, and
+auth token lifecycle that were refined through subsequent PRs. The design and security
+model remained stable; the implementation iterations addressed operational details
+(e.g. token TTL management, audit event structure, PR comment content).
+
+### Live documentation
+
+The design is fully documented as complete end-to-end in
+`docs/guides/endpoint-control-plane-setup.md`.
 
 ## Compliance
 

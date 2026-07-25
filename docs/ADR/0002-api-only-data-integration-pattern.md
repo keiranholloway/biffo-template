@@ -132,19 +132,18 @@ Option C is over-engineered for this stage and does not address write-path consi
 
 **Network enforcement:**
 
-- The RDS security group allows inbound port 5432 only from the Core API Lambda security group. This is enforced in the Terraform module and verified by Checkov on every plan.
-- tfsec rules flag any deviation from this security group rule in CI.
+- The RDS security group allows inbound port 5432 only from the Core API Lambda security group. This is enforced in the Terraform module and verified by Checkov on every plan (`.github/workflows/ci.yml:288`, `bridgecrewio/checkov-action@v12`).
 
 **IAM enforcement:**
 
 - The database secret ARN is granted only to the Core API Lambda execution role via an explicit `aws_iam_role_policy` resource. No other role receives this grant.
-- Terraform's `moved` block and tagging conventions prevent accidental grant propagation to new Lambda roles.
+- Tagging conventions prevent accidental grant propagation to new Lambda roles (no `moved` blocks currently exist in the module, as verified by `grep -rn "moved {" modules/`).
 
 **Application enforcement:**
 
 - No Biffo module or service template ships `psycopg2`, `asyncpg`, `SQLAlchemy`, or any other database client library outside of `services/api/`.
 - The `services/_template/` stub for new microservices ships an API client, not a database client.
-- A CI lint rule (custom Ruff plugin) fails the build if a non-API service directory contains a database driver import.
+- A CI lint rule (Ruff's built-in `TID251` rule from `flake8-tidy-imports`) fails the build if a non-API service directory contains a database driver import. The rule is configured in `pyproject.toml:36,69-77` with a per-file exemption for `services/api/**` at line 67, enforcing the ADR-0002 invariant that only the Core API may import database clients.
 
 **Event contracts:**
 

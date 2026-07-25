@@ -469,3 +469,49 @@ async def test_the_platform_ceiling_wins_over_a_misconfigured_deployment(monkeyp
     assert RunLimits.from_snapshot({"timeout_seconds": 99999}).timeout_seconds == float(
         LAMBDA_MAX_SECONDS
     )
+
+
+async def test_an_invalid_output_submission_is_rejected_and_the_model_retries():
+    """A submission missing a required field must NOT terminate the run with junk.
+    The loop rejects it with the schema errors and the model re-submits (regression
+    for the ideation 502 on an incomplete analyst report)."""
+    invalid = tool_call_response("submit_report", {"notes": ["x"]})  # missing required "score"
+    valid = tool_call_response("submit_report", {"score": 5})
+    llm = FakeLLM(invalid, valid)
+
+    outcome = await collect(
+        AgentLoop(llm).stream(
+            model="m",
+            instructions="Assess it.",
+            input_payload={},
+            limits=_limits(max_turns=3),
+            output_tools=[_SUBMIT],
+        )
+    )
+
+    assert outcome.status == COMPLETED
+    assert outcome.result is not None
+    assert outcome.result["arguments"] == {"score": 5}  # the VALID re-submission
+    assert len(llm.calls) == 2  # it went round again after the rejection
+    tool_msgs = [m for m in outcome.messages if m["role"] == TOOL]
+    assert tool_msgs, "the rejection should be delivered as a tool result"
+    assert "score" in tool_msgs[0]["content"].lower()
+
+
+async def test_persistently_invalid_submissions_fail_at_max_turns_not_forever():
+    """If the model never fixes its submission, the run fails at max_turns rather
+    than completing with an invalid payload or looping unbounded."""
+    invalid = tool_call_response("submit_report", {"notes": ["x"]})
+    llm = FakeLLM(invalid, invalid, invalid, invalid)
+
+    outcome = await collect(
+        AgentLoop(llm).stream(
+            model="m",
+            instructions="Assess it.",
+            input_payload={},
+            limits=_limits(max_turns=2),
+            output_tools=[_SUBMIT],
+        )
+    )
+
+    assert outcome.status == FAILED  # never a COMPLETED-with-junk

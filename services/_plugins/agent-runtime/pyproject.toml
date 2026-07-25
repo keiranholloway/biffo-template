@@ -12,6 +12,10 @@ dependencies = [
   "aws-lambda-powertools[tracer]>=3.4.0",
   "httpx>=0.28.1",
   "boto3>=1.35.0",
+  # Validate an output-tool submission against its declared JSON Schema before
+  # accepting it as the run's terminal result (loop.py), so an incomplete model
+  # submission is retried rather than completing the run with an unusable payload.
+  "jsonschema>=4.23.0",
 ]
 
 [dependency-groups]

@@ -70,11 +70,11 @@ Several agents often run concurrently in this repo. A worktree isolates your
 - **Do not remove or modify a worktree you did not create.** Pulling the ground
   out from under a running agent breaks it mid-flight.
 
-## 2. Branch from, and PR into, the repo's default branch
+## 2. Branch from, and PR into, the integration branch (`dev`)
 
-- Determine the integration branch with `gh repo view --json defaultBranchRef`.
-  It differs per repo (this template uses `main`; some instances use `dev`).
-  Branch from it, and open your PR back into it.
+- Branch from the integration branch and open your PR back into it. It is `dev`
+  in every Biffo repo (see below); `gh repo view --json defaultBranchRef`
+  confirms it.
 - Name branches by intent, tied to an issue where one exists:
   `feat/…`, `fix/…`, `docs/…`, `chore/…`, `ci/…`, `refactor/…`.
 - **All changes land via PR.** No direct commits to the integration branch, no

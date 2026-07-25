@@ -4,6 +4,12 @@
 **Date:** 2026-07-19
 **Deciders:** Keiran Holloway (Technical Architect)
 
+**Note:** Sections 1–3 (declare/review/enforce; no plugin code in the Core process)
+restate constraints already settled by ADR-0002 and already enforced by Accepted
+ADR-0021 — treat these specific clauses as de facto binding regardless of this
+document's overall Proposed status. Sections 4–8 (config_schema, secrets, UI
+capabilities, http_ingress specifics) remain genuinely unscheduled and open.
+
 ---
 
 ## Context
@@ -22,7 +28,7 @@ Biffo has converged on three tiers with genuinely different coupling:
 
 The distinction that matters is **which version something must track**, not where its code runs. The core admin UI belongs to core because it is a client of the core API's admin surface. A sibling belongs to nobody because it shares almost nothing — its frontend never calls the core API (ADR-0007), and its backend reaches core server-side through a documented HTTP contract.
 
-Plugins sit between: they extend the **core data model**, which a sibling cannot do (ADR-0002 forbids any component but the Core API touching the database), while remaining **optional**, which core capability is not.
+Plugins sit between: they extend the **core data model**, which a sibling cannot do (ADR-0002 forbids any component but the Core API touching the database), while remaining **optional**, which core capability is not. The Plugin tier's runtime split — event/data Lambda vs. shared-host mount, selected by the manifest's `user_ingress` field — is covered by ADR-0018/ADR-0021; this section focuses on the ownership tier distinction.
 
 ### What the tier is actually for
 
@@ -98,6 +104,8 @@ A `config_schema` field marked `secret: true` is stored in AWS Secrets Manager, 
 - Rotatable without a plugin release.
 
 A Stripe secret key must never be retrievable through the same endpoint that serves a tracking ID. The `secret` flag is the boundary, and read paths are separated by it rather than by convention.
+
+Note (documentation only, no design commitment): when this write path is built, it should consider reusing the isolated-credential pattern ADR-0008 already established for the PR-signer (`services/pr-signer/`, template-owned per issue #568) — a minimal, no-public-endpoint function that alone holds a sensitive credential and is invoked over IAM by the Core API, rather than the Core API holding the credential itself. A plugin secrets-write mechanism is arguably more security-sensitive than the permissions-block edit ADR-0008 isolates a credential for, so re-deriving a weaker mechanism from scratch here would be a regression, not a fresh design.
 
 ### 6. UI is declared as capabilities, rendered at runtime
 
@@ -178,7 +186,7 @@ Give each plugin its own datastore and let it integrate over HTTP only.
 
 **This ADR is `Proposed`, and deliberately not scheduled.**
 
-There is currently no third-party plugin, the registry ships `plugins: []`, and the sole first-party plugin (the orchestration engine) is core platform capability rather than an optional module — its tables, admin UI and trigger-matching all live in core, and only its dispatch worker is plugin-shaped.
+There is currently no third-party plugin, the registry ships `plugins: []`, and the first-party plugins (orchestrator, agent-runtime) are core platform capability rather than optional modules — their infrastructure is wired identically as template-owned platform capability (`infra/environments/dev/plugins.core.tf:44-63`), not installed through the plugin flow.
 
 Building this contract before a real plugin needs it would be speculative. Designing it now is cheap and worth doing while the reasoning is fresh; implementing it now would be guessing.
 
@@ -204,3 +212,4 @@ Schema evolution (§8) is a constraint on all of the above rather than a separat
 - [ADR-0009](0009-internal-service-authentication.md) — how a plugin's Lambda authenticates to core; the enforcement path in §3.
 - [ADR-0011](0011-authorization-is-a-core-concern.md) — authorization is never a plugin. This ADR does not reopen that.
 - [ADR-0005](0005-ddl-import-module.md) — raw DDL import, the adjacent mechanism for hand-authored schema. A plugin declares and ships a module; a DDL import vendors SQL somebody else wrote. The overlap is real and worth watching: if an instance's need is schema-only and single-instance, DDL import is the lighter tool.
+- [ADR-0008](0008-endpoint-control-plane.md) — the isolated-credential pattern (PR-signer) §5's future secrets-write mechanism should consider reusing rather than re-deriving; see the note in §5.

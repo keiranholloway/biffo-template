@@ -110,7 +110,10 @@ ways, differing only in *who authenticates the caller*:
   not the plugin, is the authority on the founder's identity and group membership;
   `run_as_user_id` is then cryptographically grounded, not merely asserted by the
   plugin. Both checks must pass: the service principal must be registered to drive
-  that `agent_key`, and the forwarded user must be in its `required_group`.
+  that `agent_key`, and the forwarded user must be in its `required_group`. (Note:
+  the service-principal↔`agent_key` binding is not yet enforced; see **Compliance**
+  §3. This forwarded-token path also does not invoke the identity provider; see
+  ADR-0012 "Scope: `require_auth` only".)
 
 Both paths converge on the identical turn logic and both persist a run with
 `run_as_kind="user"` and the verified `run_as_user_id` (ADR-0014 §6).
@@ -319,8 +322,12 @@ telling the affected owners when it cannot.
   registered prompt cannot be overridden).
 - `/internal/agent-chat` requires **both** `require_service_principal` and a valid
   forwarded Cognito token; a request missing either is rejected (401/403), tested.
-- The service principal must be registered against the `agent_key` and the verified
-  user must be in the agent's `required_group`, else 403.
+- The service principal must be a registered Biffo service (verified via SigV4,
+  ADR-0009); the verified user must be in the agent's `required_group`, else 403.
+  **Binding a service principal specifically to an `agent_key` is envisaged but not
+  yet enforced** (tracked in #565) — the install flow (ADR-0003) that would
+  establish and verify this binding does not exist yet, so today only the SigV4
+  gate and required_group check are enforced.
 - Closed-table access via the service seam **must** carry an `owner_sub` filter;
   Core rejects an unscoped call. `TID251` (ADR-0002) continues to bar any DB client
   outside `services/api/`.

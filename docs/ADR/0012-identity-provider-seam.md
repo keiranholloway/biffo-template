@@ -263,6 +263,24 @@ deployment's decision instead of the template's.
 - tabsii's port is not complete until its `auth.py` fork is deleted and a core
   upgrade applies cleanly with no conflict in that file.
 
+## Scope: `require_auth` only
+
+**The identity-provider seam covers the `require_auth` path only.** `require_forwarded_user`
+(the plugin/sibling-forwarded-token ingress, used by plugin chat routes per ADR-0017 §3
+and internal owner-scoped plugin data routes) intentionally stays a lightweight, DB-free
+claims check. It calls `identity_from_token()`, which performs pure claims mapping
+without calling `provider.resolve()`, and therefore does not populate `AuthenticatedUser.user_id`.
+Routes that use `require_forwarded_user` and need an owner identity fall back to the raw
+Cognito `sub` claim — this is correct and load-bearing (see `routing/owner_data_handlers.py`).
+
+Routing the forwarded-token path through the provider would add a database round-trip on
+every plugin-forwarded call; since plugins must never gain database access (ADR-0002),
+this scope boundary is deliberate, not an oversight. A deployment with a custom identity
+provider should be aware that **plugin-owned data is currently attributed by raw Cognito
+`sub`, not the provider's resolved canonical identity**. This is a documented, scoped
+limitation of the current architecture, and a candidate for future refining if the plugin
+surface grows to require tighter integration with canonical identity resolution.
+
 ## Related Decisions
 
 - **ADR-0011** — Authorization is a core concern, not a plugin. Unamended; this

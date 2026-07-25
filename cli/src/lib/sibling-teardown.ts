@@ -239,6 +239,20 @@ export interface SiblingMarker {
   name?: string
   core_project?: string
   path_prefix?: string
+  /**
+   * The core template's version (`biffo.core.json`'s `version` — see
+   * `lib/core-version.ts`) at the moment this sibling was scaffolded from
+   * `_skeletons/sibling-template/` (issue #567, ADR-0007). Visibility only:
+   * nothing here compares it against anything yet — there is no
+   * `biffo sibling upgrade` to power (that remains tracked future work) — it
+   * just makes drift between a sibling's vendored skeleton pieces
+   * (`middleware/auth.py`, the frontend identity/auth libs, vendored
+   * Terraform) and the current skeleton *detectable* later, the same way
+   * `biffo.core.json` makes core drift detectable via `biffo core status`.
+   * `markerMatches` deliberately does not compare on it — provenance, not
+   * identity.
+   */
+  template_version?: string
 }
 
 export const SIBLING_MARKER_FILE = 'biffo.sibling.json'

@@ -163,12 +163,14 @@ describe('writeSiblingTemplate', () => {
     writeSiblingTemplate(template, target, SIBLING_CONFIG, {
       coreProjectName: 'core-app',
       pathPrefix: 'reports',
+      templateVersion: '1.2.3',
     })
 
     expect(JSON.parse(readFileSync(join(target, 'biffo.sibling.json'), 'utf8'))).toMatchObject({
       name: 'reports',
       core_project: 'core-app',
       path_prefix: 'reports',
+      template_version: '1.2.3',
       description: 'Reports sibling',
       // Scaffolded (empty) so the field is discoverable for the developer to fill.
       routes: [],
@@ -199,6 +201,7 @@ describe('writeSiblingTemplate', () => {
     writeSiblingTemplate(template, target, configWithRoutes, {
       coreProjectName: 'core-app',
       pathPrefix: 'reports',
+      templateVersion: '1.2.3',
     })
 
     expect(JSON.parse(readFileSync(join(target, 'biffo.sibling.json'), 'utf8')).routes).toEqual([
@@ -809,6 +812,7 @@ describe('root sibling mode', () => {
     writeSiblingTemplate(template, target, ROOT_CONFIG, {
       coreProjectName: 'core-app',
       pathPrefix: '',
+      templateVersion: '1.2.3',
     })
 
     const env = readFileSync(join(target, 'apps', 'frontend', '.env.example'), 'utf8')

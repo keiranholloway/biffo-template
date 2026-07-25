@@ -4,6 +4,13 @@
 **Date:** 2026-07-24
 **Deciders:** Keiran Holloway (Technical Architect)
 
+> **Superseded in part by [ADR-0021](0021-shared-plugin-hosting.md):**
+> the backend hosting shape (§1, per-plugin Lambda) is **superseded** by the shared
+> plugin host; see ADR-0021 for the current backend design. The frontend hosting
+> pattern (§2, path-routed S3 + CloudFront) remains current and is reused by
+> ADR-0021; full retirement of this ADR's per-plugin backend hosting is tracked in
+> [#558](https://github.com/keiranholloway/biffo-template/issues/558).
+
 ---
 
 ## Context

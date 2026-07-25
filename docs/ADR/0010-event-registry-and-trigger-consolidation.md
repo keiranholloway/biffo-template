@@ -89,3 +89,11 @@ grows as new events appear on the bus.
 - **Trade-off.** Import-time registration means an event only appears in the catalog
   if its declaring module is imported — acceptable, as event-emitting routers are
   already imported by `main.py`, matching the existing model-discovery pattern.
+
+## Status update (2026-07-25)
+
+Epic #210 has shipped: the subscription gates elimination and broad EventBridge pattern
+are now implemented. The generic forwarder and catch-all EventBridge rule are in
+`modules/plugins/_template/main.tf:97-117` and `services/_plugins/orchestrator/src/orchestrator/plugin.py:138-142`,
+and the self-augmenting trigger catalog is in `services/api/src/api/orchestration.py:105-118`
+(`dispatch_event()` calling `observe_trigger(...)`). The "subsequent work" described above is complete.

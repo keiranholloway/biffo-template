@@ -36,7 +36,7 @@ The seam rules are:
 1. Every database table includes a `tenant_id` column (non-nullable, indexed).
 2. Every API endpoint validates and scopes to `tenant_id` — it is never inferred globally from deployment context.
 3. Every EventBridge event envelope includes `tenant_id` in its detail payload.
-4. No application logic ever assumes `tenant_id == "default"` — it always reads the value from auth context.
+4. The seam is currently **schema-only, not yet live** in the application layer. Cognito is provisioned with a custom `tenant_id` attribute (`modules/cloud/aws/auth/main.tf:100-110`), and the database columns exist, but `_user_from_claims()` in `services/api/src/api/middleware/auth.py:134` hardcodes `tenant_id="default"` as a literal; it does not yet read any JWT claim. Multi-tenancy activation would require wiring that read path plus (likely) a pre-token-generation Lambda or equivalent to guarantee the claim lands in the verified token before this rule can be enforced end-to-end.
 5. IAM and Cognito are structured so that a tenant management layer can be bolted on without restructuring existing resources.
 
 ---
@@ -128,7 +128,7 @@ The cost of not including `tenant_id` from the start is a schema migration and A
 
 ## Compliance
 
-- Database migrations: enforced via Alembic migration linter that rejects tables missing `tenant_id`.
+- Database schema: `TenantScopedModel` (`services/api/src/api/models/base.py:13-58`) is the abstract base class for every core table; it forces `tenant_id` onto the model via inheritance. For plugin tables, `PluginTableDefinition._ensure_auto_columns` (`services/api/src/api/models/plugin_table.py:281-299`) is a Pydantic validator that rejects a plugin manifest redeclaring the reserved `tenant_id` column.
 - API layer: a shared FastAPI dependency `require_tenant_context()` is injected on every route and throws `500` if `tenant_id` is absent from auth context — this catches regressions in CI.
 - Event contracts: a Pydantic base model `BiffoEvent` requires `tenant_id` — all event publishers inherit from it.
 - These checks run in CI on every PR.

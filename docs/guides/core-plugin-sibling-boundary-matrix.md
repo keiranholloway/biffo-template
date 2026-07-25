@@ -157,3 +157,65 @@ The clearest gap this audit surfaces for follow-up: **siblings have no
 `biffo core upgrade` equivalent.** Plugins solved this for first-party code
 via the `services/_plugins/` carve-out (ADR-0006/#243) and for third-party
 code via the registry + `plugin upgrade`; siblings have neither.
+
+## 5. Plugin ownership has two axes — don't conflate them
+
+Working through this matrix surfaced a distinction worth naming explicitly,
+because it's easy to see "first-party vs third-party" and "declarative vs
+custom-code" as the same split. They aren't.
+
+- **Axis A — source custody** (`services/_plugins/` vs `services/<name>/`):
+  who keeps a plugin's *copy* current over time — the template (`core
+  upgrade`) or the instance (`plugin upgrade`). This only exists to let
+  Biffo itself ship a small number of platform-capability plugins
+  (`orchestrator`, `agent-runtime`) in lockstep with core. It was never meant
+  to scale — every third-party plugin, regardless of count, funnels through
+  the identical `services/<name>/` channel.
+- **Axis B — execution trust** (declared-and-Core-executed vs
+  plugin's-own-process): what a plugin is allowed to *do*. A plugin never
+  runs code inside Core — it declares a `tables[]`/`api_routes[]` surface
+  that Core synthesizes and executes generically (`plugin_table.py`,
+  `plugin_router.py`), and anything beyond plain CRUD runs in the plugin's
+  own sandboxed process, calling back over a signed HTTP identity. This is
+  the actual security perimeter (ADR-0002's DB-access ban, extended to
+  untrusted third-party code) and applies identically to first- and
+  third-party plugins alike — `orchestrator` doesn't get to run inside
+  `services/api/` either.
+
+**These should not be collapsed into one axis.** Axis A already simplifies on
+its own once third-party volume grows — first-party stays a small,
+template-controlled set, and every marketplace plugin uses the one
+third-party branch already. Axis B is the security boundary that makes it
+safe to run *any* third-party code at all; weakening it (e.g. letting a
+plugin's code execute inside Core, or hand it a DB client) would be a
+regression in exactly the direction more third-party authors makes riskier,
+not safer.
+
+### Where real complexity would show up at marketplace scale (not yet, deferred)
+
+Current state: **one author, 5-10 plugins.** None of the below is worth
+building today — the two-axis model already holds at this volume without
+friction. Listed here so the gap is visible before it's load-bearing, not as
+a call to act now:
+
+1. **No `required_core_version` enforcement.** Declared in the manifest but
+   never checked (`plugin-upgrade.ts:60-77`) — fine when one author tracks
+   their own core version; becomes a real breakage vector once plugins are
+   authored against core versions their installer hasn't upgraded to yet.
+2. **The registry is a static, unreviewed JSON file** (`plugins.json` in a
+   separate repo, currently empty) — no publish intake, no automated or
+   manual review before install. Adequate for self-publishing 5-10 plugins;
+   not a marketplace yet for outside authors.
+3. **Every install vendors a full copy into the instance's own repo**, with
+   no bulk-upgrade command — per-plugin `plugin upgrade` is fine at
+   single-digit counts, tedious at dozens.
+4. **The shared plugin-host is one Lambda for every mounted user-facing
+   plugin.** Blast-radius/cold-start/resource-isolation is a non-issue at a
+   handful of mounted apps; worth stress-testing before it's load-bearing at
+   real concurrency.
+5. **Uninstall never drops schema** (tables/migrations persist forever by
+   design, `plugin-uninstall.ts`) — negligible drift at low plugin churn,
+   accumulates indefinitely under a try-and-discard marketplace pattern.
+
+Revisit this section when either axis actually strains — i.e. when a second
+external author wants to publish, or plugin count moves toward the dozens.

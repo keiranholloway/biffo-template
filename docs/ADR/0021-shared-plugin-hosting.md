@@ -55,7 +55,7 @@ marginal cost of a new plugin.
 
 The tempting fix — mount plugin routers *inside the Core API process* — is
 forbidden: **ADR-0013 §3, "No plugin code runs in the Core API process… unamended
-and non-negotiable."** A compromised or buggy plugin must never reach the DB or
+and non-negotiable"** (a constraint also grounded in ADR-0002 directly). A compromised or buggy plugin must never reach the DB or
 crash Core. Any design must also honour ADR-0002 (no DB client outside Core),
 ADR-0009 (inbound internal calls are SigV4/IAM), and ADR-0011 (authorization —
 including group-gating — is a core concern, never plugin code).

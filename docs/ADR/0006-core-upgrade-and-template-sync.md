@@ -184,7 +184,23 @@ instance, whose head was `0006`). So the upgrade runs a second, strictly
 **additive** pass over that directory alongside the merge: migrations already
 present are skipped, new ones are appended with their `down_revision` rewritten
 to the instance's current head, and a colliding revision id is re-issued as a
-deterministic `core_<hash>`. The post-carry chain is validated (every parent
+deterministic `core_<hash>`. 
+
+Migration identity uses a **3-tier match** (`cli/src/lib/core-migrations.ts:528-570`, 
+`CarryMatchKind` type lines 453):
+
+1. **Provenance marker** (strongest) — the carried file names the template migration 
+   it came from via a `# biffo:carried-from:` marker. Exact and survives any rename or renumber. 
+   Only present on migrations carried since issue #366.
+2. **Filename** (original signal) — the template filename matches an instance migration 
+   filename. This is the common case but defeated if an instance renames the file to 
+   match a re-issued revision id (which is exactly what happens when a collision occurs).
+3. **DDL body hash** (evidence-of-last-resort) — the stripped DDL is identical. This 
+   recognises migrations carried before provenance existed and since renamed, solving 
+   issue #366's trap. It is only used when exactly one migration on each side has this body 
+   (to avoid false positives on `pass` or no-op placeholders).
+
+The post-carry chain is validated (every parent
 resolves, one base, exactly one head) before a PR exists; any anomaly aborts the
 upgrade and writes nothing. Crucially this happens **at CLI time**, producing a
 reviewable file in the PR — never at deploy time, which is the failure mode
@@ -356,6 +372,32 @@ makes it safe to run against a live instance like `dev.tabsii.com`.
   git operations and a PR creation — no Terraform apply, no DB write, no Lambda
   invoke. Deployment happens only when a human merges the PR and the instance's
   existing pipeline runs.
+
+---
+
+## Implementation
+
+`biffo core upgrade` has grown several capabilities beyond the core merge mechanism:
+
+- **`--allow-conflicts`** — permits a PR to open even if core files have conflicted 
+  during the three-way merge; the conflict markers are proposed in the PR for a human 
+  to resolve.
+- **`--acknowledge-breaking`** — gated against the breaking-change registry 
+  (`cli/src/lib/breaking-changes.ts`); required when an upgrade crosses a documented 
+  breaking change (e.g., schema-destructive changes like Cognito pool replacement) to 
+  ensure the operator has reviewed the upgrade guide.
+- **`--allow-dirty`** — permits the upgrade to run against a working tree with uncommitted 
+  changes (issue #394), though the PR still requires the operator to be on a clean 
+  branch before merge.
+- **Deleted template file skip logic** — when a template-owned path is deleted upstream, 
+  `biffo.divergence.json` (an instance-side tracking file) records that and skips re-syncing 
+  it on future upgrades.
+- **Automatic lockfile refresh** — `cli/src/lib/lockfile-refresh.ts` (issue #393) 
+  automatically updates `package-lock.json` and `uv.lock` so they remain consistent with 
+  merged template or instance package changes, reducing merge conflicts.
+- **Global workflow dispatch-ref staleness warnings** — `cli/src/lib/global-workflows.ts` 
+  (issue #328) detects when a CI workflow's dispatch-ref points to a deleted or out-of-date 
+  template branch and warns the operator.
 
 ---
 

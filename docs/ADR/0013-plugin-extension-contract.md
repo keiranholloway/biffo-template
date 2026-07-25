@@ -4,6 +4,12 @@
 **Date:** 2026-07-19
 **Deciders:** Keiran Holloway (Technical Architect)
 
+**Note:** Sections 1–3 (declare/review/enforce; no plugin code in the Core process)
+restate constraints already settled by ADR-0002 and already enforced by Accepted
+ADR-0021 — treat these specific clauses as de facto binding regardless of this
+document's overall Proposed status. Sections 4–8 (config_schema, secrets, UI
+capabilities, http_ingress specifics) remain genuinely unscheduled and open.
+
 ---
 
 ## Context

@@ -542,11 +542,11 @@ async function pushSkeleton(
       // `template_version` field doc on `SiblingMarker` (lib/sibling-teardown.ts).
       templateVersion: getLatestCoreVersion(),
     })
-    await git.init(workDir, 'main')
+    await git.init(workDir, 'dev')
     await git.addRemote(workDir, 'origin', cloneUrl)
     await git.add(workDir, ['.'])
     await git.commit(workDir, `feat: scaffold ${config.project.name} sibling app (ADR-0007)`)
-    await git.push(workDir, 'main', { token: githubToken })
+    await git.push(workDir, 'dev', { token: githubToken })
   } finally {
     git.cleanup(workDir)
   }
@@ -630,12 +630,13 @@ async function configureSiblingGithub(
 ): Promise<void> {
   const { org, repo } = githubRepo(config)
 
-  // Always all three branches, regardless of which environments this sibling
-  // provisions (matches `biffo init`'s own convention — config.environments
-  // only controls GitHub *Environments* and per-env variables below, not the
-  // branch structure itself).
-  await github.createBranch(org, repo, 'dev', 'main')
-  await github.createBranch(org, repo, 'staging', 'main')
+  // `dev` (the single integration branch, #559) is already the repo's first
+  // pushed branch (see pushSkeleton). Add `staging` off it as a promotion
+  // target, regardless of which environments this sibling provisions —
+  // config.environments only controls GitHub *Environments* and per-env
+  // variables below, not the branch structure itself. There is no `main`
+  // (#559: retired everywhere).
+  await github.createBranch(org, repo, 'staging', 'dev')
   await github.setDefaultBranch(org, repo, 'dev')
 
   await github.configureBranchProtection(config)

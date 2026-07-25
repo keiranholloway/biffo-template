@@ -323,10 +323,10 @@ describe('runInit (integration — real adapters + HTTP mocks)', () => {
     // null sha = deletion
     expect(byPath['biffo.config.json']).toBeNull()
 
-    // All three branch refs end at that single commit — main from the commit
-    // itself, dev and staging fast-forwarded onto it — so they share it and the
-    // first dev→main promotion merges cleanly.
+    // Both branch refs end at that single commit — `dev` from the commit itself,
+    // `staging` fast-forwarded onto it — so they share it and the first
+    // dev→staging promotion merges cleanly. There is no `main` (#559).
     const pointedAtCommit = updatedRefs.filter((r) => r.sha === 'newcommitsha').map((r) => r.ref)
-    expect(pointedAtCommit.sort()).toEqual(['heads/dev', 'heads/main', 'heads/staging'])
+    expect(pointedAtCommit.sort()).toEqual(['heads/dev', 'heads/staging'])
   })
 })

@@ -641,11 +641,13 @@ export function buildPrBody(
     )
   }
   // Issue #328: some template workflows are dispatched by `biffo deploy` from a
-  // FIXED branch (GLOBAL_DISPATCH_REF, i.e. `main`) regardless of environment.
-  // If this PR lands one of them on a different branch (an instance whose
-  // default branch is `dev`), the fix reaches `base` but the deploy keeps
-  // running the old copy from `main` until a promotion. That gap is otherwise
-  // silent — surface it here so the operator knows a promotion is still owed.
+  // FIXED branch (GLOBAL_DISPATCH_REF, i.e. `dev` since #559) regardless of
+  // environment. Since every repo's default branch is now also `dev`, a core
+  // upgrade PR lands on the same branch it dispatches from, so this note does
+  // not fire in the unified model — it remains only for the case where a PR
+  // targets some other branch (e.g. a leftover `staging`), leaving the fix
+  // unreachable by the deploy until a promotion. Surfaced here so that gap is
+  // never silent.
   const globalWorkflowChanges = plan.changes.filter((c) =>
     GLOBAL_DISPATCH_WORKFLOW_PATHS.includes(c.path),
   )

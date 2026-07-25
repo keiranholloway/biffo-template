@@ -89,10 +89,11 @@ export class GitAdapter {
    *
    * Sets the initial branch name explicitly (`-b`) rather than relying on
    * the running machine's `init.defaultBranch` git config, which isn't
-   * guaranteed to be "main" (or even consistent between a dev's laptop and
-   * a CI runner).
+   * guaranteed to be "dev" (or even consistent between a dev's laptop and
+   * a CI runner). Defaults to `dev`, the single integration branch every Biffo
+   * repo uses (#559).
    */
-  async init(cwd: string, initialBranch = 'main'): Promise<void> {
+  async init(cwd: string, initialBranch = 'dev'): Promise<void> {
     await execa('git', ['init', '-b', initialBranch], { cwd })
   }
 
@@ -109,7 +110,7 @@ export class GitAdapter {
     await execa('git', ['commit', '-m', message], { cwd })
   }
 
-  /** The current branch name (e.g. "main"). */
+  /** The current branch name (e.g. "dev"). */
   async currentBranch(cwd: string): Promise<string> {
     const { stdout } = await execa('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd })
     return stdout.trim()

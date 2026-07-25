@@ -10,7 +10,7 @@ export interface GitHubAdapterOptions {
 
 /**
  * The required status-check contexts a freshly scaffolded repo gets on
- * `dev`/`staging`/`main`. GitHub matches a context against the job *name* (not
+ * `dev`/`staging`. GitHub matches a context against the job *name* (not
  * its id), so every entry here must be the `name:` of a job that actually runs
  * — a context nothing reports leaves every PR permanently BLOCKED even with all
  * real checks green.
@@ -64,7 +64,7 @@ export class GitHubAdapter {
    * The repo's default branch — the integration branch a PR should target.
    *
    * Asked of GitHub rather than inferred from the local checkout: it differs per
-   * repo (biffo-template uses `main`, instances use `dev`), and the local
+   * repo (every Biffo repo uses `dev` (#559)), and the local
    * current branch is whatever the caller happens to be on, which under the
    * worktree-per-change workflow is never it.
    */
@@ -323,7 +323,7 @@ export class GitHubAdapter {
     org: string,
     repo: string,
     branch: string,
-    from = 'main',
+    from = 'dev',
     waitTimeoutMs = 120_000,
     waitIntervalMs = 3_000,
   ): Promise<void> {
@@ -529,11 +529,10 @@ export class GitHubAdapter {
       config.source_control as { provider: 'github'; config: { org: string; repo: string } }
     ).config
 
-    // Protect all three branches: dev → staging → main (prod)
-    // dev: default branch; all feature work lands here via PR
-    // staging: promoted from dev; mirrors prod config
-    // main: production; requires prod-environment approval
-    const branches = ['dev', 'staging', 'main']
+    // Protect both branches: dev → staging.
+    // dev: default/integration branch (#559); all feature work lands here via PR
+    // staging: promoted from dev. There is no `main` — retired everywhere (#559).
+    const branches = ['dev', 'staging']
 
     for (const branch of branches) {
       log.info(`Waiting for ${branch} branch to be ready...`)
@@ -589,7 +588,7 @@ export class GitHubAdapter {
       }
     }
 
-    log.success('Branch protection configured on dev, staging, and main')
+    log.success('Branch protection configured on dev and staging')
   }
 
   async createEnvironments(config: ProvisioningConfig): Promise<void> {
@@ -882,7 +881,7 @@ export class GitHubAdapter {
     repo: string,
     workflowId: string,
     inputs: Record<string, string> = {},
-    ref = 'main',
+    ref = 'dev',
     timeoutMs = 60_000,
     intervalMs = 5_000,
   ): Promise<void> {
@@ -912,7 +911,7 @@ export class GitHubAdapter {
     baselineRunId: number,
     timeoutMs = 3_600_000,
     intervalMs = 30_000,
-    branch = 'main',
+    branch = 'dev',
   ): Promise<{ id: number; conclusion: string | null }> {
     const deadline = Date.now() + timeoutMs
 

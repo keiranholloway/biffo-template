@@ -112,7 +112,8 @@ ways, differing only in *who authenticates the caller*:
   plugin. Both checks must pass: the service principal must be registered to drive
   that `agent_key`, and the forwarded user must be in its `required_group`. (Note:
   the service-principal↔`agent_key` binding is not yet enforced; see **Compliance**
-  §3.)
+  §3. This forwarded-token path also does not invoke the identity provider; see
+  ADR-0012 "Scope: `require_auth` only".)
 
 Both paths converge on the identical turn logic and both persist a run with
 `run_as_kind="user"` and the verified `run_as_user_id` (ADR-0014 §6).

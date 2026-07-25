@@ -333,3 +333,41 @@ describe('validateManifest — chat agents (ADR-0017)', () => {
     ).toThrow()
   })
 })
+
+describe('validateManifest — tool declarations (ADR-0014 §7, #569)', () => {
+  const tool = {
+    name: 'web_search',
+    description: 'Search the public web and return the top results.',
+    parameters: { type: 'object', properties: {} },
+  }
+
+  it('accepts a well-formed tools entry and round-trips it', () => {
+    // The landmine this closes: before #569, `tools` validated fine and the
+    // top-level schema's non-`.strict()` object silently dropped it — a
+    // manifest author following the SDK's own ToolDeclaration docs got no
+    // error and no field. It must now survive validation intact.
+    const m = validateManifest({ name: 'agent-runtime', version: '1.0.0', tools: [tool] })
+    expect(m.tools).toHaveLength(1)
+    expect(m.tools[0]).toEqual(tool)
+  })
+
+  it('defaults tools to empty and applies the parameters default', () => {
+    expect(validateManifest({ name: 'rbac', version: '1.0.0' }).tools).toEqual([])
+    const m = validateManifest({
+      name: 'x',
+      version: '1.0.0',
+      tools: [{ name: 'web_search', description: 'Search the web.' }],
+    })
+    expect(m.tools[0]!.parameters).toEqual({})
+  })
+
+  it('rejects a tool declaration missing its required description', () => {
+    expect(() =>
+      validateManifest({
+        name: 'x',
+        version: '1.0.0',
+        tools: [{ name: 'web_search' }],
+      }),
+    ).toThrow()
+  })
+})

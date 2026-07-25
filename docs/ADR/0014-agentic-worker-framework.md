@@ -355,6 +355,66 @@ in `plugins.core.tf` plus its name in the allowlist default; a drift guard
 
 ---
 
+## Amendment: §7's declared read scope is deferred, not built; tools gained an authoring path (2026-07-25, closes #569)
+
+§7 describes effective read permission as the intersection of two things — the
+agent principal's ceiling and the worker's declared read scope — and says, in
+the present tense, that "**authoring-time validation still applies**: saving a
+worker verifies both that its declared scope sits inside the ceiling, and that
+the author holds the permissions it declares." That sentence overclaimed. An
+audit (#562) found no `read_scope` field anywhere in the codebase — `grep -rl
+"read_scope"` across the whole tree returned zero matches before this
+amendment — and no validator comparing a declared scope to anything.
+
+**What actually existed, honestly stated:**
+
+- **The ceiling half is real but dormant.** `allowed_principals` on
+  `PermissionRule` (`services/api/src/api/models/plugin_table.py`) is the
+  mechanism §7 describes, and it works. But `system:agent-runtime` names no
+  Core model's permissions block anywhere — the string appears only in its own
+  field definition and in tests. No instance has ever granted an agent read
+  access to a table, so the ceiling has never had anything to intersect with.
+- **The declared-scope half did not exist at all.** Before this amendment, the
+  "agent" action's authorable fields
+  (`services/api/src/api/schemas/orchestration.py`) were exactly `agent_name,
+  instructions, goals, model, max_turns, delivery` — the code's own comment
+  said outright that tools and read scope were "deliberately absent in M1."
+  There was no `read_scope` config field, no Pydantic model, no column, and
+  therefore nothing an author-time validator could check a ceiling against.
+  "Authoring-time validation still applies" was true of nothing.
+
+**Decision: `read_scope` stays deferred, deliberately, not because it is hard
+but because it has no consumer.** `docs/guides/agentic-workers.md` already
+records that no worker has ever read a Core table — every worker so far is
+enrichment over an event payload plus (optionally) web search. Building a
+declared-scope field, its authoring-time validator, and the ceiling ∩ scope
+intersection logic now would be speculative machinery serving a need nobody
+has yet. This is the same deferral bias §3's catalog and §9's memory already
+use, for the same reason: it is purely additive later, and guessing its shape
+now is more likely to be wrong than useful. When the first worker actually
+needs a table read, building `read_scope` for it — with a real consumer to
+validate the design against — is the right time, not before.
+
+**Tools, by contrast, already had a working runtime with no authoring path —
+that gap is closed, not deferred.** `declared_tools()` / `resolve_tools()`
+(`services/_plugins/agent-runtime/src/agent_runtime/tools.py`) were fully
+functional before this amendment, but the "agent" action's `config_fields`
+catalog had no `tools` entry, so nothing validated a declared tool name at
+save time — `_validate_action_config` did not reject it, and the only way a
+`tools` value reached a run was hand-editing `action_config` directly,
+bypassing the review the portal builder otherwise provides. This amendment's
+companion change adds `tools` to the catalog as an authoring-time-validated
+field, checked against the runtime's registry the same way `_validate_delivery`
+already validates the `delivery` sub-config. Low risk, because the runtime
+side of this contract was never in question — only the missing front door was.
+
+**Net effect on §7:** the ceiling and the tool registry are both load-bearing
+and correctly described. The declared *read* scope is the one piece that was
+never built, and is now explicitly marked deferred rather than left to imply,
+by present-tense prose, that it exists.
+
+---
+
 ## Related Decisions
 
 - [ADR-0002](0002-api-only-data-integration-pattern.md) — why the runtime reaches Core over HTTP and never touches the database.

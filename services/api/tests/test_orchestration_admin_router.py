@@ -233,15 +233,20 @@ def test_catalog_surfaces_agent_runtime_tools_as_available_tools(client: TestCli
     assert by_name["web_search"]["parameters"]["type"] == "object"
 
 
-def test_available_tools_is_not_a_config_field(client: TestClient):
-    # The builder renders config_fields by type and does not yet understand a tool
-    # picker; the tools must ride as SEPARATE data it ignores, never a config_field
-    # (a multiselect field arrives in Part B). If this regresses, the builder page
-    # could render nothing for the unknown field type.
+def test_tools_is_now_a_validated_config_field(client: TestClient):
+    # ADR-0014 §7 / #569: `tools` gained an authoring-time-validated config_field
+    # (previously it was deliberately absent, so a declared tool name went
+    # unchecked until run time). `available_tools` is a DIFFERENT thing — live
+    # discovery metadata the router attaches for the portal's picker *options* —
+    # and must stay out of config_fields, since it carries no action_config value
+    # of its own.
     agent = _agent_action(client)
     field_names = {f["name"] for f in agent["config_fields"]}
-    assert "tools" not in field_names
+    assert "tools" in field_names
     assert "available_tools" not in field_names
+    tools_field = next(f for f in agent["config_fields"] if f["name"] == "tools")
+    assert tools_field["type"] == "tools"
+    assert tools_field["required"] is False
 
 
 def test_agent_config_fields_are_unchanged_by_surfacing_tools(client: TestClient):
@@ -648,15 +653,18 @@ def test_catalog_offers_the_agent_action_with_its_m1_fields(client: TestClient):
     body = client.get(f"{_BASE}/catalog").json()
     action = next(a for a in body["actions"] if a["type"] == "agent")
     fields = {f["name"]: f for f in action["config_fields"]}
-    # Deliberately minimal in M1 — tools and read scope are M2/M3. `goals` (ADR-0014)
-    # is the one optional acceptance-criteria field folded into the system prompt.
-    # `delivery` (ADR-0020) is the optional deliver-on-completion sub-config.
+    # `goals` (ADR-0014) is the one optional acceptance-criteria field folded into
+    # the system prompt. `delivery` (ADR-0020) is the optional deliver-on-completion
+    # sub-config. `tools` (ADR-0014 §7, #569) is the declared tool list, validated
+    # against KNOWN_AGENT_TOOLS. Read scope stays deliberately absent — ADR-0014's
+    # third amendment defers it; no worker needs table reads yet.
     assert set(fields) == {
         "agent_name",
         "instructions",
         "goals",
         "model",
         "max_turns",
+        "tools",
         "delivery",
     }
     # The delivery field is optional and structured (type "delivery"): absent ⇒ no
@@ -800,6 +808,98 @@ def test_non_open_select_still_rejects_off_list_values(client: TestClient):
         ),
     )
     assert resp.status_code == 422
+
+
+# ── Agent tools (ADR-0014 §7, #569) ──────────────────────────────────────────
+#
+# `tools` is a declared list of runtime tool names, validated at save time
+# against KNOWN_AGENT_TOOLS (a reproduced mirror of the runtime's TOOL_REGISTRY
+# — Core cannot import the runtime's Python, ADR-0002). Before this, a declared
+# tool name was never checked until run time.
+
+
+def test_agent_workflow_accepts_a_known_tool(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="agent",
+            action_config={
+                "agent_name": "demo-enricher",
+                "instructions": "Enrich {company}.",
+                "tools": ["web_search"],
+            },
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["action_config"]["tools"] == ["web_search"]
+
+
+def test_agent_workflow_rejects_an_unregistered_tool(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="agent",
+            action_config={
+                "agent_name": "demo-enricher",
+                "instructions": "Enrich {company}.",
+                "tools": ["read_database"],
+            },
+        ),
+    )
+    assert resp.status_code == 422
+    assert "read_database" in resp.text
+
+
+def test_agent_workflow_without_tools_still_valid(client: TestClient):
+    """Absent `tools` is the norm — default-deny, a worker that uses none."""
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="agent",
+            action_config={"agent_name": "demo-enricher", "instructions": "Enrich {company}."},
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+    assert "tools" not in resp.json()["action_config"]
+
+
+def test_agent_workflow_accepts_a_comma_separated_tools_string(client: TestClient):
+    """Mirrors `agent_runtime.tools.declared_tools()`'s leniency: a single-text-
+    input authoring form naturally produces a comma-separated string, and that
+    must validate exactly as the list form does — not just at run time."""
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="agent",
+            action_config={
+                "agent_name": "demo-enricher",
+                "instructions": "Enrich {company}.",
+                "tools": "web_search",
+            },
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+
+
+def test_known_agent_tools_matches_the_runtime_manifest():
+    """KNOWN_AGENT_TOOLS is a reproduced mirror of the runtime's TOOL_REGISTRY
+    (Core cannot import agent_runtime's Python, ADR-0002). The runtime's own
+    test_manifest_tools.py already guarantees its biffo.plugin.json matches
+    TOOL_REGISTRY exactly, so cross-checking against that manifest here — the
+    one artifact Core can read without importing the runtime, same as the
+    router's `_agent_runtime_tools()` — is equivalent to checking against
+    TOOL_REGISTRY directly, and is the same-repo drift guard for this list.
+    """
+    from api.plugins import discover_plugin_manifests
+    from api.schemas.orchestration import KNOWN_AGENT_TOOLS
+
+    manifest = next(m for m in discover_plugin_manifests() if m.get("name") == "agent-runtime")
+    declared = {tool["name"] for tool in manifest.get("tools", [])}
+    assert declared == KNOWN_AGENT_TOOLS, (
+        "KNOWN_AGENT_TOOLS in schemas/orchestration.py has drifted from "
+        "agent-runtime's biffo.plugin.json. Update the reproduced set there to "
+        "match."
+    )
 
 
 # ── Secret redaction (#432) ──────────────────────────────────────────────────

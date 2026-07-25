@@ -319,3 +319,30 @@ describe('validateManifest — routes', () => {
     expect(() => validateManifest(manifest)).toThrow()
   })
 })
+
+describe('validateManifest — chat agents (ADR-0017)', () => {
+  const agent = {
+    key: 'ideation-challenger',
+    system_prompt: 'Ask one sharp question.',
+    model: 'anthropic/claude-sonnet-4',
+    required_group: 'founder',
+  }
+
+  it('accepts a well-formed chat_agents entry and defaults the bounds', () => {
+    const m = validateManifest({ name: 'ideation', version: '1.0.0', chat_agents: [agent] })
+    expect(m.chat_agents).toHaveLength(1)
+    expect(m.chat_agents[0]!.key).toBe('ideation-challenger')
+    expect(m.chat_agents[0]!.max_history_messages).toBe(40)
+    expect(m.chat_agents[0]!.timeout_seconds).toBe(20)
+  })
+
+  it('defaults chat_agents to empty and rejects a bad key / unknown field', () => {
+    expect(validateManifest({ name: 'rbac', version: '1.0.0' }).chat_agents).toEqual([])
+    expect(() =>
+      validateManifest({ name: 'x', version: '1.0.0', chat_agents: [{ ...agent, key: 'Bad' }] }),
+    ).toThrow()
+    expect(() =>
+      validateManifest({ name: 'x', version: '1.0.0', chat_agents: [{ ...agent, extra: true }] }),
+    ).toThrow()
+  })
+})

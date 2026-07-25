@@ -278,6 +278,27 @@ class ToolDeclaration(BaseModel):
     )
 
 
+class ChatAgentDeclaration(BaseModel):
+    """A buffered chat agent this plugin registers with Core (ADR-0017 seam #1).
+
+    Core resolves a chat turn's trusted config from the agent ``key`` a request
+    carries, never from prompt text in the request (ADR-0016 §1) — so the
+    ``system_prompt`` here is the INSTALL-VETTED instruction channel. The bounds
+    default to Core's own assistant values; a plugin declares only the essentials.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(pattern=r"^[a-z][a-z0-9-]*$")
+    agent_name: str | None = None
+    system_prompt: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    required_group: str = Field(min_length=1)
+    max_history_messages: int = Field(default=40, gt=0)
+    max_output_tokens: int = Field(default=1024, gt=0)
+    timeout_seconds: float = Field(default=20.0, gt=0)
+
+
 class PluginManifest(BaseModel):
     """Validated manifest for a Biffo plugin.
 
@@ -294,6 +315,7 @@ class PluginManifest(BaseModel):
     api_routes: list[RouteDef] = []
     required_core_version: str = ">=0.0.0"
     tools: list[ToolDeclaration] = []
+    chat_agents: list[ChatAgentDeclaration] = []
 
     @model_validator(mode="after")
     def _validate_routes_reference_declared_tables(self) -> PluginManifest:

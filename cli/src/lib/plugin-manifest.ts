@@ -244,6 +244,22 @@ const UserFrontendSchema = z
   })
   .strict()
 
+// A buffered chat agent the plugin registers with Core (ADR-0017 seam #1). The
+// system_prompt is the install-vetted instruction channel (ADR-0016 §1) — never
+// request-supplied. `.strict()` mirrors the SDK/Core models' extra="forbid".
+const ChatAgentDeclarationSchema = z
+  .object({
+    key: z.string().regex(/^[a-z][a-z0-9-]*$/, 'must be a lowercase kebab-case slug'),
+    agent_name: z.string().optional(),
+    system_prompt: z.string().min(1),
+    model: z.string().min(1),
+    required_group: z.string().min(1),
+    max_history_messages: z.number().int().positive().default(40),
+    max_output_tokens: z.number().int().positive().default(1024),
+    timeout_seconds: z.number().positive().default(20),
+  })
+  .strict()
+
 export const PluginManifestSchema = z
   .object({
     name: z.string().regex(/^[a-z][a-z0-9-]*$/, 'must be a lowercase kebab-case slug'),
@@ -266,6 +282,9 @@ export const PluginManifestSchema = z
     // ordinary (data/event/CRUD) plugin.
     user_ingress: UserIngressSchema.optional(),
     user_frontend: UserFrontendSchema.optional(),
+    // Chat agents the plugin registers with Core (ADR-0017). Default empty — an
+    // ordinary plugin declares none.
+    chat_agents: z.array(ChatAgentDeclarationSchema).default([]),
   })
   .superRefine((manifest, ctx) => {
     const tableNames = new Set(manifest.tables.map((t) => t.name))

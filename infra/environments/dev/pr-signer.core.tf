@@ -21,8 +21,8 @@
 # out-of-band; it is never stored in Terraform state.
 #
 # This file depends only on the template-seeded shape every instance has
-# (var.project_name, local.environment, local.tags, aws_kms_key.logs — all
-# defined in main.tf) plus the per-instance pr_signer_* variables, the same
+# (var.project_name, local.environment, local.tags — all defined in main.tf)
+# plus the per-instance pr_signer_* variables, the same
 # cross-file pattern plugin-host.core.tf uses for module.auth/module.events/
 # module.api_gateway. module.core_api (main.tf) references module.pr_signer's
 # outputs back (invoke_function_arns, BIFFO_PR_SIGNER_FUNCTION_NAME) — that
@@ -53,12 +53,20 @@ module "pr_signer" {
   source = "../../../modules/cloud/aws/compute"
   count  = var.enable_pr_signer ? 1 : 0
 
-  project_name          = var.project_name
-  environment           = local.environment
-  function_name         = "pr-signer"
-  handler               = "src.pr_signer.handler.handler"
-  timeout               = 30
-  cloudwatch_kms_key_id = aws_kms_key.logs.arn
+  project_name  = var.project_name
+  environment   = local.environment
+  function_name = "pr-signer"
+  handler       = "src.pr_signer.handler.handler"
+  timeout       = 30
+  # cloudwatch_kms_key_id is deliberately NOT set (#586): the signer stays on the
+  # compute module's own self-provisioned CMK. That fallback key is gated on
+  # `count = var.cloudwatch_kms_key_id == "" ? 1 : 0`; wiring `aws_kms_key.logs.arn`
+  # here in the SAME apply that creates that key makes the count unresolvable
+  # (`Invalid count argument`) on an instance where pr-signer is already live
+  # (module.pr_signer count = 1) — breaking the deploy on a live, credential-holding
+  # Lambda. Consolidating pr-signer onto the shared CMK (#445) needs a genuine
+  # two-stage migration (create the key referencing nothing, apply, THEN wire it),
+  # not a one-shot `biffo core upgrade`; see #586 for the required upgrade path.
   # No VPC: the signer calls the public GitHub API and touches no database
   # (ADR-0002). In this NAT-less env a VPC-attached Lambda couldn't reach GitHub.
   enable_vpc_access    = false

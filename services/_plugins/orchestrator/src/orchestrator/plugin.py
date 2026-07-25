@@ -111,7 +111,11 @@ def _whatsapp_from_ssm(ssm_client: Any | None) -> WhatsAppSettings:
 
 
 class OrchestratorPlugin(BiffoPluginBase):
-    """Event-driven orchestration engine (ADR-0003 plugin)."""
+    """Event-driven orchestration engine — core platform capability (ADR-0010/ADR-0014), not an optional plugin.
+
+    Uses the ADR-0003 manifest mechanism for plugin discovery and registration,
+    but is first-party and template-owned, distributed by biffo core upgrade.
+    """
 
     def __init__(
         self,

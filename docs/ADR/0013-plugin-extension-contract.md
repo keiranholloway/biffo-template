@@ -22,7 +22,7 @@ Biffo has converged on three tiers with genuinely different coupling:
 
 The distinction that matters is **which version something must track**, not where its code runs. The core admin UI belongs to core because it is a client of the core API's admin surface. A sibling belongs to nobody because it shares almost nothing — its frontend never calls the core API (ADR-0007), and its backend reaches core server-side through a documented HTTP contract.
 
-Plugins sit between: they extend the **core data model**, which a sibling cannot do (ADR-0002 forbids any component but the Core API touching the database), while remaining **optional**, which core capability is not.
+Plugins sit between: they extend the **core data model**, which a sibling cannot do (ADR-0002 forbids any component but the Core API touching the database), while remaining **optional**, which core capability is not. The Plugin tier's runtime split — event/data Lambda vs. shared-host mount, selected by the manifest's `user_ingress` field — is covered by ADR-0018/ADR-0021; this section focuses on the ownership tier distinction.
 
 ### What the tier is actually for
 
@@ -178,7 +178,7 @@ Give each plugin its own datastore and let it integrate over HTTP only.
 
 **This ADR is `Proposed`, and deliberately not scheduled.**
 
-There is currently no third-party plugin, the registry ships `plugins: []`, and the sole first-party plugin (the orchestration engine) is core platform capability rather than an optional module — its tables, admin UI and trigger-matching all live in core, and only its dispatch worker is plugin-shaped.
+There is currently no third-party plugin, the registry ships `plugins: []`, and the first-party plugins (orchestrator, agent-runtime) are core platform capability rather than optional modules — their infrastructure is wired identically as template-owned platform capability (`infra/environments/dev/plugins.core.tf:44-63`), not installed through the plugin flow.
 
 Building this contract before a real plugin needs it would be speculative. Designing it now is cheap and worth doing while the reasoning is fresh; implementing it now would be guessing.
 

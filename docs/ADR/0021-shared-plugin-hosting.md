@@ -22,7 +22,11 @@ The premise of Biffo is that `biffo init` provisions the shared infrastructure
 **once** (Core API, Cognito, EventBridge, CloudFront, RDS) and a plugin is *pure
 code on top of it* — a declaration plus a little logic. For a plugin that only
 declares tables (Core owns and serves them, ADR-0004), reacts to events, and
-exposes generic CRUD, this holds: it provisions nothing.
+exposes generic CRUD, the platform still provisions a real Lambda, EventBridge
+rule/target, and (when needed) an IAM policy per `modules/plugins/_template/main.tf:56-167`
+— every first-party plugin today (orchestrator, agent-runtime) provisions all three.
+What broke the old pattern (and what this ADR fixes) is a plugin needing a custom
+authenticated API and a frontend, not the event/data shape.
 
 It broke the moment a plugin needed a **custom authenticated API and a
 frontend** — i.e. an actual product (the Ideation Engine). The platform had no

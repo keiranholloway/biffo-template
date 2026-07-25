@@ -195,7 +195,7 @@ Effective read permission is the **intersection** of two independently maintaine
 1. **The agent principal's ceiling** — what agents may *ever* read in this deployment.
 2. **The worker's declared read scope** — what this particular worker reads.
 
-A worker cannot grant itself anything outside the ceiling, so editing a definition can never widen access. Scope is expressed as `(table, operation)` pairs — the primitives ADR-0004 already uses — not a new addressing scheme.
+A worker cannot grant itself anything outside the ceiling, so editing a definition can never widen access. Scope is expressed as `(table, operation)` pairs — the primitives ADR-0004 already uses — not a new addressing scheme. This mirrors ADR-0013's "declare → review → enforce" shape, applied here to agent read-access rather than plugin installation.
 
 **The ceiling reuses ADR-0004's declaration site, but deliberately not its role field.** A table becomes readable by agents by naming `system:agent-runtime` in an `allowed_principals` entry on its `__crud_permissions__` block — a field distinct from `required_role`, evaluated only for ADR-0009 service principals and never for authenticated users.
 

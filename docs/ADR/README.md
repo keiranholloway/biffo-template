@@ -28,6 +28,7 @@ An ADR captures a significant architectural decision: the context that forced it
 | [ADR-0018](0018-user-facing-plugin-hosting.md)                      | User-facing plugin hosting — a marketplace plugin as an authenticated sibling | Accepted | 2026-07-24 |
 | [ADR-0019](0019-dev-staging-nat-instance-egress.md)                 | dev/staging egress defaults to a fck-nat NAT instance | Accepted | 2026-07-24 |
 | [ADR-0020](0020-agent-result-delivery-on-completion.md)             | Deliver an agent's result on completion (agent-action sub-config) | Accepted | 2026-07-24 |
+| [ADR-0021](0021-shared-plugin-hosting.md)                           | Plugins are pure code on shared hosting — one plugin runtime, one app shell (supersedes ADR-0018 backend; frontend per #558) | Accepted (partial) | 2026-07-25 |
 
 ## Format
 

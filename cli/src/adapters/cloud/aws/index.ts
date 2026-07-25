@@ -34,8 +34,8 @@ import { log } from '../../../lib/logger.js'
  *
  * GitHub emits one of two subject formats depending on the account:
  *
- *   legacy:         repo:<org>/<repo>:ref:refs/heads/main
- *   ID-qualified:   repo:<org>@<ownerId>/<repo>@<repoId>:ref:refs/heads/main
+ *   legacy:         repo:<org>/<repo>:ref:refs/heads/dev
+ *   ID-qualified:   repo:<org>@<ownerId>/<repo>@<repoId>:ref:refs/heads/dev
  *
  * The ID-qualified ("immutable unique") form appends the numeric owner and
  * repository IDs so the claim survives org and repo renames. A policy matching

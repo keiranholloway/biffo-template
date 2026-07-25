@@ -246,8 +246,8 @@ describe('runSiblingCreate', () => {
       'dev/terraform.tfstate',
     )
     expect(github.createEmptyRepo).toHaveBeenCalledWith('acme', 'reports', 'Reports sibling')
-    expect(git.init).toHaveBeenCalledWith(expect.any(String), 'main')
-    expect(git.push).toHaveBeenCalledWith(expect.any(String), 'main', { token: 'gh-token' })
+    expect(git.init).toHaveBeenCalledWith(expect.any(String), 'dev')
+    expect(git.push).toHaveBeenCalledWith(expect.any(String), 'dev', { token: 'gh-token' })
     expect(aws.setupOidcTrust).toHaveBeenCalledWith(SIBLING_CONFIG, {
       ownerId: 42,
       repoId: 99,
@@ -629,7 +629,7 @@ describe('runSiblingCreate', () => {
       // `git.init` is unique to pushSkeleton — `git.push` is also used by the
       // registration step, so asserting on it would prove nothing here.
       expect(git.init).toHaveBeenCalledTimes(1)
-      expect(git.push).toHaveBeenCalledWith(expect.any(String), 'main', { token: 'gh-token' })
+      expect(git.push).toHaveBeenCalledWith(expect.any(String), 'dev', { token: 'gh-token' })
       expect(session.completedSteps).toContain('push_skeleton')
     })
 

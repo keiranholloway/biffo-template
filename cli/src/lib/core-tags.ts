@@ -29,7 +29,7 @@ import type { CoreManifest } from './core-manifest.js'
  * became unreachable, so they were deleted rather than left as reassurance.
  *
  * The one hand-editing fault that survives derivation — a `core-v*` tag pushed
- * outside `main`'s history, since tags are not covered by branch protection —
+ * outside `dev`'s history, since tags are not covered by branch protection —
  * is checked in `../scripts/sync-core-tag.ts`, where it can act on it.
  */
 

@@ -22,7 +22,7 @@ export type CompletedStep =
    * (issue #316). It is now three, split at the two boundaries that actually
    * matter on a resume:
    *
-   *   github_branches       — creating dev/staging from main
+   *   github_branches       — creating staging from dev
    *   github_instance_files — the commits that write biffo.core.json, drop the
    *                           template biffo.config.json, and register the app
    *                           sibling, on all three branches. This is the only

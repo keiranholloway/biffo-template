@@ -406,7 +406,7 @@ describe('configureBranchProtection', () => {
       expect.objectContaining({
         owner: 'acme',
         repo: 'my-app',
-        branch: 'main',
+        branch: 'dev',
         allow_force_pushes: false,
         allow_deletions: false,
       }),
@@ -446,12 +446,12 @@ describe('configureBranchProtection', () => {
       .fn()
       .mockRejectedValueOnce(notFound)
       .mockRejectedValueOnce(notFound)
-      .mockResolvedValue({}) // dev succeeds on 3rd; staging and main succeed immediately
+      .mockResolvedValue({}) // dev succeeds on 3rd; staging succeeds immediately
 
     await adapter().configureBranchProtection(CONFIG, 10)
 
-    // 2 retries + 1 success for dev, then 1 each for staging and main = 5 total
-    expect(octokitMock.repos.updateBranchProtection).toHaveBeenCalledTimes(5)
+    // 2 retries + 1 success for dev, then 1 for staging = 4 total (no main, #559)
+    expect(octokitMock.repos.updateBranchProtection).toHaveBeenCalledTimes(4)
   })
 
   it('sends the full branch protection settings (snapshot)', async () => {

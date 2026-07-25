@@ -445,18 +445,17 @@ describe('instance identity files', () => {
     return call[3] as { path: string; content: string | null }[]
   }
 
-  // Issue #329: one shared commit, not three independent look-alikes. The
-  // commit is built once on the base branch; dev and staging are fast-forwarded
-  // onto its SHA so they descend from it and the first dev→main promotion merges
+  // Issue #329: one shared commit, not independent look-alikes. The commit is
+  // built once on the base branch (`dev`); `staging` is fast-forwarded onto its
+  // SHA so it descends from it and the first dev→staging promotion merges
   // cleanly.
-  it('commits once on the base branch and fast-forwards dev and staging onto it', async () => {
+  it('commits once on the base branch and fast-forwards staging onto it', async () => {
     const github = makeGithubMock()
     github.commitFiles.mockResolvedValue('shared-sha')
     await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
 
     expect(github.commitFiles.mock.calls.map((c) => c[2])).toEqual([INSTANCE_FILE_BASE_BRANCH])
     expect(github.fastForwardBranch.mock.calls.map((c) => [c[2], c[3]])).toEqual([
-      ['dev', 'shared-sha'],
       ['staging', 'shared-sha'],
     ])
   })
@@ -472,7 +471,6 @@ describe('instance identity files', () => {
 
     expect(github.getBranchSha).toHaveBeenCalledWith('acme', 'my-app', INSTANCE_FILE_BASE_BRANCH)
     expect(github.fastForwardBranch.mock.calls.map((c) => [c[2], c[3]])).toEqual([
-      ['dev', 'existing-base-head'],
       ['staging', 'existing-base-head'],
     ])
   })

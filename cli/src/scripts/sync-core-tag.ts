@@ -1,7 +1,7 @@
 /**
  * Release the template: derive the next core version and tag HEAD with it.
  *
- * Run from `.github/workflows/core-tag.yml` on every push to `main`:
+ * Run from `.github/workflows/core-tag.yml` on every push to `dev`:
  *
  *     pnpm --filter @biffo/cli sync:core-tag -- --push
  *
@@ -22,7 +22,7 @@
  *
  * What survives is one ancestry check. `git tag` is not covered by branch
  * protection, so a tag can still be created or moved by hand onto a commit that
- * is not in main's history — and the highest tag is now the base every later
+ * is not in dev's history — and the highest tag is now the base every later
  * version is derived from.
  *
  * Without `--push` it reports what it would do, changing nothing — how the
@@ -91,9 +91,9 @@ async function main(): Promise<void> {
   const latestCommit = latestTag ? await git(['rev-list', '-n', '1', latestTag]) : null
 
   // The one hand-editing fault derivation cannot rule out. Tags are unprotected,
-  // so the highest one may sit outside main's history — via a tag pushed by hand
-  // or a force-push to main. Deriving from it would mint a successor to a tree
-  // that main never carried.
+  // so the highest one may sit outside dev's history — via a tag pushed by hand
+  // or a force-push to dev. Deriving from it would mint a successor to a tree
+  // that dev never carried.
   if (
     latestCommit !== null &&
     !(await git.ok(['merge-base', '--is-ancestor', latestCommit, head]))
@@ -102,18 +102,18 @@ async function main(): Promise<void> {
       'error',
       `${latestTag} points at ${latestCommit.slice(0, 8)}, which is not an ancestor of HEAD ` +
         `(${head.slice(0, 8)}). The highest core-v* tag is the base every later version is derived ` +
-        `from, so it has to be in main's history. Either a tag was created or moved by hand, or main ` +
+        `from, so it has to be in dev's history. Either a tag was created or moved by hand, or dev ` +
         `was force-pushed. Resolve deliberately: establish what npm actually shipped as ${latestVersion} ` +
         `(\`npm view @biffo/cli@${latestVersion} gitHead\`), then repoint or delete ${latestTag} knowing ` +
         `what it costs. Nothing is lost meanwhile — the work at HEAD is simply unreleased.`,
     )
     summary(
-      `### ❌ \`${latestTag}\` is not in \`main\`'s history\n\n` +
+      `### ❌ \`${latestTag}\` is not in \`dev\`'s history\n\n` +
         `It points at \`${latestCommit.slice(0, 8)}\`; HEAD is \`${head.slice(0, 8)}\`. The highest ` +
         `\`core-v*\` tag is the base the next version is derived from, so releases are blocked until ` +
-        `it is back in \`main\`'s history.\n\n` +
+        `it is back in \`dev\`'s history.\n\n` +
         `Tags are not covered by branch protection, so this is reachable by a hand-pushed tag or a ` +
-        `force-push to \`main\`. Check \`npm view @biffo/cli@${latestVersion} gitHead\` before moving ` +
+        `force-push to \`dev\`. Check \`npm view @biffo/cli@${latestVersion} gitHead\` before moving ` +
         `anything — an npm version is immutable and cannot follow its tag (#342).\n`,
     )
     process.exit(1)

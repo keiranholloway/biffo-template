@@ -641,16 +641,19 @@ describe('buildPrBody — global workflow promotion note (issue #328)', () => {
     content: 'x',
   }
 
-  it('adds a promotion note when a global workflow changes and the PR targets a non-main branch', () => {
-    const body = buildPrBody('0.1.0', '0.2.0', planWith([globalChange]), noMigrations, 'dev')
+  it('adds a promotion note when a global workflow changes and the PR targets a branch other than the dispatch ref', () => {
+    // The dispatch ref is `dev` (#559). Targeting anything else (e.g. a
+    // leftover `staging`) still leaves the global workflow executing from `dev`
+    // until a promotion, so the note fires.
+    const body = buildPrBody('0.1.0', '0.2.0', planWith([globalChange]), noMigrations, 'staging')
     expect(body).toContain('Promotion required')
     expect(body).toContain('.github/workflows/deploy-global.yml')
-    expect(body).toContain('`dev` → `main`')
+    expect(body).toContain('`staging` → `dev`')
     expect(body).toContain('#328')
   })
 
-  it('omits the note when the PR already targets main (nothing to promote)', () => {
-    const body = buildPrBody('0.1.0', '0.2.0', planWith([globalChange]), noMigrations, 'main')
+  it('omits the note when the PR already targets the dispatch ref (`dev`, nothing to promote)', () => {
+    const body = buildPrBody('0.1.0', '0.2.0', planWith([globalChange]), noMigrations, 'dev')
     expect(body).not.toContain('Promotion required')
   })
 

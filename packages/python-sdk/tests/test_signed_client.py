@@ -122,3 +122,42 @@ class TestCreateCoreClient:
         plugin = _Plugin(manifest)
 
         assert isinstance(plugin.api, SignedCoreClient)
+
+
+# --- ADR-0021 §1a: the X-Biffo-Plugin identity assertion header ----------------
+
+
+async def test_plugin_identity_header_is_sent_and_signed_when_acting_as_a_plugin():
+    from biffo_plugin_sdk import PLUGIN_IDENTITY_HEADER, acting_as_plugin
+
+    captured: dict[str, object] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["plugin"] = request.headers.get(PLUGIN_IDENTITY_HEADER)
+        captured["signed_headers"] = request.headers.get("Authorization", "")
+        return httpx.Response(200, json={})
+
+    client = _client(handle)
+    token = acting_as_plugin.set("ideation")
+    try:
+        await client.post("/api/v1/internal/owner-data/ideation_sessions", json={"x": 1})
+    finally:
+        acting_as_plugin.reset(token)
+
+    assert captured["plugin"] == "ideation"
+    # Signed, not just appended: the header name appears in the SigV4 SignedHeaders.
+    assert "x-biffo-plugin" in str(captured["signed_headers"]).lower()
+
+
+async def test_no_plugin_identity_header_when_not_acting_as_a_plugin():
+    from biffo_plugin_sdk import PLUGIN_IDENTITY_HEADER
+
+    captured: dict[str, object] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["plugin"] = request.headers.get(PLUGIN_IDENTITY_HEADER)
+        return httpx.Response(200, json={})
+
+    client = _client(handle)
+    await client.post("/api/v1/internal/owner-data/ideation_sessions", json={"x": 1})
+    assert captured["plugin"] is None

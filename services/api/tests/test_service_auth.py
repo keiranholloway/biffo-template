@@ -147,3 +147,53 @@ class TestLogicalNames:
             principal_arn="arn:aws:sts::123456789012:assumed-role/acme-dev-plugin--role/session"
         )
         assert principal.logical_names == frozenset()
+
+
+# --- ADR-0021 §1a: the shared plugin host asserting a plugin identity ----------
+
+HOST_ARN = "arn:aws:sts::123456789012:assumed-role/acme-dev-plugin-host-role/host-session"
+
+
+def _request_with_iam_and_headers(user_arn: str, headers: dict[str, str]) -> Request:
+    """Like _request_with_iam but also carries request headers (for X-Biffo-Plugin)."""
+    scope = {
+        "type": "http",
+        "aws.event": {"requestContext": {"http": {"method": "POST"}, "authorizer": {"iam": {"userArn": user_arn}}}},
+        "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
+    }
+    return Request(scope)
+
+
+@pytest.mark.asyncio
+async def test_host_asserting_a_plugin_identity_is_honoured(allowlist):
+    """The host (system:host) naming a plugin via X-Biffo-Plugin reads as that plugin."""
+    principal = await require_service_principal(
+        _request_with_iam_and_headers(HOST_ARN, {"X-Biffo-Plugin": "ideation"})
+    )
+    assert principal.logical_names == frozenset({"system:ideation"})
+
+
+@pytest.mark.asyncio
+async def test_host_without_assertion_keeps_its_own_identity(allowlist):
+    principal = await require_service_principal(
+        _request_with_iam_and_headers(HOST_ARN, {})
+    )
+    assert principal.logical_names == frozenset({"system:host"})
+
+
+@pytest.mark.asyncio
+async def test_host_assertion_with_malformed_name_is_ignored(allowlist):
+    for bad in ["Ideation", "../secrets", "a b", "1plugin", ""]:
+        principal = await require_service_principal(
+            _request_with_iam_and_headers(HOST_ARN, {"X-Biffo-Plugin": bad})
+        )
+        assert principal.logical_names == frozenset({"system:host"}), bad
+
+
+@pytest.mark.asyncio
+async def test_non_host_caller_cannot_assert_another_identity(allowlist):
+    """A plugin with its own role cannot spoof another plugin via the header."""
+    principal = await require_service_principal(
+        _request_with_iam_and_headers(ORCHESTRATOR_ARN, {"X-Biffo-Plugin": "ideation"})
+    )
+    assert principal.logical_names == frozenset({"system:orchestrator"})

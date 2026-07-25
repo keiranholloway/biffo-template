@@ -85,3 +85,23 @@ def test_each_plugin_routes_and_binds_its_own_identity():
 def test_identity_is_unset_outside_a_request():
     _host(MountedPlugin("ideation", _plugin_app("ideation"), "founder"))
     assert current_plugin.get() is None
+
+
+def test_gated_request_binds_the_sdk_acting_as_plugin_for_outbound_core_calls():
+    """The SDK's acting_as_plugin ContextVar (read by SignedCoreClient to stamp the
+    X-Biffo-Plugin identity header, ADR-0021 §1a) is bound to the plugin name inside
+    a gated request, and unset outside it."""
+    from biffo_plugin_sdk import acting_as_plugin
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    async def whoami(request):
+        return JSONResponse({"acting_as": acting_as_plugin.get()})
+
+    app = Starlette(routes=[Route("/whoami", whoami)])
+    client = TestClient(build_host([MountedPlugin("ideation", app, "founder")], authorize=_authorizer))
+
+    resp = client.get("/ideation/whoami", headers={"x-biffo-founder-token": "alice|founder"})
+    assert resp.status_code == 200
+    assert resp.json()["acting_as"] == "ideation"
+    assert acting_as_plugin.get() is None  # reset after the request

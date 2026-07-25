@@ -15,7 +15,12 @@ from .plugin import (
     load_manifest,
     register_plugin,
 )
-from .signed_client import SignedCoreClient, create_core_client
+from .signed_client import (
+    PLUGIN_IDENTITY_HEADER,
+    SignedCoreClient,
+    acting_as_plugin,
+    create_core_client,
+)
 from .user_serving import (
     CognitoConfig,
     ForbiddenError,
@@ -41,6 +46,8 @@ __all__ = [
     "PluginManifest",
     "RouteDef",
     "SignedCoreClient",
+    "acting_as_plugin",
+    "PLUGIN_IDENTITY_HEADER",
     "TableDefinition",
     "TablePermissions",
     "ToolDeclaration",

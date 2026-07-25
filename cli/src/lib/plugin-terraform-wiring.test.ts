@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
-  declaredOutputs,
   declaredVariables,
   GENERATED_TF_FILE,
   GENERATED_TFVARS_FILE,
@@ -12,9 +11,6 @@ import {
   listUnwirableEnvironments,
   listWireablePlugins,
   pluginModuleSource,
-  pluginOutputsFromRoot,
-  renderGeneratedTerraform,
-  rootPluginOutputName,
   staleFirstPartyCopies,
   syncPluginTerraform,
 } from './plugin-terraform-wiring.js'
@@ -115,66 +111,6 @@ describe('declaredVariables', () => {
   })
 })
 
-describe('declaredOutputs', () => {
-  it('parses output blocks from every .tf file in the module', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'biffo-outputs-'))
-    writeFileSync(
-      join(dir, 'outputs.tf'),
-      'output "function_url_domain" {\n  value = ""\n}\noutput "frontend_bucket_name" {\n  value = ""\n}\n',
-    )
-    expect([...declaredOutputs(dir)].sort()).toEqual([
-      'frontend_bucket_name',
-      'function_url_domain',
-    ])
-    rmSync(dir, { recursive: true, force: true })
-  })
-})
-
-describe('user-facing plugin output surfacing (ADR-0018)', () => {
-  it('emits a root output only for the user-facing outputs the module declares', () => {
-    const tf = renderGeneratedTerraform([
-      {
-        name: 'ideation',
-        declaredVariables: new Set(['project_name']),
-        declaredOutputs: new Set(['function_url_domain', 'frontend_bucket_regional_domain']),
-      },
-    ])
-    // function_arn is always surfaced
-    expect(tf).toContain('output "plugin_ideation_function_arn"')
-    // the two declared user-facing outputs are surfaced...
-    expect(tf).toContain('output "plugin_ideation_function_url_domain"')
-    expect(tf).toContain('try(module.plugin_ideation["ideation"].function_url_domain, null)')
-    expect(tf).toContain('output "plugin_ideation_frontend_bucket_regional_domain"')
-    // ...but frontend_bucket_name (not declared here) is NOT, so no dangling ref
-    expect(tf).not.toContain('plugin_ideation_frontend_bucket_name')
-  })
-
-  it('emits no user-facing outputs for a plugin that declares none', () => {
-    const tf = renderGeneratedTerraform([
-      { name: 'crm', declaredVariables: new Set(['project_name']) },
-    ])
-    expect(tf).toContain('output "plugin_crm_function_arn"')
-    expect(tf).not.toContain('function_url_domain')
-  })
-
-  it('pluginOutputsFromRoot inverts the root surfacing, keeping only present keys', () => {
-    const root = {
-      [rootPluginOutputName('ideation', 'function_url_domain')]: 'abc.lambda-url.on.aws',
-      [rootPluginOutputName('ideation', 'frontend_bucket_regional_domain')]: 'b.s3.amazonaws.com',
-      [rootPluginOutputName('ideation', 'frontend_bucket_name')]: 'proj-dev-ideation-web',
-      plugin_ideation_function_arn: 'arn:aws:lambda:...',
-      unrelated: 'x',
-    }
-    expect(pluginOutputsFromRoot('ideation', root)).toEqual({
-      function_url_domain: 'abc.lambda-url.on.aws',
-      frontend_bucket_regional_domain: 'b.s3.amazonaws.com',
-      frontend_bucket_name: 'proj-dev-ideation-web',
-    })
-    // a plugin the outputs don't mention yields an empty map (register fails closed)
-    expect(pluginOutputsFromRoot('other', root)).toEqual({})
-  })
-})
-
 describe('syncPluginTerraform', () => {
   it('emits a module block, an output and an enabled_plugins entry per plugin', () => {
     makeEnvironment('dev')
@@ -211,45 +147,6 @@ describe('syncPluginTerraform', () => {
     // core_api -> api_gateway -> plugin -> core_api. It must stay out of here.
     expect(tf).not.toContain('BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST =')
     expect(tf).not.toContain('.role_arn')
-  })
-
-  it('sources the user-facing plugin inputs (Cognito + CDN) when the module declares them', () => {
-    makeEnvironment('dev')
-    // A user-facing plugin (ADR-0018) declares the extra ingress/frontend inputs.
-    makePluginModule('ideation', [
-      'project_name',
-      'environment',
-      'plugin_name',
-      'handler',
-      'event_bus_name',
-      'core_api_url',
-      'core_api_execution_arn',
-      'cognito_user_pool_id',
-      'cognito_client_id',
-      'cognito_region',
-      'cdn_distribution_arn',
-      'tags',
-    ])
-
-    syncPluginTerraform(cwd)
-    const tf = generatedTf('dev')
-
-    // Alignment-agnostic: renderArguments pads keys to the widest one.
-    expect(tf).toMatch(/cognito_user_pool_id\s+= module\.auth\.user_pool_id/)
-    expect(tf).toMatch(/cognito_client_id\s+= module\.auth\.client_id/)
-    expect(tf).toMatch(/cognito_region\s+= var\.aws_region/)
-    expect(tf).toMatch(/cdn_distribution_arn\s+= module\.cdn\.distribution_arn/)
-  })
-
-  it('does not source the Cognito/CDN inputs for a plugin that does not declare them', () => {
-    makeEnvironment('dev')
-    makePluginModule('widgets') // event-only plugin: STANDARD_VARIABLES, no user-facing inputs
-
-    syncPluginTerraform(cwd)
-    const tf = generatedTf('dev')
-
-    expect(tf).not.toContain('cognito_user_pool_id')
-    expect(tf).not.toContain('cdn_distribution_arn')
   })
 
   it('omits arguments a plugin module does not declare, so older modules still validate', () => {

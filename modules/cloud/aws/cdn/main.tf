@@ -266,33 +266,8 @@ resource "aws_cloudfront_distribution" "portal" {
     }
   }
 
-  # Authenticated user-facing plugin ingresses (ADR-0018 §1) — one CUSTOM origin
-  # per plugin, pointing at that plugin's Lambda Function URL (HTTPS only). Unlike
-  # a sibling's S3 origin, there is no OAC: the ingress is a public HTTPS API
-  # Gateway reached over the internet, and the plugin's Lambda authenticates every
-  # request itself (verifying the shared-Cognito founder JWT). The api origin and
-  # its permissions are the plugin's own Terraform's responsibility; this module
-  # only routes. (The ingress is an API Gateway, not a Lambda Function URL: a
-  # governed account blocks public Function URLs, and OAC-signed Function URLs
-  # can't serve browser POSTs — CloudFront OAC needs the client to sign the body
-  # hash. `function_url_domain` is the api origin host, now an execute-api domain.)
-  dynamic "origin" {
-    for_each = var.plugin_api_origins
-    content {
-      domain_name = origin.value.function_url_domain
-      origin_id   = "plugin-api-${origin.value.name}"
-      custom_origin_config {
-        http_port              = 80
-        https_port             = 443
-        origin_protocol_policy = "https-only"
-        origin_ssl_protocols   = ["TLSv1.2"]
-      }
-    }
-  }
-
   # The shared plugin host (ADR-0021) — ONE origin (the Core API Gateway) fronting
-  # every user-facing plugin, replacing the per-plugin plugin_api_origins above.
-  # Present only when plugin_host_api_domain is set.
+  # every user-facing plugin. Present only when plugin_host_api_domain is set.
   dynamic "origin" {
     for_each = var.plugin_host_api_domain == "" ? [] : [var.plugin_host_api_domain]
     content {
@@ -346,28 +321,6 @@ resource "aws_cloudfront_distribution" "portal" {
     content {
       path_pattern             = ordered_cache_behavior.key
       target_origin_id         = ordered_cache_behavior.value
-      viewer_protocol_policy   = "redirect-to-https"
-      allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
-      cached_methods           = ["GET", "HEAD"]
-      compress                 = true
-      cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
-      origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
-    }
-  }
-
-  # Authenticated plugin API ingresses (ADR-0018 §1), emitted FIRST — before the
-  # sibling/frontend behaviours below — because CloudFront evaluates
-  # ordered_cache_behavior blocks in config order, and "<name>/api/*" must be
-  # matched ahead of the plugin's own "<name>/*" frontend (which would otherwise
-  # shadow it). An API, not static content: every method is allowed, caching is
-  # disabled, and all viewer headers except Host are forwarded so the founder's
-  # Authorization JWT reaches the Lambda. NO rewrite function — that rewrites clean
-  # URLs to index.html for static export and must never touch an API request.
-  dynamic "ordered_cache_behavior" {
-    for_each = { for p in var.plugin_api_origins : "${p.name}/api/*" => p }
-    content {
-      path_pattern             = ordered_cache_behavior.key
-      target_origin_id         = "plugin-api-${ordered_cache_behavior.value.name}"
       viewer_protocol_policy   = "redirect-to-https"
       allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
       cached_methods           = ["GET", "HEAD"]

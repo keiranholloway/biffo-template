@@ -151,33 +151,6 @@ variable "sibling_origins" {
   }
 }
 
-variable "plugin_api_origins" {
-  description = <<-EOT
-    Authenticated user-facing plugin ingresses (ADR-0018) registered for
-    path-based routing on this project's CloudFront distribution — each entry
-    routes baseurl.com/<name>/api/* to that plugin's own Lambda Function URL
-    (the plugin authenticates every request itself). The plugin install step
-    writes to this via infra/environments/<env>/plugin-apis.auto.tfvars.json
-    (Terraform auto-loads any *.auto.tfvars.json file), not by hand.
-
-    Example: [{ name = "ideation", function_url_domain = "abcd.lambda-url.eu-west-1.on.aws" }]
-  EOT
-  type = list(object({
-    name                = string
-    function_url_domain = string
-  }))
-  default = []
-
-  validation {
-    condition     = length(var.plugin_api_origins) == length(distinct([for p in var.plugin_api_origins : p.name]))
-    error_message = "plugin_api_origins must not contain duplicate plugin names."
-  }
-
-  validation {
-    condition     = alltrue([for p in var.plugin_api_origins : can(regex("^[a-z][a-z0-9-]*$", p.name))])
-    error_message = "plugin_api_origins names must be lowercase alphanumeric with hyphens (matching the baseurl.com/<name>/api/ path segment)."
-  }
-}
 
 variable "plugin_host_api_domain" {
   description = <<-EOT

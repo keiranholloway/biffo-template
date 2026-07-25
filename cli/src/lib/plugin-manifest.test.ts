@@ -40,8 +40,8 @@ function validManifest() {
   }
 }
 
-describe('validateManifest — user-facing surfaces (ADR-0018)', () => {
-  it('accepts an ADR-0021 app-ref ingress (shared host) + user_frontend', () => {
+describe('validateManifest — user-facing surfaces (ADR-0021 / frontend)', () => {
+  it('accepts an app-ref ingress (shared host) + user_frontend', () => {
     const manifest = validateManifest({
       name: 'ideation',
       version: '1.0.0',
@@ -49,28 +49,17 @@ describe('validateManifest — user-facing surfaces (ADR-0018)', () => {
       user_frontend: { dir: 'web/dist', required_group: 'founder' },
     })
     expect(manifest.user_ingress?.app).toBe('ideation.app:app')
-    expect(manifest.user_ingress?.handler).toBeUndefined()
     expect(manifest.user_frontend?.dir).toBe('web/dist')
   })
 
-  it('still accepts a legacy handler ingress', () => {
-    const manifest = validateManifest({
-      name: 'ideation',
-      version: '1.0.0',
-      user_ingress: { required_group: 'founder', handler: 'ideation.app.handler' },
-    })
-    expect(manifest.user_ingress?.handler).toBe('ideation.app.handler')
-    expect(manifest.user_ingress?.path).toBe('api') // defaulted
-  })
-
-  it('rejects a user_ingress with neither app nor handler, and a malformed app-ref', () => {
+  it('rejects a user_ingress with no app, and a malformed app-ref', () => {
     expect(() =>
       validateManifest({
         name: 'x',
         version: '1.0.0',
         user_ingress: { required_group: 'founder' },
       }),
-    ).toThrow(/app.*or.*handler/)
+    ).toThrow()
     expect(() =>
       validateManifest({
         name: 'x',
@@ -80,27 +69,25 @@ describe('validateManifest — user-facing surfaces (ADR-0018)', () => {
     ).toThrow(/app reference/)
   })
 
+  it('rejects the removed legacy handler/path keys (strict schema)', () => {
+    for (const legacy of [{ handler: 'ideation.app.handler' }, { path: 'api' }]) {
+      expect(() =>
+        validateManifest({
+          name: 'x',
+          version: '1.0.0',
+          user_ingress: { required_group: 'founder', app: 'm:a', ...legacy },
+        }),
+      ).toThrow()
+    }
+  })
+
   it('is absent on an ordinary plugin', () => {
     const manifest = validateManifest({ name: 'rbac', version: '1.0.0' })
     expect(manifest.user_ingress).toBeUndefined()
     expect(manifest.user_frontend).toBeUndefined()
   })
 
-  it('rejects a non-dotted handler, a bad path segment, and an unknown key', () => {
-    expect(() =>
-      validateManifest({
-        name: 'x',
-        version: '1.0.0',
-        user_ingress: { required_group: 'founder', handler: 'nodots' },
-      }),
-    ).toThrow(/dotted import path/)
-    expect(() =>
-      validateManifest({
-        name: 'x',
-        version: '1.0.0',
-        user_ingress: { required_group: 'founder', handler: 'a.b', path: 'Bad/Seg' },
-      }),
-    ).toThrow(/path segment/)
+  it('rejects an unknown key on user_frontend', () => {
     expect(() =>
       validateManifest({
         name: 'x',

@@ -141,14 +141,13 @@ module "cdn" {
   acm_certificate_arn           = var.acm_certificate_arn
   hosted_zone_id                = var.hosted_zone_id
   sibling_origins               = var.sibling_origins
-  plugin_api_origins            = var.plugin_api_origins
   # The shared plugin host (ADR-0021): route baseurl.com/api/v1/plugins/* to the
   # Core API Gateway that fronts every user-facing plugin, same-origin. Fed from a
   # variable, NOT module.api_gateway.api_domain — the gateway's cors_origins already
   # references module.cdn.distribution_domain, so a live reference the other way
-  # would form a cdn<->api_gateway cycle. Same reason plugin_api_origins/
-  # sibling_origins are tfvars-fed. The value is the api_gateway module's api_domain
-  # output, written to a tfvar once the API exists (it is stable across applies).
+  # would form a cdn<->api_gateway cycle (same reason sibling_origins is tfvars-fed).
+  # The value is the api_gateway module's api_domain output, written to a tfvar once
+  # the API exists (it is stable across applies).
   plugin_host_api_domain = var.plugin_host_api_domain
   tags                   = local.tags
 }

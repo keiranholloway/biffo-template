@@ -129,7 +129,6 @@ module "cdn" {
   acm_certificate_arn           = var.acm_certificate_arn
   hosted_zone_id                = var.hosted_zone_id
   sibling_origins               = var.sibling_origins
-  plugin_api_origins            = var.plugin_api_origins
   tags                          = local.tags
 }
 
@@ -298,24 +297,6 @@ variable "sibling_origins" {
   }
 }
 
-variable "plugin_api_origins" {
-  description = "Authenticated user-facing plugin ingresses (ADR-0018) registered for path-based routing — each routes baseurl.com/<name>/api/* to that plugin's own Lambda Function URL (the plugin authenticates every request itself). Populated via infra/environments/<env>/plugin-apis.auto.tfvars.json, written by the plugin install step — not hand-edited."
-  type = list(object({
-    name                = string
-    function_url_domain = string
-  }))
-  default = []
-
-  validation {
-    condition     = length(var.plugin_api_origins) == length(distinct([for p in var.plugin_api_origins : p.name]))
-    error_message = "plugin_api_origins must not contain duplicate plugin names."
-  }
-
-  validation {
-    condition     = alltrue([for p in var.plugin_api_origins : can(regex("^[a-z][a-z0-9-]*$", p.name))])
-    error_message = "plugin_api_origins names must be lowercase alphanumeric with hyphens (matching the baseurl.com/<name>/api/ path segment)."
-  }
-}
 
 variable "enabled_plugins" {
   description = <<-EOT

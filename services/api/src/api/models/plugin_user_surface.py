@@ -1,15 +1,16 @@
-"""User-facing plugin surface declarations (ADR-0018).
+"""User-facing plugin surface declarations (ADR-0021 / ADR-0018 §2).
 
-Two top-level manifest keys let a marketplace plugin be hosted as an
-*authenticated sibling* (ADR-0018), reusing ADR-0007's path-routed CloudFront +
-shared-Cognito SSO:
+Two top-level manifest keys let a marketplace plugin be user-facing:
 
-- ``user_ingress`` — the plugin's own Lambda behind a Function URL and a
-  ``<plugin>/api/*`` CloudFront behaviour. The handler verifies the shared-Cognito
-  JWT itself and gates on ``required_group``; it holds no data and reaches Core only
-  over the internal seams (ADR-0002 / ADR-0017 §3/§5).
-- ``user_frontend`` — a path-routed static app on a new S3 origin and a
-  ``<plugin>/*`` behaviour, under the same Cognito App Client as the portal.
+- ``user_ingress`` — the plugin's authenticated, group-gated API. Its ``app``
+  names an ASGI app the **shared plugin host** (ADR-0021) mounts at
+  ``/api/v1/plugins/<name>/*``; the host provides the Lambda entry and enforces
+  ``required_group`` (ADR-0011). The plugin ships no Lambda handler and no
+  per-plugin infrastructure, and reaches Core only over the internal seams
+  (ADR-0002 / ADR-0017 §3/§5).
+- ``user_frontend`` — a path-routed static app on an S3 origin and a
+  ``<plugin>/*`` CloudFront behaviour, under the same Cognito App Client as the
+  portal (ADR-0018 §2 frontend hosting, still in use).
 
 Both are **distinct** from ADR-0013's public, unauthenticated ``http_ingress``
 (webhooks): two declarations, two security postures, never one flag.
@@ -24,13 +25,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-# A single URL path segment: the plugin mounts its ingress under <plugin>/<path>/*,
-# so the segment must not itself contain a slash or be empty.
-_PATH_SEGMENT = re.compile(r"^[a-z][a-z0-9_-]*$")
-# A dotted import path to the Lambda handler, e.g. "ideation.lambda.handler".
-_HANDLER = re.compile(r"^[a-zA-Z_][\w]*(\.[a-zA-Z_][\w]*)+$")
 # An ASGI app reference "<module>:<attr>" (ADR-0021) — the shared plugin host mounts it.
 _APP_REF = re.compile(r"^[a-zA-Z_][\w]*(\.[a-zA-Z_][\w]*)*:[a-zA-Z_][\w]*$")
 # A repo-relative build directory, e.g. "web/dist". No absolute paths, no traversal.
@@ -44,13 +40,12 @@ def _require_group(value: str) -> str:
 
 
 class UserIngress(BaseModel):
-    """The plugin's authenticated, group-gated API ingress.
+    """The plugin's authenticated, group-gated API ingress (ADR-0021).
 
-    ADR-0021: ``app`` names the ASGI app the **shared plugin host** mounts at
+    ``app`` names the ASGI app the **shared plugin host** mounts at
     ``/api/v1/plugins/<name>/*``; the host provides the Lambda entry and enforces
     ``required_group`` (ADR-0011), so a plugin ships no Lambda handler and no
-    infrastructure. ``handler`` (ADR-0018, a per-plugin Lambda) is retained for
-    legacy plugins and is **deprecated**. A plugin must declare exactly one.
+    infrastructure.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -59,31 +54,10 @@ class UserIngress(BaseModel):
         description="The Cognito group a caller must be in. The shared plugin host "
         "enforces it before dispatching to the plugin (ADR-0011/0021)."
     )
-    app: str | None = Field(
-        default=None,
+    app: str = Field(
         description="ASGI app reference '<module>:<attr>' (e.g. 'ideation.app:app') "
-        "the shared plugin host mounts (ADR-0021). Preferred over `handler`.",
+        "the shared plugin host mounts (ADR-0021)."
     )
-    handler: str | None = Field(
-        default=None,
-        description="Legacy (ADR-0018): dotted Lambda handler for a per-plugin "
-        "Lambda. Deprecated in favour of `app` — never imported by Core (ADR-0002).",
-    )
-    path: str = Field(
-        default="api",
-        description="Legacy (ADR-0018): the single path segment under which a "
-        "per-plugin Function-URL ingress was routed. Unused under ADR-0021.",
-    )
-
-    @field_validator("path")
-    @classmethod
-    def _validate_path(cls, value: str) -> str:
-        if not _PATH_SEGMENT.match(value):
-            raise ValueError(
-                f"user_ingress.path {value!r} must be a single lowercase path segment "
-                "(letters, digits, '-', '_'); it must not contain '/'."
-            )
-        return value
 
     @field_validator("required_group")
     @classmethod
@@ -92,32 +66,13 @@ class UserIngress(BaseModel):
 
     @field_validator("app")
     @classmethod
-    def _validate_app(cls, value: str | None) -> str | None:
-        if value is not None and not _APP_REF.match(value):
+    def _validate_app(cls, value: str) -> str:
+        if not _APP_REF.match(value):
             raise ValueError(
                 f"user_ingress.app {value!r} must be an ASGI app reference "
                 "'<module>:<attr>', e.g. 'ideation.app:app'."
             )
         return value
-
-    @field_validator("handler")
-    @classmethod
-    def _validate_handler(cls, value: str | None) -> str | None:
-        if value is not None and not _HANDLER.match(value):
-            raise ValueError(
-                f"user_ingress.handler {value!r} must be a dotted import path, "
-                "e.g. 'ideation.lambda.handler'."
-            )
-        return value
-
-    @model_validator(mode="after")
-    def _require_one_ingress(self) -> UserIngress:
-        if not (self.app or self.handler):
-            raise ValueError(
-                "user_ingress must declare `app` (ADR-0021, preferred) or `handler` "
-                "(legacy ADR-0018)."
-            )
-        return self
 
 
 class UserFrontend(BaseModel):

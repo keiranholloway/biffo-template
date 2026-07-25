@@ -114,38 +114,8 @@ variable "sibling_origins" {
   }
 }
 
-variable "plugin_api_origins" {
-  description = "Authenticated user-facing plugin ingresses (ADR-0018 §1) registered for path-based routing. Each entry adds one CUSTOM origin (the plugin Lambda's Function URL) and one ordered_cache_behavior matching \"<name>/api/*\", so baseurl.com/<name>/api/* routes to that plugin's own Lambda. Unlike sibling_origins (S3, cached static), this behaviour forwards all viewer headers except Host (so the founder's Authorization JWT reaches the Lambda) and disables caching (it is an API). The behaviour is emitted BEFORE the sibling/frontend behaviours so \"<name>/api/*\" is matched ahead of the plugin's own \"<name>/*\" frontend. The Function URL and its permission are the plugin's own Terraform's responsibility; this module only routes. Populated via infra/environments/<env>/plugin-apis.auto.tfvars.json by the plugin install PR — empty by default."
-  type = list(object({
-    name = string
-    # The plugin Lambda's Function URL host (no scheme, no path), e.g.
-    # "abcd1234.lambda-url.eu-west-1.on.aws".
-    function_url_domain = string
-  }))
-  default = []
-
-  # A plugin api name shares the frontend's <name> segment (the plugin serves its
-  # frontend at <name>/* and its api at <name>/api/*), so the same URL-safe and
-  # reserved-name rules apply. "admin"/"login" are portal routes; "app" is the
-  # root sibling.
-  validation {
-    condition     = length([for p in var.plugin_api_origins : p.name if contains(["admin", "login", "app"], p.name)]) == 0
-    error_message = "Plugin api names \"admin\", \"login\" and \"app\" are reserved (portal routes and the root sibling)."
-  }
-
-  validation {
-    condition     = length(distinct([for p in var.plugin_api_origins : p.name])) == length(var.plugin_api_origins)
-    error_message = "Plugin api names must be unique — each maps to one origin id (\"plugin-api-<name>\") and one \"<name>/api/*\" behaviour."
-  }
-
-  validation {
-    condition     = length([for p in var.plugin_api_origins : p.name if !can(regex("^[a-z][a-z0-9-]*$", p.name))]) == 0
-    error_message = "Plugin api names must be lowercase kebab-case starting with a letter — they become URL path segments and CloudFront origin ids."
-  }
-}
-
 variable "plugin_host_api_domain" {
-  description = "Regional domain of the shared API Gateway that fronts the plugin host (ADR-0021), e.g. \"abc123.execute-api.eu-west-1.amazonaws.com\" — NO scheme, NO path. When set, this module adds one custom origin for it and one ordered_cache_behavior matching \"api/v1/plugins/*\", so baseurl.com/api/v1/plugins/<plugin>/* routes same-origin to the shared host. Like plugin_api_origins it forwards all viewer headers except Host (so the founder's Authorization JWT reaches the gateway's Cognito authorizer) and disables caching. Unlike plugin_api_origins, it is ONE shared route for EVERY user-facing plugin — the per-plugin ADR-0018 ingresses it supersedes. Empty by default (no route); typically wired to module.api_gateway's endpoint host in the root config."
+  description = "Regional domain of the shared API Gateway that fronts the plugin host (ADR-0021), e.g. \"abc123.execute-api.eu-west-1.amazonaws.com\" — NO scheme, NO path. When set, this module adds one custom origin for it and one ordered_cache_behavior matching \"api/v1/plugins/*\", so baseurl.com/api/v1/plugins/<plugin>/* routes same-origin to the shared host. It forwards all viewer headers except Host (so the founder's Authorization JWT reaches the gateway's Cognito authorizer) and disables caching. ONE shared route for EVERY user-facing plugin. Empty by default (no route); typically wired to module.api_gateway's endpoint host in the root config."
   type        = string
   default     = ""
 }

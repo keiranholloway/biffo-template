@@ -191,6 +191,7 @@ class AgentLoop:
         # (see the terminal check below). They carry no executor, so they are kept
         # apart from `offered`.
         output_offered = {tool.name for tool in output_tools}
+        output_by_name = {tool.name: tool for tool in output_tools}
         schemas = (
             [tool.to_provider_schema() for tool in tools]
             + [tool.to_provider_schema() for tool in output_tools]
@@ -276,6 +277,31 @@ class AgentLoop:
             # model both submits and calls a tool in one message, submitting wins.
             submitted = _output_tool_call(response.tool_calls, output_offered)
             if submitted is not None:
+                # Validate the submission against the output tool's declared schema
+                # BEFORE accepting it as the terminal result. An LLM sometimes calls
+                # the submit tool with required fields missing or mistyped; without
+                # this the run "completes" with a payload its owner cannot parse,
+                # surfacing as an opaque downstream error (a plugin 502). On a schema
+                # violation, hand the errors back and let the model re-submit — one
+                # more turn, bounded by max_turns like any other. Only a schema-valid
+                # submission ends the run.
+                schema_errors = _output_schema_errors(
+                    output_by_name[submitted.name], submitted.arguments
+                )
+                if schema_errors is not None:
+                    rejection = tool_result_message(
+                        tool_call_id=submitted.id,
+                        tool_name=submitted.name,
+                        content=(
+                            "Your submission was REJECTED — it does not satisfy the tool's "
+                            f"required schema:\n{schema_errors}\n"
+                            "Call the tool again with EVERY required field present and correctly "
+                            "typed. Do not omit any section."
+                        ),
+                    )
+                    messages.append(rejection)
+                    yield TurnEvent(MESSAGE, turn, {"message": rejection})
+                    continue
                 yield _finished(
                     turn,
                     COMPLETED,
@@ -412,6 +438,28 @@ def _output_tool_call(calls: Sequence[ToolCall], output_tool_names: set[str]) ->
         if call.name in output_tool_names:
             return call
     return None
+
+
+def _output_schema_errors(tool: OutputTool, arguments: dict[str, Any]) -> str | None:
+    """Validate a submitted output-tool payload against its declared JSON Schema.
+
+    Returns a compact, model-readable list of the violations (path + message), or
+    ``None`` when the payload is valid. This is what lets the loop reject an
+    incomplete submission and let the model fix it, instead of terminating the run
+    with a result its owner cannot use."""
+    from jsonschema import Draft202012Validator
+
+    errors = sorted(
+        Draft202012Validator(tool.parameters).iter_errors(arguments),
+        key=lambda e: list(e.path),
+    )
+    if not errors:
+        return None
+    lines = []
+    for err in errors[:12]:  # bound the feedback; the first dozen are plenty to fix
+        location = ".".join(str(p) for p in err.path) or "(root)"
+        lines.append(f"- {location}: {err.message}")
+    return "\n".join(lines)
 
 
 def _wants_another_turn(response: LLMResponse) -> bool:

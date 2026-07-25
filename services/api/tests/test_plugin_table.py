@@ -360,13 +360,12 @@ def test_owner_data_insert_populates_timestamps_without_a_db_default() -> None:
     reproduces that exact table shape and asserts an insert omitting the timestamps
     succeeds (regression for the ideation owner-data 500)."""
     import sqlalchemy as sa
-    from api.models.plugin_table import PluginTableDefinition
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
 
     model = PluginTableDefinition(
         name="widget",
-        columns=[{"name": "label", "type": "String(50)", "nullable": False}],
+        columns=[ColumnDefinition(name="label", type="String(50)", nullable=False)],
     ).to_sqlalchemy_model()
 
     engine = create_engine("sqlite://")

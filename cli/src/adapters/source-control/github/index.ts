@@ -10,7 +10,7 @@ export interface GitHubAdapterOptions {
 
 /**
  * The required status-check contexts a freshly scaffolded repo gets on
- * `dev`/`staging`. GitHub matches a context against the job *name* (not
+ * `dev`/`staging`/`main`. GitHub matches a context against the job *name* (not
  * its id), so every entry here must be the `name:` of a job that actually runs
  * — a context nothing reports leaves every PR permanently BLOCKED even with all
  * real checks green.
@@ -529,10 +529,11 @@ export class GitHubAdapter {
       config.source_control as { provider: 'github'; config: { org: string; repo: string } }
     ).config
 
-    // Protect both branches: dev → staging.
+    // Protect all three branches: dev → staging → main.
     // dev: default/integration branch (#559); all feature work lands here via PR
-    // staging: promoted from dev. There is no `main` — retired everywhere (#559).
-    const branches = ['dev', 'staging']
+    // staging: promoted from dev; mirrors prod config
+    // main: production, reserved until a prod environment is built (#559)
+    const branches = ['dev', 'staging', 'main']
 
     for (const branch of branches) {
       log.info(`Waiting for ${branch} branch to be ready...`)
@@ -588,7 +589,7 @@ export class GitHubAdapter {
       }
     }
 
-    log.success('Branch protection configured on dev and staging')
+    log.success('Branch protection configured on dev, staging, and main')
   }
 
   async createEnvironments(config: ProvisioningConfig): Promise<void> {

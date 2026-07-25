@@ -630,13 +630,14 @@ async function configureSiblingGithub(
 ): Promise<void> {
   const { org, repo } = githubRepo(config)
 
-  // `dev` (the single integration branch, #559) is already the repo's first
-  // pushed branch (see pushSkeleton). Add `staging` off it as a promotion
-  // target, regardless of which environments this sibling provisions —
-  // config.environments only controls GitHub *Environments* and per-env
-  // variables below, not the branch structure itself. There is no `main`
-  // (#559: retired everywhere).
+  // `dev` (the integration branch, #559) is already the repo's first pushed
+  // branch (see pushSkeleton). Cut `staging` and `main` off it as promotion
+  // targets (`main` = production, reserved until a prod environment is built),
+  // regardless of which environments this sibling provisions — config.environments
+  // only controls GitHub *Environments* and per-env variables below, not the
+  // branch structure itself.
   await github.createBranch(org, repo, 'staging', 'dev')
+  await github.createBranch(org, repo, 'main', 'dev')
   await github.setDefaultBranch(org, repo, 'dev')
 
   await github.configureBranchProtection(config)

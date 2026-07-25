@@ -2,9 +2,9 @@ name: 'CodeQL'
 
 on:
   push:
-    branches: [dev, staging]
+    branches: [dev, staging, main]
   pull_request:
-    branches: [dev, staging]
+    branches: [dev, staging, main]
   schedule:
     # Weekly catch-up scan (Tuesday 05:17 UTC) for issues that land outside
     # PR review (e.g. direct merges onto a branch).

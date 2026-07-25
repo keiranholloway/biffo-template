@@ -13,9 +13,11 @@ repo; only its product differs.
 ## 1. One integration branch: `dev`
 
 - **`dev` is the integration branch** — you branch from it and open every PR back
-  into it. There is one environment and no production, so there is one branch.
-  `gh repo view --json defaultBranchRef` confirms it; if it reports anything other
-  than `dev`, flag it rather than working around it.
+  into it; `gh repo view --json defaultBranchRef` confirms it. If it reports
+  anything other than `dev`, flag it rather than working around it. (A sibling app
+  also carries `staging` and a reserved `main`/production branch as promotion
+  targets — production not built yet; a plugin repo has `dev` only. Either way you
+  work off `dev`.)
 - **All changes land via PR.** No direct commits to `dev`, no force-pushes to it.
   Branch protection stays on.
 - Never leave the primary checkout parked on a feature branch or let it fall

@@ -25,6 +25,7 @@ from .routers.admin import orchestration as admin_orchestration
 from .routers.admin import plugins as admin_plugins
 from .routers.admin import prompt_components as admin_prompt_components
 from .routers.admin import users as admin_users
+from .routing.chat_agent_registration import register_plugin_chat_agents
 from .routing.core_crud_router import build_core_crud_router
 from .routing.owner_data_router import build_owner_data_router
 from .routing.plugin_router import build_plugin_router
@@ -95,6 +96,10 @@ app.include_router(build_plugin_router(), prefix="/api/v1")
 # Empty in the base deployment (no plugin installed); the owning module's Lambda
 # manages its own CRUD-closed rows here, dual-authed and owner-scoped.
 app.include_router(build_owner_data_router(), prefix="/api/v1")
+# Register each installed plugin's chat agents (ADR-0017 seam #1) from its manifest,
+# so /api/v1/internal/agent-chat/<key> resolves a plugin's install-vetted agent the
+# same way the in-code prompt assistant is registered. Empty in the base deployment.
+register_plugin_chat_agents()
 # Generic CRUD for opt-in core tables (ADR-0004): core TenantScopedModel
 # subclasses declaring __crud_permissions__ are served under /api/v1/data/
 # <table>. Empty in the base deployment (no core table opts in yet).

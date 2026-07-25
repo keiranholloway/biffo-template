@@ -26,12 +26,27 @@ from __future__ import annotations
 
 import json
 import os
+from contextvars import ContextVar
 from typing import Any
 from urllib.parse import urlencode
 
 from .client import BiffoAPIClient
 
 _SERVICE = "execute-api"
+
+#: The header a caller uses to assert *which* plugin identity it is acting as
+#: (ADR-0021 §1a). Only honoured by Core when the SigV4 caller is the shared
+#: plugin host — the host has one IAM role but serves many plugins, so it names
+#: the plugin per request; a plugin with its own role is identified by that role
+#: and this header is ignored. Signed (added before SigV4) so it cannot be
+#: tampered with in transit.
+PLUGIN_IDENTITY_HEADER = "X-Biffo-Plugin"
+
+#: Set by the shared plugin host (plugin_host.mount) to the name of the plugin
+#: whose request is being served, so that plugin's :class:`SignedCoreClient`
+#: calls to Core assert that identity. Unset (``None``) outside the host — a
+#: plugin running in its own Lambda asserts nothing and is identified by its role.
+acting_as_plugin: ContextVar[str | None] = ContextVar("biffo_acting_as_plugin", default=None)
 
 
 class SignedCoreClient(BiffoAPIClient):
@@ -66,6 +81,12 @@ class SignedCoreClient(BiffoAPIClient):
         from botocore.awsrequest import AWSRequest
 
         headers = {"Content-Type": "application/json"} if body is not None else {}
+        # ADR-0021 §1a: assert the plugin identity the shared host is acting as, so
+        # Core can grant `system:<plugin>` rather than the host's own role identity.
+        # Added BEFORE signing so it is covered by the SigV4 signature.
+        identity = acting_as_plugin.get()
+        if identity:
+            headers[PLUGIN_IDENTITY_HEADER] = identity
         aws_request = AWSRequest(method=method, url=url, data=body, headers=headers)
         SigV4Auth(self._get_credentials(), self._service, self._region).add_auth(aws_request)
         return dict(aws_request.headers)

@@ -44,6 +44,20 @@ _ASSUMED_ROLE_ARN = re.compile(r"^arn:aws:sts::\d{12}:assumed-role/(?P<role>[^/]
 # occurrence — matching how the name sits immediately before ``-role``.
 _PLUGIN_ROLE_NAME = re.compile(r"^.+-plugin-(?P<name>.+)-role$")
 
+# ADR-0021 §1a — the shared plugin host. It has ONE IAM role
+# (``<project>-<env>-plugin-host-role`` -> ``system:host``) but serves many
+# plugins, so it names the plugin it is acting for per request via a signed
+# header. Core honours that assertion ONLY when the SigV4 caller is the host: the
+# IAM signature authorizes "this is the host", the header says "acting as <name>".
+# A plugin running in its own Lambda is identified by its role and this header is
+# ignored, so it can never assert another plugin's identity.
+_HOST_LOGICAL_NAME = "system:host"
+_PLUGIN_IDENTITY_HEADER = "x-biffo-plugin"
+# The asserted name becomes ``system:<name>``; constrain it to the same
+# lowercase-kebab shape a plugin name (and thus a role-derived name) can take, so a
+# crafted header can neither inject into the logical name nor spoof a non-plugin.
+_VALID_PLUGIN_NAME = re.compile(r"^[a-z][a-z0-9-]*$")
+
 
 def _logical_names_from_arn(principal_arn: str) -> frozenset[str]:
     """Derive the ADR-0014 §7 logical principal name(s) from an assumed-role ARN.
@@ -75,17 +89,27 @@ class ServicePrincipal:
     principal_arn: str
     tenant_id: str = "default"
     roles: list[str] = field(default_factory=list)
+    #: ADR-0021 §1a — the plugin identity the shared host asserted for this request.
+    #: Set only by ``require_service_principal`` when the caller IS the host; then
+    #: ``logical_names`` is that plugin's identity, not the host's own role identity.
+    asserted_plugin: str | None = None
 
     @property
     def logical_names(self) -> frozenset[str]:
         """The ADR-0014 §7 logical name(s) this principal reads Core data as.
 
-        Derived from ``principal_arn`` per the compute-module role-naming
+        Normally derived from ``principal_arn`` per the compute-module role-naming
         convention (``…assumed-role/<project>-<env>-plugin-<name>-role/<session>``
-        -> ``{"system:<name>"}``). A principal whose ARN does not conform
-        resolves to an empty set and can satisfy no ``allowed_principals`` grant
-        — the fail-closed security property the read-scope ceiling depends on.
+        -> ``{"system:<name>"}``). A principal whose ARN does not conform resolves
+        to an empty set and can satisfy no ``allowed_principals`` grant — the
+        fail-closed security property the read-scope ceiling depends on.
+
+        When the shared plugin host asserted a plugin identity (ADR-0021 §1a),
+        that identity is used instead — ``require_service_principal`` sets
+        ``asserted_plugin`` only after verifying the caller is the host.
         """
+        if self.asserted_plugin is not None:
+            return frozenset({f"system:{self.asserted_plugin}"})
         return _logical_names_from_arn(self.principal_arn)
 
 
@@ -143,4 +167,25 @@ async def require_service_principal(request: Request) -> ServicePrincipal:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Service principal not authorized",
         )
-    return ServicePrincipal(principal_arn=principal_arn)
+    # ADR-0021 §1a: if the allowlisted caller is the shared plugin host and it
+    # asserted a plugin identity, honour it — the host multiplexes many plugins
+    # over its one role. Only the host may assert; any other caller's header is
+    # ignored, so a plugin cannot claim another plugin's identity.
+    asserted = _asserted_plugin_identity(request, principal_arn)
+    return ServicePrincipal(principal_arn=principal_arn, asserted_plugin=asserted)
+
+
+def _asserted_plugin_identity(request: Request, principal_arn: str) -> str | None:
+    """The plugin name the shared host asserted, or ``None``.
+
+    Returns a name only when the SigV4 caller's own identity is the host
+    (``system:host``) AND the ``X-Biffo-Plugin`` header is a well-formed plugin
+    name. Any other caller, or a malformed/absent header, yields ``None`` so the
+    caller keeps its role-derived identity (fail-closed).
+    """
+    if _logical_names_from_arn(principal_arn) != frozenset({_HOST_LOGICAL_NAME}):
+        return None
+    asserted = request.headers.get(_PLUGIN_IDENTITY_HEADER)
+    if asserted and _VALID_PLUGIN_NAME.match(asserted):
+        return asserted
+    return None

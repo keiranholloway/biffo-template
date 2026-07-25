@@ -295,3 +295,17 @@ module sources, symbolically composes the role name the naming modules build, an
 fails the build if the allowlist's glob is not exactly that. The independence
 that makes the glob safe is also what makes the coupling invisible to Terraform;
 the guard is where that coupling is now written down and enforced.
+
+### 2026-07-25 — shared host asserts plugin identity via signed header (ADR-0021 §1a)
+
+**What changed.** ADR-0021 §1a introduced the shared plugin host, which runs all
+plugins under a single IAM role (`system:host`) rather than one role per plugin.
+To distinguish which plugin is calling Core, the host asserts the plugin's logical
+identity per request via a signed `X-Biffo-Plugin` header (`services/api/src/api/middleware/service_auth.py:47-59,174-191`).
+This is a material widening of ADR-0009's trust model — one IAM identity now represents
+N logical plugin identities — but was never documented in this ADR despite this being the
+ADR governing service-to-service authentication. The mechanism enforces fail-closed: only the
+host (`system:host`) may assert a plugin identity, and the assertion becomes `system:<name>` in the
+logical-name space; plugins in their own Lambdas ignore the header and are identified by their role.
+The implementation aligns with ADR-0009's core principle — **internal trust is IAM, not a shared secret** —
+because the header assertion itself is made only after the SigV4 signature verifies the caller is the host.

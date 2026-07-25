@@ -22,7 +22,11 @@ The premise of Biffo is that `biffo init` provisions the shared infrastructure
 **once** (Core API, Cognito, EventBridge, CloudFront, RDS) and a plugin is *pure
 code on top of it* — a declaration plus a little logic. For a plugin that only
 declares tables (Core owns and serves them, ADR-0004), reacts to events, and
-exposes generic CRUD, this holds: it provisions nothing.
+exposes generic CRUD, the platform still provisions a real Lambda, EventBridge
+rule/target, and (when needed) an IAM policy per `modules/plugins/_template/main.tf:56-167`
+— every first-party plugin today (orchestrator, agent-runtime) provisions all three.
+What broke the old pattern (and what this ADR fixes) is a plugin needing a custom
+authenticated API and a frontend, not the event/data shape.
 
 It broke the moment a plugin needed a **custom authenticated API and a
 frontend** — i.e. an actual product (the Ideation Engine). The platform had no
@@ -51,7 +55,7 @@ marginal cost of a new plugin.
 
 The tempting fix — mount plugin routers *inside the Core API process* — is
 forbidden: **ADR-0013 §3, "No plugin code runs in the Core API process… unamended
-and non-negotiable."** A compromised or buggy plugin must never reach the DB or
+and non-negotiable"** (a constraint also grounded in ADR-0002 directly). A compromised or buggy plugin must never reach the DB or
 crash Core. Any design must also honour ADR-0002 (no DB client outside Core),
 ADR-0009 (inbound internal calls are SigV4/IAM), and ADR-0011 (authorization —
 including group-gating — is a core concern, never plugin code).
@@ -106,18 +110,52 @@ So the IAM role changes meaning, and Core gains a second check:
   ADR-0009 `BIFFO_SERVICE_PRINCIPAL_ARN_ALLOWLIST`, now one entry (the host's
   role) instead of one per plugin. This keeps *non-platform* callers out.
 - **Which plugin is asserted by the host** as a trusted plugin-identity header on
-  each internal call. The host is platform code — it already enforces
-  group-gating and dispatches to the plugin's router, so it is the correct
-  authority to name the plugin it is running. Core enforces the table's
-  `allowed_principals` against that asserted identity (and the owner against the
-  forwarded founder token), exactly as before. This keeps *one plugin* out of
-  *another plugin's* tables.
+  each internal call. The host binds this identity once per request, in
+  `group_gate` (`services/_plugin-host/src/plugin_host/mount.py`), before
+  dispatching to the plugin's router, and the SDK's default `self.api` client
+  (`SignedCoreClient`, `packages/python-sdk/src/biffo_plugin_sdk/signed_client.py`)
+  reads it to stamp the outbound `X-Biffo-Plugin` header. Core enforces the
+  table's `allowed_principals` against that asserted identity (and the owner
+  against the forwarded founder token), exactly as before.
 
-The trust root moves from "each plugin proves itself by its own IAM role" to "the
-platform host proves it is the host (IAM), and truthfully names the plugin it is
-running" — consistent with the host being the enforcement point for authorization
-generally (ADR-0011). An `isolated: true` plugin (its own host) keeps a distinct
-role and needs no asserted identity, so the strong-isolation path is unchanged.
+**What this guarantee actually covers, and what it does not (corrected by
+[#563](https://github.com/keiranholloway/biffo-template/issues/563)).** For
+*well-behaved* plugin code that uses the SDK's default client as intended,
+`group_gate` correctly binds and asserts the right plugin's identity, and this
+keeps one plugin's ordinary CRUD calls out of another plugin's tables. But it is
+**not** a cryptographic or process-level isolation boundary against a plugin's
+own code that deliberately chooses to assert a different identity. The identity
+binding is an ordinary, mutable `ContextVar`: any code sharing the host process
+— including the mounted plugin's own request handler — can read or overwrite it
+before making its own outbound call. Worse, hardening that specific mechanism
+(e.g. binding identity in a closure instead of a module-level `ContextVar`)
+would not close the underlying gap either, because the *credentials* are the
+real shared resource: any code running in the shared host Lambda has access to
+the host's IAM role via the standard AWS SDK credential chain
+(`botocore.session.get_session().get_credentials()`, exactly what
+`SignedCoreClient` itself calls) and could hand-construct its own SigV4-signed
+request naming any plugin identity, independent of whatever in-process
+convenience wrapper the SDK offers.
+
+So the trust root is honestly: "the platform host proves it is the host (IAM),
+and — for plugin code that behaves — truthfully names the plugin it is
+running." That protects against accidental cross-plugin data access by
+ordinary, non-adversarial plugin code sharing the host. It does **not** protect
+against a plugin an operator does not trust: genuine isolation against a
+malicious or fully-untrusted plugin requires `isolated: true` — a dedicated
+Lambda with its own IAM role, where the caller's identity is the role itself,
+not a header the plugin's own process could rewrite. Consequently, **the shared
+host is an appropriate default only for plugins the operator trusts to the same
+degree as each other** — first-party plugins, or third-party plugins that have
+been through real code review — not as a security boundary between
+mutually-distrusting plugins. A future structural fix (per-plugin STS-scoped
+credentials assumed by the host immediately before dispatch, so a plugin's code
+never sees the host's full role) is tracked as a separate infrastructure
+decision in
+[#579](https://github.com/keiranholloway/biffo-template/issues/579); it is not
+implemented today. `isolated: true` (its own host, its own role) keeps a
+distinct role and needs no asserted identity, so the strong-isolation path is
+unchanged by any of the above.
 
 ### 2. Frontend — ONE shared app shell, plugins mount UI routes
 

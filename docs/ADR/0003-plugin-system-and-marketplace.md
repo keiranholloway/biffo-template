@@ -490,9 +490,9 @@ Fixed by moving generation back to CLI time, matching this ADR's original intent
 
 **Security:**
 
-- Only the Biffo core team can publish plugins to the registry.
-- Plugin source code is scanned for secrets before acceptance (same as core repo).
-- Plugin Terraform modules are reviewed for security compliance (Checkov, tfsec) before approval.
+- (Aspirational — no publish flow or CI gate exists yet; tracked in issue #572) Only the Biffo core team can publish plugins to the registry.
+- (Aspirational — no publish flow or CI gate exists yet; tracked in issue #572) Plugin source code is scanned for secrets before acceptance (same as core repo).
+- (Aspirational — no publish flow or CI gate exists yet; tracked in issue #572) Plugin Terraform modules are reviewed for security compliance (Checkov, tfsec) before approval.
 
 ---
 

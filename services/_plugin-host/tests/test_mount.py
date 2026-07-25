@@ -107,3 +107,75 @@ def test_gated_request_binds_the_sdk_acting_as_plugin_for_outbound_core_calls():
     assert resp.status_code == 200
     assert resp.json()["acting_as"] == "ideation"
     assert acting_as_plugin.get() is None  # reset after the request
+
+
+# --- ADR-0021 §1a: known boundary, not a bug -----------------------------------
+#
+# Pinned per issue #563. This is DELIBERATE DOCUMENTATION of a known, accepted
+# limit on what `group_gate`'s identity binding protects — not a regression this
+# test is trying to catch, and not something a future PR should "fix" by making
+# this test pass differently. If this test starts failing, the limitation it
+# pins has changed and ADR-0021 §1a needs re-reading before touching anything.
+#
+# `group_gate` binds `acting_as_plugin` to the MOUNTED plugin's own name before
+# dispatching into its app (proven by the two tests above). But that binding is
+# an ordinary, mutable `ContextVar` — readable and writable by any code sharing
+# the host process, including the plugin's own request handler. A plugin's own
+# code can call `acting_as_plugin.set(<other name>)` itself, before making its
+# own outbound `SignedCoreClient` call, and the signed request will assert
+# whichever identity was set LAST — not the one `group_gate` bound for this
+# mount.
+#
+# This is not closable by hardening the SDK's convenience wrapper (a closure, a
+# private per-request client, hiding the ContextVar, etc.): any code running in
+# this same process already has the host's IAM credentials via the standard AWS
+# SDK credential chain (`botocore.session.get_session().get_credentials()` —
+# exactly what `SignedCoreClient._get_credentials()` calls) and could
+# hand-construct its own SigV4-signed request naming any plugin identity, with
+# or without this ContextVar existing at all. Genuine isolation against a
+# plugin an operator does not fully trust requires `isolated: true` (its own
+# Lambda, its own IAM role). The real structural fix — per-plugin STS-scoped
+# credentials assumed by the host right before dispatch — is tracked as a
+# separate infrastructure decision in issue #579, not attempted here.
+def test_a_plugins_own_code_can_override_the_bound_identity_before_its_own_outbound_call():
+    """Pin the known (not fixed) boundary: the plugin's own handler overrides
+    `acting_as_plugin` after `group_gate` bound it, and its own outbound signed
+    request asserts the OVERRIDDEN identity, not the one `group_gate` bound."""
+    import httpx
+    from biffo_plugin_sdk import PLUGIN_IDENTITY_HEADER, SignedCoreClient, acting_as_plugin
+    from botocore.credentials import Credentials
+
+    captured: dict[str, object] = {}
+
+    def handle_outbound(request: httpx.Request) -> httpx.Response:
+        captured["plugin_header"] = request.headers.get(PLUGIN_IDENTITY_HEADER)
+        return httpx.Response(200, json={})
+
+    async def act(request):
+        # This runs as the "ideation" plugin's OWN mounted code — not the host,
+        # not group_gate. group_gate already bound acting_as_plugin to
+        # "ideation" for this request; this handler overrides it itself, as
+        # nothing in-process stops it.
+        acting_as_plugin.set("other-plugin-name")
+        client = SignedCoreClient(
+            base_url="https://core.example.com",
+            region="eu-west-1",
+            credentials=Credentials("AKIDTEST", "SECRETTEST"),
+            client=httpx.AsyncClient(transport=httpx.MockTransport(handle_outbound)),
+        )
+        await client.post("/api/v1/internal/owner-data/other_plugin_table", json={"x": 1})
+        return JSONResponse({"ok": True})
+
+    app = Starlette(routes=[Route("/act", act, methods=["POST"])])
+    client = TestClient(
+        build_host([MountedPlugin("ideation", app, "founder")], authorize=_authorizer)
+    )
+
+    resp = client.post("/ideation/act", headers={"X-Biffo-Founder-Token": "alice|founder"})
+
+    assert resp.status_code == 200
+    # The signed outbound request asserts "other-plugin-name" — the identity the
+    # plugin's own code chose — not "ideation", the identity group_gate bound.
+    # This is the current, known, tested property (issue #563 / #579), not a
+    # fix.
+    assert captured["plugin_header"] == "other-plugin-name"

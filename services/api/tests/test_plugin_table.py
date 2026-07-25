@@ -351,3 +351,40 @@ class TestTablePermissions:
         # emitted by model_dump even though the source block omits it.
         expected = {op: {**rule, "allowed_principals": []} for op, rule in block.items()}
         assert dumped == expected
+
+
+def test_owner_data_insert_populates_timestamps_without_a_db_default() -> None:
+    """A plugin table's generated migration creates created_at/updated_at NOT NULL
+    with NO DB default (only the ORM knows now()). The model must therefore supply
+    the value in the INSERT — a server_default alone would violate NOT NULL. This
+    reproduces that exact table shape and asserts an insert omitting the timestamps
+    succeeds (regression for the ideation owner-data 500)."""
+    import sqlalchemy as sa
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    model = PluginTableDefinition(
+        name="widget",
+        columns=[ColumnDefinition(name="label", type="String(50)", nullable=False)],
+    ).to_sqlalchemy_model()
+
+    engine = create_engine("sqlite://")
+    # Create the table the way a plugin migration does: created_at/updated_at
+    # NOT NULL with NO server default, so only an ORM-side default can fill them.
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "CREATE TABLE widget ("
+                "id VARCHAR(36) PRIMARY KEY, tenant_id VARCHAR(64) NOT NULL, "
+                "label VARCHAR(50) NOT NULL, "
+                "created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL)"
+            )
+        )
+
+    with Session(engine) as session:
+        row = model(label="hi")  # no created_at/updated_at set
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        assert row.created_at is not None
+        assert row.updated_at is not None

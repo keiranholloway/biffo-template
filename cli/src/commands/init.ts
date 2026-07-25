@@ -321,11 +321,14 @@ export async function runInit(
   // Step 5a: branches. `createBranch` already returns early when the branch
   // exists, so the two calls share one checkpoint safely.
   if (!hasCompleted(session, 'github_branches')) {
-    log.step(5, totalSteps, 'Creating the staging branch...')
+    log.step(5, totalSteps, 'Creating the staging and main branches...')
     // The repo is generated from the template, whose default (and only) branch
-    // is `dev` (#559), so `dev` already exists. Add `staging` off it as a
-    // promotion target. There is no `main` — retired everywhere (#559).
+    // is `dev` (#559), so `dev` already exists as the integration branch. Cut
+    // `staging` and `main` off it as promotion targets: `dev` → `staging` →
+    // `main`. `main` is the production branch — reserved, and unused until a
+    // production environment is actually built.
     await github.createBranch(org, repo, 'staging', 'dev')
+    await github.createBranch(org, repo, 'main', 'dev')
     markStepComplete(session, 'github_branches')
   } else {
     log.step(5, totalSteps, 'Branches already created — skipping')
@@ -579,19 +582,20 @@ export const INSTANCE_CONFIG_FILE = 'biffo.config.json'
 
 /**
  * The branch the instance commit is created on. `dev` is the repo's default
- * branch (generated from the template, #559) and `staging` is cut from it, so
- * building the commit here and fast-forwarding `staging` onto it gives both
- * branches one shared commit rather than look-alikes with unrelated SHAs.
+ * branch (generated from the template, #559) and `staging`/`main` are cut from
+ * it, so building the commit here and fast-forwarding the others onto it gives
+ * every branch one shared commit rather than look-alikes with unrelated SHAs.
  */
 export const INSTANCE_FILE_BASE_BRANCH = 'dev'
 
 /**
  * The remaining branches, fast-forwarded onto the base branch's instance commit
- * so they share its history. `dev` is the base/default and `staging` is the sole
- * promotion target; each is protected and can only be updated by PR afterwards.
- * There is no `main` (retired everywhere, #559).
+ * so they share its history. `dev` is the base/default/integration branch and
+ * `staging`/`main` are the promotion targets (`main` = production, reserved
+ * until a prod environment is built, #559); each is protected and can only be
+ * updated by PR afterwards.
  */
-export const INSTANCE_FILE_FOLLOWER_BRANCHES = ['staging'] as const
+export const INSTANCE_FILE_FOLLOWER_BRANCHES = ['staging', 'main'] as const
 
 /** Every branch that ends up carrying the instance files. */
 export const INSTANCE_FILE_BRANCHES = [
@@ -620,12 +624,12 @@ export const INSTANCE_FILE_BRANCHES = [
  * the instance's own Secret Scan red on its first run, which is a worse defect
  * than the one being fixed.
  *
- * Both branches get ONE shared commit, not look-alikes (issue #329). The commit
- * is built once on `INSTANCE_FILE_BASE_BRANCH` (`dev`) and `staging` is
+ * All branches get ONE shared commit, not look-alikes (issue #329). The commit
+ * is built once on `INSTANCE_FILE_BASE_BRANCH` (`dev`) and `staging`/`main` are
  * fast-forwarded onto it. Committing the identical content to each branch
  * independently produced distinct SHAs; git treats those as unrelated, so the
- * instance's first `dev`→`staging` promotion conflicted on files the user never
- * touched. A single shared commit makes that promotion a clean merge.
+ * instance's first `dev`→`staging`→`main` promotion conflicted on files the user
+ * never touched. A single shared commit makes those promotions a clean merge.
  *
  * Idempotent — `commitFiles` no-ops when the base head already matches (a
  * resumed init reuses that head as the shared commit), and `fastForwardBranch`

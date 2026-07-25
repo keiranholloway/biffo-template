@@ -4,9 +4,10 @@
  *
  * `deploy-global.yml` provisions shared DNS + ACM — one set for the whole
  * instance — so it runs from the single integration branch, `dev`, rather than
- * any per-environment branch. Since #559 unified every repo on `dev` (one
- * environment, no production, `main` retired), the fixed dispatch ref and the
- * instance's default branch are the *same* branch.
+ * any per-environment branch. Since #559 made `dev` the integration/default
+ * branch in every repo (production is not built yet, so a deployable repo's
+ * `main` is reserved and unused), the fixed dispatch ref and the instance's
+ * default branch are the *same* branch, `dev`.
  *
  * That convergence closes the gap issue #328 was about: when the dispatch ref
  * was `main` but `biffo core upgrade` landed its PR on the default branch

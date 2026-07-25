@@ -81,12 +81,18 @@ Several agents often run concurrently in this repo. A worktree isolates your
   force-pushes to it. Branch protection stays on.
 
 **The integration branch is `dev` in every repo** — template, instances, sibling
-apps, and plugin repos alike. There is one environment (dev) and no production,
-so there is one branch: you always branch from and PR into `dev`, everywhere.
-`main` is retired; a repo that still shows `main` as its default has not yet been
-migrated (see issue #559) — `gh repo view --json defaultBranchRef` is
-authoritative, and if it reports anything other than `dev`, flag it rather than
-working around it.
+apps, and plugin repos alike. You always branch from and PR into `dev`.
+`gh repo view --json defaultBranchRef` is authoritative; a repo whose default is
+anything other than `dev` has not yet been migrated (issue #559) — flag it rather
+than working around it.
+
+Deployable repos (instances and sibling apps) additionally keep `staging` and
+`main` as promotion targets — `dev` → `staging` → `main`, where `main` is
+**production**. Production is not built yet, so `main` is **reserved and
+currently unused**; it is not a working branch, so never branch from it or open a
+PR against it. Non-deployable repos (this template, plugin-code repos) publish to
+npm or mount into the host rather than deploy to environments, so they have `dev`
+only.
 
 - **Never leave a primary checkout parked on a feature or upgrade branch, and
   never let one fall behind.** Keep the primary on `dev`, no more than a

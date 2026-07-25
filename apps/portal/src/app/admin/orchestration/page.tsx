@@ -254,8 +254,15 @@ function toolsField(action: CatalogAction | undefined): CatalogActionField | nul
 // fields, plus the injected tools multiselect when the action carries
 // available_tools. Used everywhere the field list drives behaviour (render,
 // applicability, and the save filter) so the tools value round-trips.
+//
+// Core now declares its OWN `tools` config_field too (ADR-0014 §7, #569) — but
+// purely for authoring-time validation server-side; it carries no `options`,
+// since Core has no live view of what the runtime registered. Drop it here so
+// exactly one control renders: the picker built below from `available_tools`,
+// which does have live options (with descriptions). Both write the same
+// `action_config.tools` key, so nothing about the save path changes.
 function configFieldsFor(action: CatalogAction | undefined): CatalogActionField[] {
-  const base = action?.config_fields ?? []
+  const base = (action?.config_fields ?? []).filter((f) => f.name !== TOOLS_FIELD)
   const tools = toolsField(action)
   return tools == null ? base : [...base, tools]
 }

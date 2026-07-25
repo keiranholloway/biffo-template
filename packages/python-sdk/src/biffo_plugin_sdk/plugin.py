@@ -264,10 +264,23 @@ class ToolDeclaration(BaseModel):
     Pure *declaration* — ``name``, ``description`` and the JSON-Schema
     ``parameters`` — mirroring what the runtime's in-code tool registry holds,
     minus the executor and availability predicate (those stay in the plugin's
-    Python and are never on the wire). Core reads these off the manifest to
-    populate the workflow builder's tool picker without importing the runtime.
-    The registry remains the ceiling: a declared tool a build does not register
-    fails the run (see the runtime's ``tools.py``).
+    Python and are never on the wire). The registry remains the ceiling: a
+    declared tool a build does not register fails the run (see the runtime's
+    ``tools.py``).
+
+    **Not yet implemented (#569): "Core reads these to populate the workflow
+    builder's tool picker" is aspirational for a third-party plugin's manifest.**
+    Today Core reads exactly one manifest this way — the first-party
+    ``agent-runtime`` plugin's, matched by name
+    (``services/api/src/api/routers/orchestration.py``'s
+    ``_agent_runtime_tools()``) — which happens to declare its tools with this
+    same shape, but no *generic* mechanism reads an arbitrary plugin's ``tools``
+    field for this or any other purpose. Building that generic read is a
+    separate, more general piece of work than #569 wired up (which only added
+    authoring-time validation for the agent-runtime-specific tool list already
+    reaching Core through ``action_config``). Until it exists, declaring
+    ``tools`` here validates and round-trips through ``PluginManifest`` but has
+    no effect on Core's behaviour for a third-party plugin.
     """
 
     name: str = Field(description="Registered tool name, matching the runtime's registry key.")

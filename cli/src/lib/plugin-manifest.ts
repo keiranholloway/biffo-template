@@ -6,7 +6,8 @@
  *
  *   - `packages/python-sdk/src/biffo_plugin_sdk/plugin.py`'s
  *     `ColumnDefinition` / `IndexDefinition` / `PermissionRule` /
- *     `TablePermissions` / `TableDefinition` / `RouteDef` / `PluginManifest`
+ *     `TablePermissions` / `TableDefinition` / `RouteDef` / `ToolDeclaration` /
+ *     `PluginManifest`
  *   - `services/api/src/api/models/plugin_table.py`'s
  *     `ColumnDefinition` / `IndexDefinition` / `PermissionRule` /
  *     `TablePermissions` / `PluginTableDefinition`
@@ -230,6 +231,26 @@ const UserFrontendSchema = z
   })
   .strict()
 
+// A tool a plugin's runtime exposes to an agentic worker (ADR-0014 §7). Mirrors
+// biffo_plugin_sdk.plugin.ToolDeclaration field-for-field — pure declaration
+// (name/description/parameters), never the executor or availability predicate
+// (those stay in the plugin's own Python and are never on the wire). NOT
+// `.strict()`: ToolDeclaration carries no `model_config = ConfigDict(extra=
+// "forbid")` on the Python side, so an unknown key there is silently ignored,
+// not rejected — this mirrors that permissiveness rather than tightening it.
+//
+// Note what this schema does NOT yet do: no Core-side code reads a
+// general (non-agent-runtime) plugin's declared `tools` to populate anything —
+// see the docstring correction on `ToolDeclaration` in plugin.py. Parsing it
+// here closes the *silent-strip* landmine (a manifest declaring `tools` used to
+// validate fine and lose the field with no error); it does not, by itself, wire
+// the field up to any Core behaviour.
+const ToolDeclarationSchema = z.object({
+  name: z.string(),
+  description: z.string(),
+  parameters: z.record(z.string(), z.unknown()).default({}),
+})
+
 // A buffered chat agent the plugin registers with Core (ADR-0017 seam #1). The
 // system_prompt is the install-vetted instruction channel (ADR-0016 §1) — never
 // request-supplied. `.strict()` mirrors the SDK/Core models' extra="forbid".
@@ -268,6 +289,13 @@ export const PluginManifestSchema = z
     // ordinary (data/event/CRUD) plugin.
     user_ingress: UserIngressSchema.optional(),
     user_frontend: UserFrontendSchema.optional(),
+    // Tools the plugin's runtime exposes to an agentic worker (ADR-0014 §7,
+    // #569). Default empty — an ordinary plugin declares none. Parsing this
+    // (rather than leaving it to fall through the non-`.strict()` top-level
+    // object and get silently dropped) is the fix for the parity gap: before
+    // this, a manifest declaring `tools` validated with no error and lost the
+    // field entirely.
+    tools: z.array(ToolDeclarationSchema).default([]),
     // Chat agents the plugin registers with Core (ADR-0017). Default empty — an
     // ordinary plugin declares none.
     chat_agents: z.array(ChatAgentDeclarationSchema).default([]),

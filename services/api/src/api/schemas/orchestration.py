@@ -123,9 +123,14 @@ class WorkflowRunSummary(BiffoBaseSchema):
 # a *suggestion list*: the portal offers them in a dropdown but any value is
 # accepted (the agent action's ``model`` uses this, so an author is never locked
 # out of a model that isn't among the curated slugs).
-# ``type: "multiselect"`` is a portal-only field type (the builder injects the agent
-# action's tool picker from ``available_tools``); Core never declares one, so no
-# value validation for it lives here.
+# ``type: "multiselect"`` is still a portal-only field type for other hypothetical
+# pickers; Core never declares one, so no value validation for it lives here.
+# ``type: "tools"`` (ADR-0014 §7, #569) is different: Core DOES declare this one,
+#                   on the agent action, purely for authoring-time validation —
+#                   see the field-level comment below and ``_validate_tools_field``.
+#                   The portal still builds the picker's *options* from the
+#                   router-injected ``available_tools`` (the runtime's live
+#                   manifest), never from this field, which carries no ``options``.
 # ``output_body`` — ``True`` marks the one field of a *destination* action that
 #                   carries the human message (email → ``body``, the webhook
 #                   channels → ``message``). It changes nothing for a standalone
@@ -141,6 +146,19 @@ class WorkflowRunSummary(BiffoBaseSchema):
 #                   duplicated). Absent ⇒ no delivery (today's behaviour). The
 #                   orchestrator renders ``{output}`` — the agent's result — into the
 #                   destination's ``output_body`` field on ``agent.run.completed``.
+# ``type: "tools"`` is the agent action's declared tool list (ADR-0014 §7, #569).
+#                   Its value is a list of runtime tool names, or — the one-text-
+#                   input authoring shape — a comma-separated string; both are what
+#                   ``agent_runtime.tools.declared_tools()`` accepts at run time, so
+#                   this never rejects something the runtime would accept. Every
+#                   name is checked against ``KNOWN_AGENT_TOOLS``, a reproduced
+#                   mirror of the runtime's ``TOOL_REGISTRY`` (Core cannot import
+#                   the runtime's Python, ADR-0002 — the same reason
+#                   ``worker_messages.py`` reproduces the runtime's message-assembly
+#                   constants instead of importing them). Absent/empty ⇒ no tools —
+#                   §7's default-deny posture. This field is validation only; the
+#                   portal's picker still gets its *options* from the router's live
+#                   ``available_tools``, not from here.
 
 # What a redacted secret reads back as. A fixed, recognisable placeholder rather
 # than an empty string: the portal shows "set, unchanged", and a write echoing it
@@ -342,14 +360,29 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 ],
             },
             # A hard stop on the turn loop — §8 bounds cost in the framework
-            # rather than by convention. Tools and read scope are deliberately
-            # absent in M1.
+            # rather than by convention. Read scope stays deliberately absent
+            # (ADR-0014's third amendment, #569: no worker needs table reads yet,
+            # so it is deferred rather than built speculatively). Tools, below,
+            # gained an authoring path in the same change.
             {
                 "name": "max_turns",
                 "label": "Maximum turns",
                 "type": "number",
                 "required": False,
                 "default": 1,
+            },
+            # A worker's declared tool list (ADR-0014 §7, #569) — an authoring-time-
+            # validated path onto the runtime's already-working tools.py
+            # (`declared_tools()`/`resolve_tools()`). Absent/empty is default-deny:
+            # a worker uses no tools until it opts in. See the ``type: "tools"``
+            # doc comment above for the validated shapes and KNOWN_AGENT_TOOLS below
+            # for what "known" means.
+            {
+                "name": "tools",
+                "label": "Tools",
+                "type": "tools",
+                "required": False,
+                "default": [],
             },
             # ADR-0020 (#527): optional deliver-the-result-on-completion sub-config.
             # A structured {"type": <destination>, "config": {…}} validated against
@@ -372,6 +405,20 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
 # standalone action above whose executor the orchestrator reuses; a delivery's
 # ``config`` is validated against that action's own ``config_fields``.
 DELIVERY_ACTION_TYPES: tuple[str, ...] = ("email", "slack", "google_chat", "whatsapp")
+
+# Tool names the agent runtime registers (ADR-0014 §7, #569) — a reproduced
+# mirror of ``agent_runtime.tools.TOOL_REGISTRY``
+# (``services/_plugins/agent-runtime/src/agent_runtime/tools.py``). Core cannot
+# import the runtime's Python: it is a separately deployed unit reached over
+# events/HTTP, never linked into Core's own Lambda (ADR-0002), the same
+# boundary that already makes ``worker_messages.py`` reproduce the runtime's
+# message-assembly constants instead of importing them. This list is the
+# authoring-time mirror of that registry's keys; ``test_known_agent_tools_
+# matches_the_runtime_manifest`` (test_orchestration_admin_router.py) is the
+# same-repo drift guard — it cross-checks this against the runtime's
+# ``biffo.plugin.json``, which the runtime's own ``test_manifest_tools.py`` in
+# turn guarantees matches ``TOOL_REGISTRY`` exactly.
+KNOWN_AGENT_TOOLS: frozenset[str] = frozenset({"web_search"})
 
 # Deliberately permissive — enough to reject obvious typos in the form, not a
 # full RFC 5322 validator (avoids a new email-validator dependency).
@@ -556,6 +603,10 @@ def _validate_action_config(
         if field["type"] == "delivery":
             _validate_delivery(action_config.get(field["name"]))
             continue
+        # The agent action's declared tool list (ADR-0014 §7, #569).
+        if field["type"] == "tools":
+            _validate_tools_field(action_config.get(field["name"]))
+            continue
         # A prompt-library field (instructions/goals) is EITHER a plain string or an
         # ordered list of parts (ADR-0015 §2). Validate the shape here — component
         # existence and value/variable matching need the DB and are checked in the
@@ -624,6 +675,37 @@ def _validate_delivery(value: Any) -> None:
         _validate_action_config(str(delivery_type), config, body_optional=True)
     except ValueError as exc:
         raise ValueError(f"action_config.delivery.config is invalid: {exc}") from exc
+
+
+def _validate_tools_field(value: Any) -> None:
+    """Validate an agent action's ``tools`` list (ADR-0014 §7, #569).
+
+    Absent/empty/``None`` ⇒ no tools, which is valid — the default-deny posture
+    a worker opts out of by default. Otherwise the value must be a list of tool
+    names, or a comma-separated string — the same two shapes
+    ``agent_runtime.tools.declared_tools()`` accepts when it reads a run's
+    definition snapshot at execution time, so authoring-time validation here
+    never rejects something the runtime would happily run. Every resolved name
+    must be in :data:`KNOWN_AGENT_TOOLS`, this module's reproduced mirror of the
+    runtime's ``TOOL_REGISTRY`` — an unregistered name fails at save, matching
+    the runtime's own ``UnknownToolError`` at run time, just earlier and for
+    the same reason: a typo'd or stale tool name should fail loudly, not run
+    quietly with one fewer capability.
+    """
+    if value in (None, "", []):
+        return
+    if isinstance(value, str):
+        names = [item.strip() for item in value.split(",") if item.strip()]
+    elif isinstance(value, list):
+        names = [str(item).strip() for item in value if str(item).strip()]
+    else:
+        raise ValueError(f"action_config.tools must be a list of tool names, got: {value!r}")
+    unknown = sorted(set(names) - KNOWN_AGENT_TOOLS)
+    if unknown:
+        raise ValueError(
+            f"action_config.tools declares unregistered tool(s) {unknown}. "
+            f"This build registers: {sorted(KNOWN_AGENT_TOOLS)}."
+        )
 
 
 class WorkflowCatalog(BaseModel):

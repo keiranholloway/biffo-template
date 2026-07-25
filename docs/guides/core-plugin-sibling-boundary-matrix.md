@@ -219,3 +219,54 @@ a call to act now:
 
 Revisit this section when either axis actually strains — i.e. when a second
 external author wants to publish, or plugin count moves toward the dozens.
+
+## 6. Risks in the pattern today
+
+Unlike §5's list, these hold regardless of author count or plugin volume —
+they're properties of the current implementation, not growth pains. Ranked by
+severity; exposure (latent vs. realized) noted per item.
+
+1. **High, currently latent — the shared plugin-host has no real isolation
+   between co-mounted plugins' identities.** `acting_as_plugin`
+   (`signed_client.py:44`) is a plain module-level `ContextVar` in
+   `biffo_plugin_sdk`. The host's `group_gate` sets it correctly per request
+   based on which URL segment was hit (`mount.py:107-112`), and outbound
+   calls stamp it into the signed `X-Biffo-Plugin` header before SigV4
+   (`signed_client.py:85-90`) — but every mounted plugin's own code runs in
+   the *same interpreter, same process*, and can import that identical SDK
+   module. Nothing stops a plugin from calling
+   `acting_as_plugin.set("other-plugin-name")` itself before making its own
+   request; Core would then grant it `system:other-plugin-name`'s internal-API
+   permissions — exactly the identity ADR-0021 §1a exists to assert
+   correctly. A plugin running in its own separate Lambda cannot do this (its
+   IAM role identifies it, and Core's `_asserted_plugin_identity` only trusts
+   the header when the caller is `system:host`) — this is specific to
+   plugins sharing the host process. Today it's latent: no `user_ingress`
+   plugin exists in the template yet, so nothing is actually co-mounted. It's
+   the property to design around (per-plugin resource/permission limits, code
+   review, a binding stronger than a ContextVar) before the first
+   user-facing plugin — first- or third-party — lands in that shared
+   process. The trust boundary here is application-code convention, not
+   something the OS or network enforces, unlike the per-Lambda model it
+   replaced.
+2. **Medium — `plugin install` commits a real schema migration in one
+   uninterrupted step.** `plugin-install.ts` goes manifest → synthesized
+   SQLAlchemy model → generated Alembic migration → `git commit`, with no
+   review checkpoint inside the tool itself. A crafted or buggy manifest
+   reaches your production schema shape in one CLI invocation; the only
+   backstop is reviewing the commit before it merges, not anything
+   CLI-enforced.
+3. **Medium — CRUD permissions are self-declared, not independently
+   reviewed.** Core enforces default-deny (ADR-0004) on whatever a table's
+   `permissions` block says, but that block's contents are entirely the
+   plugin author's own manifest — nothing validates a declared access scope
+   against policy before code that relies on it runs.
+4. **Low today, compounds with churn — uninstall never drops schema.** Same
+   fact as §5 item 5, restated as a present risk: any plugin tried and
+   removed leaves its tables/migrations permanently and silently, by design
+   (`--keep-data` is a documented no-op).
+5. **Informational — the ownership guard's real enforcement point is CI, not
+   the local hook.** The local pre-commit hook is bypassable with
+   `--no-verify`; CI (gated by branch protection) is the actual backstop.
+   Deliberate defense-in-depth, not a flaw, but worth knowing the local hook
+   alone isn't sufficient if branch protection is ever misconfigured.

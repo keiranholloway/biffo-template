@@ -61,6 +61,43 @@ def test_missing_required_key_raises_action_error():
         send_email({"from": "f@x"}, {}, ses_client=FakeSes())
 
 
+def test_send_email_renders_templated_recipient():
+    ses = FakeSes()
+
+    send_email(
+        {"from": "f@x", "to": "{email}", "subject": "s", "body": "b"},
+        {"email": "lead@acme.com"},
+        ses_client=ses,
+    )
+
+    assert ses.calls[0]["Destination"]["ToAddresses"] == ["lead@acme.com"]
+
+
+def test_send_email_literal_recipient_unaffected_by_rendering():
+    ses = FakeSes()
+
+    send_email(
+        {"from": "f@x", "to": "fixed@example.com", "subject": "s", "body": "b"},
+        {"email": "lead@acme.com"},
+        ses_client=ses,
+    )
+
+    assert ses.calls[0]["Destination"]["ToAddresses"] == ["fixed@example.com"]
+
+
+def test_send_email_recipient_template_missing_field_raises_action_error():
+    ses = FakeSes()
+
+    with pytest.raises(ActionError, match="rendered empty"):
+        send_email(
+            {"from": "f@x", "to": "{missing}", "subject": "s", "body": "b"},
+            {},
+            ses_client=ses,
+        )
+
+    assert ses.calls == []
+
+
 # ── Google Chat ──────────────────────────────────────────────────────────────
 
 
@@ -255,6 +292,28 @@ def test_send_whatsapp_unconfigured_is_action_error():
 def test_send_whatsapp_requires_recipient():
     with pytest.raises(ActionError, match="missing required key"):
         send_whatsapp({"message": "hi"}, {}, http_client=FakeHttp(), whatsapp=_WA)
+
+
+def test_send_whatsapp_renders_templated_recipient():
+    http = FakeHttp(status_code=200, json_data={"messages": [{"id": "wamid.T"}]})
+
+    send_whatsapp(
+        {"to": "{phone}", "message": "hi"},
+        {"phone": "+15551234567"},
+        http_client=http,
+        whatsapp=_WA,
+    )
+
+    assert http.calls[0]["json"]["to"] == "+15551234567"
+
+
+def test_send_whatsapp_recipient_template_missing_field_raises_action_error():
+    http = FakeHttp(status_code=200, json_data={"messages": [{"id": "wamid.T"}]})
+
+    with pytest.raises(ActionError, match="rendered empty"):
+        send_whatsapp({"to": "{missing}", "message": "hi"}, {}, http_client=http, whatsapp=_WA)
+
+    assert http.calls == []
 
 
 def test_send_whatsapp_api_error_is_action_error():

@@ -23,6 +23,7 @@ from .routers.admin import agent_runs as admin_agent_runs
 from .routers.admin import endpoints as admin_endpoints
 from .routers.admin import groups as admin_groups
 from .routers.admin import orchestration as admin_orchestration
+from .routers.admin import organizations as admin_organizations
 from .routers.admin import plugin_chat_agents as admin_plugin_chat_agents
 from .routers.admin import plugins as admin_plugins
 from .routers.admin import prompt_components as admin_prompt_components
@@ -57,6 +58,7 @@ app.include_router(users.router, prefix="/api/v1")
 app.include_router(admin_plugins.router, prefix="/api/v1")
 app.include_router(admin_endpoints.router, prefix="/api/v1")
 app.include_router(admin_groups.router, prefix="/api/v1")
+app.include_router(admin_organizations.router, prefix="/api/v1")
 app.include_router(admin_users.router, prefix="/api/v1")
 # Admin read surface for agent runs (ADR-0014): Cognito-authed, admin-gated,
 # tenant-scoped, read-only, under /api/v1/admin/agent-runs. Runs are written

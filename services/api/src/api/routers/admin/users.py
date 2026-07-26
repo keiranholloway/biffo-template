@@ -13,8 +13,9 @@ from typing import NoReturn
 
 from aws_lambda_powertools import Logger
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ...cognito import CognitoAdmin, CognitoAdminError
 from ...database import get_db
@@ -58,10 +59,44 @@ def _raise_http(err: CognitoAdminError) -> NoReturn:
     ) from err
 
 
-def _to_response(cog: CognitoAdmin, user: dict) -> AdminUserResponse:
-    """Attach the user's group memberships (a separate Cognito call) and shape it."""
+def _to_response(cog: CognitoAdmin, user: dict, profile: User | None = None) -> AdminUserResponse:
+    """Attach the user's group memberships (a separate Cognito call) and the
+    DB-only profile fields (organization/job role/address), if a mirror row
+    exists yet, and shape it."""
     groups = cog.list_groups_for_user(user["username"])
-    return AdminUserResponse(groups=groups, **user)
+    return AdminUserResponse(
+        groups=groups,
+        organization_id=profile.organization_id if profile else None,
+        organization_name=(profile.organization.name if profile and profile.organization else None),
+        job_role=profile.job_role if profile else None,
+        address_line1=profile.address_line1 if profile else None,
+        address_line2=profile.address_line2 if profile else None,
+        city=profile.city if profile else None,
+        region=profile.region if profile else None,
+        postal_code=profile.postal_code if profile else None,
+        country=profile.country if profile else None,
+        **user,
+    )
+
+
+async def _load_profile(db: AsyncSession, cognito_sub: str) -> User | None:
+    """Fetch the DB mirror row (with its organization eager-loaded) for one user."""
+    result = await db.execute(
+        select(User).options(selectinload(User.organization)).where(User.cognito_sub == cognito_sub)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _load_profiles(db: AsyncSession, cognito_subs: list[str]) -> dict[str, User]:
+    """Batch version of `_load_profile` for list endpoints — one query rather
+    than one per user."""
+    subs = [s for s in cognito_subs if s]
+    if not subs:
+        return {}
+    result = await db.execute(
+        select(User).options(selectinload(User.organization)).where(User.cognito_sub.in_(subs))
+    )
+    return {u.cognito_sub: u for u in result.scalars().all()}
 
 
 async def _mirror_is_active(db: AsyncSession, cognito_sub: str, active: bool) -> None:
@@ -91,21 +126,49 @@ def _emit_user_lifecycle(db: AsyncSession, event: EventType, user: dict, *, tena
 @router.post("", response_model=AdminUserResponse, status_code=status.HTTP_201_CREATED)
 async def create_user(
     body: CreateUserRequest,
-    _admin: AuthenticatedUser = Depends(require_admin),
+    admin: AuthenticatedUser = Depends(require_admin),
     cog: CognitoAdmin = Depends(get_cognito_admin),
+    db: AsyncSession = Depends(get_db),
 ) -> AdminUserResponse:
     """Create a Cognito user (Cognito emails a temporary password unless
-    suppressed) and optionally assign initial groups. The DB user row appears on
-    the user's first authenticated request."""
+    suppressed) and optionally assign initial groups.
+
+    Unlike the rest of this router, this also eagerly creates the DB mirror row
+    (rather than waiting for the user's first login, as `routers/auth.py`
+    otherwise does): organization/job role/address are DB-only fields with
+    nowhere else to live, so without this they would have no way to be set at
+    creation time. The row is looked up by `cognito_sub` on first login, so
+    that flow just updates `last_login_at` on the row this creates.
+    """
     try:
         user = cog.create_user(
             email=body.email,
+            given_name=body.given_name,
+            family_name=body.family_name,
+            phone_number=body.phone_number,
             groups=body.groups,
             suppress_invite_email=body.suppress_invite_email,
         )
     except CognitoAdminError as err:
         _raise_http(err)
-    return _to_response(cog, user)
+    profile = User(
+        cognito_sub=user["sub"],
+        email=user["email"],
+        username=user["username"],
+        tenant_id=admin.tenant_id,
+        organization_id=body.organization_id,
+        job_role=body.job_role,
+        address_line1=body.address_line1,
+        address_line2=body.address_line2,
+        city=body.city,
+        region=body.region,
+        postal_code=body.postal_code,
+        country=body.country,
+    )
+    db.add(profile)
+    await db.flush()
+    profile = await _load_profile(db, user["sub"])
+    return _to_response(cog, user, profile)
 
 
 @router.get("", response_model=AdminUserListResponse)
@@ -114,17 +177,20 @@ async def list_users(
     pagination_token: str | None = None,
     _admin: AuthenticatedUser = Depends(require_admin),
     cog: CognitoAdmin = Depends(get_cognito_admin),
+    db: AsyncSession = Depends(get_db),
 ) -> AdminUserListResponse:
     """List Cognito users (a page at a time), each with their group memberships.
 
     Group memberships require one Cognito call per user; acceptable for the small
-    admin-console listings this serves."""
+    admin-console listings this serves. Profile rows are fetched in one batched
+    query rather than per-user."""
     try:
         result = cog.list_users(limit=limit, pagination_token=pagination_token)
     except CognitoAdminError as err:
         _raise_http(err)
+    profiles = await _load_profiles(db, [u["sub"] for u in result["users"]])
     return AdminUserListResponse(
-        users=[_to_response(cog, u) for u in result["users"]],
+        users=[_to_response(cog, u, profiles.get(u["sub"])) for u in result["users"]],
         next_token=result["next_token"],
     )
 
@@ -134,12 +200,14 @@ async def get_user(
     username: str,
     _admin: AuthenticatedUser = Depends(require_admin),
     cog: CognitoAdmin = Depends(get_cognito_admin),
+    db: AsyncSession = Depends(get_db),
 ) -> AdminUserResponse:
     try:
         user = cog.get_user(username)
     except CognitoAdminError as err:
         _raise_http(err)
-    return _to_response(cog, user)
+    profile = await _load_profile(db, user["sub"])
+    return _to_response(cog, user, profile)
 
 
 @router.post("/{username}/groups", response_model=AdminUserResponse)
@@ -148,13 +216,15 @@ async def add_user_to_group(
     body: GroupAssignmentRequest,
     _admin: AuthenticatedUser = Depends(require_admin),
     cog: CognitoAdmin = Depends(get_cognito_admin),
+    db: AsyncSession = Depends(get_db),
 ) -> AdminUserResponse:
     try:
         cog.add_to_group(username=username, group=body.group)
         user = cog.get_user(username)
     except CognitoAdminError as err:
         _raise_http(err)
-    return _to_response(cog, user)
+    profile = await _load_profile(db, user["sub"])
+    return _to_response(cog, user, profile)
 
 
 @router.delete("/{username}/groups/{group}", response_model=AdminUserResponse)
@@ -163,13 +233,15 @@ async def remove_user_from_group(
     group: str,
     _admin: AuthenticatedUser = Depends(require_admin),
     cog: CognitoAdmin = Depends(get_cognito_admin),
+    db: AsyncSession = Depends(get_db),
 ) -> AdminUserResponse:
     try:
         cog.remove_from_group(username=username, group=group)
         user = cog.get_user(username)
     except CognitoAdminError as err:
         _raise_http(err)
-    return _to_response(cog, user)
+    profile = await _load_profile(db, user["sub"])
+    return _to_response(cog, user, profile)
 
 
 @router.post("/{username}/suspend", response_model=AdminUserResponse)
@@ -190,7 +262,8 @@ async def suspend_user(
         _raise_http(err)
     await _mirror_is_active(db, user["sub"], active=False)
     _emit_user_lifecycle(db, USER_SUSPENDED, user, tenant_id=admin.tenant_id)
-    return _to_response(cog, user)
+    profile = await _load_profile(db, user["sub"])
+    return _to_response(cog, user, profile)
 
 
 @router.post("/{username}/reactivate", response_model=AdminUserResponse)
@@ -207,7 +280,8 @@ async def reactivate_user(
         _raise_http(err)
     await _mirror_is_active(db, user["sub"], active=True)
     _emit_user_lifecycle(db, USER_REACTIVATED, user, tenant_id=admin.tenant_id)
-    return _to_response(cog, user)
+    profile = await _load_profile(db, user["sub"])
+    return _to_response(cog, user, profile)
 
 
 @router.delete("/{username}", status_code=status.HTTP_204_NO_CONTENT)

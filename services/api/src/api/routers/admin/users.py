@@ -32,6 +32,7 @@ from ...models.user import User
 from ...schemas.user import (
     AdminUserListResponse,
     AdminUserResponse,
+    AdminUserUpdateRequest,
     CreateUserRequest,
     GroupAssignmentRequest,
 )
@@ -217,6 +218,79 @@ async def get_user(
     db: AsyncSession = Depends(get_db),
 ) -> AdminUserResponse:
     try:
+        user = cog.get_user(username)
+    except CognitoAdminError as err:
+        _raise_http(err)
+    profile = await _load_profile(db, user["sub"])
+    return _to_response(cog, user, profile)
+
+
+@router.patch("/{username}", response_model=AdminUserResponse)
+async def update_user(
+    username: str,
+    body: AdminUserUpdateRequest,
+    admin: AuthenticatedUser = Depends(require_admin),
+    cog: CognitoAdmin = Depends(get_cognito_admin),
+    db: AsyncSession = Depends(get_db),
+) -> AdminUserResponse:
+    """Edit an existing user's name/phone (Cognito) and/or company/job role/
+    address (DB mirror row) — #633.
+
+    PATCH semantics: only fields the caller actually set are touched
+    (`exclude_unset`), so omitting a field leaves it unchanged. Cognito is
+    only called at all if given_name/family_name/phone_number were among the
+    set fields — editing just job_role never touches Cognito.
+    """
+    updates = body.model_dump(exclude_unset=True)
+    cognito_fields = {
+        k: updates[k] for k in ("given_name", "family_name", "phone_number") if k in updates
+    }
+    profile_fields = {k: v for k, v in updates.items() if k not in cognito_fields}
+
+    try:
+        if cognito_fields:
+            cog.update_attributes(username, **cognito_fields)
+        target = cog.get_user(username)
+    except CognitoAdminError as err:
+        _raise_http(err)
+
+    if profile_fields:
+        profile = await _load_profile(db, target["sub"])
+        if profile is None:
+            profile = User(
+                cognito_sub=target["sub"],
+                email=target["email"],
+                username=target["username"],
+                tenant_id=admin.tenant_id,
+                **profile_fields,
+            )
+            db.add(profile)
+        else:
+            for field, value in profile_fields.items():
+                setattr(profile, field, value)
+        await db.flush()
+
+    profile = await _load_profile(db, target["sub"])
+    return _to_response(cog, target, profile)
+
+
+@router.post("/{username}/reset-password", response_model=AdminUserResponse)
+async def reset_user_password(
+    username: str,
+    _admin: AuthenticatedUser = Depends(require_admin),
+    cog: CognitoAdmin = Depends(get_cognito_admin),
+    db: AsyncSession = Depends(get_db),
+) -> AdminUserResponse:
+    """Force the user onto Cognito's own Forgot Password flow (#633).
+
+    This invalidates their current password immediately — it does NOT itself
+    email anything. Cognito only sends a code once the user next attempts
+    "Forgot password" (or is redirected there by a blocked sign-in). See
+    CognitoAdmin.reset_password's docstring for why no single Admin API call
+    both resets a CONFIRMED user's password and emails a new one.
+    """
+    try:
+        cog.reset_password(username)
         user = cog.get_user(username)
     except CognitoAdminError as err:
         _raise_http(err)

@@ -122,6 +122,7 @@ async def fire_run(
         definition_id=claimed.definition_id,
         action_type=claimed.action_type,
         action_config=claimed.action_config,
+        trigger_event=claimed.trigger_event,
     )
 
 

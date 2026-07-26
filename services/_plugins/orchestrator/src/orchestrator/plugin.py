@@ -16,6 +16,7 @@ import hashlib
 import inspect
 import json
 import os
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
@@ -53,6 +54,28 @@ _MAX_ATTEMPTS = 3
 _BACKOFF_SECONDS = (0.5, 1.0)
 # Payload keys, in preference order, used as the event's idempotency key.
 _ID_KEYS = ("demo_request_id", "id", "lead_id")
+
+# Scheduled workflow actions (docs/implementation/0002-scheduled-workflow-actions,
+# ADR-0023). The sentinel key on a raw Lambda invocation from EventBridge
+# Scheduler's own Target.Input — never an EventBridge-rule-shaped event, so
+# main.py's handler checks for this key *before* `create_event_handler`, which
+# requires a source/detail-type/detail envelope and would raise on this shape.
+SCHEDULED_RUN_ID_KEY = "biffo_scheduled_run_id"
+_SCHEDULE_NAME_PREFIX = "wf-run-"
+
+
+def _schedule_name(run_id: str) -> str:
+    return f"{_SCHEDULE_NAME_PREFIX}{run_id}"
+
+
+def _at_expression(scheduled_for: str) -> str:
+    """EventBridge Scheduler's ``at()`` syntax: a local timestamp with no
+    timezone suffix, interpreted in the schedule's timezone (UTC, the
+    default, left unset). Core always returns an already-UTC instant."""
+    dt = datetime.fromisoformat(scheduled_for)
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(UTC).replace(tzinfo=None)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def _idempotency_key(event: BiffoEvent) -> str:
@@ -125,6 +148,7 @@ class OrchestratorPlugin(BiffoPluginBase):
         http_client: Any | None = None,
         whatsapp: WhatsAppSettings | None = None,
         ssm_client: Any | None = None,
+        scheduler_client: Any | None = None,
     ) -> None:
         manifest = load_manifest(MANIFEST_PATH)
         super().__init__(manifest, api=api if api is not None else SignedCoreClient())
@@ -132,6 +156,12 @@ class OrchestratorPlugin(BiffoPluginBase):
         # Plain (unsigned) HTTP client for webhook actions — distinct from the
         # IAM-signed Core client. Reused across warm invocations to pool connections.
         self._http = http_client if http_client is not None else httpx.Client(timeout=10)
+        # Creates the engine's own one-time schedules for a delayed run
+        # (ADR-0023). Terraform grants scheduler:CreateSchedule/DeleteSchedule/
+        # GetSchedule scoped to this plugin's own schedule group only.
+        self._scheduler = (
+            scheduler_client if scheduler_client is not None else boto3.client("scheduler")
+        )
         # Account-level WhatsApp credentials: read once per cold start from SSM,
         # never from a workflow's action_config (which is stored in the DB) and
         # never from an env var (which shows in the function's config).
@@ -184,7 +214,68 @@ class OrchestratorPlugin(BiffoPluginBase):
                     extra={"run_id": run.get("run_id")},
                 )
                 continue
-            await self._execute_run(run, event)
+            if run.get("scheduled_for"):
+                # A delayed definition (ADR-0023): schedule the future fire
+                # rather than executing now.
+                await self._schedule_run(run)
+                continue
+            await self._execute_run(run, event.payload)
+
+    async def _schedule_run(self, run: dict[str, Any]) -> None:
+        """Create a one-time EventBridge Scheduler schedule for a delayed run
+        (docs/implementation/0002-scheduled-workflow-actions, ADR-0023).
+
+        Targets this Lambda's own ARN with a small sentinel payload —
+        ``main.py``'s handler detects it and routes straight to
+        ``fire_scheduled_run``, bypassing the ``BiffoEvent``/subscribe
+        machinery entirely: this callback is not a bus event and must not be
+        treated as one (it would otherwise flow through ``process_event`` →
+        Core's ``observe_trigger``, polluting the self-building trigger
+        catalog with an internal signal no one should select as a trigger).
+        ``ActionAfterCompletion="DELETE"`` means the schedule cleans itself
+        up after firing — no follow-up ``DeleteSchedule`` call needed.
+        """
+        run_id = run["run_id"]
+        self._scheduler.create_schedule(
+            Name=_schedule_name(run_id),
+            GroupName=os.environ.get("BIFFO_SCHEDULE_GROUP_NAME", "default"),
+            ScheduleExpression=f"at({_at_expression(run['scheduled_for'])})",
+            FlexibleTimeWindow={"Mode": "OFF"},
+            Target={
+                "Arn": os.environ.get("BIFFO_FUNCTION_ARN", ""),
+                "RoleArn": os.environ.get("BIFFO_SCHEDULER_ROLE_ARN", ""),
+                "Input": json.dumps({SCHEDULED_RUN_ID_KEY: run_id}),
+            },
+            ActionAfterCompletion="DELETE",
+        )
+        logger.info(
+            "Scheduled a delayed run",
+            extra={"run_id": run_id, "scheduled_for": run["scheduled_for"]},
+        )
+
+    async def fire_scheduled_run(self, run_id: str) -> None:
+        """The fire-time callback for a scheduled run (ADR-0023).
+
+        Invoked directly by ``main.py``'s handler on the Scheduler's raw
+        Lambda-target payload — never through the event-subscription system.
+        Claims the run from Core (guards EventBridge's at-least-once delivery
+        from double-firing, and re-checks the definition is still enabled/
+        exists); ``claimed=False`` means there is nothing to execute.
+        """
+        response = await self.api.post(f"{_INTERNAL_BASE}/runs/{run_id}/fire")
+        if not (response or {}).get("claimed"):
+            logger.info(
+                "Scheduled run not claimed (already fired, or its definition was disabled/deleted)",
+                extra={"run_id": run_id},
+            )
+            return
+        run = {
+            "run_id": response["run_id"],
+            "action_type": response["action_type"],
+            "action_config": response.get("action_config") or {},
+        }
+        payload = response.get("trigger_event") or {}
+        await self._execute_run(run, payload)
 
     async def deliver_on_completion(self, event: BiffoEvent) -> None:
         """Deliver a *succeeded* agent run's result to its destination (ADR-0020).
@@ -280,7 +371,16 @@ class OrchestratorPlugin(BiffoPluginBase):
             )
             return
 
-    async def _execute_run(self, run: dict[str, Any], event: BiffoEvent) -> None:
+    async def _execute_run(self, run: dict[str, Any], payload: dict[str, Any]) -> None:
+        """Run a claimed run's action now.
+
+        ``payload`` is the triggering event's payload — the *live* event for
+        an immediate dispatch (``process_event``), or the *stored*
+        ``trigger_event`` Core hands back for a scheduled run's fire-time
+        callback (``fire_scheduled_run``, ADR-0023) — template rendering
+        needs the same payload either way, it just may be days or weeks old
+        in the second case.
+        """
         run_id = run["run_id"]
         action_type = run["action_type"]
         config = run.get("action_config") or {}
@@ -303,7 +403,7 @@ class OrchestratorPlugin(BiffoPluginBase):
             try:
                 result = handler(
                     config,
-                    event.payload,
+                    payload,
                     ses_client=self._ses,
                     http_client=self._http,
                     core_client=self.api,

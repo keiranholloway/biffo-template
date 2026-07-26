@@ -89,6 +89,10 @@ class FireScheduledRunResponse(BaseModel):
     definition_id: str | None = None
     action_type: str | None = None
     action_config: dict[str, Any] | None = None
+    # The original triggering event's payload, stored on the run at claim
+    # time — the fire-time callback has nothing but a run_id, potentially
+    # weeks after the event arrived, and template rendering needs it.
+    trigger_event: dict[str, Any] | None = None
 
 
 # ── User-facing run history (portal admin) ───────────────────────────────────

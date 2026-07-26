@@ -31,6 +31,10 @@ class _FakeEventSubscriber:
 class _FakePlugin:
     def __init__(self) -> None:
         self.events = _FakeEventSubscriber()
+        self.fired_run_ids: list[str] = []
+
+    async def fire_scheduled_run(self, run_id: str) -> None:
+        self.fired_run_ids.append(run_id)
 
 
 def _eventbridge_event(detail_type: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -98,3 +102,34 @@ def test_get_plugin_is_memoized(monkeypatch) -> None:
 
     assert first is second
     assert len(created) == 1
+
+
+# ── Scheduled workflow actions (docs/implementation/0002-scheduled-workflow-actions) ──
+
+
+def test_handler_routes_a_scheduled_fire_payload_to_fire_scheduled_run(monkeypatch) -> None:
+    """EventBridge Scheduler's raw Target.Input invocation — not an
+    EventBridge-rule-shaped event — is detected before create_event_handler
+    ever sees it and routed straight to fire_scheduled_run (ADR-0023)."""
+    fake_plugin = _FakePlugin()
+    monkeypatch.setattr(main_module, "_get_plugin", lambda: fake_plugin)
+
+    result = main_module.handler({main_module.SCHEDULED_RUN_ID_KEY: "run-42"}, _FakeContext())
+
+    assert result == {"statusCode": 200}
+    assert fake_plugin.fired_run_ids == ["run-42"]
+    # Never touched the bus-event dispatch path.
+    assert fake_plugin.events.dispatched == []
+
+
+def test_handler_still_dispatches_a_normal_event_unchanged(monkeypatch) -> None:
+    """No regression: a real EventBridge-rule event (no sentinel key) still
+    flows through create_event_handler/dispatch as before."""
+    fake_plugin = _FakePlugin()
+    monkeypatch.setattr(main_module, "_get_plugin", lambda: fake_plugin)
+
+    raw_event = _eventbridge_event("demo.requested", {"demo_request_id": "d3"})
+    main_module.handler(raw_event, _FakeContext())
+
+    assert fake_plugin.fired_run_ids == []
+    assert len(fake_plugin.events.dispatched) == 1

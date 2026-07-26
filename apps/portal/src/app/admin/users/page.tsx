@@ -1,10 +1,11 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/context/auth-context'
 import { createApiClient } from '@/lib/api-client'
 import {
   type AdminUser,
+  type AdminUserUpdateRequest,
   type CreateUserRequest,
   type Organization,
   ASSIGNABLE_GROUPS,
@@ -17,7 +18,9 @@ import {
   fetchUsers,
   reactivateUser,
   removeGroup,
+  resetPassword,
   suspendUser,
+  updateUser,
 } from '@/lib/user-admin-api'
 
 const NEW_ORGANIZATION_VALUE = '__new__'
@@ -334,6 +337,240 @@ function CreateUserForm({
   )
 }
 
+function EditUserForm({
+  user,
+  organizations,
+  onAddOrganization,
+  onSave,
+  onCancel,
+}: {
+  user: AdminUser
+  organizations: Organization[]
+  onAddOrganization: (name: string) => Promise<Organization>
+  onSave: (body: AdminUserUpdateRequest) => Promise<void>
+  onCancel: () => void
+}) {
+  const [givenName, setGivenName] = useState(user.given_name ?? '')
+  const [familyName, setFamilyName] = useState(user.family_name ?? '')
+  const [phoneNumber, setPhoneNumber] = useState(user.phone_number ?? '')
+  const [organizationId, setOrganizationId] = useState(user.organization_id ?? '')
+  const [newOrgName, setNewOrgName] = useState('')
+  const [jobRole, setJobRole] = useState(user.job_role ?? '')
+  const [addressLine1, setAddressLine1] = useState(user.address_line1 ?? '')
+  const [addressLine2, setAddressLine2] = useState(user.address_line2 ?? '')
+  const [city, setCity] = useState(user.city ?? '')
+  const [region, setRegion] = useState(user.region ?? '')
+  const [postalCode, setPostalCode] = useState(user.postal_code ?? '')
+  const [country, setCountry] = useState(user.country ?? '')
+  const [busy, setBusy] = useState(false)
+
+  async function doSave() {
+    if (givenName.trim() === '' || familyName.trim() === '' || busy) return
+    setBusy(true)
+    try {
+      let resolvedOrgId = organizationId
+      if (organizationId === NEW_ORGANIZATION_VALUE) {
+        if (newOrgName.trim() === '') {
+          setBusy(false)
+          return
+        }
+        resolvedOrgId = (await onAddOrganization(newOrgName.trim())).id
+      }
+      await onSave({
+        given_name: givenName.trim(),
+        family_name: familyName.trim(),
+        phone_number: phoneNumber.trim() || undefined,
+        organization_id: resolvedOrgId || undefined,
+        job_role: jobRole.trim() || undefined,
+        address_line1: addressLine1.trim() || undefined,
+        address_line2: addressLine2.trim() || undefined,
+        city: city.trim() || undefined,
+        region: region.trim() || undefined,
+        postal_code: postalCode.trim() || undefined,
+        country: country.trim() || undefined,
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <tr className="bg-gray-50">
+      <td colSpan={7} className="px-4 py-4">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            void doSave()
+          }}
+          className="flex flex-wrap items-end gap-3"
+        >
+          <label className="flex flex-col text-xs text-gray-600">
+            First name
+            <input
+              type="text"
+              required
+              value={givenName}
+              onChange={(e) => {
+                setGivenName(e.target.value)
+              }}
+              className="mt-1 w-36 rounded border px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="flex flex-col text-xs text-gray-600">
+            Last name
+            <input
+              type="text"
+              required
+              value={familyName}
+              onChange={(e) => {
+                setFamilyName(e.target.value)
+              }}
+              className="mt-1 w-36 rounded border px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="flex flex-col text-xs text-gray-600">
+            Phone
+            <input
+              type="tel"
+              value={phoneNumber}
+              onChange={(e) => {
+                setPhoneNumber(e.target.value)
+              }}
+              className="mt-1 w-40 rounded border px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="flex flex-col text-xs text-gray-600">
+            Company
+            <select
+              value={organizationId}
+              onChange={(e) => {
+                setOrganizationId(e.target.value)
+              }}
+              className="mt-1 w-48 rounded border px-2 py-1 text-sm"
+            >
+              <option value="">None</option>
+              {organizations.map((org) => (
+                <option key={org.id} value={org.id}>
+                  {org.name}
+                </option>
+              ))}
+              <option value={NEW_ORGANIZATION_VALUE}>+ Add new company…</option>
+            </select>
+          </label>
+          {organizationId === NEW_ORGANIZATION_VALUE && (
+            <label className="flex flex-col text-xs text-gray-600">
+              New company name
+              <input
+                type="text"
+                required
+                value={newOrgName}
+                onChange={(e) => {
+                  setNewOrgName(e.target.value)
+                }}
+                className="mt-1 w-48 rounded border px-2 py-1 text-sm"
+              />
+            </label>
+          )}
+          <label className="flex flex-col text-xs text-gray-600">
+            Job role
+            <input
+              type="text"
+              value={jobRole}
+              onChange={(e) => {
+                setJobRole(e.target.value)
+              }}
+              className="mt-1 w-40 rounded border px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="flex flex-col text-xs text-gray-600">
+            Address line 1
+            <input
+              type="text"
+              value={addressLine1}
+              onChange={(e) => {
+                setAddressLine1(e.target.value)
+              }}
+              className="mt-1 w-48 rounded border px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="flex flex-col text-xs text-gray-600">
+            Address line 2
+            <input
+              type="text"
+              value={addressLine2}
+              onChange={(e) => {
+                setAddressLine2(e.target.value)
+              }}
+              className="mt-1 w-48 rounded border px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="flex flex-col text-xs text-gray-600">
+            City
+            <input
+              type="text"
+              value={city}
+              onChange={(e) => {
+                setCity(e.target.value)
+              }}
+              className="mt-1 w-32 rounded border px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="flex flex-col text-xs text-gray-600">
+            Region / state
+            <input
+              type="text"
+              value={region}
+              onChange={(e) => {
+                setRegion(e.target.value)
+              }}
+              className="mt-1 w-32 rounded border px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="flex flex-col text-xs text-gray-600">
+            Postal code
+            <input
+              type="text"
+              value={postalCode}
+              onChange={(e) => {
+                setPostalCode(e.target.value)
+              }}
+              className="mt-1 w-24 rounded border px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="flex flex-col text-xs text-gray-600">
+            Country
+            <input
+              type="text"
+              maxLength={2}
+              value={country}
+              onChange={(e) => {
+                setCountry(e.target.value.toUpperCase())
+              }}
+              className="mt-1 w-16 rounded border px-2 py-1 text-sm uppercase"
+            />
+          </label>
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              disabled={busy}
+              className="rounded bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+            >
+              {busy ? 'Saving…' : 'Save'}
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded border px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </td>
+    </tr>
+  )
+}
+
 function GroupChips({
   user,
   onAdd,
@@ -403,10 +640,17 @@ export default function UsersPage() {
   const mySub = session?.getIdToken().payload['sub'] as string | undefined
   const [users, setUsers] = useState<AdminUser[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // A one-off confirmation for an action with no other visible side effect —
+  // reset-password doesn't change anything in this list, so without this the
+  // admin would have no sign it did anything (#633).
+  const [note, setNote] = useState<string | null>(null)
   // Live group taxonomy from the API; falls back to the baseline until it loads
   // (or if the endpoint is unavailable) so the picker always renders (issue #148).
   const [assignable, setAssignable] = useState<string[]>([...ASSIGNABLE_GROUPS])
   const [organizations, setOrganizations] = useState<Organization[]>([])
+  // The username currently shown with its inline edit row open (#633) — at
+  // most one at a time.
+  const [editingUsername, setEditingUsername] = useState<string | null>(null)
 
   const client = useMemo(() => createApiClient(getIdToken), [getIdToken])
 
@@ -456,8 +700,34 @@ export default function UsersPage() {
   // Run a mutation, surface any error, and refresh the list from the server so
   // the UI reflects Cognito's actual state rather than optimistic guesses.
   async function run(action: () => Promise<unknown>) {
+    setError(null)
+    setNote(null)
     try {
       await action()
+      await reload()
+    } catch (err: unknown) {
+      setError(errorMessage(err))
+    }
+  }
+
+  async function runResetPassword(username: string) {
+    setError(null)
+    setNote(null)
+    try {
+      await resetPassword(client, username)
+      setNote(
+        `Password reset for ${username}. They must use "Forgot password" next time they try to sign in — this does not email them anything by itself.`,
+      )
+    } catch (err: unknown) {
+      setError(errorMessage(err))
+    }
+  }
+
+  async function saveEdit(username: string, body: AdminUserUpdateRequest) {
+    setError(null)
+    try {
+      await updateUser(client, username, body)
+      setEditingUsername(null)
       await reload()
     } catch (err: unknown) {
       setError(errorMessage(err))
@@ -474,6 +744,9 @@ export default function UsersPage() {
 
       {error != null && (
         <div className="mt-6 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+      )}
+      {note != null && (
+        <div className="mt-6 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-700">{note}</div>
       )}
 
       <CreateUserForm
@@ -516,83 +789,116 @@ export default function UsersPage() {
               {users.map((user) => {
                 const isSelf = mySub != null && user.sub === mySub
                 return (
-                  <tr key={user.sub || user.username}>
-                    <td className="px-4 py-2 text-gray-800">
-                      {[user.given_name, user.family_name].filter(Boolean).join(' ') || (
-                        <span className="text-gray-400">—</span>
-                      )}
-                      {isSelf && <span className="ml-1 text-xs text-gray-400">(you)</span>}
-                    </td>
-                    <td className="px-4 py-2 text-gray-800">{user.email}</td>
-                    <td className="px-4 py-2 text-gray-600">
-                      {user.organization_name ?? <span className="text-gray-400">—</span>}
-                    </td>
-                    <td className="px-4 py-2 text-gray-600">
-                      {user.job_role ?? <span className="text-gray-400">—</span>}
-                    </td>
-                    <td className="px-4 py-2">
-                      {user.enabled ? (
-                        <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-700">
-                          {user.status || 'active'}
-                        </span>
-                      ) : (
-                        <span className="rounded bg-rose-100 px-1.5 py-0.5 text-xs text-rose-700">
-                          suspended
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-2">
-                      <GroupChips
-                        user={user}
-                        assignable={assignable}
-                        disableRemoveGroups={isSelf ? ['admin'] : []}
-                        onAdd={(group) => {
-                          void run(() => assignGroup(client, user.username, group))
-                        }}
-                        onRemove={(group) => {
-                          void run(() => removeGroup(client, user.username, group))
-                        }}
-                      />
-                    </td>
-                    <td className="px-4 py-2">
-                      <div className="flex justify-end gap-2">
+                  <Fragment key={user.sub || user.username}>
+                    <tr>
+                      <td className="px-4 py-2 text-gray-800">
+                        {[user.given_name, user.family_name].filter(Boolean).join(' ') || (
+                          <span className="text-gray-400">—</span>
+                        )}
+                        {isSelf && <span className="ml-1 text-xs text-gray-400">(you)</span>}
+                      </td>
+                      <td className="px-4 py-2 text-gray-800">{user.email}</td>
+                      <td className="px-4 py-2 text-gray-600">
+                        {user.organization_name ?? <span className="text-gray-400">—</span>}
+                      </td>
+                      <td className="px-4 py-2 text-gray-600">
+                        {user.job_role ?? <span className="text-gray-400">—</span>}
+                      </td>
+                      <td className="px-4 py-2">
                         {user.enabled ? (
+                          <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-700">
+                            {user.status || 'active'}
+                          </span>
+                        ) : (
+                          <span className="rounded bg-rose-100 px-1.5 py-0.5 text-xs text-rose-700">
+                            suspended
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2">
+                        <GroupChips
+                          user={user}
+                          assignable={assignable}
+                          disableRemoveGroups={isSelf ? ['admin'] : []}
+                          onAdd={(group) => {
+                            void run(() => assignGroup(client, user.username, group))
+                          }}
+                          onRemove={(group) => {
+                            void run(() => removeGroup(client, user.username, group))
+                          }}
+                        />
+                      </td>
+                      <td className="px-4 py-2">
+                        <div className="flex justify-end gap-2">
+                          {user.enabled ? (
+                            <button
+                              type="button"
+                              disabled={isSelf}
+                              title={isSelf ? "You can't suspend your own account" : undefined}
+                              onClick={() => {
+                                void run(() => suspendUser(client, user.username))
+                              }}
+                              className="rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                            >
+                              Suspend
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void run(() => reactivateUser(client, user.username))
+                              }}
+                              className="rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+                            >
+                              Reactivate
+                            </button>
+                          )}
                           <button
                             type="button"
                             disabled={isSelf}
-                            title={isSelf ? "You can't suspend your own account" : undefined}
+                            title={isSelf ? "You can't delete your own account" : undefined}
                             onClick={() => {
-                              void run(() => suspendUser(client, user.username))
+                              void run(() => deleteUser(client, user.username))
                             }}
-                            className="rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                            className="rounded border border-rose-200 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
                           >
-                            Suspend
+                            Delete
                           </button>
-                        ) : (
                           <button
                             type="button"
                             onClick={() => {
-                              void run(() => reactivateUser(client, user.username))
+                              setEditingUsername((current) =>
+                                current === user.username ? null : user.username,
+                              )
                             }}
                             className="rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
                           >
-                            Reactivate
+                            {editingUsername === user.username ? 'Close' : 'Edit'}
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          disabled={isSelf}
-                          title={isSelf ? "You can't delete your own account" : undefined}
-                          onClick={() => {
-                            void run(() => deleteUser(client, user.username))
-                          }}
-                          className="rounded border border-rose-200 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void runResetPassword(user.username)
+                            }}
+                            className="rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+                          >
+                            Reset password
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {editingUsername === user.username && (
+                      <EditUserForm
+                        user={user}
+                        organizations={organizations}
+                        onAddOrganization={addOrganization}
+                        onSave={(body) => saveEdit(user.username, body)}
+                        onCancel={() => {
+                          setEditingUsername(null)
+                        }}
+                      />
+                    )}
+                  </Fragment>
                 )
               })}
             </tbody>

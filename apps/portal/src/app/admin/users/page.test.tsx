@@ -40,6 +40,8 @@ const {
   suspendUser,
   reactivateUser,
   deleteUser,
+  updateUser,
+  resetPassword,
 } = vi.hoisted(() => ({
   fetchUsers: vi.fn(),
   fetchGroups: vi.fn(),
@@ -51,6 +53,8 @@ const {
   suspendUser: vi.fn(),
   reactivateUser: vi.fn(),
   deleteUser: vi.fn(),
+  updateUser: vi.fn(),
+  resetPassword: vi.fn(),
 }))
 
 vi.mock('@/lib/user-admin-api', async () => {
@@ -67,6 +71,8 @@ vi.mock('@/lib/user-admin-api', async () => {
     suspendUser,
     reactivateUser,
     deleteUser,
+    updateUser,
+    resetPassword,
   }
 })
 
@@ -127,6 +133,8 @@ describe('UsersPage', () => {
       suspendUser,
       reactivateUser,
       deleteUser,
+      updateUser,
+      resetPassword,
     ]) {
       fn.mockReset()
     }
@@ -312,6 +320,64 @@ describe('UsersPage', () => {
       expect(
         screen.getByRole('button', { name: 'Remove editor from alice@example.com' }),
       ).not.toBeDisabled()
+    })
+  })
+
+  describe('edit existing user (#633)', () => {
+    it('opens a prefilled edit form and saves the changes', async () => {
+      fetchUsers.mockResolvedValue({ users: [alice], next_token: null })
+      updateUser.mockResolvedValue({ ...alice, job_role: 'CTO' })
+
+      render(<UsersPage />)
+      fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+
+      const firstName = await screen.findByDisplayValue('Alice')
+      expect(firstName).toBeInTheDocument()
+
+      const jobRole = screen.getByLabelText('Job role')
+      fireEvent.change(jobRole, { target: { value: 'CTO' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+      await waitFor(() => {
+        expect(updateUser).toHaveBeenCalledWith(
+          expect.anything(),
+          'alice@example.com',
+          expect.objectContaining({
+            given_name: 'Alice',
+            family_name: 'Anderson',
+            job_role: 'CTO',
+          }),
+        )
+      })
+      // The form closes after a successful save.
+      expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
+    })
+
+    it('closes the edit form on Cancel without saving', async () => {
+      fetchUsers.mockResolvedValue({ users: [alice], next_token: null })
+      render(<UsersPage />)
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+      await screen.findByRole('button', { name: 'Save' })
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+      expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
+      expect(updateUser).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('reset password (#633)', () => {
+    it('triggers a reset and shows a note that nothing was emailed automatically', async () => {
+      fetchUsers.mockResolvedValue({ users: [alice], next_token: null })
+      resetPassword.mockResolvedValue({ ...alice, status: 'RESET_REQUIRED' })
+
+      render(<UsersPage />)
+      fireEvent.click(await screen.findByRole('button', { name: 'Reset password' }))
+
+      await waitFor(() => {
+        expect(resetPassword).toHaveBeenCalledWith(expect.anything(), 'alice@example.com')
+      })
+      expect(await screen.findByText(/forgot password/i)).toBeInTheDocument()
     })
   })
 })

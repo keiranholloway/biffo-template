@@ -30,6 +30,34 @@ from sqlalchemy.pool import StaticPool
 _BASE = "/api/v1/orchestration/workflows"
 
 
+@pytest.fixture(autouse=True)
+def _pristine_scope_resolver_registry():
+    """Reset the scope-resolver registry to nothing-registered around every
+    test in this file (docs/implementation/0003-hierarchy-scoped-workflows).
+
+    Most of this file's tests use ``demo.requested`` (the default trigger in
+    ``_valid_body``) together with a brand/region/unit scope, which only
+    stays valid under Phase 4's trigger-reachability check
+    (``_require_scope_reachable``) when no resolver is registered at all —
+    true throughout biffo-template's own suite (nothing here ever registers
+    one), but NOT guaranteed once this file runs inside a real instance's
+    test process: an instance's own domain module (e.g. tabsii's
+    ``domains/tabsii/scope_resolver.py``) registers its real resolver at
+    *import* time, and ``scope_resolvers._levels``/``_resolver`` are
+    module-global state that persists for the rest of that pytest session
+    regardless of which test file is executing. Without this reset, this
+    file's tests pass in isolation but fail the moment they share a process
+    with an instance's own registered resolver — exactly the class of bug
+    already fixed once for ``test_scope_resolvers.py``'s own tests.
+    """
+    from api import scope_resolvers as sr
+
+    saved_levels, saved_resolver = sr._levels, sr._resolver  # noqa: SLF001
+    sr._levels, sr._resolver = (), sr._default_resolver  # noqa: SLF001
+    yield
+    sr._levels, sr._resolver = saved_levels, saved_resolver  # noqa: SLF001
+
+
 def _caller(tenant_id: str = "default", roles: list[str] | None = None) -> AuthenticatedUser:
     return AuthenticatedUser(
         sub="admin-sub",

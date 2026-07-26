@@ -202,6 +202,7 @@ const catalog: WorkflowCatalog = {
       ],
     },
   ],
+  scope_levels: [],
 }
 
 // A catalog whose FIRST trigger declares payload fields (#505), so the builder
@@ -223,6 +224,7 @@ const catalogWithFields: WorkflowCatalog = {
     ...catalog.triggers,
   ],
   actions: catalog.actions,
+  scope_levels: [],
 }
 
 // A catalog whose trigger declares fields AND whose email action's `to` is
@@ -240,6 +242,7 @@ const catalogWithPayloadTemplateTo: WorkflowCatalog = {
         }
       : a,
   ),
+  scope_levels: [],
 }
 
 // A catalog whose email action's `body` (a textarea, unlike `to`'s plain
@@ -257,12 +260,22 @@ const catalogWithPayloadTemplateBody: WorkflowCatalog = {
         }
       : a,
   ),
+  scope_levels: [],
+}
+
+// A catalog whose instance has registered a hierarchy scope resolver
+// (docs/implementation/0003-hierarchy-scoped-workflows) — the Scope section
+// only renders when `scope_levels` is non-empty.
+const catalogWithScopeLevels: WorkflowCatalog = {
+  ...catalog,
+  scope_levels: ['tenant', 'brand', 'region', 'unit'],
 }
 
 // An agent action whose runtime registered no tools — the picker must not render.
 const catalogNoTools: WorkflowCatalog = {
   triggers: catalog.triggers,
   actions: catalog.actions.map((a) => (a.type === 'agent' ? { ...a, available_tools: [] } : a)),
+  scope_levels: [],
 }
 
 // A library component the parts editor can reference (ADR-0015).
@@ -292,6 +305,7 @@ const catalogParts: WorkflowCatalog = {
         }
       : a,
   ),
+  scope_levels: [],
 }
 
 // Like catalogParts, but the agent action ALSO carries a `goals` parts field —
@@ -310,6 +324,7 @@ const catalogPartsWithGoals: WorkflowCatalog = {
         }
       : a,
   ),
+  scope_levels: [],
 }
 
 // The Phase-3 shape (ADR-0020, #527): the agent action carries an optional
@@ -354,6 +369,7 @@ const catalogWithDelivery: WorkflowCatalog = {
         ],
       })),
   ],
+  scope_levels: [],
 }
 
 // An agent workflow whose delivery targets Slack, with the webhook stored as the
@@ -380,6 +396,7 @@ const agentWithDelivery: WorkflowDefinition = {
   },
   enabled: false,
   schedule_config: null,
+  scope: null,
 }
 
 // An agent stored with a model that is NOT among the curated options.
@@ -401,6 +418,7 @@ const offListAgent: WorkflowDefinition = {
   },
   enabled: true,
   schedule_config: null,
+  scope: null,
 }
 
 const notify: WorkflowDefinition = {
@@ -421,6 +439,7 @@ const notify: WorkflowDefinition = {
   },
   enabled: true,
   schedule_config: null,
+  scope: null,
 }
 
 const succeededRun: WorkflowRun = {
@@ -511,6 +530,7 @@ describe('OrchestrationPage', () => {
         action_config: { from: 'a@b.com', to: 'c@d.com', subject: 'Hi', body: 'Hello there' },
         enabled: true,
         schedule_config: null,
+        scope: null,
       })
     })
   })
@@ -1153,6 +1173,110 @@ describe('OrchestrationPage', () => {
 
     expect(await screen.findByText('scheduled')).toBeInTheDocument()
     expect(screen.getByText(/fires/)).toBeInTheDocument()
+  })
+
+  // ── Scope: hierarchy-scoped workflows (docs/implementation/0003-hierarchy-scoped-workflows) ──
+
+  it('does not render the Scope section when the instance has registered no resolver', async () => {
+    fetchCatalog.mockResolvedValue(catalog)
+    fetchWorkflows.mockResolvedValue([])
+    render(<OrchestrationPage />)
+
+    await screen.findByText('Timing (advanced, optional)')
+    expect(screen.queryByText('Scope (advanced, optional)')).not.toBeInTheDocument()
+  })
+
+  it('collapses the Scope section by default, with the level/id controls hidden', async () => {
+    fetchCatalog.mockResolvedValue(catalogWithScopeLevels)
+    fetchWorkflows.mockResolvedValue([])
+    render(<OrchestrationPage />)
+
+    expect(await screen.findByText('Scope (advanced, optional)')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Scope level')).not.toBeInTheDocument()
+  })
+
+  it('reveals the level/id controls once expanded and the checkbox is checked', async () => {
+    fetchCatalog.mockResolvedValue(catalogWithScopeLevels)
+    fetchWorkflows.mockResolvedValue([])
+    render(<OrchestrationPage />)
+
+    fireEvent.click(await screen.findByText('Scope (advanced, optional)'))
+    fireEvent.click(screen.getByLabelText('Restrict this rule to one part of the hierarchy'))
+
+    const level = screen.getByLabelText('Scope level')
+    expect(level).toHaveValue('tenant')
+    expect(Array.from(level.querySelectorAll('option')).map((o) => o.value)).toEqual([
+      'tenant',
+      'brand',
+      'region',
+      'unit',
+    ])
+    expect(screen.getByLabelText('Scope id')).toBeInTheDocument()
+  })
+
+  it('sends the chosen level+id when scope is enabled', async () => {
+    fetchCatalog.mockResolvedValue(catalogWithScopeLevels)
+    fetchWorkflows.mockResolvedValue([])
+    createWorkflow.mockResolvedValue(notify)
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByPlaceholderText('Notify the sales team'), {
+      target: { value: 'Scoped ping' },
+    })
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: 'a@b.com' } })
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: 'c@d.com' } })
+    fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'Hi' } })
+    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'Hello there' } })
+
+    fireEvent.click(screen.getByText('Scope (advanced, optional)'))
+    fireEvent.click(screen.getByLabelText('Restrict this rule to one part of the hierarchy'))
+    fireEvent.change(screen.getByLabelText('Scope level'), { target: { value: 'brand' } })
+    fireEvent.change(screen.getByLabelText('Scope id'), { target: { value: 'brand-1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add workflow' }))
+
+    await waitFor(() => {
+      expect(createWorkflow).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          scope: { level: 'brand', id: 'brand-1' },
+        }),
+      )
+    })
+  })
+
+  it('omits scope when the checkbox is left unchecked, even with catalog levels available', async () => {
+    fetchCatalog.mockResolvedValue(catalogWithScopeLevels)
+    fetchWorkflows.mockResolvedValue([])
+    createWorkflow.mockResolvedValue(notify)
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByPlaceholderText('Notify the sales team'), {
+      target: { value: 'Unscoped ping' },
+    })
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: 'a@b.com' } })
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: 'c@d.com' } })
+    fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'Hi' } })
+    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'Hello there' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add workflow' }))
+
+    await waitFor(() => {
+      expect(createWorkflow).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ scope: null }),
+      )
+    })
+  })
+
+  it('loads an existing scope on edit, expanded with the level/id populated', async () => {
+    fetchCatalog.mockResolvedValue(catalogWithScopeLevels)
+    fetchWorkflows.mockResolvedValue([{ ...notify, scope: { level: 'brand', id: 'brand-9' } }])
+
+    render(<OrchestrationPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+
+    expect(screen.getByLabelText('Restrict this rule to one part of the hierarchy')).toBeChecked()
+    expect(screen.getByLabelText('Scope level')).toHaveValue('brand')
+    expect(screen.getByLabelText('Scope id')).toHaveValue('brand-9')
   })
 
   // ── agent action: tools multiselect + curated model dropdown (ADR-0014) ─────

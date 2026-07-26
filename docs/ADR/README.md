@@ -30,6 +30,7 @@ An ADR captures a significant architectural decision: the context that forced it
 | [ADR-0020](0020-agent-result-delivery-on-completion.md)             | Deliver an agent's result on completion (agent-action sub-config) | Accepted | 2026-07-24 |
 | [ADR-0021](0021-shared-plugin-hosting.md)                           | Plugins are pure code on shared hosting — one plugin runtime, one app shell (supersedes ADR-0018 backend; frontend per #558) | Accepted (partial) | 2026-07-25 |
 | [ADR-0023](0023-scheduled-workflow-actions.md)                      | Scheduled / delayed workflow actions (EventBridge Scheduler, one-time fire) | Accepted | 2026-07-26 |
+| [ADR-0024](0024-hierarchy-scoped-workflow-resolver-registry.md)     | Hierarchy-scoped workflows — a resolver-registry seam, matched in Core | Accepted | 2026-07-26 |
 
 ## Format
 

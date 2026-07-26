@@ -393,6 +393,16 @@ export default function OrchestrationPage() {
   const [scheduleValue, setScheduleValue] = useState('2')
   const [scheduleUnit, setScheduleUnit] = useState<ScheduleUnit>('weeks')
 
+  // Scope (docs/implementation/0003-hierarchy-scoped-workflows): an optional
+  // hierarchy level+id this rule is restricted to, e.g. "Brand X" — covering
+  // that brand's regions/units too, not just exact-level events. Deliberately
+  // a generic level-select + free-text id here (no name lookup, no tree) —
+  // the polished, hierarchy-aware picker is a sibling's job (tabsii-crm#100);
+  // this is the same "advanced, optional" pattern as Timing above.
+  const [scopeEnabled, setScopeEnabled] = useState(false)
+  const [scopeLevel, setScopeLevel] = useState('')
+  const [scopeId, setScopeId] = useState('')
+
   // Which agent parts field the "✨ Draft with AI" drawer is open for, if any
   // (the config field name, e.g. 'instructions' | 'goals'). null = closed.
   const [assistField, setAssistField] = useState<string | null>(null)
@@ -402,6 +412,7 @@ export default function OrchestrationPage() {
   const [conditionsOpen, setConditionsOpen] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [timingOpen, setTimingOpen] = useState(false)
+  const [scopeOpen, setScopeOpen] = useState(false)
 
   // ── Test & review (Phase 2) ──────────────────────────────────────────────
   // The editable sample event the dry-run runs against, as JSON text. Seeded
@@ -448,6 +459,10 @@ export default function OrchestrationPage() {
       setScheduleValue('2')
       setScheduleUnit('weeks')
       setTimingOpen(false)
+      setScopeEnabled(false)
+      setScopeLevel(cat?.scope_levels[0] ?? '')
+      setScopeId('')
+      setScopeOpen(false)
       clearTestState()
     },
     [clearTestState],
@@ -615,6 +630,17 @@ export default function OrchestrationPage() {
       setScheduleUnit('weeks')
       setTimingOpen(false)
     }
+    if (w.scope != null) {
+      setScopeEnabled(true)
+      setScopeLevel(w.scope.level)
+      setScopeId(w.scope.id)
+      setScopeOpen(true)
+    } else {
+      setScopeEnabled(false)
+      setScopeLevel(catalog?.scope_levels[0] ?? '')
+      setScopeId('')
+      setScopeOpen(false)
+    }
     clearTestState()
   }
 
@@ -657,6 +683,10 @@ export default function OrchestrationPage() {
       enabled: enabledValue,
       schedule_config:
         delaySeconds != null ? { type: 'fixed_delay', delay_seconds: delaySeconds } : null,
+      scope:
+        scopeEnabled && scopeLevel.trim() !== '' && scopeId.trim() !== ''
+          ? { level: scopeLevel, id: scopeId.trim() }
+          : null,
     }
     setBusy(true)
     try {
@@ -1381,6 +1411,77 @@ export default function OrchestrationPage() {
               </div>
             )}
           </div>
+
+          {/* ── Scope (advanced, optional) ────────────────────────────────────
+              docs/implementation/0003-hierarchy-scoped-workflows: restrict
+              this rule to one hierarchy level+id (e.g. a brand) — it then also
+              covers everything beneath it (that brand's regions/units), not
+              just exact-level events. Only offered when the instance has
+              registered a hierarchy resolver at all (`scope_levels` non-empty)
+              — otherwise there is nothing meaningful to scope to. */}
+          {catalog.scope_levels.length > 0 && (
+            <div className="mt-4 rounded-lg border border-gray-200 p-3">
+              <button
+                type="button"
+                aria-expanded={scopeOpen}
+                onClick={() => {
+                  setScopeOpen((v) => !v)
+                }}
+                className="flex w-full items-center justify-between text-left text-xs font-semibold text-gray-700"
+              >
+                <span>Scope (advanced, optional)</span>
+                <span aria-hidden="true" className="text-gray-400">
+                  {scopeOpen ? '▲' : '▼'}
+                </span>
+              </button>
+              {scopeOpen && (
+                <div className="mt-2">
+                  <label className="flex items-center gap-2 text-sm text-gray-800">
+                    <input
+                      type="checkbox"
+                      checked={scopeEnabled}
+                      onChange={(e) => {
+                        setScopeEnabled(e.target.checked)
+                      }}
+                    />
+                    Restrict this rule to one part of the hierarchy
+                  </label>
+                  {scopeEnabled && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <select
+                        aria-label="Scope level"
+                        value={scopeLevel}
+                        onChange={(e) => {
+                          setScopeLevel(e.target.value)
+                        }}
+                        className="rounded border px-2 py-1 text-sm"
+                      >
+                        {catalog.scope_levels.map((level) => (
+                          <option key={level} value={level}>
+                            {level}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        required
+                        aria-label="Scope id"
+                        placeholder="id"
+                        value={scopeId}
+                        onChange={(e) => {
+                          setScopeId(e.target.value)
+                        }}
+                        className="w-40 rounded border px-2 py-1 text-sm"
+                      />
+                      <span className="text-sm text-gray-600">
+                        and everything beneath it in the hierarchy.
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ── Outcome (agent) / generic config (other actions) ─────────── */}
           {selectedAction != null && isAgent && (

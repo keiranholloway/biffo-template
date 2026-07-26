@@ -146,6 +146,48 @@ def test_update_can_set_and_clear_trigger_filter(client: TestClient):
     assert cleared.json()["trigger_filter"] is None
 
 
+def test_schedule_config_defaults_to_null(client: TestClient):
+    created = client.post(_BASE, json=_valid_body())
+    assert created.status_code == 201
+    assert created.json()["schedule_config"] is None
+
+
+def test_schedule_config_round_trips(client: TestClient):
+    schedule = {"type": "fixed_delay", "delay_seconds": 1209600}
+    created = client.post(_BASE, json=_valid_body(schedule_config=schedule))
+    assert created.status_code == 201, created.text
+    assert created.json()["schedule_config"] == schedule
+
+    got = client.get(f"{_BASE}/{created.json()['id']}")
+    assert got.json()["schedule_config"] == schedule
+
+
+def test_update_can_set_and_clear_schedule_config(client: TestClient):
+    schedule = {"type": "fixed_delay", "delay_seconds": 60}
+    row = client.post(_BASE, json=_valid_body(schedule_config=schedule)).json()
+
+    cleared = client.put(f"{_BASE}/{row['id']}", json=_valid_body(schedule_config=None))
+    assert cleared.status_code == 200
+    assert cleared.json()["schedule_config"] is None
+
+
+def test_create_rejects_unknown_schedule_type(client: TestClient):
+    body = _valid_body(schedule_config={"type": "cron", "delay_seconds": 60})
+    assert client.post(_BASE, json=body).status_code == 422
+
+
+def test_create_rejects_non_positive_delay(client: TestClient):
+    body = _valid_body(schedule_config={"type": "fixed_delay", "delay_seconds": 0})
+    assert client.post(_BASE, json=body).status_code == 422
+
+
+def test_create_rejects_delay_over_one_year(client: TestClient):
+    body = _valid_body(
+        schedule_config={"type": "fixed_delay", "delay_seconds": 365 * 24 * 60 * 60 + 1}
+    )
+    assert client.post(_BASE, json=body).status_code == 422
+
+
 def test_create_rejects_invalid_action_config(client: TestClient):
     body = _valid_body(action_config={"from": "no-reply@example.com"})  # missing to/subject/body
     resp = client.post(_BASE, json=body)

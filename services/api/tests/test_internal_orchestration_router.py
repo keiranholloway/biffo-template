@@ -23,10 +23,15 @@ from api.models.orchestration import (  # noqa: F401 — registers tables on Bas
 from api.routers import internal_orchestration
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 _EVENTS = "/api/v1/internal/orchestration/events"
+
+
+def _fire_url(run_id: str) -> str:
+    return f"/api/v1/internal/orchestration/runs/{run_id}/fire"
 
 
 @pytest.fixture
@@ -224,3 +229,105 @@ def test_record_result_rejects_invalid_status(orchestration_app, client):
     )
 
     assert resp.status_code == 422
+
+
+# ── Scheduled workflow actions (docs/implementation/0002-scheduled-workflow-actions) ──
+
+
+async def _set_enabled(session_factory, definition_id: str, enabled: bool) -> None:
+    async with session_factory() as session:
+        result = await session.execute(
+            select(WorkflowDefinition).where(WorkflowDefinition.id == definition_id)
+        )
+        definition = result.scalar_one()
+        definition.enabled = enabled
+        await session.commit()
+
+
+async def _delete_definition(session_factory, definition_id: str) -> None:
+    async with session_factory() as session:
+        result = await session.execute(
+            select(WorkflowDefinition).where(WorkflowDefinition.id == definition_id)
+        )
+        await session.delete(result.scalar_one())
+        await session.commit()
+
+
+def test_dispatch_with_schedule_claims_run_as_scheduled(orchestration_app, client):
+    _, session_factory = orchestration_app
+    _seed(session_factory, schedule_config={"type": "fixed_delay", "delay_seconds": 1209600})
+
+    resp = client.post(_EVENTS, json=_event_body())
+
+    run = resp.json()["runs"][0]
+    assert run["created"] is True
+    assert run["scheduled_for"] is not None
+
+
+def test_dispatch_without_schedule_has_no_scheduled_for(orchestration_app, client):
+    _, session_factory = orchestration_app
+    _seed(session_factory)
+
+    resp = client.post(_EVENTS, json=_event_body())
+
+    assert resp.json()["runs"][0]["scheduled_for"] is None
+
+
+def test_fire_claims_a_scheduled_run(orchestration_app, client):
+    _, session_factory = orchestration_app
+    _seed(session_factory, schedule_config={"type": "fixed_delay", "delay_seconds": 60})
+    run_id = client.post(_EVENTS, json=_event_body()).json()["runs"][0]["run_id"]
+
+    resp = client.post(_fire_url(run_id))
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["claimed"] is True
+    assert body["run_id"] == run_id
+    assert body["action_type"] == "email"
+    assert body["action_config"] == {"to": "sales@example.com"}
+
+
+def test_fire_is_not_claimed_twice(orchestration_app, client):
+    _, session_factory = orchestration_app
+    _seed(session_factory, schedule_config={"type": "fixed_delay", "delay_seconds": 60})
+    run_id = client.post(_EVENTS, json=_event_body()).json()["runs"][0]["run_id"]
+
+    first = client.post(_fire_url(run_id))
+    second = client.post(_fire_url(run_id))
+
+    assert first.json()["claimed"] is True
+    assert second.json()["claimed"] is False
+
+
+def test_fire_skips_a_disabled_definition(orchestration_app, client):
+    _, session_factory = orchestration_app
+    definition_id = _seed(
+        session_factory, schedule_config={"type": "fixed_delay", "delay_seconds": 60}
+    )
+    run_id = client.post(_EVENTS, json=_event_body()).json()["runs"][0]["run_id"]
+    asyncio.run(_set_enabled(session_factory, definition_id, False))
+
+    resp = client.post(_fire_url(run_id))
+
+    assert resp.json()["claimed"] is False
+
+
+def test_fire_skips_a_deleted_definition(orchestration_app, client):
+    _, session_factory = orchestration_app
+    definition_id = _seed(
+        session_factory, schedule_config={"type": "fixed_delay", "delay_seconds": 60}
+    )
+    run_id = client.post(_EVENTS, json=_event_body()).json()["runs"][0]["run_id"]
+    asyncio.run(_delete_definition(session_factory, definition_id))
+
+    resp = client.post(_fire_url(run_id))
+
+    assert resp.json()["claimed"] is False
+
+
+def test_fire_unknown_run_is_not_claimed(client):
+    resp = client.post(_fire_url("nope"))
+
+    assert resp.status_code == 200
+    assert resp.json()["claimed"] is False

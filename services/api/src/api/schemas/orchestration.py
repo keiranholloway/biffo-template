@@ -9,12 +9,17 @@ outcome.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
 from ..prompt_parts import PromptPartsError, normalize_parts
 from .base import BiffoBaseSchema
+
+# A schedule's delay, in seconds: >0 and capped at 1 year, so an author can't
+# park a run indefinitely by mistake (docs/implementation/0002-scheduled-workflow-actions).
+_MAX_SCHEDULE_DELAY_SECONDS = 365 * 24 * 60 * 60
 
 
 class DispatchEventRequest(BaseModel):
@@ -41,6 +46,10 @@ class ClaimedRun(BaseModel):
     # False when this run was already claimed by a prior (possibly replayed)
     # delivery — the engine must not re-execute it.
     created: bool
+    # Set when the claiming definition carries a schedule: the engine must
+    # create an EventBridge Scheduler one-time schedule for this UTC instant
+    # instead of executing now (docs/implementation/0002-scheduled-workflow-actions).
+    scheduled_for: datetime | None = None
 
 
 class DispatchEventResponse(BaseModel):
@@ -62,6 +71,24 @@ class WorkflowRunResponse(BiffoBaseSchema):
     dedupe_key: str
     status: str
     trigger_event: dict[str, Any]
+    scheduled_for: datetime | None = None
+
+
+class FireScheduledRunResponse(BaseModel):
+    """The result of the plugin's fire-time callback claiming a scheduled run.
+
+    ``claimed=False`` means don't execute: the run already fired (a duplicate
+    Scheduler delivery) or its definition was disabled/deleted since it was
+    scheduled — the caller records ``status="skipped"`` and does nothing
+    further. ``claimed=True`` carries the same shape ``ClaimedRun`` does for
+    the immediate-dispatch path, so the engine executes it identically.
+    """
+
+    claimed: bool
+    run_id: str
+    definition_id: str | None = None
+    action_type: str | None = None
+    action_config: dict[str, Any] | None = None
 
 
 # ── User-facing run history (portal admin) ───────────────────────────────────
@@ -94,6 +121,7 @@ class WorkflowRunSummary(BiffoBaseSchema):
     status: str
     trigger_event: dict[str, Any]
     logs: list[ActionLogEntry] = Field(default_factory=list)
+    scheduled_for: datetime | None = None
 
 
 # ── User-facing workflow-definition CRUD (portal admin builder) ──────────────
@@ -599,6 +627,26 @@ def _validate_parts_field(
         raise ValueError(f"action_config.{name} is required for the {action_type} action")
 
 
+def _validate_schedule_config(schedule: dict[str, Any] | None) -> None:
+    """Validate an optional workflow ``schedule`` (docs/implementation/
+    0002-scheduled-workflow-actions). ``None`` means "fire immediately" and is
+    always valid — every existing definition predates this field.
+    """
+    if schedule is None:
+        return
+    if schedule.get("type") != "fixed_delay":
+        raise ValueError(f"schedule.type must be 'fixed_delay', got: {schedule.get('type')!r}")
+    delay_seconds = schedule.get("delay_seconds")
+    if not isinstance(delay_seconds, int) or isinstance(delay_seconds, bool):
+        raise ValueError("schedule.delay_seconds must be an integer")
+    if delay_seconds <= 0:
+        raise ValueError("schedule.delay_seconds must be positive")
+    if delay_seconds > _MAX_SCHEDULE_DELAY_SECONDS:
+        raise ValueError(
+            f"schedule.delay_seconds must not exceed {_MAX_SCHEDULE_DELAY_SECONDS} (1 year)"
+        )
+
+
 def _validate_action_config(
     action_type: str, action_config: dict[str, Any], *, body_optional: bool = False
 ) -> None:
@@ -753,6 +801,7 @@ class WorkflowDefinitionResponse(BiffoBaseSchema):
     action_type: str
     action_config: dict[str, Any]
     enabled: bool
+    schedule_config: dict[str, Any] | None = None
 
 
 class WorkflowDefinitionBody(BaseModel):
@@ -775,10 +824,15 @@ class WorkflowDefinitionBody(BaseModel):
     action_type: str = Field(min_length=1, max_length=64)
     action_config: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
+    # Optional delay before the action fires (docs/implementation/
+    # 0002-scheduled-workflow-actions): ``{"type": "fixed_delay", "delay_seconds": N}``.
+    # None (default) -> fires immediately, today's unchanged behaviour.
+    schedule_config: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _validate_action(self) -> WorkflowDefinitionBody:
         _validate_action_config(self.action_type, self.action_config)
+        _validate_schedule_config(self.schedule_config)
         return self
 
 

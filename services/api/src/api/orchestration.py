@@ -17,10 +17,11 @@ The engine flow is two steps:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 from aws_lambda_powertools import Logger
-from sqlalchemy import func, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,6 +45,20 @@ class ClaimedRun:
     action_type: str
     action_config: dict[str, Any]
     created: bool
+    # Set when the claiming definition carries a ``schedule_config`` — the
+    # engine must create a future one-time schedule for this instant rather
+    # than execute now (docs/implementation/0002-scheduled-workflow-actions).
+    scheduled_for: datetime | None = None
+
+
+def _scheduled_for(schedule_config: dict[str, Any] | None) -> datetime | None:
+    """The UTC instant a definition's delay resolves to, or ``None`` for
+    immediate dispatch. Only ``fixed_delay`` exists today (validated at
+    authoring time in ``schemas.orchestration._validate_schedule_config``)."""
+    if schedule_config is None:
+        return None
+    delay_seconds = schedule_config["delay_seconds"]
+    return datetime.now(UTC) + timedelta(seconds=delay_seconds)
 
 
 def _dedupe_key(definition_id: str, idempotency_key: str) -> str:
@@ -67,12 +82,14 @@ async def _claim_run(
     fetched and returned with ``created=False``.
     """
     dedupe_key = _dedupe_key(definition.id, idempotency_key)
+    scheduled_for = _scheduled_for(definition.schedule_config)
     run = WorkflowRun(
         tenant_id=tenant_id,
         definition_id=definition.id,
         dedupe_key=dedupe_key,
         trigger_event=event,
-        status="pending",
+        status="scheduled" if scheduled_for is not None else "pending",
+        scheduled_for=scheduled_for,
     )
     try:
         async with db.begin_nested():
@@ -92,6 +109,7 @@ async def _claim_run(
             action_type=definition.action_type,
             action_config=definition.action_config,
             created=False,
+            scheduled_for=run.scheduled_for,
         )
     return ClaimedRun(
         run_id=run.id,
@@ -99,6 +117,7 @@ async def _claim_run(
         action_type=definition.action_type,
         action_config=definition.action_config,
         created=True,
+        scheduled_for=run.scheduled_for,
     )
 
 
@@ -143,6 +162,64 @@ async def dispatch_event(
             )
         )
     return claimed
+
+
+async def fire_scheduled_run(db: AsyncSession, *, tenant_id: str, run_id: str) -> ClaimedRun | None:
+    """Atomically claim a scheduled run for execution at its fire time.
+
+    Guards EventBridge Scheduler's at-least-once delivery: a conditional UPDATE
+    only transitions a run still ``"scheduled"`` to ``"dispatching"`` — a
+    second (duplicate) callback for the same run sees ``rowcount == 0`` and
+    backs off, exactly like ``_claim_run``'s SAVEPOINT guards a replayed event,
+    but as a row-count check rather than a unique-constraint race (there is
+    only one row to win here, not an insert that might collide).
+
+    Also re-checks the owning definition is still enabled and not deleted —
+    it may have been claimed weeks earlier, so "valid at claim time" cannot be
+    assumed valid now. Returns ``None`` when there is nothing to execute: the
+    run already fired, or the definition was disabled/deleted since (the run
+    is marked ``"skipped"`` in that case, not left stuck on ``"dispatching"``).
+    """
+    # CursorResult, not Result: `rowcount` is only defined for DML, and it is
+    # the entire verdict here (see agent_runs.claim_run for the same pattern) —
+    # the cast asserts what the statement is, not a nuisance silence.
+    updated = cast(
+        CursorResult[Any],
+        await db.execute(
+            update(WorkflowRun)
+            .where(
+                WorkflowRun.tenant_id == tenant_id,
+                WorkflowRun.id == run_id,
+                WorkflowRun.status == "scheduled",
+            )
+            .values(status="dispatching")
+        ),
+    )
+    if updated.rowcount != 1:
+        return None
+
+    result = await db.execute(
+        select(WorkflowRun).where(
+            WorkflowRun.tenant_id == tenant_id,
+            WorkflowRun.id == run_id,
+        )
+    )
+    run = result.scalar_one()
+
+    definition = await get_definition(db, tenant_id=tenant_id, definition_id=run.definition_id)
+    if definition is None or not definition.enabled:
+        run.status = "skipped"
+        await db.flush()
+        return None
+
+    return ClaimedRun(
+        run_id=run.id,
+        definition_id=run.definition_id,
+        action_type=definition.action_type,
+        action_config=definition.action_config,
+        created=True,
+        scheduled_for=run.scheduled_for,
+    )
 
 
 def _matches_trigger_filter(trigger_filter: dict[str, Any] | None, event: dict[str, Any]) -> bool:
@@ -403,6 +480,7 @@ async def create_definition(
     action_config: dict[str, Any],
     enabled: bool,
     trigger_filter: dict[str, Any] | None = None,
+    schedule_config: dict[str, Any] | None = None,
 ) -> WorkflowDefinition:
     definition = WorkflowDefinition(
         tenant_id=tenant_id,
@@ -413,6 +491,7 @@ async def create_definition(
         action_type=action_type,
         action_config=action_config,
         enabled=enabled,
+        schedule_config=schedule_config,
     )
     db.add(definition)
     await db.flush()
@@ -432,6 +511,7 @@ async def update_definition(
     action_config: dict[str, Any],
     enabled: bool,
     trigger_filter: dict[str, Any] | None = None,
+    schedule_config: dict[str, Any] | None = None,
 ) -> WorkflowDefinition | None:
     definition = await get_definition(db, tenant_id=tenant_id, definition_id=definition_id)
     if definition is None:
@@ -443,6 +523,7 @@ async def update_definition(
     definition.action_type = action_type
     definition.action_config = action_config
     definition.enabled = enabled
+    definition.schedule_config = schedule_config
     await db.flush()
     await db.refresh(definition)
     return definition

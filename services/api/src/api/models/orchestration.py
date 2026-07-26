@@ -21,9 +21,10 @@ and the editing UI will get its own explicit surface later.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, Index, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import TenantScopedModel
@@ -31,8 +32,21 @@ from .base import TenantScopedModel
 # Run lifecycle states. A run is created ``pending`` when claimed, moved to
 # ``dispatched`` once the engine begins the action, then ``succeeded``/``failed``
 # by the recorded result. ``skipped`` is reserved for definitions that matched
-# but chose not to act (e.g. a future trigger_filter miss).
-RUN_STATUSES = ("pending", "dispatched", "succeeded", "failed", "skipped")
+# but chose not to act (e.g. a future trigger_filter miss, or a scheduled run
+# whose definition was disabled/deleted before its fire time). A definition
+# carrying ``schedule_config`` claims its run as ``scheduled`` instead of
+# ``pending`` — waiting on ``scheduled_for`` rather than about to dispatch now
+# — then ``dispatching`` once the fire-time callback claims it for execution
+# (guarding EventBridge Scheduler's at-least-once delivery from double-firing).
+RUN_STATUSES = (
+    "pending",
+    "scheduled",
+    "dispatching",
+    "dispatched",
+    "succeeded",
+    "failed",
+    "skipped",
+)
 
 
 class WorkflowDefinition(TenantScopedModel):
@@ -59,6 +73,14 @@ class WorkflowDefinition(TenantScopedModel):
     action_type: Mapped[str] = mapped_column(String(64), nullable=False)
     action_config: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Optional delay before this definition's action fires, e.g. a follow-up
+    # 2 weeks after onboarding (docs/implementation/0002-scheduled-workflow-actions).
+    # ``{"type": "fixed_delay", "delay_seconds": N}`` today; ``type`` is a
+    # discriminator left for a future "relative to a payload timestamp field"
+    # variant without a schema migration, mirroring how ``action_config``
+    # already carries a type-discriminated shape rather than dedicated columns.
+    # None -> fires immediately (today's behaviour, unchanged).
+    schedule_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
 
 class TriggerCatalog(TenantScopedModel):
@@ -94,6 +116,14 @@ class WorkflowRun(TenantScopedModel):
     dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False)
     trigger_event: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    # Set only when the claiming definition carries a ``schedule_config``: the
+    # UTC instant the plugin's EventBridge Scheduler one-time schedule fires.
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The deterministic EventBridge Scheduler schedule name (``wf-run-{id}``),
+    # so a future "cancel" admin action has something to call DeleteSchedule
+    # with. Not read by v1 execution — the schedule self-deletes on fire
+    # (``ActionAfterCompletion=DELETE``).
+    schedule_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
 class ActionLog(TenantScopedModel):

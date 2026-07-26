@@ -1,6 +1,8 @@
 # Implementation Plan: Payload-Variable Templating for Recipient/Target Fields
 
-**Status:** Draft
+**Status:** Implemented in biffo-template (Milestones 1–3: #598, #599, #600).
+Milestone 4 (real-deployment E2E verification) is pending distribution to a
+live instance — biffo-template itself is not deployed.
 **Date:** 2026-07-26
 **Source PRD:** inline (this conversation) — no separate ticket
 **Data model sources consulted:** none required — no new tables, no persisted-schema change

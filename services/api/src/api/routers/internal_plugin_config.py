@@ -9,13 +9,18 @@ that a plugin's founder-triggered backend code has no way to obtain one (every
 outbound Core call it makes is SigV4-signed, which cannot also carry a real
 bearer JWT — see issue #621 for the general gap this is one instance of).
 
+GET /api/v1/internal/plugins/me/config — the list counterpart: every one of the
+caller's own active rows (optionally filtered by ?role=), for a founder-facing
+picker (e.g. "which challenger personas are active") that needs more than one
+row, not a single by-role lookup. Same identity/auth scoping as above.
+
 Single-tenant deployment (ADR-0001): tenant_id is hardcoded "default", matching
 ServicePrincipal's own default — not a generic multi-tenant lookup.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,6 +41,28 @@ def _own_plugin_name(principal: ServicePrincipal) -> str:
         )
     (name,) = names
     return name.removeprefix("system:")
+
+
+@router.get("", response_model=list[PluginChatAgentResponse])
+async def list_own_config(
+    role: str | None = Query(default=None),
+    principal: ServicePrincipal = Depends(require_service_principal),
+    db: AsyncSession = Depends(get_db),
+) -> list[PluginChatAgentResponse]:
+    """Every one of the caller's own active rows, optionally filtered to one
+    role — ordered by agent_key for a stable list."""
+    plugin_name = _own_plugin_name(principal)
+    conditions = [
+        PluginChatAgent.tenant_id == principal.tenant_id,
+        PluginChatAgent.plugin_name == plugin_name,
+        PluginChatAgent.active.is_(True),
+    ]
+    if role is not None:
+        conditions.append(PluginChatAgent.role == role)
+    rows = await db.scalars(
+        select(PluginChatAgent).where(*conditions).order_by(PluginChatAgent.agent_key)
+    )
+    return [PluginChatAgentResponse.model_validate(r) for r in rows]
 
 
 @router.get("/{role}", response_model=PluginChatAgentResponse)

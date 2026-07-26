@@ -335,3 +335,127 @@ def test_shared_host_with_asserted_plugin_succeeds():
     body = resp.json()
     assert body["plugin_name"] == "ideation"
     asyncio.run(engine.dispose())
+
+
+# ── list variant: every active row, optionally filtered by role ────────────
+
+
+def test_lists_every_active_row_for_the_caller():
+    principal = ServicePrincipal(
+        principal_arn="arn:aws:sts::123456789012:assumed-role/proj-dev-plugin-ideation-role/session"
+    )
+    app, session_factory, engine = _build_app(principal=principal)
+    client = TestClient(app)
+
+    asyncio.run(
+        _insert_plugin_agents(
+            session_factory,
+            [
+                {"plugin_name": "ideation", "role": "challenger", "agent_key": "challenger-a"},
+                {"plugin_name": "ideation", "role": "challenger", "agent_key": "challenger-b"},
+                {"plugin_name": "ideation", "role": "analyst", "agent_key": "ideation-analyst"},
+            ],
+        )
+    )
+
+    resp = client.get("/api/v1/internal/plugins/me/config")
+
+    assert resp.status_code == 200, resp.text
+    keys = [row["agent_key"] for row in resp.json()]
+    assert keys == ["challenger-a", "challenger-b", "ideation-analyst"]  # ordered by agent_key
+    asyncio.run(engine.dispose())
+
+
+def test_list_can_be_filtered_by_role():
+    principal = ServicePrincipal(
+        principal_arn="arn:aws:sts::123456789012:assumed-role/proj-dev-plugin-ideation-role/session"
+    )
+    app, session_factory, engine = _build_app(principal=principal)
+    client = TestClient(app)
+
+    asyncio.run(
+        _insert_plugin_agents(
+            session_factory,
+            [
+                {"plugin_name": "ideation", "role": "challenger", "agent_key": "challenger-a"},
+                {"plugin_name": "ideation", "role": "analyst", "agent_key": "ideation-analyst"},
+            ],
+        )
+    )
+
+    resp = client.get("/api/v1/internal/plugins/me/config", params={"role": "challenger"})
+
+    assert resp.status_code == 200, resp.text
+    keys = [row["agent_key"] for row in resp.json()]
+    assert keys == ["challenger-a"]
+    asyncio.run(engine.dispose())
+
+
+def test_list_excludes_inactive_rows():
+    principal = ServicePrincipal(
+        principal_arn="arn:aws:sts::123456789012:assumed-role/proj-dev-plugin-ideation-role/session"
+    )
+    app, session_factory, engine = _build_app(principal=principal)
+    client = TestClient(app)
+
+    asyncio.run(
+        _insert_plugin_agents(
+            session_factory,
+            [
+                {
+                    "plugin_name": "ideation",
+                    "role": "challenger",
+                    "agent_key": "active-a",
+                    "active": True,
+                },
+                {
+                    "plugin_name": "ideation",
+                    "role": "challenger",
+                    "agent_key": "inactive-b",
+                    "active": False,
+                },
+            ],
+        )
+    )
+
+    resp = client.get("/api/v1/internal/plugins/me/config")
+
+    assert resp.status_code == 200
+    keys = [row["agent_key"] for row in resp.json()]
+    assert keys == ["active-a"]
+    asyncio.run(engine.dispose())
+
+
+def test_list_never_returns_another_plugins_rows():
+    principal = ServicePrincipal(
+        principal_arn="arn:aws:sts::123456789012:assumed-role/proj-dev-plugin-ideation-role/session"
+    )
+    app, session_factory, engine = _build_app(principal=principal)
+    client = TestClient(app)
+
+    asyncio.run(
+        _insert_plugin_agents(
+            session_factory,
+            [
+                {"plugin_name": "ideation", "role": "challenger", "agent_key": "mine"},
+                {"plugin_name": "other-plugin", "role": "challenger", "agent_key": "not-mine"},
+            ],
+        )
+    )
+
+    resp = client.get("/api/v1/internal/plugins/me/config")
+
+    assert resp.status_code == 200
+    keys = [row["agent_key"] for row in resp.json()]
+    assert keys == ["mine"]
+    asyncio.run(engine.dispose())
+
+
+def test_list_with_no_principal_is_401():
+    app, _, engine = _build_app(principal=None)
+    client = TestClient(app)
+
+    resp = client.get("/api/v1/internal/plugins/me/config")
+
+    assert resp.status_code == 401
+    asyncio.run(engine.dispose())

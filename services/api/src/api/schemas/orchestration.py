@@ -104,12 +104,20 @@ class WorkflowRunSummary(BiffoBaseSchema):
 # (services/_plugins/orchestrator/.../actions.py); extend WORKFLOW_ACTIONS to offer a new
 # action in the UI.
 #
-# A config field may carry three optional keys beyond name/label/type/required:
+# A config field may carry these optional keys beyond name/label/type/required:
 #   ``default``      — value assumed when the field is absent from action_config.
 #   ``visible_when`` — ``{"field": ..., "equals": ...}``; the field only applies
 #                      when that sibling's effective value matches. A field that
 #                      does not apply is neither shown by the portal nor
 #                      required/format-checked here (see ``_field_applies``).
+#   ``payload_template`` — ``True`` marks a recipient/target field (email and
+#                      WhatsApp ``to``) as eligible for the same ``{field}``
+#                      templating already used on content fields (``subject``/
+#                      ``body``/``message``): a value containing ``{``/``}``
+#                      skips the literal-format check below and is filled from
+#                      the triggering event's payload by the orchestrator's
+#                      ``_render`` at dispatch time. A literal address with no
+#                      braces is unaffected — still format-checked as before.
 #   ``secret``       — ``True`` marks the value a credential (#432). It is never
 #                      returned in clear: reads (HTTP responses AND the state-change
 #                      events emitted to the bus) redact a stored value to
@@ -175,7 +183,17 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
         "label": "Send email",
         "config_fields": [
             {"name": "from", "label": "From", "type": "email", "required": True},
-            {"name": "to", "label": "To", "type": "email", "required": True},
+            {
+                "name": "to",
+                "label": "To",
+                "type": "email",
+                "required": True,
+                # Recipient may be a literal address or a `{field}` template
+                # filled from the triggering event's payload at dispatch time
+                # (e.g. `{email}` to notify whoever just signed up) — see
+                # `_render` in the orchestrator plugin.
+                "payload_template": True,
+            },
             {"name": "subject", "label": "Subject", "type": "text", "required": True},
             {
                 "name": "body",
@@ -242,6 +260,8 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 "label": "To (phone, international format)",
                 "type": "tel",
                 "required": True,
+                # Same `{field}` payload-templating as email's `to` (above).
+                "payload_template": True,
             },
             # Text only delivers inside an open 24-hour customer service window;
             # proactive/business-initiated sends need an approved template.
@@ -642,7 +662,17 @@ def _validate_action_config(
             raise ValueError(
                 f"action_config.{field['name']} is required for the {action_type} action"
             )
-        if field["type"] == "email" and isinstance(value, str) and value:
+        is_payload_template = (
+            field.get("payload_template")
+            and isinstance(value, str)
+            and ("{" in value or "}" in value)
+        )
+        if (
+            field["type"] == "email"
+            and isinstance(value, str)
+            and value
+            and not is_payload_template
+        ):
             if not _EMAIL_RE.match(value):
                 raise ValueError(f"action_config.{field['name']} must be a valid email address")
         if field["type"] == "url" and isinstance(value, str) and value:

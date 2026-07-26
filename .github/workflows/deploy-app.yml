@@ -141,6 +141,11 @@ jobs:
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/dev'
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
@@ -739,6 +744,11 @@ jobs:
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/staging'
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}
@@ -1349,6 +1359,11 @@ jobs:
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.BIFFO_OIDC_ROLE_ARN }}

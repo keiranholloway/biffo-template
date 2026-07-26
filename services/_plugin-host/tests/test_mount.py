@@ -134,9 +134,12 @@ def test_gated_request_binds_the_sdk_acting_as_plugin_for_outbound_core_calls():
 # hand-construct its own SigV4-signed request naming any plugin identity, with
 # or without this ContextVar existing at all. Genuine isolation against a
 # plugin an operator does not fully trust requires `isolated: true` (its own
-# Lambda, its own IAM role). The real structural fix — per-plugin STS-scoped
-# credentials assumed by the host right before dispatch — is tracked as a
-# separate infrastructure decision in issue #579, not attempted here.
+# Lambda, its own IAM role). Per-plugin STS-scoped credentials were considered
+# and DELIBERATELY NOT adopted: #579 ratified the shared host as a trust-based
+# boundary (ADR-0021 amendment 2026-07-26) — it runs only plugins the operator
+# trusts to the same degree, and `isolated: true` (tracked in #595) is the escape
+# hatch for anything else. So this property is accepted by policy, not a bug
+# awaiting a fix; the test pins it so the accepted boundary stays visible.
 def test_a_plugins_own_code_can_override_the_bound_identity_before_its_own_outbound_call():
     """Pin the known (not fixed) boundary: the plugin's own handler overrides
     `acting_as_plugin` after `group_gate` bound it, and its own outbound signed
@@ -176,6 +179,6 @@ def test_a_plugins_own_code_can_override_the_bound_identity_before_its_own_outbo
     assert resp.status_code == 200
     # The signed outbound request asserts "other-plugin-name" — the identity the
     # plugin's own code chose — not "ideation", the identity group_gate bound.
-    # This is the current, known, tested property (issue #563 / #579), not a
-    # fix.
+    # This is the accepted, tested property (issue #563; ratified by #579 as a
+    # trust-based boundary), not a bug awaiting a fix.
     assert captured["plugin_header"] == "other-plugin-name"

@@ -23,6 +23,18 @@ export interface DeliveryConfigValue {
 }
 
 /**
+ * An optional delay before a workflow definition's action fires (docs/
+ * implementation/0002-scheduled-workflow-actions) — e.g. a follow-up email 2
+ * weeks after onboarding. `type` is a discriminator left for a future
+ * "relative to a payload timestamp field" variant; only `fixed_delay` exists
+ * today. Absent from a definition ⇒ fires immediately (unchanged behaviour).
+ */
+export interface ScheduleConfig {
+  type: 'fixed_delay'
+  delay_seconds: number
+}
+
+/**
  * An orchestration workflow definition as surfaced by the Core API
  * (`/api/v1/orchestration/workflows`): a trigger (event) mapped to an action.
  * The engine reads the enabled ones matching each incoming event.
@@ -50,6 +62,7 @@ export interface WorkflowDefinition {
    */
   action_config: Record<string, ActionConfigValue>
   enabled: boolean
+  schedule_config: ScheduleConfig | null
 }
 
 /** The create/update body — the Core API validates action_config per action_type. */
@@ -61,6 +74,7 @@ export interface WorkflowInput {
   action_type: string
   action_config: Record<string, ActionConfigValue>
   enabled: boolean
+  schedule_config: ScheduleConfig | null
 }
 
 /**
@@ -219,6 +233,9 @@ export interface WorkflowRun {
   status: string
   trigger_event: Record<string, unknown>
   logs: ActionLogEntry[]
+  /** Set only for a run whose definition carries a schedule — the UTC instant
+   * its EventBridge Scheduler one-time schedule will fire (or fired). */
+  scheduled_for: string | null
 }
 
 type Client = ReturnType<typeof createApiClient>

@@ -106,6 +106,42 @@ const runStatusClass: Record<string, string> = {
   succeeded: 'bg-emerald-100 text-emerald-700',
   failed: 'bg-rose-100 text-rose-700',
   skipped: 'bg-amber-100 text-amber-700',
+  scheduled: 'bg-sky-100 text-sky-700',
+  dispatching: 'bg-sky-100 text-sky-700',
+}
+
+// Timing (docs/implementation/0002-scheduled-workflow-actions): the units the
+// "run after a delay" control offers, and their conversion to delay_seconds —
+// the only shape schedule_config's fixed_delay carries.
+type ScheduleUnit = 'minutes' | 'hours' | 'days' | 'weeks'
+
+const SCHEDULE_UNIT_SECONDS: Record<ScheduleUnit, number> = {
+  minutes: 60,
+  hours: 60 * 60,
+  days: 24 * 60 * 60,
+  weeks: 7 * 24 * 60 * 60,
+}
+
+const SCHEDULE_UNIT_ORDER: ScheduleUnit[] = ['weeks', 'days', 'hours', 'minutes']
+
+/** Value + unit -> delay_seconds, or null when the value isn't a positive integer. */
+function scheduleDelaySeconds(value: string, unit: ScheduleUnit): number | null {
+  const n = Number(value)
+  if (!Number.isInteger(n) || n <= 0) return null
+  return n * SCHEDULE_UNIT_SECONDS[unit]
+}
+
+/** delay_seconds -> the largest whole unit it divides evenly into, so editing
+ * a stored delay shows e.g. "2 weeks" rather than "20160 minutes". Falls back
+ * to minutes (rounded) when nothing divides evenly. */
+function secondsToScheduleValue(seconds: number): { value: string; unit: ScheduleUnit } {
+  for (const unit of SCHEDULE_UNIT_ORDER) {
+    const perUnit = SCHEDULE_UNIT_SECONDS[unit]
+    if (seconds % perUnit === 0) {
+      return { value: String(seconds / perUnit), unit }
+    }
+  }
+  return { value: String(Math.round(seconds / SCHEDULE_UNIT_SECONDS.minutes)), unit: 'minutes' }
 }
 
 function formatWhen(iso: string | null): string {
@@ -348,6 +384,15 @@ export default function OrchestrationPage() {
   const [enabled, setEnabled] = useState(true)
   const [busy, setBusy] = useState(false)
 
+  // Timing (docs/implementation/0002-scheduled-workflow-actions): an optional
+  // delay before the action fires, e.g. a follow-up email 2 weeks after
+  // onboarding. `scheduleEnabled` toggles between "run immediately" (the
+  // default, unchanged behaviour) and "run after a delay"; value+unit convert
+  // to delay_seconds on save.
+  const [scheduleEnabled, setScheduleEnabled] = useState(false)
+  const [scheduleValue, setScheduleValue] = useState('2')
+  const [scheduleUnit, setScheduleUnit] = useState<ScheduleUnit>('weeks')
+
   // Which agent parts field the "✨ Draft with AI" drawer is open for, if any
   // (the config field name, e.g. 'instructions' | 'goals'). null = closed.
   const [assistField, setAssistField] = useState<string | null>(null)
@@ -356,6 +401,7 @@ export default function OrchestrationPage() {
   // collapsed — the outcome, not the architecture, leads.
   const [conditionsOpen, setConditionsOpen] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [timingOpen, setTimingOpen] = useState(false)
 
   // ── Test & review (Phase 2) ──────────────────────────────────────────────
   // The editable sample event the dry-run runs against, as JSON text. Seeded
@@ -398,6 +444,10 @@ export default function OrchestrationPage() {
       setEnabled(true)
       setConditionsOpen(false)
       setAdvancedOpen(false)
+      setScheduleEnabled(false)
+      setScheduleValue('2')
+      setScheduleUnit('weeks')
+      setTimingOpen(false)
       clearTestState()
     },
     [clearTestState],
@@ -553,6 +603,18 @@ export default function OrchestrationPage() {
     setEnabled(w.enabled)
     setConditionsOpen(Object.keys(w.trigger_filter ?? {}).length > 0)
     setAdvancedOpen(false)
+    if (w.schedule_config != null) {
+      const { value, unit } = secondsToScheduleValue(w.schedule_config.delay_seconds)
+      setScheduleEnabled(true)
+      setScheduleValue(value)
+      setScheduleUnit(unit)
+      setTimingOpen(true)
+    } else {
+      setScheduleEnabled(false)
+      setScheduleValue('2')
+      setScheduleUnit('weeks')
+      setTimingOpen(false)
+    }
     clearTestState()
   }
 
@@ -584,6 +646,7 @@ export default function OrchestrationPage() {
         ),
       }
     }
+    const delaySeconds = scheduleEnabled ? scheduleDelaySeconds(scheduleValue, scheduleUnit) : null
     const body: WorkflowInput = {
       name: name.trim(),
       trigger_source: trigger_source ?? '',
@@ -592,6 +655,8 @@ export default function OrchestrationPage() {
       action_type: actionType,
       action_config: applicable,
       enabled: enabledValue,
+      schedule_config:
+        delaySeconds != null ? { type: 'fixed_delay', delay_seconds: delaySeconds } : null,
     }
     setBusy(true)
     try {
@@ -1249,6 +1314,74 @@ export default function OrchestrationPage() {
             </fieldset>
           )}
 
+          {/* ── Timing (advanced, optional) ──────────────────────────────────
+              docs/implementation/0002-scheduled-workflow-actions: delay the
+              action instead of firing it the instant the trigger arrives —
+              e.g. a follow-up email 2 weeks after onboarding. Applies to every
+              action type, so it lives here rather than inside the agent-only
+              "Advanced settings" disclosure above. */}
+          <div className="mt-4 rounded-lg border border-gray-200 p-3">
+            <button
+              type="button"
+              aria-expanded={timingOpen}
+              onClick={() => {
+                setTimingOpen((v) => !v)
+              }}
+              className="flex w-full items-center justify-between text-left text-xs font-semibold text-gray-700"
+            >
+              <span>Timing (advanced, optional)</span>
+              <span aria-hidden="true" className="text-gray-400">
+                {timingOpen ? '▲' : '▼'}
+              </span>
+            </button>
+            {timingOpen && (
+              <div className="mt-2">
+                <label className="flex items-center gap-2 text-sm text-gray-800">
+                  <input
+                    type="checkbox"
+                    checked={scheduleEnabled}
+                    onChange={(e) => {
+                      setScheduleEnabled(e.target.checked)
+                    }}
+                  />
+                  Run after a delay, instead of immediately
+                </label>
+                {scheduleEnabled && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="text-sm text-gray-600">Wait</span>
+                    <input
+                      type="number"
+                      min={1}
+                      required
+                      aria-label="Delay amount"
+                      value={scheduleValue}
+                      onChange={(e) => {
+                        setScheduleValue(e.target.value)
+                      }}
+                      className="w-20 rounded border px-2 py-1 text-sm"
+                    />
+                    <select
+                      aria-label="Delay unit"
+                      value={scheduleUnit}
+                      onChange={(e) => {
+                        setScheduleUnit(e.target.value as ScheduleUnit)
+                      }}
+                      className="rounded border px-2 py-1 text-sm"
+                    >
+                      <option value="minutes">minutes</option>
+                      <option value="hours">hours</option>
+                      <option value="days">days</option>
+                      <option value="weeks">weeks</option>
+                    </select>
+                    <span className="text-sm text-gray-600">
+                      after this trigger fires, then run the action.
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* ── Outcome (agent) / generic config (other actions) ─────────── */}
           {selectedAction != null && isAgent && (
             <>
@@ -1667,6 +1800,16 @@ export default function OrchestrationPage() {
                         filtered
                       </span>
                     )}
+                    {w.schedule_config != null && (
+                      <span
+                        className="ml-1.5 rounded bg-sky-50 px-1.5 py-0.5 text-xs text-sky-700"
+                        title={`Waits ${secondsToScheduleValue(w.schedule_config.delay_seconds).value} ${
+                          secondsToScheduleValue(w.schedule_config.delay_seconds).unit
+                        } after the trigger before running`}
+                      >
+                        delayed
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-2 text-gray-600">{w.action_type}</td>
                   <td className="px-4 py-2">
@@ -1762,6 +1905,11 @@ export default function OrchestrationPage() {
                     >
                       {r.status}
                     </span>
+                    {r.status === 'scheduled' && r.scheduled_for != null && (
+                      <span className="ml-1.5 text-xs text-gray-500">
+                        fires {formatWhen(r.scheduled_for)}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-2 text-xs text-rose-700">{runError(r)}</td>
                 </tr>

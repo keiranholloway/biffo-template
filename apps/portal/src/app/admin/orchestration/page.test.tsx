@@ -362,6 +362,7 @@ const agentWithDelivery: WorkflowDefinition = {
     },
   },
   enabled: false,
+  schedule_config: null,
 }
 
 // An agent stored with a model that is NOT among the curated options.
@@ -382,6 +383,7 @@ const offListAgent: WorkflowDefinition = {
     tools: ['web_search'],
   },
   enabled: true,
+  schedule_config: null,
 }
 
 const notify: WorkflowDefinition = {
@@ -401,6 +403,7 @@ const notify: WorkflowDefinition = {
     body: 'A demo came in.',
   },
   enabled: true,
+  schedule_config: null,
 }
 
 const succeededRun: WorkflowRun = {
@@ -423,6 +426,7 @@ const succeededRun: WorkflowRun = {
       error: null,
     },
   ],
+  scheduled_for: null,
 }
 
 describe('OrchestrationPage', () => {
@@ -489,6 +493,7 @@ describe('OrchestrationPage', () => {
         action_type: 'email',
         action_config: { from: 'a@b.com', to: 'c@d.com', subject: 'Hi', body: 'Hello there' },
         enabled: true,
+        schedule_config: null,
       })
     })
   })
@@ -1022,6 +1027,96 @@ describe('OrchestrationPage', () => {
     await screen.findByLabelText('To')
 
     expect(screen.queryByLabelText('Insert a trigger field into To')).not.toBeInTheDocument()
+  })
+
+  // ── Timing: scheduled/delayed workflow actions (docs/implementation/0002-scheduled-workflow-actions) ──
+
+  it('collapses the Timing section by default, with the delay controls hidden', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    render(<OrchestrationPage />)
+
+    expect(await screen.findByText('Timing (advanced, optional)')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Delay amount')).not.toBeInTheDocument()
+  })
+
+  it('reveals the delay controls once expanded and the checkbox is checked', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    render(<OrchestrationPage />)
+
+    fireEvent.click(await screen.findByText('Timing (advanced, optional)'))
+    fireEvent.click(screen.getByLabelText('Run after a delay, instead of immediately'))
+
+    expect(screen.getByLabelText('Delay amount')).toHaveValue(2)
+    expect(screen.getByLabelText('Delay unit')).toHaveValue('weeks')
+  })
+
+  it('sends the delay converted to seconds when scheduling is enabled', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    createWorkflow.mockResolvedValue(notify)
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByPlaceholderText('Notify the sales team'), {
+      target: { value: 'Delayed ping' },
+    })
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: 'a@b.com' } })
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: 'c@d.com' } })
+    fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'Hi' } })
+    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'Hello there' } })
+
+    fireEvent.click(screen.getByText('Timing (advanced, optional)'))
+    fireEvent.click(screen.getByLabelText('Run after a delay, instead of immediately'))
+    fireEvent.change(screen.getByLabelText('Delay amount'), { target: { value: '3' } })
+    fireEvent.change(screen.getByLabelText('Delay unit'), { target: { value: 'days' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add workflow' }))
+
+    await waitFor(() => {
+      expect(createWorkflow).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          schedule_config: { type: 'fixed_delay', delay_seconds: 3 * 24 * 60 * 60 },
+        }),
+      )
+    })
+  })
+
+  it('loads an existing schedule on edit, expanded with the value converted back', async () => {
+    fetchCatalog.mockResolvedValue(catalog)
+    fetchWorkflows.mockResolvedValue([
+      { ...notify, schedule_config: { type: 'fixed_delay', delay_seconds: 1209600 } },
+    ])
+
+    render(<OrchestrationPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+
+    expect(screen.getByLabelText('Run after a delay, instead of immediately')).toBeChecked()
+    expect(screen.getByLabelText('Delay amount')).toHaveValue(2)
+    expect(screen.getByLabelText('Delay unit')).toHaveValue('weeks')
+  })
+
+  it('flags a delayed workflow in the list', async () => {
+    fetchWorkflows.mockResolvedValue([
+      { ...notify, schedule_config: { type: 'fixed_delay', delay_seconds: 1209600 } },
+    ])
+    render(<OrchestrationPage />)
+
+    expect(await screen.findByText('delayed')).toBeInTheDocument()
+  })
+
+  it('shows the scheduled run fire time in run history', async () => {
+    fetchWorkflows.mockResolvedValue([notify])
+    fetchRuns.mockResolvedValue([
+      {
+        ...succeededRun,
+        status: 'scheduled',
+        scheduled_for: '2026-08-09T12:00:00Z',
+        logs: [],
+      },
+    ])
+
+    render(<OrchestrationPage />)
+
+    expect(await screen.findByText('scheduled')).toBeInTheDocument()
+    expect(screen.getByText(/fires/)).toBeInTheDocument()
   })
 
   // ── agent action: tools multiselect + curated model dropdown (ADR-0014) ─────

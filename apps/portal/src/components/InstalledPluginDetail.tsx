@@ -138,7 +138,13 @@ export function InstalledPluginDetail({ name }: InstalledPluginDetailProps) {
           </div>
           {plugin.has_admin_ingress && (
             <a
-              href={`/api/v1/plugins/${plugin.name}/admin/`}
+              // No trailing slash: the API Gateway route in front of the
+              // shared plugin host has no unauthenticated route for the
+              // trailing-slash form at all (AWS rejects a route_key ending in
+              // a bare "/" -- biffo-template#631) -- the bare path is the
+              // only form reachable without a token, confirmed against a
+              // real deployment.
+              href={`/api/v1/plugins/${plugin.name}/admin`}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-block rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"

@@ -81,6 +81,14 @@ class WorkflowDefinition(TenantScopedModel):
     # already carries a type-discriminated shape rather than dedicated columns.
     # None -> fires immediately (today's behaviour, unchanged).
     schedule_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Optional hierarchy scope (docs/implementation/0003-hierarchy-scoped-workflows):
+    # ``{"level": <str>, "id": <str>}``. ``level`` is an opaque string this
+    # template never hardcodes — what levels exist (e.g. "brand"/"region"/
+    # "unit") and their ordering is entirely defined by whichever
+    # ``ScopeResolver`` an instance registers (``scope_resolvers.py``). None
+    # (every existing definition) means unscoped/tenant-wide — today's
+    # behaviour, unchanged.
+    scope: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
 
 class TriggerCatalog(TenantScopedModel):

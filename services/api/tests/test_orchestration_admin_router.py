@@ -188,6 +188,68 @@ def test_create_rejects_delay_over_one_year(client: TestClient):
     assert client.post(_BASE, json=body).status_code == 422
 
 
+def test_scope_defaults_to_null(client: TestClient):
+    created = client.post(_BASE, json=_valid_body())
+    assert created.status_code == 201
+    assert created.json()["scope"] is None
+
+
+def test_scope_round_trips(client: TestClient):
+    scope = {"level": "brand", "id": "b1"}
+    created = client.post(_BASE, json=_valid_body(scope=scope))
+    assert created.status_code == 201, created.text
+    assert created.json()["scope"] == scope
+
+    got = client.get(f"{_BASE}/{created.json()['id']}")
+    assert got.json()["scope"] == scope
+
+
+def test_update_can_set_and_clear_scope(client: TestClient):
+    scope = {"level": "brand", "id": "b1"}
+    row = client.post(_BASE, json=_valid_body(scope=scope)).json()
+
+    cleared = client.put(f"{_BASE}/{row['id']}", json=_valid_body(scope=None))
+    assert cleared.status_code == 200
+    assert cleared.json()["scope"] is None
+
+
+def test_create_rejects_scope_missing_level(client: TestClient):
+    body = _valid_body(scope={"id": "b1"})
+    assert client.post(_BASE, json=body).status_code == 422
+
+
+def test_create_rejects_scope_missing_id(client: TestClient):
+    body = _valid_body(scope={"level": "brand"})
+    assert client.post(_BASE, json=body).status_code == 422
+
+
+def test_create_rejects_empty_scope_level(client: TestClient):
+    body = _valid_body(scope={"level": "", "id": "b1"})
+    assert client.post(_BASE, json=body).status_code == 422
+
+
+def test_create_accepts_any_level_name_when_no_resolver_registered(client: TestClient):
+    # Shape-only validation when the instance has registered no resolver at
+    # all — the template cannot know what levels "should" exist.
+    body = _valid_body(scope={"level": "anything", "id": "b1"})
+    assert client.post(_BASE, json=body).status_code == 201
+
+
+def test_create_rejects_a_level_not_among_a_registered_resolvers_levels(client: TestClient):
+    from api import scope_resolvers as sr
+
+    saved_levels, saved_resolver = sr._levels, sr._resolver  # noqa: SLF001
+    sr.register_scope_resolver(sr._default_resolver, levels=("brand", "region", "unit"))  # noqa: SLF001
+    try:
+        body = _valid_body(scope={"level": "franchisee", "id": "f1"})
+        assert client.post(_BASE, json=body).status_code == 422
+
+        body = _valid_body(scope={"level": "brand", "id": "b1"})
+        assert client.post(_BASE, json=body).status_code == 201
+    finally:
+        sr._levels, sr._resolver = saved_levels, saved_resolver  # noqa: SLF001
+
+
 def test_create_rejects_invalid_action_config(client: TestClient):
     body = _valid_body(action_config={"from": "no-reply@example.com"})  # missing to/subject/body
     resp = client.post(_BASE, json=body)

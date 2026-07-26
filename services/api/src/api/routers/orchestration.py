@@ -63,6 +63,7 @@ from ..schemas.orchestration import (
     redact_secrets,
     resolve_write_secrets,
 )
+from ..scope_resolvers import registered_scope_levels
 
 router = APIRouter(prefix="/orchestration/workflows", tags=["orchestration"])
 runs_router = APIRouter(prefix="/orchestration/runs", tags=["orchestration"])
@@ -208,7 +209,11 @@ async def get_catalog(
         )
         seen.add(key)
 
-    return WorkflowCatalog(triggers=triggers, actions=_actions_with_available_tools())
+    return WorkflowCatalog(
+        triggers=triggers,
+        actions=_actions_with_available_tools(),
+        scope_levels=list(registered_scope_levels()),
+    )
 
 
 def _redacted(definition: WorkflowDefinition) -> WorkflowDefinitionResponse:
@@ -313,6 +318,7 @@ async def create_workflow(
         action_config=action_config,
         enabled=body.enabled,
         schedule_config=body.schedule_config,
+        scope=body.scope,
     )
     emit_event(
         db,
@@ -372,6 +378,7 @@ async def update_workflow(
         action_config=action_config,
         enabled=body.enabled,
         schedule_config=body.schedule_config,
+        scope=body.scope,
     )
     if definition is None:
         raise _not_found()

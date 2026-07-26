@@ -16,6 +16,7 @@ The engine flow is two steps:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -32,6 +33,7 @@ from .models.orchestration import (
     WorkflowDefinition,
     WorkflowRun,
 )
+from .scope_resolvers import resolve_scope_chain, scope_matches_chain
 
 logger = Logger()
 
@@ -153,12 +155,25 @@ async def dispatch_event(
     )
     definitions = list(result.scalars().all())
 
+    # Resolved lazily and cached: most events match no scoped definition at
+    # all (Phase 1 ships with nothing scoped yet), so paying for a resolver
+    # call — potentially a database lookup, e.g. a unit's region/brand — only
+    # when a candidate definition actually carries a `scope` keeps the common
+    # case free. The chain is the same for every definition once computed
+    # (docs/implementation/0003-hierarchy-scoped-workflows).
+    scope_chain: Mapping[str, str | None] | None = None
+
     claimed: list[ClaimedRun] = []
     for definition in definitions:
         # An optional payload filter refines a coarse (source, detail_type) match —
         # e.g. leads.updated only when status == "won" (#226). No filter → always.
         if not _matches_trigger_filter(definition.trigger_filter, event):
             continue
+        if definition.scope is not None:
+            if scope_chain is None:
+                scope_chain = await resolve_scope_chain(db, source, detail_type, event)
+            if not scope_matches_chain(definition.scope, scope_chain):
+                continue
         claimed.append(
             await _claim_run(
                 db,
@@ -489,6 +504,7 @@ async def create_definition(
     enabled: bool,
     trigger_filter: dict[str, Any] | None = None,
     schedule_config: dict[str, Any] | None = None,
+    scope: dict[str, Any] | None = None,
 ) -> WorkflowDefinition:
     definition = WorkflowDefinition(
         tenant_id=tenant_id,
@@ -500,6 +516,7 @@ async def create_definition(
         action_config=action_config,
         enabled=enabled,
         schedule_config=schedule_config,
+        scope=scope,
     )
     db.add(definition)
     await db.flush()
@@ -520,6 +537,7 @@ async def update_definition(
     enabled: bool,
     trigger_filter: dict[str, Any] | None = None,
     schedule_config: dict[str, Any] | None = None,
+    scope: dict[str, Any] | None = None,
 ) -> WorkflowDefinition | None:
     definition = await get_definition(db, tenant_id=tenant_id, definition_id=definition_id)
     if definition is None:
@@ -532,6 +550,7 @@ async def update_definition(
     definition.action_config = action_config
     definition.enabled = enabled
     definition.schedule_config = schedule_config
+    definition.scope = scope
     await db.flush()
     await db.refresh(definition)
     return definition

@@ -15,6 +15,7 @@ from typing import Any
 from pydantic import BaseModel, Field, model_validator
 
 from ..prompt_parts import PromptPartsError, normalize_parts
+from ..scope_resolvers import registered_scope_levels
 from .base import BiffoBaseSchema
 
 # A schedule's delay, in seconds: >0 and capped at 1 year, so an author can't
@@ -666,6 +667,30 @@ def _validate_schedule_config(schedule: dict[str, Any] | None) -> None:
         )
 
 
+def _validate_scope(scope: dict[str, Any] | None) -> None:
+    """Validate an optional workflow ``scope`` (docs/implementation/
+    0003-hierarchy-scoped-workflows). ``None`` means unscoped/tenant-wide and
+    is always valid — every existing definition predates this field.
+
+    Shape-only: ``level``/``id`` must be non-empty strings, and — when the
+    instance has registered a resolver at all — ``level`` must be one of its
+    declared levels. The template cannot go further than that: it has no way
+    to know whether a given id is a real, existing brand/region/unit — that
+    check belongs to the resolver-owning instance (Phase 2), not here.
+    """
+    if scope is None:
+        return
+    level = scope.get("level")
+    scope_id = scope.get("id")
+    if not isinstance(level, str) or not level:
+        raise ValueError("scope.level must be a non-empty string")
+    if not isinstance(scope_id, str) or not scope_id:
+        raise ValueError("scope.id must be a non-empty string")
+    known_levels = registered_scope_levels()
+    if known_levels and level not in known_levels:
+        raise ValueError(f"scope.level must be one of {known_levels}, got: {level!r}")
+
+
 def _validate_action_config(
     action_type: str, action_config: dict[str, Any], *, body_optional: bool = False
 ) -> None:
@@ -810,6 +835,11 @@ class WorkflowCatalog(BaseModel):
 
     triggers: list[dict[str, Any]]
     actions: list[dict[str, Any]]
+    # The active scope resolver's level names, broad-to-narrow (docs/implementation/
+    # 0003-hierarchy-scoped-workflows) — empty when no resolver is registered, so a
+    # generic instance's builder simply omits the scope picker rather than offering
+    # a control with nothing to pick.
+    scope_levels: list[str] = Field(default_factory=list)
 
 
 class WorkflowDefinitionResponse(BiffoBaseSchema):
@@ -821,6 +851,7 @@ class WorkflowDefinitionResponse(BiffoBaseSchema):
     action_config: dict[str, Any]
     enabled: bool
     schedule_config: dict[str, Any] | None = None
+    scope: dict[str, Any] | None = None
 
 
 class WorkflowDefinitionBody(BaseModel):
@@ -847,11 +878,16 @@ class WorkflowDefinitionBody(BaseModel):
     # 0002-scheduled-workflow-actions): ``{"type": "fixed_delay", "delay_seconds": N}``.
     # None (default) -> fires immediately, today's unchanged behaviour.
     schedule_config: dict[str, Any] | None = None
+    # Optional hierarchy scope (docs/implementation/0003-hierarchy-scoped-workflows):
+    # ``{"level": <str>, "id": <str>}``. None (default) -> unscoped/tenant-wide,
+    # today's unchanged behaviour.
+    scope: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _validate_action(self) -> WorkflowDefinitionBody:
         _validate_action_config(self.action_type, self.action_config)
         _validate_schedule_config(self.schedule_config)
+        _validate_scope(self.scope)
         return self
 
 

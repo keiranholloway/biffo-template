@@ -334,3 +334,83 @@ def test_fire_unknown_run_is_not_claimed(client):
 
     assert resp.status_code == 200
     assert resp.json()["claimed"] is False
+
+
+# ── Hierarchy-scoped workflows (docs/implementation/0003-hierarchy-scoped-workflows) ──
+
+
+async def _fake_hierarchy_resolver(db, source: str, detail_type: str, payload: dict) -> dict:
+    """Stands in for a registered instance resolver: reads brand/unit straight
+    off the payload (as tabsii's real resolver would after its own DB lookup)
+    — good enough to exercise `dispatch_event`'s scope-matching integration
+    without a real hierarchy table."""
+    return {
+        "tenant": "default",
+        "brand": payload.get("brand_id"),
+        "region": payload.get("region_id"),
+        "unit": payload.get("unit_id"),
+    }
+
+
+@pytest.fixture
+def _registered_resolver():
+    from api import scope_resolvers as sr
+
+    saved_levels, saved_resolver = sr._levels, sr._resolver  # noqa: SLF001
+    sr.register_scope_resolver(
+        _fake_hierarchy_resolver, levels=("tenant", "brand", "region", "unit")
+    )
+    yield
+    sr._levels, sr._resolver = saved_levels, saved_resolver  # noqa: SLF001
+
+
+def _unit_event_body(brand_id: str, unit_id: str, idempotency_key: str = "unit-1") -> dict:
+    return {
+        "source": "biffo.core",
+        "detail_type": "unit.onboarded",
+        "idempotency_key": idempotency_key,
+        "event": {"brand_id": brand_id, "unit_id": unit_id},
+    }
+
+
+def test_dispatch_brand_scope_covers_a_unit_event_beneath_it(
+    orchestration_app, client, _registered_resolver
+):
+    _, session_factory = orchestration_app
+    _seed(
+        session_factory,
+        trigger_detail_type="unit.onboarded",
+        scope={"level": "brand", "id": "brand-1"},
+    )
+
+    resp = client.post(_EVENTS, json=_unit_event_body("brand-1", "unit-1"))
+
+    assert len(resp.json()["runs"]) == 1
+
+
+def test_dispatch_brand_scope_does_not_match_a_sibling_brand(
+    orchestration_app, client, _registered_resolver
+):
+    _, session_factory = orchestration_app
+    _seed(
+        session_factory,
+        trigger_detail_type="unit.onboarded",
+        scope={"level": "brand", "id": "brand-1"},
+    )
+
+    resp = client.post(_EVENTS, json=_unit_event_body("brand-2", "unit-9"))
+
+    assert resp.json()["runs"] == []
+
+
+def test_dispatch_unscoped_definition_unaffected_by_a_registered_resolver(
+    orchestration_app, client, _registered_resolver
+):
+    """A regression guard: registering a resolver must not change behaviour
+    for any definition that doesn't opt into scoping at all."""
+    _, session_factory = orchestration_app
+    _seed(session_factory, trigger_detail_type="unit.onboarded")
+
+    resp = client.post(_EVENTS, json=_unit_event_body("brand-1", "unit-1"))
+
+    assert len(resp.json()["runs"]) == 1

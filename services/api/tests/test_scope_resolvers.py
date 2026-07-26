@@ -99,3 +99,41 @@ def test_scope_matches_chain_a_region_scope_does_not_match_a_brand_only_event():
     it (scoping narrows which events a rule *can* apply to)."""
     brand_only_chain = {"tenant": "default", "brand": "b1", "region": None, "unit": None}
     assert sr.scope_matches_chain({"level": "region", "id": "r1"}, brand_only_chain) is False
+
+
+# ── trigger_reachable_levels (Phase 4, docs/implementation/
+# 0003-hierarchy-scoped-workflows) ────────────────────────────────────────────
+
+
+def test_trigger_reachable_levels_empty_when_nothing_registered():
+    sr._levels, sr._resolver = (), sr._default_resolver  # noqa: SLF001
+    assert sr.trigger_reachable_levels(["brand_id"]) == []
+
+
+def test_trigger_reachable_levels_no_hierarchy_id_is_tenant_only():
+    """demo.requested carries no brand/region/unit id — only the broadest
+    (first-registered) level is reachable, matching that it can only ever be
+    authored tenant-wide."""
+    sr.register_scope_resolver(sr._default_resolver, levels=("tenant", "brand", "region", "unit"))  # noqa: SLF001
+    assert sr.trigger_reachable_levels(["email", "company"]) == ["tenant"]
+
+
+def test_trigger_reachable_levels_brand_id_reaches_tenant_and_brand():
+    """lead.captured carries brand_id only — reachable up to (and including)
+    brand, but not region/unit, which it has no id for."""
+    sr.register_scope_resolver(sr._default_resolver, levels=("tenant", "brand", "region", "unit"))  # noqa: SLF001
+    assert sr.trigger_reachable_levels(["lead_id", "brand_id", "status"]) == ["tenant", "brand"]
+
+
+def test_trigger_reachable_levels_narrowest_present_id_wins_even_skipping_a_level():
+    """unit.onboarded carries brand_id and unit_id but not region_id — every
+    level up to and including unit (the narrowest present) is reachable, region
+    included, since resolve_scope_chain always derives the full ancestor chain
+    regardless of which ids the payload literally carries."""
+    sr.register_scope_resolver(sr._default_resolver, levels=("tenant", "brand", "region", "unit"))  # noqa: SLF001
+    assert sr.trigger_reachable_levels(["brand_id", "unit_id"]) == [
+        "tenant",
+        "brand",
+        "region",
+        "unit",
+    ]

@@ -261,6 +261,89 @@ def test_create_rejects_a_level_not_among_a_registered_resolvers_levels(client: 
         sr._levels, sr._resolver = saved_levels, saved_resolver  # noqa: SLF001
 
 
+def test_create_rejects_scope_unreachable_by_trigger(client: TestClient):
+    """demo.requested's payload carries no brand/region/unit id, so a
+    brand-scoped workflow on it would create but silently never fire
+    (Phase 4, docs/implementation/0003-hierarchy-scoped-workflows) — the API
+    catches that dead combination at authoring time instead."""
+    from api import scope_resolvers as sr
+
+    saved_levels, saved_resolver = sr._levels, sr._resolver  # noqa: SLF001
+    sr.register_scope_resolver(sr._default_resolver, levels=("tenant", "brand", "region", "unit"))  # noqa: SLF001
+    try:
+        body = _valid_body(
+            trigger_detail_type="demo.requested", scope={"level": "brand", "id": "b1"}
+        )
+        resp = client.post(_BASE, json=body)
+        assert resp.status_code == 422, resp.text
+    finally:
+        sr._levels, sr._resolver = saved_levels, saved_resolver  # noqa: SLF001
+
+
+def test_create_allows_scope_reachable_by_trigger(client: TestClient):
+    """lead.captured's payload carries brand_id — a brand-scoped workflow on
+    it is a live combination, not a dead one."""
+    from api import scope_resolvers as sr
+
+    saved_levels, saved_resolver = sr._levels, sr._resolver  # noqa: SLF001
+    sr.register_scope_resolver(sr._default_resolver, levels=("tenant", "brand", "region", "unit"))  # noqa: SLF001
+    try:
+        body = _valid_body(
+            trigger_detail_type="lead.captured", scope={"level": "brand", "id": "b1"}
+        )
+        resp = client.post(_BASE, json=body)
+        assert resp.status_code == 201, resp.text
+    finally:
+        sr._levels, sr._resolver = saved_levels, saved_resolver  # noqa: SLF001
+
+
+def test_update_rejects_scope_unreachable_by_trigger(client: TestClient):
+    from api import scope_resolvers as sr
+
+    saved_levels, saved_resolver = sr._levels, sr._resolver  # noqa: SLF001
+    row = client.post(_BASE, json=_valid_body(trigger_detail_type="demo.requested")).json()
+    sr.register_scope_resolver(sr._default_resolver, levels=("tenant", "brand", "region", "unit"))  # noqa: SLF001
+    try:
+        body = _valid_body(
+            trigger_detail_type="demo.requested", scope={"level": "brand", "id": "b1"}
+        )
+        resp = client.put(f"{_BASE}/{row['id']}", json=body)
+        assert resp.status_code == 422, resp.text
+    finally:
+        sr._levels, sr._resolver = saved_levels, saved_resolver  # noqa: SLF001
+
+
+def test_create_allows_any_scope_when_no_resolver_registered_even_on_a_tenant_only_trigger(
+    client: TestClient,
+):
+    """Reachability has nothing to check against when no resolver is
+    registered at all — mirrors _validate_scope's own leniency in that case."""
+    from api import scope_resolvers as sr
+
+    saved_levels, saved_resolver = sr._levels, sr._resolver  # noqa: SLF001
+    sr._levels, sr._resolver = (), sr._default_resolver  # noqa: SLF001
+    try:
+        body = _valid_body(
+            trigger_detail_type="demo.requested", scope={"level": "brand", "id": "b1"}
+        )
+        assert client.post(_BASE, json=body).status_code == 201
+    finally:
+        sr._levels, sr._resolver = saved_levels, saved_resolver  # noqa: SLF001
+
+
+def test_catalog_carries_reachable_levels_per_trigger(client: TestClient):
+    from api import scope_resolvers as sr
+
+    saved_levels, saved_resolver = sr._levels, sr._resolver  # noqa: SLF001
+    sr.register_scope_resolver(sr._default_resolver, levels=("tenant", "brand", "region", "unit"))  # noqa: SLF001
+    try:
+        triggers = {t["detail_type"]: t for t in client.get(f"{_BASE}/catalog").json()["triggers"]}
+        assert triggers["demo.requested"]["reachable_levels"] == ["tenant"]
+        assert triggers["lead.captured"]["reachable_levels"] == ["tenant", "brand"]
+    finally:
+        sr._levels, sr._resolver = saved_levels, saved_resolver  # noqa: SLF001
+
+
 def test_create_rejects_invalid_action_config(client: TestClient):
     body = _valid_body(action_config={"from": "no-reply@example.com"})  # missing to/subject/body
     resp = client.post(_BASE, json=body)

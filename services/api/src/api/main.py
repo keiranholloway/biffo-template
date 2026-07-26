@@ -14,6 +14,7 @@ from .routers import (
     internal_agent_chat,
     internal_agents,
     internal_orchestration,
+    internal_plugin_config,
     orchestration,
     users,
 )
@@ -82,6 +83,10 @@ app.include_router(internal_orchestration.router, prefix="/api/v1")
 # requests, reads and completes runs here, under /api/v1/internal/*.
 app.include_router(internal_agents.router, prefix="/api/v1")
 app.include_router(internal_agent_chat.router, prefix="/api/v1")
+# Internal service-only plugin config read (ADR-0009): a plugin reads its own
+# admin-set config row from plugin_chat_agents, scoped by SigV4 identity alone,
+# under /api/v1/internal/plugins/me/config/{role}.
+app.include_router(internal_plugin_config.router, prefix="/api/v1")
 # User-facing orchestration workflow CRUD (the portal builder): Cognito-authed,
 # admin-gated, under /api/v1/orchestration/workflows, plus the read-only run
 # history under /api/v1/orchestration/runs.

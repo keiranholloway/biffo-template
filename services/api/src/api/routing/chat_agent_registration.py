@@ -76,6 +76,10 @@ def register_plugin_chat_agents(manifests: Sequence[dict[str, Any]] | None = Non
     registered: list[str] = []
     for manifest in discovered:
         name = manifest.get("name")
+        # Skip dynamic plugins — they opt into live DB resolution via the
+        # internal_agent_chat.py fallback instead of static registration.
+        if manifest.get("chat_agents_dynamic"):
+            continue
         raw_agents = manifest.get("chat_agents")
         if not raw_agents:
             continue

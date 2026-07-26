@@ -39,6 +39,7 @@ from ..chat_agents import (
     UnknownChatAgentError,
     get_chat_agent,
     get_chat_context,
+    get_dynamic_chat_agent,
 )
 from ..chat_engine import RuntimeInvoker
 from ..database import get_db
@@ -70,9 +71,12 @@ async def internal_agent_chat(
     try:
         agent = get_chat_agent(agent_key)
     except UnknownChatAgentError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="No such chat agent."
-        ) from exc
+        # Fallback to live DB resolution for opted-in dynamic plugins.
+        agent = await get_dynamic_chat_agent(db, tenant_id=founder.tenant_id, agent_key=agent_key)
+        if agent is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="No such chat agent."
+            ) from exc
 
     if agent.required_group not in founder.roles:
         raise HTTPException(

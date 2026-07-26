@@ -1,9 +1,18 @@
 """Orchestrator plugin Lambda entrypoint.
 
-Invoked by the plugin's EventBridge rule (terraform/) for each subscribed event.
-Turns the raw EventBridge event into a ``BiffoEvent`` and dispatches it through
-``OrchestratorPlugin``'s ``EventSubscriber`` (ADR-0002: no DB client, Core API
-only, react to events).
+Invoked two ways:
+
+1. By the plugin's EventBridge rule (terraform/) for each subscribed bus
+   event — turned into a ``BiffoEvent`` and dispatched through
+   ``OrchestratorPlugin``'s ``EventSubscriber`` (ADR-0002: no DB client, Core
+   API only, react to events).
+2. By EventBridge Scheduler, directly invoking this Lambda at a scheduled
+   run's fire time (docs/implementation/0002-scheduled-workflow-actions,
+   ADR-0023) with a small sentinel payload — not an EventBridge-rule-shaped
+   event, and deliberately never turned into one: it is routed straight to
+   ``fire_scheduled_run``, before ``create_event_handler`` ever sees it,
+   since that call requires a source/detail-type/detail envelope and would
+   raise on this shape.
 """
 
 from __future__ import annotations
@@ -14,7 +23,7 @@ from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from biffo_plugin_sdk import create_event_handler
 
-from .plugin import OrchestratorPlugin
+from .plugin import SCHEDULED_RUN_ID_KEY, OrchestratorPlugin
 
 logger = Logger()
 tracer = Tracer()
@@ -47,8 +56,14 @@ def handler(event: dict, context: LambdaContext) -> dict:
         _loop = asyncio.new_event_loop()
     asyncio.set_event_loop(_loop)
 
-    biffo_event = create_event_handler(event)
     plugin = _get_plugin()
+
+    run_id = event.get(SCHEDULED_RUN_ID_KEY)
+    if run_id is not None:
+        _loop.run_until_complete(plugin.fire_scheduled_run(run_id))
+        return {"statusCode": 200}
+
+    biffo_event = create_event_handler(event)
     _loop.run_until_complete(plugin.events.dispatch(biffo_event))
 
     return {"statusCode": 200}

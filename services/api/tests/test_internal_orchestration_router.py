@@ -286,6 +286,9 @@ def test_fire_claims_a_scheduled_run(orchestration_app, client):
     assert body["run_id"] == run_id
     assert body["action_type"] == "email"
     assert body["action_config"] == {"to": "sales@example.com"}
+    # The original trigger event, so template rendering at fire time (days or
+    # weeks later) has the same payload the trigger carried at claim time.
+    assert body["trigger_event"] == _event_body()["event"]
 
 
 def test_fire_is_not_claimed_twice(orchestration_app, client):

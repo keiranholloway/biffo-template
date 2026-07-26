@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from biffo_plugin_sdk import BiffoEvent
@@ -12,6 +13,7 @@ from orchestrator.plugin import OrchestratorPlugin
 from orchestrator_fakes import (
     FakeCore,
     FakeHttp,
+    FakeScheduler,
     FakeSes,
     FlakyHttp,
     FlakySes,
@@ -553,3 +555,90 @@ async def test_completed_event_reaches_delivery_through_dispatch():
     # … and the wildcard forwarder still posted the event to Core for workflow
     # matching (agent chaining), unchanged.
     assert core.event_posts()[0]["detail_type"] == "agent.run.completed"
+
+
+# ── Scheduled workflow actions (docs/implementation/0002-scheduled-workflow-actions) ──
+
+
+async def test_process_event_schedules_a_delayed_run_instead_of_executing(monkeypatch):
+    monkeypatch.setenv("BIFFO_SCHEDULE_GROUP_NAME", "wf-group")
+    monkeypatch.setenv(
+        "BIFFO_FUNCTION_ARN", "arn:aws:lambda:eu-west-1:123456789012:function:orchestrator"
+    )
+    monkeypatch.setenv(
+        "BIFFO_SCHEDULER_ROLE_ARN", "arn:aws:iam::123456789012:role/scheduler-invoke"
+    )
+    core = FakeCore([_email_run(created=True, scheduled_for="2026-08-09T12:00:00+00:00")])
+    ses = FakeSes()
+    scheduler = FakeScheduler()
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=ses, scheduler_client=scheduler)
+
+    await plugin.process_event(_event())
+
+    # Not executed now — only scheduled.
+    assert len(ses.calls) == 0
+    assert len(scheduler.calls) == 1
+    call = scheduler.calls[0]
+    assert call["Name"] == "wf-run-run-1"
+    assert call["GroupName"] == "wf-group"
+    assert call["ScheduleExpression"] == "at(2026-08-09T12:00:00)"
+    assert call["FlexibleTimeWindow"] == {"Mode": "OFF"}
+    assert call["Target"]["Arn"] == "arn:aws:lambda:eu-west-1:123456789012:function:orchestrator"
+    assert call["Target"]["RoleArn"] == "arn:aws:iam::123456789012:role/scheduler-invoke"
+    assert json.loads(call["Target"]["Input"]) == {"biffo_scheduled_run_id": "run-1"}
+    assert call["ActionAfterCompletion"] == "DELETE"
+
+
+async def test_process_event_still_executes_immediately_when_not_scheduled():
+    """No regression: a run with no scheduled_for still dispatches now."""
+    core = FakeCore([_email_run(created=True)])
+    ses = FakeSes()
+    scheduler = FakeScheduler()
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=ses, scheduler_client=scheduler)
+
+    await plugin.process_event(_event())
+
+    assert len(ses.calls) == 1
+    assert len(scheduler.calls) == 0
+
+
+async def test_fire_scheduled_run_executes_the_claimed_action():
+    trigger_event = {"demo_request_id": "d1", "company": "Acme", "email": "lead@acme.com"}
+    core = FakeCore(
+        [],
+        fire_response={
+            "claimed": True,
+            "run_id": "run-1",
+            "action_type": "email",
+            "action_config": {
+                "from": "no-reply@example.com",
+                "to": "sales@example.com",
+                "subject": "Demo from {company}",
+            },
+            "trigger_event": trigger_event,
+        },
+    )
+    ses = FakeSes()
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=ses)
+
+    await plugin.fire_scheduled_run("run-1")
+
+    assert len(ses.calls) == 1
+    assert ses.calls[0]["Message"]["Subject"]["Data"] == "Demo from Acme"
+    assert core.fire_posts() == ["run-1"]
+    results = core.result_posts()
+    assert len(results) == 1
+    assert results[0]["status"] == "succeeded"
+
+
+async def test_fire_scheduled_run_not_claimed_does_nothing():
+    """The run already fired (duplicate Scheduler delivery), or its
+    definition was disabled/deleted — either way, nothing to execute."""
+    core = FakeCore([], fire_response=None)
+    ses = FakeSes()
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=ses)
+
+    await plugin.fire_scheduled_run("run-1")
+
+    assert len(ses.calls) == 0
+    assert core.result_posts() == []

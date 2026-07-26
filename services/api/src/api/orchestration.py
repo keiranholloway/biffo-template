@@ -49,6 +49,13 @@ class ClaimedRun:
     # engine must create a future one-time schedule for this instant rather
     # than execute now (docs/implementation/0002-scheduled-workflow-actions).
     scheduled_for: datetime | None = None
+    # Only populated by ``fire_scheduled_run``: the *original* triggering
+    # event's payload, stored on the run at claim time. The immediate-dispatch
+    # path doesn't need this — the engine already holds the live event it just
+    # received — but the fire-time callback has nothing but a ``run_id`` days
+    # or weeks later, and template rendering (``{field}`` in subject/body/to)
+    # needs the same payload the trigger originally carried.
+    trigger_event: dict[str, Any] | None = None
 
 
 def _scheduled_for(schedule_config: dict[str, Any] | None) -> datetime | None:
@@ -219,6 +226,7 @@ async def fire_scheduled_run(db: AsyncSession, *, tenant_id: str, run_id: str) -
         action_config=definition.action_config,
         created=True,
         scheduled_for=run.scheduled_for,
+        trigger_event=run.trigger_event,
     )
 
 

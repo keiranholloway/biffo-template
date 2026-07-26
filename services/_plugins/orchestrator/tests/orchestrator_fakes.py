@@ -34,6 +34,7 @@ class FakeCore:
         agent_run_status: int = 201,
         agent_run_detail: str = "Agent run refused",
         agent_run_record: dict[str, Any] | None = None,
+        fire_response: dict[str, Any] | None = None,
     ) -> None:
         self._runs = runs
         self._agent_run_id = agent_run_id
@@ -43,6 +44,9 @@ class FakeCore:
         # deliver-on-completion handler (ADR-0020) fetches to read a run's output
         # and its delivery snapshot (the completion event carries only a reference).
         self._agent_run_record = agent_run_record
+        # Served by POST /runs/{id}/fire (docs/implementation/
+        # 0002-scheduled-workflow-actions) — None means "not claimed".
+        self._fire_response = fire_response
         self.requests: list[tuple[str, str, dict[str, Any]]] = []
 
     def client(self) -> SignedCoreClient:
@@ -69,6 +73,12 @@ class FakeCore:
             path.rsplit("/", 1)[-1]
             for method, path, _ in self.requests
             if method == "GET" and "/agent-runs/" in path
+        ]
+
+    def fire_posts(self) -> list[str]:
+        """The run ids posted to POST /runs/{id}/fire."""
+        return [
+            path.rsplit("/", 2)[-2] for method, path, _ in self.requests if path.endswith("/fire")
         ]
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
@@ -99,6 +109,11 @@ class FakeCore:
             )
         if request.url.path.endswith("/events"):
             return httpx.Response(200, json={"runs": self._runs})
+        if request.url.path.endswith("/fire"):
+            if self._fire_response is None:
+                run_id = request.url.path.rsplit("/", 2)[-2]
+                return httpx.Response(200, json={"claimed": False, "run_id": run_id})
+            return httpx.Response(200, json=self._fire_response)
         if request.url.path.endswith("/result"):
             return httpx.Response(
                 200,
@@ -236,3 +251,17 @@ class FakeSsm:
         if Name not in self.parameters:
             raise KeyError(f"Parameter {Name} not found")
         return {"Parameter": {"Name": Name, "Value": self.parameters[Name]}}
+
+
+class FakeScheduler:
+    """Records EventBridge Scheduler ``create_schedule`` calls (docs/implementation/
+    0002-scheduled-workflow-actions) — no real AWS call."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def create_schedule(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        return {
+            "ScheduleArn": f"arn:aws:scheduler:eu-west-1:123456789012:schedule/{kwargs['Name']}"
+        }

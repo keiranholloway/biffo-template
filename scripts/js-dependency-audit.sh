@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 #
 # JS dependency audit that fails the build on a real high/critical advisory but
 # NOT on a broken audit registry (#591).
@@ -17,7 +17,8 @@
 # than as a vulnerability. "Couldn't run the check" and "the check found a
 # problem" must not be the same signal on a required gate.
 #
-set -uo pipefail
+# POSIX sh (the CI step runs `sh scripts/...`, i.e. dash) — no `pipefail`.
+set -u
 
 attempts=3
 

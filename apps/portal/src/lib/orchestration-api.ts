@@ -35,6 +35,19 @@ export interface ScheduleConfig {
 }
 
 /**
+ * An optional hierarchy scope on a workflow definition (docs/implementation/
+ * 0003-hierarchy-scoped-workflows) — e.g. "this rule applies to Brand X and
+ * everything beneath it," not just an exact trigger match. `level` is one of
+ * the catalog's `scope_levels` (empty when the instance has registered no
+ * hierarchy resolver at all — see `WorkflowCatalog`). Absent from a
+ * definition ⇒ unscoped/tenant-wide, unchanged behaviour.
+ */
+export interface WorkflowScope {
+  level: string
+  id: string
+}
+
+/**
  * An orchestration workflow definition as surfaced by the Core API
  * (`/api/v1/orchestration/workflows`): a trigger (event) mapped to an action.
  * The engine reads the enabled ones matching each incoming event.
@@ -63,6 +76,7 @@ export interface WorkflowDefinition {
   action_config: Record<string, ActionConfigValue>
   enabled: boolean
   schedule_config: ScheduleConfig | null
+  scope: WorkflowScope | null
 }
 
 /** The create/update body — the Core API validates action_config per action_type. */
@@ -75,6 +89,7 @@ export interface WorkflowInput {
   action_config: Record<string, ActionConfigValue>
   enabled: boolean
   schedule_config: ScheduleConfig | null
+  scope: WorkflowScope | null
 }
 
 /**
@@ -204,6 +219,13 @@ export interface CatalogAction {
 export interface WorkflowCatalog {
   triggers: CatalogTrigger[]
   actions: CatalogAction[]
+  /**
+   * The active hierarchy scope resolver's declared levels, broad-to-narrow
+   * (docs/implementation/0003-hierarchy-scoped-workflows) — feeds the Scope
+   * picker's level dropdown. Empty when the instance has registered no
+   * resolver at all, in which case the Scope section is not offered.
+   */
+  scope_levels: string[]
 }
 
 /**

@@ -139,16 +139,15 @@ resource "aws_cloudfront_origin_access_control" "portal" {
   signing_behavior                  = "always"
   signing_protocol                  = "sigv4"
 
-  # #543: without this, a forced replacement (e.g. an attribute change to this
-  # OAC) destroys the OLD OAC before the distribution's origin blocks are
-  # updated to reference the new one's id — CloudFront still has the old id
-  # attached and refuses the delete with 409 OriginAccessControlInUse. Terraform
-  # destroys OLD only after NEW exists AND every reference is repointed to it,
-  # which forces the distribution's detach-update to complete first. Same fix
-  # applies to any origin-request-policy resource this module manages in future.
-  lifecycle {
-    create_before_destroy = true
-  }
+  # #543: deliberately NO create_before_destroy here. This OAC's `name` is fixed
+  # (CloudFront OAC names must be unique per account), so create_before_destroy on
+  # a forced replacement would try to create a second OAC with the SAME name
+  # before destroying this one — guaranteed name collision, not a fix. It's also
+  # not the #543 hazard in the first place: this OAC is referenced from the
+  # STATIC origin block below (always present), not only from a dynamic block, so
+  # its reference can never disappear out from under a destroy. See the comment
+  # above aws_cloudfront_distribution.portal for the resource that #543 actually
+  # applies to (none exists in this module today).
 }
 
 # Dedicated log-delivery bucket for CloudFront access logs (CKV_AWS_86).

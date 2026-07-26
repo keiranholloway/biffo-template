@@ -340,3 +340,97 @@ def test_suspend_without_db_row_still_emits(harness):
 
     event = _only_event(harness)
     assert event.detail_type == "user.suspended"
+
+
+# --- self-lockout guard (#630) ------------------------------------------------
+
+
+def _sign_in_as(harness, *, sub: str, email: str) -> None:
+    """Override require_auth so the caller IS the given Cognito user, the same
+    shape /auth/me would resolve from a real token — used to test that an
+    admin cannot suspend/delete/de-admin their own account."""
+    harness["app"].dependency_overrides[require_auth] = lambda: AuthenticatedUser(
+        sub=sub, email=email, username=email, tenant_id="default", roles=["admin"]
+    )
+
+
+def test_admin_cannot_suspend_themselves(harness):
+    self_user = harness["cog"].create_user(
+        email="self@example.com", given_name="Self", family_name="Admin", suppress_invite_email=True
+    )
+    _sign_in_as(harness, sub=self_user["sub"], email="self@example.com")
+
+    resp = harness["client"].post(f"{_BASE}/self@example.com/suspend")
+
+    assert resp.status_code == 400
+    assert "own account" in resp.json()["detail"]
+    # Never reached Cognito — still enabled.
+    assert harness["cog"].get_user("self@example.com")["enabled"] is True
+
+
+def test_admin_cannot_delete_themselves(harness):
+    self_user = harness["cog"].create_user(
+        email="self2@example.com",
+        given_name="Self",
+        family_name="Admin",
+        suppress_invite_email=True,
+    )
+    _sign_in_as(harness, sub=self_user["sub"], email="self2@example.com")
+
+    resp = harness["client"].delete(f"{_BASE}/self2@example.com")
+
+    assert resp.status_code == 400
+    assert "own account" in resp.json()["detail"]
+    assert harness["client"].get(f"{_BASE}/self2@example.com").status_code == 200
+
+
+def test_admin_cannot_remove_themselves_from_admin_group(harness):
+    self_user = harness["cog"].create_user(
+        email="self3@example.com",
+        given_name="Self",
+        family_name="Admin",
+        groups=["admin"],
+        suppress_invite_email=True,
+    )
+    _sign_in_as(harness, sub=self_user["sub"], email="self3@example.com")
+
+    resp = harness["client"].delete(f"{_BASE}/self3@example.com/groups/admin")
+
+    assert resp.status_code == 400
+    assert "admin group" in resp.json()["detail"]
+    assert "admin" in harness["cog"].list_groups_for_user("self3@example.com")
+
+
+def test_admin_can_remove_themselves_from_a_non_admin_group(harness):
+    """The guard is scoped to the admin group specifically (#630) — leaving
+    any other group is not a self-lockout risk."""
+    self_user = harness["cog"].create_user(
+        email="self4@example.com",
+        given_name="Self",
+        family_name="Admin",
+        groups=["admin", "editor"],
+        suppress_invite_email=True,
+    )
+    _sign_in_as(harness, sub=self_user["sub"], email="self4@example.com")
+
+    resp = harness["client"].delete(f"{_BASE}/self4@example.com/groups/editor")
+
+    assert resp.status_code == 200
+    assert "editor" not in resp.json()["groups"]
+
+
+def test_admin_can_still_suspend_a_different_user(harness):
+    """The guard compares resolved sub, not just "an admin is acting" — acting
+    on someone else is unaffected."""
+    harness["cog"].create_user(
+        email="other@example.com",
+        given_name="Other",
+        family_name="Person",
+        suppress_invite_email=True,
+    )
+    _sign_in_as(harness, sub="a-different-admin-sub", email="admin@example.com")
+
+    resp = harness["client"].post(f"{_BASE}/other@example.com/suspend")
+
+    assert resp.status_code == 200
+    assert resp.json()["enabled"] is False

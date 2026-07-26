@@ -37,7 +37,13 @@ def build_plugin_host(
     the gated host. ``authorize`` defaults to the real Cognito authorizer; ``load``
     is injectable so the composition is testable without importing real plugins."""
     plugins = [
-        MountedPlugin(name=p.name, app=load(p.app_ref), required_group=p.required_group)
+        MountedPlugin(
+            name=p.name,
+            app=load(p.app_ref),
+            required_group=p.required_group,
+            admin_app=load(p.admin_app_ref) if p.admin_app_ref else None,
+            admin_required_group=p.admin_required_group,
+        )
         for p in discover_plugins(services_root)
     ]
     return build_host(plugins, authorize=authorize or cognito_authorizer())

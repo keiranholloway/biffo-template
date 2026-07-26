@@ -14,6 +14,7 @@ const rbacPlugin: InstalledPlugin = {
   routes: [
     { method: 'GET', path: '/roles', table: 'rbac_roles', operation: 'list', description: '' },
   ],
+  has_admin_ingress: false,
 }
 
 describe('InstalledPluginRow', () => {

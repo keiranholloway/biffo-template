@@ -54,6 +54,7 @@ export interface InstalledPlugin {
   description: string
   tables: PluginTableDefinition[]
   routes: PluginRouteDefinition[]
+  has_admin_ingress: boolean
 }
 
 /** Fetch all installed plugins from the real Core API endpoint. */

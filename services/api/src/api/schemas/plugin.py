@@ -17,3 +17,4 @@ class InstalledPluginResponse(BaseModel):
     description: str = ""
     tables: list[PluginTableDefinition] = []
     routes: list[RouteDefinition] = []
+    has_admin_ingress: bool = False

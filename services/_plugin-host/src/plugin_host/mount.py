@@ -1,9 +1,10 @@
-"""Mounting and group-gating user-facing plugin apps in the shared plugin host
-(ADR-0021 §1/§1a).
+"""Mounting and group-gating user-facing and admin-facing plugin apps in the shared
+plugin host (ADR-0021 §1/§1a).
 
 The shared plugin host is ONE Lambda that runs every installed user-facing plugin's
 API. Each plugin contributes an ASGI app (a FastAPI app or router); the host mounts
-it at ``/<name>`` behind a group-gate. The gate:
+it at ``/<name>`` behind a group-gate, and optionally at ``/<name>/admin`` for the
+admin ingress. The gate:
 
 - authorizes the founder JWT against the plugin's declared ``required_group`` — the
   host, being platform code, enforces authorization (ADR-0011), not the plugin;
@@ -52,11 +53,14 @@ Authorizer = Callable[[str, str], Any]
 @dataclass(frozen=True)
 class MountedPlugin:
     """A plugin ready to mount: its name (URL segment + asserted identity), its ASGI
-    app, and the Cognito group a caller must be in."""
+    app, and the Cognito group a caller must be in. Optionally includes an admin app
+    mounted at ``/<name>/admin``."""
 
     name: str
     app: Any
     required_group: str
+    admin_app: Any | None = None
+    admin_required_group: str | None = None
 
 
 def _founder_token(headers: list[tuple[bytes, bytes]]) -> str:
@@ -87,27 +91,27 @@ async def _send_json(send: Callable, status: int, body: dict) -> None:
     await send({"type": "http.response.body", "body": payload})
 
 
-def group_gate(plugin: MountedPlugin, authorize: Authorizer) -> Callable:
+def group_gate(app: Any, required_group: str, plugin_name: str, authorize: Authorizer) -> Callable:
     """Wrap a plugin's ASGI app so every HTTP request is authorized against the
-    plugin's group and runs with the plugin's identity bound."""
+    required group and runs with the plugin's identity bound."""
 
     async def gated(scope: dict, receive: Callable, send: Callable) -> None:
         if scope["type"] != "http":
-            await plugin.app(scope, receive, send)
+            await app(scope, receive, send)
             return
         token = _founder_token(scope.get("headers", []))
         try:
-            authorize(token, plugin.required_group)
+            authorize(token, required_group)
         except GateError as exc:
             await _send_json(send, exc.status, {"detail": exc.detail})
             return
-        reset = current_plugin.set(plugin.name)
+        reset = current_plugin.set(plugin_name)
         # The SDK's SignedCoreClient reads this to stamp the X-Biffo-Plugin identity
         # header on the plugin's outbound Core calls (ADR-0021 §1a), so Core grants
         # `system:<plugin>` rather than the host's own role identity.
-        reset_sdk = acting_as_plugin.set(plugin.name)
+        reset_sdk = acting_as_plugin.set(plugin_name)
         try:
-            await plugin.app(scope, receive, send)
+            await app(scope, receive, send)
         finally:
             current_plugin.reset(reset)
             acting_as_plugin.reset(reset_sdk)
@@ -116,11 +120,27 @@ def group_gate(plugin: MountedPlugin, authorize: Authorizer) -> Callable:
 
 
 def build_host(plugins: list[MountedPlugin], *, authorize: Authorizer) -> Starlette:
-    """The shared plugin-host ASGI app: each plugin mounted, gated, under ``/<name>``.
+    """The shared plugin-host ASGI app: each plugin mounted, gated, under ``/<name>``
+    and optionally under ``/<name>/admin`` if an admin ingress is declared.
 
     Starlette's ``Mount`` strips the ``/<name>`` prefix, so a plugin's routes stay
     clean (``/sessions``, …) with no per-plugin knowledge of where it is mounted —
     replacing ADR-0018's per-plugin Mangum ``api_gateway_base_path`` hack.
     """
-    routes = [Mount(f"/{p.name}", app=group_gate(p, authorize)) for p in plugins]
+    routes = []
+    for p in plugins:
+        # Admin app mount (if declared) — must come before user-facing mount so
+        # /ideation/admin/* matches before /ideation/* (Starlette routes are
+        # checked in order, and a Mount matches if the path starts with its prefix)
+        if p.admin_app is not None and p.admin_required_group is not None:
+            routes.append(
+                Mount(
+                    f"/{p.name}/admin",
+                    app=group_gate(p.admin_app, p.admin_required_group, p.name, authorize),
+                )
+            )
+        # User-facing app mount
+        routes.append(
+            Mount(f"/{p.name}", app=group_gate(p.app, p.required_group, p.name, authorize))
+        )
     return Starlette(routes=routes)

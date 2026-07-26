@@ -9,6 +9,10 @@ Cognito group a caller must be in (ADR-0011).
 The ASGI app is referenced as ``"<module>:<attr>"`` (e.g. ``"ideation.app:app"``)
 in ``user_ingress.app`` — the host mounts that app, and provides the Lambda entry
 itself, so a plugin no longer ships its own Mangum handler.
+
+A plugin may additionally declare ``admin_ingress`` (same schema as ``user_ingress``)
+to mount an authenticated, admin-gated API and static UI bundle alongside the user
+ingress.
 """
 
 from __future__ import annotations
@@ -23,6 +27,8 @@ class DiscoveredPlugin:
     name: str
     app_ref: str  # "module:attr"
     required_group: str
+    admin_app_ref: str | None = None  # "module:attr" or None if admin_ingress not declared
+    admin_required_group: str | None = None  # Cognito group or None if admin_ingress not declared
 
 
 def discover_plugins(services_root: str | Path) -> list[DiscoveredPlugin]:
@@ -49,7 +55,28 @@ def discover_plugins(services_root: str | Path) -> list[DiscoveredPlugin]:
         required_group = ingress.get("required_group")
         if not (name and app_ref and required_group):
             continue
-        found.append(DiscoveredPlugin(name=name, app_ref=app_ref, required_group=required_group))
+
+        # Parse admin_ingress if present
+        admin_ingress = manifest.get("admin_ingress")
+        admin_app_ref = None
+        admin_required_group = None
+        if isinstance(admin_ingress, dict):
+            admin_app_ref = admin_ingress.get("app")
+            admin_required_group = admin_ingress.get("required_group")
+            # Only populate if both are present
+            if not (admin_app_ref and admin_required_group):
+                admin_app_ref = None
+                admin_required_group = None
+
+        found.append(
+            DiscoveredPlugin(
+                name=name,
+                app_ref=app_ref,
+                required_group=required_group,
+                admin_app_ref=admin_app_ref,
+                admin_required_group=admin_required_group,
+            )
+        )
     return found
 
 

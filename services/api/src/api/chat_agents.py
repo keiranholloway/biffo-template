@@ -20,6 +20,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 Message = dict[str, Any]
 
 
@@ -106,3 +109,35 @@ def register_chat_context(agent_key: str, assembler: ContextAssembler) -> None:
 def get_chat_context(agent_key: str) -> ContextAssembler | None:
     """The registered context assembler for ``agent_key``, or ``None``."""
     return _CONTEXT_ASSEMBLERS.get(agent_key)
+
+
+async def get_dynamic_chat_agent(
+    db: AsyncSession, *, tenant_id: str, agent_key: str
+) -> ChatAgent | None:
+    """Resolve a live, admin-editable chat agent by key (any plugin's), scoped
+    to the caller's tenant and only if active. Returns None if not found —
+    callers map that the same way as UnknownChatAgentError from the static
+    registry (ADR-0017 seam #1 extension: the fallback for a plugin that opted
+    into chat_agents_dynamic, including agent keys created after cold-start
+    that the static _BUILDERS dict never saw)."""
+    from .models.plugin_chat_agent import PluginChatAgent
+
+    row = await db.scalar(
+        select(PluginChatAgent).where(
+            PluginChatAgent.tenant_id == tenant_id,
+            PluginChatAgent.agent_key == agent_key,
+            PluginChatAgent.active.is_(True),
+        )
+    )
+    if row is None:
+        return None
+    return ChatAgent(
+        agent_key=row.agent_key,
+        agent_name=row.agent_name,
+        system_prompt=row.system_prompt,
+        model=row.model,
+        required_group=row.required_group,
+        max_history_messages=row.max_history_messages,
+        max_output_tokens=row.max_output_tokens,
+        timeout_seconds=row.timeout_seconds,
+    )

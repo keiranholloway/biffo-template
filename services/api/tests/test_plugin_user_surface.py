@@ -1,11 +1,13 @@
-"""User-facing plugin surface declarations (ADR-0021 / ADR-0018 §2): manifest schema."""
+"""User-facing and admin-facing plugin surface declarations: manifest schema."""
 
 from __future__ import annotations
 
 import pytest
 from api.models.plugin_user_surface import (
+    AdminIngress,
     UserFrontend,
     UserIngress,
+    parse_admin_ingress_from_manifest,
     parse_user_frontend_from_manifest,
     parse_user_ingress_from_manifest,
 )
@@ -42,6 +44,35 @@ def test_user_ingress_rejects_unknown_keys():
             UserIngress.model_validate({"required_group": "founder", "app": "m:a", **extra})
 
 
+# ── admin_ingress ────────────────────────────────────────────────────────────
+
+
+def test_admin_ingress_parses_an_app_ref_the_shared_host_mounts():
+    ingress = AdminIngress(required_group="admin", app="ideation.admin:app")
+    assert ingress.app == "ideation.admin:app"
+    assert ingress.required_group == "admin"
+
+
+def test_admin_ingress_requires_a_group_and_an_app_ref():
+    with pytest.raises(ValidationError):
+        AdminIngress(required_group="  ", app="ideation.admin:app")
+    # app is required
+    with pytest.raises(ValidationError):
+        AdminIngress.model_validate({"required_group": "admin"})
+
+
+def test_admin_ingress_rejects_a_malformed_app_ref():
+    for bad in ("nocolon", "mod:", ":attr", "1bad:app", "mod:1bad"):
+        with pytest.raises(ValidationError):
+            AdminIngress(required_group="admin", app=bad)
+
+
+def test_admin_ingress_rejects_unknown_keys():
+    # extra="forbid": a typo'd key on a security surface fails loudly.
+    with pytest.raises(ValidationError):
+        AdminIngress.model_validate({"required_group": "admin", "app": "m:a", "extra": True})
+
+
 # ── user_frontend ────────────────────────────────────────────────────────────────
 
 
@@ -61,15 +92,19 @@ def test_user_frontend_dir_must_be_relative_no_traversal():
 
 def test_parsers_return_none_when_absent():
     assert parse_user_ingress_from_manifest({}) is None
+    assert parse_admin_ingress_from_manifest({}) is None
     assert parse_user_frontend_from_manifest({}) is None
 
 
 def test_parsers_build_the_models_when_present():
     manifest = {
         "user_ingress": {"required_group": "founder", "app": "ideation.app:app"},
+        "admin_ingress": {"required_group": "admin", "app": "ideation.admin:app"},
         "user_frontend": {"dir": "web/dist", "required_group": "founder"},
     }
     ingress = parse_user_ingress_from_manifest(manifest)
+    admin_ingress = parse_admin_ingress_from_manifest(manifest)
     frontend = parse_user_frontend_from_manifest(manifest)
     assert ingress is not None and ingress.app == "ideation.app:app"
+    assert admin_ingress is not None and admin_ingress.app == "ideation.admin:app"
     assert frontend is not None and frontend.dir == "web/dist"

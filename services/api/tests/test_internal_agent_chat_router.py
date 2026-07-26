@@ -7,6 +7,9 @@ verification are exercised elsewhere (ADR-0009; packages/cognito-auth), so here
 they are faked/overridden and the focus is this endpoint's own logic: the run is
 run_as the *forwarded founder*, the gate is the agent's required_group, a missing
 forwarded token is 401, and an unknown agent is 404.
+
+Additionally tests the live, DB-backed resolution fallback for opted-in dynamic
+plugins (ADR-0017 seam #1 extension).
 """
 
 import asyncio
@@ -21,6 +24,7 @@ from api.middleware.auth import AuthenticatedUser
 from api.middleware.service_auth import ServicePrincipal, require_service_principal
 from api.models.agent_run import AgentRun  # noqa: F401 — registers the table on Base.metadata
 from api.models.base import Base
+from api.models.plugin_chat_agent import PluginChatAgent  # noqa: F401 — registers the table
 from api.routers import internal_agent_chat
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -184,3 +188,105 @@ def test_the_forwarded_token_is_verified_via_cores_own_mapping(monkeypatch):
 
     assert seen["token"] == "a.b.c"  # the header value is what gets verified
     assert user.sub == "founder-sub-abc"
+
+
+# ── Dynamic chat agents: live, DB-backed resolution (ADR-0017 seam #1 extension) ──
+
+
+def test_a_dynamic_chat_agent_from_db_runs_the_turn():
+    """An agent_key NOT in the static registry, but present as an active row in
+    PluginChatAgent, is resolved from the DB and runs successfully."""
+    invoker = FakeInvoker()
+    app, session_factory, engine = _build_app(founder=_founder(roles=["founder"]), invoker=invoker)
+    client = TestClient(app)
+
+    # Insert a dynamic agent directly into the DB.
+    async def _insert_dynamic():
+        async with session_factory() as session:
+            agent = PluginChatAgent(
+                tenant_id="default",
+                plugin_name="dynamic-plugin",
+                agent_key="dynamic-agent",
+                agent_name="Dynamic Agent",
+                role="founder",
+                system_prompt="I am a dynamic agent from the DB.",
+                model="test/dynamic-model",
+                required_group="founder",
+                active=True,
+                max_history_messages=40,
+                max_output_tokens=256,
+                timeout_seconds=10.0,
+            )
+            session.add(agent)
+            await session.commit()
+
+    asyncio.run(_insert_dynamic())
+
+    # The request should succeed and use the DB agent's config.
+    resp = client.post(
+        "/api/v1/internal/agent-chat/dynamic-agent",
+        json={"message": "hello from dynamic"},
+    )
+
+    assert resp.status_code == 200
+    # The DB agent's system prompt should be in the messages sent to the invoker.
+    messages = invoker.calls[0]["messages"]
+    assert "I am a dynamic agent from the DB." in messages[0]["content"]
+    asyncio.run(engine.dispose())
+
+
+def test_an_inactive_dynamic_agent_is_not_resolved():
+    """An inactive row in PluginChatAgent is not returned by the fallback, so
+    an unknown key with an inactive row still 404s."""
+    invoker = FakeInvoker()
+    app, session_factory, engine = _build_app(founder=_founder(roles=["founder"]), invoker=invoker)
+    client = TestClient(app)
+
+    # Insert an inactive dynamic agent.
+    async def _insert_inactive():
+        async with session_factory() as session:
+            agent = PluginChatAgent(
+                tenant_id="default",
+                plugin_name="dynamic-plugin",
+                agent_key="inactive-agent",
+                agent_name="Inactive Agent",
+                role="founder",
+                system_prompt="This is inactive.",
+                model="test/model",
+                required_group="founder",
+                active=False,
+                max_history_messages=40,
+                max_output_tokens=256,
+                timeout_seconds=10.0,
+            )
+            session.add(agent)
+            await session.commit()
+
+    asyncio.run(_insert_inactive())
+
+    # The request should 404 (not resolve the inactive agent).
+    resp = client.post(
+        "/api/v1/internal/agent-chat/inactive-agent",
+        json={"message": "hello"},
+    )
+
+    assert resp.status_code == 404
+    assert invoker.calls == []
+    asyncio.run(engine.dispose())
+
+
+def test_a_totally_unknown_agent_is_still_404():
+    """Regression: an agent that exists neither in the static registry nor the
+    DB should still be a 404."""
+    invoker = FakeInvoker()
+    app, _, engine = _build_app(founder=_founder(roles=["founder"]), invoker=invoker)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/api/v1/internal/agent-chat/totally-unknown-agent",
+        json={"message": "hello"},
+    )
+
+    assert resp.status_code == 404
+    assert invoker.calls == []
+    asyncio.run(engine.dispose())

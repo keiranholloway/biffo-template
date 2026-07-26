@@ -248,7 +248,12 @@ severity; exposure (latent vs. realized) noted per item.
    user-facing plugin — first- or third-party — lands in that shared
    process. The trust boundary here is application-code convention, not
    something the OS or network enforces, unlike the per-Lambda model it
-   replaced.
+   replaced. **Resolved by decision (#579, ADR-0021 amendment 2026-07-26):** the
+   shared host is ratified as a *trust-based* boundary — it runs only plugins the
+   operator trusts to the same degree (first-party, or third-party that passed
+   install review), STS-scoping was explicitly not adopted, and `isolated: true`
+   (a dedicated Lambda, tracked in #595) is the escape hatch for anything an
+   operator won't fully trust.
 2. **Medium — `plugin install` commits a real schema migration in one
    uninterrupted step.** `plugin-install.ts` goes manifest → synthesized
    SQLAlchemy model → generated Alembic migration → `git commit`, with no

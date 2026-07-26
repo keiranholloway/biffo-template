@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (partially implemented). The **backend** design here is built and live:
+Accepted (partially implemented). Amended 2026-07-26 — see the trust-based isolation decision at the end of this document (#579). The **backend** design here is built and live:
 one shared plugin-host Lambda (`services/_plugin-host/`) behind the Core API
 Gateway at `/api/v1/plugins/*`, same-origin via CloudFront, with per-plugin
 identity asserted by a signed `X-Biffo-Plugin` header (§1a). Verified serving the
@@ -148,14 +148,25 @@ not a header the plugin's own process could rewrite. Consequently, **the shared
 host is an appropriate default only for plugins the operator trusts to the same
 degree as each other** — first-party plugins, or third-party plugins that have
 been through real code review — not as a security boundary between
-mutually-distrusting plugins. A future structural fix (per-plugin STS-scoped
-credentials assumed by the host immediately before dispatch, so a plugin's code
-never sees the host's full role) is tracked as a separate infrastructure
-decision in
-[#579](https://github.com/keiranholloway/biffo-template/issues/579); it is not
-implemented today. `isolated: true` (its own host, its own role) keeps a
-distinct role and needs no asserted identity, so the strong-isolation path is
-unchanged by any of the above.
+mutually-distrusting plugins.
+
+This is a **deliberate, ratified decision**
+([#579](https://github.com/keiranholloway/biffo-template/issues/579)), not a gap
+awaiting a fix. Per-plugin STS-scoped credentials — the host assuming a
+plugin-scoped role immediately before dispatch, so a plugin's code never sees
+the host's full role — were considered and **explicitly not adopted**: they add
+an `sts:AssumeRole` round-trip (and its rate limits) to every dispatch plus a
+non-trivial session-policy design, a cost not justified when every plugin
+reaching the shared host is install-reviewed (ADR-0013) and the host, by policy,
+runs only plugins the operator trusts to the same degree. The escape hatch for a
+user-facing plugin an operator will *not* fully trust is `isolated: true` — its
+own Lambda with its own IAM role, where the role itself is the identity and no
+`X-Biffo-Plugin` assertion is involved, so the strong-isolation path is
+unaffected by any of the above. That path is **not yet built** — there is no
+third-party user-facing plugin to need it (everything in the shared host today
+is first-party and mutually trusted) — and is tracked in
+[#595](https://github.com/keiranholloway/biffo-template/issues/595), to be built
+when first needed. See the amendment at the end of this document.
 
 ### 2. Frontend — ONE shared app shell, plugins mount UI routes
 
@@ -287,3 +298,51 @@ the tail.
 4. Migrate Ideation as the first consumer; delete its per-plugin infra.
 5. Remove the superseded machinery (ADR-0018 hosting, OAC, `plugin_api_origins`,
    `plugin wire`).
+
+---
+
+## Amendment 2026-07-26 — the shared-host isolation model is trust-based, by decision (#579)
+
+**Status:** Accepted
+**Issue:** [#579](https://github.com/keiranholloway/biffo-template/issues/579)
+(ratified), follow-up [#595](https://github.com/keiranholloway/biffo-template/issues/595)
+
+§1a asserts that the shared plugin host keeps one plugin out of another's tables.
+[#563](https://github.com/keiranholloway/biffo-template/issues/563) established
+that it does not, structurally: every plugin mounted in the shared host runs in
+the same Lambda process and can reach the host's IAM-role credentials via the
+standard AWS SDK credential chain, so it can hand-sign a Core request naming any
+plugin identity — no amount of SDK-wrapper hardening closes that, because the
+credentials, not the `ContextVar`, are the shared resource. §1a's wording was
+corrected accordingly (#563); this amendment records the **decision** about what
+to do about it.
+
+**Decision (#579): ratify the trust-based model; do not build STS scoping.** The
+shared host is a *trust* boundary, not a cryptographic or process one — by design
+and permanently. It hosts only plugins the operator trusts to the same degree:
+first-party plugins, or third-party plugins that passed install review
+(ADR-0013). Three options were weighed:
+
+1. **Per-plugin STS-scoped credentials** assumed just before dispatch — real
+   isolation, but an `sts:AssumeRole` round-trip and session-policy design on
+   every request, for a threat (a malicious co-mounted plugin) that install
+   review already governs. **Rejected** as cost without a matching need.
+2. **Lambda-per-plugin** (real per-plugin IAM roles, the pre-ADR-0021 model) —
+   gives up the shared-runtime economy ADR-0021 exists to capture. **Rejected**
+   as the default; retained only as the `isolated: true` escape hatch.
+3. **Ratify shared-host-is-trusted-only, with `isolated: true` as the escape
+   hatch for anything else.** **Chosen** — it is where the platform already
+   effectively lands, and it costs nothing on the request path.
+
+**Consequences.**
+- The operating policy is explicit: **do not mount a plugin in the shared host
+  you would not trust with every other co-mounted plugin's data.** For a
+  user-facing plugin an operator will not fully trust, use `isolated: true`.
+- `isolated: true` is the *only* real isolation mechanism for that case, and it
+  is **not yet built** — it lives in ADR text and a couple of SDK docstrings, not
+  in the manifest schema, discovery, or Terraform. That is acceptable today
+  because there are zero third-party user-facing plugins; building it is tracked
+  in #595, to be done when the first one needs it.
+- The `#563` pinning test
+  (`services/_plugin-host/tests/test_mount.py`) stays: it documents the accepted
+  property, not a bug awaiting a fix.

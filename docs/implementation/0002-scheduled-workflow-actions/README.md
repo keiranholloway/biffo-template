@@ -1,6 +1,9 @@
 # Implementation Plan: Scheduled / Delayed Workflow Actions
 
-**Status:** Draft
+**Status:** Implemented in biffo-template (Milestones 1–3: #603, #604, #606).
+Milestone 4 (real-deployment E2E verification, and a real manual browser
+click-through of the Timing UI — not possible in the build sandbox) is
+pending distribution to a live instance.
 **Date:** 2026-07-26
 **Source PRD:** inline (this conversation) — no separate ticket
 **Data model sources consulted:** none required — extends the existing orchestration-engine schema, no new product/domain tables

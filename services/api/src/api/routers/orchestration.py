@@ -312,6 +312,7 @@ async def create_workflow(
         action_type=body.action_type,
         action_config=action_config,
         enabled=body.enabled,
+        schedule_config=body.schedule_config,
     )
     emit_event(
         db,
@@ -370,6 +371,7 @@ async def update_workflow(
         action_type=body.action_type,
         action_config=action_config,
         enabled=body.enabled,
+        schedule_config=body.schedule_config,
     )
     if definition is None:
         raise _not_found()

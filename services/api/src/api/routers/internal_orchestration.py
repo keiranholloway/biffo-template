@@ -20,11 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..middleware.service_auth import ServicePrincipal, require_service_principal
 from ..models.orchestration import WorkflowDefinition, WorkflowRun
-from ..orchestration import dispatch_event, record_result
+from ..orchestration import dispatch_event, fire_scheduled_run, record_result
 from ..schemas.orchestration import (
     ClaimedRun,
     DispatchEventRequest,
     DispatchEventResponse,
+    FireScheduledRunResponse,
     RecordResultRequest,
     WorkflowRunResponse,
 )
@@ -91,9 +92,36 @@ async def dispatch_incoming_event(
                 action_type=c.action_type,
                 action_config=c.action_config,
                 created=c.created,
+                scheduled_for=c.scheduled_for,
             )
             for c in claimed
         ]
+    )
+
+
+@router.post("/runs/{run_id}/fire", response_model=FireScheduledRunResponse)
+async def fire_run(
+    run_id: str,
+    principal: ServicePrincipal = Depends(require_service_principal),
+    db: AsyncSession = Depends(get_db),
+) -> FireScheduledRunResponse:
+    """The fire-time callback for a scheduled run (docs/implementation/
+    0002-scheduled-workflow-actions): the engine's EventBridge Scheduler
+    one-time schedule invokes this at the run's ``scheduled_for`` instant.
+
+    ``claimed=False`` means don't execute — the run already fired (a
+    duplicate Scheduler delivery) or its definition was disabled/deleted
+    since it was scheduled.
+    """
+    claimed = await fire_scheduled_run(db, tenant_id=principal.tenant_id, run_id=run_id)
+    if claimed is None:
+        return FireScheduledRunResponse(claimed=False, run_id=run_id)
+    return FireScheduledRunResponse(
+        claimed=True,
+        run_id=claimed.run_id,
+        definition_id=claimed.definition_id,
+        action_type=claimed.action_type,
+        action_config=claimed.action_config,
     )
 
 

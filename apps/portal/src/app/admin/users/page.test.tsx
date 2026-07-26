@@ -15,6 +15,8 @@ vi.mock('@/lib/api-client', () => ({
 const {
   fetchUsers,
   fetchGroups,
+  fetchOrganizations,
+  createOrganization,
   createUser,
   assignGroup,
   removeGroup,
@@ -24,6 +26,8 @@ const {
 } = vi.hoisted(() => ({
   fetchUsers: vi.fn(),
   fetchGroups: vi.fn(),
+  fetchOrganizations: vi.fn(),
+  createOrganization: vi.fn(),
   createUser: vi.fn(),
   assignGroup: vi.fn(),
   removeGroup: vi.fn(),
@@ -38,6 +42,8 @@ vi.mock('@/lib/user-admin-api', async () => {
     ...actual, // keeps ASSIGNABLE_GROUPS
     fetchUsers,
     fetchGroups,
+    fetchOrganizations,
+    createOrganization,
     createUser,
     assignGroup,
     removeGroup,
@@ -55,6 +61,18 @@ const alice: AdminUser = {
   enabled: true,
   groups: ['editor'],
   created_at: null,
+  given_name: 'Alice',
+  family_name: 'Anderson',
+  phone_number: null,
+  organization_id: null,
+  organization_name: null,
+  job_role: null,
+  address_line1: null,
+  address_line2: null,
+  city: null,
+  region: null,
+  postal_code: null,
+  country: null,
 }
 
 const bob: AdminUser = {
@@ -65,6 +83,18 @@ const bob: AdminUser = {
   enabled: false,
   groups: [],
   created_at: null,
+  given_name: 'Bob',
+  family_name: 'Baker',
+  phone_number: null,
+  organization_id: null,
+  organization_name: null,
+  job_role: null,
+  address_line1: null,
+  address_line2: null,
+  city: null,
+  region: null,
+  postal_code: null,
+  country: null,
 }
 
 describe('UsersPage', () => {
@@ -72,6 +102,8 @@ describe('UsersPage', () => {
     for (const fn of [
       fetchUsers,
       fetchGroups,
+      fetchOrganizations,
+      createOrganization,
       createUser,
       assignGroup,
       removeGroup,
@@ -82,6 +114,7 @@ describe('UsersPage', () => {
       fn.mockReset()
     }
     fetchGroups.mockResolvedValue({ groups: ['admin', 'editor', 'viewer'] })
+    fetchOrganizations.mockResolvedValue({ organizations: [] })
   })
 
   it('renders users with email, status and groups', async () => {
@@ -112,12 +145,25 @@ describe('UsersPage', () => {
     fireEvent.change(screen.getByPlaceholderText('person@example.com'), {
       target: { value: 'new@example.com' },
     })
+    fireEvent.change(screen.getByPlaceholderText('Jamie'), { target: { value: 'New' } })
+    fireEvent.change(screen.getByPlaceholderText('Rivera'), { target: { value: 'User' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add user' }))
 
     await waitFor(() => {
       expect(createUser).toHaveBeenCalledWith(expect.anything(), {
         email: 'new@example.com',
+        given_name: 'New',
+        family_name: 'User',
+        phone_number: undefined,
         groups: [],
+        organization_id: undefined,
+        job_role: undefined,
+        address_line1: undefined,
+        address_line2: undefined,
+        city: undefined,
+        region: undefined,
+        postal_code: undefined,
+        country: undefined,
       })
     })
   })

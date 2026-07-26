@@ -5,16 +5,22 @@ import { useAuth } from '@/context/auth-context'
 import { createApiClient } from '@/lib/api-client'
 import {
   type AdminUser,
+  type CreateUserRequest,
+  type Organization,
   ASSIGNABLE_GROUPS,
   assignGroup,
+  createOrganization,
   createUser,
   deleteUser,
   fetchGroups,
+  fetchOrganizations,
   fetchUsers,
   reactivateUser,
   removeGroup,
   suspendUser,
 } from '@/lib/user-admin-api'
+
+const NEW_ORGANIZATION_VALUE = '__new__'
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error'
@@ -23,11 +29,28 @@ function errorMessage(err: unknown): string {
 function CreateUserForm({
   onCreate,
   assignable,
+  organizations,
+  onAddOrganization,
 }: {
-  onCreate: (email: string, groups: string[]) => Promise<void>
+  onCreate: (body: CreateUserRequest) => Promise<void>
   assignable: readonly string[]
+  organizations: Organization[]
+  onAddOrganization: (name: string) => Promise<Organization>
 }) {
   const [email, setEmail] = useState('')
+  const [givenName, setGivenName] = useState('')
+  const [familyName, setFamilyName] = useState('')
+  const [phoneNumber, setPhoneNumber] = useState('')
+  const [organizationId, setOrganizationId] = useState('')
+  const [newOrgName, setNewOrgName] = useState('')
+  const [jobRole, setJobRole] = useState('')
+  const [showAddress, setShowAddress] = useState(false)
+  const [addressLine1, setAddressLine1] = useState('')
+  const [addressLine2, setAddressLine2] = useState('')
+  const [city, setCity] = useState('')
+  const [region, setRegion] = useState('')
+  const [postalCode, setPostalCode] = useState('')
+  const [country, setCountry] = useState('')
   const [groups, setGroups] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
 
@@ -37,13 +60,52 @@ function CreateUserForm({
     )
   }
 
+  function reset() {
+    setEmail('')
+    setGivenName('')
+    setFamilyName('')
+    setPhoneNumber('')
+    setOrganizationId('')
+    setNewOrgName('')
+    setJobRole('')
+    setShowAddress(false)
+    setAddressLine1('')
+    setAddressLine2('')
+    setCity('')
+    setRegion('')
+    setPostalCode('')
+    setCountry('')
+    setGroups([])
+  }
+
   async function doSubmit() {
-    if (email.trim() === '' || busy) return
+    if (email.trim() === '' || givenName.trim() === '' || familyName.trim() === '' || busy) return
     setBusy(true)
     try {
-      await onCreate(email.trim(), groups)
-      setEmail('')
-      setGroups([])
+      let resolvedOrgId = organizationId
+      if (organizationId === NEW_ORGANIZATION_VALUE) {
+        if (newOrgName.trim() === '') {
+          setBusy(false)
+          return
+        }
+        resolvedOrgId = (await onAddOrganization(newOrgName.trim())).id
+      }
+      await onCreate({
+        email: email.trim(),
+        given_name: givenName.trim(),
+        family_name: familyName.trim(),
+        phone_number: phoneNumber.trim() || undefined,
+        groups,
+        organization_id: resolvedOrgId || undefined,
+        job_role: jobRole.trim() || undefined,
+        address_line1: addressLine1.trim() || undefined,
+        address_line2: addressLine2.trim() || undefined,
+        city: city.trim() || undefined,
+        region: region.trim() || undefined,
+        postal_code: postalCode.trim() || undefined,
+        country: country.trim() || undefined,
+      })
+      reset()
     } finally {
       setBusy(false)
     }
@@ -69,7 +131,93 @@ function CreateUserForm({
               setEmail(e.target.value)
             }}
             placeholder="person@example.com"
-            className="mt-1 w-64 rounded border px-2 py-1 text-sm"
+            className="mt-1 w-56 rounded border px-2 py-1 text-sm"
+          />
+        </label>
+        <label className="flex flex-col text-xs text-gray-600">
+          First name
+          <input
+            type="text"
+            required
+            value={givenName}
+            onChange={(e) => {
+              setGivenName(e.target.value)
+            }}
+            placeholder="Jamie"
+            className="mt-1 w-36 rounded border px-2 py-1 text-sm"
+          />
+        </label>
+        <label className="flex flex-col text-xs text-gray-600">
+          Last name
+          <input
+            type="text"
+            required
+            value={familyName}
+            onChange={(e) => {
+              setFamilyName(e.target.value)
+            }}
+            placeholder="Rivera"
+            className="mt-1 w-36 rounded border px-2 py-1 text-sm"
+          />
+        </label>
+        <label className="flex flex-col text-xs text-gray-600">
+          Phone (optional)
+          <input
+            type="tel"
+            value={phoneNumber}
+            onChange={(e) => {
+              setPhoneNumber(e.target.value)
+            }}
+            placeholder="+14155551234"
+            className="mt-1 w-40 rounded border px-2 py-1 text-sm"
+          />
+        </label>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <label className="flex flex-col text-xs text-gray-600">
+          Company (optional)
+          <select
+            value={organizationId}
+            onChange={(e) => {
+              setOrganizationId(e.target.value)
+            }}
+            className="mt-1 w-48 rounded border px-2 py-1 text-sm"
+          >
+            <option value="">None</option>
+            {organizations.map((org) => (
+              <option key={org.id} value={org.id}>
+                {org.name}
+              </option>
+            ))}
+            <option value={NEW_ORGANIZATION_VALUE}>+ Add new company…</option>
+          </select>
+        </label>
+        {organizationId === NEW_ORGANIZATION_VALUE && (
+          <label className="flex flex-col text-xs text-gray-600">
+            New company name
+            <input
+              type="text"
+              required
+              value={newOrgName}
+              onChange={(e) => {
+                setNewOrgName(e.target.value)
+              }}
+              placeholder="Acme Inc."
+              className="mt-1 w-48 rounded border px-2 py-1 text-sm"
+            />
+          </label>
+        )}
+        <label className="flex flex-col text-xs text-gray-600">
+          Job role (optional)
+          <input
+            type="text"
+            value={jobRole}
+            onChange={(e) => {
+              setJobRole(e.target.value)
+            }}
+            placeholder="CTO"
+            className="mt-1 w-40 rounded border px-2 py-1 text-sm"
           />
         </label>
         <div className="flex flex-col text-xs text-gray-600">
@@ -89,6 +237,91 @@ function CreateUserForm({
             ))}
           </div>
         </div>
+      </div>
+
+      <details
+        className="mt-3"
+        open={showAddress}
+        onToggle={(e) => {
+          setShowAddress(e.currentTarget.open)
+        }}
+      >
+        <summary className="cursor-pointer text-xs font-medium text-gray-600">
+          Address (optional)
+        </summary>
+        <div className="mt-2 flex flex-wrap items-end gap-3">
+          <label className="flex flex-col text-xs text-gray-600">
+            Address line 1
+            <input
+              type="text"
+              value={addressLine1}
+              onChange={(e) => {
+                setAddressLine1(e.target.value)
+              }}
+              className="mt-1 w-56 rounded border px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="flex flex-col text-xs text-gray-600">
+            Address line 2
+            <input
+              type="text"
+              value={addressLine2}
+              onChange={(e) => {
+                setAddressLine2(e.target.value)
+              }}
+              className="mt-1 w-56 rounded border px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="flex flex-col text-xs text-gray-600">
+            City
+            <input
+              type="text"
+              value={city}
+              onChange={(e) => {
+                setCity(e.target.value)
+              }}
+              className="mt-1 w-36 rounded border px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="flex flex-col text-xs text-gray-600">
+            Region / state
+            <input
+              type="text"
+              value={region}
+              onChange={(e) => {
+                setRegion(e.target.value)
+              }}
+              className="mt-1 w-36 rounded border px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="flex flex-col text-xs text-gray-600">
+            Postal code
+            <input
+              type="text"
+              value={postalCode}
+              onChange={(e) => {
+                setPostalCode(e.target.value)
+              }}
+              className="mt-1 w-28 rounded border px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="flex flex-col text-xs text-gray-600">
+            Country (ISO code)
+            <input
+              type="text"
+              maxLength={2}
+              value={country}
+              onChange={(e) => {
+                setCountry(e.target.value.toUpperCase())
+              }}
+              placeholder="GB"
+              className="mt-1 w-16 rounded border px-2 py-1 text-sm uppercase"
+            />
+          </label>
+        </div>
+      </details>
+
+      <div className="mt-3">
         <button
           type="submit"
           disabled={busy}
@@ -162,6 +395,7 @@ export default function UsersPage() {
   // Live group taxonomy from the API; falls back to the baseline until it loads
   // (or if the endpoint is unavailable) so the picker always renders (issue #148).
   const [assignable, setAssignable] = useState<string[]>([...ASSIGNABLE_GROUPS])
+  const [organizations, setOrganizations] = useState<Organization[]>([])
 
   const client = useMemo(() => createApiClient(getIdToken), [getIdToken])
 
@@ -174,6 +408,25 @@ export default function UsersPage() {
         /* keep the fallback groups */
       })
   }, [client])
+
+  const reloadOrganizations = useCallback(async () => {
+    try {
+      const result = await fetchOrganizations(client)
+      setOrganizations(result.organizations)
+    } catch {
+      /* Company picker just falls back to "None" + add-new */
+    }
+  }, [client])
+
+  useEffect(() => {
+    void reloadOrganizations()
+  }, [reloadOrganizations])
+
+  async function addOrganization(name: string): Promise<Organization> {
+    const org = await createOrganization(client, name)
+    await reloadOrganizations()
+    return org
+  }
 
   const reload = useCallback(async () => {
     try {
@@ -214,7 +467,9 @@ export default function UsersPage() {
 
       <CreateUserForm
         assignable={assignable}
-        onCreate={(email, groups) => run(() => createUser(client, { email, groups }))}
+        organizations={organizations}
+        onAddOrganization={addOrganization}
+        onCreate={(body) => run(() => createUser(client, body))}
       />
 
       {users == null && error == null && (
@@ -237,7 +492,10 @@ export default function UsersPage() {
           <table className="min-w-full divide-y divide-gray-200 text-sm">
             <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
               <tr>
+                <th className="px-4 py-2">Name</th>
                 <th className="px-4 py-2">Email</th>
+                <th className="px-4 py-2">Company</th>
+                <th className="px-4 py-2">Role</th>
                 <th className="px-4 py-2">Status</th>
                 <th className="px-4 py-2">Groups</th>
                 <th className="px-4 py-2 text-right">Actions</th>
@@ -246,7 +504,18 @@ export default function UsersPage() {
             <tbody className="divide-y divide-gray-100">
               {users.map((user) => (
                 <tr key={user.sub || user.username}>
+                  <td className="px-4 py-2 text-gray-800">
+                    {[user.given_name, user.family_name].filter(Boolean).join(' ') || (
+                      <span className="text-gray-400">—</span>
+                    )}
+                  </td>
                   <td className="px-4 py-2 text-gray-800">{user.email}</td>
+                  <td className="px-4 py-2 text-gray-600">
+                    {user.organization_name ?? <span className="text-gray-400">—</span>}
+                  </td>
+                  <td className="px-4 py-2 text-gray-600">
+                    {user.job_role ?? <span className="text-gray-400">—</span>}
+                  </td>
                   <td className="px-4 py-2">
                     {user.enabled ? (
                       <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-700">

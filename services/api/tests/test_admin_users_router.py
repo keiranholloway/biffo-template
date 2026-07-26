@@ -116,7 +116,13 @@ async def _db_is_active(session_factory, cognito_sub: str) -> bool | None:
 
 def test_create_user_returns_201(harness):
     resp = harness["client"].post(
-        _BASE, json={"email": "alice@example.com", "suppress_invite_email": True}
+        _BASE,
+        json={
+            "email": "alice@example.com",
+            "given_name": "Alice",
+            "family_name": "Anderson",
+            "suppress_invite_email": True,
+        },
     )
     assert resp.status_code == 201
     body = resp.json()
@@ -130,6 +136,8 @@ def test_create_user_with_initial_groups(harness):
         _BASE,
         json={
             "email": "bob@example.com",
+            "given_name": "Bob",
+            "family_name": "Baker",
             "groups": ["editor"],
             "suppress_invite_email": True,
         },
@@ -139,7 +147,12 @@ def test_create_user_with_initial_groups(harness):
 
 
 def test_create_duplicate_user_returns_409(harness):
-    payload = {"email": "carol@example.com", "suppress_invite_email": True}
+    payload = {
+        "email": "carol@example.com",
+        "given_name": "Carol",
+        "family_name": "Chen",
+        "suppress_invite_email": True,
+    }
     assert harness["client"].post(_BASE, json=payload).status_code == 201
     assert harness["client"].post(_BASE, json=payload).status_code == 409
 
@@ -150,7 +163,13 @@ def test_create_duplicate_user_returns_409(harness):
 def test_non_admin_caller_is_forbidden(harness):
     harness["app"].dependency_overrides[require_auth] = lambda: _caller([])
     resp = harness["client"].post(
-        _BASE, json={"email": "eve@example.com", "suppress_invite_email": True}
+        _BASE,
+        json={
+            "email": "eve@example.com",
+            "given_name": "Eve",
+            "family_name": "Ellis",
+            "suppress_invite_email": True,
+        },
     )
     assert resp.status_code == 403
 
@@ -159,7 +178,9 @@ def test_non_admin_caller_is_forbidden(harness):
 
 
 def test_list_and_get_users(harness):
-    harness["cog"].create_user(email="dave@example.com", suppress_invite_email=True)
+    harness["cog"].create_user(
+        email="dave@example.com", given_name="Dave", family_name="Davis", suppress_invite_email=True
+    )
 
     listing = harness["client"].get(_BASE)
     assert listing.status_code == 200
@@ -179,7 +200,12 @@ def test_get_missing_user_returns_404(harness):
 
 
 def test_add_and_remove_group(harness):
-    harness["cog"].create_user(email="heidi@example.com", suppress_invite_email=True)
+    harness["cog"].create_user(
+        email="heidi@example.com",
+        given_name="Heidi",
+        family_name="Hill",
+        suppress_invite_email=True,
+    )
 
     added = harness["client"].post(f"{_BASE}/heidi@example.com/groups", json={"group": "editor"})
     assert added.status_code == 200
@@ -194,7 +220,12 @@ def test_add_and_remove_group(harness):
 
 
 def test_suspend_disables_and_mirrors_is_active(harness):
-    user = harness["cog"].create_user(email="frank@example.com", suppress_invite_email=True)
+    user = harness["cog"].create_user(
+        email="frank@example.com",
+        given_name="Frank",
+        family_name="Foster",
+        suppress_invite_email=True,
+    )
     asyncio.run(
         _seed_db_user(harness["session_factory"], cognito_sub=user["sub"], email=user["email"])
     )
@@ -206,7 +237,12 @@ def test_suspend_disables_and_mirrors_is_active(harness):
 
 
 def test_reactivate_enables_and_mirrors_is_active(harness):
-    user = harness["cog"].create_user(email="grace@example.com", suppress_invite_email=True)
+    user = harness["cog"].create_user(
+        email="grace@example.com",
+        given_name="Grace",
+        family_name="Green",
+        suppress_invite_email=True,
+    )
     asyncio.run(
         _seed_db_user(harness["session_factory"], cognito_sub=user["sub"], email=user["email"])
     )
@@ -219,7 +255,12 @@ def test_reactivate_enables_and_mirrors_is_active(harness):
 
 
 def test_delete_removes_from_cognito_and_deactivates_db_row(harness):
-    user = harness["cog"].create_user(email="ivan@example.com", suppress_invite_email=True)
+    user = harness["cog"].create_user(
+        email="ivan@example.com",
+        given_name="Ivan",
+        family_name="Ivanov",
+        suppress_invite_email=True,
+    )
     asyncio.run(
         _seed_db_user(harness["session_factory"], cognito_sub=user["sub"], email=user["email"])
     )
@@ -233,7 +274,9 @@ def test_delete_removes_from_cognito_and_deactivates_db_row(harness):
 def test_suspend_without_db_row_still_succeeds(harness):
     """A user provisioned but never logged in has no DB row — the mirror is a
     no-op, not an error."""
-    harness["cog"].create_user(email="judy@example.com", suppress_invite_email=True)
+    harness["cog"].create_user(
+        email="judy@example.com", given_name="Judy", family_name="Jones", suppress_invite_email=True
+    )
     resp = harness["client"].post(f"{_BASE}/judy@example.com/suspend")
     assert resp.status_code == 200
 
@@ -251,7 +294,9 @@ def _only_event(harness):
 
 
 def test_suspend_emits_user_suspended_event(harness):
-    user = harness["cog"].create_user(email="kate@example.com", suppress_invite_email=True)
+    user = harness["cog"].create_user(
+        email="kate@example.com", given_name="Kate", family_name="King", suppress_invite_email=True
+    )
     harness["client"].post(f"{_BASE}/kate@example.com/suspend")
 
     event = _only_event(harness)
@@ -262,7 +307,9 @@ def test_suspend_emits_user_suspended_event(harness):
 
 
 def test_reactivate_emits_user_reactivated_event(harness):
-    harness["cog"].create_user(email="leo@example.com", suppress_invite_email=True)
+    harness["cog"].create_user(
+        email="leo@example.com", given_name="Leo", family_name="Lopez", suppress_invite_email=True
+    )
     harness["client"].post(f"{_BASE}/leo@example.com/suspend")
     harness["published"].clear()  # drop the suspend event; assert only reactivate
 
@@ -273,7 +320,9 @@ def test_reactivate_emits_user_reactivated_event(harness):
 
 
 def test_delete_emits_user_deleted_event(harness):
-    user = harness["cog"].create_user(email="mia@example.com", suppress_invite_email=True)
+    user = harness["cog"].create_user(
+        email="mia@example.com", given_name="Mia", family_name="Moore", suppress_invite_email=True
+    )
     harness["client"].delete(f"{_BASE}/mia@example.com")
 
     event = _only_event(harness)
@@ -284,7 +333,9 @@ def test_delete_emits_user_deleted_event(harness):
 def test_suspend_without_db_row_still_emits(harness):
     """The event reflects the admin action, so it fires even when no DB mirror
     row exists to update."""
-    harness["cog"].create_user(email="nina@example.com", suppress_invite_email=True)
+    harness["cog"].create_user(
+        email="nina@example.com", given_name="Nina", family_name="Novak", suppress_invite_email=True
+    )
     harness["client"].post(f"{_BASE}/nina@example.com/suspend")
 
     event = _only_event(harness)

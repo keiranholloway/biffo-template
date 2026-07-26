@@ -23,7 +23,12 @@ def pool():
 
 def test_create_user_returns_normalized_user_with_sub(pool):
     admin, _client, _pool_id = pool
-    user = admin.create_user(email="alice@example.com", suppress_invite_email=True)
+    user = admin.create_user(
+        email="alice@example.com",
+        given_name="Alice",
+        family_name="Anderson",
+        suppress_invite_email=True,
+    )
 
     assert user["username"] == "alice@example.com"
     assert user["email"] == "alice@example.com"
@@ -33,14 +38,25 @@ def test_create_user_returns_normalized_user_with_sub(pool):
 
 def test_create_user_assigns_initial_groups(pool):
     admin, _client, _pool_id = pool
-    admin.create_user(email="bob@example.com", groups=["editor"], suppress_invite_email=True)
+    admin.create_user(
+        email="bob@example.com",
+        given_name="Bob",
+        family_name="Baker",
+        groups=["editor"],
+        suppress_invite_email=True,
+    )
 
     assert admin.list_groups_for_user("bob@example.com") == ["editor"]
 
 
 def test_get_user_roundtrip(pool):
     admin, _client, _pool_id = pool
-    admin.create_user(email="carol@example.com", suppress_invite_email=True)
+    admin.create_user(
+        email="carol@example.com",
+        given_name="Carol",
+        family_name="Chen",
+        suppress_invite_email=True,
+    )
 
     fetched = admin.get_user("carol@example.com")
     assert fetched["email"] == "carol@example.com"
@@ -48,8 +64,12 @@ def test_get_user_roundtrip(pool):
 
 def test_list_users_includes_created_users(pool):
     admin, _client, _pool_id = pool
-    admin.create_user(email="dave@example.com", suppress_invite_email=True)
-    admin.create_user(email="erin@example.com", suppress_invite_email=True)
+    admin.create_user(
+        email="dave@example.com", given_name="Dave", family_name="Davis", suppress_invite_email=True
+    )
+    admin.create_user(
+        email="erin@example.com", given_name="Erin", family_name="Evans", suppress_invite_email=True
+    )
 
     result = admin.list_users()
     emails = {u["email"] for u in result["users"]}
@@ -58,7 +78,12 @@ def test_list_users_includes_created_users(pool):
 
 def test_disable_then_enable_user_toggles_enabled(pool):
     admin, _client, _pool_id = pool
-    admin.create_user(email="frank@example.com", suppress_invite_email=True)
+    admin.create_user(
+        email="frank@example.com",
+        given_name="Frank",
+        family_name="Foster",
+        suppress_invite_email=True,
+    )
 
     admin.disable_user("frank@example.com")
     assert admin.get_user("frank@example.com")["enabled"] is False
@@ -69,7 +94,12 @@ def test_disable_then_enable_user_toggles_enabled(pool):
 
 def test_delete_user_removes_it(pool):
     admin, _client, _pool_id = pool
-    admin.create_user(email="grace@example.com", suppress_invite_email=True)
+    admin.create_user(
+        email="grace@example.com",
+        given_name="Grace",
+        family_name="Green",
+        suppress_invite_email=True,
+    )
 
     admin.delete_user("grace@example.com")
 
@@ -80,7 +110,12 @@ def test_delete_user_removes_it(pool):
 
 def test_add_and_remove_group(pool):
     admin, _client, _pool_id = pool
-    admin.create_user(email="heidi@example.com", suppress_invite_email=True)
+    admin.create_user(
+        email="heidi@example.com",
+        given_name="Heidi",
+        family_name="Hill",
+        suppress_invite_email=True,
+    )
 
     admin.add_to_group(username="heidi@example.com", group="admin")
     assert "admin" in admin.list_groups_for_user("heidi@example.com")

@@ -76,8 +76,13 @@ class TestCreateUserRequest:
         # email-only for the same reason.
         assert "username" not in CreateUserRequest.model_fields
 
-    def test_an_email_alone_is_a_complete_request(self) -> None:
-        body = CreateUserRequest(email="person@example.com")
+    def test_email_and_name_is_a_complete_request(self) -> None:
+        # given_name/family_name are required (unlike everything else here) —
+        # an absent name is what let the dashboard fall back to showing the
+        # raw Cognito sub as the "Welcome <uuid>" greeting.
+        body = CreateUserRequest(
+            email="person@example.com", given_name="Person", family_name="Example"
+        )
         assert body.email == "person@example.com"
         assert body.groups == []
 

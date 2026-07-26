@@ -14,6 +14,20 @@ export interface AdminUser {
   enabled: boolean
   groups: string[]
   created_at: string | null
+  // Cognito attributes (identity source of truth)
+  given_name: string | null
+  family_name: string | null
+  phone_number: string | null
+  // DB-mirror-only profile fields — null until the mirror row exists
+  organization_id: string | null
+  organization_name: string | null
+  job_role: string | null
+  address_line1: string | null
+  address_line2: string | null
+  city: string | null
+  region: string | null
+  postal_code: string | null
+  country: string | null
 }
 
 export interface AdminUserList {
@@ -23,7 +37,28 @@ export interface AdminUserList {
 
 export interface CreateUserRequest {
   email: string
-  groups?: string[]
+  given_name: string
+  family_name: string
+  phone_number?: string | undefined
+  groups?: string[] | undefined
+  organization_id?: string | undefined
+  job_role?: string | undefined
+  address_line1?: string | undefined
+  address_line2?: string | undefined
+  city?: string | undefined
+  region?: string | undefined
+  postal_code?: string | undefined
+  country?: string | undefined
+}
+
+/** A company an admin can attach to a user (see /admin/organizations). */
+export interface Organization {
+  id: string
+  name: string
+}
+
+export interface OrganizationList {
+  organizations: Organization[]
 }
 
 /**
@@ -86,4 +121,19 @@ export function reactivateUser(client: Pick<Client, 'post'>, username: string): 
 
 export async function deleteUser(client: Pick<Client, 'delete'>, username: string): Promise<void> {
   await client.delete(`${BASE}/${encodeURIComponent(username)}`)
+}
+
+const ORGANIZATIONS_BASE = '/api/v1/admin/organizations'
+
+/** List organizations for the "Company" picker. */
+export function fetchOrganizations(client: Pick<Client, 'get'>): Promise<OrganizationList> {
+  return client.get<OrganizationList>(ORGANIZATIONS_BASE)
+}
+
+/** Add a new organization (e.g. from the "Company" picker's "add new" option). */
+export function createOrganization(
+  client: Pick<Client, 'post'>,
+  name: string,
+): Promise<Organization> {
+  return client.post<Organization>(ORGANIZATIONS_BASE, { name })
 }

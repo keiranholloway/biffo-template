@@ -63,6 +63,9 @@ def _normalize_user(raw: dict[str, Any]) -> dict[str, Any]:
         "status": raw.get("UserStatus", ""),
         "enabled": raw.get("Enabled", True),
         "created_at": raw.get("UserCreateDate"),
+        "given_name": attrs.get("given_name") or None,
+        "family_name": attrs.get("family_name") or None,
+        "phone_number": attrs.get("phone_number") or None,
     }
 
 
@@ -101,14 +104,27 @@ class CognitoAdmin:
         self,
         *,
         email: str,
+        given_name: str,
+        family_name: str,
+        phone_number: str | None = None,
         groups: list[str] | None = None,
         suppress_invite_email: bool = False,
     ) -> dict[str, Any]:
         """Create a user; Cognito emails a temporary password unless suppressed.
 
         Returns the normalized user (including the generated `sub`). Any `groups`
-        are assigned after creation.
+        are assigned after creation. given_name/family_name are required so a
+        user always has a real name in the ID token — an absent name is what
+        made the dashboard fall back to showing the raw `sub` UUID.
         """
+        attributes = [
+            {"Name": "email", "Value": email},
+            {"Name": "email_verified", "Value": "true"},
+            {"Name": "given_name", "Value": given_name},
+            {"Name": "family_name", "Value": family_name},
+        ]
+        if phone_number:
+            attributes.append({"Name": "phone_number", "Value": phone_number})
         kwargs: dict[str, Any] = {
             # The pool sets username_attributes = ["email"], so Cognito IGNORES
             # this value and generates its own username (a UUID equal to `sub`).
@@ -116,10 +132,7 @@ class CognitoAdmin:
             # makes the intent readable — the created user's `Username` in the
             # response is the generated id, not this.
             "Username": email,
-            "UserAttributes": [
-                {"Name": "email", "Value": email},
-                {"Name": "email_verified", "Value": "true"},
-            ],
+            "UserAttributes": attributes,
             "DesiredDeliveryMediums": ["EMAIL"],
         }
         if suppress_invite_email:

@@ -103,7 +103,12 @@ resource "aws_lambda_permission" "plugin_host_api_gateway" {
 # routes stay fully gated either way.
 resource "aws_apigatewayv2_route" "plugin_admin_shell_root" {
   api_id             = module.api_gateway.api_id
-  route_key          = "GET /api/v1/plugins/{name}/admin/"
+  # No trailing slash: API Gateway v2 rejects a route_key with an empty final
+  # path segment ("Part of the given route key path is empty", confirmed by a
+  # real failed apply) -- there is no way to express the trailing-slash form
+  # literally. Whether this alone also serves a browser's GET .../admin/
+  # (with the slash) needs confirming against the real deployed API.
+  route_key          = "GET /api/v1/plugins/{name}/admin"
   target             = "integrations/${aws_apigatewayv2_integration.plugin_host.id}"
   authorization_type = "NONE"
 }

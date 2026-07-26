@@ -158,10 +158,15 @@ class OrchestratorPlugin(BiffoPluginBase):
         self._http = http_client if http_client is not None else httpx.Client(timeout=10)
         # Creates the engine's own one-time schedules for a delayed run
         # (ADR-0023). Terraform grants scheduler:CreateSchedule/DeleteSchedule/
-        # GetSchedule scoped to this plugin's own schedule group only.
-        self._scheduler = (
-            scheduler_client if scheduler_client is not None else boto3.client("scheduler")
-        )
+        # GetSchedule scoped to this plugin's own schedule group only. Built
+        # lazily (unlike `self._ses` above): `boto3.client("scheduler")`
+        # validates a region at construction time, unlike `ses`, so
+        # constructing it unconditionally here breaks every test that never
+        # schedules anything and has no AWS region configured (CI has none —
+        # the same NoRegionError class this codebase already hit with a real
+        # EventPublisher). Most workflows never delay, so most invocations
+        # never need this client at all.
+        self._scheduler = scheduler_client
         # Account-level WhatsApp credentials: read once per cold start from SSM,
         # never from a workflow's action_config (which is stored in the DB) and
         # never from an env var (which shows in the function's config).
@@ -236,6 +241,8 @@ class OrchestratorPlugin(BiffoPluginBase):
         up after firing — no follow-up ``DeleteSchedule`` call needed.
         """
         run_id = run["run_id"]
+        if self._scheduler is None:
+            self._scheduler = boto3.client("scheduler")
         self._scheduler.create_schedule(
             Name=_schedule_name(run_id),
             GroupName=os.environ.get("BIFFO_SCHEDULE_GROUP_NAME", "default"),

@@ -39,6 +39,7 @@ from ..events.registry import (
     WORKFLOW_DEFINITION_DELETED,
     WORKFLOW_DEFINITION_UPDATED,
     EventField,
+    find_event,
     registered_events,
 )
 from ..middleware.auth import AuthenticatedUser, require_auth
@@ -72,7 +73,7 @@ from ..schemas.orchestration import (
     redact_secrets,
     resolve_write_secrets,
 )
-from ..scope_resolvers import registered_scope_levels
+from ..scope_resolvers import registered_scope_levels, trigger_reachable_levels
 
 router = APIRouter(prefix="/orchestration/workflows", tags=["orchestration"])
 runs_router = APIRouter(prefix="/orchestration/runs", tags=["orchestration"])
@@ -93,6 +94,29 @@ def _serialize_fields(fields: tuple[EventField, ...] | list[EventField]) -> list
     return [
         {"name": f.name, "label": f.label, "type": f.type, "values": list(f.values)} for f in fields
     ]
+
+
+def _trigger_field_names(source: str, detail_type: str) -> list[str]:
+    """The declared payload field names for a (source, detail_type) trigger.
+
+    The shared lookup behind both the catalog's per-trigger ``reachable_levels``
+    and the create/update scope-reachability check (Phase 4, docs/implementation/
+    0003-hierarchy-scoped-workflows), so the two can never disagree.
+
+    Declared business events (events/registry.py) first; else a generic-CRUD
+    ``<table>.<op>`` trigger, resolved back to its table via the permissions
+    registry. Empty for an observed-but-undeclared trigger — its payload shape
+    isn't known, so it is only ever reachable at the broadest scope level.
+    """
+    event = find_event(source, detail_type)
+    if event is not None:
+        return [f.name for f in event.payload_fields()]
+    if source == "biffo.core":
+        for table, block in get_permissions_registry().items():
+            for op, verb in (("create", "created"), ("update", "updated"), ("delete", "deleted")):
+                if getattr(block, op).allowed and detail_type == f"{table}.{verb}":
+                    return [f.name for f in fields_for_crud_table(table)]
+    return []
 
 
 def _agent_runtime_tools() -> list[dict[str, Any]]:
@@ -160,6 +184,7 @@ async def get_catalog(
 
     # Declared business events (events/registry.py).
     for e in registered_events():
+        fields = e.payload_fields()
         triggers.append(
             {
                 "source": e.source,
@@ -169,7 +194,13 @@ async def get_catalog(
                 "origin": "declared",
                 # Advisory field metadata for the "Only when…" editor (#505); an
                 # event that declares none serialises as [] (UI → free text).
-                "fields": _serialize_fields(e.payload_fields()),
+                "fields": _serialize_fields(fields),
+                # Which registered scope levels this trigger's payload could ever
+                # match (Phase 4, #0003-hierarchy-scoped-workflows) — lets the
+                # builder warn/filter rather than let an author build a scoped
+                # workflow that can never fire (e.g. a brand-scoped rule on a
+                # tenant-only trigger like demo.requested).
+                "reachable_levels": trigger_reachable_levels(f.name for f in fields),
             }
         )
         seen.add((e.source, e.detail_type))
@@ -188,6 +219,7 @@ async def get_catalog(
             key = ("biffo.core", f"{table}.{verb}")
             if key in seen:
                 continue
+            crud_fields = fields_for_crud_table(table)
             triggers.append(
                 {
                     "source": "biffo.core",
@@ -198,7 +230,8 @@ async def get_catalog(
                     # A CRUD event's payload is the mutated row, so its fields are
                     # the table's columns, introspected from the model (#505).
                     # Empty when the table has no locatable model.
-                    "fields": _serialize_fields(fields_for_crud_table(table)),
+                    "fields": _serialize_fields(crud_fields),
+                    "reachable_levels": trigger_reachable_levels(f.name for f in crud_fields),
                 }
             )
             seen.add(key)
@@ -219,6 +252,8 @@ async def get_catalog(
                 # An undeclared, observed event has no described payload — the UI
                 # falls back to free-text conditions (#505).
                 "fields": [],
+                # No declared fields -> only the broadest scope level is reachable.
+                "reachable_levels": trigger_reachable_levels([]),
             }
         )
         seen.add(key)
@@ -311,6 +346,35 @@ async def _require_known_trigger(
         )
 
 
+def _require_scope_reachable(
+    scope: dict[str, Any] | None, *, source: str, detail_type: str
+) -> None:
+    """422 if ``scope`` is set but this trigger's payload could never carry an
+    id at that level (Phase 4, docs/implementation/0003-hierarchy-scoped-
+    workflows).
+
+    Phase 3's ``_require_scope_access`` checks *who* may author at a scope;
+    this checks whether the resulting workflow could ever actually fire. A
+    Brand-scoped workflow bound to a tenant-only trigger (e.g.
+    ``demo.requested``, whose payload carries no ``brand_id``) would create
+    successfully but silently never match in ``dispatch_event`` — this catches
+    that dead combination at authoring time instead. A no-op when no resolver
+    is registered (nothing to reason about reachability against, mirroring
+    ``_validate_scope``'s own leniency in that case).
+    """
+    if scope is None or not registered_scope_levels():
+        return
+    reachable = trigger_reachable_levels(_trigger_field_names(source, detail_type))
+    if scope["level"] not in reachable:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"scope.level {scope['level']!r} can never match trigger "
+                f"{source}/{detail_type} — its payload only ever reaches: {reachable}"
+            ),
+        )
+
+
 async def _require_resolvable_agent_prompts(
     db: AsyncSession, *, tenant_id: str, action_type: str, action_config: dict[str, Any]
 ) -> None:
@@ -358,6 +422,9 @@ async def create_workflow(
         tenant_id=caller.tenant_id,
         source=body.trigger_source,
         detail_type=body.trigger_detail_type,
+    )
+    _require_scope_reachable(
+        body.scope, source=body.trigger_source, detail_type=body.trigger_detail_type
     )
     # No stored config to merge against on a create, so the sentinel has nothing to
     # keep and is refused rather than persisted as a "secret" (#432).
@@ -410,6 +477,9 @@ async def update_workflow(
         tenant_id=caller.tenant_id,
         source=body.trigger_source,
         detail_type=body.trigger_detail_type,
+    )
+    _require_scope_reachable(
+        body.scope, source=body.trigger_source, detail_type=body.trigger_detail_type
     )
     # Fetch first, to merge secrets against what is stored: a PUT replaces the whole
     # action_config, and the portal round-trips the redacted sentinel, so an

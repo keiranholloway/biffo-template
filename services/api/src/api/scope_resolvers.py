@@ -17,7 +17,7 @@ awareness without editing this file.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -65,6 +65,36 @@ def registered_scope_levels() -> tuple[str, ...]:
     """The active resolver's level names, in broad-to-narrow order — feeds
     the builder's scope picker. Empty when nothing is registered."""
     return _levels
+
+
+def trigger_reachable_levels(field_names: Iterable[str]) -> list[str]:
+    """Which registered scope levels a trigger carrying these declared
+    payload field names could ever match (docs/implementation/0003-hierarchy
+    -scoped-workflows Phase 4).
+
+    A trigger's "native" granularity is the narrowest registered level whose
+    ``f"{level}_id"`` is among its declared fields (the broadest level, index
+    0, if none match — e.g. a trigger with no hierarchy id at all is only
+    ever tenant-wide). Every level from the broadest up to and including the
+    native one is reachable: because ``resolve_scope_chain`` always resolves
+    an event's full ancestor chain regardless of how granular the event
+    itself is (the same "higher level covers lower levels" guarantee
+    ``scope_matches_chain`` relies on), a scope at or above the native level
+    can still match even when an intermediate level's id isn't literally in
+    the payload (e.g. a unit event with no ``region_id`` field is still
+    region-reachable, since the region is derived from the unit). Levels
+    narrower than native can never match — the event carries no id to narrow
+    to. Empty when no resolver is registered.
+    """
+    levels = registered_scope_levels()
+    if not levels:
+        return []
+    names = set(field_names)
+    native_index = 0
+    for i, level in enumerate(levels):
+        if f"{level}_id" in names:
+            native_index = i
+    return list(levels[: native_index + 1])
 
 
 async def resolve_scope_chain(

@@ -1,10 +1,18 @@
 """User-facing orchestration API: workflow-definition CRUD + run history.
 
-Cognito-authenticated, admin-gated, tenant-scoped (ADR-0001/ADR-0004). This is
-the editing surface the orchestration domain deferred — distinct from the
-engine's IAM-signed internal API (``routers/internal_orchestration.py``, ADR-0009)
-and from the generic-CRUD layer: ``action_config`` needs shape validation per
+Cognito-authenticated, tenant-scoped (ADR-0001/ADR-0004). This is the editing
+surface the orchestration domain deferred — distinct from the engine's
+IAM-signed internal API (``routers/internal_orchestration.py``, ADR-0009) and
+from the generic-CRUD layer: ``action_config`` needs shape validation per
 ``action_type``, and "toggle enabled" is a bespoke verb, so it is hand-written.
+
+Authorization on the workflow CRUD (not the catalog or run history) is a
+platform admin OR the registered scope authorizer (``orchestration_authz.py``,
+docs/implementation/0003-hierarchy-scoped-workflows Phase 3): a caller who
+genuinely owns a definition's target scope (e.g. a brand manager, via an
+instance's own role-assignment model) may act on it without being a full
+admin. The default authorizer is fail-closed, so a base deployment (nothing
+registered) keeps today's exact all-or-nothing admin gate.
 
 Two routers are exported, both mounted in main.py and both covered by the JWT
 ``$default`` API Gateway route (no Terraform change needed):
@@ -23,7 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..dependencies import require_admin
+from ..dependencies import ADMIN_GROUP, require_admin
 from ..events import emit_event
 from ..events.event_fields import fields_for_crud_table
 from ..events.registry import (
@@ -33,7 +41,7 @@ from ..events.registry import (
     EventField,
     registered_events,
 )
-from ..middleware.auth import AuthenticatedUser
+from ..middleware.auth import AuthenticatedUser, require_auth
 from ..models.orchestration import RUN_STATUSES, WorkflowDefinition
 from ..orchestration import (
     RunWithLogs,
@@ -47,6 +55,7 @@ from ..orchestration import (
     set_definition_enabled,
     update_definition,
 )
+from ..orchestration_authz import authorize_workflow_scope
 from ..permissions import get_permissions_registry
 from ..plugins import discover_plugin_manifests
 from ..prompt_library import validate_agent_prompts
@@ -130,10 +139,15 @@ def _actions_with_available_tools() -> list[dict[str, Any]]:
 
 @router.get("/catalog", response_model=WorkflowCatalog)
 async def get_catalog(
-    caller: AuthenticatedUser = Depends(require_admin),
+    caller: AuthenticatedUser = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ) -> WorkflowCatalog:
     """The triggers and actions the builder offers (drives the UI dropdowns).
+
+    Open to any authenticated caller, not just an admin — Phase 3 (docs/
+    implementation/0003-hierarchy-scoped-workflows) lets a scoped, non-admin
+    caller build workflows too, and the catalog carries no tenant-specific
+    secrets, only what triggers/actions/scope-levels exist to pick from.
 
     Triggers are every **declared** event (defined in code — a registered
     ``EventType`` or a generic-CRUD ``<table>.<op>`` from the permissions registry,
@@ -216,6 +230,43 @@ async def get_catalog(
     )
 
 
+async def _require_scope_access(
+    caller: AuthenticatedUser, db: AsyncSession, scope: dict[str, Any] | None
+) -> None:
+    """403 unless ``caller`` is a platform admin or the registered authorizer
+    says they may act on a definition carrying ``scope`` (Phase 3). Checked
+    against the *submitted* scope on create/update — not just an existing
+    row's stored one — so a scoped caller can never move a definition to a
+    scope wider than their own reach (e.g. a brand manager setting `scope:
+    null` to make a rule tenant-wide): the registered authorizer is the same
+    check either way, and a caller who cannot act on that scope is refused it
+    regardless of which direction the change goes.
+    """
+    if ADMIN_GROUP in caller.roles:
+        return
+    if await authorize_workflow_scope(caller, db, scope):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this scope"
+    )
+
+
+async def _require_row_access(
+    caller: AuthenticatedUser, db: AsyncSession, definition: WorkflowDefinition | None
+) -> WorkflowDefinition:
+    """404 unless ``definition`` exists AND ``caller`` may act on its stored
+    scope — a scoped caller sees an out-of-reach row exactly as "not found",
+    never a 403 that would confirm it exists.
+    """
+    if definition is None:
+        raise _not_found()
+    if ADMIN_GROUP in caller.roles:
+        return definition
+    if await authorize_workflow_scope(caller, db, definition.scope):
+        return definition
+    raise _not_found()
+
+
 def _redacted(definition: WorkflowDefinition) -> WorkflowDefinitionResponse:
     """A response for ``definition`` with secret config values masked (#432).
 
@@ -282,19 +333,26 @@ async def _require_resolvable_agent_prompts(
 
 @router.get("", response_model=list[WorkflowDefinitionResponse])
 async def list_workflows(
-    caller: AuthenticatedUser = Depends(require_admin),
+    caller: AuthenticatedUser = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ) -> list[WorkflowDefinitionResponse]:
+    """Every definition an admin sees; a scoped caller sees only the ones
+    they're authorized for (Phase 3) — silently filtered, not an error."""
     definitions = await list_definitions(db, tenant_id=caller.tenant_id)
+    if ADMIN_GROUP not in caller.roles:
+        definitions = [
+            d for d in definitions if await authorize_workflow_scope(caller, db, d.scope)
+        ]
     return [_redacted(d) for d in definitions]
 
 
 @router.post("", response_model=WorkflowDefinitionResponse, status_code=status.HTTP_201_CREATED)
 async def create_workflow(
     body: CreateWorkflowDefinitionRequest,
-    caller: AuthenticatedUser = Depends(require_admin),
+    caller: AuthenticatedUser = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ) -> WorkflowDefinitionResponse:
+    await _require_scope_access(caller, db, body.scope)
     await _require_known_trigger(
         db,
         tenant_id=caller.tenant_id,
@@ -332,12 +390,11 @@ async def create_workflow(
 @router.get("/{definition_id}", response_model=WorkflowDefinitionResponse)
 async def get_workflow(
     definition_id: str,
-    caller: AuthenticatedUser = Depends(require_admin),
+    caller: AuthenticatedUser = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ) -> WorkflowDefinitionResponse:
     definition = await get_definition(db, tenant_id=caller.tenant_id, definition_id=definition_id)
-    if definition is None:
-        raise _not_found()
+    definition = await _require_row_access(caller, db, definition)
     return _redacted(definition)
 
 
@@ -345,7 +402,7 @@ async def get_workflow(
 async def update_workflow(
     definition_id: str,
     body: UpdateWorkflowDefinitionRequest,
-    caller: AuthenticatedUser = Depends(require_admin),
+    caller: AuthenticatedUser = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ) -> WorkflowDefinitionResponse:
     await _require_known_trigger(
@@ -360,8 +417,12 @@ async def update_workflow(
     # over it (#432). Merge keys on the *submitted* action_type — changing the
     # action legitimately drops the old action's secrets.
     existing = await get_definition(db, tenant_id=caller.tenant_id, definition_id=definition_id)
-    if existing is None:
-        raise _not_found()
+    # Must be authorized for BOTH the row's current scope (can they touch this
+    # at all) AND the newly submitted one (can they move it there) — a scoped
+    # caller can edit within their reach but never re-scope a definition wider
+    # than it (e.g. a brand manager setting `scope: null` to go tenant-wide).
+    existing = await _require_row_access(caller, db, existing)
+    await _require_scope_access(caller, db, body.scope)
     action_config = _write_secrets(body.action_type, body.action_config, existing.action_config)
     await _require_resolvable_agent_prompts(
         db, tenant_id=caller.tenant_id, action_type=body.action_type, action_config=action_config
@@ -395,9 +456,11 @@ async def update_workflow(
 async def set_workflow_enabled(
     definition_id: str,
     body: SetEnabledRequest,
-    caller: AuthenticatedUser = Depends(require_admin),
+    caller: AuthenticatedUser = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ) -> WorkflowDefinitionResponse:
+    existing = await get_definition(db, tenant_id=caller.tenant_id, definition_id=definition_id)
+    await _require_row_access(caller, db, existing)
     definition = await set_definition_enabled(
         db,
         tenant_id=caller.tenant_id,
@@ -419,9 +482,11 @@ async def set_workflow_enabled(
 @router.delete("/{definition_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_workflow(
     definition_id: str,
-    caller: AuthenticatedUser = Depends(require_admin),
+    caller: AuthenticatedUser = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    existing = await get_definition(db, tenant_id=caller.tenant_id, definition_id=definition_id)
+    await _require_row_access(caller, db, existing)
     deleted = await delete_definition(db, tenant_id=caller.tenant_id, definition_id=definition_id)
     if deleted is None:
         raise _not_found()
@@ -468,7 +533,10 @@ async def list_workflow_runs(
     """Most-recent-first history of what fired, when, and how it turned out.
 
     Read-only: runs are written by the engine through the internal API, never
-    from here.
+    from here. Deliberately still platform-admin-only — Phase 3's scoped
+    authorization (docs/implementation/0003-hierarchy-scoped-workflows)
+    covers the workflow-definition CRUD only; scoping run *history* to a
+    definition's owner is an explicitly deferred follow-up, not an oversight.
     """
     if run_status is not None and run_status not in RUN_STATUSES:
         raise HTTPException(

@@ -149,7 +149,10 @@ jobs:
         run: pnpm run test
       - name: Dependency audit
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: pnpm audit --audit-level=high
+        # Fails on a real high/critical advisory, but treats a broken audit
+        # registry (non-JSON response) as inconclusive rather than blocking the
+        # whole merge queue (#591).
+        run: sh scripts/js-dependency-audit.sh
       # A plugin manifest declaring event_subscriptions must ship terraform/,
       # or the subscription is inert in every deployment (#194). This walks the
       # whole tree from the git root so it also covers _skeletons/, which no

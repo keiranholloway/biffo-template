@@ -164,6 +164,42 @@ def test_create_rejects_bad_email(client: TestClient):
     assert client.post(_BASE, json=body).status_code == 422
 
 
+def test_create_accepts_payload_template_to(client: TestClient):
+    body = _valid_body(
+        action_config={
+            "from": "no-reply@example.com",
+            "to": "{email}",
+            "subject": "s",
+            "body": "b",
+        }
+    )
+    assert client.post(_BASE, json=body).status_code == 201
+
+
+def test_create_accepts_payload_template_to_with_extra_text(client: TestClient):
+    body = _valid_body(
+        action_config={
+            "from": "no-reply@example.com",
+            "to": "{email} <notifications@example.com>",
+            "subject": "s",
+            "body": "b",
+        }
+    )
+    assert client.post(_BASE, json=body).status_code == 201
+
+
+def test_create_still_rejects_bad_literal_to(client: TestClient):
+    body = _valid_body(
+        action_config={
+            "from": "no-reply@example.com",
+            "to": "not-an-email",
+            "subject": "s",
+            "body": "b",
+        }
+    )
+    assert client.post(_BASE, json=body).status_code == 422
+
+
 def test_create_rejects_unknown_trigger(client: TestClient):
     assert client.post(_BASE, json=_valid_body(trigger_detail_type="nope")).status_code == 422
 

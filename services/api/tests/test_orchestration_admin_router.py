@@ -230,9 +230,20 @@ def test_create_rejects_empty_scope_level(client: TestClient):
 
 def test_create_accepts_any_level_name_when_no_resolver_registered(client: TestClient):
     # Shape-only validation when the instance has registered no resolver at
-    # all — the template cannot know what levels "should" exist.
-    body = _valid_body(scope={"level": "anything", "id": "b1"})
-    assert client.post(_BASE, json=body).status_code == 201
+    # all — the template cannot know what levels "should" exist. Explicitly
+    # reset to that pristine state rather than asserting whatever happens to
+    # be ambient: on a real instance that registers its own resolver at import
+    # time (e.g. tabsii's scope_resolver_tabsii.py), that registration has
+    # already run somewhere else in this same test process.
+    from api import scope_resolvers as sr
+
+    saved_levels, saved_resolver = sr._levels, sr._resolver  # noqa: SLF001
+    sr._levels, sr._resolver = (), sr._default_resolver  # noqa: SLF001
+    try:
+        body = _valid_body(scope={"level": "anything", "id": "b1"})
+        assert client.post(_BASE, json=body).status_code == 201
+    finally:
+        sr._levels, sr._resolver = saved_levels, saved_resolver  # noqa: SLF001
 
 
 def test_create_rejects_a_level_not_among_a_registered_resolvers_levels(client: TestClient):

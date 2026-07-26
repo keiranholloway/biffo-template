@@ -103,6 +103,27 @@ describe('InstalledPluginDetail', () => {
     expect(screen.getByText('No routes declared.')).toBeInTheDocument()
   })
 
+  it('links the admin panel to the bare path, with no trailing slash', async () => {
+    // The API Gateway route in front of the shared plugin host has no
+    // unauthenticated route for the trailing-slash form at all (AWS rejects
+    // a route_key ending in a bare "/" -- biffo-template#631) -- the bare
+    // path is the only form reachable without a token, confirmed against a
+    // real deployment. A trailing slash here would 401 for every admin.
+    fetchInstalledPlugins.mockResolvedValue([{ ...rbacPlugin, has_admin_ingress: true }])
+    render(<InstalledPluginDetail name="rbac" />)
+
+    const link = await screen.findByRole('link', { name: 'Open admin panel' })
+    expect(link).toHaveAttribute('href', '/api/v1/plugins/rbac/admin')
+  })
+
+  it('shows no admin panel link when the plugin has no admin_ingress', async () => {
+    fetchInstalledPlugins.mockResolvedValue([rbacPlugin])
+    render(<InstalledPluginDetail name="rbac" />)
+
+    await screen.findByRole('heading', { name: 'rbac' })
+    expect(screen.queryByRole('link', { name: 'Open admin panel' })).not.toBeInTheDocument()
+  })
+
   it('shows a not-installed message when no installed plugin matches the name', async () => {
     fetchInstalledPlugins.mockResolvedValue([rbacPlugin])
     render(<InstalledPluginDetail name="does-not-exist" />)

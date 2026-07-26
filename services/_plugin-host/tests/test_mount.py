@@ -182,3 +182,46 @@ def test_a_plugins_own_code_can_override_the_bound_identity_before_its_own_outbo
     # This is the accepted, tested property (issue #563; ratified by #579 as a
     # trust-based boundary), not a bug awaiting a fix.
     assert captured["plugin_header"] == "other-plugin-name"
+
+
+def test_admin_app_mount_is_accessible_and_gated_independently():
+    """A plugin with an admin app is reachable at /<name>/admin/<path>, gated by
+    its own admin_required_group independently of the user-facing required_group."""
+    client = _host(
+        MountedPlugin(
+            "ideation",
+            _plugin_app("ideation"),
+            "founder",
+            admin_app=_plugin_app("ideation-admin"),
+            admin_required_group="admin",
+        )
+    )
+    # User-facing route works with founder token
+    r = client.get("/ideation/ping", headers={"X-Biffo-Founder-Token": "alice|founder"})
+    assert r.status_code == 200
+
+    # Admin route works with admin token
+    r = client.get("/ideation/admin/ping", headers={"X-Biffo-Founder-Token": "bob|admin"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["identity"] == "ideation"  # plugin identity stays the same
+
+    # User-facing route fails with admin-only token (wrong group)
+    r = client.get("/ideation/ping", headers={"X-Biffo-Founder-Token": "bob|admin"})
+    assert r.status_code == 403
+
+    # Admin route fails with founder-only token (wrong group)
+    r = client.get("/ideation/admin/ping", headers={"X-Biffo-Founder-Token": "alice|founder"})
+    assert r.status_code == 403
+
+
+def test_plugin_without_admin_app_has_no_admin_route():
+    """A plugin without an admin_app (admin_app=None) has no /<name>/admin route."""
+    client = _host(MountedPlugin("ideation", _plugin_app("ideation"), "founder"))
+    # User-facing route works
+    r = client.get("/ideation/ping", headers={"X-Biffo-Founder-Token": "alice|founder"})
+    assert r.status_code == 200
+
+    # Admin route does not exist (404, not auth failure)
+    r = client.get("/ideation/admin/ping", headers={"X-Biffo-Founder-Token": "alice|founder"})
+    assert r.status_code == 404

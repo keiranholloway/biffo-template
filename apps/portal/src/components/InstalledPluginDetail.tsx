@@ -131,8 +131,22 @@ export function InstalledPluginDetail({ name }: InstalledPluginDetailProps) {
   return (
     <div className="flex flex-col gap-6">
       <div className="rounded-xl border bg-white p-6 shadow-sm">
-        <h1 className="text-2xl font-bold text-gray-900">{plugin.name}</h1>
-        <p className="mt-1 text-sm text-gray-500">v{plugin.version}</p>
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">{plugin.name}</h1>
+            <p className="mt-1 text-sm text-gray-500">v{plugin.version}</p>
+          </div>
+          {plugin.has_admin_ingress && (
+            <a
+              href={`/api/v1/plugins/${plugin.name}/admin/`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-block rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              Open admin panel
+            </a>
+          )}
+        </div>
 
         {plugin.description !== '' && (
           <p className="mt-4 text-sm text-gray-700">{plugin.description}</p>

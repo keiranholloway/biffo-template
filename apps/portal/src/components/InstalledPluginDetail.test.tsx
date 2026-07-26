@@ -57,6 +57,7 @@ const rbacPlugin: InstalledPlugin = {
       description: '',
     },
   ],
+  has_admin_ingress: false,
 }
 
 describe('InstalledPluginDetail', () => {

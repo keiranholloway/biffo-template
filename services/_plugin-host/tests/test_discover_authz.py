@@ -39,6 +39,36 @@ def test_discover_returns_only_user_facing_plugins(tmp_path):
     ]
 
 
+def test_discover_populates_admin_ingress_when_present(tmp_path):
+    d = tmp_path / "ideation"
+    d.mkdir()
+    manifest = {
+        "name": "ideation",
+        "user_ingress": {"app": "ideation.app:app", "required_group": "founder"},
+        "admin_ingress": {"app": "ideation.admin:app", "required_group": "admin"},
+    }
+    (d / "biffo.plugin.json").write_text(json.dumps(manifest))
+
+    found = discover_plugins(tmp_path)
+    assert len(found) == 1
+    plugin = found[0]
+    assert plugin.name == "ideation"
+    assert plugin.admin_app_ref == "ideation.admin:app"
+    assert plugin.admin_required_group == "admin"
+
+
+def test_discover_leaves_admin_fields_none_when_absent(tmp_path):
+    _write_plugin(
+        tmp_path, "ideation", ingress={"app": "ideation.app:app", "required_group": "founder"}
+    )
+
+    found = discover_plugins(tmp_path)
+    assert len(found) == 1
+    plugin = found[0]
+    assert plugin.admin_app_ref is None
+    assert plugin.admin_required_group is None
+
+
 def test_discover_empty_when_root_missing(tmp_path):
     assert discover_plugins(tmp_path / "nope") == []
 

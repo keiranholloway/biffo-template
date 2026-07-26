@@ -1,6 +1,6 @@
-"""User-facing plugin surface declarations (ADR-0021 / ADR-0018 §2).
+"""User-facing and admin-facing plugin surface declarations (ADR-0021 / ADR-0018 §2).
 
-Two top-level manifest keys let a marketplace plugin be user-facing:
+Three top-level manifest keys let a marketplace plugin be user-facing or admin-facing:
 
 - ``user_ingress`` — the plugin's authenticated, group-gated API. Its ``app``
   names an ASGI app the **shared plugin host** (ADR-0021) mounts at
@@ -8,12 +8,16 @@ Two top-level manifest keys let a marketplace plugin be user-facing:
   ``required_group`` (ADR-0011). The plugin ships no Lambda handler and no
   per-plugin infrastructure, and reaches Core only over the internal seams
   (ADR-0002 / ADR-0017 §3/§5).
+- ``admin_ingress`` — the plugin's admin-gated API and optional static UI bundle.
+  Its ``app`` names an ASGI app the shared plugin host mounts at
+  ``/api/v1/plugins/<name>/admin/*``; the host provides the Lambda entry and
+  enforces ``required_group`` (same schema as ``user_ingress``).
 - ``user_frontend`` — a path-routed static app on an S3 origin and a
   ``<plugin>/*`` CloudFront behaviour, under the same Cognito App Client as the
   portal (ADR-0018 §2 frontend hosting, still in use).
 
-Both are **distinct** from ADR-0013's public, unauthenticated ``http_ingress``
-(webhooks): two declarations, two security postures, never one flag.
+All three are **distinct** from ADR-0013's public, unauthenticated ``http_ingress``
+(webhooks): three declarations, two security postures, never one flag.
 
 These are parsed piecemeal from the manifest (like ``plugin_route.py`` /
 ``plugin_table.py``), and — being a security surface — use ``extra="forbid"`` so a
@@ -75,6 +79,42 @@ class UserIngress(BaseModel):
         return value
 
 
+class AdminIngress(BaseModel):
+    """The plugin's admin-gated API and optional static UI bundle.
+
+    ``app`` names the ASGI app the **shared plugin host** mounts at
+    ``/api/v1/plugins/<name>/admin/*``; the host provides the Lambda entry and
+    enforces ``required_group`` (ADR-0011). The app may serve both JSON API
+    routes and a static UI bundle via Starlette's StaticFiles.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    required_group: str = Field(
+        description="The Cognito group a caller must be in. The shared plugin host "
+        "enforces it before dispatching to the plugin (ADR-0011)."
+    )
+    app: str = Field(
+        description="ASGI app reference '<module>:<attr>' (e.g. 'ideation.admin:app') "
+        "the shared plugin host mounts at /api/v1/plugins/<name>/admin/*."
+    )
+
+    @field_validator("required_group")
+    @classmethod
+    def _validate_required_group(cls, value: str) -> str:
+        return _require_group(value)
+
+    @field_validator("app")
+    @classmethod
+    def _validate_app(cls, value: str) -> str:
+        if not _APP_REF.match(value):
+            raise ValueError(
+                f"admin_ingress.app {value!r} must be an ASGI app reference "
+                "'<module>:<attr>', e.g. 'ideation.admin:app'."
+            )
+        return value
+
+
 class UserFrontend(BaseModel):
     """The plugin's path-routed static frontend under shared-Cognito SSO (ADR-0018 §2)."""
 
@@ -110,6 +150,12 @@ def parse_user_ingress_from_manifest(manifest: dict[str, Any]) -> UserIngress | 
     """The manifest's ``user_ingress`` declaration, or ``None`` if absent."""
     raw = manifest.get("user_ingress")
     return None if raw is None else UserIngress(**raw)
+
+
+def parse_admin_ingress_from_manifest(manifest: dict[str, Any]) -> AdminIngress | None:
+    """The manifest's ``admin_ingress`` declaration, or ``None`` if absent."""
+    raw = manifest.get("admin_ingress")
+    return None if raw is None else AdminIngress(**raw)
 
 
 def parse_user_frontend_from_manifest(manifest: dict[str, Any]) -> UserFrontend | None:

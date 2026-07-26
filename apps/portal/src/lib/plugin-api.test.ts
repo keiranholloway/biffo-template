@@ -25,6 +25,7 @@ describe('fetchInstalledPlugins', () => {
             description: '',
           },
         ],
+        has_admin_ingress: false,
       },
     ]
     const get = vi.fn().mockResolvedValue(plugins)

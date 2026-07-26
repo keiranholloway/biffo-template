@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 from ...middleware.auth import AuthenticatedUser, require_auth
 from ...migrations.plugin_migrations import parse_plugin_tables_from_manifest
 from ...models.plugin_route import RouteDefinition, parse_plugin_routes_from_manifest
+from ...models.plugin_user_surface import parse_admin_ingress_from_manifest
 from ...plugins import discover_plugin_manifests
 from ...schemas.plugin import InstalledPluginResponse
 
@@ -54,6 +55,7 @@ async def list_available_plugins(
                 description=manifest.get("description", ""),
                 tables=parse_plugin_tables_from_manifest(manifest),
                 routes=routes,
+                has_admin_ingress=parse_admin_ingress_from_manifest(manifest) is not None,
             )
         )
     return responses

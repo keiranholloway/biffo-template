@@ -79,3 +79,37 @@ class TestListAvailablePlugins:
         result = await list_available_plugins(_caller=_CALLER)
         payload = json.dumps([p.model_dump(mode="json") for p in result])
         assert "roles" in payload
+
+    async def test_has_admin_ingress_true_when_admin_ingress_declared(self, monkeypatch):
+        manifest = {
+            "name": "ideation",
+            "version": "1.0.0",
+            "user_ingress": {"app": "ideation.app:app", "required_group": "founder"},
+            "admin_ingress": {"app": "ideation.admin:app", "required_group": "admin"},
+            "tables": [],
+        }
+        monkeypatch.setattr(
+            "api.routers.admin.plugins.discover_plugin_manifests",
+            lambda: [manifest],
+        )
+
+        result = await list_available_plugins(_caller=_CALLER)
+
+        assert len(result) == 1
+        assert result[0].has_admin_ingress is True
+
+    async def test_has_admin_ingress_false_when_admin_ingress_absent(self, monkeypatch):
+        manifest = {
+            "name": "rbac",
+            "version": "1.0.0",
+            "tables": [],
+        }
+        monkeypatch.setattr(
+            "api.routers.admin.plugins.discover_plugin_manifests",
+            lambda: [manifest],
+        )
+
+        result = await list_available_plugins(_caller=_CALLER)
+
+        assert len(result) == 1
+        assert result[0].has_admin_ingress is False

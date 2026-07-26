@@ -651,11 +651,23 @@ def test_tenant_isolation(app, client: TestClient):
     assert client.get(_BASE).json() == []
 
 
-def test_non_admin_is_forbidden(app, client: TestClient):
+def test_non_admin_with_no_registered_authorizer_sees_nothing_and_cannot_create(
+    app, client: TestClient
+):
+    # Phase 3 (docs/implementation/0003-hierarchy-scoped-workflows): a non-admin
+    # is no longer an outright 403 on list — they're authenticated and see
+    # whatever the registered scope authorizer lets them see. The default
+    # (fail-closed, nothing registered) authorizes nothing, so list is an empty
+    # 200, not a blanket 403; create/update/delete still refuse (403) since the
+    # default authorizes no scope at all, including the unscoped default.
     fastapi, _ = app
     fastapi.dependency_overrides[require_auth] = lambda: _caller(roles=[])
-    assert client.get(_BASE).status_code == 403
+
     assert client.post(_BASE, json=_valid_body()).status_code == 403
+
+    resp = client.get(_BASE)
+    assert resp.status_code == 200
+    assert resp.json() == []
 
 
 def test_catalog_includes_declared_crud_events(client: TestClient, monkeypatch):
@@ -1460,3 +1472,154 @@ def test_delivery_workflow_is_tenant_isolated(app, client: TestClient):
     asyncio.run(_seed_other_tenant())
     # Caller is tenant "default" — the other tenant's delivery row is invisible.
     assert client.get(_BASE).json() == []
+
+
+# ── Phase 3: scoped authorization (docs/implementation/0003-hierarchy-scoped-workflows) ──
+#
+# A fake authorizer standing in for an instance's real role-assignment model
+# (e.g. tabsii's brand/region/unit reach): authorized for brand-1's scope only
+# — never the tenant-wide default (`scope: None`) and never a sibling brand.
+# Exercises the router's use of the registered authorizer, not the authorizer
+# itself (that's covered by test_orchestration_authz.py).
+
+
+async def _brand_1_authorizer(caller, db, scope) -> bool:  # noqa: ANN001
+    return scope is not None and scope.get("level") == "brand" and scope.get("id") == "brand-1"
+
+
+@pytest.fixture
+def _registered_brand_1_authorizer():
+    from api import orchestration_authz as authz
+
+    saved = authz._authorizer  # noqa: SLF001
+    authz.register_workflow_scope_authorizer(_brand_1_authorizer)
+    yield
+    authz._authorizer = saved  # noqa: SLF001
+
+
+def _non_admin(client: TestClient, app) -> None:
+    fastapi, _ = app
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(roles=[])
+
+
+def test_scoped_caller_can_create_within_their_own_brand(
+    app, client: TestClient, _registered_brand_1_authorizer
+):
+    _non_admin(client, app)
+    body = _valid_body(scope={"level": "brand", "id": "brand-1"})
+    assert client.post(_BASE, json=body).status_code == 201
+
+
+def test_scoped_caller_cannot_create_in_a_sibling_brand(
+    app, client: TestClient, _registered_brand_1_authorizer
+):
+    _non_admin(client, app)
+    body = _valid_body(scope={"level": "brand", "id": "brand-2"})
+    assert client.post(_BASE, json=body).status_code == 403
+
+
+def test_scoped_caller_cannot_create_an_unscoped_tenant_wide_workflow(
+    app, client: TestClient, _registered_brand_1_authorizer
+):
+    # The ceiling: a brand-scoped caller cannot go "up" to tenant-wide by
+    # simply omitting scope — the default (unscoped) is still just another
+    # scope the authorizer must approve, and this authorizer never does.
+    _non_admin(client, app)
+    assert client.post(_BASE, json=_valid_body()).status_code == 403
+
+
+def test_scoped_caller_sees_only_their_own_brands_workflows_in_list(
+    app, client: TestClient, _registered_brand_1_authorizer
+):
+    admin_created_brand_1 = client.post(
+        _BASE, json=_valid_body(name="Brand 1 rule", scope={"level": "brand", "id": "brand-1"})
+    )
+    admin_created_brand_2 = client.post(
+        _BASE, json=_valid_body(name="Brand 2 rule", scope={"level": "brand", "id": "brand-2"})
+    )
+    assert admin_created_brand_1.status_code == 201
+    assert admin_created_brand_2.status_code == 201
+
+    _non_admin(client, app)
+    names = {row["name"] for row in client.get(_BASE).json()}
+    assert names == {"Brand 1 rule"}
+
+
+def test_scoped_caller_gets_404_not_403_for_an_out_of_reach_workflow(
+    app, client: TestClient, _registered_brand_1_authorizer
+):
+    other_brand = client.post(
+        _BASE, json=_valid_body(scope={"level": "brand", "id": "brand-2"})
+    ).json()
+
+    _non_admin(client, app)
+    assert client.get(f"{_BASE}/{other_brand['id']}").status_code == 404
+
+
+def test_scoped_caller_can_read_update_delete_their_own_scoped_workflow(
+    app, client: TestClient, _registered_brand_1_authorizer
+):
+    own = client.post(_BASE, json=_valid_body(scope={"level": "brand", "id": "brand-1"})).json()
+
+    _non_admin(client, app)
+    assert client.get(f"{_BASE}/{own['id']}").status_code == 200
+
+    updated = client.put(
+        f"{_BASE}/{own['id']}",
+        json=_valid_body(name="Renamed", scope={"level": "brand", "id": "brand-1"}),
+    )
+    assert updated.status_code == 200
+    assert updated.json()["name"] == "Renamed"
+
+    assert client.delete(f"{_BASE}/{own['id']}").status_code == 204
+
+
+def test_scoped_caller_cannot_widen_their_own_workflow_to_tenant_wide(
+    app, client: TestClient, _registered_brand_1_authorizer
+):
+    # The ceiling again, on update: even a workflow already inside the
+    # caller's own reach cannot be re-scoped past it.
+    own = client.post(_BASE, json=_valid_body(scope={"level": "brand", "id": "brand-1"})).json()
+
+    _non_admin(client, app)
+    widened = client.put(f"{_BASE}/{own['id']}", json=_valid_body(scope=None))
+    assert widened.status_code == 403
+
+
+def test_scoped_caller_cannot_move_a_workflow_to_a_sibling_brand(
+    app, client: TestClient, _registered_brand_1_authorizer
+):
+    own = client.post(_BASE, json=_valid_body(scope={"level": "brand", "id": "brand-1"})).json()
+
+    _non_admin(client, app)
+    moved = client.put(
+        f"{_BASE}/{own['id']}", json=_valid_body(scope={"level": "brand", "id": "brand-2"})
+    )
+    assert moved.status_code == 403
+
+
+def test_scoped_caller_cannot_toggle_or_delete_an_out_of_reach_workflow(
+    app, client: TestClient, _registered_brand_1_authorizer
+):
+    other_brand = client.post(
+        _BASE, json=_valid_body(scope={"level": "brand", "id": "brand-2"})
+    ).json()
+
+    _non_admin(client, app)
+    assert (
+        client.post(f"{_BASE}/{other_brand['id']}/enabled", json={"enabled": False}).status_code
+        == 404
+    )
+    assert client.delete(f"{_BASE}/{other_brand['id']}").status_code == 404
+
+
+def test_admin_is_unaffected_by_a_registered_authorizer(
+    client: TestClient, _registered_brand_1_authorizer
+):
+    # Sanity/regression guard: registering a scoped authorizer must not
+    # narrow the platform admin's own reach — they still see and manage
+    # everything, exactly as before Phase 3.
+    body = _valid_body(scope={"level": "brand", "id": "brand-2"})
+    created = client.post(_BASE, json=body)
+    assert created.status_code == 201
+    assert len(client.get(_BASE).json()) == 1

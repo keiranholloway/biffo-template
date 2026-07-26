@@ -24,6 +24,14 @@ def _reset_registry():
 
 
 async def test_default_resolver_has_no_levels_when_nothing_registered():
+    # Explicitly reset to the pristine, nothing-ever-registered state rather
+    # than asserting whatever happens to be ambient: on a real instance that
+    # registers its own resolver at import time (e.g. tabsii's
+    # scope_resolver_tabsii.py), that registration has already run somewhere
+    # else in this same test process by the time this test executes, so the
+    # "actual default" is never observable without forcing it here. The
+    # autouse fixture above restores whatever was active before this test.
+    sr._levels, sr._resolver = (), sr._default_resolver  # noqa: SLF001
     assert sr.registered_scope_levels() == ()
     chain = await sr.resolve_scope_chain(_DB, "biffo.core", "demo.requested", {"brand_id": "b1"})
     assert chain == {}

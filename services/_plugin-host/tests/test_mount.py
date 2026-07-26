@@ -262,6 +262,31 @@ def test_admin_static_shell_paths_bypass_the_gate_without_a_token():
     assert r.json()["shell"] is True
 
 
+def test_bare_admin_path_with_no_trailing_slash_reaches_the_admin_shell_not_founder():
+    """Regression pin: a request for the EXACT bare "/ideation/admin" (no
+    trailing slash, nothing after) must resolve to the admin app's public
+    shell — not silently fall through to the founder-facing mount and get
+    gated with the wrong (founder) group. Starlette's Mount compiles a regex
+    requiring a trailing slash, so without the bare-path normalization this
+    request used to match "/ideation" (the founder mount) instead, since
+    "/ideation/admin" also starts with "/ideation/". This is the exact shape
+    of the API Gateway route that's actually reachable unauthenticated
+    (AWS rejects a route_key ending in a bare "/" — biffo-template#631), so it
+    must resolve correctly with no token at all."""
+    client = _host(
+        MountedPlugin(
+            "ideation",
+            _plugin_app("ideation"),
+            "founder",
+            admin_app=_admin_app_with_static_shell("ideation"),
+            admin_required_group="admin",
+        )
+    )
+    r = client.get("/ideation/admin", follow_redirects=False)
+    assert r.status_code == 200
+    assert r.json()["shell"] is True
+
+
 def test_admin_api_paths_still_require_a_token_even_alongside_a_public_shell():
     """Only the shell paths are exempted — the actual JSON API stays gated."""
     client = _host(

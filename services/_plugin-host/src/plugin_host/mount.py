@@ -166,7 +166,37 @@ def group_gate(
     return gated
 
 
-def build_host(plugins: list[MountedPlugin], *, authorize: Authorizer) -> Starlette:
+def _normalize_bare_admin_paths(app: Any, bare_paths: frozenset[str]) -> Callable:
+    """Rewrite scope["path"] to add a trailing slash for an exact, bare
+    ``/<name>/admin`` request before Starlette's own router ever sees it.
+
+    Starlette's ``Mount("/<name>/admin", ...)`` compiles to a regex requiring a
+    trailing slash (``^/<name>/admin/(?P<path>.*)$``) — proven by inspecting
+    ``Mount(...).path_regex.pattern`` directly. A request for the bare path
+    with NO trailing slash and nothing after it therefore never matches that
+    Mount at all; Starlette falls through to the next route that DOES match —
+    the founder-facing ``Mount("/<name>", ...)``, which happens to also match
+    ``/<name>/admin`` as "founder mount, sub-path admin" and gates it with the
+    wrong (founder) group entirely. Confirmed live: a real deployed request to
+    the bare admin path returned "No bearer token" from the FOUNDER gate, not
+    a 404 or the admin gate — i.e. it silently routed to the wrong plugin app.
+
+    This can't be fixed by redirecting to the trailing-slash form either: the
+    API Gateway route in front of this Lambda has no unauthenticated route for
+    that form at all (AWS rejects a route_key ending in a bare "/" —
+    biffo-template#631) — the bare, no-slash path is the ONLY form reachable
+    unauthenticated at the Gateway, so it has to resolve correctly as-is.
+    """
+
+    async def normalized(scope: dict, receive: Callable, send: Callable) -> None:
+        if scope["type"] == "http" and scope.get("path") in bare_paths:
+            scope = {**scope, "path": scope["path"] + "/"}
+        await app(scope, receive, send)
+
+    return normalized
+
+
+def build_host(plugins: list[MountedPlugin], *, authorize: Authorizer) -> Any:
     """The shared plugin-host ASGI app: each plugin mounted, gated, under ``/<name>``
     and optionally under ``/<name>/admin`` if an admin ingress is declared.
 
@@ -175,6 +205,7 @@ def build_host(plugins: list[MountedPlugin], *, authorize: Authorizer) -> Starle
     replacing ADR-0018's per-plugin Mangum ``api_gateway_base_path`` hack.
     """
     routes = []
+    bare_admin_paths = set()
     for p in plugins:
         # Admin app mount (if declared) — must come before user-facing mount so
         # /ideation/admin/* matches before /ideation/* (Starlette routes are
@@ -192,8 +223,12 @@ def build_host(plugins: list[MountedPlugin], *, authorize: Authorizer) -> Starle
                     ),
                 )
             )
+            bare_admin_paths.add(f"/{p.name}/admin")
         # User-facing app mount
         routes.append(
             Mount(f"/{p.name}", app=group_gate(p.app, p.required_group, p.name, authorize))
         )
-    return Starlette(routes=routes)
+    host = Starlette(routes=routes)
+    if not bare_admin_paths:
+        return host
+    return _normalize_bare_admin_paths(host, frozenset(bare_admin_paths))

@@ -138,6 +138,17 @@ resource "aws_cloudfront_origin_access_control" "portal" {
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
   signing_protocol                  = "sigv4"
+
+  # #543: without this, a forced replacement (e.g. an attribute change to this
+  # OAC) destroys the OLD OAC before the distribution's origin blocks are
+  # updated to reference the new one's id — CloudFront still has the old id
+  # attached and refuses the delete with 409 OriginAccessControlInUse. Terraform
+  # destroys OLD only after NEW exists AND every reference is repointed to it,
+  # which forces the distribution's detach-update to complete first. Same fix
+  # applies to any origin-request-policy resource this module manages in future.
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # Dedicated log-delivery bucket for CloudFront access logs (CKV_AWS_86).
@@ -205,10 +216,23 @@ data "aws_cloudfront_cache_policy" "caching_disabled" {
   name = "Managed-CachingDisabled"
 }
 
+# Managed data-source policies are safe by construction here — they're read-only
+# AWS-owned policies, never created/destroyed by this module.
 data "aws_cloudfront_origin_request_policy" "all_viewer_except_host" {
   name = "Managed-AllViewerExceptHostHeader"
 }
 
+# #543 (see also #541, where this pattern previously bit): if a future change adds
+# a MANAGED aws_cloudfront_origin_access_control or aws_cloudfront_origin_request_policy
+# resource that is referenced ONLY from inside a dynamic "origin"/"ordered_cache_behavior"
+# block below (e.g. a per-sibling or per-plugin resource, keyed by for_each/count), and
+# that resource is later removed, add its address to an explicit top-level `depends_on`
+# on this distribution resource. Without it, removing the resource's LAST dynamic-block
+# entry makes the reference vanish from this plan entirely, so Terraform's graph has no
+# edge forcing "distribution update (detach)" before "resource delete" — the delete can
+# race ahead of CloudFront finishing the detach and fail with 409 OriginAccessControlInUse
+# / OriginRequestPolicyInUse. (The `portal` OAC below doesn't need this: it's ALSO
+# referenced from a static, always-present origin block, so the edge can never disappear.)
 resource "aws_cloudfront_distribution" "portal" {
   #checkov:skip=CKV_AWS_310:Single static S3 origin; no secondary origin exists to fail over to. Failover origin block stays optional/config-driven.
   #checkov:skip=CKV_AWS_374:Public franchise marketplace must serve all geographies; geo-restriction would break the product.

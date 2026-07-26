@@ -242,6 +242,23 @@ const catalogWithPayloadTemplateTo: WorkflowCatalog = {
   ),
 }
 
+// A catalog whose email action's `body` (a textarea, unlike `to`'s plain
+// input) is `payload_template`-eligible (#609) — exercises the picker on a
+// content field, not just a recipient field.
+const catalogWithPayloadTemplateBody: WorkflowCatalog = {
+  triggers: catalogWithFields.triggers,
+  actions: catalog.actions.map((a) =>
+    a.type === 'email'
+      ? {
+          ...a,
+          config_fields: a.config_fields.map((f) =>
+            f.name === 'body' ? { ...f, payload_template: true } : f,
+          ),
+        }
+      : a,
+  ),
+}
+
 // An agent action whose runtime registered no tools — the picker must not render.
 const catalogNoTools: WorkflowCatalog = {
   triggers: catalog.triggers,
@@ -1015,6 +1032,25 @@ describe('OrchestrationPage', () => {
     await screen.findByLabelText('To')
 
     expect(screen.queryByLabelText('Insert a trigger field into To')).not.toBeInTheDocument()
+  })
+
+  it('offers the insert-field picker on a payload_template textarea field too (#609)', async () => {
+    // The picker isn't nested inside the textarea/select/input branches in
+    // fieldControl() — it renders once per field regardless of which of
+    // those the field takes, so a content field (Body, a textarea) gets it
+    // the same as a recipient field (To, a plain input).
+    fetchWorkflows.mockResolvedValue([])
+    fetchCatalog.mockResolvedValue(catalogWithPayloadTemplateBody)
+
+    render(<OrchestrationPage />)
+    await screen.findByLabelText('Body')
+
+    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'Contact: ' } })
+    fireEvent.change(screen.getByLabelText('Insert a trigger field into Body'), {
+      target: { value: 'status' },
+    })
+
+    expect(screen.getByLabelText('Body')).toHaveValue('Contact: {status}')
   })
 
   it('omits the insert-field picker on a field that is not payload_template', async () => {

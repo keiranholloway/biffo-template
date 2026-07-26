@@ -290,6 +290,37 @@ def test_catalog_offers_chat_actions(client: TestClient):
     assert {"email", "google_chat", "whatsapp"} <= types
 
 
+# ── payload_template on content fields drives the portal's insert-field
+#    picker (#609): `_render` already fills these identically to `to` —
+#    this only makes the catalog say so, so the portal can offer the same
+#    picker there too. ──────────────────────────────────────────────────────
+
+
+def _field(action: dict, name: str) -> dict:
+    return next(f for f in action["config_fields"] if f["name"] == name)
+
+
+def test_catalog_flags_email_content_fields_as_payload_template(client: TestClient):
+    body = client.get(f"{_BASE}/catalog").json()
+    email = next(a for a in body["actions"] if a["type"] == "email")
+    assert _field(email, "subject")["payload_template"] is True
+    assert _field(email, "body")["payload_template"] is True
+
+
+def test_catalog_flags_chat_message_fields_as_payload_template(client: TestClient):
+    body = client.get(f"{_BASE}/catalog").json()
+    for action_type in ("google_chat", "slack"):
+        action = next(a for a in body["actions"] if a["type"] == action_type)
+        assert _field(action, "message")["payload_template"] is True
+
+
+def test_catalog_flags_whatsapp_message_fields_as_payload_template(client: TestClient):
+    body = client.get(f"{_BASE}/catalog").json()
+    whatsapp = next(a for a in body["actions"] if a["type"] == "whatsapp")
+    assert _field(whatsapp, "message")["payload_template"] is True
+    assert _field(whatsapp, "template_params")["payload_template"] is True
+
+
 # ── agent action surfaces the runtime's declared tools (ADR-0014 §7) ──────────
 
 

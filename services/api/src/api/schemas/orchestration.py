@@ -142,14 +142,18 @@ class WorkflowRunSummary(BiffoBaseSchema):
 #                      when that sibling's effective value matches. A field that
 #                      does not apply is neither shown by the portal nor
 #                      required/format-checked here (see ``_field_applies``).
-#   ``payload_template`` — ``True`` marks a recipient/target field (email and
-#                      WhatsApp ``to``) as eligible for the same ``{field}``
-#                      templating already used on content fields (``subject``/
-#                      ``body``/``message``): a value containing ``{``/``}``
-#                      skips the literal-format check below and is filled from
-#                      the triggering event's payload by the orchestrator's
-#                      ``_render`` at dispatch time. A literal address with no
-#                      braces is unaffected — still format-checked as before.
+#   ``payload_template`` — ``True`` marks a field as eligible for ``{field}``
+#                      templating from the triggering event's payload, filled
+#                      by the orchestrator's ``_render`` at dispatch time. Set
+#                      on both recipient/target fields (email/WhatsApp ``to``)
+#                      and content fields (``subject``/``body``/``message``/
+#                      ``template_params``) — `_render` already fills all of
+#                      them identically; this flag only drives the portal's
+#                      "insert field" picker (#609) and, for a field whose
+#                      ``type`` is otherwise format-checked (``email``), skips
+#                      that check when the value contains ``{``/``}`` so a
+#                      literal address with no braces is unaffected — still
+#                      format-checked as before.
 #   ``secret``       — ``True`` marks the value a credential (#432). It is never
 #                      returned in clear: reads (HTTP responses AND the state-change
 #                      events emitted to the bus) redact a stored value to
@@ -226,13 +230,20 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 # `_render` in the orchestrator plugin.
                 "payload_template": True,
             },
-            {"name": "subject", "label": "Subject", "type": "text", "required": True},
+            {
+                "name": "subject",
+                "label": "Subject",
+                "type": "text",
+                "required": True,
+                "payload_template": True,
+            },
             {
                 "name": "body",
                 "label": "Body",
                 "type": "textarea",
                 "required": True,
                 "output_body": True,
+                "payload_template": True,
             },
         ],
     },
@@ -256,6 +267,7 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 "type": "textarea",
                 "required": True,
                 "output_body": True,
+                "payload_template": True,
             },
         ],
     },
@@ -278,6 +290,7 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 "type": "textarea",
                 "required": True,
                 "output_body": True,
+                "payload_template": True,
             },
         ],
     },
@@ -314,6 +327,7 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 "type": "textarea",
                 "required": True,
                 "output_body": True,
+                "payload_template": True,
                 "visible_when": {"field": "message_type", "equals": "text"},
             },
             # The template must already exist and be approved in WhatsApp
@@ -338,6 +352,7 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 "label": "Body parameters, in order (comma-separated, {field} allowed)",
                 "type": "text",
                 "required": False,
+                "payload_template": True,
                 "visible_when": {"field": "message_type", "equals": "template"},
             },
         ],

@@ -16,6 +16,15 @@ function sessionWithSub(sub: string) {
   return { getIdToken: () => ({ payload: { sub } }) }
 }
 
+/** The table row containing the given text, or throws — avoids a `!`
+ * non-null assertion (forbidden by this repo's ESLint config) at call sites
+ * that already know the row must exist. */
+function findRow(rows: HTMLElement[], text: string): HTMLElement {
+  const row = rows.find((r) => r.textContent.includes(text))
+  if (row == null) throw new Error(`No row found containing "${text}"`)
+  return row
+}
+
 vi.mock('@/lib/api-client', () => ({
   createApiClient: () => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() }),
 }))
@@ -266,20 +275,15 @@ describe('UsersPage', () => {
       await screen.findByText('alice@example.com')
 
       const rows = screen.getAllByRole('row')
-      const aliceRow = rows.find((r) => r.textContent.includes('alice@example.com'))
-      const bobRow = rows.find((r) => r.textContent.includes('bob@example.com'))
+      const aliceRow = findRow(rows, 'alice@example.com')
+      const bobRow = findRow(rows, 'bob@example.com')
 
-      expect(aliceRow).toBeDefined()
-      expect(bobRow).toBeDefined()
-
-      expect(within(aliceRow!).getByRole('button', { name: 'Suspend' })).toBeDisabled()
-
-      expect(within(aliceRow!).getByRole('button', { name: 'Delete' })).toBeDisabled()
+      expect(within(aliceRow).getByRole('button', { name: 'Suspend' })).toBeDisabled()
+      expect(within(aliceRow).getByRole('button', { name: 'Delete' })).toBeDisabled()
       expect(screen.getByText('(you)')).toBeInTheDocument()
 
       // bob is a different user — unaffected.
-
-      expect(within(bobRow!).getByRole('button', { name: 'Reactivate' })).not.toBeDisabled()
+      expect(within(bobRow).getByRole('button', { name: 'Reactivate' })).not.toBeDisabled()
     })
 
     it("does not disable another admin's row", async () => {

@@ -339,34 +339,41 @@ function GroupChips({
   onAdd,
   onRemove,
   assignable,
+  disableRemoveGroups = [],
 }: {
   user: AdminUser
   onAdd: (group: string) => void
   onRemove: (group: string) => void
   assignable: readonly string[]
+  disableRemoveGroups?: readonly string[]
 }) {
   const available = assignable.filter((g) => !user.groups.includes(g))
   return (
     <span className="flex flex-wrap items-center gap-1">
       {user.groups.length === 0 && <span className="text-xs text-gray-400">none</span>}
-      {user.groups.map((group) => (
-        <span
-          key={group}
-          className="flex items-center gap-1 rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-700"
-        >
-          {group}
-          <button
-            type="button"
-            aria-label={`Remove ${group} from ${user.email}`}
-            onClick={() => {
-              onRemove(group)
-            }}
-            className="text-gray-400 hover:text-gray-700"
+      {user.groups.map((group) => {
+        const removeDisabled = disableRemoveGroups.includes(group)
+        return (
+          <span
+            key={group}
+            className="flex items-center gap-1 rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-700"
           >
-            ×
-          </button>
-        </span>
-      ))}
+            {group}
+            <button
+              type="button"
+              aria-label={`Remove ${group} from ${user.email}`}
+              disabled={removeDisabled}
+              title={removeDisabled ? "You can't remove yourself from this group" : undefined}
+              onClick={() => {
+                onRemove(group)
+              }}
+              className="text-gray-400 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-gray-400"
+            >
+              ×
+            </button>
+          </span>
+        )
+      })}
       {available.length > 0 && (
         <select
           aria-label={`Add group to ${user.email}`}
@@ -389,7 +396,11 @@ function GroupChips({
 }
 
 export default function UsersPage() {
-  const { getIdToken } = useAuth()
+  const { getIdToken, session } = useAuth()
+  // The signed-in admin's own sub (#630) — used to disable Suspend/Delete and
+  // "remove from admin group" on their own row, so self-lockout is caught
+  // before the request is even sent, not just enforced server-side.
+  const mySub = session?.getIdToken().payload['sub'] as string | undefined
   const [users, setUsers] = useState<AdminUser[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Live group taxonomy from the API; falls back to the baseline until it loads
@@ -502,79 +513,88 @@ export default function UsersPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {users.map((user) => (
-                <tr key={user.sub || user.username}>
-                  <td className="px-4 py-2 text-gray-800">
-                    {[user.given_name, user.family_name].filter(Boolean).join(' ') || (
-                      <span className="text-gray-400">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2 text-gray-800">{user.email}</td>
-                  <td className="px-4 py-2 text-gray-600">
-                    {user.organization_name ?? <span className="text-gray-400">—</span>}
-                  </td>
-                  <td className="px-4 py-2 text-gray-600">
-                    {user.job_role ?? <span className="text-gray-400">—</span>}
-                  </td>
-                  <td className="px-4 py-2">
-                    {user.enabled ? (
-                      <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-700">
-                        {user.status || 'active'}
-                      </span>
-                    ) : (
-                      <span className="rounded bg-rose-100 px-1.5 py-0.5 text-xs text-rose-700">
-                        suspended
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2">
-                    <GroupChips
-                      user={user}
-                      assignable={assignable}
-                      onAdd={(group) => {
-                        void run(() => assignGroup(client, user.username, group))
-                      }}
-                      onRemove={(group) => {
-                        void run(() => removeGroup(client, user.username, group))
-                      }}
-                    />
-                  </td>
-                  <td className="px-4 py-2">
-                    <div className="flex justify-end gap-2">
-                      {user.enabled ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void run(() => suspendUser(client, user.username))
-                          }}
-                          className="rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
-                        >
-                          Suspend
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void run(() => reactivateUser(client, user.username))
-                          }}
-                          className="rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
-                        >
-                          Reactivate
-                        </button>
+              {users.map((user) => {
+                const isSelf = mySub != null && user.sub === mySub
+                return (
+                  <tr key={user.sub || user.username}>
+                    <td className="px-4 py-2 text-gray-800">
+                      {[user.given_name, user.family_name].filter(Boolean).join(' ') || (
+                        <span className="text-gray-400">—</span>
                       )}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void run(() => deleteUser(client, user.username))
+                      {isSelf && <span className="ml-1 text-xs text-gray-400">(you)</span>}
+                    </td>
+                    <td className="px-4 py-2 text-gray-800">{user.email}</td>
+                    <td className="px-4 py-2 text-gray-600">
+                      {user.organization_name ?? <span className="text-gray-400">—</span>}
+                    </td>
+                    <td className="px-4 py-2 text-gray-600">
+                      {user.job_role ?? <span className="text-gray-400">—</span>}
+                    </td>
+                    <td className="px-4 py-2">
+                      {user.enabled ? (
+                        <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-700">
+                          {user.status || 'active'}
+                        </span>
+                      ) : (
+                        <span className="rounded bg-rose-100 px-1.5 py-0.5 text-xs text-rose-700">
+                          suspended
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2">
+                      <GroupChips
+                        user={user}
+                        assignable={assignable}
+                        disableRemoveGroups={isSelf ? ['admin'] : []}
+                        onAdd={(group) => {
+                          void run(() => assignGroup(client, user.username, group))
                         }}
-                        className="rounded border border-rose-200 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                        onRemove={(group) => {
+                          void run(() => removeGroup(client, user.username, group))
+                        }}
+                      />
+                    </td>
+                    <td className="px-4 py-2">
+                      <div className="flex justify-end gap-2">
+                        {user.enabled ? (
+                          <button
+                            type="button"
+                            disabled={isSelf}
+                            title={isSelf ? "You can't suspend your own account" : undefined}
+                            onClick={() => {
+                              void run(() => suspendUser(client, user.username))
+                            }}
+                            className="rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                          >
+                            Suspend
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void run(() => reactivateUser(client, user.username))
+                            }}
+                            className="rounded border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+                          >
+                            Reactivate
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={isSelf}
+                          title={isSelf ? "You can't delete your own account" : undefined}
+                          onClick={() => {
+                            void run(() => deleteUser(client, user.username))
+                          }}
+                          className="rounded border border-rose-200 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>

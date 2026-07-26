@@ -1,12 +1,20 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import UsersPage from './page'
 import type * as UserAdminApiModule from '@/lib/user-admin-api'
 import type { AdminUser } from '@/lib/user-admin-api'
 
+const { useAuthMock } = vi.hoisted(() => ({ useAuthMock: vi.fn() }))
+
 vi.mock('@/context/auth-context', () => ({
-  useAuth: () => ({ getIdToken: () => 'fake-token' }),
+  useAuth: useAuthMock,
 }))
+
+/** A fake session whose ID token carries the given sub — used to make the
+ * signed-in admin "be" a specific row (#630's self-lockout guard). */
+function sessionWithSub(sub: string) {
+  return { getIdToken: () => ({ payload: { sub } }) }
+}
 
 vi.mock('@/lib/api-client', () => ({
   createApiClient: () => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() }),
@@ -115,6 +123,7 @@ describe('UsersPage', () => {
     }
     fetchGroups.mockResolvedValue({ groups: ['admin', 'editor', 'viewer'] })
     fetchOrganizations.mockResolvedValue({ organizations: [] })
+    useAuthMock.mockReturnValue({ getIdToken: () => 'fake-token', session: undefined })
   })
 
   it('renders users with email, status and groups', async () => {
@@ -246,5 +255,59 @@ describe('UsersPage', () => {
     // The custom "billing" group (not in the hardcoded fallback) appears as an
     // assignable checkbox in the Add-user form.
     expect(await screen.findByLabelText('billing')).toBeInTheDocument()
+  })
+
+  describe('self-lockout guard (#630)', () => {
+    it("disables Suspend and Delete on the signed-in admin's own row", async () => {
+      useAuthMock.mockReturnValue({ getIdToken: () => 'fake-token', session: sessionWithSub('s1') })
+      fetchUsers.mockResolvedValue({ users: [alice, bob], next_token: null })
+
+      render(<UsersPage />)
+      await screen.findByText('alice@example.com')
+
+      const rows = screen.getAllByRole('row')
+      const aliceRow = rows.find((r) => r.textContent.includes('alice@example.com'))
+      const bobRow = rows.find((r) => r.textContent.includes('bob@example.com'))
+
+      expect(aliceRow).toBeDefined()
+      expect(bobRow).toBeDefined()
+
+      expect(within(aliceRow!).getByRole('button', { name: 'Suspend' })).toBeDisabled()
+
+      expect(within(aliceRow!).getByRole('button', { name: 'Delete' })).toBeDisabled()
+      expect(screen.getByText('(you)')).toBeInTheDocument()
+
+      // bob is a different user — unaffected.
+
+      expect(within(bobRow!).getByRole('button', { name: 'Reactivate' })).not.toBeDisabled()
+    })
+
+    it("does not disable another admin's row", async () => {
+      useAuthMock.mockReturnValue({
+        getIdToken: () => 'fake-token',
+        session: sessionWithSub('a-different-sub'),
+      })
+      fetchUsers.mockResolvedValue({ users: [alice], next_token: null })
+
+      render(<UsersPage />)
+      expect(await screen.findByRole('button', { name: 'Suspend' })).not.toBeDisabled()
+      expect(screen.queryByText('(you)')).not.toBeInTheDocument()
+    })
+
+    it('disables removing the admin group, but not other groups, on the own row', async () => {
+      const self = { ...alice, groups: ['admin', 'editor'] }
+      useAuthMock.mockReturnValue({ getIdToken: () => 'fake-token', session: sessionWithSub('s1') })
+      fetchUsers.mockResolvedValue({ users: [self], next_token: null })
+
+      render(<UsersPage />)
+      await screen.findByText('alice@example.com')
+
+      expect(
+        screen.getByRole('button', { name: 'Remove admin from alice@example.com' }),
+      ).toBeDisabled()
+      expect(
+        screen.getByRole('button', { name: 'Remove editor from alice@example.com' }),
+      ).not.toBeDisabled()
+    })
   })
 })

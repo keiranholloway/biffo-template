@@ -59,6 +59,20 @@ def _raise_http(err: CognitoAdminError) -> NoReturn:
     ) from err
 
 
+def _reject_if_self(admin: AuthenticatedUser, target_sub: str, action: str) -> None:
+    """Block an admin from locking themselves out (#630): a caller could
+    otherwise suspend or delete their own account — or remove themselves from
+    the `admin` group — with no way back in short of a Terraform re-apply to
+    recreate the bootstrap admin user, as happened in production. Compares
+    resolved `sub`, not the raw `username` path param, since Cognito's Admin*
+    APIs accept either an email or a sub as `username` (see cognito.py)."""
+    if target_sub == admin.sub:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"You cannot {action} your own account.",
+        )
+
+
 def _to_response(cog: CognitoAdmin, user: dict, profile: User | None = None) -> AdminUserResponse:
     """Attach the user's group memberships (a separate Cognito call) and the
     DB-only profile fields (organization/job role/address), if a mirror row
@@ -231,11 +245,17 @@ async def add_user_to_group(
 async def remove_user_from_group(
     username: str,
     group: str,
-    _admin: AuthenticatedUser = Depends(require_admin),
+    admin: AuthenticatedUser = Depends(require_admin),
     cog: CognitoAdmin = Depends(get_cognito_admin),
     db: AsyncSession = Depends(get_db),
 ) -> AdminUserResponse:
     try:
+        # Only the admin-group removal is a self-lockout risk (#630) — leaving
+        # any other group is harmless, so this is scoped to that one case
+        # rather than blocking all self group-edits.
+        if group == "admin":
+            target = cog.get_user(username)
+            _reject_if_self(admin, target["sub"], "remove yourself from the admin group")
         cog.remove_from_group(username=username, group=group)
         user = cog.get_user(username)
     except CognitoAdminError as err:
@@ -255,6 +275,8 @@ async def suspend_user(
     access tokens remain valid until they expire (up to the pool's access-token
     TTL); refresh is cut immediately."""
     try:
+        target = cog.get_user(username)
+        _reject_if_self(admin, target["sub"], "suspend")
         cog.disable_user(username)
         cog.global_sign_out(username)
         user = cog.get_user(username)
@@ -295,6 +317,7 @@ async def delete_user(
     hard-deleted, so historical references like rbac assignments stay resolvable)."""
     try:
         user = cog.get_user(username)  # resolve sub before deletion; 404 if missing
+        _reject_if_self(admin, user["sub"], "delete")
         cog.delete_user(username)
     except CognitoAdminError as err:
         _raise_http(err)

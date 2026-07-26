@@ -49,6 +49,13 @@ export function createApiClient(getIdToken: () => string | null) {
         body: JSON.stringify(body),
       }).then((r) => handleResponse<T>(r)),
 
+    patch: <T>(path: string, body: unknown): Promise<T> =>
+      fetch(`${API_URL}${path}`, {
+        method: 'PATCH',
+        headers: authHeaders(),
+        body: JSON.stringify(body),
+      }).then((r) => handleResponse<T>(r)),
+
     delete: <T>(path: string): Promise<T> =>
       fetch(`${API_URL}${path}`, { method: 'DELETE', headers: authHeaders() }).then((r) =>
         handleResponse<T>(r),

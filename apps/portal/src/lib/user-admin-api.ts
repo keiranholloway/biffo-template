@@ -51,6 +51,25 @@ export interface CreateUserRequest {
   country?: string | undefined
 }
 
+/**
+ * Edit an existing user (#633) — every field optional, and PATCH semantics
+ * apply: omitting a field leaves it unchanged (unlike CreateUserRequest,
+ * where every field describes the whole new user).
+ */
+export interface AdminUserUpdateRequest {
+  given_name?: string | undefined
+  family_name?: string | undefined
+  phone_number?: string | undefined
+  organization_id?: string | undefined
+  job_role?: string | undefined
+  address_line1?: string | undefined
+  address_line2?: string | undefined
+  city?: string | undefined
+  region?: string | undefined
+  postal_code?: string | undefined
+  country?: string | undefined
+}
+
 /** A company an admin can attach to a user (see /admin/organizations). */
 export interface Organization {
   id: string
@@ -121,6 +140,24 @@ export function reactivateUser(client: Pick<Client, 'post'>, username: string): 
 
 export async function deleteUser(client: Pick<Client, 'delete'>, username: string): Promise<void> {
   await client.delete(`${BASE}/${encodeURIComponent(username)}`)
+}
+
+export function updateUser(
+  client: Pick<Client, 'patch'>,
+  username: string,
+  body: AdminUserUpdateRequest,
+): Promise<AdminUser> {
+  return client.patch<AdminUser>(`${BASE}/${encodeURIComponent(username)}`, body)
+}
+
+/**
+ * Force the user onto Cognito's own Forgot Password flow (#633). This does
+ * NOT itself email anything — see CognitoAdmin.reset_password's docstring —
+ * so the caller should tell the admin the user must use "Forgot password"
+ * next time they try to sign in, not that a new password was just emailed.
+ */
+export function resetPassword(client: Pick<Client, 'post'>, username: string): Promise<AdminUser> {
+  return client.post<AdminUser>(`${BASE}/${encodeURIComponent(username)}/reset-password`, {})
 }
 
 const ORGANIZATIONS_BASE = '/api/v1/admin/organizations'

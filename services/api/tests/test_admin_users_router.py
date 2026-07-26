@@ -85,6 +85,8 @@ def harness() -> Generator[dict]:
             "app": app,
             "client": TestClient(app),
             "cog": cog,
+            "raw_client": client,
+            "pool_id": pool_id,
             "session_factory": session_factory,
             "published": published,
         }
@@ -434,3 +436,131 @@ def test_admin_can_still_suspend_a_different_user(harness):
 
     assert resp.status_code == 200
     assert resp.json()["enabled"] is False
+
+
+# --- edit existing user (#633) ------------------------------------------------
+
+
+def test_patch_updates_cognito_name_fields(harness):
+    harness["cog"].create_user(
+        email="oscar@example.com",
+        given_name="Oscar",
+        family_name="Original",
+        suppress_invite_email=True,
+    )
+
+    resp = harness["client"].patch(
+        f"{_BASE}/oscar@example.com", json={"given_name": "Oz", "family_name": "Updated"}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["given_name"] == "Oz"
+    assert resp.json()["family_name"] == "Updated"
+
+
+def test_patch_creates_a_profile_row_when_none_exists(harness):
+    """job_role/organization_id/address have no other home — editing them for
+    a user with no DB mirror row yet must create one, not silently drop the
+    edit (mirrors create_user's eager-row-creation rationale)."""
+    harness["cog"].create_user(
+        email="pat@example.com", given_name="Pat", family_name="Patel", suppress_invite_email=True
+    )
+
+    resp = harness["client"].patch(f"{_BASE}/pat@example.com", json={"job_role": "CTO"})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["job_role"] == "CTO"
+
+
+def test_patch_updates_an_existing_profile_row(harness):
+    harness["cog"].create_user(
+        email="quinn@example.com",
+        given_name="Quinn",
+        family_name="Quincy",
+        suppress_invite_email=True,
+    )
+    harness["client"].patch(f"{_BASE}/quinn@example.com", json={"job_role": "Engineer"})
+
+    resp = harness["client"].patch(
+        f"{_BASE}/quinn@example.com", json={"job_role": "Staff Engineer"}
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["job_role"] == "Staff Engineer"
+
+
+def test_patch_omitted_fields_are_left_unchanged(harness):
+    """PATCH semantics: omitting a field must NOT clear it — unlike the
+    self-service user-profile PUT, which is a whole-form save."""
+    harness["cog"].create_user(
+        email="riley@example.com", given_name="Riley", family_name="Ray", suppress_invite_email=True
+    )
+    harness["client"].patch(f"{_BASE}/riley@example.com", json={"job_role": "Designer"})
+
+    resp = harness["client"].patch(
+        f"{_BASE}/riley@example.com", json={"phone_number": "+15551234567"}
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["job_role"] == "Designer"
+    assert resp.json()["phone_number"] == "+15551234567"
+
+
+def test_patch_does_not_touch_cognito_when_only_profile_fields_set(harness):
+    """Editing just job_role must not call Cognito at all — the given/family
+    name on the Cognito side must be untouched."""
+    harness["cog"].create_user(
+        email="sam@example.com",
+        given_name="Sam",
+        family_name="Original",
+        suppress_invite_email=True,
+    )
+
+    resp = harness["client"].patch(f"{_BASE}/sam@example.com", json={"job_role": "PM"})
+
+    assert resp.status_code == 200
+    assert resp.json()["given_name"] == "Sam"
+    assert resp.json()["family_name"] == "Original"
+
+
+def test_patch_empty_body_is_a_no_op(harness):
+    harness["cog"].create_user(
+        email="taylor@example.com",
+        given_name="Taylor",
+        family_name="Swift",
+        suppress_invite_email=True,
+    )
+    resp = harness["client"].patch(f"{_BASE}/taylor@example.com", json={})
+    assert resp.status_code == 200
+    assert resp.json()["given_name"] == "Taylor"
+
+
+# --- reset password (#633) ----------------------------------------------------
+
+
+def test_reset_password_forces_reset_required_status(harness):
+    harness["cog"].create_user(
+        email="uma@example.com",
+        given_name="Uma",
+        family_name="Underwood",
+        suppress_invite_email=True,
+    )
+    # Cognito refuses AdminResetUserPassword on a user still in
+    # FORCE_CHANGE_PASSWORD (nothing to "reset" yet) — move to CONFIRMED first,
+    # as a real user would after completing their first sign-in.
+    harness["raw_client"].admin_set_user_password(
+        UserPoolId=harness["pool_id"],
+        Username="uma@example.com",
+        Password="SuperSecret123!",
+        Permanent=True,
+    )
+
+    resp = harness["client"].post(f"{_BASE}/uma@example.com/reset-password")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "RESET_REQUIRED"
+
+
+def test_reset_password_missing_user_returns_404(harness):
+    resp = harness["client"].post(f"{_BASE}/nobody@example.com/reset-password")
+    assert resp.status_code == 404

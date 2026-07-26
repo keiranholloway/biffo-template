@@ -78,6 +78,31 @@ class CreateUserRequest(BaseModel):
     suppress_invite_email: bool = False
 
 
+class AdminUserUpdateRequest(BaseModel):
+    """Edit an existing user's name/phone (Cognito) and/or company/job role/
+    address (DB mirror row) — #633. Every field is optional, and PATCH
+    semantics apply: the router only touches fields the caller actually set
+    (Pydantic's `model_fields_set`/`exclude_unset`), so omitting a field
+    leaves it unchanged — including explicitly sending `null` to clear one,
+    which IS "set" as far as `exclude_unset` is concerned. Unlike
+    CreateUserRequest, given_name/family_name are optional here: this edits
+    an existing user who already has a name, not a required part of onboarding
+    a new one.
+    """
+
+    given_name: str | None = Field(default=None, min_length=1, max_length=128)
+    family_name: str | None = Field(default=None, min_length=1, max_length=128)
+    phone_number: str | None = None
+    organization_id: str | None = None
+    job_role: str | None = Field(default=None, max_length=128)
+    address_line1: str | None = Field(default=None, max_length=255)
+    address_line2: str | None = Field(default=None, max_length=255)
+    city: str | None = Field(default=None, max_length=128)
+    region: str | None = Field(default=None, max_length=128)
+    postal_code: str | None = Field(default=None, max_length=32)
+    country: str | None = Field(default=None, min_length=2, max_length=2)
+
+
 class GroupAssignmentRequest(BaseModel):
     group: str
 

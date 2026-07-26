@@ -145,6 +145,45 @@ class CognitoAdmin:
     def get_user(self, username: str) -> dict[str, Any]:
         return _normalize_user(self._call("admin_get_user", Username=username))
 
+    def update_attributes(
+        self,
+        username: str,
+        *,
+        given_name: str | None = None,
+        family_name: str | None = None,
+        phone_number: str | None = None,
+    ) -> None:
+        """Update one or more Cognito attributes on an existing user.
+
+        Only the provided (non-None) fields are sent, so an admin editing just
+        job_role (a DB-only field — see routers/admin/users.py) never touches
+        Cognito at all, and editing just given_name never touches phone_number.
+        """
+        attributes = []
+        if given_name is not None:
+            attributes.append({"Name": "given_name", "Value": given_name})
+        if family_name is not None:
+            attributes.append({"Name": "family_name", "Value": family_name})
+        if phone_number is not None:
+            attributes.append({"Name": "phone_number", "Value": phone_number})
+        if not attributes:
+            return
+        self._call("admin_update_user_attributes", Username=username, UserAttributes=attributes)
+
+    def reset_password(self, username: str) -> None:
+        """Force the user onto Cognito's own Forgot Password flow.
+
+        This invalidates their current password and moves their status to
+        RESET_REQUIRED immediately — it does NOT itself send anything. Cognito
+        emails a verification code only when the user next attempts "Forgot
+        password" (or is redirected there by a blocked sign-in attempt). There
+        is no Cognito Admin API that both resets a CONFIRMED user's password
+        and emails a new one in a single call; that combination only exists
+        for a user still in FORCE_CHANGE_PASSWORD (see create_user's
+        MessageAction/DesiredDeliveryMediums, which is a different state).
+        """
+        self._call("admin_reset_user_password", Username=username)
+
     def list_users(self, *, limit: int = 60, pagination_token: str | None = None) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"Limit": limit}
         if pagination_token:

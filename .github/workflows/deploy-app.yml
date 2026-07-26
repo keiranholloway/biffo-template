@@ -594,6 +594,20 @@ jobs:
             cp -r "$plugin_dir"/src/. "$pkg/"
             mkdir -p "$pkg/services/$name"
             cp "$manifest" "$pkg/services/$name/biffo.plugin.json"
+            # admin_ingress's built UI shell (biffo-template#627/#632) is served
+            # by this same Lambda, read from services/<name>/web-admin/dist via
+            # BIFFO_PLUGINS_ROOT -- build it here (same pnpm shape as the
+            # plugin-frontend step below) and copy the output in. Skipped if the
+            # plugin declares no admin_ingress or has no web-admin/ directory.
+            if jq -e '.admin_ingress' "$manifest" >/dev/null 2>&1 && [ -d "$plugin_dir/web-admin" ]; then
+              (
+                cd "$plugin_dir/web-admin"
+                pnpm install --ignore-workspace --frozen-lockfile
+                pnpm run build
+              )
+              mkdir -p "$pkg/services/$name/web-admin"
+              cp -r "$plugin_dir/web-admin/dist" "$pkg/services/$name/web-admin/dist"
+            fi
             echo "::endgroup::"
           done
           # Trim runtime-provided and dead weight so the zip fits the direct
@@ -1197,6 +1211,20 @@ jobs:
             cp -r "$plugin_dir"/src/. "$pkg/"
             mkdir -p "$pkg/services/$name"
             cp "$manifest" "$pkg/services/$name/biffo.plugin.json"
+            # admin_ingress's built UI shell (biffo-template#627/#632) is served
+            # by this same Lambda, read from services/<name>/web-admin/dist via
+            # BIFFO_PLUGINS_ROOT -- build it here (same pnpm shape as the
+            # plugin-frontend step below) and copy the output in. Skipped if the
+            # plugin declares no admin_ingress or has no web-admin/ directory.
+            if jq -e '.admin_ingress' "$manifest" >/dev/null 2>&1 && [ -d "$plugin_dir/web-admin" ]; then
+              (
+                cd "$plugin_dir/web-admin"
+                pnpm install --ignore-workspace --frozen-lockfile
+                pnpm run build
+              )
+              mkdir -p "$pkg/services/$name/web-admin"
+              cp -r "$plugin_dir/web-admin/dist" "$pkg/services/$name/web-admin/dist"
+            fi
             echo "::endgroup::"
           done
           # Trim runtime-provided and dead weight so the zip fits the direct
@@ -1812,6 +1840,20 @@ jobs:
             cp -r "$plugin_dir"/src/. "$pkg/"
             mkdir -p "$pkg/services/$name"
             cp "$manifest" "$pkg/services/$name/biffo.plugin.json"
+            # admin_ingress's built UI shell (biffo-template#627/#632) is served
+            # by this same Lambda, read from services/<name>/web-admin/dist via
+            # BIFFO_PLUGINS_ROOT -- build it here (same pnpm shape as the
+            # plugin-frontend step below) and copy the output in. Skipped if the
+            # plugin declares no admin_ingress or has no web-admin/ directory.
+            if jq -e '.admin_ingress' "$manifest" >/dev/null 2>&1 && [ -d "$plugin_dir/web-admin" ]; then
+              (
+                cd "$plugin_dir/web-admin"
+                pnpm install --ignore-workspace --frozen-lockfile
+                pnpm run build
+              )
+              mkdir -p "$pkg/services/$name/web-admin"
+              cp -r "$plugin_dir/web-admin/dist" "$pkg/services/$name/web-admin/dist"
+            fi
             echo "::endgroup::"
           done
           # Trim runtime-provided and dead weight so the zip fits the direct

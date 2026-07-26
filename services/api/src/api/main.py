@@ -27,6 +27,7 @@ from .routers.admin import prompt_components as admin_prompt_components
 from .routers.admin import users as admin_users
 from .routing.chat_agent_registration import register_plugin_chat_agents
 from .routing.core_crud_router import build_core_crud_router
+from .routing.domain_router import build_domain_router
 from .routing.owner_data_router import build_owner_data_router
 from .routing.plugin_router import build_plugin_router
 
@@ -104,6 +105,13 @@ register_plugin_chat_agents()
 # subclasses declaring __crud_permissions__ are served under /api/v1/data/
 # <table>. Empty in the base deployment (no core table opts in yet).
 app.include_router(build_core_crud_router(), prefix="/api/v1")
+# Instance product-domain routers (ADR-0022): an instance's own product code
+# lives in the user-owned services/api/src/api/domains/<name>/ carve-out inside
+# this template-owned core API. Each domain keeps its native paths (no
+# /domains/<name> namespacing), so a relocated domain serves the same routes it
+# did before — the contract to siblings is unchanged. Empty in the base
+# deployment (no product domain yet); see api.routing.domain_router.
+app.include_router(build_domain_router(), prefix="/api/v1")
 
 handler = Mangum(app, lifespan="off")
 

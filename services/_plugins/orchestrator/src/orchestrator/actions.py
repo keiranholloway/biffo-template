@@ -187,17 +187,38 @@ def _require(config: dict[str, Any], action: str, key: str) -> Any:
         raise ActionError(f"{action} action_config missing required key: {exc}") from exc
 
 
+def _render_recipient(action: str, field: str, value: Any, payload: dict[str, Any]) -> Any:
+    """Render a recipient/target field's ``{field}`` template, same as content fields.
+
+    A literal address (no ``{...}``) round-trips unchanged. A non-string value
+    (a list, for a multi-recipient ``to``) is left untouched — templating only
+    ever authors a single string. Renders to a blank/whitespace-only result
+    (e.g. the trigger doesn't actually carry the referenced field) is a
+    permanent failure, not a silent send to nowhere.
+    """
+    if not isinstance(value, str):
+        return value
+    rendered = _render(value, payload)
+    if not rendered.strip():
+        raise ActionError(
+            f"{action} action_config '{field}' rendered empty — check the template "
+            "references a field the trigger actually carries"
+        )
+    return rendered
+
+
 def send_email(
     config: dict[str, Any], payload: dict[str, Any], *, ses_client: SesClient, **_: Any
 ) -> dict[str, Any]:
     """Send a templated email via SES.
 
-    ``config`` keys: ``from`` (verified SES sender, required), ``to`` (address
-    or list, required), ``subject`` and ``body`` (optional ``{field}`` templates
-    filled from the event payload).
+    ``config`` keys: ``from`` (verified SES sender, required), ``to`` (address,
+    address list, or a ``{field}`` template filled from the event payload —
+    e.g. ``{email}`` to notify whoever triggered the run — required), ``subject``
+    and ``body`` (optional ``{field}`` templates filled from the event payload).
     """
     source = _require(config, "email", "from")
-    to = _require(config, "email", "to")
+    to = _render_recipient("email", "to", _require(config, "email", "to"), payload)
 
     recipients = [to] if isinstance(to, str) else list(to)
     subject = _render(config.get("subject", "Notification"), payload)
@@ -337,8 +358,9 @@ def send_whatsapp(
 
     Account credentials (access token + phone-number id) are injected from the
     orchestrator environment, so ``config`` never carries them. Per-workflow
-    keys: ``to`` (recipient in international format, required) and
-    ``message_type`` — ``"text"`` (default) or ``"template"``.
+    keys: ``to`` (recipient in international format, or a ``{field}`` template
+    filled from the event payload, required) and ``message_type`` —
+    ``"text"`` (default) or ``"template"``.
 
     - ``text``: ``message`` is a ``{field}`` template filled from the payload.
       A text message only delivers inside an **open 24-hour customer service
@@ -355,7 +377,7 @@ def send_whatsapp(
             "and WHATSAPP_PHONE_NUMBER_ID_PARAMETER at SSM parameters holding "
             "the credentials, and check the engine can read them."
         )
-    to = _require(config, "whatsapp", "to")
+    to = _render_recipient("whatsapp", "to", _require(config, "whatsapp", "to"), payload)
     body = _whatsapp_body(config, payload, to)
 
     url = f"https://graph.facebook.com/{whatsapp.api_version}/{whatsapp.phone_number_id}/messages"

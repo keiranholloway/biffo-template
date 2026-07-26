@@ -143,6 +143,13 @@ export interface CatalogActionField {
    * plain string (one inline part) or a parts list here.
    */
   parts?: boolean
+  /**
+   * `true` on a recipient/target field (email/WhatsApp `to`) that accepts a
+   * `{field}` template filled from the trigger's payload at dispatch time —
+   * e.g. `{email}` to notify whoever triggered the run — in addition to a
+   * literal value. Drives the builder's "insert field" picker.
+   */
+  payload_template?: boolean
   /** Value assumed when the field is absent from action_config. */
   default?: string
   /**

@@ -11,11 +11,17 @@ test needs no real installable domain package. Aggregation is verified the way
 ``TestClient`` — rather than by introspecting route objects.
 """
 
+from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from api.routing import domain_router
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
+
+# services/api/tests/ -> services/api/ -> services/ -> repo root.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_IS_INSTANCE = (_REPO_ROOT / "biffo.core.json").is_file()
 
 
 def _client_for(router: APIRouter) -> TestClient:
@@ -24,6 +30,15 @@ def _client_for(router: APIRouter) -> TestClient:
     return TestClient(app)
 
 
+@pytest.mark.skipif(
+    _IS_INSTANCE,
+    reason=(
+        "only true of the template's own pristine domains/ (__init__.py + "
+        "README, no domain packages); an instance is expected to add "
+        "domains/<name>/ (ADR-0022), which correctly makes real discovery "
+        "non-empty — this assertion is template-only, not a general contract"
+    ),
+)
 def test_base_template_has_no_domains_and_mounts_nothing() -> None:
     # The base template ships domains/ with only __init__.py + README (no domain
     # packages), so real discovery finds nothing.
@@ -84,3 +99,23 @@ def test_build_tolerates_a_domain_that_exports_no_routers(monkeypatch) -> None:
     monkeypatch.setattr("importlib.import_module", lambda name: SimpleNamespace())
     client = _client_for(domain_router.build_domain_router())
     assert client.get("/anything").status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("module_name", "expected_root"),
+    [
+        ("api.routing.domain_router", "api"),
+        # Regression: this project's own test suite sometimes imports the app
+        # as ``src.api.main`` (chdir'd into services/api/, so ``src`` becomes
+        # the importable top-level) rather than ``api.main``. Taking only
+        # __name__'s first dotted segment used to silently resolve the
+        # domains package as "src.domains" instead of the real
+        # "src.api.domains" in that context — invisible as long as no domain
+        # package existed to discover, ModuleNotFoundError the moment one did.
+        ("src.api.routing.domain_router", "src.api"),
+    ],
+)
+def test_root_package_resolves_correctly_regardless_of_import_depth(
+    module_name: str, expected_root: str
+) -> None:
+    assert domain_router._root_package_from_module_name(module_name) == expected_root

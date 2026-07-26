@@ -44,10 +44,28 @@ from fastapi import APIRouter
 
 logger = Logger()
 
-# ``api`` — this module is ``api.routing.domain_router``; the domains package is
-# ``api.domains``. Derived from ``__name__`` (the top-level package) rather than
-# hard-coded so a package rename can't leave a stale literal behind.
-_ROOT_PACKAGE = __name__.split(".")[0]
+_OWN_SUFFIX = ".routing.domain_router"
+
+
+def _root_package_from_module_name(name: str) -> str:
+    """The app's top-level package, given this module's own ``__name__``.
+
+    Normally ``api`` — this module is ``api.routing.domain_router``, so the
+    domains package is ``api.domains``. Strips this module's own known
+    ``.routing.domain_router`` suffix rather than taking just ``name``'s first
+    dotted segment, so it still resolves correctly when the app is imported
+    under a deeper root — some of this project's own tests import it as
+    ``src.api.main`` (chdir'd into ``services/api/`` so ``src`` becomes the
+    importable top-level), where the first-segment approach used to compute
+    the domains package as ``src.domains`` instead of the real
+    ``src.api.domains``, raising ModuleNotFoundError the moment a real
+    instance domain existed to discover (harmless before that, since a
+    domain-free tree never reached the import).
+    """
+    return name.removesuffix(_OWN_SUFFIX)
+
+
+_ROOT_PACKAGE = _root_package_from_module_name(__name__)
 _DOMAINS_PACKAGE = f"{_ROOT_PACKAGE}.domains"
 _DOMAINS_DIR = Path(__file__).resolve().parent.parent / "domains"
 

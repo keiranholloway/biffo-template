@@ -85,3 +85,32 @@ resource "aws_lambda_permission" "plugin_host_api_gateway" {
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${module.api_gateway.execution_arn}/*/*"
 }
+
+# admin_ingress's built UI shell (index.html + hashed assets/*) is served from
+# INSIDE the same /<name>/admin path space as its gated JSON API — a deliberate
+# M2 tradeoff to avoid provisioning per-plugin CloudFront/S3 for a handful of
+# trusted admins (unlike a founder-facing user_frontend, which gets its own
+# unauthenticated CloudFront distribution). But the blanket JWT authorizer
+# above covers ALL of /api/v1/plugins/{proxy+}, and a plain browser navigation
+# can never attach a custom Authorization header — so without these two more
+# specific, unauthenticated routes, the shell's own index.html/JS/CSS could
+# never load in the first place, for anyone (biffo-template#627). API Gateway
+# v2 prefers a route with more literal path segments over a less specific
+# catch-all matching the same prefix, so these win for exactly the shell paths
+# they name and leave everything else on the blanket JWT route above. The
+# plugin-host Lambda's own group_gate independently exempts these same paths
+# from its token check (mount.py's _is_public_admin_asset) — its JSON API
+# routes stay fully gated either way.
+resource "aws_apigatewayv2_route" "plugin_admin_shell_root" {
+  api_id             = module.api_gateway.api_id
+  route_key          = "GET /api/v1/plugins/{name}/admin/"
+  target             = "integrations/${aws_apigatewayv2_integration.plugin_host.id}"
+  authorization_type = "NONE"
+}
+
+resource "aws_apigatewayv2_route" "plugin_admin_shell_assets" {
+  api_id             = module.api_gateway.api_id
+  route_key          = "GET /api/v1/plugins/{name}/admin/assets/{proxy+}"
+  target             = "integrations/${aws_apigatewayv2_integration.plugin_host.id}"
+  authorization_type = "NONE"
+}

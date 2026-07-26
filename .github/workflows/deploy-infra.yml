@@ -6,6 +6,13 @@ on:
     paths:
       - 'infra/**'
       - 'modules/**'
+      # A first-party plugin's own Terraform (template-owned per
+      # core-manifest.json, referenced in place by infra/environments/*/main.tf
+      # — ADR-0003 §2 / #406) is a real infra change needing `terraform apply`,
+      # but doesn't touch infra/** or modules/** — so without this it silently
+      # never triggers a deploy, even though "Deploy Application" still runs
+      # and merges/CI look complete (#608).
+      - 'services/_plugins/*/terraform/**'
   workflow_dispatch:
     inputs:
       environment:

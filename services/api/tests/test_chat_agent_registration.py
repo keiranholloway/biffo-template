@@ -82,3 +82,20 @@ def test_missing_required_field_is_rejected_by_the_model():
 def test_empty_system_prompt_is_rejected():
     with pytest.raises(ValueError):
         PluginChatAgentDef.model_validate({**_CHALLENGER, "system_prompt": ""})
+
+
+def test_dynamic_plugin_manifest_registers_nothing():
+    """A manifest with chat_agents_dynamic: true is skipped entirely — its
+    chat_agents array is not statically registered."""
+    dynamic = {
+        "name": "dynamic-plugin",
+        "chat_agents_dynamic": True,
+        "chat_agents": [
+            {**_CHALLENGER, "key": "dynamic-agent"},
+        ],
+    }
+    keys = register_plugin_chat_agents([dynamic])
+    assert keys == []
+    # Confirm the agent is NOT in the static registry.
+    with pytest.raises(UnknownChatAgentError):
+        get_chat_agent("dynamic-agent")

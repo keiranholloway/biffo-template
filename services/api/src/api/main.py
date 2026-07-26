@@ -22,6 +22,7 @@ from .routers.admin import agent_runs as admin_agent_runs
 from .routers.admin import endpoints as admin_endpoints
 from .routers.admin import groups as admin_groups
 from .routers.admin import orchestration as admin_orchestration
+from .routers.admin import plugin_chat_agents as admin_plugin_chat_agents
 from .routers.admin import plugins as admin_plugins
 from .routers.admin import prompt_components as admin_prompt_components
 from .routers.admin import users as admin_users
@@ -69,6 +70,11 @@ app.include_router(agent_chat.router, prefix="/api/v1")
 # tenant-scoped, under /api/v1/admin/prompt-components. The authoring surface for
 # reusable prompt components until the Phase-2 portal UI.
 app.include_router(admin_prompt_components.router, prefix="/api/v1")
+# Live-editable plugin chat agents (ADR-0017 seam #1 extension): Cognito-authed,
+# admin-gated, tenant-scoped CRUD under /api/v1/admin/plugins/{plugin_name}/chat-agents.
+# Allows opted-in plugins to have their agent config be runtime-editable without
+# a redeploy via the internal_agent_chat.py fallback.
+app.include_router(admin_plugin_chat_agents.router, prefix="/api/v1")
 # Internal service-only orchestration API (ADR-0009): reachable only by an
 # allowlisted IAM principal (the engine plugin), under /api/v1/internal/*.
 app.include_router(internal_orchestration.router, prefix="/api/v1")

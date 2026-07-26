@@ -815,6 +815,26 @@ export default function OrchestrationPage() {
             className={inputClass}
           />
         )}
+        {field.payload_template === true && triggerFields.length > 0 && (
+          <select
+            aria-label={`Insert a trigger field into ${label}`}
+            value=""
+            onChange={(e) => {
+              const chosen = e.target.value
+              if (chosen === '') return
+              setField(field.name, (prev) => `${asString(prev)}{${chosen}}`)
+              e.target.value = ''
+            }}
+            className="mt-1 self-start rounded border px-1.5 py-1 text-xs text-gray-500"
+          >
+            <option value="">+ Insert field from payload…</option>
+            {triggerFields.map((f) => (
+              <option key={f.name} value={f.name}>
+                {f.label} ({f.name})
+              </option>
+            ))}
+          </select>
+        )}
       </label>
     )
   }

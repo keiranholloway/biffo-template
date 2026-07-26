@@ -225,6 +225,23 @@ const catalogWithFields: WorkflowCatalog = {
   actions: catalog.actions,
 }
 
+// A catalog whose trigger declares fields AND whose email action's `to` is
+// `payload_template`-eligible (#597 followup) — exercises the "insert field"
+// picker on the recipient input.
+const catalogWithPayloadTemplateTo: WorkflowCatalog = {
+  triggers: catalogWithFields.triggers,
+  actions: catalog.actions.map((a) =>
+    a.type === 'email'
+      ? {
+          ...a,
+          config_fields: a.config_fields.map((f) =>
+            f.name === 'to' ? { ...f, payload_template: true } : f,
+          ),
+        }
+      : a,
+  ),
+}
+
 // An agent action whose runtime registered no tools — the picker must not render.
 const catalogNoTools: WorkflowCatalog = {
   triggers: catalog.triggers,
@@ -946,6 +963,65 @@ describe('OrchestrationPage', () => {
     render(<OrchestrationPage />)
 
     expect(await screen.findByText('Nothing has run yet')).toBeInTheDocument()
+  })
+
+  // ── payload-template recipient picker (#597 followup) ──────────────────────
+
+  it('offers an insert-field picker on a payload_template recipient field when the trigger has fields', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    fetchCatalog.mockResolvedValue(catalogWithPayloadTemplateTo)
+
+    render(<OrchestrationPage />)
+    await screen.findByLabelText('To')
+
+    const picker = screen.getByLabelText('Insert a trigger field into To')
+    expect(Array.from(picker.querySelectorAll('option')).map((o) => o.textContent)).toEqual([
+      '+ Insert field from payload…',
+      'Status (status)',
+      'Score (score)',
+    ])
+  })
+
+  it('appends the chosen field as a {field} template into the recipient input', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    fetchCatalog.mockResolvedValue(catalogWithPayloadTemplateTo)
+
+    render(<OrchestrationPage />)
+    await screen.findByLabelText('To')
+
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: 'fallback@example.com' } })
+    fireEvent.change(screen.getByLabelText('Insert a trigger field into To'), {
+      target: { value: 'status' },
+    })
+
+    expect(screen.getByLabelText('To')).toHaveValue('fallback@example.com{status}')
+  })
+
+  it('omits the insert-field picker when the trigger declares no fields', async () => {
+    // The default catalog's triggers declare no fields, so even a
+    // payload_template field falls back to a plain input — no dead-end picker.
+    fetchWorkflows.mockResolvedValue([])
+    fetchCatalog.mockResolvedValue({
+      ...catalogWithPayloadTemplateTo,
+      triggers: catalog.triggers,
+    })
+
+    render(<OrchestrationPage />)
+    await screen.findByLabelText('To')
+
+    expect(screen.queryByLabelText('Insert a trigger field into To')).not.toBeInTheDocument()
+  })
+
+  it('omits the insert-field picker on a field that is not payload_template', async () => {
+    // The default catalog's email `to` carries no `payload_template` flag —
+    // no regression for actions that don't opt in.
+    fetchWorkflows.mockResolvedValue([])
+    fetchCatalog.mockResolvedValue(catalogWithFields)
+
+    render(<OrchestrationPage />)
+    await screen.findByLabelText('To')
+
+    expect(screen.queryByLabelText('Insert a trigger field into To')).not.toBeInTheDocument()
   })
 
   // ── agent action: tools multiselect + curated model dropdown (ADR-0014) ─────

@@ -33,6 +33,20 @@ export interface Sibling {
 /** Path the deploy workflow publishes the manifest to. Must stay under `/admin`. */
 export const SIBLINGS_MANIFEST_PATH = '/admin/siblings.json'
 
+/**
+ * The reserved registry name for the ROOT application sibling (issue #306),
+ * kept in lockstep with `local.root_sibling_name` in
+ * `modules/cloud/aws/cdn/main.tf`. It is a real, non-empty `sibling_origins[]`
+ * name (an empty name would break origin ids and CLI teardown lookup), but its
+ * PATH PREFIX is empty — the CDN module deliberately gives it
+ * `default_cache_behavior` instead of the usual `"app"`/`"app/*"` ordered
+ * behaviors, specifically so the literal URL `/app` is never claimed by it.
+ * A generic `/${name}` link would therefore point at a path CloudFront never
+ * routes to this sibling (it falls through to the same origin only by
+ * accident, via the default 404 catch-all) instead of its real address, `/`.
+ */
+export const ROOT_SIBLING_NAME = 'app'
+
 /** Fetch the registered siblings for this deployment. */
 export async function fetchSiblings(): Promise<Sibling[]> {
   const res = await fetch(SIBLINGS_MANIFEST_PATH, { cache: 'no-store' })
@@ -48,15 +62,21 @@ export async function fetchSiblings(): Promise<Sibling[]> {
  * Same-origin path link to a sibling. **No trailing slash** — CloudFront routes
  * `baseurl/<name>` exactly, and a trailing slash has bitten us before (e.g.
  * `/cms` works, `/cms/` does not). This is the clickable *entry point*.
+ *
+ * The root sibling (`ROOT_SIBLING_NAME`) is the one exception: its real address
+ * is `/`, never `/app` — see `ROOT_SIBLING_NAME`'s own comment for why.
  */
 export function siblingHref(name: string): string {
-  return `/${name}`
+  return name === ROOT_SIBLING_NAME ? '/' : `/${name}`
 }
 
 /**
  * Same-origin link to one of a sibling's declared routes: `/<name>/<path>`, no
  * trailing slash (CloudFront's `<name>/*` behavior routes it to the sibling).
+ *
+ * For the root sibling this omits the name entirely (`/<path>`, not
+ * `/app/<path>`) for the same reason as `siblingHref`.
  */
 export function siblingRouteHref(name: string, path: string): string {
-  return `/${name}/${path}`
+  return name === ROOT_SIBLING_NAME ? `/${path}` : `/${name}/${path}`
 }

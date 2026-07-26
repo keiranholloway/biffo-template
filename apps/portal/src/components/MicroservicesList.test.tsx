@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MicroservicesList } from './MicroservicesList'
+import { ROOT_SIBLING_NAME } from '@/lib/siblings-api'
 import type * as SiblingsApiModule from '@/lib/siblings-api'
 
 const { fetchSiblings } = vi.hoisted(() => ({ fetchSiblings: vi.fn() }))
@@ -59,6 +60,22 @@ describe('MicroservicesList', () => {
     expect(await screen.findByText('crm')).toBeInTheDocument()
     expect(screen.getByText('crm').closest('a')).toHaveAttribute('href', '/crm')
     expect(screen.getByText('/crm')).toBeInTheDocument()
+  })
+
+  it('links the root sibling to / and its declared routes to /<path>, never /app', async () => {
+    fetchSiblings.mockResolvedValue([
+      {
+        name: ROOT_SIBLING_NAME,
+        description: 'The platform itself',
+        routes: [{ path: 'dashboard', label: 'Founder Dashboard' }],
+      },
+    ])
+
+    render(<MicroservicesList />)
+
+    expect(await screen.findByText(ROOT_SIBLING_NAME)).toBeInTheDocument()
+    expect(screen.getByText(ROOT_SIBLING_NAME).closest('a')).toHaveAttribute('href', '/')
+    expect(screen.getByText('Founder Dashboard').closest('a')).toHaveAttribute('href', '/dashboard')
   })
 
   it('shows an empty state when there are no siblings', async () => {

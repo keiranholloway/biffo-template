@@ -76,6 +76,17 @@ variable "sibling_origins" {
     # Optional human description, surfaced on the portal's Microservices tab
     # (baked into siblings.json at deploy time). Not used for routing.
     description = optional(string)
+    # Optional notable routes the sibling declares in its own biffo.sibling.json
+    # (e.g. [{ path = "dashboard", label = "Founder Dashboard" }]), surfaced as
+    # labelled links on the portal's Microservices tab (see
+    # .github/workflows/deploy-app.yml's siblings.json generation and
+    # apps/portal/src/lib/siblings-api.ts). Not used for routing — CloudFront
+    # already matches "<name>/*" for every non-root sibling regardless of which
+    # sub-paths are declared here.
+    routes = optional(list(object({
+      path  = string
+      label = string
+    })), [])
   }))
   default = []
 

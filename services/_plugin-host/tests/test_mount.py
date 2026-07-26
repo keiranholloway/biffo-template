@@ -215,6 +215,88 @@ def test_admin_app_mount_is_accessible_and_gated_independently():
     assert r.status_code == 403
 
 
+def _admin_app_with_static_shell(name: str) -> Starlette:
+    """A fake admin app with one gated API route plus a root/assets static shell,
+    mirroring ideation's admin_app.py (a JSON API + a StaticFiles(html=True)
+    mount at "/")."""
+
+    async def api(request):
+        return JSONResponse({"name": name, "identity": current_plugin.get()})
+
+    async def shell(request):
+        return JSONResponse({"shell": True, "path": request.url.path})
+
+    from starlette.routing import Route as _Route
+
+    return Starlette(
+        routes=[
+            _Route("/agents", api),
+            # Registered after the real API route, matching how the real
+            # admin_app.py mounts StaticFiles last — Starlette checks routes in
+            # order, so /agents still matches its own route first.
+            _Route("/{path:path}", shell),
+        ]
+    )
+
+
+def test_admin_static_shell_paths_bypass_the_gate_without_a_token():
+    """The admin mount's root and /assets/* — the built UI shell (biffo-template#627)
+    — are reachable with NO token at all, since the API Gateway route in front of
+    this Lambda must independently allow them through unauthenticated (a plain
+    browser navigation can never attach a custom Authorization header)."""
+    client = _host(
+        MountedPlugin(
+            "ideation",
+            _plugin_app("ideation"),
+            "founder",
+            admin_app=_admin_app_with_static_shell("ideation"),
+            admin_required_group="admin",
+        )
+    )
+    r = client.get("/ideation/admin/", follow_redirects=False)
+    assert r.status_code == 200
+    assert r.json()["shell"] is True
+
+    r = client.get("/ideation/admin/assets/index-abc123.js")
+    assert r.status_code == 200
+    assert r.json()["shell"] is True
+
+
+def test_admin_api_paths_still_require_a_token_even_alongside_a_public_shell():
+    """Only the shell paths are exempted — the actual JSON API stays gated."""
+    client = _host(
+        MountedPlugin(
+            "ideation",
+            _plugin_app("ideation"),
+            "founder",
+            admin_app=_admin_app_with_static_shell("ideation"),
+            admin_required_group="admin",
+        )
+    )
+    r = client.get("/ideation/admin/agents")
+    assert r.status_code == 401
+
+    r = client.get("/ideation/admin/agents", headers={"X-Biffo-Founder-Token": "bob|admin"})
+    assert r.status_code == 200
+    assert r.json()["identity"] == "ideation"
+
+
+def test_user_facing_mount_is_not_given_the_public_shell_exemption():
+    """The exemption is scoped to the admin mount only — a founder-facing plugin
+    with a route literally at "/" stays fully gated."""
+
+    async def root(request):
+        return JSONResponse({"ok": True})
+
+    from starlette.routing import Route as _Route
+
+    app = Starlette(routes=[_Route("/", root)])
+    client = _host(MountedPlugin("ideation", app, "founder"))
+
+    r = client.get("/ideation/")
+    assert r.status_code == 401
+
+
 def test_plugin_without_admin_app_has_no_admin_route():
     """A plugin without an admin_app (admin_app=None) has no /<name>/admin route."""
     client = _host(MountedPlugin("ideation", _plugin_app("ideation"), "founder"))

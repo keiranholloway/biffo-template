@@ -91,12 +91,59 @@ async def _send_json(send: Callable, status: int, body: dict) -> None:
     await send({"type": "http.response.body", "body": payload})
 
 
-def group_gate(app: Any, required_group: str, plugin_name: str, authorize: Authorizer) -> Callable:
+#: Paths within an admin_ingress mount that are the built UI shell, not the JSON
+#: API — served publicly (no token), mirroring how a founder app's static UI is
+#: hosted unauthenticated on its own CloudFront distribution (ADR-0018) while only
+#: its *API calls* are gated. admin_ingress instead serves both from this one
+#: mount, so the exemption has to happen here. Matches Vite's own build-output
+#: convention (``dist/index.html`` + hashed files under ``dist/assets/``) — a
+#: plugin's admin API must not declare routes at ``/`` or under ``/assets/*``.
+def _is_public_admin_asset(path: str) -> bool:
+    return path in ("", "/") or path.startswith("/assets/")
+
+
+def _route_path(scope: dict) -> str:
+    """The request path relative to this ASGI callable's own mount point.
+
+    Starlette's ``Mount`` does not rewrite ``scope["path"]`` in place — it only
+    grows ``scope["root_path"]`` by the matched prefix, leaving ``path`` as the
+    full original request path throughout (verified against Starlette's own
+    ``Mount.matches``/``get_route_path``). This mirrors that same, tiny
+    computation without importing Starlette's private ``_utils`` module.
+    """
+    path: str = scope["path"]
+    root_path = scope.get("root_path", "")
+    if not root_path or not path.startswith(root_path):
+        return path
+    if path == root_path:
+        return ""
+    return path[len(root_path) :] if path[len(root_path)] == "/" else path
+
+
+def group_gate(
+    app: Any,
+    required_group: str,
+    plugin_name: str,
+    authorize: Authorizer,
+    *,
+    is_public_path: Callable[[str], bool] | None = None,
+) -> Callable:
     """Wrap a plugin's ASGI app so every HTTP request is authorized against the
-    required group and runs with the plugin's identity bound."""
+    required group and runs with the plugin's identity bound.
+
+    ``is_public_path``, when given, exempts matching request paths from the
+    token check entirely — used only for the admin mount's static UI shell
+    (see :func:`_is_public_admin_asset`). The API Gateway route this Lambda sits
+    behind must independently allow these same paths through unauthenticated
+    (biffo-template#627) — this in-Lambda exemption alone does not help if the
+    Gateway itself already rejected the request first.
+    """
 
     async def gated(scope: dict, receive: Callable, send: Callable) -> None:
         if scope["type"] != "http":
+            await app(scope, receive, send)
+            return
+        if is_public_path is not None and is_public_path(_route_path(scope)):
             await app(scope, receive, send)
             return
         token = _founder_token(scope.get("headers", []))
@@ -136,7 +183,13 @@ def build_host(plugins: list[MountedPlugin], *, authorize: Authorizer) -> Starle
             routes.append(
                 Mount(
                     f"/{p.name}/admin",
-                    app=group_gate(p.admin_app, p.admin_required_group, p.name, authorize),
+                    app=group_gate(
+                        p.admin_app,
+                        p.admin_required_group,
+                        p.name,
+                        authorize,
+                        is_public_path=_is_public_admin_asset,
+                    ),
                 )
             )
         # User-facing app mount

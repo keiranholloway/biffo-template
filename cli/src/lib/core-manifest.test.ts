@@ -218,7 +218,7 @@ describe('listTemplateOwnedFiles + computeCoreDiff', () => {
     write(instance, 'services/api/main.py', 'old')
     // added (in template, not instance)
     write(template, 'services/api/new_file.py', 'brand new')
-    // removed (in instance, not template)
+    // instance-only (in instance, never in template) — NOT a removal (#689)
     write(instance, 'services/api/gone.py', 'obsolete')
     // user-owned differences are ignored entirely
     write(template, 'services/acme-crm/a.json', '1')
@@ -227,7 +227,38 @@ describe('listTemplateOwnedFiles + computeCoreDiff', () => {
     const diff = computeCoreDiff(template, instance, MANIFEST)
     expect(diff.modified).toEqual(['services/api/main.py'])
     expect(diff.added).toEqual(['services/api/new_file.py'])
-    expect(diff.removed).toEqual(['services/api/gone.py'])
+    // With no merge base, "absent from the template" cannot mean "the template
+    // dropped it" — so it is instance-only, never a pending deletion (#689).
+    expect(diff.instanceOnly).toEqual(['services/api/gone.py'])
+    expect(diff.removed).toEqual([])
     expect(diff.unchanged).toBe(1)
+  })
+
+  it('distinguishes an upstream removal from an instance addition, given a base (#689)', () => {
+    const base = mkdtempSync(join(tmpdir(), 'biffo-base-'))
+    // The template shipped this and later dropped it -> an upgrade DELETES it.
+    write(base, 'services/api/retired.py', 'old core file')
+    write(instance, 'services/api/retired.py', 'old core file')
+    // The instance authored this; the template never had it -> upgrade leaves it.
+    write(instance, 'services/api/ours.py', 'instance feature')
+    write(template, 'services/api/kept.py', 'still shipped')
+    write(instance, 'services/api/kept.py', 'still shipped')
+
+    const diff = computeCoreDiff(template, instance, MANIFEST, base)
+
+    expect(diff.removed).toEqual(['services/api/retired.py'])
+    expect(diff.instanceOnly).toEqual(['services/api/ours.py'])
+  })
+
+  it('never reports an instance-authored file as removed (#689 regression)', () => {
+    // The exact shape that halted a deploy: files an instance wrote inside a
+    // template-owned tree, reported as `removed` and read as imminent data loss.
+    write(instance, 'services/api/tables/__init__.py', '# instance-authored')
+    write(instance, 'services/api/tests/test_require_approved.py', 'def test(): pass')
+
+    const diff = computeCoreDiff(template, instance, MANIFEST)
+
+    expect(diff.removed).toEqual([])
+    expect(diff.instanceOnly).toHaveLength(2)
   })
 })

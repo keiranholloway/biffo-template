@@ -64,6 +64,9 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | The plugin skeleton's `ci.yml` asserts "a plugin repo has no JS/TS". False for any user-facing plugin (ADR-0017/0021) — so nothing checked the frontend's lint, types, tests or whether it built, and `web/dist` is what `user_frontend` ships | **drift** · fail-open | biffo-plugin-idea-scout | biffo-template `_skeletons/plugin-template` | **fixed downstream** ([idea-scout#14](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/14)); skeleton **open** |
 | [#670](https://github.com/keiranholloway/biffo-template/issues/670) | Core migration 0010 does `batch_alter_table("users")`, assuming a Core-owned `public.users` in the instance's Alembic chain. tabsii's users are DDL-imported as `tabsii.users`, so the migration raises `NoSuchTableError` and takes 4 smoke tests with it | **drift** | tabsii-platform [#241](https://github.com/tabsii-com/tabsii-platform/pull/241) | biffo-template `migrations/` | **open** — declined in tabsii ([#244](https://github.com/tabsii-com/tabsii-platform/issues/244)) |
 | [#668](https://github.com/keiranholloway/biffo-template/issues/668) | ADR-0022 discovery runs *after* `build_core_crud_router()`, and importing a domain is what registers its models — so relocating a domain silently drops every `/api/v1/data/` route its models back. **21 routes vanished in tabsii with the full suite green (1712 passed)**; no test builds the app the way `main.py` does, so none could have failed | **visibility** · boundary | tabsii-platform [#243](https://github.com/tabsii-com/tabsii-platform/pull/243) | biffo-template `main.py` + `routing/domain_router.py` | **open** — instance reordered locally as a stopgap |
+| [tabsii#249](https://github.com/tabsii-com/tabsii-platform/issues/249) | Write-back scoped its update by ADR-0001's seam string `"default"`, but an ADR-0005 DDL-imported table keys tenancy on a real `UUID`. The bind error was caught and recorded as *"the database refused the write for the workflow's owner"* — **indistinguishable from RLS correctly refusing a revoked author**, so the one failure the feature exists to expose was being counterfeited | **drift** · visibility | tabsii-platform dev E2E | biffo-template [#686](https://github.com/keiranholloway/biffo-template/pull/686) + tabsii [#251](https://github.com/tabsii-com/tabsii-platform/pull/251) | **fixed** |
+| [#690](https://github.com/keiranholloway/biffo-template/pull/690) | The audit row is written in the **same transaction** as the business write, and carries the written row's id in a JSON column. An instance's id is a `UUID`, which asyncpg cannot serialise — so recording a successful write **rolled that write back**. The traceback shows `status: 'succeeded'` on the insert that destroyed it | **fail-open** · visibility | tabsii-platform dev E2E | biffo-template `writeback.py` | **open** |
+| — | Three consecutive write-back defects were the same assumption: template code treats ids/tenants as Core's `String(36)`, instances use real `UUID`s. SQLite has no UUID type and asyncpg coerces silently, so **neither the template suite nor a PostgreSQL happy path can see it** | **drift** | tabsii-platform dev E2E | biffo-template | **unfiled** — pattern, not a single bug |
 | — | `build_core_crud_router()` returns **zero** routes when called a second time (the first call consumes the registry). A guard test written for #668 compared the assembled app against a freshly-rebuilt router, so its expected set was empty and it passed against the exact bug it guarded | **fail-open** | tabsii-platform [#246](https://github.com/tabsii-com/tabsii-platform/pull/246) | biffo-template (make idempotent or document); instance test hardened to a golden list | **unfiled** |
 | [tabsii#252](https://github.com/tabsii-com/tabsii-platform/issues/252) | Two events ship with no `fields` and no `payload_model` while emitting a real payload, so the workflow builder's dropdowns are empty. The guard credited with preventing this (#546) does not iterate `registered_events()` at all — no test asserts field-metadata *coverage*, here or in the template | **fail-open** · drift | tabsii-platform (found closing #221) | biffo-template `services/api/tests` | **open** |
 | — | Five template-owned files diverged **undeclared** across a whole core upgrade. The instance's tests checked each declaration was valid but never that the declared set and `core diff`'s modified set *agree*, so undeclared divergence was invisible governance — the guard hard-blocked those files with no recorded reason | **visibility** | tabsii-platform [#250](https://github.com/tabsii-com/tabsii-platform/pull/250) | tabsii-platform (ratchet added); biffo-template could emit the delta from `core diff` | **fixed** in the instance |
@@ -116,10 +119,10 @@ Tallying the filed issues above by the repo that must change:
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 10 of 11 | Core API, CI, CDN module, skeletons, repo settings, ADR-0022 seam, event-registry guard, `core diff` output |
-| **biffo-platform** | 2 of 11 | Shares #647 and #652 — the instantiated infra (API Gateway routes, CDN) |
-| **tabsii-platform** | 1 of 11 | The divergence-coverage ratchet; every other tabsii-surfaced defect fixes upstream |
-| **biffo-plugin-ideation** | **0 of 11** | Where two were *reported*; where none were *fixed* |
+| **biffo-template** | 13 of 14 | Core API, CI, CDN module, skeletons, repo settings, ADR-0022 seam, event-registry guard, `core diff` output, write-back executor |
+| **biffo-platform** | 2 of 14 | Shares #647 and #652 — the instantiated infra (API Gateway routes, CDN) |
+| **tabsii-platform** | 2 of 14 | The divergence-coverage ratchet, and the instance half of the write-back tenant fix (#251) |
+| **biffo-plugin-ideation** | **0 of 14** | Where two were *reported*; where none were *fixed* |
 
 **The most actionable number here is still the zero — and it now has company.**
 Six of these eleven were surfaced by `tabsii-platform`, and exactly one is fixed
@@ -140,9 +143,18 @@ Two consequences worth internalising:
   table CRUD — so the plugin can only wait. Platform defects are throughput
   blockers for everything downstream, and should be priced accordingly.
 
-**What changed with this sample:** the instance repos are not just where defects
-*appear*, they are where the template's untested seams get exercised for the
-first time. ADR-0022, the ownership guard and the event registry were all green in
+**What changed with this recount:** nine of the fourteen were surfaced by
+`tabsii-platform` and two are fixed there — the ratio moved, the conclusion did
+not. Three of the new rows come from a single afternoon's E2E of one feature, and
+all three are the *same* assumption (Core's `String(36)` id space meeting an
+instance's `UUID`s). That is the first time the page shows a repeated **root
+cause** rather than repeated symptoms, and it argues for a different investment
+than "fix more bugs": the template needs a way to exercise an instance's column
+types.
+
+**What changed with the earlier sample:** the instance repos are not just where
+defects *appear*, they are where the template's untested seams get exercised for
+the first time. ADR-0022, the ownership guard and the event registry were all green in
 `biffo-template` and all broke on first real instance use. An instance is the
 template's integration test, and currently the only one.
 ### How wide one feature reaches
@@ -271,6 +283,27 @@ clean run — was what actually established #636 was correct.
 `--admin` on every one of four failed merge attempts for #659. Taking it would
 have merged an auth change past branch protection to save ten minutes.
 
+**Read the run, not the checks summary.** `gh pr checks` reported Release Guards
+as `pending` on tabsii-platform#241 while `gh run view --json jobs` reported that
+same job as `failure`. Waiting on the summary would have been waiting for a green
+that was never coming. Two different views of one run disagreed, and only one of
+them was true — when a check "hasn't finished" for an implausibly long time,
+query the run's jobs directly.
+
+**Carry a core release into a real instance before believing it.** Three defects
+(#670, #671, #666) were found in a single afternoon by upgrading tabsii from
+0.127.0, and none was findable upstream — the template always has `public.users`,
+always has an empty write-back registry, and always resolves its CLI locally
+rather than from npm. Template CI was green throughout while an instance could
+not build at all.
+
+**Diagnose to a single cause before fixing any of it.** Three CI steps failed on
+tabsii-platform#241 with three different-looking symptoms — a release-subject
+guard, an ownership guard, and a plugin-Terraform guard. Reproducing each one
+locally showed all three were the same `ETARGET`: an unpublished CLI version.
+Fixing them individually would have been three wrong fixes; the actual fix was
+one changed version number.
+
 
 **Diff the assembled artifact, not the source tree.** Relocating a domain under
 ADR-0022 silently removed 21 generic-CRUD routes. The suite passed — 1712 green —
@@ -365,6 +398,49 @@ who else claims it?
 **We cannot inspect what a green check did.** CI logs are not retained for the
 self-hosted runs, so verifying whether an audit step actually audited required
 reproducing it locally. Cheap to fix, disproportionate payoff.
+
+**A core version can be tagged but not installable, and nothing notices.**
+`core-tag.yml` tags on merge; `publish-cli.yml` publishes on the tag. When the
+publish fails, the tag survives and the version looks real. Every instance guard
+then execs `npx @biffo/cli@<its pinned version>`, so an instance that upgrades
+into the hole cannot pass its own CI — and the upgrade PR's own version bump is
+what breaks its own guards, making it unfixable from inside. 0.131.0 and 0.132.0
+are currently in exactly that state (#671). The version line should not be
+allowed to contain a hole: either the tag should be conditional on a successful
+publish, or something should assert that every `core-v*` tag resolves on npm.
+
+**The template cannot reproduce an instance's column types, and that is now a
+repeated root cause rather than a one-off.** Three write-back defects in one
+afternoon were the same assumption — Core's ids and tenants are `String(36)`,
+an instance's are real `UUID`s. SQLite has no UUID type, so the template suite
+cannot see it; asyncpg coerces strings silently, so a PostgreSQL *happy path*
+cannot either. It only surfaced where a UUID met a JSON column and a bind. A
+fixture that runs some of the suite against PostgreSQL with UUID-keyed tables
+would have caught all three before they shipped.
+
+**A recorded failure that lies is worse than one that crashes.** Two of those
+three were caught by the executor's own error handling and written to the audit
+log as *"the database refused the write for the workflow's owner"* — the exact
+wording of the legitimate case the feature exists to make visible. On dev it read
+as the feature working. Any handler that converts an exception into a
+domain-level explanation needs to distinguish *the domain reason* from *anything
+else*, or it manufactures false evidence.
+
+**Template-owned tests can assert properties only the template has.** Two write
+-back tests asserted an empty registry and an ambient identity provider. Both are
+true upstream forever and false in every instance, so they were green in template
+CI and red on arrival (#666). The general shape — *is this asserting the contract,
+or asserting my own environment?* — has no check behind it, and the only thing
+that found it was a real distribution.
+
+**A registry populated by import side effects has no test isolation story.**
+Instances register scope resolvers, authorizers, write-back targets and identity
+providers at module-import time, last-write-wins. That is a good pattern for
+production and a hostile one for tests: a fixture that sets a global can be
+silently undone by an unrelated module's import, which is precisely what made
+14 tests pass in isolation and fail in a full suite. Patching the name in the
+*consuming* module worked, but that is a workaround each test has to know to
+apply rather than a property of the registries.
 
 **Unit-green is routinely mistaken for working.** AGENTS.md §4 already says this,
 citing #275. It recurred: #659's tests prove `require_principal` in isolation, and
@@ -487,6 +563,11 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-workflow` | **partial** | Step 7 (`gh pr merge --squash`) assumes you can win the up-to-date race. `dev` was taking a merge every 3–5 min against a ~2.5 min CI cycle, so the branch was `BEHIND` on every attempt and **four rebases lost it**. The real fix was a repo setting (auto-merge), not a rebase. The step should offer an auto-merge path. |
 | `claude-in-chrome` | **worked** | The only thing that reproduced the reported bug. `curl` returned clean `401` JSON and looked healthy — the HTML only appears on an *authenticated* request, because 401 passes the CDN untouched while 403/404 are rewritten. An unauthenticated check would have concluded "works fine" and #647 would still be unfound. |
 | `biffo-verify` | **partial** | §1 caught that the planned #621 step 3 would have collapsed ADR-0014 §7's two-axis authorization boundary — a real save. But it was **not applied to its own author's output**: `core diff`'s `removed (5)` was reported to the user as fact without the dry run that disproves it in seconds. The step exists and was skipped. |
+
+| `biffo-sib-build` | **partial** | Step 2 mandates one PR per milestone. Against a `dev` with strict up-to-date protection and other agents merging, every merge forced a full CI re-run on every open PR — M3+M4 and M5+M6 were batched to halve the cycles, and both batches were single coherent contracts anyway. The step should say when batching is *correct* rather than a shortcut. Its "stop and ask" guidance was right and used twice (migration 0010, the `pipeline_stage_id` lookup). |
+| `biffo-verify` | **worked** | §4 caught that the deployed Lambda unpacks under `src/api/`, not the `api/` I guessed — the grep I would have trusted returned nothing for the wrong reason. §3 caught that a test written for the JSON-serialisation fix passed with that fix reverted; only reverting *both* it and the stringified id made it fail, so the test defends less than it appeared to. Both are things a green run would have hidden. |
+| `biffo-verify` | **worked** | Reading the run's job states instead of `gh pr checks` exposed a job reported as `pending` that had already **failed**. Waiting on the summary would have been waiting indefinitely. |
+| `biffo-workflow` | **should have been invoked** | Followed AGENTS.md by hand across ~10 PRs in three repos instead. It cost a real mistake: branch cleanup was chained onto an unverified `gh pr merge`, the merge failed on a required-check race, and deleting the branch **closed the PR**. The skill's honest-push/verify-remote discipline exists precisely for that. Missed because the work read as "build a feature", not "land a change" — the trigger wording is landing-shaped. |
 
 ## Adding a row
 

@@ -4,6 +4,25 @@ Revision ID: 0010
 Revises: 0009
 Create Date: 2026-07-26
 
+The profile columns are added **only where a Core-owned `users` table exists**
+(issue #670).
+
+`users` is not universal. An instance may retire Core's `public.users` and model
+its own — tabsii's are DDL-imported as `tabsii.users` (ADR-0005), created by no
+migration at all. Against such a chain `batch_alter_table("users")` reflects and
+raises `NoSuchTableError`, which took out four migration smoke tests and every
+write-back executor test on the 0.127.0 -> 0.132.0 upgrade into tabsii-platform
+(tabsii-platform#241). That instance had to *decline* this migration and re-point
+its chain around it, which is a divergence that then has to be maintained for
+ever.
+
+The template cannot see this class of bug in its own CI, because the template
+always has `public.users`. So the guard is not defensive coding — it is the only
+way this migration can be honest about a table it does not own everywhere.
+
+`organizations` is created unconditionally: it is Core's own table, it depends on
+nothing instance-specific, and an instance that later adopts Core users should
+find it already there.
 """
 
 from collections.abc import Sequence
@@ -41,6 +60,11 @@ def upgrade() -> None:
     op.create_index("ix_organizations_tenant_id", "organizations", ["tenant_id"])
     op.create_index("ix_organizations_name", "organizations", ["name"])
 
+    if not _has_core_users_table():
+        # No Core-owned `users` to extend. `organizations` above still lands, so
+        # an instance that later adopts Core users converges rather than forking.
+        return
+
     # Batch mode (rather than plain op.add_column + op.create_foreign_key)
     # because SQLite — used by the test suite — cannot ALTER TABLE ADD
     # CONSTRAINT at all; batch mode falls back to its copy-and-move strategy
@@ -61,6 +85,30 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if _has_core_users_table():
+        _drop_user_profile_columns()
+
+    op.drop_index("ix_organizations_name", table_name="organizations")
+    op.drop_index("ix_organizations_tenant_id", table_name="organizations")
+    op.drop_table("organizations")
+
+
+def _has_core_users_table() -> bool:
+    """Whether this instance has a Core-owned `users` table to extend.
+
+    Inspected at run time against the live connection rather than assumed from
+    the chain: whether `users` exists is a property of the database in front of
+    us, and an instance may have created, dropped or never had it.
+
+    Deliberately unqualified, matching what `batch_alter_table("users")` would
+    itself reflect — the default search path. An instance whose users live in
+    another schema (tabsii's `tabsii.users`) reads False here, which is correct:
+    those are not Core's to alter.
+    """
+    return sa.inspect(op.get_bind()).has_table("users")
+
+
+def _drop_user_profile_columns() -> None:
     with op.batch_alter_table("users") as batch_op:
         batch_op.drop_constraint("fk_users_organization_id", type_="foreignkey")
         batch_op.drop_index("ix_users_organization_id")
@@ -72,7 +120,3 @@ def downgrade() -> None:
         batch_op.drop_column("address_line1")
         batch_op.drop_column("job_role")
         batch_op.drop_column("organization_id")
-
-    op.drop_index("ix_organizations_name", table_name="organizations")
-    op.drop_index("ix_organizations_tenant_id", table_name="organizations")
-    op.drop_table("organizations")

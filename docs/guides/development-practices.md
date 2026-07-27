@@ -71,6 +71,9 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | [tabsii#252](https://github.com/tabsii-com/tabsii-platform/issues/252) | Two events ship with no `fields` and no `payload_model` while emitting a real payload, so the workflow builder's dropdowns are empty. The guard credited with preventing this (#546) does not iterate `registered_events()` at all — no test asserts field-metadata *coverage*, here or in the template | **fail-open** · drift | tabsii-platform (found closing #221) | biffo-template `services/api/tests` | **open** |
 | — | Five template-owned files diverged **undeclared** across a whole core upgrade. The instance's tests checked each declaration was valid but never that the declared set and `core diff`'s modified set *agree*, so undeclared divergence was invisible governance — the guard hard-blocked those files with no recorded reason | **visibility** | tabsii-platform [#250](https://github.com/tabsii-com/tabsii-platform/pull/250) | tabsii-platform (ratchet added); biffo-template could emit the delta from `core diff` | **fixed** in the instance |
 | — | `biffo core diff` emits human-prose only. Consumers hand-parse it, and a parse that silently drops a line under-reports divergence — one did exactly that here, reporting 4 undeclared files when the answer was 5, caught only because the section header's own count disagreed | **visibility** | tabsii-platform revalidation | biffo-template `cli` (a `--json` mode) | **unfiled** |
+| — | `tabsii-platform` has `allow_auto_merge=false` and `delete_branch_on_merge=false` — the settings fixed on `biffo-template` and `biffo-platform` on 2026-07-27 were never applied to the third repo, so every PR there is merged by hand and every branch reaped by hand | **process** | tabsii-platform | tabsii-platform settings | **open** — one API call |
+| [tabsii#256](https://github.com/tabsii-com/tabsii-platform/issues/256) | The ownership guard blocks edits to *instance-authored* files under a template-owned prefix (e.g. `identity/tabsii.py`), but `core diff` classifies those as `removed`, not `modified` — so the instance's own divergence ratchet rejects a declaration for them. Governance actively prevents the record it exists to encourage; the only route through is a per-commit trailer | **boundary** | tabsii-platform [#253](https://github.com/tabsii-com/tabsii-platform/pull/253) | tabsii-platform ratchet; `core diff` bucket semantics ([#689](https://github.com/keiranholloway/biffo-template/issues/689), [#696](https://github.com/keiranholloway/biffo-template/issues/696)) | **open** |
+| [#697](https://github.com/keiranholloway/biffo-template/issues/697) | Two open issues described one npm outage ([#664](https://github.com/keiranholloway/biffo-template/issues/664), [#671](https://github.com/keiranholloway/biffo-template/issues/671)), filed independently days apart. Nothing prompts a search before filing, and the duplicate was found only when listing open issues for an unrelated reason — after one had already been closed on its own | **process** · visibility | biffo-template issue tracker | practice, not code | **closed** — both closed, residue split to #697 |
 | [#666](https://github.com/keiranholloway/biffo-template/pull/666) | Template tests asserted **ambient process state** — an empty write-back registry, and whichever identity provider happened to be installed. Both are properties only a bare template has, so 14 tests were green upstream and red the moment they were distributed | **drift** · fail-open | tabsii-platform [#241](https://github.com/tabsii-com/tabsii-platform/pull/241) | biffo-template `services/api/tests` | **fixed** ([#666](https://github.com/keiranholloway/biffo-template/pull/666)) |
 | — | [#665](https://github.com/keiranholloway/biffo-template/pull/665) was written, reviewed, merged and **wrong** — it pinned the *default* identity provider, which reads `public.users`, a table the instance also lacks. It was never run against the instance it existed to unblock; [#666](https://github.com/keiranholloway/biffo-template/pull/666) corrects it | **process** | biffo-template | biffo-template | **fixed** — verify a distribution fix *against the distribution* |
 
@@ -143,80 +146,60 @@ good — which is the only thing that found any of these.
 
 ## Where the work actually lands
 
-Tallying the filed issues above by the repo that must change:
+Tallying the filed issues above by the repo that must change. **Recounted from
+the scoreboard, 41 rows:**
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 13 of 14 | Core API, CI, CDN module, skeletons, repo settings, ADR-0022 seam, event-registry guard, `core diff` output, write-back executor |
-| **biffo-platform** | 2 of 14 | Shares #647 and #652 — the instantiated infra (API Gateway routes, CDN) |
-| **tabsii-platform** | 2 of 14 | The divergence-coverage ratchet, and the instance half of the write-back tenant fix (#251) |
-| **biffo-plugin-ideation** | **0 of 14** | Where two were *reported*; where none were *fixed* |
+**Counting rule** (two sessions computed different totals in good faith, so it is
+now stated): count **every scoreboard row**, filed or not — an unfiled row is
+still work that has to land somewhere. A row naming two repos counts once for
+each, so the column sums exceed the row count. Recounted at **44 rows**
+(27 with a filed issue, 17 unfiled):
 
-**The most actionable number here is still the zero — and it now has company.**
-Six of these eleven were surfaced by `tabsii-platform`, and exactly one is fixed
-there. The Ideation figure was the first evidence; tabsii is the second, larger
-sample, and it says the same thing.
+| Repo | Fixes landing here | Notes |
+| --- | --- | --- |
+| **biffo-template** | 40 of 44 | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings |
+| **tabsii-platform** | 4 of 44 | Its own divergence ratchet and repo settings; every other tabsii-surfaced defect fixes upstream |
+| **biffo-platform** | 2 of 44 | Shares #647 and #652 — the instantiated infra (API Gateway routes, CDN) |
+| **biffo-runners** | 1 of 44 | Runner fleet docs + fail-fast |
+| **biffo-plugin-ideation** | **0 of 44** | Where two were *reported*; where none were *fixed* |
 
-The original case: a user hit `Failed to load catalog: Unexpected token '<'` in
-the Ideation admin UI, and it was two platform defects stacked — a routing
-collision (#652) producing a 404, and a CDN rule (#647) disguising that 404 as a
-successful HTML response. The plugin was correct throughout.
+**The zero has held as the sample grew.** It was 0 of 5; it is now 0 of 44, and the shape of the answer has not moved: defects are
+*reported* wherever a human or an instance runs into them, and **91% of them are
+fixed in `biffo-template`**.
+
+The original case remains the clearest illustration: a user hit
+`Failed to load catalog: Unexpected token '<'` in the Ideation admin UI, and it
+was two platform defects stacked — a routing collision (#652) producing a 404,
+and a CDN rule (#647) disguising that 404 as a successful HTML response. The
+plugin was correct throughout.
 
 Two consequences worth internalising:
 
 - **Bug reports are attributed to where they are seen, not where they live.** Time
-  spent hardening plugins would not have prevented either defect.
-- **A plugin can be blocked by a defect it cannot fix.** #652 has no workaround
-  inside `biffo-plugin-ideation` — Core exposes no non-colliding path for plugin
-  table CRUD — so the plugin can only wait. Platform defects are throughput
-  blockers for everything downstream, and should be priced accordingly.
+  spent hardening plugins or instances would not have prevented these.
+- **A downstream repo can be blocked by a defect it cannot fix.** #652 has no
+  workaround inside `biffo-plugin-ideation`; #671/#664 blocked *every* instance's
+  guards from a broken npm credential. Platform defects are throughput blockers
+  for everything downstream, and should be priced accordingly.
 
-**What changed with this recount:** nine of the fourteen were surfaced by
-`tabsii-platform` and two are fixed there — the ratio moved, the conclusion did
-not. Three of the new rows come from a single afternoon's E2E of one feature, and
-all three are the *same* assumption (Core's `String(36)` id space meeting an
-instance's `UUID`s). That is the first time the page shows a repeated **root
-cause** rather than repeated symptoms, and it argues for a different investment
-than "fix more bugs": the template needs a way to exercise an instance's column
-types.
+**What changed with this recount:** the rows landing in `tabsii-platform` are
+mostly *scaffolding to detect the next defect*, not product fixes. Several rows
+come from a single afternoon's E2E of one feature, and they share one **root
+cause** (Core's `String(36)` id space meeting an instance's `UUID`s) rather than
+being distinct symptoms. That is the first time the page shows a repeated root
+cause, and it argues for a different investment than "fix more bugs": the
+template needs a way to exercise an instance's column types.
 
-**What changed with the earlier sample:** the instance repos are not just where
-defects *appear*, they are where the template's untested seams get exercised for
-the first time. ADR-0022, the ownership guard and the event registry were all green in
-`biffo-template` and all broke on first real instance use. An instance is the
-template's integration test, and currently the only one.
+**What the larger sample added:** instance repos are not just where defects
+*appear*, they are where the template's untested seams get exercised for the
+first time. ADR-0022's discovery order, the ownership guard's coverage, the event
+registry's field metadata and migration 0010's `public.users` assumption were all
+green in `biffo-template` and all broke on first real instance use. An instance is
+the template's integration test, and currently the only one.
+
 ### How wide one feature reaches
-
-The same pattern measured a different way. Building **one** plugin feature
-(Idea Scout, 2026-07-27) required changes in **six repositories**, four of which
-were not the feature's own:
-
-| Repo | Why it was involved |
-| --- | --- |
-| `biffo-plugin-idea-scout` | The feature |
-| `biffo-template` | A Core query and an engine capability the feature needed, plus the release pipeline it broke on |
-| `biffo-platform` | An instance-owned Core domain (the profile read seam), and where the plugin installs |
-| `biffo-platform-app` | The dashboard tab that embeds it |
-| `biffo-plugin-ideation` | Receives the promoted idea |
-| `biffo-runners` | CI capacity for the new repo |
-
-Rough split of the day: **~35%** feature code, **~25%** platform capability the
-feature turned out to need, **~40%** toolchain, CI and release failures — almost
-none of which were specific to this feature.
-
-Two things that share a cause with the zero above:
-
-- **The capability gap was not visible at planning.** The feature was specified
-  as "runs weekly, unattended". Nothing in the platform supported an unattended
-  multi-agent pipeline, and that surfaced only when a reviewer asked why the user
-  had to watch it — after the orchestration had been built and merged. Ten
-  minutes of "what writes the result when nobody is looking?" would have found it.
-- **New-repo onboarding is a tax paid per repo, not per platform.** Three of the
-  day's failure conditions (#649, #651, biffo-runners#2) are variations of *the
-  skeleton produces a repo that cannot go green*, and each is rediscovered by
-  whoever creates the next repo.
-
----
 
 ## Where the cycles go
 
@@ -233,6 +216,10 @@ Measured on the 2026-07-27 session, which shipped one bug fix end to end.
 | **One near-miss deploying half a fix** | Hop 3 can lag hop 2: `core-v0.136.0` was tagged while npm still served `0.135.0`. Upgrading in that window carries a *partial* change that deploys green and still fails | caught by checking npm, not the tag; **unautomated** |
 | **One wrongly-halted deploy + a wrongly-filed issue** | `core diff` reported instance-authored files as `removed`; `core upgrade` deletes none of them ([#689](https://github.com/keiranholloway/biffo-template/issues/689)). The preview was escalated as fact without running the dry run that disproves it | **open** (#689); the escalation is a practice failure, recorded under *needs more thought* |
 | **One wrong diff, silently** | `core diff` was run against a local template checkout missing the just-merged commit, and reported *no changes at all* for the half it was missing. Caught only because the absence looked implausible | **open** — no tooling notices; a stale-tree diff looks identical to a current one |
+| **~2¼ hours babysitting 8 merges** | `tabsii-platform` CI is **6–8 min** wall-clock (not the ~2.5 min the template enjoys) and Deploy Application a further **6–12 min**. With `allow_auto_merge=false` on that repo, every one of 8 PRs was watched to green, merged by hand, then watched again through deploy | **open** — structural, and one setting removes most of it |
+| **8 × full dependency install** | Every worktree needs its own `uv sync` + `pnpm install` before the pre-push `pyright` can be trusted (AGENTS.md §1). Eight worktrees this session; no shared venv or store warm-start | **open** — inherent to worktree-per-change, but cacheable |
+| **2 wasted hook cycles** | `commitlint` (footer >100 chars) and the ownership guard both reject **after** `lint-staged` has run ruff+prettier over the staged set. A rejected commit costs the whole hook cycle, and neither constraint is discoverable before tripping it | **open** — cheap fix: validate the message first, or document both limits in AGENTS.md §3 |
+| **2 false 'no checks' reads** | `gh pr checks --watch` run immediately after `gh pr create` returns *no checks reported* and exits 1, because it races GitHub registering the runs. Indistinguishable from the genuine "GitHub created no run" case AGENTS.md §6 warns about, which is the one you must not paper over | **open** — needs a settle delay, or a way to tell the two apart |
 
 ### The six hops are the root cost
 
@@ -408,6 +395,25 @@ that works", and no test suite would have.
 
 ---
 
+**Diff the assembled artifact after any relocation.** Moving a domain into the
+ADR-0022 carve-out silently removed 21 generic-CRUD routes while 1712 tests
+passed. Comparing `app.openapi()` against the previous deployment is the only
+thing that saw it, and it caught the same class again two batches later. It is
+now the standing check for a relocation, and it costs seconds.
+
+**Establish current state before *closing*, not just before coding.** #221 read
+as finished; checking found two events still undescribed and, more usefully, that
+the guard the issue credited with preventing that class of bug does not exist.
+The same habit applied one step earlier would have found #664 before #671 was
+filed as its duplicate — the check that works for code works for the tracker.
+
+**Say which side of a divergence is ahead.** `core diff` reports *that* a file
+differs. Every useful decision — reconcile, backport, declare — depends on
+*which way*, and that is one `diff` against a template worktree. Skipping it is
+how a defect gets pinned as an intentional divergence.
+
+---
+
 ## What needs more thought
 
 **Fail-open is our default, and it should not be.** Three separate gates passed
@@ -578,6 +584,24 @@ the hooks have already run.
 
 ---
 
+**Instance CI is 2–3× slower than the template's, and nobody owns that number.**
+`biffo-template` CI is ~2.5 min; `tabsii-platform` is 6–8 min, plus 6–12 min to
+deploy. Every instance-side change pays that, and the six-hop loop above pays it
+twice. Nothing tracks it, so it drifts upward unnoticed.
+
+**A repo-settings fix applied to two of three repos is not applied.** Auto-merge
+and branch reaping were enabled on `biffo-template` and `biffo-platform` and
+recorded here as *fixed*. `tabsii-platform` was missed, so the row overstates the
+remedy and the third repo kept paying the original cost for a full session. Any
+settings change needs an explicit inventory of the repos it must reach.
+
+**Nothing prompts a search before filing an issue.** Two issues described one npm
+outage. The cost is small in isolation and compounds: a duplicate splits the
+evidence, and closing one leaves the other quietly asserting a resolved problem
+is still open.
+
+---
+
 ## Skills used
 
 Skills cannot be iterated on impressions. Every invocation, with an honest outcome.
@@ -591,6 +615,10 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-workflow` | **partial** | Step 7 (`gh pr merge --squash`) assumes you can win the up-to-date race. `dev` was taking a merge every 3–5 min against a ~2.5 min CI cycle, so the branch was `BEHIND` on every attempt and **four rebases lost it**. The real fix was a repo setting (auto-merge), not a rebase. The step should offer an auto-merge path. |
 | `claude-in-chrome` | **worked** | The only thing that reproduced the reported bug. `curl` returned clean `401` JSON and looked healthy — the HTML only appears on an *authenticated* request, because 401 passes the CDN untouched while 403/404 are rewritten. An unauthenticated check would have concluded "works fine" and #647 would still be unfound. |
 | `biffo-verify` | **partial** | §1 caught that the planned #621 step 3 would have collapsed ADR-0014 §7's two-axis authorization boundary — a real save. But it was **not applied to its own author's output**: `core diff`'s `removed (5)` was reported to the user as fact without the dry run that disproves it in seconds. The step exists and was skipped. |
+| `biffo-workflow` | **worked** | Nine changes across three repos, start → merged → worktree reaped. Its honest-push and remote-verify steps earned their place twice: once when a rebase onto a mid-flight core upgrade needed re-verification, and once when a **blocked commit still produced `push exit 0`** — the branch existed on the remote carrying none of the work. Only `git log origin/<branch>` showed it. |
+| `biffo-workflow` | **partial** | Step 7 assumes you merge by hand. Where the repo allows auto-merge that is wasted watching; where it does not (`tabsii-platform`, `allow_auto_merge=false`) it is unavoidable and cost ~2¼ hours this session. The step should say: enable auto-merge, use it, and treat a repo without it as a defect to fix rather than a cadence to absorb. |
+| `biffo-verify` | **worked** | §3 caught **two** vacuous guards — one whose expected set was empty because `build_core_crud_router()` returns zero on a second call ([#695](https://github.com/keiranholloway/biffo-template/issues/695)), one that asserted a path existed when a hand-written route kept it alive regardless. Both were green, both protected nothing. Reverting the fix and watching the guard fail is the only step that distinguishes those from a real guard. |
+| `biffo-verify` | **worked** | §1 and §7 changed two outcomes: #221 was closed on evidence rather than its own summary (finding a guard it credited does not exist), and #190 on the registry showing `greenlet==3.5.3` where PyPI serves `3.5.4` — the exact package that broke it — rather than on "the flag is present". |
 
 | `biffo-sib-build` | **partial** | Step 2 mandates one PR per milestone. Against a `dev` with strict up-to-date protection and other agents merging, every merge forced a full CI re-run on every open PR — M3+M4 and M5+M6 were batched to halve the cycles, and both batches were single coherent contracts anyway. The step should say when batching is *correct* rather than a shortcut. Its "stop and ask" guidance was right and used twice (migration 0010, the `pipeline_stage_id` lookup). |
 | `biffo-verify` | **worked** | §4 caught that the deployed Lambda unpacks under `src/api/`, not the `api/` I guessed — the grep I would have trusted returned nothing for the wrong reason. §3 caught that a test written for the JSON-serialisation fix passed with that fix reverted; only reverting *both* it and the stringified id made it fail, so the test defends less than it appeared to. Both are things a green run would have hidden. |

@@ -42,6 +42,7 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | CI logs not retained for self-hosted runs, so a green check cannot be inspected to confirm *what it actually did* | visibility | biffo-template CI | biffo-template CI | **unfiled** |
 | — | `ci.yml` fires on both `push` and `pull_request`, leaving duplicate in-flight runs that make "are all checks done?" unanswerable to tooling | visibility · process | biffo-template CI | biffo-template CI | **unfiled** |
 | [#689](https://github.com/keiranholloway/biffo-template/issues/689) | `core diff` reports instance-authored files as `removed` — a false data-loss signal that `core upgrade` does not act on. Halted a deploy, produced an incorrect issue, and prompted a workaround hunt, all for something that would not happen | **visibility** | biffo-platform upgrade | biffo-template `cli/` | **open** |
+| — | `gh` was **2.46.0 from Ubuntu universe — 7 months and ~50 minor versions stale**. `gh issue view <n>` failed outright on a deprecated Projects-classic GraphQL field, and `gh pr update-branch` **printed its help text and exited 0** instead of running. Both were worked around as quirks across two sessions; neither prompted anyone to check the version. Nothing in either failure said "your tool is old" | **visibility** | agents working in every Biffo repo | workstation tooling (GitHub's apt repo, not Ubuntu's) | **fixed** — 2.96.0, auto-updating |
 | — | Two plugin admin URLs both answered `200 text/html`, so they were read as the same failure. They were opposites: one carried `x-cache: Miss` and `<title>Ideation Engine — Admin</title>` (working), the other `server: AmazonS3` + `x-cache: Error` (a 404 the CDN rewrote). The proposed fix would have reverted #635 and broken admin access for every admin | **visibility** | biffo-template [#713](https://github.com/keiranholloway/biffo-template/issues/713) | biffo-plugin-idea-scout (missing `web-admin/dist`) | **corrected** — cost ~25m and one wrong issue |
 | — | An admin panel rendered a **500 as "No catalog entries yet."** The screenshot looked like a working feature with no data; only `read_network_requests` showed the status. A UI that renders a failed fetch as an empty collection makes a broken feature indistinguishable from an idle one | **visibility** | biffo-platform (Ideation admin) | biffo-plugin-ideation (surface fetch failures) | **unfiled** |
 | — | `scripts/js-dependency-audit.sh` ran under dash, whose `echo` interprets backslash escapes. Advisory payloads contain them, so `echo "$out" \| jq` mangled the JSON and every run reported INCONCLUSIVE — the gate green while scanning nothing, inside the very fix (#591) that exists to stop it failing open | **fail-open** | biffo-template CI | biffo-template `scripts/` | **fixed** ([#717](https://github.com/keiranholloway/biffo-template/pull/717)) |
@@ -83,11 +84,11 @@ shape recurring across unrelated components is a design problem, not bad luck.
 ### What the classes say
 
 > Counted from `docs/practices/evidence.jsonl`, not asserted. Regenerate with
-> `node scripts/practices-evidence.mjs --report`. **46 rows.**
+> `node scripts/practices-evidence.mjs --report`. **47 rows.**
 
 | Primary class | Rows |
 | --- | --- |
-| **visibility** | 15 |
+| **visibility** | 16 |
 | drift | 12 |
 | boundary | 8 |
 | fail-open | 6 |
@@ -95,7 +96,7 @@ shape recurring across unrelated components is a design problem, not bad luck.
 
 **This page previously said "fail-open is the dominant shape — three of the five
 filed issues".** That was true of a five-row sample and was never revised as the
-sample grew ninefold. Counted across all 46 rows, fail-open is *fourth*. The
+sample grew ninefold. Counted across all 47 rows, fail-open is *fourth*. The
 error is instructive and is the reason the rows are now a dataset: **a narrative
 appended to by hand drifts from the evidence above it, silently, and reads
 exactly as confidently while doing so.**
@@ -112,7 +113,7 @@ what it does when it cannot run, and make "inconclusive" a distinct, visible
 outcome from "passed".** A gate that cannot report its own inconclusiveness is
 just one more thing that cannot say what it did.
 
-**What the dataset cannot yet tell us.** Of 46 rows, **1** carries a cost figure
+**What the dataset cannot yet tell us.** Of 47 rows, **1** carries a cost figure
 and **33** carry a date — all of them in a single month, 2026-07. So rows can be
 ranked by *frequency* but not yet by *cost*, and there is no longitudinal trend
 to read. Recording wall-clock on every new row is what unlocks the ranking this
@@ -508,6 +509,14 @@ implausible. AGENTS.md §1 already warns about auditing dead code; the gap is th
 nothing in the tooling notices — a diff against a stale tree looks exactly like a
 diff against a current one. Worth having `core diff`/`core upgrade` state the
 template commit they resolved, so the input is visible in the output.
+
+**A tool behaving oddly is evidence about the tool, not just an obstacle.** Two
+separate `gh` commands misbehaved — one erroring on a deprecated API field, one
+silently printing help and exiting 0 — and both were routed around with a
+workaround rather than diagnosed. The cause was a package 7 months stale, which
+one `gh --version` would have exposed. The workarounds were even *written into a
+subagent's brief*, propagating the symptom instead of removing it. Worth asking,
+the second time a tool surprises you: **is this tool the version I think it is?**
 
 **Escalating an unverified tool output cost more than the bug.** The false
 `removed (5)` reading produced: a halted deploy, an incorrectly-titled issue, a

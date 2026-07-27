@@ -476,3 +476,88 @@ def test_reap_is_not_shadowed_by_the_run_id_routes(client):
     # `/reap` is a literal segment where `{run_id}` also lives. If FastAPI ever
     # matched it as a run id, the sweep would silently 404 instead of running.
     assert client.post(f"{_RUNS}/reap", json={}).status_code == 200
+
+
+# ── Listing a causation chain (issue #656) ──────────────────────────────────
+#
+# How a fan-in discovers the siblings of the run that just completed: given the
+# causation_id off the completion event, ask which runs share it and whether
+# they are all terminal yet.
+
+
+def test_list_returns_only_the_runs_of_the_named_chain(client):
+    _create(client, agent_name="research-a", causation_id="chain-1")
+    _create(client, agent_name="research-b", causation_id="chain-1")
+    _create(client, agent_name="unrelated", causation_id="chain-2")
+
+    resp = client.get(_RUNS, params={"causation_id": "chain-1"})
+
+    assert resp.status_code == 200
+    assert {row["agent_name"] for row in resp.json()} == {"research-a", "research-b"}
+
+
+def test_list_can_narrow_a_chain_to_one_agent(client):
+    _create(client, agent_name="research-a", causation_id="chain-1")
+    _create(client, agent_name="research-b", causation_id="chain-1")
+
+    resp = client.get(_RUNS, params={"causation_id": "chain-1", "agent_name": "research-b"})
+
+    assert [row["agent_name"] for row in resp.json()] == ["research-b"]
+
+
+def test_list_of_an_unknown_chain_is_empty_not_an_error(client):
+    """A fan-in polling a chain it has not seen must get [], not a 404 it has to
+    special-case."""
+    resp = client.get(_RUNS, params={"causation_id": "never-existed"})
+
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_list_requires_a_causation_id(client):
+    """Deliberately not optional: an unfiltered list here would hand any
+    allowlisted principal every run in the tenant. The human-gated admin surface
+    is where an unfiltered list belongs."""
+    resp = client.get(_RUNS)
+
+    assert resp.status_code == 422
+
+
+def test_list_reports_each_runs_status_so_a_fan_in_can_decide(client):
+    """The whole point of the endpoint — a fan-in fires only once every sibling
+    is terminal, and terminal includes failed."""
+    first = _create(client, agent_name="research-a", causation_id="chain-1").json()["id"]
+    _create(client, agent_name="research-b", causation_id="chain-1")
+
+    client.post(f"{_RUNS}/{first}/claim")
+    client.post(
+        f"{_RUNS}/{first}/complete",
+        json={"status": "failed", "messages": [], "error": "boom"},
+    )
+
+    rows = {
+        row["agent_name"]: row["status"]
+        for row in client.get(_RUNS, params={"causation_id": "chain-1"}).json()
+    }
+
+    assert rows == {"research-a": "failed", "research-b": "pending"}
+
+
+def test_list_never_returns_transcripts_or_payloads(client):
+    """Summaries only. A list that carried unbounded messages/result/input_payload
+    is what the load_only discipline in list_runs exists to prevent."""
+    _create(client, causation_id="chain-1")
+
+    row = client.get(_RUNS, params={"causation_id": "chain-1"}).json()[0]
+
+    assert "messages" not in row
+    assert "result" not in row
+    assert "input_payload" not in row
+    # The summary still carries what a fan-in needs to identify the run.
+    assert row["agent_name"] == "demo-enricher"
+    assert row["model"] == "anthropic/claude-sonnet-4"
+
+
+def test_list_bounds_its_page_size(client):
+    resp = client.get(_RUNS, params={"causation_id": "chain-1", "limit": 500})
+    assert resp.status_code == 422

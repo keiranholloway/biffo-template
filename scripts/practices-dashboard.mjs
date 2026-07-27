@@ -23,6 +23,7 @@
 
 import { readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { readSessions, summariseSessions } from './practices-session.mjs'
 
 /** SRE practice caps toil at 50%. Above that, maintenance is eating delivery. */
 export const TOIL_BUDGET = 50
@@ -159,18 +160,58 @@ td.hot{color:var(--crit); font-weight:600}
 td.mid{color:var(--warn)}
 .side{font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:var(--ink-3); margin-left:6px}
 
+.unvalidated{padding:16px 18px; border:1px dashed var(--warn); border-radius:3px; background:var(--warn-bg); color:var(--ink-2); font-size:13px}
+.unvalidated code{font-family:ui-monospace,monospace; font-size:12px}
+.sessions{display:flex; flex-direction:column; gap:6px; padding:16px 18px; background:var(--surface); border:1px solid var(--line); border-radius:3px; font-size:14px}
+.sessions .k{display:inline-block; min-width:110px; font-size:11px; text-transform:uppercase; letter-spacing:0.09em; color:var(--ink-3)}
 .notes{margin-top:34px; padding:18px 20px; border:1px dashed var(--line); border-radius:3px; font-size:13px; color:var(--ink-2)}
 .notes h3{margin:0 0 8px; font-size:12px; text-transform:uppercase; letter-spacing:0.1em; color:var(--ink-3)}
 .notes ul{margin:0; padding-left:18px} .notes li{margin:5px 0}
 .notes code{font-family:ui-monospace,monospace; font-size:12px; background:var(--unknown-bg); padding:1px 4px; border-radius:2px}
 `
 
+
+/**
+ * Compare recorded wall-clock against the merge-derived estimate.
+ *
+ * Every other figure on this page is inferred from commit types and repo names.
+ * That inference is free and it might be wrong. This panel is the only thing
+ * that can *falsify* it — and when no sessions have been recorded it says so
+ * plainly rather than leaving the headline looking corroborated.
+ *
+ * @param {{sessions: number, hours: number, delivery: number|null, platform: number|null, toil: number|null}|null} s
+ * @param {number|null} mergeToilRatio
+ */
+export function renderSessions(s, mergeToilRatio) {
+  if (!s || !s.sessions) {
+    return `<div class="unvalidated">
+      <strong>No sessions recorded.</strong> Every figure above is inferred from merge
+      metadata — commit types and repo names — and nothing has tested that inference
+      against a real day's wall-clock. Record one with
+      <code>node scripts/practices-session.mjs --minutes N --delivery N --platform N --toil N</code>.
+    </div>`
+  }
+  const gap =
+    mergeToilRatio === null || s.toil === null ? null : Math.round((s.toil - mergeToilRatio) * 10) / 10
+  const verdict =
+    gap === null
+      ? 'not comparable yet'
+      : Math.abs(gap) <= 10
+        ? `proxy agrees within ${Math.abs(gap)} points`
+        : `proxy is off by ${gap > 0 ? '+' : ''}${gap} points — treat the headline with suspicion`
+  return `<div class="sessions">
+    <div><span class="k">recorded</span> <strong class="num">${s.sessions}</strong> sessions · <strong class="num">${s.hours}h</strong></div>
+    <div><span class="k">wall-clock</span> delivery <strong class="num">${fmt(s.delivery, '%')}</strong> · platform <strong class="num">${fmt(s.platform, '%')}</strong> · toil <strong class="num">${fmt(s.toil, '%')}</strong></div>
+    <div><span class="k">merge proxy</span> toil <strong class="num">${fmt(mergeToilRatio, '%')}</strong> — ${esc(verdict)}</div>
+  </div>`
+}
+
 /**
  * Render the whole page.
  *
  * @param {any} snapshot
  */
-export function renderDashboard(snapshot) {
+export function renderDashboard(snapshot, sessions = null) {
   const w = (d) => snapshot.windows?.[d]
   const day = w(1)
   const base = w(90)
@@ -298,6 +339,9 @@ export function renderDashboard(snapshot) {
     <span><i style="background:var(--crit)"></i>toil + rework (${fmt(e(7).toilRatio, '%')})</span>
   </div>
 
+  <h2>Wall-clock vs the merge proxy — is the headline believable?</h2>
+  ${renderSessions(sessions, e(90).toilRatio)}
+
   <h2>By repository — 90-day baseline, with last 24h merges</h2>
   <div class="scroll">
     <table>
@@ -329,14 +373,17 @@ function main() {
   const argv = process.argv.slice(2)
   let out = 'docs/practices/dashboard.html'
   let dir = 'docs/practices/data'
+  let sessionLog = 'docs/practices/sessions.jsonl'
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--out') out = argv[++i]
     else if (argv[i] === '--data') dir = argv[++i]
+    else if (argv[i] === '--sessions') sessionLog = argv[++i]
   }
   const file = latestSnapshotFile(dir)
   const snapshot = JSON.parse(readFileSync(file, 'utf8'))
+  const sessions = summariseSessions(readSessions(sessionLog))
   mkdirSync(dirname(out), { recursive: true })
-  writeFileSync(out, renderDashboard(snapshot))
+  writeFileSync(out, renderDashboard(snapshot, sessions.sessions ? sessions : null))
   process.stderr.write(`rendered ${out} from ${file}\n`)
 }
 

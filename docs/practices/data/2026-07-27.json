@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "collectedAt": "2026-07-27T12:47:21.036Z",
+  "collectedAt": "2026-07-27T13:17:51.217Z",
   "windowDays": [
     1,
     7,
@@ -8,33 +8,47 @@
   ],
   "windows": {
     "1": {
-      "since": "2026-07-26T12:47:20.994Z",
+      "since": "2026-07-26T13:17:51.182Z",
       "repos": {
         "keiranholloway/biffo-template": {
           "role": "template",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 46,
+          "mergedPrs": 48,
           "workMix": {
-            "merges": 46,
-            "delivery": 34.8,
-            "rework": 32.6,
-            "toil": 4.3,
-            "quality": 10.9,
-            "docs": 17.4,
+            "merges": 48,
+            "delivery": 35.4,
+            "rework": 33.3,
+            "toil": 4.2,
+            "quality": 10.4,
+            "docs": 16.7,
             "unconventional": 0,
-            "toilRatio": 37
+            "toilRatio": 37.5,
+            "counts": {
+              "delivery": 17,
+              "rework": 16,
+              "toil": 2,
+              "quality": 5,
+              "docs": 8,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 48,
+              "product": 0
+            },
+            "productDelivery": 0
           },
-          "ciFailureRate": 4.3,
+          "ciFailureRate": 4.2,
           "revisionsP50": 0,
           "revisionsP90": 2,
-          "landedFirstPushRate": 56.5,
+          "landedFirstPushRate": 56.3,
           "cycleTimeP50Minutes": 3.6,
           "cycleTimeP90Minutes": 48.8,
           "rework": {
-            "merges": 46,
-            "fixMerges": 15,
-            "fixShare": 32.6,
+            "merges": 48,
+            "fixMerges": 16,
+            "fixShare": 33.3,
             "attributed": 13,
             "medianHoursToRework": 4.8,
             "p90HoursToRework": 581.8,
@@ -42,14 +56,14 @@
             "correctedWithin24hShare": 69.2
           },
           "contention": {
-            "greenButUnmergedHours": 21.2,
-            "greenToMergeP50Minutes": 0.6,
+            "greenButUnmergedHours": 21.3,
+            "greenToMergeP50Minutes": 0.7,
             "greenToMergeP90Minutes": 46.4,
             "greenToMergeMaxMinutes": 830.2,
-            "repushRate": 43.5,
-            "racedShare": 23.9,
-            "prsMeasured": 46,
-            "prsWithGreen": 46
+            "repushRate": 43.8,
+            "racedShare": 22.9,
+            "prsMeasured": 48,
+            "prsWithGreen": 48
           },
           "flakes": {
             "pairs": 1,
@@ -58,15 +72,15 @@
             ]
           },
           "integration": {
-            "runs": 171,
+            "runs": 177,
             "failures": 0,
             "redMinutes": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 46,
+            "prsMeasured": 48,
             "prsUnmeasured": 0,
-            "workflowRuns": 380,
+            "workflowRuns": 396,
             "reworkSource": "git-blame"
           }
         },
@@ -83,7 +97,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 11.8,
-            "toilRatio": 64.7
+            "toilRatio": 64.7,
+            "counts": {
+              "delivery": 4,
+              "rework": 2,
+              "toil": 9,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 2,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 17,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": 11.8,
           "revisionsP50": 0,
@@ -141,7 +169,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 50
+            "toilRatio": 50,
+            "counts": {
+              "delivery": 1,
+              "rework": 1,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 2,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -199,7 +241,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 83.3
+            "toilRatio": 83.3,
+            "counts": {
+              "delivery": 1,
+              "rework": 4,
+              "toil": 1,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 6,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": 33.3,
           "revisionsP50": 0,
@@ -257,7 +313,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 36.4
+            "toilRatio": 36.4,
+            "counts": {
+              "delivery": 7,
+              "rework": 2,
+              "toil": 2,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 11,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": 0,
           "revisionsP50": 0,
@@ -315,7 +385,10 @@
             "quality": null,
             "docs": null,
             "unconventional": null,
-            "toilRatio": null
+            "toilRatio": null,
+            "counts": null,
+            "sideCounts": null,
+            "productDelivery": null
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -373,7 +446,21 @@
             "quality": 25,
             "docs": 0,
             "unconventional": 35,
-            "toilRatio": 30
+            "toilRatio": 30,
+            "counts": {
+              "delivery": 2,
+              "rework": 3,
+              "toil": 3,
+              "quality": 5,
+              "docs": 0,
+              "unconventional": 7,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 9,
+              "product": 11
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": 26.3,
           "revisionsP50": 1,
@@ -431,7 +518,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 50
+            "toilRatio": 50,
+            "counts": {
+              "delivery": 4,
+              "rework": 4,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 8
+            },
+            "productDelivery": 4
           },
           "ciFailureRate": 0,
           "revisionsP50": 0,
@@ -489,7 +590,21 @@
             "quality": null,
             "docs": null,
             "unconventional": null,
-            "toilRatio": null
+            "toilRatio": null,
+            "counts": {
+              "delivery": 0,
+              "rework": 0,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -547,7 +662,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 75
+            "toilRatio": 75,
+            "counts": {
+              "delivery": 1,
+              "rework": 3,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 4
+            },
+            "productDelivery": 1
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -605,7 +734,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 100
+            "toilRatio": 100,
+            "counts": {
+              "delivery": 0,
+              "rework": 0,
+              "toil": 4,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 4
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": 25,
           "revisionsP50": 0,
@@ -663,7 +806,21 @@
             "quality": null,
             "docs": null,
             "unconventional": null,
-            "toilRatio": null
+            "toilRatio": null,
+            "counts": {
+              "delivery": 0,
+              "rework": 0,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -721,7 +878,21 @@
             "quality": null,
             "docs": null,
             "unconventional": null,
-            "toilRatio": null
+            "toilRatio": null,
+            "counts": {
+              "delivery": 0,
+              "rework": 0,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -779,7 +950,21 @@
             "quality": 0,
             "docs": 100,
             "unconventional": 0,
-            "toilRatio": 0
+            "toilRatio": 0,
+            "counts": {
+              "delivery": 0,
+              "rework": 0,
+              "toil": 0,
+              "quality": 0,
+              "docs": 1,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 1
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -837,7 +1022,21 @@
             "quality": null,
             "docs": null,
             "unconventional": null,
-            "toilRatio": null
+            "toilRatio": null,
+            "counts": {
+              "delivery": 0,
+              "rework": 0,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -884,59 +1083,67 @@
         }
       },
       "estate": {
-        "merges": 119,
-        "platformShare": 68.9,
-        "productShare": 31.1,
-        "toilRatio": 46.2,
-        "productFeatureShare": 5.9,
-        "contentionHours": 23.2,
+        "merges": 121,
+        "platformShare": 76.9,
+        "productShare": 23.1,
+        "toilRatio": 46.3,
+        "productFeatureShare": 4.1,
+        "contentionHours": 23.3,
         "bySide": {
           "platform": {
-            "merges": 82,
-            "delivery": 35.4,
-            "rework": 29.3,
-            "toil": 17,
-            "toilRatio": 46.3
+            "merges": 93,
+            "share": 76.9
           },
           "product": {
-            "merges": 37,
-            "delivery": 18.9,
-            "rework": 27,
-            "toil": 18.9,
-            "toilRatio": 45.9
+            "merges": 28,
+            "share": 23.1
           }
         },
         "note": "merges are a proxy for effort, not a measure of time"
       }
     },
     "7": {
-      "since": "2026-07-20T12:47:21.012Z",
+      "since": "2026-07-20T13:17:51.194Z",
       "repos": {
         "keiranholloway/biffo-template": {
           "role": "template",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 255,
+          "mergedPrs": 257,
           "workMix": {
-            "merges": 255,
-            "delivery": 39.2,
-            "rework": 31,
-            "toil": 7.5,
-            "quality": 9,
-            "docs": 13.3,
+            "merges": 257,
+            "delivery": 39.3,
+            "rework": 31.1,
+            "toil": 7.4,
+            "quality": 8.9,
+            "docs": 13.2,
             "unconventional": 0,
-            "toilRatio": 38.4
+            "toilRatio": 38.5,
+            "counts": {
+              "delivery": 101,
+              "rework": 80,
+              "toil": 19,
+              "quality": 23,
+              "docs": 34,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 257,
+              "product": 0
+            },
+            "productDelivery": 0
           },
-          "ciFailureRate": 13.3,
+          "ciFailureRate": 13.2,
           "revisionsP50": 0,
           "revisionsP90": 2,
-          "landedFirstPushRate": 59.6,
+          "landedFirstPushRate": 59.5,
           "cycleTimeP50Minutes": 3.7,
           "cycleTimeP90Minutes": 24.4,
           "rework": {
-            "merges": 255,
-            "fixMerges": 79,
-            "fixShare": 31,
+            "merges": 257,
+            "fixMerges": 80,
+            "fixShare": 31.1,
             "attributed": 70,
             "medianHoursToRework": 1.5,
             "p90HoursToRework": 521.7,
@@ -944,14 +1151,14 @@
             "correctedWithin24hShare": 77.1
           },
           "contention": {
-            "greenButUnmergedHours": 72.2,
+            "greenButUnmergedHours": 72.4,
             "greenToMergeP50Minutes": 0.6,
             "greenToMergeP90Minutes": 20.8,
             "greenToMergeMaxMinutes": 943,
-            "repushRate": 40.4,
-            "racedShare": 13.3,
-            "prsMeasured": 255,
-            "prsWithGreen": 255
+            "repushRate": 40.5,
+            "racedShare": 13.2,
+            "prsMeasured": 257,
+            "prsWithGreen": 257
           },
           "flakes": {
             "pairs": 1,
@@ -960,15 +1167,15 @@
             ]
           },
           "integration": {
-            "runs": 265,
+            "runs": 271,
             "failures": 0,
             "redMinutes": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 255,
+            "prsMeasured": 257,
             "prsUnmeasured": 0,
-            "workflowRuns": 2073,
+            "workflowRuns": 2089,
             "reworkSource": "git-blame"
           }
         },
@@ -985,7 +1192,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 13.2,
-            "toilRatio": 67.6
+            "toilRatio": 67.6,
+            "counts": {
+              "delivery": 13,
+              "rework": 8,
+              "toil": 38,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 9,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 68,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": 12.1,
           "revisionsP50": 0,
@@ -1043,7 +1264,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 37.5
+            "toilRatio": 37.5,
+            "counts": {
+              "delivery": 5,
+              "rework": 3,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 8,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": 40,
           "revisionsP50": 0,
@@ -1101,7 +1336,21 @@
             "quality": 3.3,
             "docs": 0,
             "unconventional": 10,
-            "toilRatio": 43.3
+            "toilRatio": 43.3,
+            "counts": {
+              "delivery": 13,
+              "rework": 9,
+              "toil": 4,
+              "quality": 1,
+              "docs": 0,
+              "unconventional": 3,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 30,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": 14.3,
           "revisionsP50": 0,
@@ -1159,7 +1408,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 36.4
+            "toilRatio": 36.4,
+            "counts": {
+              "delivery": 7,
+              "rework": 2,
+              "toil": 2,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 11,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": 0,
           "revisionsP50": 0,
@@ -1217,7 +1480,10 @@
             "quality": null,
             "docs": null,
             "unconventional": null,
-            "toilRatio": null
+            "toilRatio": null,
+            "counts": null,
+            "sideCounts": null,
+            "productDelivery": null
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -1275,7 +1541,21 @@
             "quality": 13.2,
             "docs": 1.3,
             "unconventional": 26.3,
-            "toilRatio": 51.3
+            "toilRatio": 51.3,
+            "counts": {
+              "delivery": 6,
+              "rework": 9,
+              "toil": 30,
+              "quality": 10,
+              "docs": 1,
+              "unconventional": 20,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 20,
+              "product": 56
+            },
+            "productDelivery": 4
           },
           "ciFailureRate": 25,
           "revisionsP50": 0,
@@ -1333,7 +1613,21 @@
             "quality": 8.3,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 33.3
+            "toilRatio": 33.3,
+            "counts": {
+              "delivery": 7,
+              "rework": 4,
+              "toil": 0,
+              "quality": 1,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 12
+            },
+            "productDelivery": 7
           },
           "ciFailureRate": 8.3,
           "revisionsP50": 0,
@@ -1391,7 +1685,21 @@
             "quality": null,
             "docs": null,
             "unconventional": null,
-            "toilRatio": null
+            "toilRatio": null,
+            "counts": {
+              "delivery": 0,
+              "rework": 0,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -1449,7 +1757,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 60
+            "toilRatio": 60,
+            "counts": {
+              "delivery": 2,
+              "rework": 3,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 5
+            },
+            "productDelivery": 2
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -1507,7 +1829,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 100
+            "toilRatio": 100,
+            "counts": {
+              "delivery": 0,
+              "rework": 0,
+              "toil": 4,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 4
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": 25,
           "revisionsP50": 0,
@@ -1565,7 +1901,21 @@
             "quality": null,
             "docs": null,
             "unconventional": null,
-            "toilRatio": null
+            "toilRatio": null,
+            "counts": {
+              "delivery": 0,
+              "rework": 0,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -1623,7 +1973,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 33.3
+            "toilRatio": 33.3,
+            "counts": {
+              "delivery": 2,
+              "rework": 1,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 3
+            },
+            "productDelivery": 2
           },
           "ciFailureRate": 50,
           "revisionsP50": 0,
@@ -1683,7 +2047,21 @@
             "quality": 0,
             "docs": 100,
             "unconventional": 0,
-            "toilRatio": 0
+            "toilRatio": 0,
+            "counts": {
+              "delivery": 0,
+              "rework": 0,
+              "toil": 0,
+              "quality": 0,
+              "docs": 1,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 1
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -1741,7 +2119,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 100
+            "toilRatio": 100,
+            "counts": {
+              "delivery": 0,
+              "rework": 1,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 1
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -1788,59 +2180,67 @@
         }
       },
       "estate": {
-        "merges": 474,
-        "platformShare": 78.5,
-        "productShare": 21.5,
+        "merges": 476,
+        "platformShare": 82.8,
+        "productShare": 17.2,
         "toilRatio": 45.6,
-        "productFeatureShare": 3.6,
-        "contentionHours": 94.2,
+        "productFeatureShare": 3.2,
+        "contentionHours": 94.4,
         "bySide": {
           "platform": {
-            "merges": 372,
-            "delivery": 37.1,
-            "rework": 27.2,
-            "toil": 17,
-            "toilRatio": 44.1
+            "merges": 394,
+            "share": 82.8
           },
           "product": {
-            "merges": 102,
-            "delivery": 16.7,
-            "rework": 17.6,
-            "toil": 33.4,
-            "toilRatio": 51
+            "merges": 82,
+            "share": 17.2
           }
         },
         "note": "merges are a proxy for effort, not a measure of time"
       }
     },
     "90": {
-      "since": "2026-04-28T12:47:21.022Z",
+      "since": "2026-04-28T13:17:51.204Z",
       "repos": {
         "keiranholloway/biffo-template": {
           "role": "template",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 454,
+          "mergedPrs": 456,
           "workMix": {
-            "merges": 521,
-            "delivery": 34.7,
-            "rework": 37.4,
+            "merges": 523,
+            "delivery": 34.8,
+            "rework": 37.5,
             "toil": 9.8,
             "quality": 7.3,
             "docs": 9.6,
-            "unconventional": 1.2,
-            "toilRatio": 47.2
+            "unconventional": 1.1,
+            "toilRatio": 47.2,
+            "counts": {
+              "delivery": 182,
+              "rework": 196,
+              "toil": 51,
+              "quality": 38,
+              "docs": 50,
+              "unconventional": 6,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 523,
+              "product": 0
+            },
+            "productDelivery": 0
           },
-          "ciFailureRate": 17.4,
+          "ciFailureRate": 17.3,
           "revisionsP50": 0,
           "revisionsP90": 2,
           "landedFirstPushRate": 64.3,
           "cycleTimeP50Minutes": 3.6,
           "cycleTimeP90Minutes": 33.3,
           "rework": {
-            "merges": 521,
-            "fixMerges": 195,
-            "fixShare": 37.4,
+            "merges": 523,
+            "fixMerges": 196,
+            "fixShare": 37.5,
             "attributed": 173,
             "medianHoursToRework": 2.4,
             "p90HoursToRework": 63.6,
@@ -1848,14 +2248,14 @@
             "correctedWithin24hShare": 76.9
           },
           "contention": {
-            "greenButUnmergedHours": 162.9,
+            "greenButUnmergedHours": 163.1,
             "greenToMergeP50Minutes": 0.9,
             "greenToMergeP90Minutes": 25.8,
             "greenToMergeMaxMinutes": 943,
             "repushRate": 35.7,
-            "racedShare": 13.9,
-            "prsMeasured": 454,
-            "prsWithGreen": 454
+            "racedShare": 13.8,
+            "prsMeasured": 456,
+            "prsWithGreen": 456
           },
           "flakes": {
             "pairs": 2,
@@ -1865,15 +2265,15 @@
             ]
           },
           "integration": {
-            "runs": 265,
+            "runs": 271,
             "failures": 0,
             "redMinutes": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 454,
+            "prsMeasured": 456,
             "prsUnmeasured": 0,
-            "workflowRuns": 3402,
+            "workflowRuns": 3418,
             "reworkSource": "git-blame"
           }
         },
@@ -1890,7 +2290,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 13.2,
-            "toilRatio": 67.6
+            "toilRatio": 67.6,
+            "counts": {
+              "delivery": 13,
+              "rework": 8,
+              "toil": 38,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 9,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 68,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": 12.1,
           "revisionsP50": 0,
@@ -1948,7 +2362,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 37.5
+            "toilRatio": 37.5,
+            "counts": {
+              "delivery": 5,
+              "rework": 3,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 8,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": 40,
           "revisionsP50": 0,
@@ -2006,7 +2434,21 @@
             "quality": 3.3,
             "docs": 0,
             "unconventional": 10,
-            "toilRatio": 43.3
+            "toilRatio": 43.3,
+            "counts": {
+              "delivery": 13,
+              "rework": 9,
+              "toil": 4,
+              "quality": 1,
+              "docs": 0,
+              "unconventional": 3,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 30,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": 14.3,
           "revisionsP50": 0,
@@ -2064,7 +2506,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 36.4
+            "toilRatio": 36.4,
+            "counts": {
+              "delivery": 7,
+              "rework": 2,
+              "toil": 2,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 11,
+              "product": 0
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": 0,
           "revisionsP50": 0,
@@ -2122,7 +2578,10 @@
             "quality": null,
             "docs": null,
             "unconventional": null,
-            "toilRatio": null
+            "toilRatio": null,
+            "counts": null,
+            "sideCounts": null,
+            "productDelivery": null
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -2180,7 +2639,21 @@
             "quality": 5.2,
             "docs": 3.9,
             "unconventional": 19.6,
-            "toilRatio": 43.5
+            "toilRatio": 43.5,
+            "counts": {
+              "delivery": 63,
+              "rework": 46,
+              "toil": 54,
+              "quality": 12,
+              "docs": 9,
+              "unconventional": 45,
+              "other": 1
+            },
+            "sideCounts": {
+              "platform": 30,
+              "product": 200
+            },
+            "productDelivery": 60
           },
           "ciFailureRate": 23.3,
           "revisionsP50": 0,
@@ -2238,7 +2711,21 @@
             "quality": 2.5,
             "docs": 9.9,
             "unconventional": 3.7,
-            "toilRatio": 19.8
+            "toilRatio": 19.8,
+            "counts": {
+              "delivery": 52,
+              "rework": 10,
+              "toil": 6,
+              "quality": 2,
+              "docs": 8,
+              "unconventional": 3,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 81
+            },
+            "productDelivery": 52
           },
           "ciFailureRate": 13.8,
           "revisionsP50": 0,
@@ -2298,7 +2785,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 11.1,
-            "toilRatio": 22.2
+            "toilRatio": 22.2,
+            "counts": {
+              "delivery": 6,
+              "rework": 1,
+              "toil": 1,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 1,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 9
+            },
+            "productDelivery": 6
           },
           "ciFailureRate": 0,
           "revisionsP50": 0,
@@ -2356,7 +2857,21 @@
             "quality": 5.9,
             "docs": 0,
             "unconventional": 5.9,
-            "toilRatio": 41.2
+            "toilRatio": 41.2,
+            "counts": {
+              "delivery": 8,
+              "rework": 5,
+              "toil": 2,
+              "quality": 1,
+              "docs": 0,
+              "unconventional": 1,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 17
+            },
+            "productDelivery": 8
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -2414,7 +2929,21 @@
             "quality": 5.9,
             "docs": 29.4,
             "unconventional": 0,
-            "toilRatio": 29.4
+            "toilRatio": 29.4,
+            "counts": {
+              "delivery": 6,
+              "rework": 0,
+              "toil": 5,
+              "quality": 1,
+              "docs": 5,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 17
+            },
+            "productDelivery": 6
           },
           "ciFailureRate": 6.3,
           "revisionsP50": 0,
@@ -2472,7 +3001,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 12.5,
-            "toilRatio": 0
+            "toilRatio": 0,
+            "counts": {
+              "delivery": 7,
+              "rework": 0,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 1,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 8
+            },
+            "productDelivery": 7
           },
           "ciFailureRate": 14.3,
           "revisionsP50": 0,
@@ -2532,7 +3075,21 @@
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 33.3
+            "toilRatio": 33.3,
+            "counts": {
+              "delivery": 2,
+              "rework": 1,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 3
+            },
+            "productDelivery": 2
           },
           "ciFailureRate": 50,
           "revisionsP50": 0,
@@ -2592,7 +3149,21 @@
             "quality": 0,
             "docs": 42.9,
             "unconventional": 14.3,
-            "toilRatio": 42.9
+            "toilRatio": 42.9,
+            "counts": {
+              "delivery": 0,
+              "rework": 2,
+              "toil": 1,
+              "quality": 0,
+              "docs": 3,
+              "unconventional": 1,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 7
+            },
+            "productDelivery": 0
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -2650,7 +3221,21 @@
             "quality": 0,
             "docs": 9.5,
             "unconventional": 66.7,
-            "toilRatio": 9.5
+            "toilRatio": 9.5,
+            "counts": {
+              "delivery": 3,
+              "rework": 2,
+              "toil": 0,
+              "quality": 0,
+              "docs": 2,
+              "unconventional": 14,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 21
+            },
+            "productDelivery": 3
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -2697,26 +3282,20 @@
         }
       },
       "estate": {
-        "merges": 1031,
-        "platformShare": 61.9,
-        "productShare": 38.1,
-        "toilRatio": 43.4,
-        "productFeatureShare": 14.3,
-        "contentionHours": 252.8,
+        "merges": 1033,
+        "platformShare": 64.9,
+        "productShare": 35.1,
+        "toilRatio": 43.5,
+        "productFeatureShare": 13.9,
+        "contentionHours": 253,
         "bySide": {
           "platform": {
-            "merges": 638,
-            "delivery": 34.3,
-            "rework": 34,
-            "toil": 14.9,
-            "toilRatio": 48.9
+            "merges": 670,
+            "share": 64.9
           },
           "product": {
-            "merges": 393,
-            "delivery": 37.4,
-            "rework": 17,
-            "toil": 17.6,
-            "toilRatio": 34.6
+            "merges": 363,
+            "share": 35.1
           }
         },
         "note": "merges are a proxy for effort, not a measure of time"

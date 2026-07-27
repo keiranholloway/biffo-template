@@ -22,7 +22,7 @@ env:
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: astral-sh/setup-uv@v5
@@ -34,7 +34,7 @@ jobs:
 
   typecheck:
     name: Type Check
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: astral-sh/setup-uv@v5
@@ -45,7 +45,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: astral-sh/setup-uv@v5
@@ -60,7 +60,7 @@ jobs:
 
   validate-manifest:
     name: Validate biffo.plugin.json
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: astral-sh/setup-uv@v5
@@ -100,7 +100,7 @@ jobs:
 
   security-secrets:
     name: Secret Scan
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     permissions:
       contents: read
       pull-requests: read
@@ -108,13 +108,40 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # gitleaks/gitleaks-action@v2 cannot pass here, for two independent
+      # reasons, and a generated plugin repo would be born permanently red:
+      #
+      #   1. On self-hosted runners the scan succeeds and the action then dies
+      #      uploading its SARIF — it assumes a GitHub-hosted $HOME layout, and
+      #      on the AWS fleet the workspace is not under $HOME.
+      #   2. It requires a paid GITLEAKS_LICENSE for organization-owned repos
+      #      (confirmed on tabsii-com/tabsii-platform and tabsii-com/tabsii-crm).
+      #
+      # Install the free, open-source CLI instead — the same approach this
+      # template's own root ci.yml uses. Keep the two in step (issue #649).
+      - name: Install gitleaks
+        run: |
+          curl -sSfL -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz -C /usr/local/bin gitleaks
+          gitleaks version
+      # --log-opts is load-bearing (issue #258). gitleaks defaults to `--all`,
+      # so with fetch-depth: 0 the scan reaches commits that exist only on
+      # unmerged branches — one bad commit on anyone's open branch then reddens
+      # every open PR, with nothing in the built ref responsible for it.
+      # Scoping to HEAD does not weaken detection: the full reachable history is
+      # still walked, so a secret committed then removed is still caught.
+      - name: gitleaks git history scan
+        run: gitleaks detect --redact -v --exit-code=2 --log-opts="--full-history HEAD"
+      # Second pass over the working tree. A generated repo's initial commit
+      # contains every skeleton file, so a secret in an unchanged file would
+      # pass the history scan and fail here. Running both closes the gap.
+      - name: gitleaks filesystem scan
+        run: gitleaks detect --no-git --redact -v --exit-code=2
 
   security-deps:
     name: Dependency Audit
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: astral-sh/setup-uv@v5

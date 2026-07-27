@@ -52,17 +52,43 @@ packages = ["src/example_plugin"]
 target-version = "py313"
 line-length = 100
 
+# Match the select an instance actually enforces once this plugin is vendored
+# into services/<name>/ — the instance applies it with no third-party carve-out,
+# so a skeleton that is *stricter* makes an author write annotations nobody asked
+# for, and one that is looser lets a plugin pass its own CI and fail the tree it
+# lands in. Keep in step with the template root and biffo-plugin-ideation
+# (issue #650).
+#
+# ANN is deliberately absent for that reason. It is also actively wrong in one
+# place: ANN401 rejects the `Any` in a Pydantic mode="before" validator, which
+# is the one signature where `Any` is genuinely correct.
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "B", "S", "UP", "ANN"]
+select = ["E", "F", "I", "N", "W", "B", "S", "UP"]
 ignore = [
   "S101", # allow assert in tests
 ]
 
+# FastAPI's dependency-injection defaults are the framework's idiomatic
+# call-in-default pattern, not the B008 mutable-default bug. Without this a
+# plugin cannot write `x = Depends(...)` — the mandatory idiom for any plugin
+# exposing routes — and B008 reddens its CI on the first endpoint it adds.
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+  "fastapi.Depends",
+  "fastapi.Query",
+  "fastapi.Path",
+  "fastapi.Body",
+  "fastapi.Header",
+  "fastapi.Cookie",
+  "fastapi.Form",
+  "fastapi.File",
+]
+
 [tool.ruff.lint.per-file-ignores]
-# S101: assert is the normal pytest idiom. ANN: test functions don't need
-# return-type annotations. S106: fakes.py's mock BiffoAPIClient(token=...)
-# is a fixed test fixture value, not a real credential.
-"tests/**/*.py" = ["S101", "ANN", "S106"]
+# S101: assert is the normal pytest idiom. S106: fakes.py's mock
+# BiffoAPIClient(token=...) is a fixed test fixture value, not a real
+# credential. (ANN is no longer selected, so it needs no per-file ignore.)
+"tests/**/*.py" = ["S101", "S106"]
 
 [tool.ruff.format]
 quote-style = "double"

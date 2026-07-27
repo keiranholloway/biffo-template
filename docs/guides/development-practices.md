@@ -42,6 +42,9 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | CI logs not retained for self-hosted runs, so a green check cannot be inspected to confirm *what it actually did* | visibility | biffo-template CI | biffo-template CI | **unfiled** |
 | — | `ci.yml` fires on both `push` and `pull_request`, leaving duplicate in-flight runs that make "are all checks done?" unanswerable to tooling | visibility · process | biffo-template CI | biffo-template CI | **unfiled** |
 | [#689](https://github.com/keiranholloway/biffo-template/issues/689) | `core diff` reports instance-authored files as `removed` — a false data-loss signal that `core upgrade` does not act on. Halted a deploy, produced an incorrect issue, and prompted a workaround hunt, all for something that would not happen | **visibility** | biffo-platform upgrade | biffo-template `cli/` | **open** |
+| — | Two plugin admin URLs both answered `200 text/html`, so they were read as the same failure. They were opposites: one carried `x-cache: Miss` and `<title>Ideation Engine — Admin</title>` (working), the other `server: AmazonS3` + `x-cache: Error` (a 404 the CDN rewrote). The proposed fix would have reverted #635 and broken admin access for every admin | **visibility** | biffo-template [#713](https://github.com/keiranholloway/biffo-template/issues/713) | biffo-plugin-idea-scout (missing `web-admin/dist`) | **corrected** — cost ~25m and one wrong issue |
+| — | An admin panel rendered a **500 as "No catalog entries yet."** The screenshot looked like a working feature with no data; only `read_network_requests` showed the status. A UI that renders a failed fetch as an empty collection makes a broken feature indistinguishable from an idle one | **visibility** | biffo-platform (Ideation admin) | biffo-plugin-ideation (surface fetch failures) | **unfiled** |
+| — | `scripts/js-dependency-audit.sh` ran under dash, whose `echo` interprets backslash escapes. Advisory payloads contain them, so `echo "$out" \| jq` mangled the JSON and every run reported INCONCLUSIVE — the gate green while scanning nothing, inside the very fix (#591) that exists to stop it failing open | **fail-open** | biffo-template CI | biffo-template `scripts/` | **fixed** ([#717](https://github.com/keiranholloway/biffo-template/pull/717)) |
 | — | A cut `core-v*` tag is not an available artifact: the tag existed at 0.136.0 while npm still served 0.135.0. Upgrading in that window carries a *partial* fix that deploys green and still fails | visibility · process | biffo-template release chain | biffo-template CI | **unfiled** — caught before it bit |
 | [#671](https://github.com/keiranholloway/biffo-template/issues/671) | `scripts/biffo.sh` execs `npx @biffo/cli@$(biffo.core.json .version)`, so an unpublished core version reds **every guard on every instance**. npm publish has been failing (E404 on PUT) since 0.131.0 — the upgrade PR's own version bump is what breaks its guards, so it can never go green | **boundary** · visibility | tabsii-platform [#241](https://github.com/tabsii-com/tabsii-platform/pull/241) | biffo-template (npm token + `publish-cli.yml`) | publishing **fixed** ([#669](https://github.com/keiranholloway/biffo-template/pull/669), npm now at 0.133.3); the coupling itself still **open** ([#667](https://github.com/keiranholloway/biffo-template/issues/667)) |
 | [#664](https://github.com/keiranholloway/biffo-template/issues/664) | The npm publish credential was issued with a **7-day expiry** and aged out mid-session — 0.130.0 published at 08:47, 0.131.0 failed at 08:50. Nothing warned before, during or after; the pipeline had no notion of its own credential having a lifetime | **visibility** | biffo-template release | biffo-template `publish-cli.yml` | **fixed** — replaced with OIDC trusted publishing, which has no long-lived credential ([#669](https://github.com/keiranholloway/biffo-template/pull/669)) |
@@ -80,19 +83,19 @@ shape recurring across unrelated components is a design problem, not bad luck.
 ### What the classes say
 
 > Counted from `docs/practices/evidence.jsonl`, not asserted. Regenerate with
-> `node scripts/practices-evidence.mjs --report`. **41 rows.**
+> `node scripts/practices-evidence.mjs --report`. **46 rows.**
 
 | Primary class | Rows |
 | --- | --- |
-| **visibility** | 13 |
+| **visibility** | 15 |
 | drift | 12 |
-| boundary | 7 |
+| boundary | 8 |
 | fail-open | 6 |
-| process | 3 |
+| process | 5 |
 
 **This page previously said "fail-open is the dominant shape — three of the five
 filed issues".** That was true of a five-row sample and was never revised as the
-sample grew eightfold. Counted across all 41 rows, fail-open is *fourth*. The
+sample grew ninefold. Counted across all 46 rows, fail-open is *fourth*. The
 error is instructive and is the reason the rows are now a dataset: **a narrative
 appended to by hand drifts from the evidence above it, silently, and reads
 exactly as confidently while doing so.**
@@ -109,7 +112,7 @@ what it does when it cannot run, and make "inconclusive" a distinct, visible
 outcome from "passed".** A gate that cannot report its own inconclusiveness is
 just one more thing that cannot say what it did.
 
-**What the dataset cannot yet tell us.** Of 41 rows, **1** carries a cost figure
+**What the dataset cannot yet tell us.** Of 46 rows, **1** carries a cost figure
 and **33** carry a date — all of them in a single month, 2026-07. So rows can be
 ranked by *frequency* but not yet by *cost*, and there is no longitudinal trend
 to read. Recording wall-clock on every new row is what unlocks the ranking this
@@ -264,6 +267,16 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**Read the headers, not the rendering.** Two plugin admin URLs both returned
+`200 text/html` and were read as one failure; `x-cache` and `<title>` — present
+in the first response fetched — proved they were opposites. The same session
+then read `200`-looking success from an admin panel that was actually serving a
+**500** rendered as an empty state. Both times the correct answer was one field
+away in a response already in hand, and both times it was skipped because the
+page *looked* consistent with the theory. **A rendered page is the weakest
+evidence available; it is the layer designed to look fine.**
+
 
 Each of these caught something that would otherwise have shipped.
 

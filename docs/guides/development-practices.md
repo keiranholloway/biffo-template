@@ -76,13 +76,41 @@ shape recurring across unrelated components is a design problem, not bad luck.
 
 ### What the classes say
 
-**fail-open is the dominant shape** — three of the five filed issues. A dependency
-audit that exits 0 when the registry is broken, a skeleton lockfile no gate
-audits, a CDN that turns 404 into 200. Each was individually reasonable; together
-they mean *a green pipeline is not evidence that a check ran*. That is the single
-most valuable lesson on this page, and it generalises: **when adding a gate, decide
-explicitly what it does when it cannot run, and make "inconclusive" a distinct,
-visible outcome from "passed".**
+> Counted from `docs/practices/evidence.jsonl`, not asserted. Regenerate with
+> `node scripts/practices-evidence.mjs --report`. **41 rows.**
+
+| Primary class | Rows |
+| --- | --- |
+| **visibility** | 13 |
+| drift | 12 |
+| boundary | 7 |
+| fail-open | 6 |
+| process | 3 |
+
+**This page previously said "fail-open is the dominant shape — three of the five
+filed issues".** That was true of a five-row sample and was never revised as the
+sample grew eightfold. Counted across all 41 rows, fail-open is *fourth*. The
+error is instructive and is the reason the rows are now a dataset: **a narrative
+appended to by hand drifts from the evidence above it, silently, and reads
+exactly as confidently while doing so.**
+
+**visibility is the dominant shape** — the truth was not observable. Masked
+errors, absent logs, unretained evidence, a preview that contradicts the
+operation it previews, a diagnostic that was confidently wrong. Nearly a third
+of every failure recorded here was not a component behaving incorrectly but a
+system unable to say what it had done.
+
+The fail-open lesson stands and is worth keeping, because it is a *sub-shape* of
+visibility rather than a rival to it: **when adding a gate, decide explicitly
+what it does when it cannot run, and make "inconclusive" a distinct, visible
+outcome from "passed".** A gate that cannot report its own inconclusiveness is
+just one more thing that cannot say what it did.
+
+**What the dataset cannot yet tell us.** Of 41 rows, **1** carries a cost figure
+and **33** carry a date — all of them in a single month, 2026-07. So rows can be
+ranked by *frequency* but not yet by *cost*, and there is no longitudinal trend
+to read. Recording wall-clock on every new row is what unlocks the ranking this
+page exists to support (§ Adding a row).
 
 **boundary and drift are both ownership failures.** #652 is two ADRs claiming one
 URL prefix; #621 is one concept with two implementations. Neither is a coding
@@ -574,6 +602,10 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 Add one when a defect costs more than ~30 minutes, or when you catch yourself
 saying "how did that ever work?".
 
+0. **Record what it cost**, in the row, as `cost 1h 20m`. One row in
+   forty-one carries a cost today, which is why nothing on this page can be
+   ranked by impact — only by frequency. This is the single most valuable field
+   and the only one that cannot be recovered later.
 1. Add a scoreboard row: the failure *condition* (not the symptom), its class,
    where it surfaced, where the fix lands, and a link.
 2. If the fix repo differs from the surfacing repo, say so — that gap is the
@@ -588,6 +620,14 @@ saying "how did that ever work?".
    *should* have used and did not, and why you missed it: a skill nobody invokes
    is indistinguishable from one that does not exist, and that is a fixable
    defect in the skill.
+
+Then re-extract, so the analysis stays derived rather than asserted:
+
+```bash
+node scripts/practices-evidence.mjs --extract   # table -> docs/practices/evidence.jsonl
+node scripts/practices-evidence.mjs --enrich    # recover dates from the linked issues
+node scripts/practices-evidence.mjs --report    # regenerate the counts above
+```
 
 Keep entries falsifiable. "Testing could be better" helps nobody; "the audit gate
 exits 0 when the registry returns non-JSON, so a green check does not mean the

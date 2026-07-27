@@ -935,3 +935,147 @@ describe('renderSessions', () => {
     expect(html).toContain('not comparable yet')
   })
 })
+
+// @ts-expect-error -- plain .mjs, same arrangement as above.
+import {
+  analyse,
+  extractRefs,
+  extractRows,
+  parseClasses,
+  parseCost,
+  parseStatus,
+  mergeExtracted,
+} from '../../../scripts/practices-evidence.mjs'
+
+describe('extractRefs', () => {
+  it('resolves a bare reference to the template', () => {
+    expect(extractRefs('| [#591](x) | thing |')).toEqual(['keiranholloway/biffo-template#591'])
+  })
+
+  it('resolves a prefixed reference to its own repo', () => {
+    expect(extractRefs('| [tabsii#252](x) |')).toEqual(['tabsii-com/tabsii-platform#252'])
+    expect(extractRefs('| [biffo-runners#2](x) |')).toEqual(['keiranholloway/biffo-runners#2'])
+  })
+
+  it('keeps every distinct reference in order, deduplicated', () => {
+    expect(extractRefs('#664 then #669 then #664 again')).toEqual([
+      'keiranholloway/biffo-template#664',
+      'keiranholloway/biffo-template#669',
+    ])
+  })
+})
+
+describe('parseClasses', () => {
+  /**
+   * Rows carry up to three tags, which is why the tag counts never summed to
+   * the row count and why nothing could be ranked. The first tag is the shape
+   * the author reached for first; the rest are kept, not discarded.
+   */
+  it('takes the first tag as primary and keeps the rest', () => {
+    const { primary, secondary } = parseClasses('**fail-open** · visibility')
+    expect(primary).toBe('fail-open')
+    expect(secondary).toEqual(['visibility'])
+  })
+
+  it('reads tags in the order they appear, not the order they are defined', () => {
+    expect(parseClasses('visibility · boundary').primary).toBe('visibility')
+    expect(parseClasses('boundary · visibility').primary).toBe('boundary')
+  })
+
+  it('returns null for a cell naming no class', () => {
+    expect(parseClasses('Meaning').primary).toBeNull()
+  })
+})
+
+describe('parseCost', () => {
+  it('reads a stated wall-clock cost in minutes', () => {
+    expect(parseCost('cost **1h 44m** on one queued job')).toBe(104)
+    expect(parseCost('cost 30m')).toBe(30)
+  })
+
+  /**
+   * Absent cost is null, never zero. A defect nobody timed is not a free
+   * defect, and averaging it in as one understates every ranking built on it.
+   */
+  it('returns null when the row states no cost', () => {
+    expect(parseCost('a row with no cost figure at all')).toBeNull()
+  })
+})
+
+describe('parseStatus', () => {
+  it('prefers the more specific status', () => {
+    expect(parseStatus('**fixed downstream** (idea-scout#15); skeleton **open**')).toBe(
+      'fixed downstream',
+    )
+    expect(parseStatus('**partly fixed** — 1 residual')).toBe('partly fixed')
+    expect(parseStatus('**open**')).toBe('open')
+  })
+})
+
+describe('extractRows / analyse', () => {
+  const table = [
+    '| # | Failure condition | Class | Surfaced in | Fix lands in | Status |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| [#1](x) | a gate passes when it cannot run | **fail-open** · visibility | CI | template | **open** |',
+    '| — | two ADRs claim one prefix | **boundary** | plugin | template | **unfiled** |',
+    '| [#3](x) | truth not observable | visibility | instance | template | **fixed** |',
+    '| — | masked error, no logs retained | visibility | CI | template | **unfiled** |',
+  ].join('\n')
+
+  it('parses each scoreboard row once, ignoring the header', () => {
+    const rows = extractRows(table)
+    expect(rows).toHaveLength(4)
+    expect(rows[0].class).toBe('fail-open')
+    expect(rows[0].alsoClass).toEqual(['visibility'])
+    expect(rows[1].refs).toEqual([])
+  })
+
+  /**
+   * The reason this file exists. The page asserted "fail-open is the dominant
+   * shape" from a 5-row sample and never revised it; at 41 rows fail-open is
+   * near the bottom. A generated analysis cannot disagree with its own rows.
+   */
+  it('derives the dominant class from the rows rather than asserting it', () => {
+    const a = analyse(extractRows(table))
+    expect(a.rows).toBe(4)
+    expect(a.dominant).toBe('visibility')
+    expect(a.dominantCount).toBe(2)
+    expect(a.byClass['fail-open']).toBe(1)
+  })
+
+  it('reports cost and date coverage rather than implying completeness', () => {
+    const a = analyse(extractRows(table))
+    expect(a.coverage.withCost).toBe(0)
+    expect(a.coverage.withDate).toBe(0)
+    expect(a.coverage.costHours).toBeNull()
+  })
+})
+
+describe('mergeExtracted', () => {
+  /**
+   * Re-extracting after adding one row must not discard the dates recovered for
+   * the other forty — each cost an API call, and the analysis would quietly
+   * report worse coverage than it actually has.
+   */
+  it('carries forward a recovered date the markdown cannot state', () => {
+    const merged = mergeExtracted(
+      [{ summary: 'a gate passes when it cannot run', date: null, costMinutes: null }],
+      [{ summary: 'a gate passes when it cannot run', date: '2026-07-14', costMinutes: 104 }],
+    )
+    expect(merged[0].date).toBe('2026-07-14')
+    expect(merged[0].costMinutes).toBe(104)
+  })
+
+  it('lets the markdown win where it does state a value', () => {
+    const merged = mergeExtracted(
+      [{ summary: 'x', date: null, costMinutes: 30 }],
+      [{ summary: 'x', date: '2026-07-01', costMinutes: 999 }],
+    )
+    expect(merged[0].costMinutes).toBe(30)
+  })
+
+  it('leaves a genuinely new row untouched', () => {
+    const merged = mergeExtracted([{ summary: 'brand new', date: null, costMinutes: null }], [])
+    expect(merged[0].date).toBeNull()
+  })
+})

@@ -119,6 +119,31 @@ template's integration test, and currently the only one.
 
 ---
 
+## Skills used
+
+Skills are meant to be iterated, and they cannot be iterated on impressions.
+Every session that invokes one records it here, honestly: **worked** (followed as
+written, produced the intended result), **partial** (useful, but required
+deviation or workaround), or **failed** (did not achieve the goal, or misled).
+
+For anything not **worked**, the *why* is the whole value — the specific step
+that misfired, not a verdict.
+
+| Skill | Outcome | Notes |
+| --- | --- | --- |
+| `biffo-workflow` | **partial** | Followed for six PRs; the worktree/verify/honest-push steps all held. Step 7 (`gh pr merge --squash`) assumes you can win the up-to-date race: `dev` was taking a merge every 3–5 min against a ~2.5 min CI cycle, so the branch was `BEHIND` on every attempt and four rebases lost it. Fixed by enabling repo auto-merge; **the skill still documents the losing manual path** and should gain an auto-merge step. |
+| `claude-in-chrome` | **worked** | The only way the reported bug reproduced. `curl` returned clean `401` JSON and looked healthy — the HTML only appears on an *authenticated* request, because 401 passes the CDN untouched while 403/404 are rewritten. An unauthenticated check would have concluded "works fine" and closed #647 unfound. |
+| `biffo-verify` | **worked** | Written mid-session, then used on #652: its §1 "establish current state first" is what caught that the planned step 3 would have collapsed ADR-0014 §7's deliberate two-axis authorization boundary. |
+
+### What the outcomes say
+
+The one **partial** is not a documentation nit. `biffo-workflow` encoded a merge
+step that silently assumed a quiet integration branch, and the cost only appeared
+under concurrency — four wasted rebase cycles on a single PR before the real fix
+(a repo setting) was even considered. **A skill that works alone and fails under
+concurrency reads as user error until someone tallies it**, which is the argument
+for this table existing.
+
 ## What went well — practices that earned their keep
 
 Each of these caught something that would otherwise have shipped.
@@ -264,6 +289,11 @@ saying "how did that ever work?".
    point of the "where the work lands" table.
 3. If a practice caught it, add it to *what went well* with the specific
    evidence. If a practice would have caught it, add it to *needs more thought*.
+4. Record every **skill** you invoked in *Skills used*, with an honest outcome —
+   and for anything not `worked`, the step that misfired. Also record a skill you
+   *should* have used and did not, and why you missed it: a skill nobody invokes
+   is indistinguishable from one that does not exist, and that is a fixable
+   defect in the skill.
 
 Keep entries falsifiable. "Testing could be better" helps nobody; "the audit gate
 exits 0 when the registry returns non-JSON, so a green check does not mean the

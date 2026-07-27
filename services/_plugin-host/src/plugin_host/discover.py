@@ -23,12 +23,27 @@ from pathlib import Path
 
 
 @dataclass(frozen=True)
+class DeclaredRoute:
+    """One manifest-declared ``api_routes`` entry (ADR-0003).
+
+    These are NOT served by the plugin's own app — Core generates handlers for
+    them from the table declaration. The host only needs to recognise them so it
+    can forward them to Core (#652); it never implements them.
+    """
+
+    method: str
+    path: str
+
+
+@dataclass(frozen=True)
 class DiscoveredPlugin:
     name: str
     app_ref: str  # "module:attr"
     required_group: str
     admin_app_ref: str | None = None  # "module:attr" or None if admin_ingress not declared
     admin_required_group: str | None = None  # Cognito group or None if admin_ingress not declared
+    #: Manifest-declared api_routes, forwarded to Core rather than served here.
+    api_routes: tuple[DeclaredRoute, ...] = ()
 
 
 def discover_plugins(services_root: str | Path) -> list[DiscoveredPlugin]:
@@ -68,6 +83,12 @@ def discover_plugins(services_root: str | Path) -> list[DiscoveredPlugin]:
                 admin_app_ref = None
                 admin_required_group = None
 
+        declared = tuple(
+            DeclaredRoute(method=str(r["method"]).upper(), path=str(r["path"]))
+            for r in manifest.get("api_routes") or []
+            if isinstance(r, dict) and r.get("method") and r.get("path")
+        )
+
         found.append(
             DiscoveredPlugin(
                 name=name,
@@ -75,6 +96,7 @@ def discover_plugins(services_root: str | Path) -> list[DiscoveredPlugin]:
                 required_group=required_group,
                 admin_app_ref=admin_app_ref,
                 admin_required_group=admin_required_group,
+                api_routes=declared,
             )
         )
     return found

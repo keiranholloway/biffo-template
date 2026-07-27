@@ -30,6 +30,9 @@ from biffo_plugin_sdk import acting_as_plugin
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
+from .discover import DeclaredRoute
+from .forward import DeclaredRouteForwarder, forwarding_gate
+
 #: The plugin whose router is handling the current request. None outside a gated
 #: plugin request. Bound alongside the SDK's ``acting_as_plugin`` (which the
 #: outbound Core transport actually reads to assert plugin identity, ADR-0021 §1a).
@@ -61,6 +64,9 @@ class MountedPlugin:
     required_group: str
     admin_app: Any | None = None
     admin_required_group: str | None = None
+    #: Manifest-declared api_routes (ADR-0003). Served by Core, not by the
+    #: plugin — the host forwards them (#652). Empty means nothing to forward.
+    api_routes: tuple[DeclaredRoute, ...] = ()
 
 
 def _founder_token(headers: list[tuple[bytes, bytes]]) -> str:
@@ -196,7 +202,12 @@ def _normalize_bare_admin_paths(app: Any, bare_paths: frozenset[str]) -> Callabl
     return normalized
 
 
-def build_host(plugins: list[MountedPlugin], *, authorize: Authorizer) -> Any:
+def build_host(
+    plugins: list[MountedPlugin],
+    *,
+    authorize: Authorizer,
+    send_to_core: Any | None = None,
+) -> Any:
     """The shared plugin-host ASGI app: each plugin mounted, gated, under ``/<name>``
     and optionally under ``/<name>/admin`` if an admin ingress is declared.
 
@@ -224,10 +235,20 @@ def build_host(plugins: list[MountedPlugin], *, authorize: Authorizer) -> Any:
                 )
             )
             bare_admin_paths.add(f"/{p.name}/admin")
-        # User-facing app mount
-        routes.append(
-            Mount(f"/{p.name}", app=group_gate(p.app, p.required_group, p.name, authorize))
-        )
+        # User-facing app mount. When the plugin declares api_routes, the
+        # forwarder wraps the gated app OUTSIDE the group gate: those routes are
+        # authorised by their table's own permissions in Core (ADR-0004), and
+        # gating them on the plugin's user group as well would reject the admin
+        # an admin-only required_role exists to admit (#652). Everything else
+        # falls through to the gated plugin app untouched.
+        user_app = group_gate(p.app, p.required_group, p.name, authorize)
+        if p.api_routes and send_to_core is not None:
+            user_app = forwarding_gate(
+                user_app,
+                DeclaredRouteForwarder(p.name, p.api_routes, send_to_core=send_to_core),
+                token_of=_founder_token,
+            )
+        routes.append(Mount(f"/{p.name}", app=user_app))
     host = Starlette(routes=routes)
     if not bare_admin_paths:
         return host

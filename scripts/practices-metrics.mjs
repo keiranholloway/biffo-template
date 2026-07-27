@@ -119,6 +119,12 @@ export const OPAQUE_PATHS =
  * available that separates "built the product" from "fought the toolchain"
  * without anyone filling in a timesheet.
  */
+/**
+ * A merge that carries the template into an instance. Platform work wherever it
+ * lands, because it maintains the machine rather than advancing the product.
+ */
+export const CORE_UPGRADE_SUBJECT = /upgrade biffo core|core[- ]upgrade/i
+
 export const WORK_CLASS = {
   feat: 'delivery',
   fix: 'rework',
@@ -154,6 +160,28 @@ export function classifyWork(subject) {
 }
 
 /**
+ * Which side of the house does *this merge* serve?
+ *
+ * The repo is the default answer, but it is not always the right one. An
+ * instance repo like `tabsii-platform` is simultaneously the product's backend
+ * **and** a Biffo instance, so maintenance of the machine lands inside a product
+ * repo: 30 of its 230 merges in the first 90-day window were core upgrades —
+ * 7.8% of all product-repo merges — every one of them counted as product
+ * delivery by the repo-level cut.
+ *
+ * That blur is not only a measurement artefact. A boundary where platform churn
+ * structurally lands in product repos is a candidate root cause in its own
+ * right, and is filed as such rather than merely corrected for here.
+ *
+ * @param {string} subject
+ * @param {string | undefined} repoSide
+ */
+export function classifyMergeSide(subject, repoSide) {
+  if (CORE_UPGRADE_SUBJECT.test(subject)) return 'platform'
+  return repoSide ?? null
+}
+
+/**
  * The work-mix of a set of merges — the "are we building or maintaining?" view.
  *
  * `toilRatio` is the SRE framing: toil plus rework is effort that did not add
@@ -164,22 +192,45 @@ export function classifyWork(subject) {
  *
  * @param {Array<{subject: string}>} commits
  */
-export function summariseWorkMix(commits) {
-  if (commits.length === 0) {
-    return { merges: 0, delivery: null, rework: null, toil: null, quality: null, docs: null, unconventional: null, toilRatio: null }
+export function summariseWorkMix(commits, repoSide) {
+  const empty = {
+    merges: 0,
+    delivery: null, rework: null, toil: null, quality: null, docs: null, unconventional: null,
+    toilRatio: null,
+    counts: { delivery: 0, rework: 0, toil: 0, quality: 0, docs: 0, unconventional: 0, other: 0 },
+    sideCounts: { platform: 0, product: 0 },
+    productDelivery: 0,
   }
-  const count = (kind) => commits.filter((c) => classifyWork(c.subject) === kind).length
-  const toil = count('toil')
-  const rework = count('rework')
+  if (commits.length === 0) return empty
+
+  const counts = { delivery: 0, rework: 0, toil: 0, quality: 0, docs: 0, unconventional: 0, other: 0 }
+  const sideCounts = { platform: 0, product: 0 }
+  let productDelivery = 0
+
+  for (const commit of commits) {
+    const kind = classifyWork(commit.subject)
+    counts[kind] = (counts[kind] ?? 0) + 1
+    const side = classifyMergeSide(commit.subject, repoSide)
+    if (side) sideCounts[side] += 1
+    if (side === 'product' && kind === 'delivery') productDelivery += 1
+  }
+
+  const n = commits.length
   return {
-    merges: commits.length,
-    delivery: rate(count('delivery'), commits.length),
-    rework: rate(rework, commits.length),
-    toil: rate(toil, commits.length),
-    quality: rate(count('quality'), commits.length),
-    docs: rate(count('docs'), commits.length),
-    unconventional: rate(count('unconventional'), commits.length),
-    toilRatio: rate(toil + rework, commits.length),
+    merges: n,
+    delivery: rate(counts.delivery, n),
+    rework: rate(counts.rework, n),
+    toil: rate(counts.toil, n),
+    quality: rate(counts.quality, n),
+    docs: rate(counts.docs, n),
+    unconventional: rate(counts.unconventional, n),
+    toilRatio: rate(counts.toil + counts.rework, n),
+    // Absolute counts so the estate rollup can sum rather than reconstruct
+    // totals from percentages — that reconstruction was lossy and let a repo
+    // with three merges pull as hard as one with four hundred.
+    counts,
+    sideCounts,
+    productDelivery,
   }
 }
 
@@ -635,8 +686,12 @@ export function summariseRepo(repo, data) {
     mergedPrs: merged.length,
     // Are we building the product or maintaining the machine?
     workMix: rework
-      ? summariseWorkMix(rework.commits)
-      : { merges: null, delivery: null, rework: null, toil: null, quality: null, docs: null, unconventional: null, toilRatio: null },
+      ? summariseWorkMix(rework.commits, repo.side)
+      : {
+          merges: null, delivery: null, rework: null, toil: null, quality: null,
+          docs: null, unconventional: null, toilRatio: null,
+          counts: null, sideCounts: null, productDelivery: null,
+        },
     // Consistency — two metrics, never one. See prChurn().
     ciFailureRate: rate(measured.filter((c) => c.ciFailed).length, measured.length),
     revisionsP50: percentile(
@@ -698,7 +753,7 @@ export function summariseRepo(repo, data) {
  * @param {Record<string, any>} repos
  */
 export function summariseEstate(repos) {
-  const usable = Object.values(repos).filter((r) => r && !r.error && r.workMix?.merges)
+  const usable = Object.values(repos).filter((r) => r && !r.error && r.workMix?.counts)
   if (usable.length === 0) {
     return {
       merges: 0,
@@ -706,62 +761,48 @@ export function summariseEstate(repos) {
       productShare: null,
       toilRatio: null,
       productFeatureShare: null,
+      contentionHours: null,
       bySide: {},
       note: 'merges are a proxy for effort, not a measure of time',
     }
   }
 
-  const total = usable.reduce((sum, r) => sum + r.workMix.merges, 0)
-  const sideTotal = (side) =>
-    usable.filter((r) => r.side === side).reduce((sum, r) => sum + r.workMix.merges, 0)
+  const sum = (fn) => usable.reduce((total, r) => total + fn(r), 0)
+  const merges = sum((r) => r.workMix.merges)
+  const platform = sum((r) => r.workMix.sideCounts.platform)
+  const product = sum((r) => r.workMix.sideCounts.product)
+  const toil = sum((r) => r.workMix.counts.toil)
+  const rework = sum((r) => r.workMix.counts.rework)
 
-  // Reconstruct absolute counts from each repo's shares so the estate figure is
-  // merge-weighted rather than an average of averages, which would let a repo
-  // with three merges swing the headline as hard as one with four hundred.
-  const weighted = (kind) =>
-    usable.reduce((sum, r) => sum + ((r.workMix[kind] ?? 0) / 100) * r.workMix.merges, 0)
-
+  /**
+   * Per-side rollup. A repo contributes to *both* sides when its merges do —
+   * an instance repo carries core upgrades (platform) alongside features
+   * (product), and attributing the whole repo to one side is the error this
+   * function exists to remove.
+   */
   const bySide = {}
   for (const side of ['platform', 'product']) {
-    const rows = usable.filter((r) => r.side === side)
-    const n = rows.reduce((sum, r) => sum + r.workMix.merges, 0)
+    const n = sum((r) => r.workMix.sideCounts[side])
     if (!n) continue
-    const w = (kind) =>
-      rate(
-        rows.reduce((sum, r) => sum + ((r.workMix[kind] ?? 0) / 100) * r.workMix.merges, 0),
-        n,
-      )
+    // Kind counts are not split by side (a merge has one kind and one side, but
+    // the cross-tab is only tracked for the product-delivery cell that the
+    // headline needs). Shares here are of that side's merges.
     bySide[side] = {
       merges: n,
-      delivery: w('delivery'),
-      rework: w('rework'),
-      toil: w('toil'),
-      toilRatio: rate(
-        rows.reduce(
-          (sum, r) =>
-            sum + (((r.workMix.toil ?? 0) + (r.workMix.rework ?? 0)) / 100) * r.workMix.merges,
-          0,
-        ),
-        n,
-      ),
+      share: rate(n, merges),
     }
   }
 
-  const productDelivery = usable
-    .filter((r) => r.side === 'product')
-    .reduce((sum, r) => sum + ((r.workMix.delivery ?? 0) / 100) * r.workMix.merges, 0)
-
   return {
-    merges: total,
-    platformShare: rate(sideTotal('platform'), total),
-    productShare: rate(sideTotal('product'), total),
+    merges,
+    platformShare: rate(platform, merges),
+    productShare: rate(product, merges),
     // SRE framing: toil + rework is effort that added no product value.
-    toilRatio: rate(weighted('toil') + weighted('rework'), total),
-    // The headline. Features shipped in the product, as a share of ALL merges.
-    productFeatureShare: rate(productDelivery, total),
-    contentionHours: round1(
-      usable.reduce((sum, r) => sum + (r.contention?.greenButUnmergedHours ?? 0), 0),
-    ),
+    toilRatio: rate(toil + rework, merges),
+    // The headline. Features shipped in the product, as a share of ALL merges —
+    // now excluding core upgrades that land in a product repo.
+    productFeatureShare: rate(sum((r) => r.workMix.productDelivery), merges),
+    contentionHours: round1(sum((r) => r.contention?.greenButUnmergedHours ?? 0)),
     bySide,
     note: 'merges are a proxy for effort, not a measure of time',
   }

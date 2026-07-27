@@ -183,18 +183,17 @@ jobs:
           echo "OK: tarball ships _skeletons ($skeleton_files entries)"
           rm -f "$tarball" "$listing"
 
-      # Fails loudly (not silently) when NPM_TOKEN is absent, so a release that
-      # cannot authenticate is a red run rather than a green no-op.
-      - name: Require NPM_TOKEN
+      # Trusted publishing (OIDC) needs a recent npm: support landed in 11.5.1,
+      # and Node 22 still bundles npm 10.x. Without this the CLI never exchanges
+      # the OIDC token, silently falls back to looking for a credential that no
+      # longer exists, and the publish fails with a 404 that reads like a
+      # missing package (#664). Pin-free `@latest` is deliberate — this is the
+      # publish path, and an npm too old to authenticate is the failure mode.
+      - name: Use an npm that supports trusted publishing
         if: steps.guard.outputs.is_template == 'true' && !inputs.dry_run
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          if [ -z "${NPM_TOKEN:-}" ]; then
-            echo "::error::Secret NPM_TOKEN is not set on this repository."
-            echo "::error::Create an npm automation token with publish rights to 'biffo' and add it as the NPM_TOKEN repository secret."
-            exit 1
-          fi
+          npm install -g npm@latest
+          npm --version
 
       # Publish, and make the failure legible.
       #
@@ -215,7 +214,15 @@ jobs:
         if: steps.guard.outputs.is_template == 'true' && !inputs.dry_run
         working-directory: cli
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # No NODE_AUTH_TOKEN: this package publishes via npm trusted
+          # publishing (OIDC). npm exchanges the `id-token: write` credential
+          # this job already requests — the same one provenance uses — for a
+          # short-lived registry token, so there is no long-lived secret to
+          # expire, rotate, or leak. The trust is registered on the package
+          # itself: npmjs.com → @biffo/cli → Settings → Trusted Publisher,
+          # naming this repository and this workflow filename. Renaming this
+          # file, or publishing from a different workflow, breaks publishing
+          # until that registration is updated to match.
           NPM_CONFIG_PROVENANCE: 'true'
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ inputs.tag || github.ref_name }}

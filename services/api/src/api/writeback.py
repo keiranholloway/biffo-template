@@ -146,6 +146,32 @@ def _derived_value(derived: DerivedValue, *, tenant_id: str, scope: dict[str, An
     return scope.get("id")
 
 
+def _tenant_scope(target: WriteBackTarget, *, tenant_id: str) -> Any:
+    """The value this target's rows are scoped by on their tenant column.
+
+    **Not necessarily ADR-0001's seam string.** That seam ("default") is Core's
+    own value space; a table an instance DDL-imported may key tenancy on
+    something else entirely — tabsii's `tabsii.leads.tenant_id` is a UUID FK to
+    `tabsii.tenants`, which is exactly what `require_tabsii_tenant_context`
+    exists to resolve for the request path.
+
+    So the target's own declaration wins: whatever `derived` says fills the
+    tenant column on a create is what an update must match on. Falling back to
+    the seam keeps a target that declares nothing behaving as before.
+
+    A create never needed this — it applies every derived value when building
+    the row — which is why only the update path was wrong.
+    """
+    for derived in target.derived:
+        if derived.column != "tenant_id":
+            continue
+        if derived.kind == "literal":
+            return derived.value
+        if derived.kind == "from_tenant":
+            return tenant_id
+    return tenant_id
+
+
 def _apply_overwrite(column: WriteBackColumn, existing: Any, incoming: Any) -> Any:
     """What an update writes, given what is already there.
 
@@ -571,7 +597,7 @@ async def _update_row(
     row = (
         await db.execute(
             select(target.model).where(
-                target.model.tenant_id == tenant_id,  # type: ignore[attr-defined]
+                target.model.tenant_id == _tenant_scope(target, tenant_id=tenant_id),  # type: ignore[attr-defined]
                 column == row_id,
             )
         )

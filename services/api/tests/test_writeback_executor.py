@@ -433,3 +433,73 @@ def test_an_update_whose_trigger_carries_no_row_id_is_denied(app, client):
     body = _post(client, run_id).json()
     assert body["status"] == "denied"
     assert "no matching row" in body["reason"]
+
+
+# ── The row's tenant is the instance's value space, not the seam's ───────────
+#
+# ADR-0001's `tenant_id` seam is the string "default" for Core's own tables. A
+# table an instance DDL-imported may key tenancy on something else entirely —
+# tabsii's `tabsii.leads.tenant_id` is a UUID FK to `tabsii.tenants`, which is
+# what `dependencies.require_tabsii_tenant_context` exists to resolve.
+#
+# The executor must therefore scope by what the TARGET declares, not by the
+# calling principal's seam value. Without this the selection binds "default" to
+# the row's tenant column and the write fails for a reason that reads, in the
+# audit log, exactly like a legitimate authorization refusal.
+
+
+def _foreign_tenant_target() -> wb.WriteBackTarget:
+    """A target whose rows live under a tenant id unrelated to the seam."""
+    return _target(
+        derived=(
+            wb.literal("tenant_id", "tenant-in-another-value-space"),
+            wb.from_scope("brand_id", "brand"),
+            wb.literal("source", "agent"),
+        ),
+    )
+
+
+def test_an_update_finds_the_row_by_the_targets_declared_tenant(app, client):
+    _, factory = app
+    wb._targets.clear()  # noqa: SLF001
+    wb.register_writeback_target(_foreign_tenant_target())
+
+    existing = Note(
+        id="note-42",
+        tenant_id="tenant-in-another-value-space",
+        email="old@b.com",
+        notes="Typed by a person",
+    )
+    run_id = asyncio.run(
+        _seed(
+            factory,
+            writeback={"table": "wb_notes", "operation": "update", "columns": {"notes": "y"}},
+            result={"notes": "And the agent's view"},
+            existing_note=existing,
+            input_payload={"note_id": "note-42"},
+        )
+    )
+
+    body = _post(client, run_id).json()
+    assert body["status"] == "written", body
+
+    async def _read() -> Note:
+        async with factory() as session:
+            return (await session.execute(select(Note).where(Note.id == "note-42"))).scalar_one()
+
+    assert asyncio.run(_read()).notes == "Typed by a person\n\nAnd the agent's view"
+
+
+def test_a_create_files_the_row_under_the_targets_declared_tenant(app, client):
+    _, factory = app
+    wb._targets.clear()  # noqa: SLF001
+    wb.register_writeback_target(_foreign_tenant_target())
+    run_id = asyncio.run(_seed(factory))
+
+    assert _post(client, run_id).json()["status"] == "written"
+
+    async def _read() -> Note:
+        async with factory() as session:
+            return (await session.execute(select(Note))).scalar_one()
+
+    assert asyncio.run(_read()).tenant_id == "tenant-in-another-value-space"

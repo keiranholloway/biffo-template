@@ -62,6 +62,7 @@ from ..schemas.agent_run import (
     CreateAgentRunRequest,
     ThreadMessagesResponse,
 )
+from ..writeback_targets import apply_writeback_output_tool
 
 logger = Logger()
 
@@ -101,12 +102,18 @@ async def request_agent_run(
     (ADR-0015 §6). The run is aborted rather than created with a broken or
     half-substituted prompt, the same fail-loud posture as the depth ceiling.
     """
+    # The result contract for a write-back run is Core's to state, generated from
+    # the registered target rather than accepted from the caller (ADR-0027 §6) —
+    # so the model is required to return typed columns, and is never offered a
+    # field outside the ceiling. A snapshot with no write-back is untouched.
+    snapshot = apply_writeback_output_tool(body.definition_snapshot)
+
     try:
         run = await create_run(
             db,
             tenant_id=principal.tenant_id,
             agent_name=body.agent_name,
-            definition_snapshot=body.definition_snapshot,
+            definition_snapshot=snapshot,
             input_payload=body.input_payload,
             causation_id=body.causation_id,
             depth=body.depth,

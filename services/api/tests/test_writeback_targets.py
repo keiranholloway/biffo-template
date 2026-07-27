@@ -208,3 +208,73 @@ async def test_an_absent_user_id_never_reaches_the_provider():
 
     wb.register_principal_session_provider(provider)
     assert await wb.bind_principal_session(_DB, "") is False
+
+
+# ── The generated result contract (ADR-0027 §6) ───────────────────────────────
+
+
+def _rich_target() -> wb.WriteBackTarget:
+    return _target(
+        columns=(
+            wb.WriteBackColumn(name="email", label="Email", type="email", required=True),
+            wb.WriteBackColumn(name="notes", label="Notes", type="textarea"),
+            wb.WriteBackColumn(
+                name="rating", label="Rating", type="enum", values=("hot", "warm", "cold")
+            ),
+        ),
+    )
+
+
+def test_the_generated_schema_offers_exactly_the_declared_columns():
+    wb.register_writeback_target(_rich_target())
+    tool = wb.output_tool_for_writeback({"table": "leads", "columns": {"email": "x", "notes": "y"}})
+    assert tool is not None
+    fn = tool["function"]
+    assert fn["name"] == "submit_leads_record"
+    params = fn["parameters"]
+    # `rating` was not declared by this workflow, so the model is never offered it.
+    assert set(params["properties"]) == {"email", "notes"}
+    assert params["required"] == ["email"]
+    assert params["additionalProperties"] is False
+
+
+def test_the_model_is_never_offered_a_column_outside_the_ceiling():
+    wb.register_writeback_target(_rich_target())
+    # Even if a declaration names something the target does not allow, the schema
+    # is built from the *target*, so the extra column simply does not appear.
+    tool = wb.output_tool_for_writeback(
+        {"table": "leads", "columns": {"email": "x", "brand_id": "whatever"}}
+    )
+    assert tool is not None
+    assert set(tool["function"]["parameters"]["properties"]) == {"email"}
+
+
+def test_an_enum_column_constrains_the_models_choices():
+    wb.register_writeback_target(_rich_target())
+    tool = wb.output_tool_for_writeback({"table": "leads", "columns": {"rating": "x"}})
+    assert tool is not None
+    assert tool["function"]["parameters"]["properties"]["rating"]["enum"] == ["hot", "warm", "cold"]
+
+
+def test_no_writeback_or_an_unregistered_table_generates_nothing():
+    assert wb.output_tool_for_writeback(None) is None
+    assert wb.output_tool_for_writeback({}) is None
+    assert wb.output_tool_for_writeback({"table": "salaries", "columns": {"amount": "1"}}) is None
+
+
+def test_apply_overrides_whatever_the_plugin_supplied():
+    wb.register_writeback_target(_rich_target())
+    snapshot = {
+        "writeback": {"table": "leads", "columns": {"email": "x"}},
+        # A plugin cannot decide the shape of a row Core is about to write.
+        "output_tools": [{"function": {"name": "submit_anything", "parameters": {}}}],
+    }
+    applied = wb.apply_writeback_output_tool(snapshot)
+    assert [t["function"]["name"] for t in applied["output_tools"]] == ["submit_leads_record"]
+    # The original is not mutated — the run records what Core resolved.
+    assert snapshot["output_tools"][0]["function"]["name"] == "submit_anything"
+
+
+def test_a_snapshot_with_no_writeback_is_returned_untouched():
+    snapshot = {"agent_name": "researcher", "output_tools": [{"function": {"name": "keep_me"}}]}
+    assert wb.apply_writeback_output_tool(snapshot) is snapshot

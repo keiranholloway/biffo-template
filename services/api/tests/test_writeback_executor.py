@@ -13,6 +13,7 @@ refusal aborts) and behaviourally in the instance's real-PostgreSQL E2E.
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import AsyncGenerator, Generator
 from typing import Any
 
@@ -26,7 +27,7 @@ from api.models.orchestration import ActionLog, WorkflowDefinition, WorkflowRun
 from api.routers import internal_orchestration
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import String, select
+from sqlalchemy import String, Uuid, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.pool import StaticPool
@@ -503,3 +504,81 @@ def test_a_create_files_the_row_under_the_targets_declared_tenant(app, client):
             return (await session.execute(select(Note))).scalar_one()
 
     assert asyncio.run(_read()).tenant_id == "tenant-in-another-value-space"
+
+
+# ── An instance's row id is not necessarily a string ─────────────────────────
+#
+# Core's own tables use String(36) primary keys; tabsii's `tabsii.*` tables use
+# real UUIDs. The written row's id travels into the audit log's JSON `response`
+# column, and a raw UUID raises on insert.
+#
+# What makes that worse than a logging nuisance: the audit row is written in the
+# SAME transaction as the business write, so the failure rolls the successful
+# write back with it. The feature silently does nothing, and the run history
+# shows a 500 rather than the write it actually performed.
+
+
+class UuidNote(Base):
+    """A target whose primary key is a real UUID, as an imported table's is.
+
+    Deliberately not a ``TenantScopedModel``: that base declares a ``str`` id, and
+    the whole point here is a row whose id is not one — which is exactly the
+    shape an ADR-0005 DDL-imported table has.
+    """
+
+    __tablename__ = "wb_uuid_notes"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+
+def test_a_uuid_row_id_does_not_roll_back_the_write_it_records(app, client):
+    _, factory = app
+    wb._targets.clear()  # noqa: SLF001
+    wb.register_writeback_target(
+        wb.WriteBackTarget(
+            table="wb_uuid_notes",
+            model=UuidNote,
+            label="UUID note",
+            permission_code="notes.update",
+            allowed_principals=("system:orchestrator",),
+            columns=(wb.WriteBackColumn(name="notes", label="Notes", overwrite="always"),),
+            operations=("update",),
+            derived=(wb.from_tenant(),),
+            row_selector=wb.RowSelector(payload_field="note_id"),
+        )
+    )
+    row_id = uuid.uuid4()
+
+    async def _seed_uuid_note() -> None:
+        async with factory() as session:
+            session.add(UuidNote(id=row_id, tenant_id="default", notes="before"))
+            await session.commit()
+
+    asyncio.run(_seed_uuid_note())
+    run_id = asyncio.run(
+        _seed(
+            factory,
+            writeback={
+                "table": "wb_uuid_notes",
+                "operation": "update",
+                "columns": {"notes": "x"},
+            },
+            result={"notes": "after"},
+            input_payload={"note_id": str(row_id)},
+        )
+    )
+
+    response = _post(client, run_id)
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "written"
+
+    async def _read() -> UuidNote:
+        async with factory() as session:
+            return (
+                await session.execute(select(UuidNote).where(UuidNote.id == row_id))
+            ).scalar_one()
+
+    # The write must survive being recorded.
+    assert asyncio.run(_read()).notes == "after"

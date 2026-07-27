@@ -74,6 +74,11 @@ from ..schemas.orchestration import (
     resolve_write_secrets,
 )
 from ..scope_resolvers import registered_scope_levels, trigger_reachable_levels
+from ..writeback_targets import (
+    WriteBackTarget,
+    registered_writeback_targets,
+    resolve_writeback_target,
+)
 
 router = APIRouter(prefix="/orchestration/workflows", tags=["orchestration"])
 runs_router = APIRouter(prefix="/orchestration/runs", tags=["orchestration"])
@@ -258,10 +263,20 @@ async def get_catalog(
         )
         seen.add(key)
 
+    # Only the targets this caller may actually write (ADR-0027): the picker must
+    # never offer a table they could not save against, and must not disclose what
+    # else this deployment lets other people write.
+    writeback_targets = [
+        _writeback_target_summary(target)
+        for target in registered_writeback_targets()
+        if _may_write_target(caller, target)
+    ]
+
     return WorkflowCatalog(
         triggers=triggers,
         actions=_actions_with_available_tools(),
         scope_levels=list(registered_scope_levels()),
+        writeback_targets=writeback_targets,
     )
 
 
@@ -284,6 +299,123 @@ async def _require_scope_access(
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this scope"
     )
+
+
+def _may_write_target(caller: AuthenticatedUser, target: WriteBackTarget) -> bool:
+    """Whether ``caller`` personally holds the authority ``target`` requires.
+
+    The third term of ADR-0027 §3, checked at authoring time so a workflow that
+    could never write is refused on save rather than hours later on a completion.
+
+    Platform admins and the Cognito ``admin`` group pass, consistent with every
+    other gate in this router and with ADR-0010's platform short-circuit — and
+    harmlessly, because this is only the *authoring* check: the write itself
+    still runs under the instance's row policies as the stored author, so an
+    admin gets exactly what an admin would get by hand.
+    """
+    if caller.is_platform_admin or ADMIN_GROUP in caller.roles:
+        return True
+    return target.permission_code in caller.permissions
+
+
+def _writeback_target_summary(target: WriteBackTarget) -> dict[str, Any]:
+    """The builder's view of a target: what may be written, and how."""
+    return {
+        "table": target.table,
+        "label": target.label,
+        "operations": list(target.operations),
+        "scope_levels": list(target.scope_levels),
+        "row_selector": (
+            target.row_selector.payload_field if target.row_selector is not None else None
+        ),
+        "columns": [
+            {
+                "name": column.name,
+                "label": column.label,
+                "type": column.type,
+                "required": column.required,
+                "values": list(column.values),
+                "overwrite": column.overwrite,
+            }
+            for column in target.columns
+        ],
+    }
+
+
+async def _require_writeback_authority(
+    caller: AuthenticatedUser,
+    db: AsyncSession,
+    *,
+    action_config: dict[str, Any],
+    scope: dict[str, Any] | None,
+) -> None:
+    """Gate a definition that declares a write-back (ADR-0027 §3, term 3).
+
+    Shape and column-allowlist validation already happened in the schema; what is
+    left is the part only a request can answer — whether *this caller* may write
+    here, at *this scope*, and whether the definition can carry a principal at all.
+
+    Order matters. The unregistered-table case is a 404 (ADR-0004 §4: an
+    ungranted table is indistinguishable from one that does not exist, so a
+    workflow cannot be used to probe what else this deployment can write),
+    while a caller who simply lacks the permission gets a 403.
+    """
+    declared = action_config.get("writeback")
+    if not declared:
+        return
+
+    target = resolve_writeback_target(str(declared.get("table") or ""))
+    if target is None:
+        raise _not_found()
+
+    if not _may_write_target(caller, target):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"You do not have permission to write to {target.label} "
+                f"({target.permission_code}), so you cannot build a workflow that does."
+            ),
+        )
+
+    # A write-back is only ever as good as the principal it will run as. Without
+    # one there is nobody to bind the write to, so it could never be authorized
+    # — refuse now rather than store a rule that is guaranteed to fail.
+    if not caller.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "This workflow cannot record a result because your identity resolves "
+                "to no user, so the write would have no authority to run under."
+            ),
+        )
+
+    # A target that derives a column from the hierarchy has nothing to derive
+    # from on an unscoped rule. Left alone this fails at the policy much later,
+    # with no hint of the cause.
+    if target.scope_levels and scope is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"Writing to {target.label} needs the workflow to be scoped to a "
+                f"{' or '.join(target.scope_levels)}, so the record can be filed there."
+            ),
+        )
+    if target.scope_levels and scope is not None and scope.get("level") not in target.scope_levels:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"Writing to {target.label} needs a "
+                f"{' or '.join(target.scope_levels)}-scoped workflow; this one is scoped "
+                f"to {scope.get('level')!r}."
+            ),
+        )
+
+    # Belt and braces: the caller must also be authorized for the scope itself.
+    # `_require_scope_access` has already run on the same scope by the time this
+    # is called, so this is a second, cheap assertion rather than the primary
+    # gate — kept because the write-back path is the one place where getting
+    # scope wrong writes real business data.
+    await _require_scope_access(caller, db, scope)
 
 
 async def _require_row_access(
@@ -429,6 +561,7 @@ async def create_workflow(
     # No stored config to merge against on a create, so the sentinel has nothing to
     # keep and is refused rather than persisted as a "secret" (#432).
     action_config = _write_secrets(body.action_type, body.action_config, stored={})
+    await _require_writeback_authority(caller, db, action_config=action_config, scope=body.scope)
     await _require_resolvable_agent_prompts(
         db, tenant_id=caller.tenant_id, action_type=body.action_type, action_config=action_config
     )
@@ -495,6 +628,7 @@ async def update_workflow(
     existing = await _require_row_access(caller, db, existing)
     await _require_scope_access(caller, db, body.scope)
     action_config = _write_secrets(body.action_type, body.action_config, existing.action_config)
+    await _require_writeback_authority(caller, db, action_config=action_config, scope=body.scope)
     await _require_resolvable_agent_prompts(
         db, tenant_id=caller.tenant_id, action_type=body.action_type, action_config=action_config
     )

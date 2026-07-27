@@ -320,6 +320,98 @@ def registered_writeback_targets() -> tuple[WriteBackTarget, ...]:
     return tuple(_targets.values())
 
 
+# ── The agent's result contract, generated from the ceiling ───────────────────
+
+#: Column type -> JSON Schema type. Everything textual is a string; the schema's
+#: job is to make the model return the right *shape*, not to re-specify the
+#: column's storage.
+_JSON_SCHEMA_TYPES: dict[str, str] = {
+    "text": "string",
+    "textarea": "string",
+    "email": "string",
+    "tel": "string",
+    "url": "string",
+    "number": "number",
+    "boolean": "boolean",
+    "enum": "string",
+}
+
+
+def output_tool_for_writeback(declared: Any) -> dict[str, Any] | None:
+    """The terminal submit tool a write-back workflow's agent must call (ADR-0027 §6).
+
+    Generated **from the registered target**, intersected with the columns the
+    definition declared — never from anything the caller or the plugin supplied.
+    Two things follow, and both are the point:
+
+    - The model is required to return structured, typed data, so extracting the
+      payload is never text parsing and never "the model wrote prose this time".
+    - The model is not even *offered* a field outside the ceiling. The tool
+      schema is the permission boundary, expressed in the one place the model
+      actually reads.
+
+    Returns ``None`` when there is no write-back, or the table is not (or is no
+    longer) registered — in which case the run simply carries no generated tool
+    and the executor refuses later anyway.
+    """
+    if not isinstance(declared, dict):
+        return None
+    target = resolve_writeback_target(str(declared.get("table") or ""))
+    if target is None:
+        return None
+    requested = declared.get("columns")
+    names = set(requested) if isinstance(requested, dict) else set(target.column_names)
+
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+    for column in target.columns:
+        if column.name not in names:
+            continue
+        schema: dict[str, Any] = {
+            "type": _JSON_SCHEMA_TYPES.get(column.type, "string"),
+            "description": column.label,
+        }
+        if column.type == "enum":
+            schema["enum"] = list(column.values)
+        properties[column.name] = schema
+        if column.required:
+            required.append(column.name)
+
+    if not properties:
+        return None
+    return {
+        "type": "function",
+        "function": {
+            "name": f"submit_{target.table}_record",
+            "description": (
+                f"Submit the {target.label} record to save. Call this exactly once, "
+                "with your final result."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def apply_writeback_output_tool(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Return ``snapshot`` with its ``output_tools`` set from its write-back.
+
+    **Overrides** rather than merges. The snapshot arrives from the orchestrator,
+    and the result contract is Core's to state: a plugin that supplied its own
+    ``output_tools`` alongside a write-back would otherwise decide what shape the
+    model returns for a row Core is about to write. A snapshot with no write-back
+    is returned untouched, so every existing agent workflow is unaffected.
+    """
+    tool = output_tool_for_writeback(snapshot.get("writeback"))
+    if tool is None:
+        return snapshot
+    return {**snapshot, "output_tools": [tool]}
+
+
 # ── The principal-session seam ────────────────────────────────────────────────
 
 #: ``(db, user_id) -> was the session bound to that principal?`` Async because

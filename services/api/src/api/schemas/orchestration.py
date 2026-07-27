@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from ..prompt_parts import PromptPartsError, normalize_parts
 from ..scope_resolvers import registered_scope_levels
+from ..writeback_targets import resolve_writeback_target
 from .base import BiffoBaseSchema
 
 # A schedule's delay, in seconds: >0 and capped at 1 year, so an author can't
@@ -465,6 +466,18 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 "type": "delivery",
                 "required": False,
             },
+            # The optional write-back sub-config (ADR-0027). Absent ⇒ the run's
+            # result goes nowhere but the run itself, today's behaviour. Its value
+            # is structured — ``{"table", "operation", "columns", "row_selector"?}``
+            # — and validated against the *registered targets*, not against
+            # anything declared here, because what is writeable is an instance's
+            # decision in code and this catalog is the template's.
+            {
+                "name": "writeback",
+                "label": "Record the result",
+                "type": "writeback",
+                "required": False,
+            },
         ],
     },
 ]
@@ -715,6 +728,10 @@ def _validate_action_config(
         if field["type"] == "delivery":
             _validate_delivery(action_config.get(field["name"]))
             continue
+        # The agent action's optional write-back sub-config (ADR-0027).
+        if field["type"] == "writeback":
+            _validate_writeback(action_config.get(field["name"]))
+            continue
         # The agent action's declared tool list (ADR-0014 §7, #569).
         if field["type"] == "tools":
             _validate_tools_field(action_config.get(field["name"]))
@@ -770,6 +787,74 @@ def _validate_action_config(
         if field["type"] == "url" and isinstance(value, str) and value:
             if not _URL_RE.match(value):
                 raise ValueError(f"action_config.{field['name']} must be an https URL")
+
+
+def _validate_writeback(value: Any) -> None:
+    """Validate an agent-action ``writeback`` sub-config (ADR-0027 §3, term 2).
+
+    Absent/empty ⇒ no write-back, which is valid and is today's behaviour.
+    Otherwise the declaration is checked against the **registered target** — the
+    instance's in-code ceiling — so it can only ever narrow what that target
+    permits, never widen it:
+
+    - the table must be registered (an unregistered one is unknown, not "denied":
+      the router turns that into a 404, ADR-0004 §4);
+    - the operation must be one the target allows;
+    - every named column must be in the target's allowlist, which is what stops
+      an author reaching a column the ceiling never offered;
+    - every column the target marks ``required`` must be mapped, so a run cannot
+      produce a row the table would reject;
+    - an ``update`` must name the target's declared row selector rather than
+      inventing its own, since the row comes from the trigger event.
+
+    Raises ``ValueError``; the caller surfaces it as a 422.
+    """
+    if value in (None, {}, ""):
+        return
+    if not isinstance(value, dict):
+        raise ValueError("action_config.writeback must be an object")
+
+    table = value.get("table")
+    if not isinstance(table, str) or not table:
+        raise ValueError("action_config.writeback.table is required")
+    target = resolve_writeback_target(table)
+    if target is None:
+        raise ValueError(f"action_config.writeback.table {table!r} is not a write-back target")
+
+    operation = value.get("operation") or "create"
+    if operation not in target.operations:
+        raise ValueError(
+            f"action_config.writeback.operation must be one of: {', '.join(target.operations)}"
+        )
+
+    columns = value.get("columns")
+    if not isinstance(columns, dict) or not columns:
+        raise ValueError("action_config.writeback.columns must be a non-empty object")
+    unknown = sorted(set(columns) - set(target.column_names))
+    if unknown:
+        raise ValueError(
+            f"action_config.writeback.columns names column(s) {unknown} that {table!r} "
+            f"does not allow an agent to write; allowed: {list(target.column_names)}"
+        )
+    missing = sorted(
+        column.name for column in target.columns if column.required and column.name not in columns
+    )
+    if missing:
+        raise ValueError(
+            f"action_config.writeback.columns is missing required column(s) {missing} for {table!r}"
+        )
+
+    if operation == "update":
+        selector = target.row_selector
+        if selector is None:  # pragma: no cover — registration already refuses this
+            raise ValueError(f"{table!r} allows update but declares no row selector")
+        declared = value.get("row_selector")
+        if declared not in (None, selector.payload_field):
+            raise ValueError(
+                "action_config.writeback.row_selector must be the target's declared "
+                f"selector {selector.payload_field!r} — the row to update comes from the "
+                "trigger event, not from the workflow"
+            )
 
 
 def _validate_delivery(value: Any) -> None:
@@ -840,6 +925,12 @@ class WorkflowCatalog(BaseModel):
     # generic instance's builder simply omits the scope picker rather than offering
     # a control with nothing to pick.
     scope_levels: list[str] = Field(default_factory=list)
+    # The write-back targets the *calling user* may currently write to (ADR-0027).
+    # Filtered per caller rather than listed wholesale: the picker must not offer
+    # a table the author could not save against, and it must not disclose what
+    # else this deployment lets other people write. Empty for an instance that
+    # registers none — the builder simply omits the control.
+    writeback_targets: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class WorkflowDefinitionResponse(BiffoBaseSchema):

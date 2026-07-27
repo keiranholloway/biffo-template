@@ -8,8 +8,10 @@ The StaticPool/in-memory-SQLite fixture mirrors test_core_crud_router.py.
 
 import asyncio
 from collections.abc import AsyncGenerator, Generator
+from contextlib import contextmanager
 
 import pytest
+from api import writeback_targets as wb
 from api.database import get_db
 from api.events.emit import is_declared, pending_events
 from api.middleware.auth import AuthenticatedUser, require_auth
@@ -62,6 +64,7 @@ def _caller(
     tenant_id: str = "default",
     roles: list[str] | None = None,
     user_id: str | None = None,
+    permissions: frozenset[str] | None = None,
 ) -> AuthenticatedUser:
     return AuthenticatedUser(
         sub="admin-sub",
@@ -70,6 +73,7 @@ def _caller(
         tenant_id=tenant_id,
         roles=["admin"] if roles is None else roles,
         user_id=user_id,
+        permissions=permissions or frozenset(),
     )
 
 
@@ -966,8 +970,9 @@ def test_catalog_offers_the_agent_action_with_its_m1_fields(client: TestClient):
     # `goals` (ADR-0014) is the one optional acceptance-criteria field folded into
     # the system prompt. `delivery` (ADR-0020) is the optional deliver-on-completion
     # sub-config. `tools` (ADR-0014 §7, #569) is the declared tool list, validated
-    # against KNOWN_AGENT_TOOLS. Read scope stays deliberately absent — ADR-0014's
-    # third amendment defers it; no worker needs table reads yet.
+    # against KNOWN_AGENT_TOOLS. `writeback` (ADR-0027) is the optional
+    # record-the-result sub-config. Read scope stays deliberately absent —
+    # ADR-0014's third amendment defers it; no worker needs table reads yet.
     assert set(fields) == {
         "agent_name",
         "instructions",
@@ -976,6 +981,7 @@ def test_catalog_offers_the_agent_action_with_its_m1_fields(client: TestClient):
         "max_turns",
         "tools",
         "delivery",
+        "writeback",
     }
     # The delivery field is optional and structured (type "delivery"): absent ⇒ no
     # delivery, which is today's behaviour.
@@ -1844,3 +1850,213 @@ def test_the_state_change_event_carries_the_run_as_principal(app, client):
     published = fastapi.state.published
     assert published, "creating a definition must emit a state-change event"
     assert published[-1].payload["run_as_user_id"] == "user-a"
+
+
+# ── write-back config: ceiling, catalog and authoring authority (ADR-0027) ────
+
+
+@pytest.fixture
+def leads_target():
+    """A registered target, torn down after each test so the registry stays empty
+    for every other test in this module (the ceiling's default is 'nothing')."""
+    target = wb.WriteBackTarget(
+        table="leads",
+        model=WorkflowDefinition,  # any mapped class; the registry only holds it
+        label="Lead",
+        permission_code="leads.create",
+        allowed_principals=("system:orchestrator",),
+        columns=(
+            wb.WriteBackColumn(name="email", label="Email", type="email", required=True),
+            wb.WriteBackColumn(name="notes", label="Notes", type="textarea", overwrite="append"),
+        ),
+        operations=("create", "update"),
+        derived=(
+            wb.from_tenant(),
+            wb.from_scope("brand_id", "brand"),
+            wb.literal("source", "agent"),
+        ),
+        row_selector=wb.RowSelector(payload_field="lead_id"),
+    )
+    wb.register_writeback_target(target)
+    yield target
+    wb._targets.clear()  # noqa: SLF001
+
+
+@contextmanager
+def _scope_authorizer_allowing_all():
+    """Register a permissive scope authorizer for the duration of a test.
+
+    Needed to reach the *write-back* gate at all as a non-admin: create/update
+    run `_require_scope_access` first, and the default authorizer is fail-closed,
+    so without this every non-admin request stops at "Not authorized for this
+    scope" and never exercises what these tests are about.
+    """
+    from api import orchestration_authz as authz
+
+    async def _allow(caller, db, scope):  # noqa: ANN001 — test double
+        del caller, db, scope
+        return True
+
+    saved = authz._authorizer  # noqa: SLF001
+    authz.register_workflow_scope_authorizer(_allow)
+    try:
+        yield
+    finally:
+        authz._authorizer = saved  # noqa: SLF001
+
+
+def _writeback_body(writeback: dict | None, **over) -> dict:
+    config: dict = {"agent_name": "qualifier", "instructions": "Assess it."}
+    if writeback is not None:
+        config["writeback"] = writeback
+    return _valid_body(action_type="agent", action_config=config, **over)
+
+
+_WB = {"table": "leads", "operation": "create", "columns": {"email": "{output.email}"}}
+_SCOPED = {"scope": {"level": "brand", "id": "b1"}}
+
+
+def test_catalog_offers_no_writeback_targets_until_an_instance_registers_one(client):
+    assert client.get(f"{_BASE}/catalog").json()["writeback_targets"] == []
+
+
+def test_catalog_offers_a_registered_target_with_its_allowlist(client, leads_target):
+    targets = client.get(f"{_BASE}/catalog").json()["writeback_targets"]
+    assert [t["table"] for t in targets] == ["leads"]
+    target = targets[0]
+    assert target["operations"] == ["create", "update"]
+    assert target["scope_levels"] == ["brand"]
+    assert target["row_selector"] == "lead_id"
+    # Only the agent-writeable columns are offered — the derived ones (tenant_id,
+    # brand_id, source) are Core's and must never appear in a picker.
+    assert [c["name"] for c in target["columns"]] == ["email", "notes"]
+    assert next(c for c in target["columns"] if c["name"] == "notes")["overwrite"] == "append"
+
+
+def test_catalog_hides_a_target_the_caller_could_not_write(app, client, leads_target):
+    fastapi, _ = app
+    # A scoped, non-admin caller holding no relevant permission.
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(roles=[], user_id="user-a")
+    assert client.get(f"{_BASE}/catalog").json()["writeback_targets"] == []
+
+
+def test_rejects_a_column_outside_the_targets_allowlist(client, leads_target):
+    body = _writeback_body(
+        {"table": "leads", "columns": {"email": "x", "brand_id": "{output.brand}"}}, **_SCOPED
+    )
+    response = client.post(f"{_BASE}", json=body)
+    assert response.status_code == 422
+    assert "brand_id" in response.text
+
+
+def test_rejects_a_missing_required_column_and_an_empty_column_map(client, leads_target):
+    assert (
+        client.post(
+            f"{_BASE}",
+            json=_writeback_body({"table": "leads", "columns": {"notes": "x"}}, **_SCOPED),
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            f"{_BASE}", json=_writeback_body({"table": "leads", "columns": {}}, **_SCOPED)
+        ).status_code
+        == 422
+    )
+
+
+def test_rejects_an_operation_the_target_does_not_allow(client, leads_target):
+    wb._targets.clear()  # noqa: SLF001
+    wb.register_writeback_target(
+        wb.WriteBackTarget(
+            table="leads",
+            model=WorkflowDefinition,
+            label="Lead",
+            permission_code="leads.create",
+            allowed_principals=("system:orchestrator",),
+            columns=(wb.WriteBackColumn(name="email", label="Email", required=True),),
+            operations=("create",),
+            derived=(wb.from_scope("brand_id", "brand"),),
+        )
+    )
+    body = _writeback_body(
+        {"table": "leads", "operation": "update", "columns": {"email": "x"}}, **_SCOPED
+    )
+    assert client.post(f"{_BASE}", json=body).status_code == 422
+
+
+def test_an_update_may_not_invent_its_own_row_selector(client, leads_target):
+    body = _writeback_body(
+        {
+            "table": "leads",
+            "operation": "update",
+            "columns": {"email": "x"},
+            "row_selector": "whatever_the_agent_says",
+        },
+        **_SCOPED,
+    )
+    response = client.post(f"{_BASE}", json=body)
+    assert response.status_code == 422
+    assert "trigger event" in response.text
+
+
+def test_an_unregistered_table_is_indistinguishable_from_one_that_does_not_exist(client):
+    # 422 from the schema (it is not a target at all); the router's own 404 covers
+    # the race where a target is deregistered between validation and the gate.
+    response = client.post(
+        f"{_BASE}",
+        json=_writeback_body({"table": "salaries", "columns": {"amount": "1"}}, **_SCOPED),
+    )
+    assert response.status_code == 422
+
+
+def test_a_caller_without_the_targets_permission_cannot_build_one(app, client, leads_target):
+    fastapi, _ = app
+    # Authorized for the scope, but holding no `leads.create` — so they may
+    # author workflows here, just not ones that write to leads.
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(roles=[], user_id="user-a")
+    with _scope_authorizer_allowing_all():
+        response = client.post(f"{_BASE}", json=_writeback_body(_WB, **_SCOPED))
+    assert response.status_code == 403
+    assert "leads.create" in response.text
+
+
+def test_a_caller_holding_the_permission_can_build_one(app, client, leads_target):
+    fastapi, _ = app
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(
+        roles=[], user_id="user-a", permissions=frozenset({"leads.create"})
+    )
+    with _scope_authorizer_allowing_all():
+        response = client.post(f"{_BASE}", json=_writeback_body(_WB, **_SCOPED))
+    assert response.status_code == 201, response.text
+    assert response.json()["run_as_user_id"] == "user-a"
+
+
+def test_a_writeback_needs_a_principal_to_run_as(app, client, leads_target):
+    fastapi, _ = app
+    # An admin (so the permission check passes) whose identity resolves no user.
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(user_id=None)
+    response = client.post(f"{_BASE}", json=_writeback_body(_WB, **_SCOPED))
+    assert response.status_code == 403
+    assert "no authority" in response.text
+
+
+def test_a_scope_deriving_target_refuses_an_unscoped_workflow(app, client, leads_target):
+    fastapi, _ = app
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(user_id="user-a")
+    response = client.post(f"{_BASE}", json=_writeback_body(_WB))
+    assert response.status_code == 422
+    assert "scoped to a brand" in response.text
+
+
+def test_a_scope_deriving_target_refuses_the_wrong_scope_level(app, client, leads_target):
+    fastapi, _ = app
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(user_id="user-a")
+    response = client.post(
+        f"{_BASE}", json=_writeback_body(_WB, scope={"level": "region", "id": "r1"})
+    )
+    assert response.status_code == 422
+
+
+def test_a_workflow_with_no_writeback_is_completely_unaffected(client, leads_target):
+    assert client.post(f"{_BASE}", json=_writeback_body(None)).status_code == 201

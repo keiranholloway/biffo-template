@@ -438,6 +438,7 @@ async def request_agent_run(
     payload: dict[str, Any],
     *,
     core_client: CoreClient,
+    workflow_run_id: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
     """Ask Core to create an agent run — and stop there (ADR-0014 §4).
@@ -471,6 +472,11 @@ async def request_agent_run(
                 "input_payload": payload,
                 "causation_id": causation_id,
                 "depth": depth,
+                # Links the agent run back to the orchestration run, and so to
+                # the definition. Core needs that chain to find the principal a
+                # write-back runs as (ADR-0027 §2); without it a completed run
+                # has no owner and the write is refused.
+                "workflow_run_id": workflow_run_id,
             },
         )
     except BiffoAPIError as exc:

@@ -313,6 +313,15 @@ class OrchestratorPlugin(BiffoPluginBase):
 
         run = await self.api.get(f"{_AGENT_RUNS_BASE}/{run_id}")
         snapshot = (run or {}).get("definition_snapshot") or {}
+
+        # Record the result into the table the workflow declared (ADR-0027).
+        # Independent of message delivery below: a workflow may do both, and one
+        # failing must not suppress the other. This plugin knows nothing about
+        # the table, the columns, the values or the principal — it says only
+        # which run finished, and Core resolves the rest from stored state.
+        if snapshot.get("writeback"):
+            await self._write_back(str(run_id))
+
         prepared = prepare_delivery(snapshot.get("delivery"), run or {})
         if prepared is None:
             # No delivery configured, or a delivery this engine can't dispatch —
@@ -321,6 +330,39 @@ class OrchestratorPlugin(BiffoPluginBase):
 
         action_type, config, delivery_payload = prepared
         await self._deliver(str(run_id), action_type, config, delivery_payload)
+
+    async def _write_back(self, agent_run_id: str) -> None:
+        """Ask Core to record a completed run's result.
+
+        Best-effort and bounded, like delivery: Core claims the write against the
+        agent run before performing it, so a retry here cannot double-write. A
+        denial comes back as a normal 200 with a status — the engine has nothing
+        to do about it, and Core has already recorded it where the run history
+        will show it.
+        """
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                result = await self.api.post(
+                    f"{_INTERNAL_BASE}/writeback", json={"agent_run_id": agent_run_id}
+                )
+            except Exception:  # noqa: BLE001 — never let a write-back fail the invocation
+                if attempt == _MAX_ATTEMPTS:
+                    logger.exception(
+                        "Write-back request failed after retries",
+                        extra={"agent_run_id": agent_run_id, "attempts": attempt},
+                    )
+                    return
+                await asyncio.sleep(_BACKOFF_SECONDS[attempt - 1])
+                continue
+            logger.info(
+                "Write-back recorded",
+                extra={
+                    "agent_run_id": agent_run_id,
+                    "status": (result or {}).get("status"),
+                    "reason": (result or {}).get("reason"),
+                },
+            )
+            return
 
     async def _deliver(
         self,
@@ -415,6 +457,12 @@ class OrchestratorPlugin(BiffoPluginBase):
                     http_client=self._http,
                     core_client=self.api,
                     whatsapp=self._whatsapp,
+                    # The orchestration run this action belongs to. The agent
+                    # action passes it to Core so a completed run can be traced
+                    # back to the definition that requested it — which is how
+                    # write-back finds the principal to act as (ADR-0027 §2).
+                    # Handlers that don't need it absorb it via **_.
+                    workflow_run_id=run_id,
                 )
                 # Handlers whose side effect is an await-only call (the agent
                 # action POSTs to Core through the async signed client) are

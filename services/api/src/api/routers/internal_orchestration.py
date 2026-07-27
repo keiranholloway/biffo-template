@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from aws_lambda_powertools import Logger
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,10 +30,66 @@ from ..schemas.orchestration import (
     RecordResultRequest,
     WorkflowRunResponse,
 )
+from ..writeback import WriteBackNotFoundError, execute_writeback
 
 logger = Logger()
 
 router = APIRouter(prefix="/internal/orchestration", tags=["internal:orchestration"])
+
+
+class WriteBackRequest(BaseModel):
+    """Everything the engine may say about a write-back: which run finished.
+
+    Deliberately nothing else (ADR-0027 §1). Target table, operation, columns,
+    values, row selection and the principal to act as are all resolved by Core
+    from stored state, so a buggy or compromised plugin cannot name a table,
+    choose a column, supply a value or pick an identity.
+    """
+
+    agent_run_id: str = Field(min_length=1, max_length=36)
+
+
+class WriteBackResponse(BaseModel):
+    status: str
+    run_id: str | None = None
+    row_id: str | None = None
+    reason: str | None = None
+
+
+@router.post("/writeback", response_model=WriteBackResponse)
+async def record_writeback(
+    body: WriteBackRequest,
+    principal: ServicePrincipal = Depends(require_service_principal),
+    db: AsyncSession = Depends(get_db),
+) -> WriteBackResponse:
+    """Record a completed agent run's result into the table its workflow declared.
+
+    Answers **404** for a run that does not exist *and* for a target this
+    principal was never named on — the two must be indistinguishable, so one
+    plugin cannot probe what another may write (ADR-0004 §4).
+
+    Every other outcome is a 200 carrying its status: ``written``, ``duplicate``
+    (a redelivered completion event — the claim already exists, so nothing is
+    written twice), ``skipped`` (no write-back declared, or the run did not
+    succeed), or ``denied``. A denial is a normal, recorded result rather than an
+    error status, because the caller cannot do anything about it and the audit
+    log is where it needs to land.
+    """
+    try:
+        outcome = await execute_writeback(
+            db,
+            tenant_id=principal.tenant_id,
+            agent_run_id=body.agent_run_id,
+            principal_names=principal.logical_names,
+        )
+    except WriteBackNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found") from exc
+    return WriteBackResponse(
+        status=outcome.status,
+        run_id=outcome.run_id,
+        row_id=outcome.row_id,
+        reason=outcome.reason,
+    )
 
 
 @router.post("/events", response_model=DispatchEventResponse)

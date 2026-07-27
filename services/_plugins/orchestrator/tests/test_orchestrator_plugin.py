@@ -642,3 +642,66 @@ async def test_fire_scheduled_run_not_claimed_does_nothing():
 
     assert len(ses.calls) == 0
     assert core.result_posts() == []
+
+
+# ── Write-back on completion (ADR-0027 M6) ───────────────────────────────────
+#
+# The plugin's whole part is "say which run finished". It carries no knowledge of
+# the table, the columns, the values or the principal — Core resolves all of that
+# from stored state — so these assert the trigger and its independence from
+# message delivery, not any write behaviour.
+
+_WRITEBACK = {"table": "leads", "operation": "create", "columns": {"email": "{output.email}"}}
+
+
+def _writeback_run(*, status: str = "completed", delivery: dict | None = None) -> dict:
+    snapshot: dict = {"model": "m", "instructions": "go", "writeback": _WRITEBACK}
+    if delivery is not None:
+        snapshot["delivery"] = delivery
+    return {
+        "id": "agent-run-9",
+        "agent_name": "demo-enricher",
+        "status": status,
+        "result": {"email": "a@b.com"},
+        "definition_snapshot": snapshot,
+    }
+
+
+async def test_a_completed_run_with_a_writeback_asks_core_to_record_it():
+    core = FakeCore([], agent_run_record=_writeback_run())
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes(), http_client=FakeHttp())
+
+    await plugin.events.dispatch(_completed_event())
+
+    posted = core.writeback_posts()
+    assert posted, "a run declaring a write-back must be sent to Core"
+    # Only the run id — never a table, a column, a value or a principal.
+    assert posted[0] == {"agent_run_id": "agent-run-9"}
+
+
+async def test_a_run_with_no_writeback_asks_for_nothing():
+    core = FakeCore([], agent_run_record=_run_record())
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes(), http_client=FakeHttp())
+
+    await plugin.events.dispatch(_completed_event())
+    assert core.writeback_posts() == []
+
+
+async def test_a_failed_run_records_nothing():
+    core = FakeCore([], agent_run_record=_writeback_run(status="failed"))
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes(), http_client=FakeHttp())
+
+    await plugin.events.dispatch(_completed_event(status="failed"))
+    assert core.writeback_posts() == []
+
+
+async def test_writing_back_and_delivering_a_message_are_independent():
+    core = FakeCore([], agent_run_record=_writeback_run(delivery=_SLACK_DELIVERY))
+    http = FakeHttp(status_code=200)
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes(), http_client=http)
+
+    await plugin.events.dispatch(_completed_event())
+
+    # A workflow may do both, and one must not suppress the other.
+    assert core.writeback_posts()
+    assert len(http.calls) == 1

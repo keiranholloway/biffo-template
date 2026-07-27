@@ -199,9 +199,10 @@ data "aws_iam_policy_document" "lambda_permissions" {
     }
   }
 
-  # Cognito admin operations for user management (add users, assign to groups,
-  # suspend/remove). Scoped to the single user pool ARN — never pool-wildcard,
-  # keeping the least-privilege posture (no AdministratorAccess).
+  # Cognito admin operations for user management (add users, edit attributes,
+  # assign to groups, suspend/remove, reset password). Scoped to the single
+  # user pool ARN — never pool-wildcard, keeping the least-privilege posture
+  # (no AdministratorAccess).
   dynamic "statement" {
     for_each = var.cognito_user_pool_arn != "" ? [1] : []
     content {
@@ -210,6 +211,7 @@ data "aws_iam_policy_document" "lambda_permissions" {
       actions = [
         "cognito-idp:AdminCreateUser",
         "cognito-idp:AdminGetUser",
+        "cognito-idp:AdminUpdateUserAttributes",
         "cognito-idp:AdminDisableUser",
         "cognito-idp:AdminEnableUser",
         "cognito-idp:AdminDeleteUser",
@@ -217,6 +219,7 @@ data "aws_iam_policy_document" "lambda_permissions" {
         "cognito-idp:AdminRemoveUserFromGroup",
         "cognito-idp:AdminListGroupsForUser",
         "cognito-idp:AdminUserGlobalSignOut",
+        "cognito-idp:AdminResetUserPassword",
         "cognito-idp:ListUsers",
         "cognito-idp:ListGroups",
       ]

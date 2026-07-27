@@ -234,7 +234,56 @@ export function analyse(rows) {
     surfacedNotFixedHere: rows.filter(
       (r) => r.surfacedIn && r.fixesIn && !r.fixesIn.includes(r.surfacedIn.split(' ')[0]),
     ).length,
+    byFixRepo: tallyFixRepos(rows),
   }
+}
+
+/**
+ * The "Where the work actually lands" table, derived rather than typed.
+ *
+ * That table has now gone stale three times — most recently claiming 44 rows
+ * against a scoreboard holding 47, while its headline ("0 fixes land in a plugin
+ * repo") had already been falsified by two rows. A hand-maintained count beside a
+ * hand-maintained table drifts by default, and the page's own advice is to
+ * generate these figures; until this existed there was nothing to generate them
+ * with.
+ *
+ * Longest-name-first matters: `biffo-plugin-idea-scout` contains neither
+ * `biffo-platform` nor `biffo-plugin-ideation`, but `biffo-platform` IS a prefix
+ * of `biffo-platform-app`, so a shorter name matching first would swallow the
+ * longer one's rows. Each row counts a repo at most once, but may count several
+ * repos — a fix landing in two places is two obligations, so the column
+ * deliberately sums to more than the row count.
+ *
+ * @param {Array<Record<string, any>>} rows
+ */
+function tallyFixRepos(rows) {
+  const known = [
+    'biffo-plugin-idea-scout',
+    'biffo-plugin-ideation',
+    'biffo-platform-app',
+    'biffo-template',
+    'tabsii-platform',
+    'biffo-platform',
+    'tabsii-marketplace',
+    'tabsii-intake',
+    'biffo-runners',
+    'tabsii-crm',
+    'tabsii-geo',
+    'tabsii-map',
+  ]
+  const tally = {}
+  for (const row of rows) {
+    if (!row.fixesIn) continue
+    let rest = row.fixesIn
+    for (const repo of known) {
+      if (!rest.includes(repo)) continue
+      tally[repo] = (tally[repo] ?? 0) + 1
+      // Blank the match so a shorter repo name cannot re-match inside it.
+      rest = rest.split(repo).join(' ')
+    }
+  }
+  return Object.fromEntries(Object.entries(tally).sort((a, b) => b[1] - a[1]))
 }
 
 function gh(path) {

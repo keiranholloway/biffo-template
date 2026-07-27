@@ -24,7 +24,12 @@ import {
   filterToWindow,
 } from '../../../scripts/practices-metrics.mjs'
 // @ts-expect-error -- plain .mjs, same arrangement as above.
-import { grade, fmt, renderDashboard, renderSessions } from '../../../scripts/practices-dashboard.mjs'
+import {
+  grade,
+  fmt,
+  renderDashboard,
+  renderSessions,
+} from '../../../scripts/practices-dashboard.mjs'
 // @ts-expect-error -- plain .mjs, same arrangement as above.
 import { buildEntry, summariseSessions } from '../../../scripts/practices-session.mjs'
 
@@ -641,7 +646,12 @@ describe('classifyMergeSide', () => {
 describe('summariseEstate', () => {
   const repo = (side: string, subjects: string[], hours = 10) => ({
     side,
-    ...{ workMix: summariseWorkMix(subjects.map((subject) => ({ subject })), side) },
+    ...{
+      workMix: summariseWorkMix(
+        subjects.map((subject) => ({ subject })),
+        side,
+      ),
+    },
     contention: { greenButUnmergedHours: hours },
   })
 
@@ -652,7 +662,10 @@ describe('summariseEstate', () => {
    */
   it('weights the estate figure by merge volume', () => {
     const estate = summariseEstate({
-      big: repo('platform', Array.from({ length: 8 }, (_, i) => (i < 4 ? 'fix: a' : 'feat: b'))),
+      big: repo(
+        'platform',
+        Array.from({ length: 8 }, (_, i) => (i < 4 ? 'fix: a' : 'feat: b')),
+      ),
       small: repo('product', ['feat: c']),
     })
     expect(estate.merges).toBe(9)
@@ -899,17 +912,26 @@ describe('renderSessions', () => {
   })
 
   it('confirms the proxy when wall-clock agrees', () => {
-    const html = renderSessions({ sessions: 3, hours: 9, delivery: 40, platform: 20, toil: 40 }, 43.4)
+    const html = renderSessions(
+      { sessions: 3, hours: 9, delivery: 40, platform: 20, toil: 40 },
+      43.4,
+    )
     expect(html).toContain('proxy agrees within 3.4 points')
   })
 
   it('warns when wall-clock contradicts the proxy', () => {
-    const html = renderSessions({ sessions: 3, hours: 9, delivery: 20, platform: 10, toil: 70 }, 43.4)
+    const html = renderSessions(
+      { sessions: 3, hours: 9, delivery: 20, platform: 10, toil: 70 },
+      43.4,
+    )
     expect(html).toContain('treat the headline with suspicion')
   })
 
   it('does not compare when the merge-derived figure is unmeasured', () => {
-    const html = renderSessions({ sessions: 1, hours: 2, delivery: 50, platform: 25, toil: 25 }, null)
+    const html = renderSessions(
+      { sessions: 1, hours: 2, delivery: 50, platform: 25, toil: 25 },
+      null,
+    )
     expect(html).toContain('not comparable yet')
   })
 })

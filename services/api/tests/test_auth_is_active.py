@@ -1,5 +1,12 @@
-"""issue #150: require_auth enforces the DB `users.is_active` flag, so a
-suspended user can't keep calling the API with an already-issued access token.
+"""issue #150: the DB `users.is_active` flag is enforced on every authenticated
+path, so a suspended user can't keep calling the API with an already-issued
+access token.
+
+Covers both dependencies deliberately (#621). The flag was originally enforced
+only in `require_auth`; `require_forwarded_user` — the SigV4/plugin path — did
+not, so the mitigation silently missed every plugin-forwarded route. The
+assertions below are duplicated across both entry points on purpose: they are
+what stops the two drifting apart again.
 
 Specifically about the *default* provider, whose store is the Core's own
 `public.users`. A deployment that retired that table (ADR-0012) has its own
@@ -17,6 +24,7 @@ from api.identity import (
     set_identity_provider,
 )
 from api.middleware.auth import require_auth
+from api.middleware.forwarded_user import require_forwarded_user
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
@@ -97,4 +105,27 @@ async def test_allows_active_user():
 async def test_allows_user_without_a_row_yet():
     # Provisioned-but-never-logged-in: no row -> treated as active.
     caller = await require_auth(credentials=_credentials(), db=_FakeDb(None))  # type: ignore[arg-type]
+    assert caller.sub == "sub-1"
+
+
+# ── the same flag, via the forwarded (SigV4/plugin) path — #621 ─────────────────
+
+
+async def test_rejects_deactivated_user_on_the_forwarded_path():
+    """The regression #621 exists to prevent: a suspended user's unexpired token,
+    forwarded by a plugin, must be refused exactly as a direct call is."""
+    db = _FakeDb(is_active=False)
+    with pytest.raises(HTTPException) as exc:
+        await require_forwarded_user(forwarded_token="token", db=db)  # type: ignore[arg-type]
+    assert exc.value.status_code == 401
+    assert db.executed  # the provider lookup actually ran on this path
+
+
+async def test_allows_active_user_on_the_forwarded_path():
+    caller = await require_forwarded_user(forwarded_token="token", db=_FakeDb(True))  # type: ignore[arg-type]
+    assert caller.sub == "sub-1"
+
+
+async def test_forwarded_path_allows_user_without_a_row_yet():
+    caller = await require_forwarded_user(forwarded_token="token", db=_FakeDb(None))  # type: ignore[arg-type]
     assert caller.sub == "sub-1"

@@ -76,11 +76,22 @@ class SignedCoreClient(BiffoAPIClient):
             raise RuntimeError("No AWS credentials available to sign Core API requests")
         return self._credentials
 
-    def _sign(self, method: str, url: str, body: bytes | None) -> dict[str, str]:
+    def _sign(
+        self,
+        method: str,
+        url: str,
+        body: bytes | None,
+        extra: dict[str, str] | None = None,
+    ) -> dict[str, str]:
         from botocore.auth import SigV4Auth
         from botocore.awsrequest import AWSRequest
 
         headers = {"Content-Type": "application/json"} if body is not None else {}
+        # Caller-supplied headers go in BEFORE signing, for the same reason the
+        # plugin identity does: anything the receiver trusts must be covered by
+        # the signature, or it can be altered in transit.
+        if extra:
+            headers.update(extra)
         # ADR-0021 §1a: assert the plugin identity the shared host is acting as, so
         # Core can grant `system:<plugin>` rather than the host's own role identity.
         # Added BEFORE signing so it is covered by the SigV4 signature.
@@ -107,6 +118,36 @@ class SignedCoreClient(BiffoAPIClient):
         response = await self._client.request(method, url, headers=headers, content=body)
         self._raise_if_error(response)
         return self._parse_json(response)
+
+    async def raw_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        content: bytes | None = None,
+        extra_signed_headers: dict[str, str] | None = None,
+    ) -> tuple[int, bytes, str]:
+        """A signed request returning ``(status, body, content_type)`` verbatim.
+
+        Unlike :meth:`get`/:meth:`post`, this does **not** raise on a non-2xx and
+        does not parse the body. It exists for proxying, where the upstream
+        status is the answer and must reach the original caller unchanged — the
+        shared plugin host forwarding a plugin's declared ``api_routes`` to Core
+        (#652) needs a 403 from Core's permission check to arrive as a 403, not
+        as an exception it would have to invent a status for.
+
+        ``extra_signed_headers`` are included before signing, so a header the
+        receiver authenticates on (the forwarded user token) is covered by the
+        signature rather than appended to a signed request afterwards.
+        """
+        url = self._url(path)
+        headers = self._sign(method, url, content, extra_signed_headers)
+        response = await self._client.request(method, url, headers=headers, content=content)
+        return (
+            response.status_code,
+            response.content,
+            response.headers.get("content-type", "application/json"),
+        )
 
     async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         return await self._send("GET", path, params=params)

@@ -29,9 +29,12 @@ An ADR captures a significant architectural decision: the context that forced it
 | [ADR-0019](0019-dev-staging-nat-instance-egress.md)                 | dev/staging egress defaults to a fck-nat NAT instance | Accepted | 2026-07-24 |
 | [ADR-0020](0020-agent-result-delivery-on-completion.md)             | Deliver an agent's result on completion (agent-action sub-config) | Accepted | 2026-07-24 |
 | [ADR-0021](0021-shared-plugin-hosting.md)                           | Plugins are pure code on shared hosting — one plugin runtime, one app shell (supersedes ADR-0018 backend; frontend per #558) | Accepted (partial) | 2026-07-25 |
+| [ADR-0022](0022-product-domain-modules-are-user-owned-guests.md)    | Product-domain modules are user-owned guests hosted in the core API | Accepted | 2026-07-26 |
 | [ADR-0023](0023-scheduled-workflow-actions.md)                      | Scheduled / delayed workflow actions (EventBridge Scheduler, one-time fire) | Accepted | 2026-07-26 |
 | [ADR-0024](0024-hierarchy-scoped-workflow-resolver-registry.md)     | Hierarchy-scoped workflows — a resolver-registry seam, matched in Core | Accepted | 2026-07-26 |
 | [ADR-0025](0025-orchestration-scoped-authorization-registry.md)     | Scoped workflow authorization — an authorizer-registry seam, checked against the submitted scope | Accepted | 2026-07-26 |
+| [ADR-0026](0026-trigger-scope-reachability.md)                      | Trigger scope-reachability — reject a scope a trigger's payload can never carry | Accepted | 2026-07-26 |
+| [ADR-0027](0027-agent-write-back-to-core-tables.md)                 | Agent write-back to Core tables — author-bound authority, re-checked under RLS (amends ADR-0014 §7) | Accepted | 2026-07-27 |
 
 ## Format
 

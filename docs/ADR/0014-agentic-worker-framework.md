@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-07-21
 **Amended:** 2026-07-21 — see *Amendment: UI distribution and the plugin question*
+**Amended:** 2026-07-27 — §7's prohibition on writes is lifted under stated conditions by [ADR-0027](0027-agent-write-back-to-core-tables.md)
 **Deciders:** Keiran Holloway (Technical Architect)
 
 ---
@@ -208,6 +209,8 @@ Three properties follow for almost no new machinery:
 - **Default-deny, 404-on-undeclared, and unconditional tenant scoping** are inherited unchanged from the existing handler path.
 
 **Writes are not reachable through this path at all.** `agent-runtime` is never granted create, update or delete. A run's only write is completing itself, through a purpose-built internal route authorised by the run's own identity and state rather than by generic CRUD. A worker needing to write business data is a new decision requiring an amendment to this ADR — the right amount of friction for the thing §5 exists to prevent.
+
+> **Amended 2026-07-27 by [ADR-0027](0027-agent-write-back-to-core-tables.md).** That friction was paid: writes are now reachable, but only through a purpose-built route with its own three-term ceiling, and never through this read path. `agent-runtime` is still granted no create/update/delete, and `allowed_principals` remains a read-only grant. Write-back is `create` and selector-bound `update` on **separately registered** `WriteBackTarget`s, executed by Core on an RLS session as the workflow's stored author — so §7's composition `ceiling ∩ declared scope ∩ the user's own permissions` is, for the first time, fully exercised: the `run_as_user_id` field §6.2 reserved is what supplies the third term. `delete` remains unreachable by any path.
 
 **Authoring-time validation** still applies: saving a worker verifies both that its declared scope sits inside the ceiling, and that the *author* holds the permissions it declares. Failing at save beats failing at run.
 

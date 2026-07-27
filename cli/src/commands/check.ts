@@ -1,4 +1,5 @@
 import { Command } from 'commander'
+import { runBranchProtectionCheck } from '../scripts/check-branch-protection.js'
 import { runOwnershipCheck } from '../scripts/check-core-ownership.js'
 import { runPluginTerraformCheck } from '../scripts/check-plugin-terraform.js'
 import { runReleaseSubjectCheck } from '../scripts/check-release-subject.js'
@@ -25,7 +26,7 @@ import { runReleaseSubjectCheck } from '../scripts/check-release-subject.js'
  * code path rather than two that can drift.
  */
 export const checkCommand = new Command('check').description(
-  'Repo guards (ownership, release subject, plugin terraform) — run in CI and git hooks',
+  'Repo guards (ownership, release subject, plugin terraform, branch protection)',
 )
 
 checkCommand
@@ -54,6 +55,16 @@ checkCommand
   .description('Verify every template-owned plugin declaring infra ships a Terraform module')
   .action(async () => {
     await runPluginTerraformCheck()
+  })
+
+checkCommand
+  .command('branch-protection')
+  .description(
+    'Verify dev/staging/main are actually protected — scaffolding skips this on a 403 (#715)',
+  )
+  .option('--repo <owner/name>', "Repo to audit; defaults to this checkout's origin remote")
+  .action(async (opts: { repo?: string }) => {
+    await runBranchProtectionCheck(opts.repo)
   })
 
 /**

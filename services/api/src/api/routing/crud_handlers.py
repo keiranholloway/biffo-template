@@ -132,6 +132,35 @@ def make_read_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
     return handler
 
 
+async def _run_created_hook(
+    model: type[Any], db: AsyncSession, row: Any, tenant_id: Any
+) -> None:
+    """Give a model a say in what its creation *means*, beyond the row.
+
+    The `<table>.created` event this layer emits is a faithful record of a row
+    appearing, and for most tables that is the whole story. For some it is not:
+    a row of foreign keys can be a genuine business moment whose useful payload
+    needs a lookup the CRUD layer has no business doing — tabsii's
+    `user_role_assignments` row means "someone was granted access to this
+    brand", and an automation that reacts to it wants the person's email, which
+    the row does not carry.
+
+    A model opts in with an async `__on_created__(db, row, tenant_id)`. It runs
+    **after** the generic event, on the same session, so anything it emits is
+    buffered and published by the same post-commit path (ADR-0002) and is
+    dropped with the row if the transaction rolls back.
+
+    The alternative was a bespoke create route per such table, which would mean
+    reimplementing tenant injection and the RLS `WITH CHECK` this handler
+    already gets right — duplicating a write path to add an event to it is a bad
+    trade on any table, and a worse one on a grant.
+    """
+    hook = getattr(model, "__on_created__", None)
+    if hook is None:
+        return
+    await hook(db, row, tenant_id)
+
+
 def make_create_handler(
     model: type[Any], user_columns: frozenset[str]
 ) -> Callable[..., Awaitable[Any]]:
@@ -152,6 +181,7 @@ def make_create_handler(
             ) from exc
         await db.refresh(row)
         _emit_crud_event(db, model, "created", tenant_id, row=row)
+        await _run_created_hook(model, db, row, tenant_id)
         return serialize(row)
 
     return handler

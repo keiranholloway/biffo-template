@@ -135,6 +135,26 @@ refuted on 2026-08-10, and the pre-registered next moves stand: a **merge queue*
 Recorded now rather than at review, so the observation cannot be reconstructed
 favourably after seeing the number.
 
+### Corroboration — two more, in different repos, same day
+
+The observation above was a single PR in one repo, which is weak evidence. Two
+further instances occurred later on 2026-07-27, in **different repositories**:
+
+| PR | State | Behind by | Resolution |
+| --- | --- | --- | --- |
+| [biffo-plugin-idea-scout#21](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/21) | auto-merge armed, all 7 checks green, `mergeStateStatus: BEHIND` | 1 | hand `rebase` + `--force-with-lease`, then a full CI re-run |
+| [biffo-template#731](https://github.com/keiranholloway/biffo-template/pull/731) | auto-merge armed, all 5 checks green, `mergeable: MERGEABLE`, `BEHIND` | 2 | same |
+
+Both sat green-and-blocked for over ten minutes before anyone intervened. So the
+behaviour is **not repo-specific and not a one-off**: across three repos and three
+PRs, auto-merge under `strict: true` never once updated a behind branch.
+
+Note this raises the expected `racedShare` rather than lowering it — each of
+these is a green-for-over-ten-minutes PR that was then repushed, which is the
+metric's definition of raced. The prediction (`racedShare` below 5%) now looks
+**unlikely to hold**, and recording that before the review date is the point of
+writing it down here.
+
 ## Result
 
 _To be completed on 2026-08-10. Verdict: `confirmed` / `refuted` /

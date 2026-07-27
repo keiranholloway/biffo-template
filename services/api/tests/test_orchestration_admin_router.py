@@ -1917,7 +1917,16 @@ _SCOPED = {"scope": {"level": "brand", "id": "b1"}}
 
 
 def test_catalog_offers_no_writeback_targets_until_an_instance_registers_one(client):
-    assert client.get(f"{_BASE}/catalog").json()["writeback_targets"] == []
+    # Clear whatever the ambient process registered before asserting the default.
+    # An instance registers its targets as an import side effect of its domain
+    # module, so "the registry is empty" is only true of a bare template — this
+    # test would otherwise pass upstream and fail the moment it is distributed.
+    saved = dict(wb._targets)  # noqa: SLF001
+    wb._targets.clear()  # noqa: SLF001
+    try:
+        assert client.get(f"{_BASE}/catalog").json()["writeback_targets"] == []
+    finally:
+        wb._targets.update(saved)  # noqa: SLF001
 
 
 def test_catalog_offers_a_registered_target_with_its_allowlist(client, leads_target):

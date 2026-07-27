@@ -69,28 +69,56 @@ def _target(**over: Any) -> wb.WriteBackTarget:
     return wb.WriteBackTarget(**kwargs)
 
 
-@pytest.fixture(autouse=True)
-def _identity() -> Generator[None]:
-    """Pin the identity provider for these tests.
+class _NoPermissions:
+    """An identity provider that answers without touching a database.
 
     The executor re-checks the workflow owner's *current* permissions through
-    whichever provider is installed. An instance's provider reads them from its
-    own tables (tabsii's queries `tabsii.user_role_assignments`), which this
-    SQLite fixture has no schema for — so without pinning, these tests pass in
-    the template and fail the moment they are distributed. Found exactly that
-    way. The permission re-check itself is covered by the instance's E2E against
-    real data; here it must simply not be the thing under test.
-    """
-    from api import identity  # noqa: PLC0415 — local to keep the fixture self-contained
+    whichever provider is installed, so these tests must install one — otherwise
+    they run against whatever the process happens to have. Neither real provider
+    works here: the default reads `public.users` and an instance's reads its own
+    tables (tabsii's queries `tabsii.user_role_assignments`), and this SQLite
+    fixture has schema for neither.
 
-    saved = identity._provider  # noqa: SLF001
-    identity.set_identity_provider(identity.default.DefaultIdentityProvider())
-    yield
-    identity._provider = saved  # noqa: SLF001
+    Returning an empty set is also the case worth pinning. The executor treats
+    "no permissions resolved" as "this deployment does not model permissions
+    that way" and lets the row policies decide, rather than as a denial — so
+    these tests exercise the write path itself. The permission re-check is
+    covered against real role assignments in the instance E2E, which is the only
+    place it can mean anything.
+    """
+
+    async def resolve(self, db, user_id):  # noqa: ANN001, ANN201 — test double
+        del db, user_id
+        return frozenset()
+
+    async def resolve_identity(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+        raise NotImplementedError
+
+    async def sync_platform_admin(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+        return None
+
+    async def resolve_permissions(self, db, user_id):  # noqa: ANN001, ANN201
+        del db, user_id
+        return frozenset()
 
 
 @pytest.fixture(autouse=True)
-def _registry() -> Generator[None]:
+def _identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Install the no-database provider for every test in this module.
+
+    Patched **on the consuming module** rather than on `api.identity`'s global.
+    An instance installs its own provider as an import side effect of `api.main`
+    (tabsii: `set_identity_provider(TabsiiIdentityProvider())`), and in a full
+    suite run that can land after this fixture has set the global — which is
+    exactly how these tests passed in isolation and failed once distributed.
+    Patching the name the executor actually calls cannot be undone by whoever
+    imports what, and in whichever order.
+    """
+    monkeypatch.setattr("api.writeback.get_identity_provider", lambda: _NoPermissions())
+
+
+@pytest.fixture(autouse=True)
+def _registry(app) -> Generator[None]:  # noqa: ANN001 — ordering: after the app exists
     saved_targets, saved_provider = dict(wb._targets), wb._provider  # noqa: SLF001
     wb._targets.clear()  # noqa: SLF001
     wb.register_writeback_target(_target())

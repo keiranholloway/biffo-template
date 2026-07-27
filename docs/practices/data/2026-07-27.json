@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "collectedAt": "2026-07-27T13:17:51.217Z",
+  "collectedAt": "2026-07-27T13:04:46.077Z",
   "windowDays": [
     1,
     7,
@@ -8,47 +8,33 @@
   ],
   "windows": {
     "1": {
-      "since": "2026-07-26T13:17:51.182Z",
+      "since": "2026-07-26T13:04:46.037Z",
       "repos": {
         "keiranholloway/biffo-template": {
           "role": "template",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 48,
+          "mergedPrs": 47,
           "workMix": {
-            "merges": 48,
-            "delivery": 35.4,
-            "rework": 33.3,
-            "toil": 4.2,
-            "quality": 10.4,
-            "docs": 16.7,
+            "merges": 47,
+            "delivery": 36.2,
+            "rework": 31.9,
+            "toil": 4.3,
+            "quality": 10.6,
+            "docs": 17,
             "unconventional": 0,
-            "toilRatio": 37.5,
-            "counts": {
-              "delivery": 17,
-              "rework": 16,
-              "toil": 2,
-              "quality": 5,
-              "docs": 8,
-              "unconventional": 0,
-              "other": 0
-            },
-            "sideCounts": {
-              "platform": 48,
-              "product": 0
-            },
-            "productDelivery": 0
+            "toilRatio": 36.2
           },
           "ciFailureRate": 4.2,
           "revisionsP50": 0,
           "revisionsP90": 2,
-          "landedFirstPushRate": 56.3,
+          "landedFirstPushRate": 55.3,
           "cycleTimeP50Minutes": 3.6,
           "cycleTimeP90Minutes": 48.8,
           "rework": {
-            "merges": 48,
-            "fixMerges": 16,
-            "fixShare": 33.3,
+            "merges": 47,
+            "fixMerges": 15,
+            "fixShare": 31.9,
             "attributed": 13,
             "medianHoursToRework": 4.8,
             "p90HoursToRework": 581.8,
@@ -60,10 +46,10 @@
             "greenToMergeP50Minutes": 0.7,
             "greenToMergeP90Minutes": 46.4,
             "greenToMergeMaxMinutes": 830.2,
-            "repushRate": 43.8,
-            "racedShare": 22.9,
-            "prsMeasured": 48,
-            "prsWithGreen": 48
+            "repushRate": 44.7,
+            "racedShare": 23.4,
+            "prsMeasured": 47,
+            "prsWithGreen": 47
           },
           "flakes": {
             "pairs": 1,
@@ -72,15 +58,15 @@
             ]
           },
           "integration": {
-            "runs": 177,
+            "runs": 174,
             "failures": 0,
             "redMinutes": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 48,
+            "prsMeasured": 47,
             "prsUnmeasured": 0,
-            "workflowRuns": 396,
+            "workflowRuns": 390,
             "reworkSource": "git-blame"
           }
         },
@@ -1083,16 +1069,19 @@
         }
       },
       "estate": {
-        "merges": 121,
-        "platformShare": 76.9,
-        "productShare": 23.1,
-        "toilRatio": 46.3,
-        "productFeatureShare": 4.1,
+        "merges": 120,
+        "platformShare": 69.2,
+        "productShare": 30.8,
+        "toilRatio": 45.9,
+        "productFeatureShare": 5.8,
         "contentionHours": 23.3,
         "bySide": {
           "platform": {
-            "merges": 93,
-            "share": 76.9
+            "merges": 83,
+            "delivery": 36.2,
+            "rework": 28.9,
+            "toil": 16.9,
+            "toilRatio": 45.8
           },
           "product": {
             "merges": 28,
@@ -1103,47 +1092,33 @@
       }
     },
     "7": {
-      "since": "2026-07-20T13:17:51.194Z",
+      "since": "2026-07-20T13:04:46.054Z",
       "repos": {
         "keiranholloway/biffo-template": {
           "role": "template",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 257,
+          "mergedPrs": 256,
           "workMix": {
-            "merges": 257,
-            "delivery": 39.3,
-            "rework": 31.1,
+            "merges": 256,
+            "delivery": 39.5,
+            "rework": 30.9,
             "toil": 7.4,
-            "quality": 8.9,
-            "docs": 13.2,
+            "quality": 9,
+            "docs": 13.3,
             "unconventional": 0,
-            "toilRatio": 38.5,
-            "counts": {
-              "delivery": 101,
-              "rework": 80,
-              "toil": 19,
-              "quality": 23,
-              "docs": 34,
-              "unconventional": 0,
-              "other": 0
-            },
-            "sideCounts": {
-              "platform": 257,
-              "product": 0
-            },
-            "productDelivery": 0
+            "toilRatio": 38.3
           },
           "ciFailureRate": 13.2,
           "revisionsP50": 0,
           "revisionsP90": 2,
-          "landedFirstPushRate": 59.5,
+          "landedFirstPushRate": 59.4,
           "cycleTimeP50Minutes": 3.7,
           "cycleTimeP90Minutes": 24.4,
           "rework": {
-            "merges": 257,
-            "fixMerges": 80,
-            "fixShare": 31.1,
+            "merges": 256,
+            "fixMerges": 79,
+            "fixShare": 30.9,
             "attributed": 70,
             "medianHoursToRework": 1.5,
             "p90HoursToRework": 521.7,
@@ -1155,10 +1130,10 @@
             "greenToMergeP50Minutes": 0.6,
             "greenToMergeP90Minutes": 20.8,
             "greenToMergeMaxMinutes": 943,
-            "repushRate": 40.5,
-            "racedShare": 13.2,
-            "prsMeasured": 257,
-            "prsWithGreen": 257
+            "repushRate": 40.6,
+            "racedShare": 13.3,
+            "prsMeasured": 256,
+            "prsWithGreen": 256
           },
           "flakes": {
             "pairs": 1,
@@ -1167,15 +1142,15 @@
             ]
           },
           "integration": {
-            "runs": 271,
+            "runs": 268,
             "failures": 0,
             "redMinutes": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 257,
+            "prsMeasured": 256,
             "prsUnmeasured": 0,
-            "workflowRuns": 2089,
+            "workflowRuns": 2083,
             "reworkSource": "git-blame"
           }
         },
@@ -2180,16 +2155,19 @@
         }
       },
       "estate": {
-        "merges": 476,
-        "platformShare": 82.8,
-        "productShare": 17.2,
-        "toilRatio": 45.6,
-        "productFeatureShare": 3.2,
+        "merges": 475,
+        "platformShare": 78.5,
+        "productShare": 21.5,
+        "toilRatio": 45.5,
+        "productFeatureShare": 3.6,
         "contentionHours": 94.4,
         "bySide": {
           "platform": {
-            "merges": 394,
-            "share": 82.8
+            "merges": 373,
+            "delivery": 37.3,
+            "rework": 27.1,
+            "toil": 16.9,
+            "toilRatio": 44
           },
           "product": {
             "merges": 82,
@@ -2200,47 +2178,33 @@
       }
     },
     "90": {
-      "since": "2026-04-28T13:17:51.204Z",
+      "since": "2026-04-28T13:04:46.064Z",
       "repos": {
         "keiranholloway/biffo-template": {
           "role": "template",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 456,
+          "mergedPrs": 455,
           "workMix": {
-            "merges": 523,
-            "delivery": 34.8,
-            "rework": 37.5,
+            "merges": 522,
+            "delivery": 34.9,
+            "rework": 37.4,
             "toil": 9.8,
             "quality": 7.3,
             "docs": 9.6,
             "unconventional": 1.1,
-            "toilRatio": 47.2,
-            "counts": {
-              "delivery": 182,
-              "rework": 196,
-              "toil": 51,
-              "quality": 38,
-              "docs": 50,
-              "unconventional": 6,
-              "other": 0
-            },
-            "sideCounts": {
-              "platform": 523,
-              "product": 0
-            },
-            "productDelivery": 0
+            "toilRatio": 47.1
           },
           "ciFailureRate": 17.3,
           "revisionsP50": 0,
           "revisionsP90": 2,
-          "landedFirstPushRate": 64.3,
-          "cycleTimeP50Minutes": 3.6,
+          "landedFirstPushRate": 64.2,
+          "cycleTimeP50Minutes": 3.7,
           "cycleTimeP90Minutes": 33.3,
           "rework": {
-            "merges": 523,
-            "fixMerges": 196,
-            "fixShare": 37.5,
+            "merges": 522,
+            "fixMerges": 195,
+            "fixShare": 37.4,
             "attributed": 173,
             "medianHoursToRework": 2.4,
             "p90HoursToRework": 63.6,
@@ -2249,13 +2213,13 @@
           },
           "contention": {
             "greenButUnmergedHours": 163.1,
-            "greenToMergeP50Minutes": 0.9,
+            "greenToMergeP50Minutes": 1,
             "greenToMergeP90Minutes": 25.8,
             "greenToMergeMaxMinutes": 943,
-            "repushRate": 35.7,
+            "repushRate": 35.8,
             "racedShare": 13.8,
-            "prsMeasured": 456,
-            "prsWithGreen": 456
+            "prsMeasured": 455,
+            "prsWithGreen": 455
           },
           "flakes": {
             "pairs": 2,
@@ -2265,15 +2229,15 @@
             ]
           },
           "integration": {
-            "runs": 271,
+            "runs": 268,
             "failures": 0,
             "redMinutes": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 456,
+            "prsMeasured": 455,
             "prsUnmeasured": 0,
-            "workflowRuns": 3418,
+            "workflowRuns": 3412,
             "reworkSource": "git-blame"
           }
         },
@@ -3282,16 +3246,19 @@
         }
       },
       "estate": {
-        "merges": 1033,
-        "platformShare": 64.9,
-        "productShare": 35.1,
+        "merges": 1032,
+        "platformShare": 61.9,
+        "productShare": 38.1,
         "toilRatio": 43.5,
-        "productFeatureShare": 13.9,
+        "productFeatureShare": 14.2,
         "contentionHours": 253,
         "bySide": {
           "platform": {
-            "merges": 670,
-            "share": 64.9
+            "merges": 639,
+            "delivery": 34.5,
+            "rework": 34,
+            "toil": 14.9,
+            "toilRatio": 48.9
           },
           "product": {
             "merges": 363,

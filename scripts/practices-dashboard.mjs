@@ -23,7 +23,7 @@
 
 import { readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { readSessions, summariseSessions } from './practices-session.mjs'
+import { daysSince, readSessions, summariseSessions } from './practices-session.mjs'
 
 /** SRE practice caps toil at 50%. Above that, maintenance is eating delivery. */
 export const TOIL_BUDGET = 50
@@ -160,6 +160,7 @@ td.hot{color:var(--crit); font-weight:600}
 td.mid{color:var(--warn)}
 .side{font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:var(--ink-3); margin-left:6px}
 
+.stale{margin-top:4px; padding:8px 10px; border-left:3px solid var(--warn); background:var(--warn-bg); color:var(--ink-2); font-size:12px}
 .unvalidated{padding:16px 18px; border:1px dashed var(--warn); border-radius:3px; background:var(--warn-bg); color:var(--ink-2); font-size:13px}
 .unvalidated code{font-family:ui-monospace,monospace; font-size:12px}
 .sessions{display:flex; flex-direction:column; gap:6px; padding:16px 18px; background:var(--surface); border:1px solid var(--line); border-radius:3px; font-size:14px}
@@ -191,6 +192,8 @@ export function renderSessions(s, mergeToilRatio) {
       <code>node scripts/practices-session.mjs --minutes N --delivery N --platform N --toil N</code>.
     </div>`
   }
+  const age = daysSince(s.lastDate)
+  const stale = age !== null && age >= 7
   const gap =
     mergeToilRatio === null || s.toil === null ? null : Math.round((s.toil - mergeToilRatio) * 10) / 10
   const verdict =
@@ -203,6 +206,7 @@ export function renderSessions(s, mergeToilRatio) {
     <div><span class="k">recorded</span> <strong class="num">${s.sessions}</strong> sessions · <strong class="num">${s.hours}h</strong></div>
     <div><span class="k">wall-clock</span> delivery <strong class="num">${fmt(s.delivery, '%')}</strong> · platform <strong class="num">${fmt(s.platform, '%')}</strong> · toil <strong class="num">${fmt(s.toil, '%')}</strong></div>
     <div><span class="k">merge proxy</span> toil <strong class="num">${fmt(mergeToilRatio, '%')}</strong> — ${esc(verdict)}</div>
+    ${stale ? `<div class="stale">Last recorded <strong>${age} days ago</strong> — a calibration that stopped is not calibration; the working pattern it validated has moved on.</div>` : ''}
   </div>`
 }
 

@@ -31,7 +31,12 @@ import {
   renderSessions,
 } from '../../../scripts/practices-dashboard.mjs'
 // @ts-expect-error -- plain .mjs, same arrangement as above.
-import { buildEntry, summariseSessions } from '../../../scripts/practices-session.mjs'
+import {
+  buildEntry,
+  daysSince,
+  nudge,
+  summariseSessions,
+} from '../../../scripts/practices-session.mjs'
 
 /** A workflow run as `GET /repos/{o}/{r}/actions/runs` returns it. */
 const run = (
@@ -1077,5 +1082,39 @@ describe('mergeExtracted', () => {
   it('leaves a genuinely new row untouched', () => {
     const merged = mergeExtracted([{ summary: 'brand new', date: null, costMinutes: null }], [])
     expect(merged[0].date).toBeNull()
+  })
+})
+
+describe('daysSince / nudge', () => {
+  const now = new Date('2026-07-27T09:00:00Z')
+
+  it('measures staleness in whole days', () => {
+    expect(daysSince('2026-07-27', now)).toBe(0)
+    expect(daysSince('2026-07-20', now)).toBe(7)
+  })
+
+  it('returns null rather than 0 when nothing was ever recorded', () => {
+    expect(daysSince(null, now)).toBeNull()
+  })
+
+  /**
+   * The empty case has to say what it is protecting. A reminder that only nags
+   * gets ignored, and then the thing it guards silently stops happening — which
+   * is exactly how a documented worktree-hygiene rule left nine orphans behind.
+   */
+  it('explains the consequence when nothing has ever been logged', () => {
+    const m = nudge({ sessions: 0, lastDate: null }, 3, now)
+    expect(m).toContain('unvalidated inference')
+    expect(m).toContain('practices-session.mjs')
+  })
+
+  it('stays silent while the log is fresh', () => {
+    expect(nudge({ sessions: 4, lastDate: '2026-07-26' }, 3, now)).toBeNull()
+  })
+
+  it('nudges once the log goes stale, naming the gap', () => {
+    const m = nudge({ sessions: 4, lastDate: '2026-07-20' }, 3, now)
+    expect(m).toContain('7 days ago')
+    expect(m).toContain('4 recorded so far')
   })
 })

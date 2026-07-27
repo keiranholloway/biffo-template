@@ -108,6 +108,8 @@ export function summariseSessions(entries) {
     return { sessions: 0, minutes: 0, delivery: null, platform: null, toil: null, toilRatio: null }
   }
   const total = entries.reduce((sum, e) => sum + e.minutes, 0)
+  const dates = entries.map((e) => e.date).filter(Boolean).sort()
+  const lastDate = dates[dates.length - 1] ?? null
   const share = (bucket) => {
     const n = entries.reduce((sum, e) => sum + (e[bucket] ?? 0), 0)
     return total ? Math.round((n / total) * 1000) / 10 : null
@@ -121,7 +123,46 @@ export function summariseSessions(entries) {
     toil: share('toil'),
     // Directly comparable with the merge-derived toilRatio on the dashboard.
     toilRatio: share('toil'),
+    lastDate,
   }
+}
+
+/**
+ * How stale is the ground truth?
+ *
+ * A calibration that stopped two months ago is not calibration — the working
+ * pattern it validated has moved on. This is what the daily job nudges on, and
+ * what the dashboard shows beside the comparison.
+ *
+ * @param {string | null} lastDate ISO date of the most recent session
+ * @param {Date} now
+ */
+export function daysSince(lastDate, now = new Date()) {
+  if (!lastDate) return null
+  const then = Date.parse(`${lastDate}T00:00:00Z`)
+  if (Number.isNaN(then)) return null
+  const today = Date.parse(`${now.toISOString().slice(0, 10)}T00:00:00Z`)
+  return Math.max(0, Math.round((today - then) / 864e5))
+}
+
+/**
+ * The line the daily cron job prints.
+ *
+ * Deliberately states *why* rather than just nagging: a reminder that does not
+ * say what it is protecting gets ignored, and then the thing it protects
+ * silently stops happening — which is exactly how the worktree-hygiene rule
+ * lapsed and left nine orphans behind.
+ *
+ * @param {{sessions: number, lastDate: string | null}} summary
+ * @param {number} staleAfterDays
+ */
+export function nudge(summary, staleAfterDays = 3, now = new Date()) {
+  if (!summary || summary.sessions === 0) {
+    return 'no sessions ever recorded — every dashboard figure is unvalidated inference. One command at the end of your next session fixes that: scripts/practices-session.mjs --minutes N --delivery N --platform N --toil N'
+  }
+  const age = daysSince(summary.lastDate, now)
+  if (age === null || age < staleAfterDays) return null
+  return `last session logged ${age} days ago (${summary.lastDate}) — the proxy comparison is going stale; ${summary.sessions} recorded so far`
 }
 
 /** @param {string} file */
@@ -147,6 +188,7 @@ function parseArgs(argv) {
     if (!flag.startsWith('--')) continue
     const key = flag.slice(2)
     if (key === 'summary') args.summary = true
+    else if (key === 'nudge') args.nudge = true
     else args[key] = argv[++i]
   }
   return args
@@ -154,6 +196,12 @@ function parseArgs(argv) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2))
+
+  if (args.nudge) {
+    const message = nudge(summariseSessions(readSessions(args.file)))
+    if (message) process.stdout.write(`practices: ${message}\n`)
+    return
+  }
 
   if (args.summary) {
     const s = summariseSessions(readSessions(args.file))

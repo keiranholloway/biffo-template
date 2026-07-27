@@ -52,6 +52,14 @@ git rebase origin/dev --quiet || {
 node scripts/practices-metrics.mjs --windows 1,7,90 --out "$DATA_DIR"
 node scripts/practices-dashboard.mjs --out "$PAGE" --data "$DATA_DIR"
 
+# A stable path outside the worktree, so the page can be bookmarked once and
+# stay correct. The copy inside the worktree moves with every rebase and gets
+# rewritten by the next run; a bookmark pointing at it would break silently the
+# first time the branch was recreated.
+STABLE="${PRACTICES_PAGE:-$HOME/practices-dashboard.html}"
+cp "$PAGE" "$STABLE"
+echo "practices-daily: page at file://$STABLE"
+
 if git diff --quiet -- "$DATA_DIR" "$PAGE"; then
   echo "practices-daily: no change"
   exit 0
@@ -65,7 +73,9 @@ git -c commit.gpgsign=false commit --no-verify -q -m "chore(practices): snapshot
 git push origin "$BRANCH" --quiet
 echo "practices-daily: pushed snapshot $(date -u +%F)"
 
-# The dashboard *page* is regenerated here, but republishing it to its shared
-# Artifact URL needs a Claude session — cron cannot call that tool. The HTML is
-# committed either way, so the data is never lost; the hosted page refreshes
-# next time it is asked for.
+# The rendered page lives in three places on purpose:
+#   1. $STABLE            — bookmark this; rewritten in place every run
+#   2. the pushed branch  — version-controlled history, one commit per day
+#   3. an Artifact URL    — only when a Claude session republishes it, since
+#                           cron cannot call that tool. Not required for the
+#                           daily read; useful for sharing.

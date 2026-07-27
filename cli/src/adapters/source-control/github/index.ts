@@ -36,6 +36,29 @@ export const DEFAULT_STATUS_CHECKS = [
   'Terraform Validate & Security',
 ]
 
+/**
+ * Merge settings every Biffo repo is created with (#714).
+ *
+ * **`allow_auto_merge` is the load-bearing one, and its absence is a trap.**
+ * `gh pr merge --squash --auto` against a repo where auto-merge is disabled does
+ * **not** queue — it merges *immediately* if the PR happens to be mergeable at
+ * that instant. On a protected branch that is harmless: the requirements still
+ * gate it. On an unprotected branch it merges regardless of check state, which
+ * is how `biffo-plugin-ideation#54` landed with both CI jobs still running.
+ *
+ * The two defects compound. A repo born without protection *and* without
+ * auto-merge turns the documented `--auto` flow into "merge now, unchecked" —
+ * and every Biffo repo had `allow_auto_merge: false` until it was set by hand.
+ *
+ * `delete_branch_on_merge` is here for a smaller reason: without it, merged
+ * topic branches accumulate until nobody can tell which are live, the same
+ * confusion AGENTS.md §1 exists to prevent for worktrees.
+ */
+export const REPO_MERGE_SETTINGS = {
+  allow_auto_merge: true,
+  delete_branch_on_merge: true,
+} as const
+
 export class GitHubAdapter {
   private octokit: Octokit
   private templateOwner: string
@@ -204,6 +227,7 @@ export class GitHubAdapter {
         org,
         name: repo,
         private: true,
+        ...REPO_MERGE_SETTINGS,
         ...(description !== undefined ? { description } : {}),
       })
       log.success(`Repository created: ${data.html_url}`)
@@ -217,6 +241,7 @@ export class GitHubAdapter {
     const { data } = await this.octokit.repos.createForAuthenticatedUser({
       name: repo,
       private: true,
+      ...REPO_MERGE_SETTINGS,
       ...(description !== undefined ? { description } : {}),
     })
     log.success(`Repository created: ${data.html_url}`)

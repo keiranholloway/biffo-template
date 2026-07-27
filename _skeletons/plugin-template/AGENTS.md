@@ -66,7 +66,39 @@ repo; only its product differs.
   before merge: `git log origin/<branch> -1`. A green PR page is not proof your
   latest local commit reached it.
 
-## 7. CI runners — two steps this repo cannot do for itself
+## 7. Creating this repo correctly (read once, at birth)
+
+**No `biffo` command creates a standalone plugin repo.** `biffo plugin create`
+scaffolds a plugin _into an existing checkout_; a repo like this one is made by
+hand. So the governance that `biffo init` and `biffo sibling create` apply
+automatically is **not applied here**, and has to be set deliberately.
+
+That gap is not theoretical: both existing plugin repos ran with **no branch
+protection at all**, and `biffo-plugin-ideation#54` was merged with both CI jobs
+still in progress because nothing stopped it (biffo-template#714).
+
+After creating the repo and pushing this skeleton:
+
+```bash
+# 1. Auto-merge must be ON, or `gh pr merge --auto` merges IMMEDIATELY
+#    rather than queuing — see the warning below.
+gh api -X PATCH repos/<org>/<repo> -f allow_auto_merge=true -f delete_branch_on_merge=true
+
+# 2. Protect dev, deriving the required checks from what CI actually reports.
+#    Run it once CI has gone green at least twice, so there is something to derive from.
+biffo check branch-protection --repo <org>/<repo> --fix
+
+# 3. Confirm it took.
+biffo check branch-protection --repo <org>/<repo>
+```
+
+> **`--auto` is not a safety net on an unconfigured repo.** With
+> `allow_auto_merge` disabled, `gh pr merge --squash --auto` does not queue — it
+> merges _now_ if the PR is mergeable at that instant. On an unprotected branch
+> that means merging with checks still running. Steps 1 and 2 together are what
+> make the documented flow behave as documented; either alone is not enough.
+
+## 8. CI runners — two steps this repo cannot do for itself
 
 The workflows use `runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}`, so they
 work anywhere by default and route to a self-hosted fleet when one exists. Two
@@ -83,7 +115,7 @@ fleet:
 If a job is queued and nothing is happening, check the grant before anything
 else. It is the failure that looks exactly like patience.
 
-## 8. Security
+## 9. Security
 
 - **Never commit secrets** (keys, tokens, credentials, `.env` values).
 - **Never silently disable a security gate.** If one must be loosened, do it in

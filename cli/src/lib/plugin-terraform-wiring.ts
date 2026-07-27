@@ -96,6 +96,13 @@ function standardArguments(pluginName: string, handler: string): Array<[string, 
     ['event_bus_name', 'module.events.event_bus_name'],
     ['core_api_url', 'module.api_gateway.api_endpoint'],
     ['core_api_execution_arn', 'module.api_gateway.execution_arn'],
+    // ADR-0021: a user-facing plugin has no Lambda of its own — its module
+    // provisions a frontend S3 origin and REQUIRES the parent distribution's
+    // ARN, with no default. Without this the generated block cannot plan at
+    // all ("No value for required variable"), which is what made #685 break
+    // `terraform plan` for a whole environment. Filtered by declaration below,
+    // so a Lambda-backed legacy module that does not declare it is unaffected.
+    ['cdn_distribution_arn', 'module.cdn.distribution_arn'],
     ['tags', 'local.tags'],
   ]
 }
@@ -326,6 +333,40 @@ export function declaredVariables(moduleDir: string): Set<string> {
   return names
 }
 
+/**
+ * Output names a module declares, read the same way as {@link declaredVariables}.
+ *
+ * The generator used to hardcode a single `function_arn` output on every
+ * plugin. Under ADR-0021 a user-facing plugin has no Lambda and therefore no
+ * such output, so the generated block failed with `Unsupported attribute` — a
+ * correct, current-architecture module could not be instantiated at all (#685).
+ *
+ * Deriving them means the CLI carries no per-plugin knowledge: whatever the
+ * module declares is what gets re-exported.
+ */
+export function declaredOutputs(moduleDir: string): Set<string> {
+  const names = new Set<string>()
+  let entries
+  try {
+    entries = readdirSync(moduleDir, { withFileTypes: true })
+  } catch {
+    return names
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.tf')) continue
+    let contents: string
+    try {
+      contents = readFileSync(join(moduleDir, entry.name), 'utf8')
+    } catch {
+      continue
+    }
+    for (const match of contents.matchAll(/^\s*output\s+"([^"]+)"/gm)) {
+      names.add(match[1]!)
+    }
+  }
+  return names
+}
+
 /** Renders `key = value` lines with `=` aligned, as `terraform fmt` requires. */
 function renderArguments(args: Array<[string, string]>, indent: string): string {
   const width = Math.max(...args.map(([key]) => key.length))
@@ -337,9 +378,26 @@ function renderModuleBlock(
   declared: Set<string>,
   handler: string,
   source: string,
+  outputs: Set<string>,
 ): string {
   const args = standardArguments(pluginName, handler).filter(([key]) => declared.has(key))
   const quoted = JSON.stringify(pluginName)
+
+  // Re-export whatever the module declares, rather than assuming `function_arn`.
+  // A hardcoded output is why a correct ADR-0021 module could not be
+  // instantiated: it has no Lambda, so referencing one is `Unsupported
+  // attribute` and the whole environment fails to plan (#685).
+  const exported = [...outputs]
+    .sort()
+    .map((name) =>
+      [
+        `output "plugin_${pluginName}_${name}" {`,
+        `  description = "${name} of the ${pluginName} plugin, or null when it is not in enabled_plugins."`,
+        `  value       = try(module.plugin_${pluginName}[${quoted}].${name}, null)`,
+        '}',
+      ].join('\n'),
+    )
+
   const lines = [
     `module "plugin_${pluginName}" {`,
     `  source   = "${source}"`,
@@ -347,11 +405,7 @@ function renderModuleBlock(
     '',
     renderArguments(args, '  '),
     '}',
-    '',
-    `output "plugin_${pluginName}_function_arn" {`,
-    `  description = "Lambda ARN of the ${pluginName} plugin, or null when it is not in enabled_plugins."`,
-    `  value       = try(module.plugin_${pluginName}[${quoted}].function_arn, null)`,
-    '}',
+    ...(exported.length > 0 ? ['', exported.join('\n\n')] : []),
   ]
   return lines.join('\n')
 }
@@ -384,6 +438,8 @@ export function renderGeneratedTerraform(
   plugins: Array<{
     name: string
     declaredVariables: Set<string>
+    /** Outputs the module declares; each is re-exported. Absent means none. */
+    declaredOutputs?: Set<string>
     handler?: string
     /** Defaults to the copied `modules/plugins/<name>` path, which is correct
      * for a third-party plugin; a first-party one passes its real source. */
@@ -396,6 +452,7 @@ export function renderGeneratedTerraform(
       p.declaredVariables,
       p.handler ?? DEFAULT_PLUGIN_HANDLER,
       p.source ?? THIRD_PARTY_TERRAFORM(p.name),
+      p.declaredOutputs ?? new Set<string>(),
     ),
   )
   return `${GENERATED_HEADER}\n${blocks.join('\n\n')}\n`
@@ -427,6 +484,7 @@ export function syncPluginTerraform(cwd: string): PluginTerraformSyncResult {
     return {
       name,
       declaredVariables: declaredVariables(moduleDir),
+      declaredOutputs: declaredOutputs(moduleDir),
       source: pluginModuleSource(cwd, name),
     }
   })

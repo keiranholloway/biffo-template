@@ -29,13 +29,31 @@ const STANDARD_VARIABLES = [
   'tags',
 ]
 
-function makePluginModule(name: string, variables: string[] = STANDARD_VARIABLES): void {
+/**
+ * A plugin module fixture.
+ *
+ * `outputs` defaults to `function_arn` — the Lambda-backed (ADR-0018) shape —
+ * because the generator now re-exports what a module *declares* rather than
+ * assuming that output exists. A fixture with no outputs.tf previously still
+ * produced a `function_arn` output, which is the #685 defect itself: a module
+ * that has no Lambda got one invented, and `terraform plan` failed with
+ * `Unsupported attribute` for the whole environment.
+ */
+function makePluginModule(
+  name: string,
+  variables: string[] = STANDARD_VARIABLES,
+  outputs: string[] = ['function_arn'],
+): void {
   const dir = join(cwd, 'modules', 'plugins', name)
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'main.tf'), '# module body\n')
   writeFileSync(
     join(dir, 'variables.tf'),
     variables.map((v) => `variable "${v}" {\n  type = string\n}\n`).join('\n'),
+  )
+  writeFileSync(
+    join(dir, 'outputs.tf'),
+    outputs.map((o) => `output "${o}" {\n  value = ""\n}\n`).join('\n'),
   )
 }
 

@@ -1,5 +1,6 @@
 import { Command } from 'commander'
 import { runOwnershipCheck } from '../scripts/check-core-ownership.js'
+import { runPluginCollisionCheck } from '../scripts/check-plugin-collisions.js'
 import { runPluginTerraformCheck } from '../scripts/check-plugin-terraform.js'
 import { runReleaseSubjectCheck } from '../scripts/check-release-subject.js'
 
@@ -25,7 +26,7 @@ import { runReleaseSubjectCheck } from '../scripts/check-release-subject.js'
  * code path rather than two that can drift.
  */
 export const checkCommand = new Command('check').description(
-  'Repo guards (ownership, release subject, plugin terraform) — run in CI and git hooks',
+  'Repo guards (ownership, release subject, plugin terraform, plugin collisions) — run in CI and git hooks',
 )
 
 checkCommand
@@ -47,6 +48,13 @@ checkCommand
   .argument('[base]', 'Base branch to diff against; defaults to $GITHUB_BASE_REF')
   .action(async () => {
     await runReleaseSubjectCheck(rawArgsAfter('release-subject'))
+  })
+
+checkCommand
+  .command('plugin-collisions')
+  .description('Refuse two vendored plugins claiming the same importable name (#688)')
+  .action(async () => {
+    await runPluginCollisionCheck()
   })
 
 checkCommand

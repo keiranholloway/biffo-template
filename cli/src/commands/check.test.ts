@@ -23,7 +23,7 @@ describe('biffo check', () => {
   const names = checkCommand.commands.map((c) => c.name()).sort()
 
   it('exposes exactly the guards CI and the commit hook invoke', () => {
-    expect(names).toEqual(['ownership', 'plugin-terraform', 'release-subject'])
+    expect(names).toEqual(['ownership', 'plugin-collisions', 'plugin-terraform', 'release-subject'])
   })
 
   it('is registered on the root program, or the published binary has no guards', () => {

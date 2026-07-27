@@ -1,33 +1,48 @@
 /**
- * Record where a working session's wall-clock actually went.
+ * Record what one unit of work actually cost, and where it went.
  *
  * ## Why this is the one metric a human has to produce
  *
  * Everything else on the practices dashboard is derived from merge metadata, so
  * the clock only starts when a pull request opens. The experience that prompted
- * this whole programme — "a five-minute change turns into an hour" — happens
- * almost entirely *before* that, and git will never record it.
+ * this programme — "a five-minute change turns into an hour" — happens almost
+ * entirely *before* that, and git will never record it.
  *
  * ## What it is really for
  *
  * Not to add a number, but to **falsify the merge proxy**. The platform/product
  * split and the toil ratio are inferred from commit types and repo names; they
- * are free, and they might be wrong. If the recorded wall-clock split
- * consistently disagrees with the merge-derived one, the proxy is wrong and the
- * dashboard's headline needs rebuilding. That check is impossible without
- * ground truth, and this is the cheapest ground truth available.
+ * are free, and they might be wrong. If recorded effort consistently disagrees
+ * with the merge-derived figure, the proxy is wrong and the dashboard's headline
+ * needs rebuilding.
+ *
+ * ## The unit is one task, not one day and not one session
+ *
+ * Record after **each unit of work**, from whichever session did it. Entries are
+ * **agent-effort minutes** and are therefore additive: five sessions working
+ * thirty minutes in parallel is 150 minutes of capacity spent, and all five
+ * should log it.
+ *
+ * That is deliberate, and it is what makes the comparison valid. The merge proxy
+ * counts merges produced by *every* agent, so it measures capacity too. Logging
+ * the operator's personal wall-clock instead would compare a single human's
+ * afternoon against the output of five parallel workers — apples to oranges, and
+ * it would make the proxy look wrong for the wrong reason.
+ *
+ * The log is append-only and each line carries its date, so a day's total is
+ * simply the sum of that day's lines. Nothing needs to be merged or mutated.
  *
  * ## Why it is deliberately coarse
  *
  * Three buckets and a total, in whole minutes, from memory, at the end of a
- * session. A finer instrument would be more accurate and would not get used —
- * and a metric nobody records is indistinguishable from one that does not
- * exist. Estimates are expected; honesty matters more than precision, because
- * a systematically flattering estimate breaks the falsification test above.
+ * task. A finer instrument would be more accurate and would not get used — and a
+ * metric nobody records is indistinguishable from one that does not exist.
+ * Estimates are expected; honesty matters more than precision, because a
+ * systematically flattering estimate breaks the falsification test above.
  *
  * Usage:
- *   node scripts/practices-session.mjs --minutes 180 --delivery 60 --platform 40 --toil 80 \
- *     --note "idea-scout fan-in; lost an hour to the plugin skeleton"
+ *   node scripts/practices-session.mjs --minutes 45 --platform 30 --toil 15 \
+ *     --note "core upgrade into tabsii; lost 15m to the publish race"
  *
  *   node scripts/practices-session.mjs --summary
  */
@@ -35,7 +50,16 @@
 import { appendFileSync, existsSync, readFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 
-export const DEFAULT_LOG = 'docs/practices/sessions.jsonl'
+/**
+ * Outside the repo on purpose.
+ *
+ * Appending to a tracked file would leave the primary checkout dirty on `dev`
+ * after every entry, and committing each one through its own PR would add more
+ * merges to the very contention this programme is measuring. The daily job
+ * copies it onto the snapshot branch instead, so the history is still
+ * version-controlled without a PR per entry.
+ */
+export const DEFAULT_LOG = `${process.env.HOME}/.practices-sessions.jsonl`
 
 /**
  * The three buckets, chosen to line up with the merge-derived work mix so the
@@ -105,25 +129,32 @@ export function buildEntry(input, now = new Date()) {
  */
 export function summariseSessions(entries) {
   if (entries.length === 0) {
-    return { sessions: 0, minutes: 0, delivery: null, platform: null, toil: null, toilRatio: null }
+    return {
+      tasks: 0, days: 0, sessions: 0, minutes: 0, hours: 0,
+      delivery: null, platform: null, toil: null, toilRatio: null, lastDate: null,
+    }
   }
   const total = entries.reduce((sum, e) => sum + e.minutes, 0)
-  const dates = entries.map((e) => e.date).filter(Boolean).sort()
-  const lastDate = dates[dates.length - 1] ?? null
+  const dates = [...new Set(entries.map((e) => e.date).filter(Boolean))].sort()
   const share = (bucket) => {
     const n = entries.reduce((sum, e) => sum + (e[bucket] ?? 0), 0)
     return total ? Math.round((n / total) * 1000) / 10 : null
   }
   return {
+    // Entries are units of work, not days and not agent sessions.
+    tasks: entries.length,
+    days: dates.length,
+    // Kept so existing callers (the dashboard, the nudge) keep working.
     sessions: entries.length,
     minutes: total,
     hours: Math.round((total / 60) * 10) / 10,
     delivery: share('delivery'),
     platform: share('platform'),
     toil: share('toil'),
-    // Directly comparable with the merge-derived toilRatio on the dashboard.
+    // Directly comparable with the merge-derived toilRatio: both are
+    // capacity-weighted across every agent, not one person's wall-clock.
     toilRatio: share('toil'),
-    lastDate,
+    lastDate: dates[dates.length - 1] ?? null,
   }
 }
 
@@ -205,12 +236,12 @@ function main() {
 
   if (args.summary) {
     const s = summariseSessions(readSessions(args.file))
-    if (s.sessions === 0) {
-      process.stdout.write('no sessions recorded yet\n')
+    if (s.tasks === 0) {
+      process.stdout.write('no work recorded yet\n')
       return
     }
     process.stdout.write(
-      `${s.sessions} sessions · ${s.hours}h\n` +
+      `${s.tasks} tasks over ${s.days} days · ${s.hours}h of effort\n` +
         `  delivery ${s.delivery}%  platform ${s.platform}%  toil ${s.toil}%\n`,
     )
     return

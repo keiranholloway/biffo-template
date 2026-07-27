@@ -888,18 +888,38 @@ describe('summariseSessions', () => {
    */
   it('produces a toil ratio comparable with the merge-derived one', () => {
     const s = summariseSessions([
-      { minutes: 100, delivery: 50, platform: 20, toil: 30 },
-      { minutes: 100, delivery: 30, platform: 20, toil: 50 },
+      { date: '2026-07-27', minutes: 100, delivery: 50, platform: 20, toil: 30 },
+      { date: '2026-07-27', minutes: 100, delivery: 30, platform: 20, toil: 50 },
     ])
-    expect(s.sessions).toBe(2)
+    expect(s.tasks).toBe(2)
     expect(s.hours).toBe(3.3)
     expect(s.delivery).toBe(40)
     expect(s.toilRatio).toBe(40)
   })
 
+  /**
+   * Entries are agent-effort minutes and are additive on purpose. Five sessions
+   * working thirty minutes in parallel is 150 minutes of capacity spent, and the
+   * merge proxy it is compared against also counts every agent's output. Logging
+   * one person's wall-clock instead would compare one afternoon against five
+   * parallel workers and make the proxy look wrong for the wrong reason.
+   */
+  it('adds effort across parallel sessions and counts distinct days', () => {
+    const s = summariseSessions([
+      { date: '2026-07-27', minutes: 30, delivery: 0, platform: 30, toil: 0 },
+      { date: '2026-07-27', minutes: 30, delivery: 0, platform: 0, toil: 30 },
+      { date: '2026-07-26', minutes: 60, delivery: 60, platform: 0, toil: 0 },
+    ])
+    expect(s.tasks).toBe(3)
+    expect(s.days).toBe(2)
+    expect(s.minutes).toBe(120)
+    expect(s.toilRatio).toBe(25)
+  })
+
   it('returns nulls rather than zeroes with nothing recorded', () => {
     const s = summariseSessions([])
-    expect(s.sessions).toBe(0)
+    expect(s.tasks).toBe(0)
+    expect(s.days).toBe(0)
     expect(s.toilRatio).toBeNull()
   })
 })

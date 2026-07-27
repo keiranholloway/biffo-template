@@ -189,7 +189,7 @@ export function renderSessions(s, mergeToilRatio) {
       <strong>No sessions recorded.</strong> Every figure above is inferred from merge
       metadata — commit types and repo names — and nothing has tested that inference
       against a real day's wall-clock. Record one with
-      <code>node scripts/practices-session.mjs --minutes N --delivery N --platform N --toil N</code>.
+      <code>node scripts/practices-session.mjs --minutes N --delivery N --platform N --toil N</code> after each task — entries are additive across parallel sessions.
     </div>`
   }
   const age = daysSince(s.lastDate)
@@ -203,7 +203,7 @@ export function renderSessions(s, mergeToilRatio) {
         ? `proxy agrees within ${Math.abs(gap)} points`
         : `proxy is off by ${gap > 0 ? '+' : ''}${gap} points — treat the headline with suspicion`
   return `<div class="sessions">
-    <div><span class="k">recorded</span> <strong class="num">${s.sessions}</strong> sessions · <strong class="num">${s.hours}h</strong></div>
+    <div><span class="k">recorded</span> <strong class="num">${s.tasks ?? s.sessions}</strong> tasks · <strong class="num">${s.hours}h</strong></div>
     <div><span class="k">wall-clock</span> delivery <strong class="num">${fmt(s.delivery, '%')}</strong> · platform <strong class="num">${fmt(s.platform, '%')}</strong> · toil <strong class="num">${fmt(s.toil, '%')}</strong></div>
     <div><span class="k">merge proxy</span> toil <strong class="num">${fmt(mergeToilRatio, '%')}</strong> — ${esc(verdict)}</div>
     ${stale ? `<div class="stale">Last recorded <strong>${age} days ago</strong> — a calibration that stopped is not calibration; the working pattern it validated has moved on.</div>` : ''}
@@ -377,7 +377,7 @@ function main() {
   const argv = process.argv.slice(2)
   let out = 'docs/practices/dashboard.html'
   let dir = 'docs/practices/data'
-  let sessionLog = 'docs/practices/sessions.jsonl'
+  let sessionLog = `${process.env.HOME}/.practices-sessions.jsonl`
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--out') out = argv[++i]
     else if (argv[i] === '--data') dir = argv[++i]

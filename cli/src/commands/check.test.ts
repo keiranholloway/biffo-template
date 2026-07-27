@@ -26,7 +26,7 @@ describe('biffo check', () => {
    * The subcommands CI invokes on every PR. These are the seam: rename or drop
    * one and every instance's CI fails on a command that no longer exists.
    */
-  const ciGuards = ['ownership', 'plugin-terraform', 'release-subject']
+  const ciGuards = ['ownership', 'plugin-collisions', 'plugin-terraform', 'release-subject']
 
   /**
    * Subcommands that are deliberately NOT wired into per-PR CI. `biffo check

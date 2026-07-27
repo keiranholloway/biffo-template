@@ -160,6 +160,14 @@ jobs:
       - name: Plugin Terraform guard
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/biffo.sh check plugin-terraform
+      # Two plugins vendored into one instance must not claim the same
+      # importable name — a regular `scripts` package, or a test module pytest
+      # imports by bare basename. Both broke the *incumbent* plugin when a
+      # second was installed (#688). A no-op here (the template vendors no
+      # plugins) and load-bearing in every instance, which is where they meet.
+      - name: Plugin collision guard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check plugin-collisions
 
   python:
     name: Python (lint, types, test, security)

@@ -160,6 +160,11 @@ export interface CatalogActionField {
     // Rendered by the builder's "Record the result" section against the
     // catalog's `writeback_targets`, never as a plain input.
     | 'writeback'
+    // A fan-in agent's structured result contract (#729) — the inline JSON tool
+    // schema it must call to answer. Structured, so never a plain input: a
+    // string typed into a text box is not a tool schema. It has no dedicated
+    // control yet, so the builder round-trips the stored value untouched.
+    | 'output_tools'
   required: boolean
   /**
    * `true` marks the value a credential (#432): a Slack/Google Chat webhook URL.

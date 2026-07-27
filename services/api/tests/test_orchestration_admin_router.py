@@ -1197,6 +1197,120 @@ def test_agent_workflow_accepts_a_comma_separated_tools_string(client: TestClien
     assert resp.status_code == 201, resp.text
 
 
+def _fan_in_config(**over) -> dict:
+    config = {
+        "expect_agents": "researcher-a,researcher-b",
+        "agent_name": "synthesiser",
+        "instructions": "Rank what they found.",
+    }
+    config.update(over)
+    return config
+
+
+def _candidates_tool(name: str = "submit_idea_candidates") -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": "Submit the ranked candidates. Call this exactly once.",
+            "parameters": {"type": "object", "properties": {"candidates": {"type": "array"}}},
+        },
+    }
+
+
+def test_fan_in_accepts_and_round_trips_an_output_tool(client: TestClient):
+    """#729: a fan-in agent could be *told* to call a tool but never given one,
+    so it answered in prose and the caller's extractor rejected the result."""
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="agent_fan_in",
+            action_config=_fan_in_config(output_tools=[_candidates_tool()]),
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+    stored = resp.json()["action_config"]["output_tools"]
+    assert stored[0]["function"]["name"] == "submit_idea_candidates"
+
+
+def test_fan_in_accepts_a_bare_function_object(client: TestClient):
+    """Mirrors the runtime's `_coerce_output_tool`, which takes the provider
+    shape or the inner `function` object directly."""
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="agent_fan_in",
+            action_config=_fan_in_config(output_tools=_candidates_tool()["function"]),
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+
+
+def test_fan_in_without_an_output_tool_is_still_valid(client: TestClient):
+    """Every workflow authored before the field existed answers in prose. The
+    field is additive, so absence must stay valid."""
+    resp = client.post(
+        _BASE, json=_valid_body(action_type="agent_fan_in", action_config=_fan_in_config())
+    )
+    assert resp.status_code == 201, resp.text
+    assert "output_tools" not in resp.json()["action_config"]
+
+
+@pytest.mark.parametrize(
+    ("tool", "expected"),
+    [
+        (
+            {"name": "Submit Candidates", "description": "d", "parameters": {"type": "object"}},
+            "Submit Candidates",
+        ),
+        (
+            {"name": "submit_x", "description": "  ", "parameters": {"type": "object"}},
+            "description",
+        ),
+        (
+            {"name": "submit_x", "description": "d", "parameters": {"type": "array"}},
+            "JSON Schema object",
+        ),
+        ({"name": "submit_x", "description": "d"}, "JSON Schema object"),
+    ],
+)
+def test_fan_in_rejects_a_malformed_output_tool(client: TestClient, tool: dict, expected: str):
+    """Rejected at *save* rather than mid-chain: by run time the fan-out has
+    already been paid for."""
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="agent_fan_in", action_config=_fan_in_config(output_tools=[tool])
+        ),
+    )
+    assert resp.status_code == 422
+    assert expected in resp.text
+
+
+def test_fan_in_rejects_duplicate_output_tool_names(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="agent_fan_in",
+            action_config=_fan_in_config(
+                output_tools=[_candidates_tool(), _candidates_tool()],
+            ),
+        ),
+    )
+    assert resp.status_code == 422
+    assert "more than once" in resp.text
+
+
+def test_fan_in_catalog_declares_output_tools(client: TestClient):
+    """Undeclared is the whole bug: the save path keeps only *declared* fields,
+    so an undeclared output_tools is silently dropped on any edit."""
+    catalog = client.get(f"{_BASE}/catalog").json()
+    fan_in = next(a for a in catalog["actions"] if a["type"] == "agent_fan_in")
+    field = next(f for f in fan_in["config_fields"] if f["name"] == "output_tools")
+    assert field["type"] == "output_tools"
+    assert field["required"] is False
+
+
 def test_known_agent_tools_matches_the_runtime_manifest():
     """KNOWN_AGENT_TOOLS is a reproduced mirror of the runtime's TOOL_REGISTRY
     (Core cannot import agent_runtime's Python, ADR-0002). The runtime's own

@@ -256,6 +256,33 @@ const catalogWithWriteBack: WorkflowCatalog = {
 // A catalog whose FIRST trigger declares payload fields (#505), so the builder
 // loads straight into the trigger-aware "Only when…" dropdowns. It keeps the
 // field-less triggers too, to exercise the free-text fallback in one fixture.
+// A fan-in action carrying every structured sub-config it really has (#729).
+// `output_tools` is a JSON tool schema; drawn as a generic text input it would
+// put a *string* where Core expects an object.
+const catalogWithFanIn: WorkflowCatalog = {
+  triggers: catalog.triggers,
+  actions: [
+    ...catalog.actions,
+    {
+      type: 'agent_fan_in',
+      label: 'Run an agent once several agents have finished',
+      config_fields: [
+        { name: 'expect_agents', label: 'Wait for these agents', type: 'text', required: true },
+        { name: 'agent_name', label: 'Agent name', type: 'text', required: true },
+        { name: 'instructions', label: 'Instructions', type: 'textarea', required: true },
+        {
+          name: 'output_tools',
+          label: 'Structured result — the tool this agent must call to answer',
+          type: 'output_tools',
+          required: false,
+        },
+        { name: 'writeback', label: 'Record the result', type: 'writeback', required: false },
+      ],
+    },
+  ],
+  scope_levels: [],
+}
+
 const catalogWithFields: WorkflowCatalog = {
   triggers: [
     {
@@ -639,6 +666,25 @@ describe('OrchestrationPage', () => {
     expect(screen.getByLabelText('Message')).toBeInTheDocument()
     expect(screen.queryByLabelText('Template name')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Language code')).not.toBeInTheDocument()
+  })
+
+  it('never draws a fan-in structured field as a generic input', async () => {
+    // A structured sub-config rendered as a text box does not merely look wrong:
+    // typing in it stores a string where Core expects an object. The plain fields
+    // must still render, so this is an exclusion and not a blanket suppression.
+    fetchWorkflows.mockResolvedValue([])
+    fetchCatalog.mockResolvedValue(catalogWithFanIn)
+
+    render(<OrchestrationPage />)
+    fireEvent.change(await screen.findByLabelText('Action'), {
+      target: { value: 'agent_fan_in' },
+    })
+
+    expect(screen.getByLabelText('Agent name')).toBeInTheDocument()
+    expect(
+      screen.queryByLabelText('Structured result — the tool this agent must call to answer'),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Record the result')).not.toBeInTheDocument()
   })
 
   it('swaps in the template fields when the message type is template', async () => {

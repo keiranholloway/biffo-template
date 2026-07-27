@@ -138,6 +138,27 @@ clean run — was what actually established #636 was correct.
 `--admin` on every one of four failed merge attempts for #659. Taking it would
 have merged an auth change past branch protection to save ten minutes.
 
+**Read the run, not the checks summary.** `gh pr checks` reported Release Guards
+as `pending` on tabsii-platform#241 while `gh run view --json jobs` reported that
+same job as `failure`. Waiting on the summary would have been waiting for a green
+that was never coming. Two different views of one run disagreed, and only one of
+them was true — when a check "hasn't finished" for an implausibly long time,
+query the run's jobs directly.
+
+**Carry a core release into a real instance before believing it.** Three defects
+(#670, #671, #666) were found in a single afternoon by upgrading tabsii from
+0.127.0, and none was findable upstream — the template always has `public.users`,
+always has an empty write-back registry, and always resolves its CLI locally
+rather than from npm. Template CI was green throughout while an instance could
+not build at all.
+
+**Diagnose to a single cause before fixing any of it.** Three CI steps failed on
+tabsii-platform#241 with three different-looking symptoms — a release-subject
+guard, an ownership guard, and a plugin-Terraform guard. Reproducing each one
+locally showed all three were the same `ETARGET`: an unpublished CLI version.
+Fixing them individually would have been three wrong fixes; the actual fix was
+one changed version number.
+
 ---
 
 ## What needs more thought
@@ -158,6 +179,32 @@ who else claims it?
 **We cannot inspect what a green check did.** CI logs are not retained for the
 self-hosted runs, so verifying whether an audit step actually audited required
 reproducing it locally. Cheap to fix, disproportionate payoff.
+
+**A core version can be tagged but not installable, and nothing notices.**
+`core-tag.yml` tags on merge; `publish-cli.yml` publishes on the tag. When the
+publish fails, the tag survives and the version looks real. Every instance guard
+then execs `npx @biffo/cli@<its pinned version>`, so an instance that upgrades
+into the hole cannot pass its own CI — and the upgrade PR's own version bump is
+what breaks its own guards, making it unfixable from inside. 0.131.0 and 0.132.0
+are currently in exactly that state (#671). The version line should not be
+allowed to contain a hole: either the tag should be conditional on a successful
+publish, or something should assert that every `core-v*` tag resolves on npm.
+
+**Template-owned tests can assert properties only the template has.** Two write
+-back tests asserted an empty registry and an ambient identity provider. Both are
+true upstream forever and false in every instance, so they were green in template
+CI and red on arrival (#666). The general shape — *is this asserting the contract,
+or asserting my own environment?* — has no check behind it, and the only thing
+that found it was a real distribution.
+
+**A registry populated by import side effects has no test isolation story.**
+Instances register scope resolvers, authorizers, write-back targets and identity
+providers at module-import time, last-write-wins. That is a good pattern for
+production and a hostile one for tests: a fixture that sets a global can be
+silently undone by an unrelated module's import, which is precisely what made
+14 tests pass in isolation and fail in a full suite. Patching the name in the
+*consuming* module worked, but that is a workaround each test has to know to
+apply rather than a property of the registries.
 
 **Unit-green is routinely mistaken for working.** AGENTS.md §4 already says this,
 citing #275. It recurred: #659's tests prove `require_principal` in isolation, and

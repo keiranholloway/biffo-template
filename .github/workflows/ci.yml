@@ -206,7 +206,10 @@ jobs:
           path: bandit-report.json
       - name: Dependency audit
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: uv run pip-audit
+        # Fails on a real advisory, but treats a broken audit registry/network
+        # response as inconclusive rather than blocking the whole merge queue
+        # (#591 — same treatment already applied to the JS audit).
+        run: sh scripts/py-dependency-audit.sh
 
   security-secrets:
     name: Secret Scan

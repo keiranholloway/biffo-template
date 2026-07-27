@@ -52,6 +52,7 @@ from ..agent_runs import (
     list_runs,
     list_thread_runs,
     reap_stale_runs,
+    run_reference_payload,
 )
 from ..config import settings
 from ..database import get_db
@@ -72,22 +73,6 @@ from ..writeback_targets import apply_writeback_output_tool
 logger = Logger()
 
 router = APIRouter(prefix="/internal/agent-runs", tags=["internal:agents"])
-
-
-def _reference_payload(run: AgentRun) -> dict[str, object]:
-    """The event payload for a run: a **reference**, never the result (§5).
-
-    The transcript and the run's output are LLM content derived from
-    attacker-influenceable input, so they stay behind the authenticated fetch
-    above rather than being broadcast to every subscriber.
-    """
-    return {
-        "run_id": run.id,
-        "agent": run.agent_name,
-        "status": run.status,
-        "causation_id": run.causation_id,
-        "depth": run.depth,
-    }
 
 
 @router.post("", response_model=AgentRunResponse, status_code=status.HTTP_201_CREATED)
@@ -137,7 +122,7 @@ async def request_agent_run(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
 
-    emit_event(db, AGENT_RUN_REQUESTED, _reference_payload(run), tenant_id=principal.tenant_id)
+    emit_event(db, AGENT_RUN_REQUESTED, run_reference_payload(run), tenant_id=principal.tenant_id)
     return AgentRunResponse.model_validate(run)
 
 
@@ -191,6 +176,7 @@ def _summary(run: AgentRun) -> AgentRunSummary:
         updated_at=run.updated_at,
         agent_name=run.agent_name,
         status=run.status,
+        dry_run=run.dry_run,
         model=model if isinstance(model, str) else None,
         input_tokens=run.input_tokens,
         output_tokens=run.output_tokens,
@@ -282,6 +268,12 @@ async def complete_agent_run(
     Failures emit too, with ``status`` in the payload. A run that has already
     terminated is refused with 409: the runtime's POST is retryable, and a
     replayed completion must not overwrite a finished run's result.
+
+    **A dry run is recorded but not announced** (issue #726). The orchestrator is
+    the only subscriber to this event, and it is what fires the write-back and any
+    chained agent — so withholding it here is the whole of "a preview causes
+    nothing", enforced once rather than re-checked by every action. The row is
+    still written, so the portal polling the run sees it terminate normally.
     """
     try:
         run = await complete_run(
@@ -301,7 +293,10 @@ async def complete_agent_run(
     if run is None:
         raise _not_found()
 
-    emit_event(db, AGENT_RUN_COMPLETED, _reference_payload(run), tenant_id=principal.tenant_id)
+    if not run.dry_run:
+        emit_event(
+            db, AGENT_RUN_COMPLETED, run_reference_payload(run), tenant_id=principal.tenant_id
+        )
     return AgentRunResponse.model_validate(run)
 
 
@@ -319,6 +314,12 @@ async def reap_stale_agent_runs(
     because that is the entire point. §5 exists so a subscriber can tell
     "failed" from "still running"; a stranded run says neither, and anything
     waiting on it waits for ever.
+
+    Dry runs are reaped but not announced, for the same reason the completion
+    endpoint withholds the event (issue #726). This is the easier one to miss:
+    a stranded *preview* would otherwise announce a failure, and the orchestrator
+    subscribes to failures as well as successes — so a timed-out preview could
+    advance a workflow that the successful preview deliberately did not.
     """
     reaped = await reap_stale_runs(
         db,
@@ -326,7 +327,11 @@ async def reap_stale_agent_runs(
         stale_after_seconds=settings.agent_run_stale_after_seconds,
     )
     for run in reaped:
-        emit_event(db, AGENT_RUN_COMPLETED, _reference_payload(run), tenant_id=principal.tenant_id)
+        if run.dry_run:
+            continue
+        emit_event(
+            db, AGENT_RUN_COMPLETED, run_reference_payload(run), tenant_id=principal.tenant_id
+        )
     if reaped:
         logger.warning(
             "Reaped stale agent runs",

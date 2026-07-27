@@ -38,11 +38,57 @@ vi.mock('@/lib/agent-chat-api', async () => {
   return { ...actual, sendAgentChat }
 })
 
-const { runWorkflowDryRun } = vi.hoisted(() => ({ runWorkflowDryRun: vi.fn() }))
+const { startWorkflowDryRun } = vi.hoisted(() => ({ startWorkflowDryRun: vi.fn() }))
 vi.mock('@/lib/workflow-dryrun-api', async () => {
   const actual = await vi.importActual<typeof WorkflowDryRunApiModule>('@/lib/workflow-dryrun-api')
-  return { ...actual, runWorkflowDryRun }
+  return { ...actual, startWorkflowDryRun }
 })
+
+// The dry-run is asynchronous (#726): the POST only queues a run, and the panel
+// polls the run for the outcome. Both halves are mocked, so a test states the
+// queued id and the terminal run separately — which is also what lets a test
+// assert the in-flight state without timing anything.
+const { fetchAgentRun } = vi.hoisted(() => ({ fetchAgentRun: vi.fn() }))
+vi.mock('@/lib/agent-runs-api', async () => {
+  const actual = await vi.importActual('@/lib/agent-runs-api')
+  return { ...actual, fetchAgentRun }
+})
+
+/** A terminal preview run, as `fetchAgentRun` would return it. */
+function completedRun(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'run-preview-1',
+    tenant_id: 'default',
+    agent_name: 'lead-enricher',
+    status: 'completed',
+    dry_run: true,
+    definition_snapshot: { model: 'anthropic/claude-sonnet-4' },
+    input_payload: {},
+    messages: [{ role: 'assistant', content: 'ok' }],
+    result: null,
+    error: null,
+    input_tokens: 10,
+    output_tokens: 5,
+    cost_usd: 0.002,
+    depth: 0,
+    run_as_kind: 'system',
+    run_as_user_id: null,
+    thread_id: null,
+    causation_id: null,
+    workflow_run_id: null,
+    created_at: null,
+    updated_at: null,
+    started_at: null,
+    completed_at: null,
+    ...overrides,
+  }
+}
+
+/** The common case: queued, then terminal on the first poll. */
+function mockDryRun(run: Record<string, unknown> = completedRun()) {
+  startWorkflowDryRun.mockResolvedValue({ run_id: String(run['id']), status: 'pending' })
+  fetchAgentRun.mockResolvedValue(run)
+}
 
 const {
   fetchWorkflows,
@@ -555,7 +601,8 @@ describe('OrchestrationPage', () => {
       fn.mockReset()
     }
     sendAgentChat.mockReset()
-    runWorkflowDryRun.mockReset()
+    startWorkflowDryRun.mockReset()
+    fetchAgentRun.mockReset()
     fetchCatalog.mockResolvedValue(catalog)
     fetchRuns.mockResolvedValue([])
     fetchPromptComponents.mockResolvedValue([])
@@ -1762,17 +1809,18 @@ describe('OrchestrationPage', () => {
         /Add a workflow name, an agent name and instructions to run the test/,
       ),
     ).toBeInTheDocument()
-    expect(runWorkflowDryRun).not.toHaveBeenCalled()
+    expect(startWorkflowDryRun).not.toHaveBeenCalled()
   })
 
   it('runs the dry-run and previews the returned output', async () => {
     fetchWorkflows.mockResolvedValue([])
-    runWorkflowDryRun.mockResolvedValue({
-      output: 'Acme is a mid-market SaaS company.',
-      model: 'moonshotai/kimi-k3',
-      cost_usd: 0.0021,
-      finish_reason: 'stop',
-    })
+    mockDryRun(
+      completedRun({
+        messages: [{ role: 'assistant', content: 'Acme is a mid-market SaaS company.' }],
+        definition_snapshot: { model: 'moonshotai/kimi-k3' },
+        cost_usd: 0.0021,
+      }),
+    )
 
     render(<OrchestrationPage />)
     await fillTestableAgent()
@@ -1783,7 +1831,7 @@ describe('OrchestrationPage', () => {
     expect(await screen.findByText('Acme is a mid-market SaaS company.')).toBeInTheDocument()
     expect(screen.getByText('test passed')).toBeInTheDocument()
     // The request carried the inline instructions and the agent name.
-    const body = runWorkflowDryRun.mock.calls.at(0)?.[1] as {
+    const body = startWorkflowDryRun.mock.calls.at(0)?.[1] as {
       agent_name: string
       instructions: unknown
     }
@@ -1793,7 +1841,7 @@ describe('OrchestrationPage', () => {
 
   it('disables Enable until a test passes, and re-disables it after an edit', async () => {
     fetchWorkflows.mockResolvedValue([])
-    runWorkflowDryRun.mockResolvedValue({ output: 'ok' })
+    mockDryRun()
 
     render(<OrchestrationPage />)
     await fillTestableAgent()
@@ -1816,7 +1864,7 @@ describe('OrchestrationPage', () => {
 
   it('enables the workflow (enabled=true) once a test has passed', async () => {
     fetchWorkflows.mockResolvedValue([])
-    runWorkflowDryRun.mockResolvedValue({ output: 'ok' })
+    mockDryRun()
     createWorkflow.mockResolvedValue(notify)
 
     render(<OrchestrationPage />)
@@ -1850,31 +1898,14 @@ describe('OrchestrationPage', () => {
     })
   })
 
-  it('shows a distinct unavailable state on 503 and does not pass the test', async () => {
+  it('reports a run that came back failed, and keeps Enable gated', async () => {
     fetchWorkflows.mockResolvedValue([])
-    runWorkflowDryRun.mockRejectedValue(
-      new ApiError(503, JSON.stringify({ detail: 'The runtime is not configured.' })),
-    )
+    // The run terminated honestly rather than the request failing — the shape a
+    // runtime error takes now that nothing is invoked inside the request (#726).
+    mockDryRun(completedRun({ status: 'failed', error: 'The agent could not complete this turn.' }))
 
     render(<OrchestrationPage />)
     await fillTestableAgent()
-    // "Test workflow" is persistent (panel + sticky action bar) — either runs it.
-    fireEvent.click(screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement)
-
-    expect(await screen.findByText(/Testing is unavailable on this deployment/)).toBeInTheDocument()
-    expect(screen.queryByText('test passed')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Enable workflow' })).toBeDisabled()
-  })
-
-  it('shows a retryable error on 502 and keeps Enable gated', async () => {
-    fetchWorkflows.mockResolvedValue([])
-    runWorkflowDryRun.mockRejectedValue(
-      new ApiError(502, JSON.stringify({ detail: 'The agent could not complete this turn.' })),
-    )
-
-    render(<OrchestrationPage />)
-    await fillTestableAgent()
-    // "Test workflow" is persistent (panel + sticky action bar) — either runs it.
     fireEvent.click(screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement)
 
     expect(await screen.findByText(/could not complete this turn/)).toBeInTheDocument()
@@ -1882,12 +1913,48 @@ describe('OrchestrationPage', () => {
     expect(screen.getByRole('button', { name: 'Enable workflow' })).toBeDisabled()
   })
 
+  it('shows a retryable error when the draft is refused, and never polls', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    startWorkflowDryRun.mockRejectedValue(
+      new ApiError(422, JSON.stringify({ detail: 'Prompt component “tone” does not exist.' })),
+    )
+
+    render(<OrchestrationPage />)
+    await fillTestableAgent()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement)
+
+    expect(await screen.findByText(/does not exist/)).toBeInTheDocument()
+    expect(screen.queryByText('test passed')).not.toBeInTheDocument()
+    // No run was queued, so there is nothing to poll — polling anyway would 404
+    // in a loop against a run id that never existed.
+    expect(fetchAgentRun).not.toHaveBeenCalled()
+  })
+
+  it('shows the run it is waiting on while the agent is still working', async () => {
+    fetchWorkflows.mockResolvedValue([])
+    startWorkflowDryRun.mockResolvedValue({ run_id: 'run-preview-1', status: 'pending' })
+    // Never terminal: the agent is still going. This is the state a research
+    // agent sits in for minutes, and the one a synchronous dry-run could not
+    // represent at all — it simply timed out.
+    fetchAgentRun.mockResolvedValue(completedRun({ status: 'running' }))
+
+    render(<OrchestrationPage />)
+    await fillTestableAgent()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement)
+
+    expect(await screen.findByText(/Running the agent/)).toBeInTheDocument()
+    // The id is offered so a long run is followable in Agent Runs rather than
+    // being an indefinite spinner.
+    expect(await screen.findByText('run-preview-1')).toBeInTheDocument()
+    expect(screen.queryByText('test passed')).not.toBeInTheDocument()
+  })
+
   // ── Delivery: destination sub-form, output_body, secrets, gating (Phase 3) ──
 
   it('renders a chosen destination’s fields from the catalog and stores delivery', async () => {
     fetchCatalog.mockResolvedValue(catalogWithDelivery)
     fetchWorkflows.mockResolvedValue([])
-    runWorkflowDryRun.mockResolvedValue({ output: 'ok' })
+    mockDryRun()
     createWorkflow.mockResolvedValue(agentWithDelivery)
 
     render(<OrchestrationPage />)
@@ -1923,7 +1990,7 @@ describe('OrchestrationPage', () => {
   it('clears the delivery sub-config when None is chosen', async () => {
     fetchCatalog.mockResolvedValue(catalogWithDelivery)
     fetchWorkflows.mockResolvedValue([])
-    runWorkflowDryRun.mockResolvedValue({ output: 'ok' })
+    mockDryRun()
     createWorkflow.mockResolvedValue(agentWithDelivery)
 
     render(<OrchestrationPage />)
@@ -1950,7 +2017,7 @@ describe('OrchestrationPage', () => {
   it('treats the delivery message as optional but enforces other required fields', async () => {
     fetchCatalog.mockResolvedValue(catalogWithDelivery)
     fetchWorkflows.mockResolvedValue([])
-    runWorkflowDryRun.mockResolvedValue({ output: 'ok' })
+    mockDryRun()
 
     render(<OrchestrationPage />)
     await fillTestableAgent()
@@ -1975,7 +2042,7 @@ describe('OrchestrationPage', () => {
   it('re-arms the Enable test-gate when the delivery config is edited', async () => {
     fetchCatalog.mockResolvedValue(catalogWithDelivery)
     fetchWorkflows.mockResolvedValue([])
-    runWorkflowDryRun.mockResolvedValue({ output: 'ok' })
+    mockDryRun()
 
     render(<OrchestrationPage />)
     await fillTestableAgent()

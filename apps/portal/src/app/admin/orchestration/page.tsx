@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '@/context/auth-context'
 import { ApiError, createApiClient } from '@/lib/api-client'
 import {
@@ -24,11 +24,8 @@ import {
   type WorkflowInput,
   type WorkflowRun,
 } from '@/lib/orchestration-api'
-import {
-  runWorkflowDryRun,
-  type WorkflowDryRunRequest,
-  type WorkflowDryRunResponse,
-} from '@/lib/workflow-dryrun-api'
+import { startWorkflowDryRun, type WorkflowDryRunRequest } from '@/lib/workflow-dryrun-api'
+import { fetchAgentRun, type AgentRunResponse } from '@/lib/agent-runs-api'
 import {
   filterTriggers,
   groupTriggersBySource,
@@ -419,6 +416,60 @@ function promptHasContent(value: ConfigValue | undefined): boolean {
   )
 }
 
+/**
+ * What the Test panel shows once a preview run terminates.
+ *
+ * Derived from the run rather than returned by the dry-run call: the call only
+ * queues the work (#726), so everything displayable arrives on the run row.
+ */
+interface DryRunOutcome {
+  runId: string
+  output: string
+  /** Set when the agent answered through an output tool — the typed columns a
+   *  write-back WOULD have written, which is the more useful preview for a
+   *  write-back workflow and the thing the dry run deliberately did not do. */
+  result: Record<string, unknown> | null
+  model: string | null
+  costUsd: number | null
+}
+
+/** Terminal states, from the run lifecycle (ADR-0014 §6). */
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed'])
+
+const DRY_RUN_POLL_INTERVAL_MS = 2_000
+/** Generous on purpose: a research agent legitimately runs for minutes (#726),
+ *  so this exists to end a *stuck* run, not a slow one. */
+const DRY_RUN_POLL_TIMEOUT_MS = 5 * 60_000
+
+/**
+ * Thrown when a poll is superseded — a second test started, or the panel moved
+ * on. Carries no message because nothing should render it: it means "these
+ * results are no longer wanted", not "something went wrong".
+ */
+class AbandonedPoll extends Error {}
+
+/**
+ * The agent's prose answer: the last assistant message carrying content.
+ *
+ * Read from the back because a tool-using run ends with assistant/tool pairs and
+ * only the final assistant turn is the answer. Empty string when the model
+ * answered purely through an output tool, in which case `result` is the preview
+ * and the panel shows that instead.
+ */
+function outputFromRun(run: AgentRunResponse): string {
+  for (let i = run.messages.length - 1; i >= 0; i -= 1) {
+    const message = run.messages[i]
+    if (
+      message?.role === 'assistant' &&
+      typeof message.content === 'string' &&
+      message.content !== ''
+    ) {
+      return message.content
+    }
+  }
+  return ''
+}
+
 export default function OrchestrationPage() {
   const { getIdToken } = useAuth()
   const client = useMemo(() => createApiClient(getIdToken), [getIdToken])
@@ -479,13 +530,17 @@ export default function OrchestrationPage() {
   // trigger changes.
   const [sampleEventText, setSampleEventText] = useState('{}')
   const [testing, setTesting] = useState(false)
-  const [dryRunResult, setDryRunResult] = useState<WorkflowDryRunResponse | null>(null)
-  // A transient/retryable failure (502 runtime, 422 unresolvable parts, or a bad
-  // sample) — the author can fix and retry.
+  const [dryRunResult, setDryRunResult] = useState<DryRunOutcome | null>(null)
+  // A retryable failure: 422 unresolvable parts, a bad sample, or a run that
+  // came back `failed`. The author can fix and retry.
   const [dryRunError, setDryRunError] = useState<string | null>(null)
-  // 503: the runtime/assistant is not wired up on this deployment. Testing is
-  // simply unavailable here — a distinct, non-retryable state.
-  const [dryRunUnavailable, setDryRunUnavailable] = useState<string | null>(null)
+  // The run being watched, surfaced while it is in flight. An agent can take
+  // minutes (#726), so "testing…" alone would look indistinguishable from a
+  // hang — the id gives the author something to open in Agent Runs.
+  const [dryRunPending, setDryRunPending] = useState<{ runId: string; status: string } | null>(null)
+  // Identifies the in-flight poll. A new test replaces it, which is how the
+  // previous poll learns to stop without a cancellation API.
+  const pollRef = useRef<object | null>(null)
   // The definition snapshot that last passed a test this session. The Enable
   // gate holds only while the current definition still matches it — editing any
   // config/trigger/condition invalidates the pass automatically (see below).
@@ -497,7 +552,7 @@ export default function OrchestrationPage() {
     setTesting(false)
     setDryRunResult(null)
     setDryRunError(null)
-    setDryRunUnavailable(null)
+    setDryRunPending(null)
     setTestedSnapshot(null)
   }, [])
 
@@ -802,14 +857,14 @@ export default function OrchestrationPage() {
     if (!agentRequiredValid) {
       setDryRunError(`Add ${listToProse(missingForTest)} to run the test.`)
       setDryRunResult(null)
-      setDryRunUnavailable(null)
+      setDryRunPending(null)
       return
     }
     const parsed = parseSampleEvent(sampleEventText)
     if (parsed.error != null) {
       setDryRunError(parsed.error)
       setDryRunResult(null)
-      setDryRunUnavailable(null)
+      setDryRunPending(null)
       return
     }
     const [source, detail_type] = triggerKey.split('|')
@@ -827,25 +882,86 @@ export default function OrchestrationPage() {
     }
     setTesting(true)
     setDryRunError(null)
-    setDryRunUnavailable(null)
+    setDryRunResult(null)
     // Snapshot captured before the await so a passing test binds to the config
     // that was actually tested.
     const snapshotAtSend = definitionSnapshot
+    // Claimed before the first await. Every state write below is guarded on
+    // still owning it, so a test started while this one is in flight is not
+    // overwritten by the older run's result, error, or its `finally`.
+    const token = {}
+    pollRef.current = token
     try {
-      const res = await runWorkflowDryRun(client, request)
-      setDryRunResult(res)
+      const accepted = await startWorkflowDryRun(client, request)
+      if (pollRef.current !== token) return
+      setDryRunPending({ runId: accepted.run_id, status: accepted.status })
+      const run = await pollUntilTerminal(accepted.run_id, token)
+      if (run.status === 'failed') {
+        // The run terminated honestly; show why. Distinct from a request that
+        // never started, which throws above.
+        setDryRunError(run.error ?? 'The agent run failed.')
+        return
+      }
+      setDryRunResult({
+        runId: run.id,
+        output: outputFromRun(run),
+        result: run.result,
+        // Read off the snapshot rather than the request: this is the model the
+        // run actually executed with, including Core's default when none was set.
+        model:
+          typeof run.definition_snapshot['model'] === 'string'
+            ? run.definition_snapshot['model']
+            : null,
+        costUsd: run.cost_usd,
+      })
       setTestedSnapshot(snapshotAtSend)
     } catch (err: unknown) {
-      setDryRunResult(null)
-      if (err instanceof ApiError && err.status === 503) {
-        // Runtime not wired on this deployment — testing is unavailable here.
-        setDryRunUnavailable(detailOf(err))
-      } else {
-        // 502 (runtime turn failed — retryable) / 422 (unresolvable parts) / other.
-        setDryRunError(detailOf(err))
-      }
+      // A superseded poll is not a failure — a newer test owns the panel now, so
+      // reporting this one would overwrite its state with stale bad news.
+      if (err instanceof AbandonedPoll || pollRef.current !== token) return
+      // 422 (unresolvable parts), a poll that gave up, or a transport failure.
+      // The old 502/503 branches are gone with the synchronous invoke: there is
+      // no in-request runtime call left to fail or to be unconfigured.
+      setDryRunError(detailOf(err))
     } finally {
-      setTesting(false)
+      // Only the owning invocation clears the busy state — otherwise a
+      // superseded poll would switch the button back on mid-test.
+      if (pollRef.current === token) {
+        pollRef.current = null
+        setTesting(false)
+        setDryRunPending(null)
+      }
+    }
+  }
+
+  /**
+   * Poll a preview run until it terminates.
+   *
+   * Bounded rather than open-ended: a runtime that never claims the run would
+   * otherwise leave this polling for the life of the page. The cap is generous
+   * because the whole point of #726 is that a real agent may legitimately take
+   * minutes — it exists to end a *stuck* run, not a slow one, and it says so
+   * rather than reporting a false failure.
+   *
+   * `token` is re-checked each tick so starting a second test abandons the first
+   * quietly instead of racing it into the panel.
+   */
+  async function pollUntilTerminal(runId: string, token: object): Promise<AgentRunResponse> {
+    const deadline = Date.now() + DRY_RUN_POLL_TIMEOUT_MS
+    for (;;) {
+      // Read before sleeping: a fast agent should return at once rather than
+      // paying a fixed interval for nothing.
+      if (pollRef.current !== token) throw new AbandonedPoll()
+      const run = await fetchAgentRun(client, runId)
+      if (TERMINAL_RUN_STATUSES.has(run.status)) return run
+      setDryRunPending({ runId, status: run.status })
+      if (Date.now() > deadline) {
+        throw new Error(
+          `The run has not finished after ${String(Math.round(DRY_RUN_POLL_TIMEOUT_MS / 60000))} minutes ` +
+            `and is still “${run.status}”. It may still complete — open run ${runId} in Agent Runs to follow it.`,
+        )
+      }
+      await new Promise((resolve) => setTimeout(resolve, DRY_RUN_POLL_INTERVAL_MS))
     }
   }
 
@@ -1913,12 +2029,15 @@ export default function OrchestrationPage() {
                   )}
                 </div>
 
-                {dryRunUnavailable != null && (
+                {dryRunPending != null && (
                   <div
-                    role="alert"
-                    className="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800"
+                    role="status"
+                    className="mt-3 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-800"
                   >
-                    Testing is unavailable on this deployment. {dryRunUnavailable}
+                    Running the agent…{' '}
+                    {dryRunPending.status === 'pending' ? 'queued' : dryRunPending.status}. This can
+                    take a few minutes for a research agent — you can follow run{' '}
+                    <code className="font-mono text-xs">{dryRunPending.runId}</code> in Agent Runs.
                   </div>
                 )}
                 {dryRunError != null && (
@@ -1934,19 +2053,39 @@ export default function OrchestrationPage() {
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
                       Preview output
                     </p>
-                    <pre className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-800">
-                      {dryRunResult.output}
-                    </pre>
+                    {dryRunResult.output !== '' && (
+                      <pre className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-800">
+                        {dryRunResult.output}
+                      </pre>
+                    )}
+                    {dryRunResult.result != null && (
+                      <div className="mt-2">
+                        {/* The typed columns a write-back WOULD have written. The
+                            dry run deliberately did not write them, so showing
+                            them is the whole point of previewing this workflow. */}
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                          Would write
+                        </p>
+                        <pre className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-800">
+                          {JSON.stringify(dryRunResult.result, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                    {dryRunResult.output === '' && dryRunResult.result == null && (
+                      <p className="mt-1 text-sm text-gray-500">
+                        The agent finished without producing any output.
+                      </p>
+                    )}
                     <div className="mt-2 flex flex-wrap gap-3 border-t border-emerald-100 pt-2 text-[11px] text-gray-500">
                       {dryRunResult.model != null && dryRunResult.model !== '' && (
                         <span>{dryRunResult.model}</span>
                       )}
-                      {dryRunResult.cost_usd != null && (
-                        <span>${dryRunResult.cost_usd.toFixed(4)}</span>
+                      {dryRunResult.costUsd != null && (
+                        <span>${dryRunResult.costUsd.toFixed(4)}</span>
                       )}
-                      {dryRunResult.finish_reason != null && dryRunResult.finish_reason !== '' && (
-                        <span>finish: {dryRunResult.finish_reason}</span>
-                      )}
+                      <span>
+                        run <code className="font-mono">{dryRunResult.runId}</code>
+                      </span>
                     </div>
                   </div>
                 )}

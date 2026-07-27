@@ -370,7 +370,9 @@ def test_a_run_returning_prose_rather_than_the_submitted_record_is_denied(app, c
     run_id = asyncio.run(_seed(factory, result={"output": "I had a think about it."}))
     body = _post(client, run_id).json()
     assert body["status"] == "denied"
-    assert "required column" in body["reason"]
+    # Caught by the "nothing to write" guard, which fires before the
+    # required-column check and says something truer about what happened.
+    assert "nothing to write" in body["reason"]
 
 
 def test_a_value_outside_the_declared_columns_is_never_written(app, client):
@@ -582,3 +584,88 @@ def test_a_uuid_row_id_does_not_roll_back_the_write_it_records(app, client):
 
     # The write must survive being recorded.
     assert asyncio.run(_read()).notes == "after"
+
+
+# ── The runtime's submit-tool result shape ───────────────────────────────────
+#
+# `agent_runtime.loop` records a submit-tool call as
+#   {"output_tool": ..., "arguments": {...columns...}, "model": ..., "turns": ...}
+# so the columns are NESTED under `arguments`. Reading the top level matched no
+# column, wrote nothing, and still reported success — the run history said
+# `succeeded` while the row was untouched.
+#
+# These pin the shape against the writer rather than against an assumption,
+# which is what the originals did wrong.
+
+
+def test_columns_are_read_from_the_runtimes_arguments_envelope(app, client):
+    _, factory = app
+    run_id = asyncio.run(
+        _seed(
+            factory,
+            writeback={
+                "table": "wb_notes",
+                "operation": "update",
+                "columns": {"notes": "{output.notes}"},
+            },
+            result={
+                "output_tool": "submit_wb_notes_record",
+                "arguments": {"notes": "the agent's verdict"},
+                "model": "moonshotai/kimi-k3",
+                "turns": 1,
+                "finish_reason": "tool_calls",
+            },
+            existing_note=Note(id="note-77", tenant_id="default", notes=None),
+            input_payload={"note_id": "note-77"},
+        )
+    )
+
+    assert _post(client, run_id).json()["status"] == "written"
+
+    async def _read() -> Note:
+        async with factory() as session:
+            return (await session.execute(select(Note).where(Note.id == "note-77"))).scalar_one()
+
+    assert asyncio.run(_read()).notes == "the agent's verdict"
+
+
+def test_run_metadata_is_never_mistaken_for_a_column(app, client):
+    """`model`/`turns`/`finish_reason` describe the run, not the row."""
+    _, factory = app
+    run_id = asyncio.run(
+        _seed(
+            factory,
+            result={"model": "kimi", "turns": 1, "finish_reason": "stop"},
+        )
+    )
+    body = _post(client, run_id).json()
+    assert body["status"] == "denied"
+    assert "nothing to write" in body["reason"]
+
+
+def test_a_write_that_would_change_nothing_is_refused_not_reported_as_success(app, client):
+    """The failure this pair exists for: a row 'updated' with no values, logged
+    as succeeded. Indistinguishable from the feature working."""
+    _, factory = app
+    run_id = asyncio.run(
+        _seed(
+            factory,
+            writeback={
+                "table": "wb_notes",
+                "operation": "update",
+                "columns": {"notes": "{output.notes}"},
+            },
+            result={"output_tool": "x", "arguments": {"unrelated": "value"}},
+            existing_note=Note(id="note-88", tenant_id="default", notes="untouched"),
+            input_payload={"note_id": "note-88"},
+        )
+    )
+
+    body = _post(client, run_id).json()
+    assert body["status"] == "denied", body
+
+    async def _read() -> Note:
+        async with factory() as session:
+            return (await session.execute(select(Note).where(Note.id == "note-88"))).scalar_one()
+
+    assert asyncio.run(_read()).notes == "untouched"

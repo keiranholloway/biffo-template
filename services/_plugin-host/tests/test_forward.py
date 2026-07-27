@@ -235,3 +235,91 @@ def test_path_matching_is_exact(declared, candidate, expected):
         "p", (DeclaredRoute(method="GET", path=declared),), send_to_core=FakeCore()
     )
     assert fwd.matches("GET", candidate) is expected
+
+
+# ── the production wiring (#652): sender construction and signing ───────────────
+
+
+def test_no_core_url_disables_forwarding_rather_than_failing():
+    """A deployment without BIFFO_CORE_API_URL keeps working exactly as before,
+    instead of breaking every plugin request at import."""
+    from plugin_host.app import core_sender
+
+    assert core_sender("") is None
+
+
+def test_the_forwarded_user_token_is_covered_by_the_signature():
+    """The header Core authenticates the user on must be signed, not appended to
+    an already-signed request — otherwise it can be altered in transit."""
+    import asyncio
+
+    from biffo_plugin_sdk import SignedCoreClient
+
+    signed: dict = {}
+
+    class FakeHttp:
+        async def request(self, method, url, headers=None, content=None):
+            signed["headers"] = headers
+
+            class R:
+                status_code = 200
+                content = b"[]"
+                headers = {"content-type": "application/json"}
+
+            return R()
+
+    client = SignedCoreClient(
+        base_url="https://core.example",
+        region="eu-west-1",
+        credentials=_FakeCreds(),
+        client=FakeHttp(),
+    )
+
+    status, body, ctype = asyncio.run(
+        client.raw_request(
+            "GET",
+            "/api/v1/internal/plugins/ideation/model-catalog",
+            extra_signed_headers={"X-Biffo-User-Token": "the-token"},
+        )
+    )
+
+    assert (status, body, ctype) == (200, b"[]", "application/json")
+    # present...
+    assert signed["headers"]["X-Biffo-User-Token"] == "the-token"
+    # ...and named in the SigV4 SignedHeaders list, i.e. actually signed.
+    assert "x-biffo-user-token" in signed["headers"]["Authorization"].lower()
+
+
+def test_raw_request_does_not_raise_on_a_non_2xx():
+    """Pass-through semantics: a 403 is data, not an exception."""
+    import asyncio
+
+    from biffo_plugin_sdk import SignedCoreClient
+
+    class FakeHttp:
+        async def request(self, method, url, headers=None, content=None):
+            class R:
+                status_code = 403
+                content = b'{"detail":"nope"}'
+                headers = {"content-type": "application/json"}
+
+            return R()
+
+    client = SignedCoreClient(
+        base_url="https://core.example",
+        region="eu-west-1",
+        credentials=_FakeCreds(),
+        client=FakeHttp(),
+    )
+    status, body, _ = asyncio.run(client.raw_request("GET", "/x"))
+    assert status == 403
+    assert b"nope" in body
+
+
+class _FakeCreds:
+    access_key = "AKIAIOSFODNN7EXAMPLE"
+    secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    token = None
+
+    def get_frozen_credentials(self):
+        return self

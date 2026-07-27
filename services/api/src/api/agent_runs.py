@@ -82,6 +82,28 @@ class RunNotClaimableError(Exception):
         )
 
 
+def run_reference_payload(run: AgentRun) -> dict[str, object]:
+    """The event payload for a run: a **reference**, never the result (ADR-0014 §5).
+
+    The transcript and the run's output are LLM content derived from
+    attacker-influenceable input, so they stay behind the authenticated fetch
+    rather than being broadcast to every subscriber.
+
+    Lives here rather than beside one of its emitters because both
+    ``agent.run.requested`` and ``agent.run.completed`` carry this exact shape, and
+    they are now emitted from two modules (the internal router for real runs, the
+    dry-run service for previews). A second hand-rolled copy of this dict is how
+    the two events quietly stop agreeing on what a run reference is.
+    """
+    return {
+        "run_id": run.id,
+        "agent": run.agent_name,
+        "status": run.status,
+        "causation_id": run.causation_id,
+        "depth": run.depth,
+    }
+
+
 async def create_run(
     db: AsyncSession,
     *,
@@ -96,6 +118,7 @@ async def create_run(
     thread_id: str | None = None,
     run_as_kind: str = "system",
     run_as_user_id: str | None = None,
+    dry_run: bool = False,
 ) -> AgentRun:
     """Record a requested run in ``pending``, refusing anything past the ceiling.
 
@@ -106,6 +129,12 @@ async def create_run(
     runtime never sees a component. A plain-string prompt (the pre-library shape)
     round-trips unchanged. Resolution runs *after* the depth check, the cheapest
     guard, so a runaway chain is refused without a component fetch.
+
+    ``dry_run`` marks a preview (issue #726). It changes nothing here — a dry run
+    is created, claimed, executed and completed exactly like a real one, because
+    a preview that took a different path would not be previewing anything. It is
+    read once, by the completion endpoint, to decide whether to announce the run
+    on the bus.
 
     Raises:
         DepthLimitExceededError: when ``depth`` is greater than ``max_depth``.
@@ -133,6 +162,7 @@ async def create_run(
         input_payload=input_payload or {},
         messages=[],
         workflow_run_id=workflow_run_id,
+        dry_run=dry_run,
     )
     db.add(run)
     await db.flush()

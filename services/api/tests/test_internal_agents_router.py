@@ -14,6 +14,7 @@ including the "a rolled-back transaction emits nothing" case (ADR-0014 §5).
 
 import asyncio
 from collections.abc import AsyncGenerator, Generator
+from typing import Any, cast
 
 import api.dependencies as dependencies
 import pytest
@@ -22,7 +23,7 @@ from api.database import get_db
 from api.events import BiffoEvent
 from api.events.emit import publish_pending
 from api.middleware.service_auth import ServicePrincipal, require_service_principal
-from api.models.agent_run import AgentRun  # noqa: F401 — registers the table on Base.metadata
+from api.models.agent_run import AgentRun
 from api.models.base import Base
 from api.routers import internal_agents
 from fastapi import FastAPI
@@ -89,6 +90,10 @@ def agents_app(fail_commit) -> Generator[FastAPI]:
                 await publish_pending(session)
 
     app = FastAPI()
+    # Exposed so a test can mark a run as a dry run — the one attribute no route
+    # sets, because dry runs are created by the admin dry-run service (#726),
+    # not through this service-only surface.
+    app.state.session_factory = session_factory
     app.include_router(internal_agents.router, prefix="/api/v1")
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[require_service_principal] = lambda: ServicePrincipal(
@@ -561,3 +566,106 @@ def test_list_never_returns_transcripts_or_payloads(client):
 def test_list_bounds_its_page_size(client):
     resp = client.get(_RUNS, params={"causation_id": "chain-1", "limit": 500})
     assert resp.status_code == 422
+
+
+# ── dry runs are recorded but never announced (issue #726) ──────────────────
+#
+# The workflow dry-run is a real run executed by the real runtime, so by the time
+# it completes it is indistinguishable from a genuine one. The *only* thing that
+# stops a preview firing the write-back it was previewing is this router
+# withholding `agent.run.completed` — the orchestrator is that event's sole
+# subscriber, and it is what executes write-backs and fires chained agents.
+#
+# These are therefore the tests that make "a preview causes nothing" true.
+
+
+def _mark_dry_run(client: TestClient, run_id: str) -> None:
+    """Flip an existing run to a dry run, as the admin dry-run service creates it."""
+
+    # `client.app` is typed as a bare ASGI callable, which has no `.state`; the
+    # FastAPI instance underneath does. Cast rather than restructure the fixture,
+    # which every other test in this file depends on.
+    session_factory = cast("Any", client.app).state.session_factory
+
+    async def _mark() -> None:
+        async with session_factory() as session:
+            run = await session.get(AgentRun, run_id)
+            run.dry_run = True
+            await session.commit()
+
+    asyncio.run(_mark())
+
+
+def test_completing_a_dry_run_emits_nothing(client, publisher):
+    run_id = _create(client).json()["id"]
+    _mark_dry_run(client, run_id)
+    publisher.events.clear()
+
+    resp = client.post(
+        f"{_RUNS}/{run_id}/complete",
+        json={"status": "completed", "result": {"summary": "previewed enrichment"}},
+    )
+
+    assert resp.status_code == 200
+    # Not "no write-back happened" — nothing was *told*, which is the property
+    # that holds no matter what subscribers are added later.
+    assert publisher.events == []
+
+
+def test_a_completed_dry_run_is_still_recorded_for_the_poller(client):
+    run_id = _create(client).json()["id"]
+    _mark_dry_run(client, run_id)
+
+    client.post(
+        f"{_RUNS}/{run_id}/complete",
+        json={"status": "completed", "result": {"summary": "previewed enrichment"}},
+    )
+
+    after = client.get(f"{_RUNS}/{run_id}").json()
+    # Silence on the bus must not mean silence to the person waiting: the portal
+    # polls this row, so a preview that completed invisibly would hang the UI.
+    assert after["status"] == "completed"
+    assert after["result"] == {"summary": "previewed enrichment"}
+
+
+def test_a_failed_dry_run_emits_nothing_either(client, publisher):
+    run_id = _create(client).json()["id"]
+    _mark_dry_run(client, run_id)
+    publisher.events.clear()
+
+    client.post(
+        f"{_RUNS}/{run_id}/complete",
+        json={"status": "failed", "error": "the agent runtime turn failed"},
+    )
+
+    # The orchestrator subscribes to failures as well as successes, so a failed
+    # preview could otherwise advance a workflow that the successful one did not.
+    assert publisher.events == []
+
+
+def test_reaping_a_stale_dry_run_emits_nothing(client, publisher, monkeypatch):
+    monkeypatch.setattr(settings, "agent_run_stale_after_seconds", STALE_IMMEDIATELY)
+    run_id = _claimed_run(client)
+    _mark_dry_run(client, run_id)
+    publisher.events.clear()
+
+    resp = client.post(f"{_RUNS}/reap", json={})
+
+    # The easier one to miss: the reaper announces every run it fails, on a
+    # schedule, long after the request that created the preview is gone.
+    assert [r["id"] for r in resp.json()] == [run_id]
+    assert resp.json()[0]["status"] == "failed"
+    assert publisher.events == []
+
+
+def test_a_real_run_alongside_a_dry_one_is_still_announced(client, publisher):
+    """The suppression must key off the run, not off a global switch."""
+    dry_id = _create(client).json()["id"]
+    _mark_dry_run(client, dry_id)
+    real_id = _create(client).json()["id"]
+    publisher.events.clear()
+
+    client.post(f"{_RUNS}/{dry_id}/complete", json={"status": "completed"})
+    client.post(f"{_RUNS}/{real_id}/complete", json={"status": "completed"})
+
+    assert [e.payload["run_id"] for e in publisher.events] == [real_id]

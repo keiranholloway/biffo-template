@@ -80,10 +80,15 @@ def test_demo_requested_derives_its_full_payload():
 
 
 def test_agent_run_payload_model_matches_the_real_reference_payload():
-    """The model is the source for the fields; assert it still equals the emit site."""
-    from api.routers.internal_agents import _reference_payload
+    """The model is the source for the fields; assert it still equals the emit site.
 
-    # _reference_payload only reads five attributes; duck-type them.
+    Imports from ``api.agent_runs`` rather than the router: the builder moved
+    there when the dry-run service became a second emitter of
+    ``agent.run.requested`` (#726), so one shape now serves both emit sites.
+    """
+    from api.agent_runs import run_reference_payload
+
+    # run_reference_payload only reads five attributes; duck-type them.
     run = cast(
         "AgentRun",
         SimpleNamespace(
@@ -94,7 +99,7 @@ def test_agent_run_payload_model_matches_the_real_reference_payload():
             depth=0,
         ),
     )
-    assert set(_reference_payload(run).keys()) == set(AgentRunEventPayload.model_fields)
+    assert set(run_reference_payload(run).keys()) == set(AgentRunEventPayload.model_fields)
     # Both agent-run events point at that model.
     for event in (AGENT_RUN_REQUESTED, AGENT_RUN_COMPLETED):
         assert event.payload_model is AgentRunEventPayload

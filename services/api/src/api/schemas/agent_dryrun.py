@@ -57,12 +57,20 @@ class WorkflowDryRunRequest(BaseModel):
     trigger: DryRunTrigger | None = None
 
 
-class WorkflowDryRunResponse(BaseModel):
-    """The runtime's output for one previewed turn. No ids: nothing was persisted."""
+class WorkflowDryRunAccepted(BaseModel):
+    """The queued preview's id, for polling ``GET /admin/agent-runs/{run_id}``.
 
-    output: str
-    model: str | None = None
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    cost_usd: float | None = None
-    finish_reason: str | None = None
+    Replaces the old inline ``WorkflowDryRunResponse`` (issue #726). The dry-run
+    cannot return the output any more, because the whole reason it moved was that
+    an agent may run for minutes and no HTTP response can wait that long — API
+    Gateway's integration cap here is 29s and cannot be raised on an HTTP API.
+
+    So the result is not in this response by design, not by omission: it arrives
+    on the run row, which the caller already has a page for.
+    """
+
+    run_id: str
+    #: Always ``"pending"`` at this point — the run is queued, not started. Named
+    #: rather than implied so a client polls on the same vocabulary the run itself
+    #: uses (``pending``/``running``/``completed``/``failed``).
+    status: str

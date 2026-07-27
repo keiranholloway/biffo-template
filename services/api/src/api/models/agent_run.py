@@ -45,7 +45,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Float, Index, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import TenantScopedModel
@@ -100,6 +100,16 @@ class AgentRun(TenantScopedModel):
     messages: Mapped[list[Any]] = mapped_column(JSON, nullable=False, default=list)
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # A preview run: executed identically, but nothing downstream may react to it
+    # (issue #726). The whole side-effect surface hangs off `agent.run.completed`
+    # — the orchestrator is its only subscriber, and is what fires write-backs and
+    # fan-in — so "causes nothing" is enforced by not emitting that one event,
+    # rather than by a flag threaded through every action.
+    #
+    # It is therefore load-bearing at exactly one moment: after the runtime has
+    # finished, when the run is otherwise indistinguishable from a real one.
+    dry_run: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Cost accounting (§8). Nullable: unknown until the run terminates, and a
     # failure may terminate before any tokens were spent.

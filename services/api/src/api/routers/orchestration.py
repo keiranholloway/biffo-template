@@ -444,6 +444,7 @@ async def create_workflow(
         enabled=body.enabled,
         schedule_config=body.schedule_config,
         scope=body.scope,
+        run_as_user_id=caller.user_id,
     )
     emit_event(
         db,
@@ -510,6 +511,7 @@ async def update_workflow(
         enabled=body.enabled,
         schedule_config=body.schedule_config,
         scope=body.scope,
+        run_as_user_id=caller.user_id,
     )
     if definition is None:
         raise _not_found()
@@ -536,6 +538,7 @@ async def set_workflow_enabled(
         tenant_id=caller.tenant_id,
         definition_id=definition_id,
         enabled=body.enabled,
+        run_as_user_id=caller.user_id,
     )
     if definition is None:
         raise _not_found()

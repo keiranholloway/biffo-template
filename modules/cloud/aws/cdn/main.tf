@@ -425,17 +425,38 @@ resource "aws_cloudfront_distribution" "portal" {
     max_ttl     = 60
   }
 
-  # SPA routing: serve index.html for 403/404
+  # SPA routing: serve the app shell for 403/404, but PRESERVE THE STATUS (#647).
+  #
+  # `custom_error_response` is distribution-wide — CloudFront gives no way to
+  # scope it to a cache behaviour — so whatever is set here applies to the API
+  # behaviours as much as to the portal. Returning `response_code = 200` meant
+  # every API 403/404 reached the caller as a *successful* HTML response:
+  # `res.ok` was true, no client error path ran, and the failure surfaced only
+  # as "Unexpected token '<', "<!DOCTYPE "... is not valid JSON" pointing at the
+  # client instead of at the real backend error. It also made a broken backend
+  # indistinguishable from a missing route: while diagnosing #652, the same URL
+  # returned 200-HTML, then 500, then real JSON within two minutes.
+  #
+  # Serving the shell is still right — a deep link to a client-routed path must
+  # render the app. Claiming success is not. Keeping response_page_path and
+  # dropping the status rewrite fixes the lie without losing the routing: the
+  # browser renders index.html and the SPA router takes over exactly as before
+  # (a body is rendered regardless of status), while an API client now sees the
+  # true 403/404 and takes its error path.
+  #
+  # Deep links to *known* routes never reach here anyway: the viewer-request
+  # function (rewrite.js) already maps extensionless URIs to their static
+  # index.html, so this only ever fires for genuinely-missing keys.
   custom_error_response {
     error_code            = 403
-    response_code         = 200
+    response_code         = 403
     response_page_path    = "/index.html"
     error_caching_min_ttl = 10
   }
 
   custom_error_response {
     error_code            = 404
-    response_code         = 200
+    response_code         = 404
     response_page_path    = "/index.html"
     error_caching_min_ttl = 10
   }

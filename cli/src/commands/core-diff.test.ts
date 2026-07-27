@@ -65,7 +65,7 @@ describe('runCoreDiff', () => {
     write(template, 'services/api/main.py', 'v2')
     write(instance, 'services/api/main.py', 'v1') // modified
     write(template, 'services/api/added.py', 'x') // added
-    write(instance, 'services/api/removed.py', 'y') // removed
+    write(instance, 'services/api/removed.py', 'y') // instance-only, not a removal (#689)
     write(template, 'services/acme-crm/p.json', 'a') // user-owned, ignored
     write(instance, 'services/acme-crm/p.json', 'b')
 
@@ -76,7 +76,10 @@ describe('runCoreDiff', () => {
     expect(out).toContain('services/api/added.py')
     expect(out).toContain('services/api/removed.py')
     expect(out).not.toContain('services/acme-crm/p.json')
-    expect(out).toContain('3 template-owned file(s) would change')
+    // Instance-only files are listed but NOT counted as pending changes (#689).
+    expect(out).toContain('2 template-owned file(s) would change')
+    expect(out).toContain('instance-only')
+    expect(out).toContain('An upgrade leaves these alone')
     // read-only preview mentions Phase 3
     expect(out).toContain('biffo core upgrade')
   })

@@ -189,7 +189,7 @@ export function listTemplateOwnedFiles(root: string, manifest: CoreManifest): st
   return out.sort()
 }
 
-export type ChangeKind = 'added' | 'removed' | 'modified'
+export type ChangeKind = 'added' | 'removed' | 'modified' | 'instance-only'
 
 export interface CoreDiffEntry {
   path: string
@@ -198,7 +198,24 @@ export interface CoreDiffEntry {
 
 export interface CoreDiff {
   added: string[] // present in the template, absent in the instance (upgrade would add)
-  removed: string[] // present in the instance, absent in the template (upgrade would delete)
+  /**
+   * The template HAD this file and dropped it, so an upgrade deletes it.
+   * Only ever populated when a merge base is supplied — without one, "absent
+   * from the template" is not enough to know an upgrade would delete it.
+   */
+  removed: string[]
+  /**
+   * Present in the instance, never in the template. An upgrade neither carries
+   * nor deletes these (#689): `planCoreUpgrade` removes a path only when it is
+   * `inBase && !inTheirs`, so a file the template never shipped cannot be
+   * deleted by one.
+   *
+   * These used to be reported as `removed`, which read as imminent data loss
+   * for files an instance legitimately authored inside a template-owned tree.
+   * It halted a real deploy and produced an incorrect data-loss issue before
+   * anyone ran the dry run that disproves it.
+   */
+  instanceOnly: string[]
   modified: string[] // present in both, content differs
   unchanged: number
   entries: CoreDiffEntry[]
@@ -220,11 +237,24 @@ export function computeCoreDiff(
   templateRoot: string,
   instanceRoot: string,
   manifest: CoreManifest,
+  baseRoot?: string,
 ): CoreDiff {
   const templateFiles = new Set(listTemplateOwnedFiles(templateRoot, manifest))
   const instanceFiles = new Set(listTemplateOwnedFiles(instanceRoot, manifest))
+  // The template at the instance's CURRENT version — the same merge base
+  // `planCoreUpgrade` uses. Without it we cannot tell "the template dropped
+  // this" from "the instance added this", so everything absent upstream is
+  // reported as instance-only, which is the answer that never overstates.
+  const baseFiles = baseRoot ? new Set(listTemplateOwnedFiles(baseRoot, manifest)) : undefined
 
-  const diff: CoreDiff = { added: [], removed: [], modified: [], unchanged: 0, entries: [] }
+  const diff: CoreDiff = {
+    added: [],
+    removed: [],
+    instanceOnly: [],
+    modified: [],
+    unchanged: 0,
+    entries: [],
+  }
 
   for (const rel of [...templateFiles].sort()) {
     if (!instanceFiles.has(rel)) {
@@ -238,9 +268,15 @@ export function computeCoreDiff(
     }
   }
   for (const rel of [...instanceFiles].sort()) {
-    if (!templateFiles.has(rel)) {
+    if (templateFiles.has(rel)) continue
+    // Mirrors planCoreUpgrade's rule exactly: a path is deleted by an upgrade
+    // only when the base had it and the target does not.
+    if (baseFiles?.has(rel)) {
       diff.removed.push(rel)
       diff.entries.push({ path: rel, kind: 'removed' })
+    } else {
+      diff.instanceOnly.push(rel)
+      diff.entries.push({ path: rel, kind: 'instance-only' })
     }
   }
 

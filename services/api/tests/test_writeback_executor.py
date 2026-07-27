@@ -103,18 +103,22 @@ class _NoPermissions:
 
 
 @pytest.fixture(autouse=True)
-def _identity() -> Generator[None]:
-    """Install the no-database provider above for every test in this module."""
-    from api import identity  # noqa: PLC0415 — local to keep the fixture self-contained
+def _identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Install the no-database provider for every test in this module.
 
-    saved = identity._provider  # noqa: SLF001
-    identity._provider = _NoPermissions()  # type: ignore[assignment]  # noqa: SLF001
-    yield
-    identity._provider = saved  # noqa: SLF001
+    Patched **on the consuming module** rather than on `api.identity`'s global.
+    An instance installs its own provider as an import side effect of `api.main`
+    (tabsii: `set_identity_provider(TabsiiIdentityProvider())`), and in a full
+    suite run that can land after this fixture has set the global — which is
+    exactly how these tests passed in isolation and failed once distributed.
+    Patching the name the executor actually calls cannot be undone by whoever
+    imports what, and in whichever order.
+    """
+    monkeypatch.setattr("api.writeback.get_identity_provider", lambda: _NoPermissions())
 
 
 @pytest.fixture(autouse=True)
-def _registry() -> Generator[None]:
+def _registry(app) -> Generator[None]:  # noqa: ANN001 — ordering: after the app exists
     saved_targets, saved_provider = dict(wb._targets), wb._provider  # noqa: SLF001
     wb._targets.clear()  # noqa: SLF001
     wb.register_writeback_target(_target())

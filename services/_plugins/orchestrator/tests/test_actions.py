@@ -1,6 +1,8 @@
-"""Tests for the action handlers (email, Google Chat, WhatsApp, agent)."""
+"""Tests for the action handlers (email, Google Chat, WhatsApp, agent, fan-in)."""
 
 from __future__ import annotations
+
+from typing import Any
 
 import pytest
 from orchestrator.actions import (
@@ -8,6 +10,7 @@ from orchestrator.actions import (
     ActionError,
     TransientActionError,
     WhatsAppSettings,
+    fan_in_agent_runs,
     prepare_delivery,
     request_agent_run,
     send_email,
@@ -724,3 +727,259 @@ async def test_a_5xx_or_429_from_core_on_the_agent_action_is_transient(status: i
 
     with pytest.raises(TransientActionError):
         await request_agent_run(_AGENT_CONFIG, {}, core_client=core.client())
+
+
+# ── agent_fan_in: run an agent once N parallel agents have finished (#657) ───
+#
+# The join. Every sibling's completion fires this action; all but the last
+# no-op because the set is not yet complete.
+
+_CHAIN = "chain-root-1"
+
+
+def _completion(run_id: str = "research-a", *, depth: int = 1) -> dict[str, Any]:
+    """The `agent.run.completed` reference payload that triggers a fan-in."""
+    return {
+        "run_id": run_id,
+        "agent": "research-a",
+        "status": "completed",
+        "causation_id": _CHAIN,
+        "depth": depth,
+    }
+
+
+def _summary(run_id: str, agent_name: str, status: str = "completed") -> dict[str, Any]:
+    """A chain-listing row, as Core's summary endpoint returns it."""
+    return {
+        "id": run_id,
+        "agent_name": agent_name,
+        "status": status,
+        "causation_id": _CHAIN,
+    }
+
+
+def _record(output: str) -> dict[str, Any]:
+    return {"id": "x", "status": "completed", "result": {"output": output}}
+
+
+_FAN_IN_CONFIG = {
+    "expect_agents": "research-a,research-b",
+    "agent_name": "synthesis",
+    "instructions": "Reconcile the findings.",
+}
+
+
+def _fan_in_core(chain, records=None, **kwargs):
+    return FakeCore(
+        [],
+        chain_runs=chain,
+        agent_run_records=records or {},
+        agent_run_id="synthesis-run-1",
+        **kwargs,
+    )
+
+
+async def test_fan_in_waits_while_a_sibling_is_still_running():
+    """The common case: with N siblings this happens N-1 times."""
+    core = _fan_in_core(
+        [_summary("ra", "research-a"), _summary("rb", "research-b", status="running")]
+    )
+
+    result = await fan_in_agent_runs(_FAN_IN_CONFIG, _completion(), core_client=core.client())
+
+    assert result["status"] == "waiting"
+    assert not [p for m, p, _ in core.requests if m == "POST"]
+
+
+async def test_fan_in_waits_when_an_expected_agent_has_no_run_at_all():
+    core = _fan_in_core([_summary("ra", "research-a")])
+
+    result = await fan_in_agent_runs(_FAN_IN_CONFIG, _completion(), core_client=core.client())
+
+    assert result["status"] == "waiting"
+
+
+async def test_fan_in_fires_once_every_sibling_is_terminal():
+    core = _fan_in_core(
+        [_summary("ra", "research-a"), _summary("rb", "research-b")],
+        {"ra": _record("findings A"), "rb": _record("findings B")},
+    )
+
+    result = await fan_in_agent_runs(_FAN_IN_CONFIG, _completion(), core_client=core.client())
+
+    assert result["status"] == "requested"
+    assert result["run_id"] == "synthesis-run-1"
+    assert result["joined"] == ["research-a", "research-b"]
+
+
+async def test_the_fired_run_carries_every_siblings_output_keyed_by_agent():
+    core = _fan_in_core(
+        [_summary("ra", "research-a"), _summary("rb", "research-b")],
+        {"ra": _record("findings A"), "rb": _record("findings B")},
+    )
+
+    await fan_in_agent_runs(_FAN_IN_CONFIG, _completion(), core_client=core.client())
+
+    posted = [b for m, p, b in core.requests if m == "POST" and p.endswith("/agent-runs")][0]
+    assert posted["agent_name"] == "synthesis"
+    assert posted["input_payload"]["fan_in"] == {
+        "research-a": "findings A",
+        "research-b": "findings B",
+    }
+    # The completion that tripped the join is carried too, so a handler can tell
+    # what it was reacting to.
+    assert posted["input_payload"]["trigger"]["causation_id"] == _CHAIN
+
+
+async def test_the_fired_run_stays_in_the_same_chain_and_increments_depth():
+    """The §8 loop guard only works if the chain is unbroken."""
+    core = _fan_in_core(
+        [_summary("ra", "research-a"), _summary("rb", "research-b")],
+        {"ra": _record("A"), "rb": _record("B")},
+    )
+
+    await fan_in_agent_runs(_FAN_IN_CONFIG, _completion(depth=2), core_client=core.client())
+
+    posted = [b for m, p, b in core.requests if m == "POST" and p.endswith("/agent-runs")][0]
+    assert posted["causation_id"] == _CHAIN
+    assert posted["depth"] == 3
+
+
+async def test_expect_agents_is_not_sent_as_part_of_the_run_snapshot():
+    """It configures the join, not the agent — a run's snapshot is what explains
+    the run afterwards (§10) and this would be noise in it."""
+    core = _fan_in_core(
+        [_summary("ra", "research-a"), _summary("rb", "research-b")],
+        {"ra": _record("A"), "rb": _record("B")},
+    )
+
+    await fan_in_agent_runs(_FAN_IN_CONFIG, _completion(), core_client=core.client())
+
+    posted = [b for m, p, b in core.requests if m == "POST" and p.endswith("/agent-runs")][0]
+    assert "expect_agents" not in posted["definition_snapshot"]
+    assert posted["definition_snapshot"]["instructions"] == "Reconcile the findings."
+
+
+async def test_a_failed_sibling_is_terminal_and_the_join_proceeds_without_it():
+    """Redundant angles want a degraded answer, not a hang."""
+    core = _fan_in_core(
+        [_summary("ra", "research-a"), _summary("rb", "research-b", status="failed")],
+        {"ra": _record("findings A")},
+    )
+
+    result = await fan_in_agent_runs(_FAN_IN_CONFIG, _completion(), core_client=core.client())
+
+    assert result["status"] == "requested"
+    assert result["joined"] == ["research-a"]
+    posted = [b for m, p, b in core.requests if m == "POST" and p.endswith("/agent-runs")][0]
+    assert posted["input_payload"]["fan_in"] == {"research-a": "findings A"}
+
+
+async def test_every_sibling_failing_fails_the_action_rather_than_running_on_nothing():
+    core = _fan_in_core(
+        [
+            _summary("ra", "research-a", status="failed"),
+            _summary("rb", "research-b", status="failed"),
+        ]
+    )
+
+    with pytest.raises(ActionError, match="nothing to run"):
+        await fan_in_agent_runs(_FAN_IN_CONFIG, _completion(), core_client=core.client())
+
+
+async def test_the_join_does_not_fire_twice_for_the_same_chain():
+    """The idempotency guard: a synthesis run already in the chain means an
+    earlier completion won the race. Each duplicate is a real invoice."""
+    core = _fan_in_core(
+        [
+            _summary("ra", "research-a"),
+            _summary("rb", "research-b"),
+            _summary("s1", "synthesis"),
+        ],
+        {"ra": _record("A"), "rb": _record("B")},
+    )
+
+    result = await fan_in_agent_runs(_FAN_IN_CONFIG, _completion(), core_client=core.client())
+
+    assert result["status"] == "already_fired"
+    assert result["run_id"] == "s1"
+    assert not [p for m, p, _ in core.requests if m == "POST" and p.endswith("/agent-runs")]
+
+
+async def test_runs_from_another_chain_are_not_counted():
+    """Two scouts running at once must not satisfy each other's joins."""
+    other = dict(_summary("rb", "research-b"), causation_id="a-different-chain")
+    core = _fan_in_core([_summary("ra", "research-a"), other])
+
+    result = await fan_in_agent_runs(_FAN_IN_CONFIG, _completion(), core_client=core.client())
+
+    assert result["status"] == "waiting"
+
+
+async def test_an_unchained_trigger_is_a_configuration_error():
+    """Triggered by something that is not an agent completion — there is no
+    chain to join, and silently doing nothing would hide the misconfiguration."""
+    core = _fan_in_core([])
+
+    with pytest.raises(ActionError, match="chained trigger"):
+        await fan_in_agent_runs(_FAN_IN_CONFIG, {"id": "not-a-run"}, core_client=core.client())
+
+
+async def test_expect_agents_accepts_a_list_as_well_as_a_string():
+    core = _fan_in_core(
+        [_summary("ra", "research-a"), _summary("rb", "research-b")],
+        {"ra": _record("A"), "rb": _record("B")},
+    )
+    config = {**_FAN_IN_CONFIG, "expect_agents": ["research-a", "research-b"]}
+
+    result = await fan_in_agent_runs(config, _completion(), core_client=core.client())
+
+    assert result["status"] == "requested"
+
+
+async def test_an_empty_expect_agents_is_rejected():
+    core = _fan_in_core([])
+
+    with pytest.raises(ActionError, match="nothing to wait for"):
+        await fan_in_agent_runs(
+            {**_FAN_IN_CONFIG, "expect_agents": " , "}, _completion(), core_client=core.client()
+        )
+
+
+async def test_missing_required_config_is_a_permanent_failure():
+    core = _fan_in_core([])
+
+    with pytest.raises(ActionError, match="expect_agents"):
+        await fan_in_agent_runs(
+            {"agent_name": "synthesis", "instructions": "x"},
+            _completion(),
+            core_client=core.client(),
+        )
+
+
+async def test_a_depth_ceiling_refusal_is_permanent_not_retried():
+    """409 is §8 stopping a runaway chain — retrying is the runaway."""
+    core = _fan_in_core(
+        [_summary("ra", "research-a"), _summary("rb", "research-b")],
+        {"ra": _record("A"), "rb": _record("B")},
+        agent_run_status=409,
+    )
+
+    with pytest.raises(ActionError) as exc:
+        await fan_in_agent_runs(_FAN_IN_CONFIG, _completion(), core_client=core.client())
+    assert not isinstance(exc.value, TransientActionError)
+
+
+async def test_core_being_briefly_unwell_is_retried():
+    core = _fan_in_core(
+        [_summary("ra", "research-a"), _summary("rb", "research-b")],
+        {"ra": _record("A"), "rb": _record("B")},
+        agent_run_status=503,
+    )
+
+    with pytest.raises(TransientActionError):
+        await fan_in_agent_runs(_FAN_IN_CONFIG, _completion(), core_client=core.client())
+
+
+async def test_the_action_is_registered_under_its_catalog_type():
+    assert ACTION_HANDLERS["agent_fan_in"] is fan_in_agent_runs

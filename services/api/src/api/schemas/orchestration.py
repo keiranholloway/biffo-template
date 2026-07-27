@@ -480,6 +480,71 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
             },
         ],
     },
+    {
+        # The join (#657). "Run an agent" fans out — N definitions on one trigger
+        # start N runs in parallel — but nothing brought them back together: a
+        # definition is one trigger to one action, so each of the N completions
+        # fired the follow-on independently, N times.
+        #
+        # This action is triggered by `agent.run.completed` and no-ops until every
+        # agent in `expect_agents` has a terminal run in the same causation chain
+        # (ADR-0014 §8). The last completion to arrive finds the set complete and
+        # starts `agent_name` with all their outputs in its `input_payload`.
+        "type": "agent_fan_in",
+        "label": "Run an agent once several agents have finished",
+        "config_fields": [
+            {
+                "name": "expect_agents",
+                "label": (
+                    "Wait for these agents (comma-separated) — the runs whose "
+                    "results this agent works from"
+                ),
+                "type": "text",
+                "required": True,
+            },
+            {"name": "agent_name", "label": "Agent name", "type": "text", "required": True},
+            {
+                "name": "instructions",
+                "label": "Instructions",
+                "type": "textarea",
+                "required": True,
+                "parts": True,
+            },
+            {
+                "name": "goals",
+                "label": "Goals — what does a good result look like?",
+                "type": "textarea",
+                "required": False,
+                "parts": True,
+            },
+            {
+                "name": "model",
+                "label": "Model",
+                "type": "text",
+                "required": False,
+                "default": "moonshotai/kimi-k3",
+            },
+            {
+                "name": "max_turns",
+                "label": "Maximum turns",
+                "type": "number",
+                "required": False,
+                "default": 1,
+            },
+            {
+                "name": "delivery",
+                "label": "Deliver the result on completion",
+                "type": "delivery",
+                "required": False,
+            },
+            {
+                "name": "writeback",
+                "label": "Record the result",
+                "type": "writeback",
+                "required": False,
+            },
+        ],
+    },
 ]
 
 # The destinations an agent-action delivery may target (ADR-0020, #527). Each is a

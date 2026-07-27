@@ -9,7 +9,7 @@ monorepo.
 from __future__ import annotations
 
 from biffo_plugin_sdk import BiffoEvent
-from fakes import FakeCoreApi
+from example_plugin_fakes import FakeCoreApi
 
 from example_plugin.plugin import _DEFAULT_WIDGET, ExamplePlugin
 

@@ -66,7 +66,24 @@ repo; only its product differs.
   before merge: `git log origin/<branch> -1`. A green PR page is not proof your
   latest local commit reached it.
 
-## 7. Security
+## 7. CI runners — two steps this repo cannot do for itself
+
+The workflows use `runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}`, so they
+work anywhere by default and route to a self-hosted fleet when one exists. Two
+things must be done **outside** this repo before its first run can succeed on a
+fleet:
+
+1. **Set the repo variable `RUNNER_LABEL`** to the fleet's label.
+2. **Grant the runner GitHub App access to this repo.** The scale-up webhook only
+   sees repos the App can see. Without the grant, jobs queue **indefinitely with
+   no error** — and nothing in the UI distinguishes that from a slow runner. The
+   first plugin repo to hit this sat queued for **1h 44m** before anyone noticed
+   (`keiranholloway/biffo-runners#2`).
+
+If a job is queued and nothing is happening, check the grant before anything
+else. It is the failure that looks exactly like patience.
+
+## 8. Security
 
 - **Never commit secrets** (keys, tokens, credentials, `.env` values).
 - **Never silently disable a security gate.** If one must be loosened, do it in

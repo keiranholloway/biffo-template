@@ -56,14 +56,19 @@ class HttpClient(Protocol):
 
 
 class CoreClient(Protocol):
-    """The slice of the IAM-signed Core API client the agent action uses.
+    """The slice of the IAM-signed Core API client the agent actions use.
 
     Satisfied by ``SignedCoreClient`` from the plugin SDK — the same client the
     plugin already uses to claim runs and post results (ADR-0009). The agent
-    action never builds its own.
+    actions never build their own.
+
+    ``get`` is here for the fan-in, which has to read a causation chain and then
+    the runs in it before it can decide anything.
     """
 
     async def post(self, path: str, json: dict[str, Any] | None = None) -> Any: ...
+
+    async def get(self, path: str, params: dict[str, Any] | None = None) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -515,6 +520,217 @@ async def request_agent_run(
     return {"run_id": run_id, "status": "requested", "depth": depth}
 
 
+# ── Fan-in: run an agent once N parallel agents have all finished (#657) ────
+#
+# The engine can already fan *out* — N definitions on one trigger start N runs
+# in parallel. It could not join them back: a `WorkflowDefinition` is one trigger
+# to one action, so each of the N `agent.run.completed` events fires the
+# follow-on independently, N times. This action is the join.
+#
+# It works by being deliberately near-idempotent: every sibling's completion
+# fires it, and all but the last one no-op because the set is not yet complete.
+
+TERMINAL_RUN_STATUSES = frozenset({"completed", "failed"})
+
+
+def _expected_agents(config: dict[str, Any]) -> list[str]:
+    """The agent names whose runs make up the set being joined."""
+    raw = _require(config, "agent_fan_in", "expect_agents")
+    if isinstance(raw, str):
+        # An authoring form with one text input is the obvious way this gets
+        # filled in — accept a comma-separated list, same as `declared_tools`.
+        names = [part.strip() for part in raw.split(",")]
+    elif isinstance(raw, list):
+        names = [str(part).strip() for part in raw]
+    else:
+        raise ActionError(
+            "agent_fan_in expect_agents must be a list or a comma-separated "
+            f"string, got {type(raw).__name__}"
+        )
+    names = [name for name in names if name]
+    if not names:
+        raise ActionError("agent_fan_in expect_agents is empty — there is nothing to wait for")
+    return names
+
+
+def _terminal_run_by_agent(
+    siblings: list[dict[str, Any]], expected: list[str]
+) -> dict[str, dict[str, Any]] | None:
+    """One terminal run per expected agent, or ``None`` if any is still pending.
+
+    ``None`` is the wait signal, and it is the common case: with N siblings this
+    returns ``None`` N-1 times and a full mapping once.
+
+    Where an agent has several runs in the chain (a retry, say) the newest wins —
+    ``list`` returns newest-first, so the first terminal one seen is the latest.
+    """
+    newest: dict[str, dict[str, Any]] = {}
+    for run in siblings:
+        name = run.get("agent_name")
+        if name in expected and name not in newest and run.get("status") in TERMINAL_RUN_STATUSES:
+            newest[name] = run
+    missing = [name for name in expected if name not in newest]
+    if missing:
+        return None
+    return newest
+
+
+async def fan_in_agent_runs(
+    config: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    core_client: CoreClient,
+    **_: Any,
+) -> dict[str, Any]:
+    """Run an agent over the outputs of a set of parallel agents, once they finish.
+
+    Triggered by ``agent.run.completed``. Reads the chain off the event
+    (``causation_id``), asks Core which runs share it (#656), and:
+
+    - **no-ops** while any agent in ``expect_agents`` has no terminal run yet;
+    - **no-ops** if a run for ``agent_name`` already exists in this chain — the
+      idempotency guard, see below;
+    - otherwise fetches each expected run in full and starts ``agent_name`` with
+      their outputs in ``input_payload``.
+
+    ``config`` keys: ``expect_agents`` and ``agent_name`` and ``instructions``
+    (required), ``model`` and ``max_turns`` (defaulted from the catalog, like the
+    plain ``agent`` action).
+
+    **A failed sibling is still terminal.** The join proceeds and simply carries
+    no output for it, because a workflow that fans out to redundant angles wants
+    a degraded answer rather than a hang. If *every* expected run failed there is
+    nothing to work from and the action fails loudly instead of starting an agent
+    with an empty payload.
+
+    **On the idempotency guard.** Sibling completions can race: two arriving
+    together can both observe a complete set, and each duplicate is a real
+    invoice. The engine's own `WorkflowRun.dedupe_key` does not help here — it is
+    keyed per *event*, and these are genuinely different events, which is exactly
+    why they each get a run. So the guard is a check for an existing run of
+    ``agent_name`` in the chain, made as late as possible. That closes the
+    ordinary case (siblings finishing seconds or minutes apart) but leaves a
+    narrow window where two simultaneous completions both find nothing and both
+    fire. It fails safe — a duplicate follow-on run, never a loop, and §8's depth
+    ceiling still bounds the chain. Closing it properly needs an atomic
+    create-once in Core; tracked in #661.
+    """
+    expected = _expected_agents(config)
+    agent_name = _require(config, "agent_fan_in", "agent_name")
+    _require(config, "agent_fan_in", "instructions")
+
+    causation_id, depth = _agent_chain(payload)
+    if causation_id is None:
+        raise ActionError(
+            "agent_fan_in needs a chained trigger: the event carried no run_id/depth, "
+            "so there is no causation chain to join. Trigger it from agent.run.completed."
+        )
+
+    siblings = await _get_chain(core_client, causation_id=causation_id)
+    terminal = _terminal_run_by_agent(siblings, expected)
+    if terminal is None:
+        return {"status": "waiting", "causation_id": causation_id, "expected": expected}
+
+    # The guard — deliberately re-read rather than derived from `siblings`, so the
+    # window between deciding and firing is as small as it can be.
+    already = await _get_chain(core_client, causation_id=causation_id, agent_name=agent_name)
+    if already:
+        return {
+            "status": "already_fired",
+            "causation_id": causation_id,
+            "run_id": already[0].get("id"),
+        }
+
+    outputs: dict[str, Any] = {}
+    for name, summary in terminal.items():
+        if summary.get("status") != "completed":
+            continue  # failed sibling: terminal, but has nothing to contribute
+        run_id = summary.get("id")
+        if not run_id:
+            continue
+        full = await _get_run(core_client, run_id=str(run_id))
+        outputs[name] = _delivery_output(full)
+
+    if not outputs:
+        raise ActionError(
+            f"agent_fan_in has nothing to run {agent_name!r} on: every agent in "
+            f"{expected} failed in chain {causation_id}"
+        )
+
+    snapshot: dict[str, Any] = {
+        **AGENT_CONFIG_DEFAULTS,
+        **{
+            key: value
+            for key, value in config.items()
+            if value not in (None, "") and key != "expect_agents"
+        },
+    }
+    try:
+        run = await core_client.post(
+            _AGENT_RUNS_PATH,
+            json={
+                "agent_name": agent_name,
+                "definition_snapshot": snapshot,
+                # The joined outputs, keyed by which agent produced each, plus the
+                # completion that happened to trip the join — a handler that wants
+                # to know what it was reacting to still can.
+                "input_payload": {"fan_in": outputs, "trigger": payload},
+                "causation_id": causation_id,
+                "depth": depth,
+            },
+        )
+    except BiffoAPIError as exc:
+        if _transient_status(exc.status_code):
+            raise TransientActionError(
+                f"Core could not create the fan-in run for {agent_name!r} at "
+                f"depth {depth} (transient): {exc.status_code} {exc.detail}"
+            ) from exc
+        raise ActionError(
+            f"Core refused the fan-in run for {agent_name!r} at depth {depth}: "
+            f"{exc.status_code} {exc.detail}"
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 — no answer at all is transient
+        raise TransientActionError(
+            f"Fan-in run request to Core failed for {agent_name!r}: {exc}"
+        ) from exc
+
+    run_id = (run or {}).get("id")
+    if not run_id:
+        raise ActionError("Core accepted the fan-in run but returned no run id")
+    return {
+        "run_id": run_id,
+        "status": "requested",
+        "depth": depth,
+        "joined": sorted(outputs),
+    }
+
+
+async def _get_chain(
+    core_client: CoreClient, *, causation_id: str, agent_name: str | None = None
+) -> list[dict[str, Any]]:
+    """Run summaries sharing a causation chain (#656), newest first."""
+    params = {"causation_id": causation_id}
+    if agent_name is not None:
+        params["agent_name"] = agent_name
+    try:
+        rows = await core_client.get(_AGENT_RUNS_PATH, params=params)
+    except BiffoAPIError as exc:
+        raise TransientActionError(
+            f"Could not read causation chain {causation_id}: {exc.status_code} {exc.detail}"
+        ) from exc
+    return list(rows or [])
+
+
+async def _get_run(core_client: CoreClient, *, run_id: str) -> dict[str, Any]:
+    """One run in full — the summaries from ``_get_chain`` carry no output."""
+    try:
+        return await core_client.get(f"{_AGENT_RUNS_PATH}/{run_id}") or {}
+    except BiffoAPIError as exc:
+        raise TransientActionError(
+            f"Could not read agent run {run_id}: {exc.status_code} {exc.detail}"
+        ) from exc
+
+
 # action_type -> handler. The engine dispatches by this key (ADR-0003 plugin).
 # Keep in step with the Core builder catalog (WORKFLOW_ACTIONS) so every
 # offered action has a handler and vice versa.
@@ -524,6 +740,7 @@ ACTION_HANDLERS: dict[str, Any] = {
     "slack": send_slack,
     "whatsapp": send_whatsapp,
     "agent": request_agent_run,
+    "agent_fan_in": fan_in_agent_runs,
 }
 
 

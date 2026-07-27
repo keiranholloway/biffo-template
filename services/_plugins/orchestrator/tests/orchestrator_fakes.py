@@ -34,6 +34,8 @@ class FakeCore:
         agent_run_status: int = 201,
         agent_run_detail: str = "Agent run refused",
         agent_run_record: dict[str, Any] | None = None,
+        agent_run_records: dict[str, dict[str, Any]] | None = None,
+        chain_runs: list[dict[str, Any]] | None = None,
         fire_response: dict[str, Any] | None = None,
     ) -> None:
         self._runs = runs
@@ -44,6 +46,12 @@ class FakeCore:
         # deliver-on-completion handler (ADR-0020) fetches to read a run's output
         # and its delivery snapshot (the completion event carries only a reference).
         self._agent_run_record = agent_run_record
+        # Per-run records keyed by id, for a fan-in that fetches several
+        # different runs; falls back to the single record above.
+        self._agent_run_records = agent_run_records or {}
+        # The causation chain served by GET /agent-runs?causation_id= (#656) —
+        # summaries, exactly as Core returns them (no messages/result).
+        self._chain_runs = chain_runs or []
         # Served by POST /runs/{id}/fire (docs/implementation/
         # 0002-scheduled-workflow-actions) — None means "not claimed".
         self._fire_response = fire_response
@@ -89,11 +97,26 @@ class FakeCore:
         body = json.loads(request.content or b"{}")
         self.requests.append((request.method, request.url.path, body))
 
-        # GET /agent-runs/{id}: the full run record the delivery handler reads.
+        # GET /agent-runs/{id}: the full run record the delivery handler reads,
+        # and the per-run fetch the fan-in makes once its set is complete.
         if request.method == "GET" and "/agent-runs/" in request.url.path:
-            if self._agent_run_record is None:
+            run_id = request.url.path.rsplit("/", 1)[-1]
+            record = self._agent_run_records.get(run_id, self._agent_run_record)
+            if record is None:
                 return httpx.Response(404, json={"detail": "Agent run not found"})
-            return httpx.Response(200, json=self._agent_run_record)
+            return httpx.Response(200, json=record)
+
+        # GET /agent-runs?causation_id=…: the chain listing a fan-in reads to
+        # discover its siblings (#656). Filters the scripted chain the same way
+        # Core does, so a test can assert the action's own filtering rather than
+        # the fake's.
+        if request.method == "GET" and request.url.path.endswith("/agent-runs"):
+            causation_id = request.url.params.get("causation_id")
+            agent_name = request.url.params.get("agent_name")
+            rows = [r for r in self._chain_runs if r.get("causation_id") == causation_id]
+            if agent_name is not None:
+                rows = [r for r in rows if r.get("agent_name") == agent_name]
+            return httpx.Response(200, json=rows)
 
         if request.url.path.endswith("/agent-runs"):
             if self._agent_run_status >= 400:

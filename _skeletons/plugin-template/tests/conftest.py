@@ -1,14 +1,22 @@
-"""Make `example_plugin` and the test-local `fakes` module importable.
+"""Make `example_plugin` and its test-local fakes module importable.
 
 This template is a standalone repo (not part of the biffo-template
 monorepo's uv workspace — see README's "Standalone repo" note), so
 `example_plugin` is installed normally via the project's own
 [build-system]/hatchling config when `uv sync` runs. This conftest only
 needs to put `tests/` itself on sys.path so `tests/test_example_plugin.py`
-can `import fakes` as a plain sibling module (pytest's rootdir insertion
+can import its fakes as a plain sibling module (pytest's rootdir insertion
 already covers this in most configurations, but the explicit path insert
 keeps this working from any cwd, matching the RBAC reference plugin's
 `services/rbac/tests/conftest.py` pattern in the biffo-template monorepo).
+
+The fakes module is named after the plugin (`example_plugin_fakes.py`, which
+scaffolding rewrites per plugin) rather than a bare `fakes.py`. Without
+`__init__.py` here, pytest's prepend import mode imports test modules by bare
+basename, so two vendored plugins both shipping `fakes.py` would fight over the
+top-level module name and one would silently import the other's — which is
+exactly what happened when a second plugin was installed (issue #688). Guarded
+by `cli/src/lib/plugin-skeleton-second-occupant.test.ts`.
 """
 
 import sys

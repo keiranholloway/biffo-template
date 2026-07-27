@@ -75,6 +75,10 @@ class FakeCore:
             if method == "GET" and "/agent-runs/" in path
         ]
 
+    def writeback_posts(self) -> list[dict[str, Any]]:
+        """The bodies posted to POST /internal/orchestration/writeback (ADR-0027)."""
+        return [body for _, path, body in self.requests if path.endswith("/writeback")]
+
     def fire_posts(self) -> list[str]:
         """The run ids posted to POST /runs/{id}/fire."""
         return [

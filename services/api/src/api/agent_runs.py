@@ -145,6 +145,7 @@ async def list_runs(
     tenant_id: str,
     agent_name: str | None = None,
     status: str | None = None,
+    causation_id: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[AgentRun]:
@@ -157,8 +158,15 @@ async def list_runs(
     heavy columns are never touched here, so serializing an ``AgentRunSummary``
     triggers no lazy IO.
 
-    ``agent_name`` and ``status`` are optional equality filters. Paginated by
-    ``limit``/``offset``; the caller bounds ``limit``.
+    ``agent_name``, ``status`` and ``causation_id`` are optional equality
+    filters. Paginated by ``limit``/``offset``; the caller bounds ``limit``.
+
+    ``causation_id`` is how a chain is read back (ADR-0014 §8). Every run a
+    chain spawns carries the root's id, so filtering on it answers "what else is
+    in this chain?" — the question a fan-in has to ask when one of N parallel
+    runs completes and it must decide whether the rest are done. Note the root
+    run itself has ``causation_id`` NULL (it caused nothing before it), so a
+    chain query returns the descendants, not the root.
     """
     stmt = (
         select(AgentRun)
@@ -184,6 +192,8 @@ async def list_runs(
         stmt = stmt.where(AgentRun.agent_name == agent_name)
     if status is not None:
         stmt = stmt.where(AgentRun.status == status)
+    if causation_id is not None:
+        stmt = stmt.where(AgentRun.causation_id == causation_id)
     stmt = stmt.order_by(AgentRun.created_at.desc(), AgentRun.id.desc()).limit(limit).offset(offset)
     return list((await db.scalars(stmt)).all())
 

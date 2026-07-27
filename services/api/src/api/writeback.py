@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from aws_lambda_powertools import Logger
+from pydantic_core import to_jsonable_python
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -146,6 +147,26 @@ def _derived_value(derived: DerivedValue, *, tenant_id: str, scope: dict[str, An
     return scope.get("id")
 
 
+def _coerce_selector(column: Any, value: Any) -> Any:
+    """Cast the selector value to the column's own Python type.
+
+    A trigger payload is JSON, so the row id always arrives as a **string**. The
+    column it identifies need not be one — tabsii's are ``UUID``. PostgreSQL's
+    driver coerces that silently, so this looks unnecessary there; SQLite does
+    not, and neither dialect should be the thing deciding whether a workflow can
+    find its row.
+    """
+    python_type = getattr(getattr(column, "type", None), "python_type", None)
+    if python_type is None or isinstance(value, python_type):
+        return value
+    try:
+        return python_type(value)
+    except (TypeError, ValueError):
+        # Not convertible: leave it alone and let the comparison find nothing,
+        # which the caller records as "no matching row" rather than an error.
+        return value
+
+
 def _tenant_scope(target: WriteBackTarget, *, tenant_id: str) -> Any:
     """The value this target's rows are scoped by on their tenant column.
 
@@ -200,7 +221,15 @@ async def _record(
     error: str | None = None,
 ) -> None:
     """Write the audit row. ``request`` is deliberately never populated — it
-    would echo the action config, which can carry a credential (#432)."""
+    would echo the action config, which can carry a credential (#432).
+
+    ``response`` is normalised with ``to_jsonable_python`` because it carries the
+    written row's id, and an instance's id is not necessarily a string: tabsii's
+    `tabsii.*` tables use real ``UUID`` primary keys. A raw ``UUID`` in a JSON
+    column raises on insert — and because the audit row is written in the same
+    transaction as the business write, that failure **rolls back the successful
+    write with it**. So a serialisation detail here silently undoes the feature.
+    """
     if run_id is None:
         return
     db.add(
@@ -209,7 +238,7 @@ async def _record(
             run_id=run_id,
             action_type=WRITEBACK_ACTION,
             status=status,
-            response=response,
+            response=to_jsonable_python(response) if response is not None else None,
             error=error,
         )
     )
@@ -537,7 +566,10 @@ async def execute_writeback(
         row=row,
         agent_run=agent_run,
     )
+    # Stringified for the same reason ``_record`` normalises its payload: an
+    # instance's row id may be a UUID, and this value travels into JSON.
     row_id = getattr(row, "id", None)
+    row_id = str(row_id) if row_id is not None else None
     workflow_run.status = "succeeded"
     await _record(
         db,
@@ -594,6 +626,7 @@ async def _update_row(
     if not row_id:
         return None
     column = getattr(target.model, selector.column)
+    row_id = _coerce_selector(column, row_id)
     row = (
         await db.execute(
             select(target.model).where(

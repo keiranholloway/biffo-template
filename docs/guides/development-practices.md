@@ -43,7 +43,25 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | `ci.yml` fires on both `push` and `pull_request`, leaving duplicate in-flight runs that make "are all checks done?" unanswerable to tooling | visibility · process | biffo-template CI | biffo-template CI | **unfiled** |
 | [#689](https://github.com/keiranholloway/biffo-template/issues/689) | `core diff` reports instance-authored files as `removed` — a false data-loss signal that `core upgrade` does not act on. Halted a deploy, produced an incorrect issue, and prompted a workaround hunt, all for something that would not happen | **visibility** | biffo-platform upgrade | biffo-template `cli/` | **open** |
 | — | A cut `core-v*` tag is not an available artifact: the tag existed at 0.136.0 while npm still served 0.135.0. Upgrading in that window carries a *partial* fix that deploys green and still fails | visibility · process | biffo-template release chain | biffo-template CI | **unfiled** — caught before it bit |
-| [#671](https://github.com/keiranholloway/biffo-template/issues/671) | `scripts/biffo.sh` execs `npx @biffo/cli@$(biffo.core.json .version)`, so an unpublished core version reds **every guard on every instance**. npm publish has been failing (E404 on PUT) since 0.131.0 — the upgrade PR's own version bump is what breaks its guards, so it can never go green | **boundary** · visibility | tabsii-platform [#241](https://github.com/tabsii-com/tabsii-platform/pull/241) | biffo-template (npm token + `publish-cli.yml`) | **open** — hard blocker, needs credentials |
+| [#671](https://github.com/keiranholloway/biffo-template/issues/671) | `scripts/biffo.sh` execs `npx @biffo/cli@$(biffo.core.json .version)`, so an unpublished core version reds **every guard on every instance**. npm publish has been failing (E404 on PUT) since 0.131.0 — the upgrade PR's own version bump is what breaks its guards, so it can never go green | **boundary** · visibility | tabsii-platform [#241](https://github.com/tabsii-com/tabsii-platform/pull/241) | biffo-template (npm token + `publish-cli.yml`) | publishing **fixed** ([#669](https://github.com/keiranholloway/biffo-template/pull/669), npm now at 0.133.3); the coupling itself still **open** ([#667](https://github.com/keiranholloway/biffo-template/issues/667)) |
+| [#664](https://github.com/keiranholloway/biffo-template/issues/664) | The npm publish credential was issued with a **7-day expiry** and aged out mid-session — 0.130.0 published at 08:47, 0.131.0 failed at 08:50. Nothing warned before, during or after; the pipeline had no notion of its own credential having a lifetime | **visibility** | biffo-template release | biffo-template `publish-cli.yml` | **fixed** — replaced with OIDC trusted publishing, which has no long-lived credential ([#669](https://github.com/keiranholloway/biffo-template/pull/669)) |
+| [#664](https://github.com/keiranholloway/biffo-template/issues/664) | npm answers **404 on an unauthorised PUT**, not 403 (deliberately — so it cannot be used to probe whether a private package exists). An auth failure therefore reads as "no such package", and the obvious next move is the wrong one | **visibility** | biffo-template release | biffo-template (failure reporter) | **fixed** — the 404-means-403 trap is now named in the failure summary ([#669](https://github.com/keiranholloway/biffo-template/pull/669)) |
+| — | The publish failure reporter said "mint a fresh automation token… re-dispatch if transient". Both halves were wrong, and it said them **confidently** — three re-dispatches were spent on advice that could not work. Misleading diagnostics cost more than absent ones | **visibility** · process | biffo-template release | biffo-template `cli/src/lib/npm-publish.ts` | **fixed** ([#669](https://github.com/keiranholloway/biffo-template/pull/669)) |
+| — | npm ignores trusted publishing entirely below **11.5.1**, and Node 22 bundles 10.x — an OIDC setup on an old npm fails *identically* to an expired token. Caught before shipping only by reading the npm docs, not by any signal from the tool | **visibility** | biffo-template release | biffo-template `publish-cli.yml` | **fixed** — npm upgraded in the publish job ([#669](https://github.com/keiranholloway/biffo-template/pull/669)) |
+| — | The outage left a **hole in the published range** (0.130.0 → 0.133.3; 0.131.0–0.133.2 never published). An instance upgrade already computed against 0.133.1 was still uncommittable after publishing was fixed, and had to be discarded and recomputed | process | biffo-platform | biffo-template (consequence of #664 + #667) | **worked around** — recompute against a version that exists |
+| [#649](https://github.com/keiranholloway/biffo-template/issues/649) | The plugin skeleton ships `gitleaks/gitleaks-action@v2`, which **cannot pass** on this project's self-hosted runners (its SARIF upload assumes a GitHub-hosted `$HOME` layout) and needs a paid licence for org-owned repos. Every generated plugin repo is born with a permanently red check — the scan itself passes, then the action dies uploading | **drift** | biffo-plugin-idea-scout (first push) | biffo-template `_skeletons/plugin-template` | **open** — fixed downstream in [idea-scout#7](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/7), diff is portable |
+| [#651](https://github.com/keiranholloway/biffo-template/issues/651) | The plugin skeleton hardcodes `runs-on: ubuntu-latest`, so a generated repo bills GitHub-hosted minutes and fails immediately on an account over its spending limit. Same shape as the known sibling-skeleton issue, hit again on a new repo type | **drift** | biffo-plugin-idea-scout | biffo-template `_skeletons/plugin-template` | **open** |
+| [biffo-runners#2](https://github.com/keiranholloway/biffo-runners/issues/2) | A new repo pointed at the runner fleet gets **no runner and no error** until the `biffo-gha-runners` App is granted access to it. The webhook only sees repos the App can see, so jobs queue indefinitely and nothing distinguishes that from a slow runner | **visibility** | biffo-plugin-idea-scout | biffo-runners (docs + fail-fast) | **open** — cost **1h 44m** on one queued job |
+| [#650](https://github.com/keiranholloway/biffo-template/issues/650) | The plugin skeleton's ruff config diverges from both the Ideation Engine's and the instance's — `ANN` on where nobody else has it, and **missing** `flake8-bugbear.extend-immutable-calls`, without which `B008` rejects FastAPI's mandatory `Depends()` idiom. Hit **twice in one day** on one plugin, each time needing a local workaround | **drift** | biffo-plugin-idea-scout | biffo-template `_skeletons/plugin-template` | **open** |
+| [#657](https://github.com/keiranholloway/biffo-template/issues/657) | The orchestration engine could fan **out** but had no **join**: a `WorkflowDefinition` is one trigger to one action, so N parallel agent completions fired the follow-on N times. And outputs cannot travel a chain — a completion event carries a *reference*, not the result (ADR-0014 §5, correctly) — with no tool to fetch one | **boundary** | biffo-plugin-idea-scout | biffo-template `services/_plugins/orchestrator` | **fixed** ([#662](https://github.com/keiranholloway/biffo-template/pull/662)) |
+| [#656](https://github.com/keiranholloway/biffo-template/issues/656) | `AgentRun.causation_id` was written on every chained run but nothing could query it, so nothing could ask "what else is in this chain?" — the question any fan-in must answer | **visibility** | biffo-plugin-idea-scout | biffo-template `services/api` | **fixed** ([#658](https://github.com/keiranholloway/biffo-template/pull/658)) |
+| [#661](https://github.com/keiranholloway/biffo-template/issues/661) | Agent-run creation has no idempotency key, so a fan-in racing on simultaneous sibling completions can create the follow-on twice — two invoices for one result. The engine's `dedupe_key` cannot help: it is keyed per *event*, and sibling completions are genuinely different events | **boundary** | biffo-template orchestrator | biffo-template `services/api` | **open** — guarded by a check-then-act, documented as such |
+| — | Owner-scoped plugin tables can only be written inside a founder request — the owner comes from the forwarded token, never the body (correct, ADR-0017 §5). There is therefore **no autonomous write path** for a plugin doing background work, which turns "run this unattended" from a plugin question into a platform one | **boundary** | biffo-plugin-idea-scout | biffo-template `services/api` | **unfiled** — worked around by keeping the DB projection on first read |
+| [#685](https://github.com/keiranholloway/biffo-template/issues/685) | `biffo plugin install` regenerates `plugins.generated.tf` from an ADR-0018 §1 template — Lambda-backed, `function_arn` output, no `cdn_distribution_arn`. **No current plugin module has that shape**, so the generated block cannot plan. And it regenerates **in full**, so installing one plugin silently reverted `ideation`'s hand-corrected block too | **drift** · boundary | biffo-platform (installing idea-scout) | biffo-template `cli/` | **open** — hand-corrected, will revert on the next install |
+| [#688](https://github.com/keiranholloway/biffo-template/issues/688) | Two vendored plugins both define a *regular* package named `scripts`; regular packages do not merge across `sys.path`, so the first shadows the other and the second plugin's install breaks the first's seed-script imports | **boundary** | biffo-platform (installing idea-scout) | biffo-template `_skeletons/` | **open** — worked around per-plugin (path loading) |
+| [#688](https://github.com/keiranholloway/biffo-template/issues/688) | Plugin `tests/` carry no `__init__.py`, so pytest imports every module by bare basename. `test_manifest.py`, `test_app.py`, `test_service.py` are names *any* plugin picks — six collided at collection. `--import-mode=importlib` fixes it and breaks 10 other modules that rely on prepend | **boundary** · drift | biffo-platform (installing idea-scout) | biffo-template `_skeletons/` | **open** — worked around by prefixing every test file |
+| — | The plugin **skeleton's** `terraform/` provisions an ADR-0018 §1 Lambda + EventBridge + ingress, obsolete under ADR-0021. Unlike the two above it fails *silently*: it applies successfully and leaves a Lambda nothing ever invokes | **drift** | biffo-plugin-idea-scout | biffo-template `_skeletons/plugin-template` | **fixed downstream** ([idea-scout#15](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/15)); skeleton **open** |
+| — | The plugin skeleton's `ci.yml` asserts "a plugin repo has no JS/TS". False for any user-facing plugin (ADR-0017/0021) — so nothing checked the frontend's lint, types, tests or whether it built, and `web/dist` is what `user_frontend` ships | **drift** · fail-open | biffo-plugin-idea-scout | biffo-template `_skeletons/plugin-template` | **fixed downstream** ([idea-scout#14](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/14)); skeleton **open** |
 | [#670](https://github.com/keiranholloway/biffo-template/issues/670) | Core migration 0010 does `batch_alter_table("users")`, assuming a Core-owned `public.users` in the instance's Alembic chain. tabsii's users are DDL-imported as `tabsii.users`, so the migration raises `NoSuchTableError` and takes 4 smoke tests with it | **drift** | tabsii-platform [#241](https://github.com/tabsii-com/tabsii-platform/pull/241) | biffo-template `migrations/` | **open** — declined in tabsii ([#244](https://github.com/tabsii-com/tabsii-platform/issues/244)) |
 | [#668](https://github.com/keiranholloway/biffo-template/issues/668) | ADR-0022 discovery runs *after* `build_core_crud_router()`, and importing a domain is what registers its models — so relocating a domain silently drops every `/api/v1/data/` route its models back. **21 routes vanished in tabsii with the full suite green (1712 passed)**; no test builds the app the way `main.py` does, so none could have failed | **visibility** · boundary | tabsii-platform [#243](https://github.com/tabsii-com/tabsii-platform/pull/243) | biffo-template `main.py` + `routing/domain_router.py` | **open** — instance reordered locally as a stopgap |
 | [tabsii#249](https://github.com/tabsii-com/tabsii-platform/issues/249) | Write-back scoped its update by ADR-0001's seam string `"default"`, but an ADR-0005 DDL-imported table keys tenancy on a real `UUID`. The bind error was caught and recorded as *"the database refused the write for the workflow's owner"* — **indistinguishable from RLS correctly refusing a revoked author**, so the one failure the feature exists to expose was being counterfeited | **drift** · visibility | tabsii-platform dev E2E | biffo-template [#686](https://github.com/keiranholloway/biffo-template/pull/686) + tabsii [#251](https://github.com/tabsii-com/tabsii-platform/pull/251) | **fixed** |
@@ -69,6 +87,15 @@ visible outcome from "passed".**
 **boundary and drift are both ownership failures.** #652 is two ADRs claiming one
 URL prefix; #621 is one concept with two implementations. Neither is a coding
 mistake — both are two correct designs meeting with nobody owning the seam.
+
+**The skeleton has never been exercised by a second plugin.** Five rows above —
+#685, both halves of #688, the dead Terraform module and the "no JS/TS" CI
+assumption — were all found by installing a *second* plugin alongside the first.
+Every one is a shared namespace or a template that only ever had one occupant:
+one `scripts` package, one set of test basenames, one generated Terraform block,
+one assumed repo shape. None would have been found by testing the skeleton
+harder in isolation, and all of them broke the *incumbent* plugin, not the new
+one.
 
 **Distribution is a test environment the template does not have.** Three rows
 (#670, #671, #666) were found in one afternoon by carrying core `0.127.0 →
@@ -130,8 +157,96 @@ defects *appear*, they are where the template's untested seams get exercised for
 the first time. ADR-0022, the ownership guard and the event registry were all green in
 `biffo-template` and all broke on first real instance use. An instance is the
 template's integration test, and currently the only one.
+### How wide one feature reaches
+
+The same pattern measured a different way. Building **one** plugin feature
+(Idea Scout, 2026-07-27) required changes in **six repositories**, four of which
+were not the feature's own:
+
+| Repo | Why it was involved |
+| --- | --- |
+| `biffo-plugin-idea-scout` | The feature |
+| `biffo-template` | A Core query and an engine capability the feature needed, plus the release pipeline it broke on |
+| `biffo-platform` | An instance-owned Core domain (the profile read seam), and where the plugin installs |
+| `biffo-platform-app` | The dashboard tab that embeds it |
+| `biffo-plugin-ideation` | Receives the promoted idea |
+| `biffo-runners` | CI capacity for the new repo |
+
+Rough split of the day: **~35%** feature code, **~25%** platform capability the
+feature turned out to need, **~40%** toolchain, CI and release failures — almost
+none of which were specific to this feature.
+
+Two things that share a cause with the zero above:
+
+- **The capability gap was not visible at planning.** The feature was specified
+  as "runs weekly, unattended". Nothing in the platform supported an unattended
+  multi-agent pipeline, and that surfaced only when a reviewer asked why the user
+  had to watch it — after the orchestration had been built and merged. Ten
+  minutes of "what writes the result when nobody is looking?" would have found it.
+- **New-repo onboarding is a tax paid per repo, not per platform.** Three of the
+  day's failure conditions (#649, #651, biffo-runners#2) are variations of *the
+  skeleton produces a repo that cannot go green*, and each is rediscovered by
+  whoever creates the next repo.
 
 ---
+
+## Where the cycles go
+
+The scoreboard records what *broke*. This records what it *cost*, which is a
+different question and often the more actionable one: a defect fixed in ten
+minutes and a defect that ate an afternoon get one row each up there.
+
+Measured on the 2026-07-27 session, which shipped one bug fix end to end.
+
+| Cost | Cause | Status |
+| --- | --- | --- |
+| **~4 rebase cycles on one PR** | `dev` takes a merge every 3–5 min; CI is ~2.5 min. The branch is `BEHIND` again before its checks finish, so the manual `merge → rejected → rebase → re-verify → push` loop is **structurally unwinnable**, not unlucky | **fixed** — auto-merge enabled on `biffo-template` and `biffo-platform`; GitHub now owns the update-and-merge |
+| **~40 min minimum feedback loop** | A template-owned change reaches a running instance through **six hops**: template PR → `core-tag` → npm publish → `core upgrade` → instance PR → deploy. Nothing is verifiable until the last one | **open** — see below |
+| **One near-miss deploying half a fix** | Hop 3 can lag hop 2: `core-v0.136.0` was tagged while npm still served `0.135.0`. Upgrading in that window carries a *partial* change that deploys green and still fails | caught by checking npm, not the tag; **unautomated** |
+| **One wrongly-halted deploy + a wrongly-filed issue** | `core diff` reported instance-authored files as `removed`; `core upgrade` deletes none of them ([#689](https://github.com/keiranholloway/biffo-template/issues/689)). The preview was escalated as fact without running the dry run that disproves it | **open** (#689); the escalation is a practice failure, recorded under *needs more thought* |
+| **One wrong diff, silently** | `core diff` was run against a local template checkout missing the just-merged commit, and reported *no changes at all* for the half it was missing. Caught only because the absence looked implausible | **open** — no tooling notices; a stale-tree diff looks identical to a current one |
+
+### The six hops are the root cost
+
+Every other row above is a *symptom* of the same shape: the chain from "merged
+in the template" to "running in an instance" is long, and **verification is only
+possible at the end of it**. So every mistake — a stale checkout, an unpublished
+artifact, a silently-skipped deploy step — is discovered after the full ~40
+minute round trip, and each retry costs another one.
+
+That is what "going in circles" actually is here. It is not carelessness at any
+single hop; it is that the loop is too long to catch anything early, so the
+error rate per hop compounds into the wall-clock cost.
+
+Worth attacking in this order, cheapest first:
+
+1. **Make the preview trustworthy** (#689). A `core diff` that contradicts
+   `core upgrade` does not just waste a run — it caused a safe upgrade to be
+   abandoned and an incorrect data-loss issue to be filed. Confidence in the
+   preview is what makes the other five hops tolerable.
+2. **Assert the artifact, not the tag.** A cut `core-v*` is not an available
+   artifact. `core upgrade` should refuse to run (or warn loudly) when the
+   resolved CLI version is older than the template tag it is upgrading from —
+   the check that caught this by hand.
+3. **Make deploys prove they deployed.** Capture Lambda `LastModified` before
+   deploying and assert it moved afterwards. The plugin-host step *skips
+   silently* when a function is unprovisioned, so a green deploy is not evidence
+   the code shipped. Doing this by hand is what confirmed the #652 fix actually
+   landed.
+4. **Retain CI logs.** Not retained for self-hosted runs, so a green check cannot
+   be inspected to see what it *did* — which forced local reproduction of the
+   audit-gate behaviour.
+5. **Shorten the loop itself.** The open question, and the biggest prize: does a
+   dev-environment change need all six hops? Everything above makes the chain
+   more honest; only this makes it shorter.
+
+### What this is not
+
+It is not an argument for skipping hops. The ownership boundary, the guard, and
+the PR-per-instance exist because manual copy-ins let instances drift silently
+(#243, #325, #559) — the failure they prevent is worse and harder to see. The
+argument is for making each hop **fast to verify and honest about its result**,
+not for removing it.
 
 ## What went well — practices that earned their keep
 
@@ -216,6 +331,53 @@ recorded a hole as solved.
 `uv export --frozen` yields `greenlet==3.5.3` while PyPI's current release is
 `3.5.4` — the exact package and broken version from the original incident —
 rather than on the weaker "the `--frozen` flag is present in the workflow".
+**Drift guards fire on real changes, and that is them working.** Adding the
+`agent_fan_in` action tripped `cli/src/lib/action-registry-sync.test.ts`, which
+pins the exact action set so a new action cannot appear in `WORKFLOW_ACTIONS`
+without appearing in `ACTION_HANDLERS`. The parity half already passed — the
+guard's *other* half forced the addition to be acknowledged deliberately rather
+than slipping in. The same session's manifest tests caught reserved columns and
+route/permission mismatches before any deploy.
+
+**Test the fakes against the real contract.** `biffo-plugin-idea-scout`'s
+`test_ports.py` checks the HTTP adapter *and* the in-memory fake against the port
+**and against each other**, because Protocol conformance permits extra optional
+parameters — so both can satisfy the port while disagreeing, and the service
+would then behave differently in tests than in production. A companion test
+asserts the fake's canned agent output still validates against the real schema.
+A fake that has drifted makes every test above it prove nothing.
+
+**When responsibility moves, rewrite the tests rather than patching them.**
+Moving the fan-in from the plugin to the engine broke 14 tests. The ones that
+asserted *the plugin fires synthesis* were rewritten to assert *the plugin waits
+for the engine and picks up what it created*, and the fake gained an explicit
+`engine_fires_synthesis` helper so a test cannot accidentally do the engine's job
+and pass for the wrong reason. Patching them to green would have preserved
+coverage of behaviour that no longer exists.
+
+**Verify the artifact, not the workflow.** After moving publishing to OIDC, the
+green Publish CLI run was not the evidence — `npm view @biffo/cli version`
+returning **0.133.3** was. A workflow can go green having published nothing;
+these are different claims (see §6 of `biffo-verify`).
+
+**Dry-run an install before letting it reach an apply.** `biffo plugin install
+--dry-run` showed it would copy the plugin's `terraform/` into the instance —
+which prompted reading that module, which showed it was the obsolete ADR-0018 §1
+Lambda shape. Fixing it first (idea-scout#15) meant the install never created a
+Lambda nothing invokes. That failure mode is the dangerous kind: it *applies
+successfully*.
+
+**Run the aggregate suite, not just the package's own.** `biffo-plugin-idea-scout`
+was green on its own 171 tests throughout. Installing it broke **ideation's**
+tests in two different ways, and neither is visible from inside either plugin.
+The reproduction that mattered was `pytest services/ideation services/idea-scout`
+— both together, which is the only configuration that actually ships.
+
+**`terraform validate` as the acceptance test for generated infra.** The
+install-only tree does not validate; the corrected one does. That single command
+distinguished "the CLI wrote something plausible" from "the CLI wrote something
+that works", and no test suite would have.
+
 ---
 
 ## What needs more thought
@@ -312,6 +474,51 @@ fixed.
 dependency level with tests. Nobody has suspended a real Cognito user in `dev` and
 replayed a plugin-forwarded call. Until that happens, #621 should not close.
 
+**Confidently wrong diagnostics are worse than none.** The publish failure
+reporter existed precisely so a release failure would explain itself, and it
+explained itself *incorrectly* — "mint a fresh automation token, re-dispatch if
+transient" when the token was gone and the failure was permanent. Three
+re-dispatches followed. A reporter that had said "I do not recognise this" would
+have cost less. Worth asking of any diagnostic: **what does it say when it is
+wrong, and how would the reader tell?**
+
+**No credential in the pipeline knows it has a lifetime.** The npm token was
+issued with a 7-day expiry and nothing — not the workflow, not a dashboard, not
+an alert — surfaced that before it expired mid-session. Trusted publishing
+removes this one, but any remaining long-lived credential has the same shape.
+Worth an audit for other short-expiry tokens, and for the general case: a
+pipeline should be able to say when its own credentials die.
+
+**The release pipeline is a single point of failure for repos that never publish.**
+An expired npm token stopped instance upgrades from being *committed*, because
+the ownership guard resolves the published CLI (#667/#671). That coupling is
+invisible from any one repo: nothing in `biffo-platform` says "this repo cannot
+merge if npm is behind".
+
+**Cross-repo features have no first-class plan.** Idea Scout spanned six repos
+with real ordering constraints between them — Core seam before deploy, engine
+before rewire. A milestone list caught the dependencies because someone wrote
+them down; nothing enforces or even represents them. The failure mode is not
+dramatic, it is a half-landed feature nobody can see the shape of.
+
+**Nothing tests the skeleton with a second occupant.** Five failure conditions
+this session came from installing a *second* plugin next to the first, and all
+of them broke the incumbent. A scaffolding test that generates two plugins and
+runs them together would have caught every one — cheaply, and before either
+reached an instance.
+
+**A workaround that only the newcomer pays is not a fix.** Idea Scout now loads
+its scripts by path and prefixes every test file. Both work; both are the second
+plugin absorbing a cost the skeleton created, and the *third* plugin will pay it
+again from scratch. Worth distinguishing, when logging a workaround, between
+"contained" and "deferred onto whoever is next".
+
+**"What happens when nobody is watching?" belongs in planning.** The
+owner-scoped-write constraint (no autonomous write path) is correct security
+design and was documented; it simply was not asked about while a feature
+specified as "runs weekly" was being designed. That question would have moved a
+platform decision from mid-build to pre-build.
+
 ---
 
 **The template's seams are first exercised by an instance, and that is the test.**
@@ -373,7 +580,10 @@ saying "how did that ever work?".
    point of the "where the work lands" table.
 3. If a practice caught it, add it to *what went well* with the specific
    evidence. If a practice would have caught it, add it to *needs more thought*.
-4. Record every **skill** you invoked in *Skills used*, with an honest outcome —
+4. If it cost real wall-clock time, add the **cost and its cause** to *Where the
+   cycles go* — not just the defect. A ten-minute fix and an afternoon lost look
+   identical on the scoreboard, and only one of them is worth restructuring for.
+5. Record every **skill** you invoked in *Skills used*, with an honest outcome —
    and for anything not `worked`, the step that misfired. Also record a skill you
    *should* have used and did not, and why you missed it: a skill nobody invokes
    is indistinguishable from one that does not exist, and that is a fixable

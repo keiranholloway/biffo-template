@@ -78,6 +78,9 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | [#715](https://github.com/keiranholloway/biffo-template/issues/715) | Scaffolding **skips branch protection entirely on a 403** (GitHub's answer for a private org repo below Team plan), logs one warning, and reports success. Nothing re-attempts and nothing audits, so a repo scaffolded during a 403 window stays unprotected after the plan is upgraded — three tabsii repos for three weeks, the **live core platform** among them, with 8 PRs merged into an ungated default branch in one session | **fail-open** · visibility | tabsii-platform [#261](https://github.com/tabsii-com/tabsii-platform/issues/261) | biffo-template `cli` (guard shipped, [#718](https://github.com/keiranholloway/biffo-template/pull/718)); repo settings | **fixed** — all 8 repos protected, `biffo check branch-protection` added |
 | — | `gh pr merge --auto` refuses with *"Pull request is in clean status"*, and `gh pr checks` reports *"no checks reported"*, when runs have not yet **registered** — not when they passed. Both readings are indistinguishable from the real thing, and they mislead in opposite directions: one invites merging unverified code, the other looks like the genuine "GitHub created no run" case AGENTS.md §6 says never to paper over | **visibility** | tabsii-platform [#260](https://github.com/tabsii-com/tabsii-platform/pull/260) | practice / tooling wrapper | **unfiled** |
 | [tabsii-intake#10](https://github.com/tabsii-com/tabsii-intake/issues/10) | CI had **not run on `dev` for three weeks**. A merge on 2026-07-22 produced a Deploy run and no CI run; triggers were correct, GitHub simply created none. `dev` shipped with no CI evidence and carried unpatched advisories nobody could see. The repo also had no `workflow_dispatch`, so there was no way to re-trigger CI on a protected branch without pushing | **visibility** | tabsii-intake | tabsii-intake (CI adopted from skeleton, adds `workflow_dispatch`) | **fixed** |
+| [tabsii-marketplace#9](https://github.com/tabsii-com/tabsii-marketplace/issues/9) | A repo's **production build is broken and its CI is green, consistently** — `pnpm run build` dies on `Both UserPoolId and ClientId are required` (a Cognito pool built at module scope, evaluated during prerender), but marketplace's `js` job runs only lint/typecheck/test/audit. The skeleton's `js` job also **builds without credentials**, precisely to catch this ([#286](https://github.com/keiranholloway/biffo-template/issues/286)) | **fail-open** · visibility | tabsii-marketplace [#8](https://github.com/tabsii-com/tabsii-marketplace/pull/8) | tabsii-marketplace (lazy pool construction, then adopt the skeleton CI) | **open** |
+| — | **CI generations drift by *step*, while job *names* stay identical.** marketplace has all four current consolidated job names and looks migrated; its `js` job is missing the Build step added later. Nothing compares a repo's workflow against the skeleton, so "are we on the current CI?" is answered by a name match that can be true while the content is a generation behind | **drift** · visibility | tabsii-marketplace | biffo-template (a workflow-drift check) | **unfiled** |
+| — | **Nothing tracks when CI last ran on `dev`.** Two sibling repos were found independently, hours apart, each with no CI run for three weeks — intake (2026-07-06) and marketplace (2026-07-06). In both the branch was green-by-absence: no failing run, because no run. A "last successful CI on the default branch" age is not surfaced anywhere | **visibility** | tabsii-intake, tabsii-marketplace | biffo-template (`biffo check`, or a scheduled sweep) | **unfiled** |
 | [#722](https://github.com/keiranholloway/biffo-template/issues/722) | An issue was filed on a **wrong premise** and proposed a fix that would have been dead config: it claimed pip-audit "reds every sibling" on an unfixable `ecdsa` advisory and asked the *skeleton* to carry a CVE suppression. The skeleton already declares `pyjwt[crypto]`, so a new sibling never sees it; only two legacy siblings did. Nothing checks an issue's claims before someone implements them | **drift** · process | biffo-template | tabsii-intake / tabsii-marketplace (drop `python-jose`) | **corrected** — intake done ([#11](https://github.com/tabsii-com/tabsii-intake/pull/11)), marketplace outstanding |
 | — | `tabsii-platform` has `allow_auto_merge=false` and `delete_branch_on_merge=false` — the settings fixed on `biffo-template` and `biffo-platform` on 2026-07-27 were never applied to the third repo, so every PR there is merged by hand and every branch reaped by hand | **process** | tabsii-platform | tabsii-platform settings | **fixed** 2026-07-27 — `allow_auto_merge` and `delete_branch_on_merge` both enabled; all three repos now match |
 | [tabsii#256](https://github.com/tabsii-com/tabsii-platform/issues/256) | The ownership guard blocks edits to *instance-authored* files under a template-owned prefix (e.g. `identity/tabsii.py`), but `core diff` classifies those as `removed`, not `modified` — so the instance's own divergence ratchet rejects a declaration for them. Governance actively prevents the record it exists to encourage; the only route through is a per-commit trailer | **boundary** | tabsii-platform [#253](https://github.com/tabsii-com/tabsii-platform/pull/253) | tabsii-platform ratchet; `core diff` bucket semantics ([#689](https://github.com/keiranholloway/biffo-template/issues/689), [#696](https://github.com/keiranholloway/biffo-template/issues/696)) | **open** |
@@ -155,41 +158,39 @@ good — which is the only thing that found any of these.
 ## Where the work actually lands
 
 Tallying by the repo that must change. **Recounted from `docs/practices/evidence.jsonl`
-(`node scripts/practices-evidence.mjs --report`), 51 rows** — not incremented by
-hand, because every prose count on this page has gone stale at least once. A row
-naming two repos counts for each, so the column sums exceed the row count.
+(`node scripts/practices-evidence.mjs --extract && --report`), 54 rows** — not
+incremented by hand, because every prose count on this page has gone stale at
+least once. A row naming two repos counts for each.
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 40 of 51 | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings |
-| **tabsii-platform** | 3 of 51 | Its own divergence ratchet and repo settings |
-| **biffo-platform** | 2 of 51 | Instantiated infra — API Gateway routes, CDN |
-| **tabsii-intake** | 2 of 51 | CI generation and the `python-jose` removal |
-| **biffo-runners** | 1 of 51 | Runner fleet docs + fail-fast |
-| **tabsii-marketplace** | 1 of 51 | Still carries `python-jose`; outstanding |
-| **biffo-plugin-ideation** | 1 of 51 | **No longer zero** — see below |
+| **biffo-template** | 42 of 54 (78%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings |
+| **tabsii-platform** | 3 of 54 | Divergence ratchet and repo settings |
+| **biffo-platform** | 2 of 54 | Instantiated infra — API Gateway routes, CDN |
+| **tabsii-intake** | 2 of 54 | CI generation and the `python-jose` removal |
+| **tabsii-marketplace** | 2 of 54 | `python-jose` removal; the credential-dependent build |
+| **biffo-plugin-ideation** | 1 of 54 | A UI rendering a 500 as an empty state |
+| **biffo-runners** | 1 of 54 | Runner fleet docs + fail-fast |
 
-**34 of 51 rows are fixed somewhere other than where they surfaced** — two thirds,
-and the single most useful number here. Defects are *reported* wherever a human or
-an instance trips over them; **78% are fixed in `biffo-template`**.
+**36 of 54 rows are fixed somewhere other than where they surfaced** — two thirds,
+and still the most useful number on the page. **78% land in `biffo-template`**,
+unchanged across the last three recounts despite the sample growing from 41 to 54.
 
-**The shape of the answer changed this round.** `biffo-plugin-ideation` was the
-page's headline zero for a long stretch — "where two were reported; where none
-were fixed". It is now 1, from a row where the plugin's admin panel rendered a 500
-as *"No catalog entries yet."* That is a genuine plugin-side defect (a UI that
-disguises a failure as an empty state), not another platform bug surfacing there.
+**What this round added is a shape, not a count.** Three of the new rows are the
+same condition in different clothes: a repo that *looks* current and is not.
+marketplace has every current CI job **name** and is missing the Build **step**;
+two siblings had no CI run for three weeks and neither surfaced as unhealthy,
+because a branch with no failing run is indistinguishable from one that passed;
+and a `pnpm.overrides` remediation now exists in two repos, copied by hand, with
+nothing linking them.
 
-The zero was never a claim that plugins are defect-free; it was evidence that the
-*specific* failures being reported against them lived upstream. That still holds
-at 40 of 51. But the headline should stop being quoted as "0 in the plugin",
-because it is no longer true and the interesting claim was always the two-thirds
-displacement, not the zero.
-
-**What the larger sample keeps confirming:** instance and plugin repos are where
-the template's untested seams are first exercised. ADR-0022's discovery order, the
-ownership guard's coverage, the event registry's field metadata, migration 0010's
-`public.users` assumption, and now the scaffolder's branch-protection skip were
-all green in `biffo-template` and all broke on first real downstream use.
+That is a different problem from the one this page has mostly tracked. The earlier
+rows are defects in *shared code* that reach instances through the template. These
+are defects in **shared conventions with no shared enforcement** — a skeleton is
+copied once at creation and then nothing ever compares a repo against it again.
+`biffo check branch-protection` is the first thing in this project to close that
+loop for one setting; the same argument applies to workflow drift, dependency
+policy, and CI recency.
 
 ## Where the cycles go
 
@@ -212,6 +213,8 @@ Measured on the 2026-07-27 session, which shipped one bug fix end to end.
 | **2 false 'no checks' reads** | `gh pr checks --watch` run immediately after `gh pr create` returns *no checks reported* and exits 1, because it races GitHub registering the runs. Indistinguishable from the genuine "GitHub created no run" case AGENTS.md §6 warns about, which is the one you must not paper over | **open** — needs a settle delay, or a way to tell the two apart |
 | **8 repos audited by hand before a tool existed** | Establishing which branches were protected meant a `gh api` loop per repo per branch, because nothing reported settings drift. That audit *is* the finding: it took writing `biffo check branch-protection` ([#718](https://github.com/keiranholloway/biffo-template/pull/718)) to make it a one-liner — and the guard then immediately caught an incomplete fix the hand audit had missed | **fixed** — guard shipped; not yet scheduled anywhere |
 | **One wrong conclusion from re-running the wrong workflow** | Testing "does intake's old CI fail today?" I re-ran the newest successful `dev` run — which was **Deploy**, not CI — and it passed, appearing to disprove the hypothesis. Redone against an actual `ci.yml` run it failed, confirming it. A run id is not self-describing; filter by workflow, not by branch and conclusion | **process** — cost one wrong belief, caught by checking the job names |
+| **2 dependency-alignment rounds on one repo** | Mirroring another sibling's known-good versions cleared 8 of 13 advisories; the last 5 were transitives with no direct upgrade path (`postcss`, `sharp`, `brace-expansion`) and needed the same repo's `pnpm.overrides` copied across too. The fix existed and was found twice, by hand, because **nothing shares a remediation between siblings** | **open** — the overrides live in two package.json files with no common source |
+| **1 full reinstall + rebuild to answer "did I break this?"** | A build failed after a dependency upgrade. Establishing that it failed *identically* before the upgrade meant stashing the lockfile changes, reinstalling the original tree and rebuilding — several minutes to convert a suspicion into a fact. Worth every second: the alternative was shipping a fix for a defect I had not caused, or abandoning an upgrade that was fine | **structural** — no cheaper way to get a before/after on a lockfile |
 
 ### The six hops are the root cost
 
@@ -443,6 +446,26 @@ that had nothing to do with the migration.
 
 ---
 
+**Run the build, even when everything else is green.** marketplace's audit,
+lint, typecheck and 26 tests all passed; `pnpm run build` failed outright. The
+repo's own CI never builds, so nothing had contradicted the green. "All checks
+passed" meant four checks passed, and the fifth did not exist.
+
+**Prove a failure predates you before owning it.** The build broke right after a
+dependency upgrade, which is exactly when it is tempting to assume cause. Stashing
+the lockfile changes and rebuilding on the original `next` reproduced the failure
+identically — turning "my upgrade broke the build" into "this build has been
+broken and unwatched", which is a different issue with a different owner.
+
+**Re-run the whole proof on the second repo, despite identical inputs.**
+marketplace's `auth.py` was byte-identical to intake's pre-swap file, so copying
+the proven implementation was safe. Re-running the 8 characterisation tests
+against *marketplace's* `python-jose` first was still the right call: identical
+source does not mean identical settings, dependencies or test environment, and
+the cost of confirming was seconds.
+
+---
+
 ## What needs more thought
 
 **Fail-open is our default, and it should not be.** Three separate gates passed
@@ -664,6 +687,25 @@ rediscovered expensively.
 
 ---
 
+**A remediation found once has to be found again per repo.** The
+`pnpm.overrides` block that clears `postcss`/`sharp`/`brace-expansion` now exists
+in two sibling `package.json` files, copied by hand, with nothing linking them.
+The third sibling to hit it will rediscover it. Siblings share a skeleton but not
+a dependency policy.
+
+**"Is this repo on the current CI?" has no reliable answer.** Job names are the
+only thing anyone compares, and they match across generations while steps differ.
+marketplace looked migrated and was a generation behind on the one step that
+mattered. A workflow-drift check against the skeleton would be cheap and would
+have caught it before the build defect became load-bearing.
+
+**Green-by-absence is indistinguishable from green.** Two repos had no CI run for
+three weeks and neither surfaced as unhealthy — a branch with no failing run looks
+exactly like a branch that passed. Both were found by accident, hours apart, while
+looking for something else.
+
+---
+
 ## Skills used
 
 Skills cannot be iterated on impressions. Every invocation, with an honest outcome.
@@ -690,6 +732,9 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **worked** | §3, applied to a library swap rather than a bug fix. The auth verifier had no tests; writing them against the **old** implementation first turned "the swap compiles and passes" into "the two implementations agree". That framing came straight from the step and is the only reason the swap is defensible. |
 | `biffo-workflow` | **worked** | Four changes across three repos. Its honest-push rule paid out again: `gh pr merge` reported an error that a piped `$?` swallowed as success, and only `gh pr view --json state` showed #698 had not merged at all. |
 | `biffo-workflow` | **partial** | Nothing in the flow covers **another session committing to your branch mid-PR**. It happened twice here (#718 gained a test commit, #9 gained the dependency fixes). Both were welcome, but the skill's model is one agent per unit of work, so the correct move — review their commits before merging rather than assuming your own diff is what lands — is not written down anywhere. |
+| `biffo-verify` | **worked** | §3 applied twice more, and the second use was the one that mattered: not "does my test fail without the fix" but "does this failure exist without my change". Stashing a lockfile and rebuilding on the original tree turned an assumed regression into a pre-existing, separately-owned defect ([marketplace#9](https://github.com/tabsii-com/tabsii-marketplace/issues/9)). |
+| `biffo-verify` | **worked** | Its refusal to accept a green suite is what prompted running `pnpm run build` at all on a repo whose CI does not build. Four checks passed; the fifth did not exist. Nothing in the workflow would have surfaced that. |
+| `biffo-workflow` | **worked** | Two repos, start → merged → worktree reaped, no incidents. Its named-stash rule (`git stash push -m`, pop by name) earned itself here — the before/after build test required stashing in a repo where other sessions have been active. |
 
 ## Adding a row
 

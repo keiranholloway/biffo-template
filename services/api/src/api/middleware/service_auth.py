@@ -143,21 +143,22 @@ def _is_allowlisted(principal_arn: str) -> bool:
     return any(fnmatch.fnmatch(principal_arn, pattern) for pattern in patterns)
 
 
-async def require_service_principal(request: Request) -> ServicePrincipal:
-    """FastAPI dependency for ``/api/v1/internal/*`` routes (ADR-0009).
+async def optional_service_principal(request: Request) -> ServicePrincipal | None:
+    """The verified service identity when the request carries one, else ``None``.
 
-    Enforces that the request arrived with a SigV4-verified IAM principal that is
-    on the configured allowlist, and returns the resulting service identity.
+    Identical to :func:`require_service_principal` except that the *absence* of
+    IAM context is not an error — it simply means the caller is not a service
+    (a human's bearer-token request), so the unified principal resolution can
+    accept both caller shapes without a second dependency (#621).
 
-    Raises 401 if no IAM principal is present (the request did not come through
-    an IAM-authorized route), 403 if the principal is not allowlisted.
+    A present-but-non-allowlisted principal still raises 403. That asymmetry is
+    the point: "no service called" and "a service called and was rejected" must
+    not collapse into the same answer, or a refused service caller would be
+    silently downgraded to an ordinary user rather than blocked.
     """
     principal_arn = _iam_principal_from_request(request)
     if principal_arn is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Service authentication required",
-        )
+        return None
     if not _is_allowlisted(principal_arn):
         logger.warning(
             "Rejected non-allowlisted service principal",
@@ -173,6 +174,24 @@ async def require_service_principal(request: Request) -> ServicePrincipal:
     # ignored, so a plugin cannot claim another plugin's identity.
     asserted = _asserted_plugin_identity(request, principal_arn)
     return ServicePrincipal(principal_arn=principal_arn, asserted_plugin=asserted)
+
+
+async def require_service_principal(request: Request) -> ServicePrincipal:
+    """FastAPI dependency for ``/api/v1/internal/*`` routes (ADR-0009).
+
+    Enforces that the request arrived with a SigV4-verified IAM principal that is
+    on the configured allowlist, and returns the resulting service identity.
+
+    Raises 401 if no IAM principal is present (the request did not come through
+    an IAM-authorized route), 403 if the principal is not allowlisted.
+    """
+    principal = await optional_service_principal(request)
+    if principal is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Service authentication required",
+        )
+    return principal
 
 
 def _asserted_plugin_identity(request: Request, principal_arn: str) -> str | None:

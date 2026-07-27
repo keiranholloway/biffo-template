@@ -41,6 +41,8 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | Three Cognito client IDs in one origin's `localStorage`; two belong to destroyed pools. AWS has exactly one pool and one client — pure browser residue, but any code picking the "first" match grabs a dead token | drift | dev.biffo.io portal | portal / plugin `web-admin` | **unfiled** — prune non-matching `CognitoIdentityServiceProvider.*` keys |
 | — | CI logs not retained for self-hosted runs, so a green check cannot be inspected to confirm *what it actually did* | visibility | biffo-template CI | biffo-template CI | **unfiled** |
 | — | `ci.yml` fires on both `push` and `pull_request`, leaving duplicate in-flight runs that make "are all checks done?" unanswerable to tooling | visibility · process | biffo-template CI | biffo-template CI | **unfiled** |
+| [#689](https://github.com/keiranholloway/biffo-template/issues/689) | `core diff` reports instance-authored files as `removed` — a false data-loss signal that `core upgrade` does not act on. Halted a deploy, produced an incorrect issue, and prompted a workaround hunt, all for something that would not happen | **visibility** | biffo-platform upgrade | biffo-template `cli/` | **open** |
+| — | A cut `core-v*` tag is not an available artifact: the tag existed at 0.136.0 while npm still served 0.135.0. Upgrading in that window carries a *partial* fix that deploys green and still fails | visibility · process | biffo-template release chain | biffo-template CI | **unfiled** — caught before it bit |
 | [#671](https://github.com/keiranholloway/biffo-template/issues/671) | `scripts/biffo.sh` execs `npx @biffo/cli@$(biffo.core.json .version)`, so an unpublished core version reds **every guard on every instance**. npm publish has been failing (E404 on PUT) since 0.131.0 — the upgrade PR's own version bump is what breaks its guards, so it can never go green | **boundary** · visibility | tabsii-platform [#241](https://github.com/tabsii-com/tabsii-platform/pull/241) | biffo-template (npm token + `publish-cli.yml`) | **open** — hard blocker, needs credentials |
 | [#670](https://github.com/keiranholloway/biffo-template/issues/670) | Core migration 0010 does `batch_alter_table("users")`, assuming a Core-owned `public.users` in the instance's Alembic chain. tabsii's users are DDL-imported as `tabsii.users`, so the migration raises `NoSuchTableError` and takes 4 smoke tests with it | **drift** | tabsii-platform [#241](https://github.com/tabsii-com/tabsii-platform/pull/241) | biffo-template `migrations/` | **open** — declined in tabsii ([#244](https://github.com/tabsii-com/tabsii-platform/issues/244)) |
 | [#668](https://github.com/keiranholloway/biffo-template/issues/668) | ADR-0022 discovery runs *after* `build_core_crud_router()`, and importing a domain is what registers its models — so relocating a domain silently drops every `/api/v1/data/` route its models back. **21 routes vanished in tabsii with the full suite green (1712 passed)**; no test builds the app the way `main.py` does, so none could have failed | **visibility** · boundary | tabsii-platform [#243](https://github.com/tabsii-com/tabsii-platform/pull/243) | biffo-template `main.py` + `routing/domain_router.py` | **open** — instance reordered locally as a stopgap |
@@ -207,6 +209,29 @@ citing #275. It recurred: #659's tests prove `require_principal` in isolation, a
 prove nothing about a deployed request, because no route uses it yet. The habit
 worth building is stating what was *not* verified, in the PR, every time.
 
+**A preview that contradicts the operation it previews is worse than no preview.**
+`core diff` said five instance files would be `removed`; `core upgrade` deletes
+none of them. The safe command was right and the *preview* cried wolf — which
+trains people either to distrust previews or to skip them, and both are worse
+than the status quo. Any tool whose job is "show what will happen" must share a
+classifier with the thing that makes it happen (#689).
+
+**A stale local checkout silently produced a wrong diff.** The first `core diff`
+run compared against a template tree missing the just-merged host commit and
+reported *no host changes at all*. It was caught only because the absence looked
+implausible. AGENTS.md §1 already warns about auditing dead code; the gap is that
+nothing in the tooling notices — a diff against a stale tree looks exactly like a
+diff against a current one. Worth having `core diff`/`core upgrade` state the
+template commit they resolved, so the input is visible in the output.
+
+**Escalating an unverified tool output cost more than the bug.** The false
+`removed (5)` reading produced: a halted deploy, an incorrectly-titled issue, a
+proposed manual copy-in that turned out to be blocked by design, and real alarm
+for the user — all before anyone ran the thirty-second dry run. The lesson is not
+"be more careful"; it is that **a claim about destructive behaviour should be
+tested before it is reported**, at the same bar as a claim that something is
+fixed.
+
 **Deactivation coverage is still unproven end to end.** #655 fixes the gap at the
 dependency level with tests. Nobody has suspended a real Cognito user in `dev` and
 replayed a plugin-forwarded call. Until that happens, #621 should not close.
@@ -252,6 +277,9 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-workflow` | **partial** | Step 3's commit example does not mention that a `Core-Divergence:`/`Core-Convergence:` trailer must fit commitlint's 100-character footer limit *and* stay on one line for the guard's anchored regex. Two commits were rejected after the hooks had run. Worth one line in the step. |
 | `biffo-verify` | **worked** | §3 ("prove the test fails without the fix") caught a guard that passed against the bug it was written for, because its expected set was empty. Nothing else in the process would have found it — the test was green, the code was correct, and the assertion was vacuous. |
 | `biffo-verify` | **should have been invoked sooner** | It was loaded at batch 4 of a five-batch relocation. Batch 3 is where 21 routes silently disappeared; the route-diff that caught them was improvised rather than prompted. The trigger wording is debugging-shaped ("investigating a bug", "green but broken"), so a *refactor* with a silent-regression risk does not read as a match. Worth adding refactors and relocations to the trigger list. |
+| `biffo-workflow` | **partial** | Step 7 (`gh pr merge --squash`) assumes you can win the up-to-date race. `dev` was taking a merge every 3–5 min against a ~2.5 min CI cycle, so the branch was `BEHIND` on every attempt and **four rebases lost it**. The real fix was a repo setting (auto-merge), not a rebase. The step should offer an auto-merge path. |
+| `claude-in-chrome` | **worked** | The only thing that reproduced the reported bug. `curl` returned clean `401` JSON and looked healthy — the HTML only appears on an *authenticated* request, because 401 passes the CDN untouched while 403/404 are rewritten. An unauthenticated check would have concluded "works fine" and #647 would still be unfound. |
+| `biffo-verify` | **partial** | §1 caught that the planned #621 step 3 would have collapsed ADR-0014 §7's two-axis authorization boundary — a real save. But it was **not applied to its own author's output**: `core diff`'s `removed (5)` was reported to the user as fact without the dry run that disproves it in seconds. The step exists and was skipped. |
 
 ## Adding a row
 
@@ -264,6 +292,11 @@ saying "how did that ever work?".
    point of the "where the work lands" table.
 3. If a practice caught it, add it to *what went well* with the specific
    evidence. If a practice would have caught it, add it to *needs more thought*.
+4. Record every **skill** you invoked in *Skills used*, with an honest outcome —
+   and for anything not `worked`, the step that misfired. Also record a skill you
+   *should* have used and did not, and why you missed it: a skill nobody invokes
+   is indistinguishable from one that does not exist, and that is a fixable
+   defect in the skill.
 
 Keep entries falsifiable. "Testing could be better" helps nobody; "the audit gate
 exits 0 when the registry returns non-JSON, so a green check does not mean the

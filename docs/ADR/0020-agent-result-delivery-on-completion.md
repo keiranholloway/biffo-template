@@ -2,6 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 2026-07-24  
+**Amended:** 2026-07-27 — [ADR-0027](0027-agent-write-back-to-core-tables.md) adds a non-message destination and closes the dedupe gap noted below  
 **Deciders:** Core team
 
 ---
@@ -148,6 +149,12 @@ fails?) and is deferred behind a clean seam rather than half-built.
   completion event, and delivery has no claim/dedupe of its own, so a rare
   redelivery can send a duplicate message. Acceptable for the MVP; a delivery-claim
   record would close it if it proves a problem.
+  **(Amended 2026-07-27.)** It proved a problem for the destination where a duplicate
+  is corruption rather than nuisance: ADR-0027's write-back claims a `WorkflowRun` on
+  `dedupe_key = "writeback:{agent_run_id}"` before writing, so the existing
+  `uq_orch_run_dedupe` constraint makes it exactly-once — and, being a real run,
+  auditable rather than merely logged (which also answers the bullet above, for
+  write-back only). Message deliveries are unchanged and remain at-least-once.
 - Delivery is coupled to the agent action (see Option B cons).
 
 ### Neutral

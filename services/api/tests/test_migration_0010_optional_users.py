@@ -19,6 +19,7 @@ the bug is invisible exactly where it lives.
 
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -75,10 +76,19 @@ def _config(tmp_path, monkeypatch, *, with_users: bool) -> tuple[Config, Path]:
         )
 
     source = (_REAL_VERSIONS / "0010_add_organizations_and_user_profile_fields.py").read_text()
-    rewritten = source.replace(
-        'down_revision: str | None = "0009"', f'down_revision: str | None = "{base_revision}"'
+    # Matched by pattern, not by the literal predecessor. In the template 0010
+    # revises 0009, but this file is template-owned and travels to instances,
+    # where `biffo core upgrade` re-points a distributed migration onto that
+    # instance's own head — tabsii's reads `"0011"`. Hardcoding the template's
+    # value made all four tests fail there on arrival (tabsii-platform#263),
+    # which is the same "green in the template, broken in the instance" shape
+    # the migration under test exists to fix.
+    rewritten, count = re.subn(
+        r'down_revision: str \| None = "[^"]+"',
+        f'down_revision: str | None = "{base_revision}"',
+        source,
     )
-    assert rewritten != source, "0010's down_revision was not rewritten; the chain would be broken"
+    assert count == 1, "0010's down_revision was not rewritten; the chain would be broken"
     (versions_dir / "0010_add_organizations_and_user_profile_fields.py").write_text(rewritten)
 
     monkeypatch.chdir(_SERVICES_API_DIR)

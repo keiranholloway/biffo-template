@@ -69,22 +69,46 @@ def _target(**over: Any) -> wb.WriteBackTarget:
     return wb.WriteBackTarget(**kwargs)
 
 
-@pytest.fixture(autouse=True)
-def _identity() -> Generator[None]:
-    """Pin the identity provider for these tests.
+class _NoPermissions:
+    """An identity provider that answers without touching a database.
 
     The executor re-checks the workflow owner's *current* permissions through
-    whichever provider is installed. An instance's provider reads them from its
-    own tables (tabsii's queries `tabsii.user_role_assignments`), which this
-    SQLite fixture has no schema for — so without pinning, these tests pass in
-    the template and fail the moment they are distributed. Found exactly that
-    way. The permission re-check itself is covered by the instance's E2E against
-    real data; here it must simply not be the thing under test.
+    whichever provider is installed, so these tests must install one — otherwise
+    they run against whatever the process happens to have. Neither real provider
+    works here: the default reads `public.users` and an instance's reads its own
+    tables (tabsii's queries `tabsii.user_role_assignments`), and this SQLite
+    fixture has schema for neither.
+
+    Returning an empty set is also the case worth pinning. The executor treats
+    "no permissions resolved" as "this deployment does not model permissions
+    that way" and lets the row policies decide, rather than as a denial — so
+    these tests exercise the write path itself. The permission re-check is
+    covered against real role assignments in the instance E2E, which is the only
+    place it can mean anything.
     """
+
+    async def resolve(self, db, user_id):  # noqa: ANN001, ANN201 — test double
+        del db, user_id
+        return frozenset()
+
+    async def resolve_identity(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+        raise NotImplementedError
+
+    async def sync_platform_admin(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+        return None
+
+    async def resolve_permissions(self, db, user_id):  # noqa: ANN001, ANN201
+        del db, user_id
+        return frozenset()
+
+
+@pytest.fixture(autouse=True)
+def _identity() -> Generator[None]:
+    """Install the no-database provider above for every test in this module."""
     from api import identity  # noqa: PLC0415 — local to keep the fixture self-contained
 
     saved = identity._provider  # noqa: SLF001
-    identity.set_identity_provider(identity.default.DefaultIdentityProvider())
+    identity._provider = _NoPermissions()  # type: ignore[assignment]  # noqa: SLF001
     yield
     identity._provider = saved  # noqa: SLF001
 

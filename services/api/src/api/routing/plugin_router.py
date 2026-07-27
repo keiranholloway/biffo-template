@@ -26,7 +26,7 @@ plugin table with no ``permissions`` block is invisible to this layer.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from aws_lambda_powertools import Logger
@@ -41,6 +41,12 @@ from ..plugins import discover_plugin_manifests
 from .crud_handlers import HANDLER_FACTORIES, SUCCESS_STATUS, user_columns_from_model
 
 logger = Logger()
+
+#: Builds the per-route authorization dependency: ``(table, operation, registry)``
+#: -> a FastAPI dependency. Both ``require_crud_permission`` and
+#: ``require_principal_crud_permission`` satisfy it; they authorise on the same
+#: axis and differ only in which transport they accept.
+GuardFactory = Callable[[str, str, PermissionsRegistry], Callable[..., Awaitable[None]]]
 
 # SQLAlchemy model classes, keyed by table name.
 # PluginTableDefinition.to_sqlalchemy_model() creates a brand-new mapped
@@ -65,6 +71,8 @@ def build_plugin_router(
     manifests: Sequence[dict[str, Any]] | None = None,
     *,
     permissions_registry: PermissionsRegistry | None = None,
+    path_prefix: str = "/plugins",
+    guard_factory: GuardFactory = require_crud_permission,
 ) -> APIRouter:
     """Build one APIRouter covering every installed plugin's declared routes.
 
@@ -78,6 +86,19 @@ def build_plugin_router(
             a route and its permission check never diverge. Passed explicitly
             only when a caller needs routes and permissions to come from
             different sources (not the normal case).
+        path_prefix: The segment the per-plugin routers hang off. The default
+            ``/plugins`` is the public, Cognito-facing mount. ``main.py`` builds
+            a *second* router at ``/internal/plugins`` because API Gateway sends
+            all of ``/api/v1/plugins/*`` to the shared plugin host (ADR-0021), so
+            Core's own copy of these routes is unaddressable from outside — the
+            #652 collision. ``/api/v1/internal/*`` is IAM-authorized and does
+            reach Core, giving the host a path to forward to.
+        guard_factory: Builds the per-route authorization dependency. Defaults
+            to the bearer-only ``require_crud_permission``; the internal mount
+            passes ``require_principal_crud_permission``, which accepts the same
+            user token from either transport and authorises on the same axis.
+            The two mounts therefore differ in *who can reach them*, never in
+            what is allowed once they do.
 
     Returns:
         An APIRouter with no prefix of its own — the caller (main.py)
@@ -114,7 +135,7 @@ def build_plugin_router(
         if not routes:
             continue
 
-        plugin_router = APIRouter(prefix=f"/plugins/{name}", tags=[f"plugin:{name}"])
+        plugin_router = APIRouter(prefix=f"{path_prefix}/{name}", tags=[f"plugin:{name}"])
         for route in routes:
             table_def = tables[route.table]
             model = _get_model(table_def)
@@ -126,9 +147,7 @@ def build_plugin_router(
                 methods=[route.method],
                 status_code=SUCCESS_STATUS[route.operation],
                 summary=route.description or f"{route.operation} {route.table}",
-                dependencies=[
-                    Depends(require_crud_permission(route.table, route.operation, registry))
-                ],
+                dependencies=[Depends(guard_factory(route.table, route.operation, registry))],
             )
         router.include_router(plugin_router)
 

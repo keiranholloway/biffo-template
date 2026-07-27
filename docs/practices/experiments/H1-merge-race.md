@@ -104,6 +104,37 @@ absent problem.
   period, something estate-wide changed and this result is not attributable to
   the intervention.
 
+## Interim observation — 2026-07-27, the predicted failure mode occurred
+
+The pre-registration named one specific reason this might be refuted:
+
+> It is *not established* that GitHub's auto-merge automatically updates a head
+> branch that falls behind while `strict: true` is in force. If it does not,
+> auto-merge only removes the manual retry loop — the PR still waits for someone
+> to update the branch — and `racedShare` will barely move.
+
+**That is exactly what happened**, on biffo-platform#84, hours after the
+intervention landed:
+
+- auto-merge armed, `mergeable: MERGEABLE`, all five checks green
+- head branch **1 commit behind** `dev`
+- PR sat `OPEN` with `mergeStateStatus: UNKNOWN` for over ten minutes
+- it merged only after a human ran `gh pr update-branch`, which triggered a full
+  re-run of CI
+
+So auto-merge **does not** update a behind branch under `strict`. It removes the
+*retry loop* — you no longer sit refreshing and re-merging — but the branch still
+has to be updated by someone, and that still costs a full CI cycle.
+
+This does not settle the experiment. `racedShare` counts PRs that were green for
+over ten minutes *and* were repushed, and a `gh pr update-branch` **is** a
+repush, so this PR will score as raced. The prediction may therefore still be
+refuted on 2026-08-10, and the pre-registered next moves stand: a **merge queue**
+(which does own the update) or **relaxing `strict`**.
+
+Recorded now rather than at review, so the observation cannot be reconstructed
+favourably after seeing the number.
+
 ## Result
 
 _To be completed on 2026-08-10. Verdict: `confirmed` / `refuted` /

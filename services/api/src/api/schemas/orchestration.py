@@ -531,6 +531,29 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 "required": False,
                 "default": 1,
             },
+            # The structured result contract (#729). A fan-in agent very often
+            # exists to hand a *machine-readable* answer back to the plugin that
+            # started the chain — a ranked list, a scorecard — and until this
+            # field existed there was no way to say so: the only route to
+            # ``output_tools`` was a write-back, which is Core deciding the shape
+            # for a row Core writes, not the caller declaring its own contract.
+            #
+            # Its absence is not a hypothetical. A synthesis agent was seeded with
+            # "call `submit_idea_candidates` exactly once, do not answer in prose"
+            # and offered no such tool, so it answered in prose, the caller's
+            # extractor rejected it, and the run failed after paying for the whole
+            # fan-out (biffo-plugin-idea-scout#19).
+            #
+            # A write-back still WINS over this: ``apply_writeback_output_tool``
+            # overrides ``output_tools`` when a write-back is configured, because
+            # the shape of a row Core is about to write is Core's to state. The
+            # two are usable together only in that order.
+            {
+                "name": "output_tools",
+                "label": "Structured result — the tool this agent must call to answer",
+                "type": "output_tools",
+                "required": False,
+            },
             {
                 "name": "delivery",
                 "label": "Deliver the result on completion",
@@ -801,6 +824,10 @@ def _validate_action_config(
         if field["type"] == "tools":
             _validate_tools_field(action_config.get(field["name"]))
             continue
+        # A fan-in agent's structured result contract (#729).
+        if field["type"] == "output_tools":
+            _validate_output_tools_field(action_config.get(field["name"]))
+            continue
         # A prompt-library field (instructions/goals) is EITHER a plain string or an
         # ordered list of parts (ADR-0015 §2). Validate the shape here — component
         # existence and value/variable matching need the DB and are checked in the
@@ -947,6 +974,68 @@ def _validate_delivery(value: Any) -> None:
         _validate_action_config(str(delivery_type), config, body_optional=True)
     except ValueError as exc:
         raise ValueError(f"action_config.delivery.config is invalid: {exc}") from exc
+
+
+#: Mirrors ``agent_runtime.tools._NAME_PATTERN`` — the runtime's rule for an
+#: output tool's function name. Reproduced rather than imported for the same
+#: reason as :data:`KNOWN_AGENT_TOOLS`: Core never links the runtime's Python.
+_OUTPUT_TOOL_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+def _validate_output_tools_field(value: Any) -> None:
+    """Validate a fan-in agent's ``output_tools`` — the result contract it is
+    told to call (#729).
+
+    Absent/empty/``None`` ⇒ no output tool, which is valid: an agent that answers
+    in prose is a legitimate workflow, and every workflow authored before this
+    field existed is exactly that.
+
+    The accepted shapes mirror ``agent_runtime.tools.output_tools`` /
+    ``_coerce_output_tool``, so authoring-time validation never rejects something
+    the runtime would happily run, and never accepts something it would reject
+    mid-chain *after* the fan-out has already been paid for:
+
+    - a single tool object, or a list of them;
+    - each either the provider shape (``{"type": "function", "function": {…}}``)
+      or the inner ``function`` object directly;
+    - ``name`` lowercase alphanumeric with underscores, ``description`` non-empty,
+      ``parameters`` a JSON Schema object;
+    - no duplicate names.
+
+    Why this exists at all: an agent whose instructions say "call
+    ``submit_x`` exactly once, do not answer in prose" and which is offered no
+    such tool cannot comply. It answers in prose, the caller's extractor rejects
+    it, and the run fails at the last step having spent the most.
+    """
+    if value in (None, "", [], {}):
+        return
+    items = [value] if isinstance(value, dict) else value
+    if not isinstance(items, (list, tuple)):
+        raise ValueError(
+            f"action_config.output_tools must be a tool schema or a list of them, got: {value!r}"
+        )
+    names: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError(f"action_config.output_tools entries must be objects, got: {item!r}")
+        fn = item["function"] if isinstance(item.get("function"), dict) else item
+        name = str(fn.get("name") or "").strip()
+        if not _OUTPUT_TOOL_NAME_RE.match(name):
+            raise ValueError(
+                f"action_config.output_tools name {name!r} must be lowercase "
+                "alphanumeric with underscores."
+            )
+        if not str(fn.get("description") or "").strip():
+            raise ValueError(f"action_config.output_tools tool {name!r} has no description.")
+        parameters = fn.get("parameters")
+        if not isinstance(parameters, dict) or parameters.get("type") != "object":
+            raise ValueError(
+                f"action_config.output_tools tool {name!r} parameters must be a JSON Schema object."
+            )
+        names.append(name)
+    duplicated = sorted({name for name in names if names.count(name) > 1})
+    if duplicated:
+        raise ValueError(f"action_config.output_tools declares {duplicated} more than once.")
 
 
 def _validate_tools_field(value: Any) -> None:

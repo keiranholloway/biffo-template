@@ -42,6 +42,8 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | CI logs not retained for self-hosted runs, so a green check cannot be inspected to confirm *what it actually did* | visibility | biffo-template CI | biffo-template CI | **unfiled** |
 | — | `ci.yml` fires on both `push` and `pull_request`, leaving duplicate in-flight runs that make "are all checks done?" unanswerable to tooling | visibility · process | biffo-template CI | biffo-template CI | **unfiled** |
 | [#689](https://github.com/keiranholloway/biffo-template/issues/689) | `core diff` reports instance-authored files as `removed` — a false data-loss signal that `core upgrade` does not act on. Halted a deploy, produced an incorrect issue, and prompted a workaround hunt, all for something that would not happen | **visibility** | biffo-platform upgrade | biffo-template `cli/` | **open** |
+| — | A deployed frontend fix verified as **still broken** — the page requested the old URL and failed. The bundle on the Lambda was correct; the *browser* had cached the previous one. A cache-busting reload showed it working. A stale client produces a perfect false negative: the deploy is fine and the evidence says otherwise | **visibility** | biffo-platform (ideation admin) | verification practice | **unfiled** — check *which URL the page requested*, not just that you reloaded |
+| — | ADR-0003's manifest-declared `api_routes` had **never once worked in a deployed instance**, and #684's forwarder had never been exercised either — every gateway log entry for the route predated the deploy that shipped it. Closing #652 took changes in **four repos** and was only provable by an authenticated click-through | **boundary** · visibility | biffo-template [#652](https://github.com/keiranholloway/biffo-template/issues/652) | biffo-template + ideation + biffo-platform | **fixed** — verified live 2026-07-27 |
 | — | `gh` was **2.46.0 from Ubuntu universe — 7 months and ~50 minor versions stale**. `gh issue view <n>` failed outright on a deprecated Projects-classic GraphQL field, and `gh pr update-branch` **printed its help text and exited 0** instead of running. Both were worked around as quirks across two sessions; neither prompted anyone to check the version. Nothing in either failure said "your tool is old" | **visibility** | agents working in every Biffo repo | workstation tooling (GitHub's apt repo, not Ubuntu's) | **fixed** — 2.96.0, auto-updating |
 | — | Two plugin admin URLs both answered `200 text/html`, so they were read as the same failure. They were opposites: one carried `x-cache: Miss` and `<title>Ideation Engine — Admin</title>` (working), the other `server: AmazonS3` + `x-cache: Error` (a 404 the CDN rewrote). The proposed fix would have reverted #635 and broken admin access for every admin | **visibility** | biffo-template [#713](https://github.com/keiranholloway/biffo-template/issues/713) | biffo-plugin-idea-scout (missing `web-admin/dist`) | **corrected** — cost ~25m and one wrong issue |
 | — | An admin panel rendered a **500 as "No catalog entries yet."** The screenshot looked like a working feature with no data; only `read_network_requests` showed the status. A UI that renders a failed fetch as an empty collection makes a broken feature indistinguishable from an idle one | **visibility** | biffo-platform (Ideation admin) | biffo-plugin-ideation (surface fetch failures) | **unfiled** |
@@ -91,19 +93,19 @@ shape recurring across unrelated components is a design problem, not bad luck.
 ### What the classes say
 
 > Counted from `docs/practices/evidence.jsonl`, not asserted. Regenerate with
-> `node scripts/practices-evidence.mjs --report`. **47 rows.**
+> `node scripts/practices-evidence.mjs --report`. **56 rows.**
 
 | Primary class | Rows |
 | --- | --- |
-| **visibility** | 16 |
-| drift | 12 |
-| boundary | 8 |
-| fail-open | 6 |
+| **visibility** | 20 |
+| drift | 14 |
+| boundary | 9 |
+| fail-open | 8 |
 | process | 5 |
 
 **This page previously said "fail-open is the dominant shape — three of the five
 filed issues".** That was true of a five-row sample and was never revised as the
-sample grew ninefold. Counted across all 47 rows, fail-open is *fourth*. The
+sample grew ninefold. Counted across all 56 rows, fail-open is *fourth*. The
 error is instructive and is the reason the rows are now a dataset: **a narrative
 appended to by hand drifts from the evidence above it, silently, and reads
 exactly as confidently while doing so.**
@@ -120,7 +122,7 @@ what it does when it cannot run, and make "inconclusive" a distinct, visible
 outcome from "passed".** A gate that cannot report its own inconclusiveness is
 just one more thing that cannot say what it did.
 
-**What the dataset cannot yet tell us.** Of 47 rows, **1** carries a cost figure
+**What the dataset cannot yet tell us.** Of 56 rows, **1** carries a cost figure
 and **33** carry a date — all of them in a single month, 2026-07. So rows can be
 ranked by *frequency* but not yet by *cost*, and there is no longitudinal trend
 to read. Recording wall-clock on every new row is what unlocks the ranking this

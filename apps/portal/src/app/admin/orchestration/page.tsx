@@ -351,7 +351,7 @@ function toolsField(action: CatalogAction | undefined): CatalogActionField | nul
 // `action_config.tools` key, so nothing about the save path changes.
 /** Config-field types that have a dedicated section and must never be drawn as a
  *  generic input. Keep in step with the sections below. */
-const STRUCTURED_FIELD_TYPES = new Set(['delivery', 'writeback'])
+const STRUCTURED_FIELD_TYPES = new Set(['delivery', 'writeback', 'output_tools'])
 
 function configFieldsFor(action: CatalogAction | undefined): CatalogActionField[] {
   const base = (action?.config_fields ?? []).filter((f) => f.name !== TOOLS_FIELD)
@@ -2136,10 +2136,21 @@ export default function OrchestrationPage() {
             </>
           )}
 
+          {/* Structured field types are excluded here for the same reason they are
+              in the agent form: drawing one as a generic input puts a *string*
+              where Core expects an object. This branch renders every non-agent
+              action, including `agent_fan_in`, whose `delivery`/`writeback`/
+              `output_tools` are all structured. They round-trip untouched on save
+              (the save filter keeps any declared field's stored value) — they are
+              simply not editable here until each grows its own control. */}
           {selectedAction != null && !isAgent && (
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               {configFieldsFor(selectedAction)
-                .filter((field) => fieldApplies(configFieldsFor(selectedAction), config, field))
+                .filter(
+                  (field) =>
+                    !STRUCTURED_FIELD_TYPES.has(field.type) &&
+                    fieldApplies(configFieldsFor(selectedAction), config, field),
+                )
                 .map((field) => fieldControl(field, mainFieldContext))}
             </div>
           )}

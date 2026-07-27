@@ -176,6 +176,7 @@ def _summary(run: AgentRun) -> AgentRunSummary:
         updated_at=run.updated_at,
         agent_name=run.agent_name,
         status=run.status,
+        dry_run=run.dry_run,
         model=model if isinstance(model, str) else None,
         input_tokens=run.input_tokens,
         output_tokens=run.output_tokens,

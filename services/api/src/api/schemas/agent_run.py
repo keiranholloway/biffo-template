@@ -52,6 +52,11 @@ class AgentRunResponse(BiffoBaseSchema):
     """A full run record — what the runtime reads before executing (§5)."""
 
     workflow_run_id: str | None = None
+    # Exposed because dry runs are persisted (#726): without it the admin run
+    # views cannot tell a preview from a run that really happened, and the two
+    # look identical once terminal. Defaulted so a caller reading an older
+    # response shape still parses.
+    dry_run: bool = False
     agent_name: str
     status: str
     run_as_kind: str
@@ -87,6 +92,9 @@ class AgentRunSummary(BiffoBaseSchema):
     agent_name: str
     status: str
     model: str | None = None
+    # Same reason as on the full response: a persisted preview must be labellable
+    # in the list, not just on the detail page (#726).
+    dry_run: bool = False
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None

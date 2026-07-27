@@ -208,6 +208,10 @@ async def list_runs(
                 AgentRun.updated_at,
                 AgentRun.agent_name,
                 AgentRun.status,
+                # Loaded because the summary carries it (#726). Omitted, the
+                # attribute is unloaded rather than false, so the list would
+                # either lazy-load per row or report every run as real.
+                AgentRun.dry_run,
                 AgentRun.definition_snapshot,
                 AgentRun.input_tokens,
                 AgentRun.output_tokens,

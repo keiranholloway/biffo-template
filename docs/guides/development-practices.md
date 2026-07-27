@@ -43,6 +43,11 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | `ci.yml` fires on both `push` and `pull_request`, leaving duplicate in-flight runs that make "are all checks done?" unanswerable to tooling | visibility · process | biffo-template CI | biffo-template CI | **unfiled** |
 | [#671](https://github.com/keiranholloway/biffo-template/issues/671) | `scripts/biffo.sh` execs `npx @biffo/cli@$(biffo.core.json .version)`, so an unpublished core version reds **every guard on every instance**. npm publish has been failing (E404 on PUT) since 0.131.0 — the upgrade PR's own version bump is what breaks its guards, so it can never go green | **boundary** · visibility | tabsii-platform [#241](https://github.com/tabsii-com/tabsii-platform/pull/241) | biffo-template (npm token + `publish-cli.yml`) | **open** — hard blocker, needs credentials |
 | [#670](https://github.com/keiranholloway/biffo-template/issues/670) | Core migration 0010 does `batch_alter_table("users")`, assuming a Core-owned `public.users` in the instance's Alembic chain. tabsii's users are DDL-imported as `tabsii.users`, so the migration raises `NoSuchTableError` and takes 4 smoke tests with it | **drift** | tabsii-platform [#241](https://github.com/tabsii-com/tabsii-platform/pull/241) | biffo-template `migrations/` | **open** — declined in tabsii ([#244](https://github.com/tabsii-com/tabsii-platform/issues/244)) |
+| [#668](https://github.com/keiranholloway/biffo-template/issues/668) | ADR-0022 discovery runs *after* `build_core_crud_router()`, and importing a domain is what registers its models — so relocating a domain silently drops every `/api/v1/data/` route its models back. **21 routes vanished in tabsii with the full suite green (1712 passed)**; no test builds the app the way `main.py` does, so none could have failed | **visibility** · boundary | tabsii-platform [#243](https://github.com/tabsii-com/tabsii-platform/pull/243) | biffo-template `main.py` + `routing/domain_router.py` | **open** — instance reordered locally as a stopgap |
+| — | `build_core_crud_router()` returns **zero** routes when called a second time (the first call consumes the registry). A guard test written for #668 compared the assembled app against a freshly-rebuilt router, so its expected set was empty and it passed against the exact bug it guarded | **fail-open** | tabsii-platform [#246](https://github.com/tabsii-com/tabsii-platform/pull/246) | biffo-template (make idempotent or document); instance test hardened to a golden list | **unfiled** |
+| [tabsii#252](https://github.com/tabsii-com/tabsii-platform/issues/252) | Two events ship with no `fields` and no `payload_model` while emitting a real payload, so the workflow builder's dropdowns are empty. The guard credited with preventing this (#546) does not iterate `registered_events()` at all — no test asserts field-metadata *coverage*, here or in the template | **fail-open** · drift | tabsii-platform (found closing #221) | biffo-template `services/api/tests` | **open** |
+| — | Five template-owned files diverged **undeclared** across a whole core upgrade. The instance's tests checked each declaration was valid but never that the declared set and `core diff`'s modified set *agree*, so undeclared divergence was invisible governance — the guard hard-blocked those files with no recorded reason | **visibility** | tabsii-platform [#250](https://github.com/tabsii-com/tabsii-platform/pull/250) | tabsii-platform (ratchet added); biffo-template could emit the delta from `core diff` | **fixed** in the instance |
+| — | `biffo core diff` emits human-prose only. Consumers hand-parse it, and a parse that silently drops a line under-reports divergence — one did exactly that here, reporting 4 undeclared files when the answer was 5, caught only because the section header's own count disagreed | **visibility** | tabsii-platform revalidation | biffo-template `cli` (a `--json` mode) | **unfiled** |
 | [#666](https://github.com/keiranholloway/biffo-template/pull/666) | Template tests asserted **ambient process state** — an empty write-back registry, and whichever identity provider happened to be installed. Both are properties only a bare template has, so 14 tests were green upstream and red the moment they were distributed | **drift** · fail-open | tabsii-platform [#241](https://github.com/tabsii-com/tabsii-platform/pull/241) | biffo-template `services/api/tests` | **fixed** ([#666](https://github.com/keiranholloway/biffo-template/pull/666)) |
 | — | [#665](https://github.com/keiranholloway/biffo-template/pull/665) was written, reviewed, merged and **wrong** — it pinned the *default* identity provider, which reads `public.users`, a table the instance also lacks. It was never run against the instance it existed to unblock; [#666](https://github.com/keiranholloway/biffo-template/pull/666) corrects it | **process** | biffo-template | biffo-template | **fixed** — verify a distribution fix *against the distribution* |
 
@@ -82,15 +87,20 @@ Tallying the filed issues above by the repo that must change:
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 5 of 5 | Core API, CI, CDN module, skeletons, repo settings |
-| **biffo-platform** | 2 of 5 | Shares #647 and #652 — the instantiated infra (API Gateway routes, CDN) |
-| **biffo-plugin-ideation** | **0 of 5** | Where two were *reported*; where none were *fixed* |
+| **biffo-template** | 10 of 11 | Core API, CI, CDN module, skeletons, repo settings, ADR-0022 seam, event-registry guard, `core diff` output |
+| **biffo-platform** | 2 of 11 | Shares #647 and #652 — the instantiated infra (API Gateway routes, CDN) |
+| **tabsii-platform** | 1 of 11 | The divergence-coverage ratchet; every other tabsii-surfaced defect fixes upstream |
+| **biffo-plugin-ideation** | **0 of 11** | Where two were *reported*; where none were *fixed* |
 
-**The most actionable number here is that zero.** The Ideation admin UI is where a
-user hit `Failed to load catalog: Unexpected token '<'`, and it turned out to be
-two platform defects stacked: a routing collision (#652) producing a 404, and a
-CDN rule (#647) disguising that 404 as a successful HTML response. The plugin was
-correct throughout; its `model-catalog` handlers exist and its manifest is valid.
+**The most actionable number here is still the zero — and it now has company.**
+Six of these eleven were surfaced by `tabsii-platform`, and exactly one is fixed
+there. The Ideation figure was the first evidence; tabsii is the second, larger
+sample, and it says the same thing.
+
+The original case: a user hit `Failed to load catalog: Unexpected token '<'` in
+the Ideation admin UI, and it was two platform defects stacked — a routing
+collision (#652) producing a 404, and a CDN rule (#647) disguising that 404 as a
+successful HTML response. The plugin was correct throughout.
 
 Two consequences worth internalising:
 
@@ -100,6 +110,12 @@ Two consequences worth internalising:
   inside `biffo-plugin-ideation` — Core exposes no non-colliding path for plugin
   table CRUD — so the plugin can only wait. Platform defects are throughput
   blockers for everything downstream, and should be priced accordingly.
+
+**What changed with this sample:** the instance repos are not just where defects
+*appear*, they are where the template's untested seams get exercised for the
+first time. ADR-0022, the ownership guard and the event registry were all green in
+`biffo-template` and all broke on first real instance use. An instance is the
+template's integration test, and currently the only one.
 
 ---
 
@@ -138,6 +154,33 @@ clean run — was what actually established #636 was correct.
 `--admin` on every one of four failed merge attempts for #659. Taking it would
 have merged an auth change past branch protection to save ten minutes.
 
+
+**Diff the assembled artifact, not the source tree.** Relocating a domain under
+ADR-0022 silently removed 21 generic-CRUD routes. The suite passed — 1712 green —
+and *could not* have failed: every test imports its models directly, so
+registration always precedes the assertion, and nothing built the app the way
+`main.py` does and then inspected the result. Comparing `app.openapi()` against
+the previous deployment was the only thing that saw it. Route-table diffing is
+now the standing check for any relocation.
+
+**Prove the test fails without the fix — including when the test is yours.** The
+guard written for that ordering bug compared the app against a freshly-rebuilt
+`build_core_crud_router()`, which returns zero routes on a second call. Its
+expected set was empty, so it passed against the exact bug it existed to catch.
+Reverting the fix and *watching the guard fail* was what exposed it; had the step
+been skipped, a guard protecting nothing would have shipped described as
+verification.
+
+**Establish current state before closing, not just before coding.** #221 read as
+finished. Checking it found two events still missing field metadata and — more
+usefully — that the guard the issue credited with preventing that class of bug
+does not exist in the tree. Closing on the issue's own summary would have
+recorded a hole as solved.
+
+**Close by the reported route.** #190 was closed on the evidence that
+`uv export --frozen` yields `greenlet==3.5.3` while PyPI's current release is
+`3.5.4` — the exact package and broken version from the original incident —
+rather than on the weaker "the `--frozen` flag is present in the workflow".
 ---
 
 ## What needs more thought
@@ -169,6 +212,46 @@ dependency level with tests. Nobody has suspended a real Cognito user in `dev` a
 replayed a plugin-forwarded call. Until that happens, #621 should not close.
 
 ---
+
+**The template's seams are first exercised by an instance, and that is the test.**
+ADR-0022's discovery order, the ownership guard's coverage, and the event
+registry's field metadata were all green in `biffo-template` and all broke on
+first real instance use. There is no integration environment where a template
+change is applied to a realistic instance before release; `biffo core upgrade`
+into a live repo is currently that environment, which is why instances keep
+paying for template defects.
+
+**Declaring divergence has no coverage check.** `biffo.divergence.json` records
+*why* a file diverges, and the guard reads it — but nothing compares the declared
+set against the actually-divergent set. Five files sat undeclared across a whole
+core upgrade, hard-blocking edits with no recorded reason and invisible to every
+gate. An instance can build a ratchet for this (tabsii did), but each one has to
+invent it; `core diff` already knows the answer and could emit it.
+
+**`biffo core diff` has no machine-readable output.** Everything that consumes it
+hand-parses prose. A parse that drops a line under-reports divergence and looks
+authoritative doing it — one here reported 4 undeclared files when the answer was
+5, caught only because the section header carried its own count. A `--json` mode
+would remove the whole class.
+
+**Trailer length is an unwritten constraint.** `Core-Divergence:`/`Core-Convergence:`
+must be a single line for the guard's anchored regex, and commitlint caps footer
+lines at 100 characters. The two rules are individually documented and jointly
+undocumented, so the first attempt at any non-trivial reason is rejected after
+the hooks have already run.
+
+---
+
+## Skills used
+
+Skills cannot be iterated on impressions. Every invocation, with an honest outcome.
+
+| Skill | Outcome | Detail |
+| --- | --- | --- |
+| `biffo-workflow` | **worked** | Seven changes across two repos, start → merged → worktree reaped. The honest-push and remote-verify steps mattered once: a rebase onto a mid-flight core upgrade needed `--force-with-lease` and re-verification, and the step's insistence on re-checking the remote caught that the PR body's numbers were now stale. |
+| `biffo-workflow` | **partial** | Step 3's commit example does not mention that a `Core-Divergence:`/`Core-Convergence:` trailer must fit commitlint's 100-character footer limit *and* stay on one line for the guard's anchored regex. Two commits were rejected after the hooks had run. Worth one line in the step. |
+| `biffo-verify` | **worked** | §3 ("prove the test fails without the fix") caught a guard that passed against the bug it was written for, because its expected set was empty. Nothing else in the process would have found it — the test was green, the code was correct, and the assertion was vacuous. |
+| `biffo-verify` | **should have been invoked sooner** | It was loaded at batch 4 of a five-batch relocation. Batch 3 is where 21 routes silently disappeared; the route-diff that caught them was improvised rather than prompted. The trigger wording is debugging-shaped ("investigating a bug", "green but broken"), so a *refactor* with a silent-regression risk does not read as a match. Worth adding refactors and relocations to the trigger list. |
 
 ## Adding a row
 

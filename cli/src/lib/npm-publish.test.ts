@@ -188,11 +188,24 @@ describe('describePublishFailure', () => {
   })
 
   describe('auth', () => {
-    it('sends the reader to the token, and says the re-run is safe', () => {
+    it('sends the reader to the trusted-publisher registration, not to a token', () => {
       const report = describePublishFailure(attempt({ log: NEEDS_AUTH }))
       expect(report.kind).toBe('auth')
-      expect(report.annotations.join(' ')).toContain('NPM_TOKEN')
+      expect(report.annotations.join(' ')).toContain('Trusted Publisher')
       expect(report.summary).toContain('re-run is safe')
+      // The old advice was "mint a fresh automation token" — there is no token
+      // any more, and following it sends the reader somewhere that cannot help.
+      expect(report.annotations.join(' ')).not.toContain('automation token')
+    })
+
+    it('warns that a bare re-run will not help, and names the 404-means-403 trap', () => {
+      // Three consecutive re-dispatches were burned on this in #664: npm answers
+      // 404 on an unauthorised PUT so as not to reveal whether a private package
+      // exists, which reads as "no such package" when it means "not allowed".
+      const report = describePublishFailure(attempt({ log: NEEDS_AUTH }))
+      expect(report.summary).toContain('will not help')
+      expect(report.summary).toContain('404')
+      expect(report.summary).toContain('11.5.1')
     })
   })
 

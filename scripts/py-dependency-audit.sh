@@ -23,11 +23,11 @@ attempts=3
 for attempt in $(seq 1 "$attempts"); do
   out="$(uv run pip-audit -f json 2>/dev/null)"
 
-  if echo "$out" | jq -e '.dependencies' >/dev/null 2>&1; then
-    vuln_count="$(echo "$out" | jq '[.dependencies[].vulns[]?] | length')"
+  if printf '%s' "$out" | jq -e '.dependencies' >/dev/null 2>&1; then
+    vuln_count="$(printf '%s' "$out" | jq '[.dependencies[].vulns[]?] | length')"
     if [ "$vuln_count" -gt 0 ]; then
       echo "::error::pip-audit found ${vuln_count} vulnerability(ies)."
-      echo "$out" | jq '[.dependencies[] | select(.vulns | length > 0)]' 2>/dev/null | head -c 4000
+      printf '%s' "$out" | jq '[.dependencies[] | select(.vulns | length > 0)]' 2>/dev/null | head -c 4000
       exit 1
     fi
     echo "pip-audit: no vulnerabilities found."

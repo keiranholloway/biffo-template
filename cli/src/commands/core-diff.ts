@@ -88,6 +88,19 @@ export async function runCoreDiff(options: CoreDiffOptions): Promise<void> {
   printGroup('modified', diff.modified, chalk.yellow)
   printGroup('added', diff.added, chalk.green)
   printGroup('removed', diff.removed, chalk.red)
+  // Listed separately and NOT counted as a change: an upgrade neither carries
+  // nor deletes these (#689). Folding them into `removed` read as imminent data
+  // loss for files an instance legitimately authored.
+  printGroup('instance-only', diff.instanceOnly, chalk.cyan)
+  if (diff.instanceOnly.length > 0) {
+    console.log(
+      chalk.dim(
+        `  ${diff.instanceOnly.length} instance-only file(s): present here, never in the template.\n` +
+          '  An upgrade leaves these alone — it deletes a path only when the template\n' +
+          '  shipped it and later dropped it. They are not pending changes.\n',
+      ),
+    )
+  }
 
   console.log(
     `\n  ${chalk.bold(String(total))} template-owned file(s) would change ` +

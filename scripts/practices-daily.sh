@@ -89,6 +89,21 @@ git -c commit.gpgsign=false commit --no-verify -q -m "chore(practices): snapshot
 git push origin "$BRANCH" --quiet
 echo "practices-daily: pushed snapshot $(date -u +%F)"
 
+# Nudge, if the ground truth is going stale. Every headline figure on the page is
+# inferred from commit types and repo names; a session log is the only thing that
+# can falsify that inference, and it is the one part nobody can automate. A rule
+# with nothing watching it stops being followed silently — that is how nine
+# orphan worktrees accumulated under a documented hygiene rule.
+NUDGE="$(node scripts/practices-session.mjs --nudge --file docs/practices/sessions.jsonl || true)"
+if [ -n "$NUDGE" ]; then
+  echo "$NUDGE"
+  # Desktop notification when a session bus is reachable. Fully optional: cron
+  # usually has no DISPLAY, and a failed notify must never fail the job.
+  if command -v notify-send >/dev/null 2>&1 && [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    notify-send "Practices" "$NUDGE" >/dev/null 2>&1 || true
+  fi
+fi
+
 # The rendered page lives in three places on purpose:
 #   1. $STABLE            — bookmark this; rewritten in place every run
 #   2. the pushed branch  — version-controlled history, one commit per day

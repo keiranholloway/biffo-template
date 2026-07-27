@@ -171,23 +171,56 @@ def test_an_unknown_agent_is_404():
 
 def test_a_missing_forwarded_token_is_401():
     with pytest.raises(HTTPException) as exc:
-        forwarded_user.require_forwarded_user(forwarded_token=None)
+        asyncio.run(forwarded_user.require_forwarded_user(forwarded_token=None, db=None))  # type: ignore[arg-type]
     assert exc.value.status_code == 401
 
 
 def test_the_forwarded_token_is_verified_via_cores_own_mapping(monkeypatch):
     seen: dict[str, str] = {}
 
-    def _fake_identity_from_token(credentials):
+    def _fake_claims_from_token(credentials):
         seen["token"] = credentials.credentials
+        return {"sub": "founder-sub-abc"}
+
+    async def _fake_authenticated_identity(claims, db):
+        seen["claims_sub"] = claims["sub"]
         return _founder(roles=["founder"])
 
-    monkeypatch.setattr(forwarded_user, "identity_from_token", _fake_identity_from_token)
+    monkeypatch.setattr(forwarded_user, "claims_from_token", _fake_claims_from_token)
+    monkeypatch.setattr(forwarded_user, "authenticated_identity", _fake_authenticated_identity)
 
-    user = forwarded_user.require_forwarded_user(forwarded_token="a.b.c")
+    user = asyncio.run(
+        forwarded_user.require_forwarded_user(forwarded_token="a.b.c", db=None)  # type: ignore[arg-type]
+    )
 
     assert seen["token"] == "a.b.c"  # the header value is what gets verified
+    assert seen["claims_sub"] == "founder-sub-abc"  # ...and its claims drive identity
     assert user.sub == "founder-sub-abc"
+
+
+def test_a_deactivated_account_is_401_on_the_forwarded_path_too(monkeypatch):
+    """The #150 deactivation gate must apply however the token arrived (#621).
+
+    This path used to verify the token and stop, so a suspended user's unexpired
+    access token kept working through every plugin-forwarded route. Both
+    dependencies now run the same `authenticated_identity`.
+    """
+    monkeypatch.setattr(
+        forwarded_user, "claims_from_token", lambda credentials: {"sub": "founder-sub-abc"}
+    )
+
+    async def _deactivated(claims, db):
+        raise HTTPException(status_code=401, detail="Account is deactivated")
+
+    monkeypatch.setattr(forwarded_user, "authenticated_identity", _deactivated)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            forwarded_user.require_forwarded_user(forwarded_token="a.b.c", db=None)  # type: ignore[arg-type]
+        )
+
+    assert exc.value.status_code == 401
+    assert "deactivated" in str(exc.value.detail)
 
 
 # ── Dynamic chat agents: live, DB-backed resolution (ADR-0017 seam #1 extension) ──

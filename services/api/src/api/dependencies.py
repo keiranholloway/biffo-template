@@ -5,6 +5,7 @@ from fastapi import Depends, HTTPException, status
 from .cognito import CognitoAdmin
 from .events.base import EventPublisher
 from .middleware.auth import AuthenticatedUser, require_auth
+from .middleware.principal import Principal, require_principal
 from .middleware.service_auth import ServicePrincipal, require_service_principal
 from .permissions import PermissionsRegistry, lookup_permission
 
@@ -114,6 +115,52 @@ def require_crud_permission(
         if rule is None or not rule.allowed:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
         if rule.required_role and not set(rule.required_role).intersection(caller.roles):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to perform this action",
+            )
+
+    return guard
+
+
+def require_principal_crud_permission(
+    table: str,
+    operation: str,
+    registry: PermissionsRegistry,
+) -> Callable[..., Awaitable[None]]:
+    """``require_crud_permission``, reachable by either transport (#621/#652).
+
+    **Same authorization axis** as :func:`require_crud_permission` — the rule is
+    looked up from the same registry and evaluated against the *user's* Cognito
+    roles, with identical 404/403 outcomes. The only difference is how the user
+    was authenticated: this depends on ``require_principal``, so it accepts the
+    user's token from ``Authorization: Bearer`` **or** from
+    ``X-Biffo-User-Token`` on a SigV4-signed request.
+
+    Why this is a third guard and not a change to either existing one:
+
+    - ``require_crud_permission`` depends on ``require_auth``, which is
+      bearer-only. A SigV4 call cannot carry a bearer JWT (the signature owns
+      ``Authorization``), so the shared plugin host acting for a real admin is
+      rejected before the rule is ever consulted — the #621 defect, and the
+      reason a plugin's declared ``api_routes`` are unreachable (#652).
+    - ``require_service_crud_permission`` authorises on a **structurally
+      separate** axis (``allowed_principals``, ADR-0014 §7) and must stay
+      separate: a Cognito user must never be able to satisfy a service grant.
+      This guard does not touch it.
+
+    So the widening here is deliberate and bounded: a service can reach a
+    role-gated table **only** while carrying a real user's verified token, and
+    only with that user's own roles. It cannot act on its own authority — the
+    service principal is authenticated but is not what authorises the call. A
+    request with no user token is 401 regardless of how well it is signed.
+    """
+
+    async def guard(principal: Principal = Depends(require_principal)) -> None:
+        rule = lookup_permission(table, operation, registry=registry)
+        if rule is None or not rule.allowed:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        if rule.required_role and not set(rule.required_role).intersection(principal.user.roles):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have permission to perform this action",

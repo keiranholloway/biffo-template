@@ -89,6 +89,20 @@ class WorkflowDefinition(TenantScopedModel):
     # (every existing definition) means unscoped/tenant-wide — today's
     # behaviour, unchanged.
     scope: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Whose authority this definition's actions run under (ADR-0027 §2).
+    #
+    # Stamped with the authenticated caller on every create, update and enable —
+    # authority re-binds to whoever last exercised it, so a definition always runs
+    # as a user who affirmatively saved it in its current form. Nullable because
+    # every definition written before write-back existed has no author to name,
+    # and a definition with no ``run_as_user_id`` cannot carry a write-back at
+    # all: fail-closed, rather than falling back to some ambient principal.
+    #
+    # ``run_as_kind`` mirrors ``AgentRun.run_as_kind`` (ADR-0014 §6.2) and stays
+    # "system" for a definition that predates this, so the two records agree on
+    # what a missing principal means.
+    run_as_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    run_as_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="system")
 
 
 class TriggerCatalog(TenantScopedModel):

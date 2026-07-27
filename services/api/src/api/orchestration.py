@@ -492,6 +492,25 @@ async def get_definition(
     return result.scalar_one_or_none()
 
 
+def _stamp_run_as(definition: WorkflowDefinition, run_as_user_id: str | None) -> None:
+    """Re-bind a definition's run-as principal to whoever is saving it (ADR-0027 §2).
+
+    Called from update and enable, not only create: authority follows the last
+    person to exercise it, so an editor cannot leave a definition running under
+    someone else's permissions — and the UI's "Runs as …" is always the person
+    who most recently vouched for the rule as it now stands.
+
+    A caller with no ``user_id`` (a machine identity, or an instance whose
+    identity provider resolves none) leaves the existing principal alone rather
+    than clearing it. Silently unbinding would demote a definition to
+    unrunnable-for-write-back on an unrelated edit, which is a confusing failure
+    a long way from its cause.
+    """
+    if run_as_user_id:
+        definition.run_as_user_id = run_as_user_id
+        definition.run_as_kind = "user"
+
+
 async def create_definition(
     db: AsyncSession,
     *,
@@ -505,6 +524,7 @@ async def create_definition(
     trigger_filter: dict[str, Any] | None = None,
     schedule_config: dict[str, Any] | None = None,
     scope: dict[str, Any] | None = None,
+    run_as_user_id: str | None = None,
 ) -> WorkflowDefinition:
     definition = WorkflowDefinition(
         tenant_id=tenant_id,
@@ -517,6 +537,8 @@ async def create_definition(
         enabled=enabled,
         schedule_config=schedule_config,
         scope=scope,
+        run_as_user_id=run_as_user_id,
+        run_as_kind="user" if run_as_user_id else "system",
     )
     db.add(definition)
     await db.flush()
@@ -538,6 +560,7 @@ async def update_definition(
     trigger_filter: dict[str, Any] | None = None,
     schedule_config: dict[str, Any] | None = None,
     scope: dict[str, Any] | None = None,
+    run_as_user_id: str | None = None,
 ) -> WorkflowDefinition | None:
     definition = await get_definition(db, tenant_id=tenant_id, definition_id=definition_id)
     if definition is None:
@@ -551,18 +574,25 @@ async def update_definition(
     definition.enabled = enabled
     definition.schedule_config = schedule_config
     definition.scope = scope
+    _stamp_run_as(definition, run_as_user_id)
     await db.flush()
     await db.refresh(definition)
     return definition
 
 
 async def set_definition_enabled(
-    db: AsyncSession, *, tenant_id: str, definition_id: str, enabled: bool
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    definition_id: str,
+    enabled: bool,
+    run_as_user_id: str | None = None,
 ) -> WorkflowDefinition | None:
     definition = await get_definition(db, tenant_id=tenant_id, definition_id=definition_id)
     if definition is None:
         return None
     definition.enabled = enabled
+    _stamp_run_as(definition, run_as_user_id)
     await db.flush()
     await db.refresh(definition)
     return definition

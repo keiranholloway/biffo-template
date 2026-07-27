@@ -58,13 +58,18 @@ def _pristine_scope_resolver_registry():
     sr._levels, sr._resolver = saved_levels, saved_resolver  # noqa: SLF001
 
 
-def _caller(tenant_id: str = "default", roles: list[str] | None = None) -> AuthenticatedUser:
+def _caller(
+    tenant_id: str = "default",
+    roles: list[str] | None = None,
+    user_id: str | None = None,
+) -> AuthenticatedUser:
     return AuthenticatedUser(
         sub="admin-sub",
         email="admin@example.com",
         username="admin",
         tenant_id=tenant_id,
         roles=["admin"] if roles is None else roles,
+        user_id=user_id,
     )
 
 
@@ -1734,3 +1739,108 @@ def test_admin_is_unaffected_by_a_registered_authorizer(
     created = client.post(_BASE, json=body)
     assert created.status_code == 201
     assert len(client.get(_BASE).json()) == 1
+
+
+# ── run-as principal (ADR-0027 §2) ────────────────────────────────────────────
+#
+# Until this, nothing recorded who had scheduled a job — so "the user scheduling
+# the job" was not a principal that could be consulted at all. Authority re-binds
+# on every save and every enable, so a definition always runs as someone who
+# affirmatively vouched for it in its current form.
+
+
+def test_create_stamps_the_authenticated_caller_as_the_run_as_principal(app, client):
+    fastapi, _ = app
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(user_id="user-a")
+
+    created = client.post("/api/v1/orchestration/workflows", json=_valid_body())
+    assert created.status_code == 201
+    assert created.json()["run_as_user_id"] == "user-a"
+    assert created.json()["run_as_kind"] == "user"
+
+
+def test_update_rebinds_authority_to_whoever_saved_it_last(app, client):
+    fastapi, _ = app
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(user_id="user-a")
+    created = client.post("/api/v1/orchestration/workflows", json=_valid_body())
+    definition_id = created.json()["id"]
+
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(user_id="user-b")
+    updated = client.put(
+        f"/api/v1/orchestration/workflows/{definition_id}",
+        json=_valid_body(name="Notify sales (revised)"),
+    )
+    assert updated.status_code == 200
+    assert updated.json()["run_as_user_id"] == "user-b"
+
+
+def test_enabling_is_an_act_of_authority_and_rebinds_too(app, client):
+    fastapi, _ = app
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(user_id="user-a")
+    created = client.post("/api/v1/orchestration/workflows", json=_valid_body(enabled=False))
+    definition_id = created.json()["id"]
+
+    # Someone else turning the rule on is vouching for it; it must not keep
+    # running under the original author's permissions.
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(user_id="user-b")
+    toggled = client.post(
+        f"/api/v1/orchestration/workflows/{definition_id}/enabled",
+        json={"enabled": True},
+    )
+    assert toggled.status_code == 200
+    assert toggled.json()["run_as_user_id"] == "user-b"
+
+
+def test_run_as_is_never_accepted_from_the_request_body(app, client):
+    fastapi, _ = app
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(user_id="user-a")
+
+    created = client.post(
+        "/api/v1/orchestration/workflows",
+        json=_valid_body(run_as_user_id="user-somebody-else", run_as_kind="user"),
+    )
+    assert created.status_code == 201
+    # The body's value is ignored entirely — the principal comes from the verified
+    # identity, never from what the client asked for.
+    assert created.json()["run_as_user_id"] == "user-a"
+
+
+def test_a_caller_with_no_resolved_user_id_leaves_the_principal_alone(app, client):
+    fastapi, _ = app
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(user_id="user-a")
+    created = client.post("/api/v1/orchestration/workflows", json=_valid_body())
+    definition_id = created.json()["id"]
+
+    # An identity that resolves no user_id must not silently unbind the
+    # definition — that would demote it to unrunnable on an unrelated edit, a
+    # confusing failure a long way from its cause.
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(user_id=None)
+    updated = client.put(
+        f"/api/v1/orchestration/workflows/{definition_id}",
+        json=_valid_body(name="Edited by a machine identity"),
+    )
+    assert updated.status_code == 200
+    assert updated.json()["run_as_user_id"] == "user-a"
+
+
+def test_definitions_written_before_this_carry_no_principal(app, client):
+    fastapi, _ = app
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(user_id=None)
+
+    created = client.post("/api/v1/orchestration/workflows", json=_valid_body())
+    assert created.status_code == 201
+    # Fail-closed: no author to name, so this definition cannot carry a
+    # write-back (M3 refuses one) rather than falling back to an ambient
+    # principal.
+    assert created.json()["run_as_user_id"] is None
+    assert created.json()["run_as_kind"] == "system"
+
+
+def test_the_state_change_event_carries_the_run_as_principal(app, client):
+    fastapi, _ = app
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(user_id="user-a")
+
+    client.post("/api/v1/orchestration/workflows", json=_valid_body())
+    published = fastapi.state.published
+    assert published, "creating a definition must emit a state-change event"
+    assert published[-1].payload["run_as_user_id"] == "user-a"

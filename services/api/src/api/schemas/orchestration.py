@@ -852,6 +852,12 @@ class WorkflowDefinitionResponse(BiffoBaseSchema):
     enabled: bool
     schedule_config: dict[str, Any] | None = None
     scope: dict[str, Any] | None = None
+    # Whose authority this definition runs under (ADR-0027 §2). Read-only: it is
+    # stamped from the authenticated caller on every save, never accepted from a
+    # request body — which is why it appears here and not on
+    # ``WorkflowDefinitionBody``. The UIs render it as "Runs as …".
+    run_as_user_id: str | None = None
+    run_as_kind: str = "system"
 
 
 class WorkflowDefinitionBody(BaseModel):

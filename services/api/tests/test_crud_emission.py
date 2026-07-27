@@ -5,6 +5,8 @@ and asserts the right ``<table>.<op>`` events are buffered, secrets are denied,
 and opt-out works. The compliance gate for ``<table>.<op>`` is tested separately.
 """
 
+from typing import ClassVar
+
 import pytest
 from api.events import is_declared, pending_events
 from api.models.base import Base, TenantScopedModel
@@ -119,3 +121,49 @@ def test_is_declared_admits_allowed_crud_ops(monkeypatch):
     # unknown table / non-crud suffix → not declared
     assert is_declared("biffo.core", "gremlins.created") is False
     assert is_declared("biffo.core", "widgets.frobnicated") is False
+
+
+# ── The post-create hook ─────────────────────────────────────────────────────
+#
+# Some rows mean more than "a row appeared". A model opts in with
+# `__on_created__` to say what, without a bespoke create route reimplementing
+# tenant injection and the RLS WITH CHECK this handler already gets right.
+
+
+class _HookedWidget(TenantScopedModel):
+    __tablename__ = "hooked_widgets_test"
+
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    seen: ClassVar[list[tuple[str, str]]] = []
+
+    @staticmethod
+    async def __on_created__(db, row, tenant_id) -> None:  # noqa: ANN001
+        _HookedWidget.seen.append((row.name, str(tenant_id)))
+
+
+async def test_a_model_can_react_to_its_own_creation(session):
+    _HookedWidget.seen.clear()
+    await make_create_handler(_HookedWidget, user_columns_from_model(_HookedWidget))(
+        payload={"name": "Acme"}, tenant_id="default", db=session
+    )
+    assert _HookedWidget.seen == [("Acme", "default")]
+
+
+async def test_the_hook_runs_after_the_generic_event_not_instead_of_it(session):
+    _HookedWidget.seen.clear()
+    await make_create_handler(_HookedWidget, user_columns_from_model(_HookedWidget))(
+        payload={"name": "Acme"}, tenant_id="default", db=session
+    )
+    # The row-level record is not replaced by the model's richer one — a
+    # consumer of `<table>.created` keeps working.
+    assert [e.detail_type for e in pending_events(session)] == ["hooked_widgets_test.created"]
+    assert _HookedWidget.seen == [("Acme", "default")]
+
+
+async def test_a_model_without_the_hook_is_untouched(session):
+    # The overwhelming majority of tables; the hook must cost them nothing.
+    await make_create_handler(_Widget, user_columns_from_model(_Widget))(
+        payload={"name": "Acme"}, tenant_id="default", db=session
+    )
+    assert [e.detail_type for e in pending_events(session)] == ["widgets_test.created"]

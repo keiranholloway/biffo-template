@@ -352,6 +352,10 @@ function toolsField(action: CatalogAction | undefined): CatalogActionField | nul
 // exactly one control renders: the picker built below from `available_tools`,
 // which does have live options (with descriptions). Both write the same
 // `action_config.tools` key, so nothing about the save path changes.
+/** Config-field types that have a dedicated section and must never be drawn as a
+ *  generic input. Keep in step with the sections below. */
+const STRUCTURED_FIELD_TYPES = new Set(['delivery', 'writeback'])
+
 function configFieldsFor(action: CatalogAction | undefined): CatalogActionField[] {
   const base = (action?.config_fields ?? []).filter((f) => f.name !== TOOLS_FIELD)
   const tools = toolsField(action)
@@ -1153,14 +1157,18 @@ export default function OrchestrationPage() {
   const agentNameField = agentFields.find((f) => f.name === 'agent_name')
   // Any other task-shaped agent field the catalog might grow: rendered in the
   // Outcome section (not Advanced) so it is never silently dropped from the UI.
-  // `delivery` is excluded here — it has its own Delivery section, and must never
-  // fall through to a generic text input.
+  // `delivery` and `writeback` are excluded here — each has its own section, and
+  // must never fall through to a generic text input. A structured sub-config
+  // rendered as a text box does not merely look wrong: typing in it puts a
+  // *string* where Core expects an object, and the author has two controls for
+  // one setting with no clue which wins. Any future structured field type
+  // belongs in this list on the same day it is added.
   const otherOutcomeFields = agentFields.filter(
     (f) =>
       !AGENT_ADVANCED_FIELDS.has(f.name) &&
       f.name !== 'goals' &&
       f.name !== 'agent_name' &&
-      f.type !== 'delivery',
+      !STRUCTURED_FIELD_TYPES.has(f.type),
   )
   const redundantWebSearch = isAgent && webSearchIsRedundant(config)
 

@@ -22,8 +22,23 @@ const repoRoot = resolve(here, '../../..')
 describe('biffo check', () => {
   const names = checkCommand.commands.map((c) => c.name()).sort()
 
-  it('exposes exactly the guards CI and the commit hook invoke', () => {
-    expect(names).toEqual(['ownership', 'plugin-collisions', 'plugin-terraform', 'release-subject'])
+  /**
+   * The subcommands CI invokes on every PR. These are the seam: rename or drop
+   * one and every instance's CI fails on a command that no longer exists.
+   */
+  const ciGuards = ['ownership', 'plugin-collisions', 'plugin-terraform', 'release-subject']
+
+  /**
+   * Subcommands that are deliberately NOT wired into per-PR CI. `biffo check
+   * branch-protection` audits GitHub repo settings over the API rather than the
+   * diff, so it belongs in a scheduled job, not a merge gate (#715). Listing it
+   * here keeps that a stated choice — a new subcommand that is neither a CI
+   * guard nor listed here fails the exhaustiveness assertion below.
+   */
+  const auditOnly = ['branch-protection']
+
+  it('exposes exactly the guards CI invokes, plus the audits that run out of band', () => {
+    expect(names).toEqual([...ciGuards, ...auditOnly].sort())
   })
 
   it('is registered on the root program, or the published binary has no guards', () => {
@@ -35,7 +50,12 @@ describe('biffo check', () => {
     const workflow = readFileSync(join(repoRoot, '.github/workflows', file), 'utf8')
     // `pnpm --filter @biffo/cli` only works where cli/ exists — the template.
     expect(workflow).not.toContain('pnpm --filter @biffo/cli check')
-    for (const name of names) expect(workflow).toContain(`sh scripts/biffo.sh check ${name}`)
+    for (const name of ciGuards) expect(workflow).toContain(`sh scripts/biffo.sh check ${name}`)
+  })
+
+  it.each(['ci.yml'])('%s does not run the out-of-band audits as a merge gate', (file) => {
+    const workflow = readFileSync(join(repoRoot, '.github/workflows', file), 'utf8')
+    for (const name of auditOnly) expect(workflow).not.toContain(`check ${name}`)
   })
 
   it('the commit hook uses the dispatcher too', () => {

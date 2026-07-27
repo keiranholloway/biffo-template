@@ -70,6 +70,26 @@ def _target(**over: Any) -> wb.WriteBackTarget:
 
 
 @pytest.fixture(autouse=True)
+def _identity() -> Generator[None]:
+    """Pin the identity provider for these tests.
+
+    The executor re-checks the workflow owner's *current* permissions through
+    whichever provider is installed. An instance's provider reads them from its
+    own tables (tabsii's queries `tabsii.user_role_assignments`), which this
+    SQLite fixture has no schema for — so without pinning, these tests pass in
+    the template and fail the moment they are distributed. Found exactly that
+    way. The permission re-check itself is covered by the instance's E2E against
+    real data; here it must simply not be the thing under test.
+    """
+    from api import identity  # noqa: PLC0415 — local to keep the fixture self-contained
+
+    saved = identity._provider  # noqa: SLF001
+    identity.set_identity_provider(identity.default.DefaultIdentityProvider())
+    yield
+    identity._provider = saved  # noqa: SLF001
+
+
+@pytest.fixture(autouse=True)
 def _registry() -> Generator[None]:
     saved_targets, saved_provider = dict(wb._targets), wb._provider  # noqa: SLF001
     wb._targets.clear()  # noqa: SLF001

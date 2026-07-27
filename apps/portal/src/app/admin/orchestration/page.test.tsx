@@ -2073,6 +2073,22 @@ describe('OrchestrationPage', () => {
       expect(screen.getByText(/needs this workflow scoped to a brand/)).toBeInTheDocument()
     })
 
+    it('never also draws the write-back as a generic text input', async () => {
+      // The bug this exists for: a structured sub-config that has its own
+      // section AND falls through to the generic field renderer appears twice.
+      // Typing in the stray box puts a *string* where Core expects an object,
+      // and the author has two controls for one setting.
+      //
+      // Found by clicking the deployed portal, not here — the original tests
+      // queried by label and were satisfied by *a* match, so two matches read
+      // as success. Hence getAllBy + a role assertion rather than getBy.
+      await openAgentWithWriteBack()
+      const textboxes = screen.queryAllByRole('textbox', { name: /Record the result/i })
+      expect(textboxes).toHaveLength(0)
+      // The real control is the target picker, and there is exactly one.
+      expect(screen.getAllByLabelText('Record into')).toHaveLength(1)
+    })
+
     it('tells the author the row comes from the event, not the agent', async () => {
       await openAgentWithWriteBack()
       fireEvent.change(screen.getByLabelText('Record into'), { target: { value: 'leads' } })

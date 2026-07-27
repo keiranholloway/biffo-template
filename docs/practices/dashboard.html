@@ -83,6 +83,10 @@ td.hot{color:var(--crit); font-weight:600}
 td.mid{color:var(--warn)}
 .side{font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:var(--ink-3); margin-left:6px}
 
+.unvalidated{padding:16px 18px; border:1px dashed var(--warn); border-radius:3px; background:var(--warn-bg); color:var(--ink-2); font-size:13px}
+.unvalidated code{font-family:ui-monospace,monospace; font-size:12px}
+.sessions{display:flex; flex-direction:column; gap:6px; padding:16px 18px; background:var(--surface); border:1px solid var(--line); border-radius:3px; font-size:14px}
+.sessions .k{display:inline-block; min-width:110px; font-size:11px; text-transform:uppercase; letter-spacing:0.09em; color:var(--ink-3)}
 .notes{margin-top:34px; padding:18px 20px; border:1px dashed var(--line); border-radius:3px; font-size:13px; color:var(--ink-2)}
 .notes h3{margin:0 0 8px; font-size:12px; text-transform:uppercase; letter-spacing:0.1em; color:var(--ink-3)}
 .notes ul{margin:0; padding-left:18px} .notes li{margin:5px 0}
@@ -95,17 +99,17 @@ td.mid{color:var(--warn)}
       <h1>Are we building the product, or maintaining the machine?</h1>
     </div>
     <div class="stamp num">
-      collected 2026-07-27 12:47 UTC<br />
+      collected 2026-07-27 13:17 UTC<br />
       windows 1 / 7 / 90 days
     </div>
   </div>
 
   <div class="headline">
     <p class="q">Product features as a share of all merges — rolling 7 days</p>
-    <div class="v num">3.6%</div>
+    <div class="v num">3.2%</div>
     <div class="sub">
       <span class="pill critical">critical</span>
-      &nbsp;90-day baseline 14.3% · last 24h 5.9%
+      &nbsp;90-day baseline 13.9% · last 24h 4.1%
     </div>
   </div>
 
@@ -114,25 +118,25 @@ td.mid{color:var(--warn)}
     <div class="tile warning">
       <div class="label">Toil ratio · 7d</div>
       <div class="value num">45.6%</div>
-      <div class="note">rework + toil · budget 50% · baseline 43.4%</div>
+      <div class="note">rework + toil · budget 50% · baseline 43.5%</div>
     </div>
     
     <div class="tile critical">
       <div class="label">Platform vs product · 7d</div>
-      <div class="value num">78.5% / 21.5%</div>
-      <div class="note">merges in biffo-* vs tabsii-* · baseline 61.9% / 38.1%</div>
+      <div class="value num">82.8% / 17.2%</div>
+      <div class="note">merges in biffo-* vs tabsii-* · baseline 64.9% / 35.1%</div>
     </div>
     
     <div class="tile critical">
       <div class="label">Green-but-unmerged · 7d</div>
-      <div class="value num">94.2h</div>
-      <div class="note">correct work that could not land · baseline 252.8h over 90d</div>
+      <div class="value num">94.4h</div>
+      <div class="note">correct work that could not land · baseline 253h over 90d</div>
     </div>
     
     <div class="tile unknown">
       <div class="label">Merges · 24h</div>
-      <div class="value num">119</div>
-      <div class="note">7d 474 · 90d 1031</div>
+      <div class="value num">121</div>
+      <div class="note">7d 476 · 90d 1033</div>
     </div>
   </div>
 
@@ -142,6 +146,14 @@ td.mid{color:var(--warn)}
     <span><i style="background:var(--good)"></i>delivery, quality &amp; docs</span>
     <span><i style="background:var(--crit)"></i>toil + rework (45.6%)</span>
   </div>
+
+  <h2>Wall-clock vs the merge proxy — is the headline believable?</h2>
+  <div class="unvalidated">
+      <strong>No sessions recorded.</strong> Every figure above is inferred from merge
+      metadata — commit types and repo names — and nothing has tested that inference
+      against a real day's wall-clock. Record one with
+      <code>node scripts/practices-session.mjs --minutes N --delivery N --platform N --toil N</code>.
+    </div>
 
   <h2>By repository — 90-day baseline, with last 24h merges</h2>
   <div class="scroll">
@@ -154,12 +166,12 @@ td.mid{color:var(--warn)}
       </thead>
       <tbody><tr>
       <td><strong>biffo-template</strong><span class="side">platform</span></td>
-      <td class="num">46</td>
-      <td class="num">454</td>
-      <td class="num mid">17.4%</td>
+      <td class="num">48</td>
+      <td class="num">456</td>
+      <td class="num mid">17.3%</td>
       <td class="num hot">35.7%</td>
-      <td class="num hot">13.9%</td>
-      <td class="num hot">162.9h</td>
+      <td class="num hot">13.8%</td>
+      <td class="num hot">163.1h</td>
       <td class="num mid">47.2%</td>
       <td class="num">2.4h</td>
     </tr>

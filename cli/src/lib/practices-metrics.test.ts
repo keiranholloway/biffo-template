@@ -19,11 +19,14 @@ import {
   summariseRepo,
   summariseRework,
   summariseWorkMix,
+  classifyMergeSide,
   classifyWork,
   filterToWindow,
 } from '../../../scripts/practices-metrics.mjs'
 // @ts-expect-error -- plain .mjs, same arrangement as above.
-import { grade, fmt, renderDashboard } from '../../../scripts/practices-dashboard.mjs'
+import { grade, fmt, renderDashboard, renderSessions } from '../../../scripts/practices-dashboard.mjs'
+// @ts-expect-error -- plain .mjs, same arrangement as above.
+import { buildEntry, summariseSessions } from '../../../scripts/practices-session.mjs'
 
 /** A workflow run as `GET /repos/{o}/{r}/actions/runs` returns it. */
 const run = (
@@ -611,44 +614,83 @@ describe('filterToWindow', () => {
   })
 })
 
-describe('summariseEstate', () => {
-  const repo = (side: string, merges: number, delivery: number, rework: number, toil: number) => ({
-    side,
-    workMix: {
-      merges,
-      delivery,
-      rework,
-      toil,
-      quality: 0,
-      docs: 0,
-      unconventional: 0,
-      toilRatio: rework + toil,
-    },
-    contention: { greenButUnmergedHours: 10 },
+describe('classifyMergeSide', () => {
+  it('defaults to the repo it landed in', () => {
+    expect(classifyMergeSide('feat(api): a', 'product')).toBe('product')
+    expect(classifyMergeSide('ci: bump', 'platform')).toBe('platform')
   })
 
   /**
-   * Merge-weighted, not an average of averages — otherwise a repo with three
-   * merges swings the headline as hard as one with four hundred.
+   * The correction this function exists for. `tabsii-platform` is the product's
+   * backend *and* a Biffo instance, so 30 of its 230 merges in the first window
+   * were core upgrades — 7.8% of all product-repo merges — each counted as
+   * product delivery by the repo-level cut.
+   */
+  it('counts a core upgrade as platform even inside a product repo', () => {
+    expect(classifyMergeSide('Upgrade Biffo core 0.124.0 → 0.127.0 (#236)', 'product')).toBe(
+      'platform',
+    )
+    expect(classifyMergeSide('chore: core-upgrade 0.1 to 0.2', 'product')).toBe('platform')
+  })
+
+  it('returns null rather than guessing when the repo has no side', () => {
+    expect(classifyMergeSide('feat(api): a', undefined)).toBeNull()
+  })
+})
+
+describe('summariseEstate', () => {
+  const repo = (side: string, subjects: string[], hours = 10) => ({
+    side,
+    ...{ workMix: summariseWorkMix(subjects.map((subject) => ({ subject })), side) },
+    contention: { greenButUnmergedHours: hours },
+  })
+
+  /**
+   * Summed from absolute counts, not reconstructed from percentages — the old
+   * implementation multiplied each repo's share back out, which let a repo with
+   * three merges pull the headline as hard as one with four hundred.
    */
   it('weights the estate figure by merge volume', () => {
     const estate = summariseEstate({
-      big: repo('platform', 400, 25, 50, 25),
-      small: repo('product', 4, 100, 0, 0),
+      big: repo('platform', Array.from({ length: 8 }, (_, i) => (i < 4 ? 'fix: a' : 'feat: b'))),
+      small: repo('product', ['feat: c']),
     })
-    expect(estate.merges).toBe(404)
-    expect(estate.platformShare).toBe(99)
-    // 200 rework + 100 toil of 404, not the mean of 75% and 0%
-    expect(estate.toilRatio).toBe(74.3)
+    expect(estate.merges).toBe(9)
+    expect(estate.platformShare).toBe(88.9)
+    expect(estate.toilRatio).toBe(44.4) // 4 rework of 9
+  })
+
+  it('reattributes a product repo’s core upgrades to platform', () => {
+    const estate = summariseEstate({
+      prod: repo('product', [
+        'feat(api): a',
+        'feat(api): b',
+        'Upgrade Biffo core 0.1 → 0.2 (#1)',
+        'Upgrade Biffo core 0.2 → 0.3 (#2)',
+      ]),
+    })
+    expect(estate.merges).toBe(4)
+    expect(estate.platformShare).toBe(50)
+    expect(estate.productShare).toBe(50)
+    // Only the two feats count as product delivery; the upgrades do not.
+    expect(estate.productFeatureShare).toBe(50)
   })
 
   it('reports the product-feature share as a fraction of ALL merges', () => {
     const estate = summariseEstate({
-      plat: repo('platform', 60, 50, 50, 0),
-      prod: repo('product', 40, 50, 50, 0),
+      plat: repo('platform', ['feat: a', 'fix: b']),
+      prod: repo('product', ['feat: c', 'fix: d']),
     })
-    // 20 product features out of 100 total merges
-    expect(estate.productFeatureShare).toBe(20)
+    // 1 product feature out of 4 total merges
+    expect(estate.productFeatureShare).toBe(25)
+  })
+
+  it('sums contention hours across repos', () => {
+    const estate = summariseEstate({
+      a: repo('platform', ['feat: a'], 100),
+      b: repo('product', ['feat: b'], 63),
+    })
+    expect(estate.contentionHours).toBe(163)
   })
 
   it('reports nulls rather than zeroes when nothing was measurable', () => {
@@ -780,5 +822,94 @@ describe('renderDashboard', () => {
     const bare = { collectedAt: 'x', windowDays: [1], windows: { 1: { estate: {}, repos: {} } } }
     const html = renderDashboard(bare)
     expect(html).toContain('—')
+  })
+})
+
+describe('buildEntry', () => {
+  const now = new Date('2026-07-27T18:00:00Z')
+
+  it('records a session whose buckets account for the time', () => {
+    const { entry, error } = buildEntry(
+      { minutes: 180, delivery: 60, platform: 40, toil: 80, note: 'fan-in; lost an hour to CI' },
+      now,
+    )
+    expect(error).toBeUndefined()
+    expect(entry.date).toBe('2026-07-27')
+    expect(entry.toil).toBe(80)
+    expect(entry.note).toContain('lost an hour')
+  })
+
+  it('allows rounding slack, because these are estimates from memory', () => {
+    expect(buildEntry({ minutes: 60, delivery: 30, toil: 25 }, now).error).toBeUndefined()
+  })
+
+  /**
+   * A log that silently accepts a malformed row is worse than one that rejects
+   * it: the aggregate then under-reports while looking complete.
+   */
+  it('rejects buckets that do not describe the session', () => {
+    const { error } = buildEntry({ minutes: 180, delivery: 10 }, now)
+    expect(error).toMatch(/roughly agree/)
+  })
+
+  it('rejects a session with no time allocated', () => {
+    expect(buildEntry({ minutes: 90 }, now).error).toMatch(/allocate the time/)
+  })
+
+  it('rejects a missing or non-positive duration', () => {
+    expect(buildEntry({ delivery: 30 }, now).error).toMatch(/positive/)
+    expect(buildEntry({ minutes: -5, delivery: 30 }, now).error).toMatch(/positive/)
+  })
+})
+
+describe('summariseSessions', () => {
+  /**
+   * The comparison the log exists for: this toilRatio is directly comparable
+   * with the merge-derived one, so a persistent gap between them falsifies the
+   * merge proxy rather than merely annotating it.
+   */
+  it('produces a toil ratio comparable with the merge-derived one', () => {
+    const s = summariseSessions([
+      { minutes: 100, delivery: 50, platform: 20, toil: 30 },
+      { minutes: 100, delivery: 30, platform: 20, toil: 50 },
+    ])
+    expect(s.sessions).toBe(2)
+    expect(s.hours).toBe(3.3)
+    expect(s.delivery).toBe(40)
+    expect(s.toilRatio).toBe(40)
+  })
+
+  it('returns nulls rather than zeroes with nothing recorded', () => {
+    const s = summariseSessions([])
+    expect(s.sessions).toBe(0)
+    expect(s.toilRatio).toBeNull()
+  })
+})
+
+describe('renderSessions', () => {
+  /**
+   * Absence of ground truth must be visible. If the panel rendered nothing when
+   * no sessions exist, the inferred headline would look corroborated by
+   * silence — which is the fail-open shape, applied to a whole methodology.
+   */
+  it('says plainly that the proxy is unvalidated when nothing is recorded', () => {
+    const html = renderSessions(null, 43.4)
+    expect(html).toContain('No sessions recorded')
+    expect(html).toContain('practices-session.mjs')
+  })
+
+  it('confirms the proxy when wall-clock agrees', () => {
+    const html = renderSessions({ sessions: 3, hours: 9, delivery: 40, platform: 20, toil: 40 }, 43.4)
+    expect(html).toContain('proxy agrees within 3.4 points')
+  })
+
+  it('warns when wall-clock contradicts the proxy', () => {
+    const html = renderSessions({ sessions: 3, hours: 9, delivery: 20, platform: 10, toil: 70 }, 43.4)
+    expect(html).toContain('treat the headline with suspicion')
+  })
+
+  it('does not compare when the merge-derived figure is unmeasured', () => {
+    const html = renderSessions({ sessions: 1, hours: 2, delivery: 50, platform: 25, toil: 25 }, null)
+    expect(html).toContain('not comparable yet')
   })
 })

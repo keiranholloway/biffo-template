@@ -15,6 +15,8 @@ import {
   type CatalogAction,
   type CatalogActionField,
   type DeliveryConfigValue,
+  type WriteBackConfigValue,
+  type WriteBackTarget,
   type WorkflowCatalog,
   type WorkflowDefinition,
   type CatalogTrigger,
@@ -181,11 +183,64 @@ type Config = Record<string, ConfigValue>
 // The agent action's delivery sub-config, if this value is one. A bare (non-list)
 // object with `type`+`config` is a delivery; everything else (strings, tool
 // lists, parts lists) reads as "no delivery" here.
+/** A copy of `source` without `key`. Avoids a dynamic `delete`, which the lint
+ *  rules ban and which mutates a value other code may still be holding. */
+function omit<T extends Record<string, unknown>>(source: T, key: string): T {
+  return Object.fromEntries(Object.entries(source).filter(([k]) => k !== key)) as T
+}
+
+function asWriteBack(value: ConfigValue | undefined): WriteBackConfigValue | null {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return null
+  const v = value as unknown as Record<string, unknown>
+  if (typeof v.table !== 'string' || v.table === '') return null
+  const columns =
+    v.columns != null && typeof v.columns === 'object' && !Array.isArray(v.columns)
+      ? (v.columns as Record<string, string>)
+      : {}
+  return {
+    table: v.table,
+    operation: typeof v.operation === 'string' && v.operation !== '' ? v.operation : 'create',
+    columns,
+  }
+}
+
+/**
+ * The plain-language version of a write-back, for the author who is about to
+ * enable it. #527 asks for this everywhere; it matters most here, because this
+ * is the one field that writes to the database.
+ */
+function describeWriteBack(
+  target: WriteBackTarget | undefined,
+  wb: WriteBackConfigValue | null,
+  scopeLabel: string,
+): string {
+  if (target == null || wb == null) return ''
+  const chosen = target.columns.filter((c) => wb.columns[c.name] != null)
+  if (chosen.length === 0) return `Records nothing yet — choose at least one field to fill.`
+  const names = listToProse(chosen.map((c) => c.label))
+  const where = scopeLabel !== '' ? ` in ${scopeLabel}` : ''
+  if (wb.operation === 'update') {
+    const appended = chosen.filter((c) => c.overwrite === 'append').map((c) => c.label)
+    const guarded = chosen.filter((c) => c.overwrite === 'if_empty').map((c) => c.label)
+    let how = ''
+    if (appended.length > 0)
+      how += ` ${listToProse(appended)} is added beneath what is already there.`
+    if (guarded.length > 0) how += ` ${listToProse(guarded)} is only filled when empty.`
+    return `Updates the ${target.label} this event is about${where}, setting ${names}.${how}`
+  }
+  return `Creates a ${target.label}${where}, setting ${names}.`
+}
+
 function asDelivery(value: ConfigValue | undefined): DeliveryConfigValue | null {
   if (value == null || typeof value !== 'object' || Array.isArray(value)) return null
-  // A non-array object is the only delivery-shaped member of the union; the
-  // runtime guards stay as defence against malformed stored data.
-  return typeof value.type === 'string' && typeof value.config === 'object' ? value : null
+  // A non-array object is no longer *only* delivery-shaped — the write-back
+  // sub-config (ADR-0027) is one too — so this narrows on the delivery keys
+  // rather than on "is an object", and doubles as the guard against malformed
+  // stored data it always was.
+  const v = value as unknown as Record<string, unknown>
+  return typeof v.type === 'string' && typeof v.config === 'object' && v.config !== null
+    ? (value as DeliveryConfigValue)
+    : null
 }
 
 function asString(value: ConfigValue | undefined): string {
@@ -525,6 +580,11 @@ export default function OrchestrationPage() {
   // catalog declares one (absent on a Core predating Phase 3). Its value is a
   // structured { type, config }; the sub-form is driven by the chosen
   // destination action's own config_fields — reused, never duplicated.
+  const writebackField = selectedAction?.config_fields.find((f) => f.type === 'writeback')
+  const writebackTargets = catalog?.writeback_targets ?? []
+  const writeback = writebackField != null ? asWriteBack(config[writebackField.name]) : null
+  const writebackTarget = writebackTargets.find((t) => t.table === writeback?.table)
+
   const deliveryField = selectedAction?.config_fields.find((f) => f.type === 'delivery')
   const delivery = deliveryField != null ? asDelivery(config[deliveryField.name]) : null
   const deliveryAction = catalog?.actions.find((a) => a.type === delivery?.type)
@@ -652,7 +712,7 @@ export default function OrchestrationPage() {
     // configFieldsFor (not raw config_fields) so the injected tools multiselect
     // is recognised and its list value round-trips.
     const fields = configFieldsFor(selectedAction)
-    const applicable = Object.fromEntries(
+    let applicable = Object.fromEntries(
       Object.entries(config).filter((entry) =>
         fields.some((f) => f.name === entry[0] && fieldApplies(fields, config, f)),
       ),
@@ -670,6 +730,23 @@ export default function OrchestrationPage() {
             ),
           ),
         ),
+      }
+    }
+    // The write-back is structured, so it round-trips as an object rather than
+    // through the generic field filter. Only the columns the author actually
+    // chose are sent — an unchecked column must not arrive as an empty mapping,
+    // which Core would read as "fill this with nothing".
+    if (writebackField != null) {
+      if (writeback != null && Object.keys(writeback.columns).length > 0) {
+        applicable[writebackField.name] = {
+          table: writeback.table,
+          operation: writeback.operation,
+          columns: writeback.columns,
+        }
+      } else {
+        // Omitted rather than emptied: an unchecked write-back must not arrive
+        // as an empty mapping, which Core reads as "fill this with nothing".
+        applicable = omit(applicable, writebackField.name)
       }
     }
     const delaySeconds = scheduleEnabled ? scheduleDelaySeconds(scheduleValue, scheduleUnit) : null
@@ -1114,6 +1191,35 @@ export default function OrchestrationPage() {
   // Choose (or clear) the delivery destination. "None" (`''`) removes the whole
   // sub-config so a read sees no delivery; a destination seeds that action's
   // catalog defaults, so what the sub-form shows is what gets saved.
+  function setWriteBack(next: WriteBackConfigValue) {
+    if (writebackField == null) return
+    setConfig((c) => ({ ...c, [writebackField.name]: next }))
+  }
+
+  function selectWriteBackTarget(table: string) {
+    if (writebackField == null) return
+    if (table === '') {
+      setConfig((c) => omit(c, writebackField.name))
+      return
+    }
+    const target = writebackTargets.find((t) => t.table === table)
+    setWriteBack({
+      table,
+      // Prefer update when offered: amending the record the event is about is
+      // the safer default, and the one an author almost always means.
+      operation: target?.operations.includes('update') === true ? 'update' : 'create',
+      columns: {},
+    })
+  }
+
+  function toggleWriteBackColumn(name: string, on: boolean) {
+    if (writeback == null) return
+    const columns = on
+      ? { ...writeback.columns, [name]: `{output.${name}}` }
+      : omit(writeback.columns, name)
+    setWriteBack({ ...writeback, columns })
+  }
+
   function selectDelivery(type: string) {
     const name = deliveryField?.name
     if (name == null) return
@@ -1535,6 +1641,145 @@ export default function OrchestrationPage() {
                 )}
               </div>
 
+              {/* ── Record the result (ADR-0027) ──────────────────────────── */}
+              {writebackField != null && writebackTargets.length > 0 && (
+                <div className="mt-4 rounded-lg border border-gray-200 p-3">
+                  <h3 className="text-sm font-semibold text-gray-900">Record the result</h3>
+                  <p className="mt-0.5 text-xs text-gray-500">
+                    Save what the agent finds back into your data. Optional — leave it on “Don’t
+                    record” and the result only goes to the destination above.{' '}
+                    <strong>This writes as you</strong>, using your own permissions, so it can never
+                    do more than you could by hand.
+                  </p>
+
+                  <label className="mt-3 flex flex-col text-xs text-gray-600">
+                    Record into
+                    <select
+                      aria-label="Record into"
+                      value={writeback?.table ?? ''}
+                      onChange={(e) => {
+                        selectWriteBackTarget(e.target.value)
+                      }}
+                      className={inputClass}
+                    >
+                      <option value="">Don’t record</option>
+                      {writebackTargets.map((t) => (
+                        <option key={t.table} value={t.table}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  {writeback != null && writebackTarget != null && (
+                    <>
+                      {writebackTarget.operations.length > 1 && (
+                        <label className="mt-3 flex flex-col text-xs text-gray-600">
+                          Create a new one, or update the existing one?
+                          <select
+                            aria-label="Write-back operation"
+                            value={writeback.operation}
+                            onChange={(e) => {
+                              setWriteBack({ ...writeback, operation: e.target.value })
+                            }}
+                            className={inputClass}
+                          >
+                            {writebackTarget.operations.map((op) => (
+                              <option key={op} value={op}>
+                                {op === 'update'
+                                  ? `Update the ${writebackTarget.label} this event is about`
+                                  : `Create a new ${writebackTarget.label}`}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+
+                      <p className="mt-3 text-xs font-medium text-gray-700">
+                        Which fields should it fill?
+                      </p>
+                      <div className="mt-1 space-y-2">
+                        {writebackTarget.columns.map((col) => {
+                          const on = writeback.columns[col.name] != null
+                          return (
+                            <div key={col.name} className="flex items-start gap-2">
+                              <input
+                                type="checkbox"
+                                id={`wb-${col.name}`}
+                                checked={on}
+                                onChange={(e) => {
+                                  toggleWriteBackColumn(col.name, e.target.checked)
+                                }}
+                                className="mt-1"
+                              />
+                              <div className="flex-1">
+                                <label
+                                  htmlFor={`wb-${col.name}`}
+                                  className="text-xs font-medium text-gray-800"
+                                >
+                                  {col.label}
+                                  {col.required && <span className="text-rose-600"> *</span>}
+                                  <span className="ml-2 font-normal text-gray-500">
+                                    {col.overwrite === 'append'
+                                      ? 'added beneath existing text'
+                                      : col.overwrite === 'if_empty'
+                                        ? 'only when empty'
+                                        : 'replaces what is there'}
+                                  </span>
+                                </label>
+                                {on && (
+                                  <input
+                                    type="text"
+                                    aria-label={`${col.label} value`}
+                                    value={writeback.columns[col.name] ?? ''}
+                                    onChange={(e) => {
+                                      setWriteBack({
+                                        ...writeback,
+                                        columns: {
+                                          ...writeback.columns,
+                                          [col.name]: e.target.value,
+                                        },
+                                      })
+                                    }}
+                                    className={inputClass}
+                                  />
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+
+                      <p className="mt-2 text-xs text-gray-500">
+                        <code>{'{output.<field>}'}</code> takes the value the agent submitted under
+                        that name. The agent is asked for exactly these fields and nothing else.
+                      </p>
+
+                      {writebackTarget.operations.includes('update') &&
+                        writeback.operation === 'update' &&
+                        writebackTarget.row_selector != null && (
+                          <p className="mt-2 text-xs text-gray-500">
+                            The record to update comes from the event’s{' '}
+                            <code>{writebackTarget.row_selector}</code> — never from the agent.
+                          </p>
+                        )}
+
+                      {writebackTarget.scope_levels.length > 0 && !scopeEnabled && (
+                        <p className="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                          Recording into {writebackTarget.label} needs this workflow scoped to a{' '}
+                          {writebackTarget.scope_levels.join(' or ')} — set Scope below, or it
+                          cannot be saved.
+                        </p>
+                      )}
+
+                      <p className="mt-3 rounded bg-gray-50 px-2 py-1 text-xs text-gray-700">
+                        {describeWriteBack(writebackTarget, writeback, scopeEnabled ? scopeId : '')}
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
+
               {/* ── Delivery (ADR-0020, #527) ─────────────────────────────── */}
               {deliveryField != null && (
                 <div className="mt-4 rounded-lg border border-gray-200 p-3">
@@ -1888,7 +2133,21 @@ export default function OrchestrationPage() {
             <tbody className="divide-y divide-gray-100">
               {workflows.map((w) => (
                 <tr key={w.id}>
-                  <td className="px-4 py-2 text-gray-800">{w.name}</td>
+                  <td className="px-4 py-2 text-gray-800">
+                    {w.name}
+                    {/* ADR-0027 §2: a workflow that writes runs under a stored
+                        principal, so who that is belongs next to the rule, not
+                        buried in a detail view. Re-saving or re-enabling it
+                        re-binds the principal to whoever did so. */}
+                    {w.run_as_kind === 'user' && w.run_as_user_id != null && (
+                      <span
+                        className="ml-2 rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600"
+                        title={`Runs with the permissions of user ${w.run_as_user_id}. Re-saving or re-enabling this workflow re-binds it to whoever does so.`}
+                      >
+                        runs as {w.run_as_user_id.slice(0, 8)}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-2 text-gray-600">
                     {triggerLabel(w)}
                     {Object.keys(w.trigger_filter ?? {}).length > 0 && (

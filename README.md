@@ -57,6 +57,7 @@ See [CLAUDE.md](CLAUDE.md) for full project context and commands.
 - [Building & installing plugins](docs/guides/plugins.md) — `biffo plugin install` and authoring a `biffo.plugin.json`
 - [Upgrading an instance's core](docs/guides/core-upgrade.md) — `biffo core status`/`diff`/`upgrade`
 - [Creating a sibling app](docs/guides/sibling-apps.md) — `biffo sibling create`, shared-session SSO, path-based routing
+- [Development practices](docs/guides/development-practices.md) — running scoreboard of failure conditions, which repo each fix lands in, and which practices caught them
 
 ## Architecture decisions
 

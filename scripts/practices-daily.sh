@@ -18,6 +18,22 @@
 
 set -euo pipefail
 
+# cron has no ssh-agent, and these keys are non-default names — so without this
+# every remote operation fails with "Permission denied (publickey)" at 07:30 and
+# the snapshot silently never reaches GitHub. Both keys are offered because the
+# collector fetches the tabsii-com clones as well as this one; ssh tries each in
+# turn. Set PRACTICES_SSH_KEYS to override.
+#
+# Verified by running the whole script under `env -i` with a cron-like PATH.
+if [ -z "${GIT_SSH_COMMAND:-}" ]; then
+  _keys="${PRACTICES_SSH_KEYS:-$HOME/.ssh/id_github_key $HOME/.ssh/id_github_key_tabsii}"
+  _ssh="ssh"
+  for _k in $_keys; do
+    [ -f "$_k" ] && _ssh="$_ssh -i $_k"
+  done
+  export GIT_SSH_COMMAND="$_ssh -o IdentitiesOnly=yes -o BatchMode=yes"
+fi
+
 REPO="${PRACTICES_REPO:-/home/keiran/code/biffo-template}"
 BRANCH="chore/practices-snapshots"
 DATA_DIR="docs/practices/data"

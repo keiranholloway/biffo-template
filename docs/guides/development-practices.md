@@ -178,6 +178,64 @@ Two things that share a cause with the zero above:
 
 ---
 
+## Where the cycles go
+
+The scoreboard records what *broke*. This records what it *cost*, which is a
+different question and often the more actionable one: a defect fixed in ten
+minutes and a defect that ate an afternoon get one row each up there.
+
+Measured on the 2026-07-27 session, which shipped one bug fix end to end.
+
+| Cost | Cause | Status |
+| --- | --- | --- |
+| **~4 rebase cycles on one PR** | `dev` takes a merge every 3–5 min; CI is ~2.5 min. The branch is `BEHIND` again before its checks finish, so the manual `merge → rejected → rebase → re-verify → push` loop is **structurally unwinnable**, not unlucky | **fixed** — auto-merge enabled on `biffo-template` and `biffo-platform`; GitHub now owns the update-and-merge |
+| **~40 min minimum feedback loop** | A template-owned change reaches a running instance through **six hops**: template PR → `core-tag` → npm publish → `core upgrade` → instance PR → deploy. Nothing is verifiable until the last one | **open** — see below |
+| **One near-miss deploying half a fix** | Hop 3 can lag hop 2: `core-v0.136.0` was tagged while npm still served `0.135.0`. Upgrading in that window carries a *partial* change that deploys green and still fails | caught by checking npm, not the tag; **unautomated** |
+| **One wrongly-halted deploy + a wrongly-filed issue** | `core diff` reported instance-authored files as `removed`; `core upgrade` deletes none of them ([#689](https://github.com/keiranholloway/biffo-template/issues/689)). The preview was escalated as fact without running the dry run that disproves it | **open** (#689); the escalation is a practice failure, recorded under *needs more thought* |
+| **One wrong diff, silently** | `core diff` was run against a local template checkout missing the just-merged commit, and reported *no changes at all* for the half it was missing. Caught only because the absence looked implausible | **open** — no tooling notices; a stale-tree diff looks identical to a current one |
+
+### The six hops are the root cost
+
+Every other row above is a *symptom* of the same shape: the chain from "merged
+in the template" to "running in an instance" is long, and **verification is only
+possible at the end of it**. So every mistake — a stale checkout, an unpublished
+artifact, a silently-skipped deploy step — is discovered after the full ~40
+minute round trip, and each retry costs another one.
+
+That is what "going in circles" actually is here. It is not carelessness at any
+single hop; it is that the loop is too long to catch anything early, so the
+error rate per hop compounds into the wall-clock cost.
+
+Worth attacking in this order, cheapest first:
+
+1. **Make the preview trustworthy** (#689). A `core diff` that contradicts
+   `core upgrade` does not just waste a run — it caused a safe upgrade to be
+   abandoned and an incorrect data-loss issue to be filed. Confidence in the
+   preview is what makes the other five hops tolerable.
+2. **Assert the artifact, not the tag.** A cut `core-v*` is not an available
+   artifact. `core upgrade` should refuse to run (or warn loudly) when the
+   resolved CLI version is older than the template tag it is upgrading from —
+   the check that caught this by hand.
+3. **Make deploys prove they deployed.** Capture Lambda `LastModified` before
+   deploying and assert it moved afterwards. The plugin-host step *skips
+   silently* when a function is unprovisioned, so a green deploy is not evidence
+   the code shipped. Doing this by hand is what confirmed the #652 fix actually
+   landed.
+4. **Retain CI logs.** Not retained for self-hosted runs, so a green check cannot
+   be inspected to see what it *did* — which forced local reproduction of the
+   audit-gate behaviour.
+5. **Shorten the loop itself.** The open question, and the biggest prize: does a
+   dev-environment change need all six hops? Everything above makes the chain
+   more honest; only this makes it shorter.
+
+### What this is not
+
+It is not an argument for skipping hops. The ownership boundary, the guard, and
+the PR-per-instance exist because manual copy-ins let instances drift silently
+(#243, #325, #559) — the failure they prevent is worse and harder to see. The
+argument is for making each hop **fast to verify and honest about its result**,
+not for removing it.
+
 ## What went well — practices that earned their keep
 
 Each of these caught something that would otherwise have shipped.
@@ -441,7 +499,10 @@ saying "how did that ever work?".
    point of the "where the work lands" table.
 3. If a practice caught it, add it to *what went well* with the specific
    evidence. If a practice would have caught it, add it to *needs more thought*.
-4. Record every **skill** you invoked in *Skills used*, with an honest outcome —
+4. If it cost real wall-clock time, add the **cost and its cause** to *Where the
+   cycles go* — not just the defect. A ten-minute fix and an afternoon lost look
+   identical on the scoreboard, and only one of them is worth restructuring for.
+5. Record every **skill** you invoked in *Skills used*, with an honest outcome —
    and for anything not `worked`, the step that misfired. Also record a skill you
    *should* have used and did not, and why you missed it: a skill nobody invokes
    is indistinguishable from one that does not exist, and that is a fixable

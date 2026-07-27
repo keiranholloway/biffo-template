@@ -21,6 +21,12 @@
 import { Octokit } from '@octokit/rest'
 import { execa } from 'execa'
 import {
+  type ObservedCheck,
+  formatPlans,
+  planProtection,
+  protectionParamsFor,
+} from '../lib/branch-protection-apply.js'
+import {
   type BranchProtectionFinding,
   auditBranch,
   formatFindings,
@@ -63,7 +69,33 @@ async function resolveRepo(explicit?: string): Promise<{ owner: string; repo: st
   return { owner: m[1], repo: m[2] }
 }
 
-export async function runBranchProtectionCheck(explicitRepo?: string): Promise<void> {
+/**
+ * Recent check runs on the repo, newest first, as `deriveRequiredContexts` wants
+ * them. Read from the default branch: that is where the checks a PR must satisfy
+ * actually report.
+ */
+async function observedChecks(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  branch: string,
+): Promise<ObservedCheck[]> {
+  const { data } = await octokit.actions.listWorkflowRunsForRepo({
+    owner,
+    repo,
+    branch,
+    per_page: 60,
+  })
+  return data.workflow_runs
+    .filter((r) => r.status === 'completed')
+    .map((r) => ({ name: r.name ?? '', headSha: r.head_sha }))
+    .filter((c) => c.name !== '')
+}
+
+export async function runBranchProtectionCheck(
+  explicitRepo?: string,
+  options: { fix?: boolean | undefined } = {},
+): Promise<void> {
   const { owner, repo } = await resolveRepo(explicitRepo)
   // 404 is control flow here — "this branch has no protection" is the finding,
   // not an error — so silence Octokit's default request log, which would print
@@ -117,13 +149,48 @@ export async function runBranchProtectionCheck(explicitRepo?: string): Promise<v
     process.exit(1)
   }
 
+  if (findings.length > 0 && options.fix) {
+    // Backfill. Both #714 (repos the CLI never created, so protection was never
+    // attempted) and #715 (protection attempted, 403'd, never revisited) end in
+    // the same state, and this is the only path that gets them out of it.
+    const defaultBranch = (await octokit.repos.get({ owner, repo })).data.default_branch
+    const observed = await observedChecks(octokit, owner, repo, defaultBranch)
+    const plans = audited.map((branch) => planProtection(branch, true, observed))
+
+    console.log(`Backfilling protection on ${owner}/${repo}:\n`)
+    console.log(formatPlans(plans))
+
+    let applied = 0
+    for (const plan of plans.filter((p) => p.action === 'apply')) {
+      await octokit.repos.updateBranchProtection({
+        owner,
+        repo,
+        branch: plan.branch,
+        ...protectionParamsFor(plan.contexts),
+      })
+      applied += 1
+    }
+
+    if (applied === 0) {
+      console.error(
+        '\n✗ nothing applied — no branch had a check reporting consistently enough to require.\n' +
+          '  Protection with an empty context list is worse than none: a PR reads CLEAN before\n' +
+          '  any run registers. Get CI reporting on this repo first.',
+      )
+      process.exit(1)
+    }
+
+    console.log(`\n✓ protection applied to ${applied} branch(es). Re-run without --fix to verify.`)
+    return
+  }
+
   if (findings.length > 0) {
     console.error(`✗ branch-protection guard: ${owner}/${repo}\n`)
     console.error(formatFindings(findings))
     console.error(
-      '\n  Protection is applied once at scaffold time and skipped silently on a 403 (#715).\n' +
-        '  Fix with the repo settings API, matching the policy — not the exact required\n' +
-        '  checks, which legitimately differ per repo.',
+      '\n  Protection is applied once at scaffold time and skipped silently on a 403 (#715),\n' +
+        '  and standalone plugin repos are created outside the CLI so it never runs at all\n' +
+        '  (#714). Re-run with --fix to backfill it from the checks this repo actually reports.',
     )
     process.exit(1)
   }

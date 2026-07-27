@@ -71,8 +71,13 @@ checkCommand
     'Verify dev/staging/main are actually protected — scaffolding skips this on a 403 (#715)',
   )
   .option('--repo <owner/name>', "Repo to audit; defaults to this checkout's origin remote")
-  .action(async (opts: { repo?: string }) => {
-    await runBranchProtectionCheck(opts.repo)
+  .option(
+    '--fix',
+    'Backfill protection from the checks this repo actually reports (#714, #715). ' +
+      'Refuses to apply an empty required-check list, which would look protected and admit anything.',
+  )
+  .action(async (opts: { repo?: string; fix?: boolean }) => {
+    await runBranchProtectionCheck(opts.repo, { fix: opts.fix })
   })
 
 /**

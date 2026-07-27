@@ -173,11 +173,19 @@ td.mid{color:var(--warn)}
 export function renderDashboard(snapshot) {
   const w = (d) => snapshot.windows?.[d]
   const day = w(1)
-  const week = w(7)
   const base = w(90)
-  const e = (win) => win?.estate ?? {}
+  /**
+   * Estate figures for a window, addressed by **day count**.
+   *
+   * This took a number in some call sites and a window object in others, so
+   * every `e(7)` silently resolved to `{}` and all four tiles rendered "—"
+   * while the headline — the one call passing an object — rendered correctly.
+   * A page that says "unmeasured" when the data is present is worse than one
+   * that crashes, so the signature is now one thing.
+   */
+  const e = (days) => w(days)?.estate ?? {}
 
-  const featureShare = e(week).productFeatureShare
+  const featureShare = e(7).productFeatureShare
   const featureGrade = grade(featureShare, {
     warn: PRODUCT_FEATURE_FLOOR,
     crit: PRODUCT_FEATURE_FLOOR / 2,

@@ -746,6 +746,30 @@ describe('renderDashboard', () => {
     expect(html).toContain('163h')
   })
 
+  /**
+   * Regression: the estate helper accepted a window *object* at one call site
+   * and a *day count* at the other four, so every tile silently resolved to {}
+   * and rendered "—" while the headline rendered correctly. The original test
+   * asserted only on repo-table values, so it passed against the bug — a guard
+   * that protected nothing. These assertions fail without the fix.
+   */
+  it('renders every estate tile with real values, not dashes', () => {
+    const html = renderDashboard(snapshot)
+    expect(html).toContain('46%') // toil ratio, 7d
+    expect(html).toContain('78% / 22%') // platform vs product, 7d
+    expect(html).toContain('9h') // green-but-unmerged, 7d
+    expect(html).toContain('>5<') // merges, 24h
+  })
+
+  it('grades a tile from its window rather than defaulting to unknown', () => {
+    const html = renderDashboard(snapshot)
+    // toilRatio 46 sits between warn (40) and crit (50)
+    expect(html).toContain('tile warning')
+    // Exactly one tile is legitimately ungraded: a raw merge count has no
+    // good or bad value. Any more than that means the window lookup broke again.
+    expect(html.match(/tile unknown/g)).toHaveLength(1)
+  })
+
   it('does not emit a document skeleton the Artifact wrapper supplies', () => {
     const html = renderDashboard(snapshot)
     expect(html).not.toContain('<!doctype')

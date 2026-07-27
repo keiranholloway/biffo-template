@@ -20,6 +20,9 @@ user. Four steps matching the run lifecycle, plus a scheduled sweep:
 5. ``POST /agent-runs/reap`` — scheduled sweep that fails runs a dead runtime
    left in ``running``, emitting the same completion event so whatever was
    waiting on them is released (§5, issue #402).
+6. ``GET /agent-runs?causation_id=`` — the runs of one chain, as summaries. How a
+   fan-in discovers the siblings of the run that just completed and decides
+   whether the rest are done (§8, issue #656).
 
 Both emits go through ``emit_event``, never the publisher directly: the event is
 buffered on the request's session and published by ``get_db`` only after the
@@ -35,7 +38,7 @@ principal no write surface beyond finishing its own run.
 from __future__ import annotations
 
 from aws_lambda_powertools import Logger
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..agent_runs import (
@@ -46,6 +49,7 @@ from ..agent_runs import (
     complete_run,
     create_run,
     get_run,
+    list_runs,
     list_thread_runs,
     reap_stale_runs,
 )
@@ -58,6 +62,7 @@ from ..models.agent_run import AgentRun
 from ..prompt_parts import PromptPartsError
 from ..schemas.agent_run import (
     AgentRunResponse,
+    AgentRunSummary,
     CompleteAgentRunRequest,
     CreateAgentRunRequest,
     ThreadMessagesResponse,
@@ -134,6 +139,65 @@ async def request_agent_run(
 
     emit_event(db, AGENT_RUN_REQUESTED, _reference_payload(run), tenant_id=principal.tenant_id)
     return AgentRunResponse.model_validate(run)
+
+
+@router.get("", response_model=list[AgentRunSummary])
+async def list_agent_runs(
+    causation_id: str = Query(
+        ...,
+        description="Only runs in this causation chain (ADR-0014 §8).",
+    ),
+    agent_name: str | None = Query(None, description="Only runs of this agent."),
+    limit: int = Query(50, ge=1, le=200),
+    principal: ServicePrincipal = Depends(require_service_principal),
+    db: AsyncSession = Depends(get_db),
+) -> list[AgentRunSummary]:
+    """The runs in one causation chain — how a fan-in discovers its siblings.
+
+    ``causation_id`` is **required**, not optional. This is a service-only route,
+    and the only reason a service has to list runs is to reason about a chain it
+    is already part of; an unfiltered list here would be an
+    every-run-in-the-tenant read for any allowlisted principal, which the admin
+    surface (``/admin/agent-runs``, human-gated) already covers.
+
+    Summaries only — never ``messages``/``result``/``input_payload``. A fan-in
+    needs statuses to decide whether to fire, then fetches the transcripts it
+    actually wants from ``GET /internal/agent-runs/{run_id}``. Returning
+    unbounded transcripts from a list is what this endpoint's ``load_only``
+    discipline exists to prevent.
+    """
+    runs = await list_runs(
+        db,
+        tenant_id=principal.tenant_id,
+        agent_name=agent_name,
+        causation_id=causation_id,
+        limit=limit,
+    )
+    return [_summary(run) for run in runs]
+
+
+def _summary(run: AgentRun) -> AgentRunSummary:
+    """Shape a run into the list summary, lifting ``model`` out of the snapshot.
+
+    Reads only the columns ``list_runs`` loaded; the heavy columns stay deferred
+    and untouched, so this does no lazy IO. Mirrors ``routers/admin/agent_runs``'s
+    ``_summary`` — same shape, different audience.
+    """
+    model = run.definition_snapshot.get("model") if run.definition_snapshot else None
+    return AgentRunSummary(
+        id=run.id,
+        tenant_id=run.tenant_id,
+        created_at=run.created_at,
+        updated_at=run.updated_at,
+        agent_name=run.agent_name,
+        status=run.status,
+        model=model if isinstance(model, str) else None,
+        input_tokens=run.input_tokens,
+        output_tokens=run.output_tokens,
+        cost_usd=run.cost_usd,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+    )
 
 
 _CONVERSATION_ROLES = ("user", "assistant")

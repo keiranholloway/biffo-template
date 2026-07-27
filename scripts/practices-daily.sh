@@ -76,12 +76,12 @@ STABLE="${PRACTICES_PAGE:-$HOME/practices-dashboard.html}"
 cp "$PAGE" "$STABLE"
 echo "practices-daily: page at file://$STABLE"
 
-if git diff --quiet -- "$DATA_DIR" "$PAGE"; then
+if git diff --quiet -- "$DATA_DIR" "$PAGE" docs/practices/sessions.jsonl; then
   echo "practices-daily: no change"
   exit 0
 fi
 
-git add "$DATA_DIR" "$PAGE"
+git add "$DATA_DIR" "$PAGE" docs/practices/sessions.jsonl 2>/dev/null || git add "$DATA_DIR" "$PAGE"
 # --no-verify: this is a generated artefact on a data branch, and the pre-push
 # whole-project pyright is irrelevant to it. Every other gate still applies when
 # the branch is reviewed.
@@ -94,7 +94,13 @@ echo "practices-daily: pushed snapshot $(date -u +%F)"
 # can falsify that inference, and it is the one part nobody can automate. A rule
 # with nothing watching it stops being followed silently — that is how nine
 # orphan worktrees accumulated under a documented hygiene rule.
-NUDGE="$(node scripts/practices-session.mjs --nudge --file docs/practices/sessions.jsonl || true)"
+# The effort log lives outside the repo so appending never dirties the primary
+# checkout, and so a PR is not needed per entry. Copy it onto the snapshot
+# branch here, which is what version-controls the history.
+EFFORT="${PRACTICES_EFFORT_LOG:-$HOME/.practices-sessions.jsonl}"
+[ -f "$EFFORT" ] && cp "$EFFORT" docs/practices/sessions.jsonl
+
+NUDGE="$(node scripts/practices-session.mjs --nudge --file "$EFFORT" || true)"
 if [ -n "$NUDGE" ]; then
   echo "$NUDGE"
   # Desktop notification when a session bus is reachable. Fully optional: cron

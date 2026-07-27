@@ -198,18 +198,27 @@ export function describePublishFailure(attempt: PublishAttempt): PublishFailureR
     return {
       kind,
       annotations: [
-        `npm rejected the credentials for ${spec}: the NPM_TOKEN is missing, expired, or lacks publish rights ` +
-          `on ${packageName}. Nothing was published.`,
-        `What to do: mint a fresh npm automation token with publish rights on ${packageName}, set it as the ` +
-          `NPM_TOKEN repository secret, then re-dispatch this workflow against ${tag}.`,
+        `npm rejected the credentials for ${spec}: trusted publishing (OIDC) did not authenticate against ` +
+          `${packageName}. Nothing was published.`,
+        `What to do: this is almost never fixed by a re-run. Check npmjs.com -> ${packageName} -> Settings -> ` +
+          `Trusted Publisher still names this repository AND this workflow filename, and that the publish job ` +
+          `requests 'id-token: write' and runs npm >= 11.5.1 (older npm ignores OIDC entirely and fails here ` +
+          `looking like a missing package).`,
       ],
       summary:
         `### ❌ npm rejected the credentials\n\n` +
-        `\`${spec}\` was not published: the token is missing, expired, or has no publish rights on ` +
+        `\`${spec}\` was not published: trusted publishing (OIDC) did not authenticate against ` +
         `\`${packageName}\`.\n\n` +
-        `Mint a fresh npm **automation** token with publish rights, set it as the \`NPM_TOKEN\` repository ` +
-        `secret, and re-dispatch this workflow against \`${tag}\`. The version is still unpublished, so the ` +
-        `re-run is safe.\n\n` +
+        `**A re-run will not help unless something changed.** npm answers **404 on the PUT** rather than 403 ` +
+        `when a publish is unauthorised — deliberately, so it does not reveal whether a private package ` +
+        `exists — so this reads like "no such package" when it is really "not allowed to publish". Check, in ` +
+        `order:\n\n` +
+        `1. npmjs.com → \`${packageName}\` → Settings → **Trusted Publisher** still names this repository and ` +
+        `this **workflow filename**. Renaming the workflow file breaks publishing until the registration is ` +
+        `updated to match.\n` +
+        `2. The publish job requests \`id-token: write\`.\n` +
+        `3. The job runs **npm >= 11.5.1**. Older npm ignores OIDC and fails exactly like this (#664).\n\n` +
+        `The version is still unpublished, so a re-run is safe once the cause is fixed.\n\n` +
         '```\n' +
         logTail(attempt.log) +
         '\n```\n',

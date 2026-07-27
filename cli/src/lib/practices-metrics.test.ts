@@ -15,9 +15,15 @@ import {
   prChurn,
   rate,
   runsForPr,
+  summariseEstate,
   summariseRepo,
   summariseRework,
+  summariseWorkMix,
+  classifyWork,
+  filterToWindow,
 } from '../../../scripts/practices-metrics.mjs'
+// @ts-expect-error -- plain .mjs, same arrangement as above.
+import { grade, fmt, renderDashboard } from '../../../scripts/practices-dashboard.mjs'
 
 /** A workflow run as `GET /repos/{o}/{r}/actions/runs` returns it. */
 const run = (
@@ -512,5 +518,267 @@ describe('summariseRepo', () => {
     expect(summary.coverage.prsMeasured).toBe(0)
     expect(summary.coverage.prsUnmeasured).toBe(1)
     expect(summary.ciFailureRate).toBeNull()
+  })
+})
+
+describe('classifyWork', () => {
+  it('maps conventional types to intent', () => {
+    expect(classifyWork('feat(api): add thing')).toBe('delivery')
+    expect(classifyWork('fix(api): correct thing')).toBe('rework')
+    expect(classifyWork('ci: bump runner')).toBe('toil')
+    expect(classifyWork('docs(guides): explain')).toBe('docs')
+  })
+
+  /**
+   * ~8% of merges carry no parseable type. Folding them into any other bucket
+   * would move the headline ratio by more than most experiments will, so they
+   * get their own.
+   */
+  it('keeps unparseable subjects in their own bucket', () => {
+    expect(classifyWork('Upgrade Biffo core 0.124.0 → 0.124.2 (#235)')).toBe('unconventional')
+    expect(classifyWork('Merge pull request #182 from x')).toBe('unconventional')
+  })
+})
+
+describe('summariseWorkMix', () => {
+  it('computes the SRE toil ratio as toil plus rework', () => {
+    const mix = summariseWorkMix([
+      { subject: 'feat(api): a' },
+      { subject: 'feat(api): b' },
+      { subject: 'fix(api): c' },
+      { subject: 'ci: d' },
+    ])
+    expect(mix.delivery).toBe(50)
+    expect(mix.rework).toBe(25)
+    expect(mix.toil).toBe(25)
+    expect(mix.toilRatio).toBe(50)
+  })
+
+  it('returns nulls rather than zeroes for an empty window', () => {
+    const mix = summariseWorkMix([])
+    expect(mix.merges).toBe(0)
+    expect(mix.toilRatio).toBeNull()
+  })
+})
+
+describe('filterToWindow', () => {
+  const data = {
+    defaultBranch: 'dev',
+    prs: [
+      { headRefName: 'a', createdAt: '2026-07-01T00:00:00Z', mergedAt: '2026-07-01T01:00:00Z' },
+      { headRefName: 'b', createdAt: '2026-07-26T00:00:00Z', mergedAt: '2026-07-26T01:00:00Z' },
+    ],
+    runs: [
+      {
+        head_branch: 'a',
+        head_sha: 'x',
+        conclusion: 'success',
+        created_at: '2026-07-01T00:30:00Z',
+      },
+      {
+        head_branch: 'b',
+        head_sha: 'y',
+        conclusion: 'success',
+        created_at: '2026-07-26T00:30:00Z',
+      },
+    ],
+    rework: {
+      fixes: [{ at: Date.parse('2026-07-01T02:00:00Z'), correctedAt: null }],
+      commits: [
+        { at: Date.parse('2026-07-01T01:00:00Z'), subject: 'feat: old' },
+        { at: Date.parse('2026-07-26T01:00:00Z'), subject: 'feat: new' },
+      ],
+    },
+  }
+
+  it('narrows every series to the window', () => {
+    const w = filterToWindow(data, '2026-07-20T00:00:00Z')
+    expect(w.prs).toHaveLength(1)
+    expect(w.runs).toHaveLength(1)
+    expect(w.rework.commits).toHaveLength(1)
+    expect(w.rework.fixes).toHaveLength(0)
+  })
+
+  it('keeps everything for a window that predates the data', () => {
+    const w = filterToWindow(data, '2026-01-01T00:00:00Z')
+    expect(w.prs).toHaveLength(2)
+    expect(w.rework.commits).toHaveLength(2)
+  })
+
+  it('passes a missing local clone through as null rather than empty', () => {
+    const w = filterToWindow({ ...data, rework: null }, '2026-07-20T00:00:00Z')
+    expect(w.rework).toBeNull()
+  })
+})
+
+describe('summariseEstate', () => {
+  const repo = (side: string, merges: number, delivery: number, rework: number, toil: number) => ({
+    side,
+    workMix: {
+      merges,
+      delivery,
+      rework,
+      toil,
+      quality: 0,
+      docs: 0,
+      unconventional: 0,
+      toilRatio: rework + toil,
+    },
+    contention: { greenButUnmergedHours: 10 },
+  })
+
+  /**
+   * Merge-weighted, not an average of averages — otherwise a repo with three
+   * merges swings the headline as hard as one with four hundred.
+   */
+  it('weights the estate figure by merge volume', () => {
+    const estate = summariseEstate({
+      big: repo('platform', 400, 25, 50, 25),
+      small: repo('product', 4, 100, 0, 0),
+    })
+    expect(estate.merges).toBe(404)
+    expect(estate.platformShare).toBe(99)
+    // 200 rework + 100 toil of 404, not the mean of 75% and 0%
+    expect(estate.toilRatio).toBe(74.3)
+  })
+
+  it('reports the product-feature share as a fraction of ALL merges', () => {
+    const estate = summariseEstate({
+      plat: repo('platform', 60, 50, 50, 0),
+      prod: repo('product', 40, 50, 50, 0),
+    })
+    // 20 product features out of 100 total merges
+    expect(estate.productFeatureShare).toBe(20)
+  })
+
+  it('reports nulls rather than zeroes when nothing was measurable', () => {
+    const estate = summariseEstate({ a: { error: 'unmeasured' } })
+    expect(estate.merges).toBe(0)
+    expect(estate.toilRatio).toBeNull()
+    expect(estate.productFeatureShare).toBeNull()
+  })
+})
+
+describe('grade', () => {
+  it('grades a lower-is-better metric against its budget', () => {
+    expect(grade(30, { warn: 40, crit: 50 })).toBe('good')
+    expect(grade(45, { warn: 40, crit: 50 })).toBe('warning')
+    expect(grade(60, { warn: 40, crit: 50 })).toBe('critical')
+  })
+
+  it('inverts for a higher-is-better metric', () => {
+    expect(grade(30, { warn: 20, crit: 10, higherIsBetter: true })).toBe('good')
+    expect(grade(15, { warn: 20, crit: 10, higherIsBetter: true })).toBe('warning')
+    expect(grade(5, { warn: 20, crit: 10, higherIsBetter: true })).toBe('critical')
+  })
+
+  /**
+   * The dashboard must never render missing data in the same colour as a
+   * healthy reading — that is the fail-open shape the programme exists to kill.
+   */
+  it('grades missing data as unknown, never good', () => {
+    expect(grade(null, { warn: 40, crit: 50 })).toBe('unknown')
+    expect(grade(undefined, { warn: 40, crit: 50 })).toBe('unknown')
+  })
+})
+
+describe('fmt', () => {
+  it('shows an em dash for unmeasured, not zero', () => {
+    expect(fmt(null, '%')).toBe('—')
+    expect(fmt(0, '%')).toBe('0%')
+  })
+})
+
+describe('renderDashboard', () => {
+  const snapshot = {
+    collectedAt: '2026-07-27T13:00:00.000Z',
+    windowDays: [1, 7, 90],
+    windows: {
+      1: {
+        estate: {
+          merges: 5,
+          productFeatureShare: 0,
+          toilRatio: 60,
+          platformShare: 100,
+          productShare: 0,
+          contentionHours: 1,
+        },
+        repos: {},
+      },
+      7: {
+        estate: {
+          merges: 40,
+          productFeatureShare: 4,
+          toilRatio: 46,
+          platformShare: 78,
+          productShare: 22,
+          contentionHours: 9,
+        },
+        repos: {},
+      },
+      90: {
+        estate: {
+          merges: 1000,
+          productFeatureShare: 14,
+          toilRatio: 43,
+          platformShare: 62,
+          productShare: 38,
+          contentionHours: 250,
+        },
+        repos: {
+          'o/alpha': {
+            side: 'platform',
+            mergedPrs: 400,
+            ciFailureRate: 17,
+            contention: { repushRate: 36, racedShare: 14, greenButUnmergedHours: 163 },
+            workMix: { toilRatio: 68 },
+            rework: { medianHoursToRework: 2.4 },
+          },
+        },
+      },
+    },
+  }
+
+  it('renders the headline and the repo row', () => {
+    const html = renderDashboard(snapshot)
+    expect(html).toContain('<title>')
+    expect(html).toContain('alpha')
+    expect(html).toContain('163h')
+  })
+
+  /**
+   * Regression: the estate helper accepted a window *object* at one call site
+   * and a *day count* at the other four, so every tile silently resolved to {}
+   * and rendered "—" while the headline rendered correctly. The original test
+   * asserted only on repo-table values, so it passed against the bug — a guard
+   * that protected nothing. These assertions fail without the fix.
+   */
+  it('renders every estate tile with real values, not dashes', () => {
+    const html = renderDashboard(snapshot)
+    expect(html).toContain('46%') // toil ratio, 7d
+    expect(html).toContain('78% / 22%') // platform vs product, 7d
+    expect(html).toContain('9h') // green-but-unmerged, 7d
+    expect(html).toContain('>5<') // merges, 24h
+  })
+
+  it('grades a tile from its window rather than defaulting to unknown', () => {
+    const html = renderDashboard(snapshot)
+    // toilRatio 46 sits between warn (40) and crit (50)
+    expect(html).toContain('tile warning')
+    // Exactly one tile is legitimately ungraded: a raw merge count has no
+    // good or bad value. Any more than that means the window lookup broke again.
+    expect(html.match(/tile unknown/g)).toHaveLength(1)
+  })
+
+  it('does not emit a document skeleton the Artifact wrapper supplies', () => {
+    const html = renderDashboard(snapshot)
+    expect(html).not.toContain('<!doctype')
+    expect(html).not.toContain('<body')
+  })
+
+  it('renders unmeasured estate values as a dash rather than zero', () => {
+    const bare = { collectedAt: 'x', windowDays: [1], windows: { 1: { estate: {}, repos: {} } } }
+    const html = renderDashboard(bare)
+    expect(html).toContain('—')
   })
 })

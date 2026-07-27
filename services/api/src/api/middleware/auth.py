@@ -89,6 +89,55 @@ def _verify_token(token: str) -> dict:
         ) from exc
 
 
+def claims_from_token(credentials: HTTPAuthorizationCredentials) -> dict:
+    """Verify the Cognito JWT and return its raw claims.
+
+    Split out of `identity_from_token` so a caller that also needs the
+    provider-backed checks (`authenticated_identity`) can run them against the
+    same claims without verifying the token twice.
+    """
+    return _verify_token(credentials.credentials)
+
+
+async def authenticated_identity(claims: dict, db: AsyncSession) -> AuthenticatedUser:
+    """The provider-backed half of authenticating a user, shared by every route.
+
+    Verifying a token proves who signed it, not that the account is still
+    allowed in. This runs the checks that answer the second question —
+    deactivation (#150), platform-admin sync, permissions — and MUST be reached
+    by every authenticated path.
+
+    It exists because it once wasn't. `require_auth` grew these checks inline
+    while `require_forwarded_user` (the SigV4/plugin path, ADR-0017 §3/§5)
+    verified the token and stopped there, so a suspended user's still-valid
+    access token kept working through any plugin-forwarded route for the
+    remainder of its ~1h life — the #150 mitigation covered one family and not
+    the other. Keep both callers on this function; a check added here is a
+    check both paths get (#621).
+    """
+    user = _user_from_claims(claims)
+    provider = get_identity_provider()
+
+    identity = await provider.resolve(db, claims)
+    if not identity.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account is deactivated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    is_platform_admin = settings.platform_admin_group in user.roles
+    await provider.sync_platform_admin(db, identity.user_id, is_platform_admin)
+    permissions = await provider.resolve_permissions(db, identity.user_id)
+
+    return replace(
+        user,
+        user_id=identity.user_id,
+        is_platform_admin=is_platform_admin,
+        permissions=permissions,
+    )
+
+
 def identity_from_token(
     credentials: HTTPAuthorizationCredentials,
 ) -> AuthenticatedUser:
@@ -146,12 +195,17 @@ async def require_auth(
     deactivated, and return the caller's identity.
 
     Raises HTTP 401 if the token is missing/expired/invalid, or if the caller's
-    identity record is marked inactive (issue #150). This is the single
-    authorization seam every authenticated route flows through, so the is_active
-    check applies everywhere — at the cost of one indexed lookup per request.
+    identity record is marked inactive (issue #150) — at the cost of one indexed
+    lookup per request.
 
-    Where that record lives is the deployment's business, not the Core's: every
-    database-backed question here goes through the ADR-0012 `IdentityProvider`.
+    This is the bearer-token half of authentication: it reads the token from
+    `Authorization` and hands off to `authenticated_identity` for the checks that
+    apply to every authenticated caller however they arrived. The SigV4/plugin
+    path (`require_forwarded_user`) reads the token from a different header and
+    then calls the same function, so the two cannot drift apart again (#621).
+
+    Where the identity record lives is the deployment's business, not the Core's:
+    every database-backed question goes through the ADR-0012 `IdentityProvider`.
     This function must never name a table.
 
     Cognito's suspend flow (AdminDisableUser + AdminUserGlobalSignOut) revokes
@@ -159,25 +213,4 @@ async def require_auth(
     until it expires (~1h). Checking the deactivation flag on every request
     closes that window.
     """
-    claims = _verify_token(credentials.credentials)
-    user = _user_from_claims(claims)
-    provider = get_identity_provider()
-
-    identity = await provider.resolve(db, claims)
-    if not identity.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Account is deactivated",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    is_platform_admin = settings.platform_admin_group in user.roles
-    await provider.sync_platform_admin(db, identity.user_id, is_platform_admin)
-    permissions = await provider.resolve_permissions(db, identity.user_id)
-
-    return replace(
-        user,
-        user_id=identity.user_id,
-        is_platform_admin=is_platform_admin,
-        permissions=permissions,
-    )
+    return await authenticated_identity(claims_from_token(credentials), db)

@@ -8,7 +8,8 @@ import type { PromptPart } from './prompt-parts'
  * accepts a plain string there too (one inline part) — that arrives typed as a
  * string, the pre-library shape.
  */
-export type ActionConfigValue = string | string[] | PromptPart[] | DeliveryConfigValue
+export type ActionConfigValue =
+  string | string[] | PromptPart[] | DeliveryConfigValue | WriteBackConfigValue
 
 /**
  * The agent action's optional deliver-on-completion sub-config (ADR-0020, #527).
@@ -67,6 +68,14 @@ export interface WorkflowDefinition {
    * precise one ("...and only when status is won").
    */
   trigger_filter: Record<string, string> | null
+  /**
+   * Whose authority this workflow's actions run under (ADR-0027 §2). Stamped
+   * from the authenticated caller on every save and every enable — so it names
+   * whoever last vouched for the rule as it stands, not merely who created it.
+   * Read-only: it is never accepted from a request body.
+   */
+  run_as_user_id?: string | null
+  run_as_kind?: string
   action_type: string
   /**
    * Per-field action config. Values are strings for scalar fields; a
@@ -147,6 +156,10 @@ export interface CatalogActionField {
     // The agent action's optional deliver-on-completion sub-config (ADR-0020,
     // #527). Rendered by the builder's Delivery section, never as a plain input.
     | 'delivery'
+    // The agent action's optional record-the-result sub-config (ADR-0027).
+    // Rendered by the builder's "Record the result" section against the
+    // catalog's `writeback_targets`, never as a plain input.
+    | 'writeback'
   required: boolean
   /**
    * `true` marks the value a credential (#432): a Slack/Google Chat webhook URL.
@@ -215,6 +228,55 @@ export interface CatalogAction {
   available_tools?: AvailableTool[]
 }
 
+/**
+ * One column an agent may be asked to fill on a write-back target (ADR-0027).
+ *
+ * `overwrite` is the one worth surfacing to an author: `if_empty` fills a gap
+ * and never replaces what a person typed, `append` adds beneath it, `always`
+ * replaces. It is the target's decision, not the workflow's — shown, not editable.
+ */
+export interface WriteBackTargetColumn {
+  name: string
+  label: string
+  type: string
+  required: boolean
+  values: string[]
+  overwrite: 'if_empty' | 'append' | 'always'
+}
+
+/**
+ * A table this caller may have an agent write to (ADR-0027 §3).
+ *
+ * The list is filtered by Core to what *this user* can write, so an empty array
+ * means "you cannot write anywhere", not "this deployment has no targets". The
+ * columns are the ceiling: a workflow can narrow them, never widen.
+ *
+ * `scope_levels` non-empty means the workflow must be scoped to one of those
+ * levels — the target derives a column (e.g. a lead's brand) from it, and Core
+ * refuses to save an unscoped definition. `row_selector` names the trigger
+ * payload field that identifies the row an `update` amends; it comes from the
+ * event, never from the agent.
+ */
+export interface WriteBackTarget {
+  table: string
+  label: string
+  operations: string[]
+  scope_levels: string[]
+  row_selector: string | null
+  columns: WriteBackTargetColumn[]
+}
+
+/**
+ * The `writeback` field's value: which table, which operation, and what fills
+ * each chosen column. A source is a literal or a `{output.<field>}` reference to
+ * the agent's submitted record.
+ */
+export interface WriteBackConfigValue {
+  table: string
+  operation: string
+  columns: Record<string, string>
+}
+
 /** What the builder offers — drives the trigger/action dropdowns and config fields. */
 export interface WorkflowCatalog {
   triggers: CatalogTrigger[]
@@ -226,6 +288,13 @@ export interface WorkflowCatalog {
    * resolver at all, in which case the Scope section is not offered.
    */
   scope_levels: string[]
+  /**
+   * The write-back targets **this caller** may write to (ADR-0027). Filtered by
+   * Core per user, so the picker can never offer a table the author could not
+   * save against. Empty for an instance that registers none — the builder then
+   * omits the section entirely.
+   */
+  writeback_targets?: WriteBackTarget[]
 }
 
 /**

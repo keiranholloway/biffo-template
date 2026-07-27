@@ -205,6 +205,54 @@ const catalog: WorkflowCatalog = {
   scope_levels: [],
 }
 
+/**
+ * A catalog offering a write-back target (ADR-0027). Core filters this list to
+ * what the *calling user* may write, so a non-empty array already means "you
+ * are allowed to write here" — the builder never re-checks.
+ */
+const catalogWithWriteBack: WorkflowCatalog = {
+  ...catalog,
+  actions: catalog.actions.map((a) =>
+    a.type === 'agent'
+      ? {
+          ...a,
+          config_fields: [
+            ...a.config_fields,
+            { name: 'writeback', label: 'Record the result', type: 'writeback', required: false },
+          ],
+        }
+      : a,
+  ),
+  scope_levels: ['tenant', 'brand'],
+  writeback_targets: [
+    {
+      table: 'leads',
+      label: 'Lead',
+      operations: ['update'],
+      scope_levels: ['brand'],
+      row_selector: 'lead_id',
+      columns: [
+        {
+          name: 'notes',
+          label: 'Notes',
+          type: 'textarea',
+          required: false,
+          values: [],
+          overwrite: 'append',
+        },
+        {
+          name: 'phone',
+          label: 'Phone',
+          type: 'tel',
+          required: false,
+          values: [],
+          overwrite: 'if_empty',
+        },
+      ],
+    },
+  ],
+}
+
 // A catalog whose FIRST trigger declares payload fields (#505), so the builder
 // loads straight into the trigger-aware "Only when…" dropdowns. It keeps the
 // field-less triggers too, to exercise the free-text fallback in one fixture.
@@ -1929,5 +1977,116 @@ describe('OrchestrationPage', () => {
       type: 'slack',
       config: { webhook_url: SECRET_SENTINEL },
     })
+  })
+
+  // ── Record the result (ADR-0027) ───────────────────────────────────────────
+  //
+  // The one field in this builder that writes to the database, so the tests are
+  // about what an author can and cannot express — not about the controls.
+
+  describe('write-back', () => {
+    async function openAgentWithWriteBack() {
+      fetchCatalog.mockResolvedValue(catalogWithWriteBack)
+      fetchWorkflows.mockResolvedValue([])
+      createWorkflow.mockResolvedValue(notify)
+      render(<OrchestrationPage />)
+      fireEvent.change(await screen.findByPlaceholderText('Notify the sales team'), {
+        target: { value: 'Enrich the lead' },
+      })
+      fireEvent.change(screen.getByLabelText('Action'), { target: { value: 'agent' } })
+    }
+
+    it('offers only the targets Core said this caller may write', async () => {
+      await openAgentWithWriteBack()
+      const picker = screen.getByLabelText('Record into')
+      expect(picker).toBeInTheDocument()
+      expect(screen.getByRole('option', { name: 'Lead' })).toBeInTheDocument()
+      // Opting out is the default and stays available.
+      expect(screen.getByRole('option', { name: 'Don’t record' })).toBeInTheDocument()
+    })
+
+    it('omits the section entirely when the caller may write nowhere', async () => {
+      fetchCatalog.mockResolvedValue({ ...catalogWithWriteBack, writeback_targets: [] })
+      fetchWorkflows.mockResolvedValue([])
+      render(<OrchestrationPage />)
+      fireEvent.change(await screen.findByPlaceholderText('Notify the sales team'), {
+        target: { value: 'x' },
+      })
+      fireEvent.change(screen.getByLabelText('Action'), { target: { value: 'agent' } })
+      expect(screen.queryByLabelText('Record into')).not.toBeInTheDocument()
+    })
+
+    it('sends only the columns the author chose', async () => {
+      await openAgentWithWriteBack()
+      fireEvent.change(screen.getByLabelText('Record into'), { target: { value: 'leads' } })
+      fireEvent.click(screen.getByLabelText(/^Notes/))
+      fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'qualifier' } })
+      // The target derives a column from the brand, so it needs a scope.
+      fireEvent.click(screen.getByText('Scope (advanced, optional)'))
+      fireEvent.click(screen.getByLabelText('Restrict this rule to one part of the hierarchy'))
+      fireEvent.change(screen.getByLabelText('Scope level'), { target: { value: 'brand' } })
+      fireEvent.change(screen.getByLabelText('Scope id'), { target: { value: 'b1' } })
+      // The agent action uses the outcome-oriented flow (#527), whose primary
+      // action is "Save draft" rather than "Add workflow".
+      fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+
+      await waitFor(() => {
+        expect(createWorkflow).toHaveBeenCalled()
+      })
+      const body = createWorkflow.mock.calls[0]?.[1] as { action_config: Record<string, unknown> }
+      // `phone` was never ticked, so it must not arrive as an empty mapping —
+      // Core reads that as "fill this with nothing".
+      expect(body.action_config.writeback).toEqual({
+        table: 'leads',
+        operation: 'update',
+        columns: { notes: '{output.notes}' },
+      })
+    })
+
+    it('sends no write-back at all when nothing is ticked', async () => {
+      await openAgentWithWriteBack()
+      fireEvent.change(screen.getByLabelText('Record into'), { target: { value: 'leads' } })
+      fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'qualifier' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+
+      await waitFor(() => {
+        expect(createWorkflow).toHaveBeenCalled()
+      })
+      const body = createWorkflow.mock.calls[0]?.[1] as { action_config: Record<string, unknown> }
+      expect(body.action_config).not.toHaveProperty('writeback')
+    })
+
+    it('says in words what it will do, including how each column is written', async () => {
+      await openAgentWithWriteBack()
+      fireEvent.change(screen.getByLabelText('Record into'), { target: { value: 'leads' } })
+      fireEvent.click(screen.getByLabelText(/^Notes/))
+
+      // #527 asks for a plain-language plan; it matters most on the field that
+      // writes to the database.
+      expect(screen.getByText(/Updates the Lead this event is about/)).toBeInTheDocument()
+      expect(screen.getByText(/added beneath what is already there/)).toBeInTheDocument()
+    })
+
+    it('warns when the target needs a scope the workflow has not got', async () => {
+      await openAgentWithWriteBack()
+      fireEvent.change(screen.getByLabelText('Record into'), { target: { value: 'leads' } })
+      expect(screen.getByText(/needs this workflow scoped to a brand/)).toBeInTheDocument()
+    })
+
+    it('tells the author the row comes from the event, not the agent', async () => {
+      await openAgentWithWriteBack()
+      fireEvent.change(screen.getByLabelText('Record into'), { target: { value: 'leads' } })
+      expect(screen.getByText(/never from the agent/)).toBeInTheDocument()
+    })
+  })
+
+  it('shows which user a write-capable workflow runs as', async () => {
+    fetchWorkflows.mockResolvedValue([
+      { ...notify, run_as_kind: 'user', run_as_user_id: 'c37c0fa7-8f9b-47ff-93b5-bd02be78aebb' },
+    ])
+    render(<OrchestrationPage />)
+    // ADR-0027 §2: the stored principal belongs next to the rule — a reader
+    // needs to know whose permissions it acts with.
+    expect(await screen.findByText(/runs as c37c0fa7/)).toBeInTheDocument()
   })
 })

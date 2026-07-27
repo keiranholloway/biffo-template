@@ -132,9 +132,7 @@ def make_read_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
     return handler
 
 
-async def _run_created_hook(
-    model: type[Any], db: AsyncSession, row: Any, tenant_id: Any
-) -> None:
+async def _run_created_hook(model: type[Any], db: AsyncSession, row: Any, tenant_id: Any) -> None:
     """Give a model a say in what its creation *means*, beyond the row.
 
     The `<table>.created` event this layer emits is a faithful record of a row

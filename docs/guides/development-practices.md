@@ -32,6 +32,10 @@ shape recurring across unrelated components is a design problem, not bad luck.
 
 | # | Failure condition | Class | Surfaced in | Fix lands in | Status |
 | --- | --- | --- | --- | --- | --- |
+| — | A drift guard written to catch skeleton regressions **walked up a fixed number of directories** to find `_skeletons/`, overshot to `/home`, and its audit returned `[]` for a path that does not exist. Reintroducing the exact `runs-on: ubuntu-latest` drift it existed to catch did **not** fail it — 11 tests green against nothing | **fail-open** | biffo-template [#744](https://github.com/keiranholloway/biffo-template/pull/744) | biffo-template `cli/` | **fixed** — searches upward, throws when not found, asserts the tree exists before auditing |
+| — | Three defects "found" in one session by **pattern-matching without running the thing**, all wrong: four bare `httpx.AsyncClient()` reported as affected when two pass a per-request timeout; a `Depends()` default called a B008 defect when ruff special-cases FastAPI route handlers; a skeleton's differing ruff `select` called drift when the difference is correct in both directions | **process** | biffo-template (this session) | diagnostic practice | **corrected before shipping** — each was disproved by executing the code rather than reading it |
+| [#714](https://github.com/keiranholloway/biffo-template/issues/714) | `gh pr merge --auto` against a repo with `allow_auto_merge` **disabled does not queue — it merges immediately**. On a protected branch that is harmless; on an unprotected one it merges with checks still running. Every Biffo repo had it `false` until it was set by hand, so the documented flow silently meant its opposite | **boundary** · visibility | biffo-plugin-ideation#54 | biffo-template `cli/` | **fixed** ([#741](https://github.com/keiranholloway/biffo-template/pull/741)) — set at repo creation |
+| — | Auto-merge **does not update a head branch that falls behind** under `strict` protection. Armed, green, one commit behind, it simply waits — three PRs in one session merged only after a manual `gh pr update-branch` plus a full CI re-run | **process** | biffo-platform#84, biffo-template #742/#720 | biffo-template (merge queue, or relax `strict`) | **open** — pre-registered as H1's likely refutation, recorded before the review date |
 | [#591](https://github.com/keiranholloway/biffo-template/issues/591) | `pnpm audit`/`pip-audit` fail identically whether they found a vulnerability or couldn't parse the registry response — one flake reds every open PR | fail-open · process | biffo-template CI | biffo-template | **closed** ([#592](https://github.com/keiranholloway/biffo-template/pull/592), [#636](https://github.com/keiranholloway/biffo-template/pull/636)) |
 | [#644](https://github.com/keiranholloway/biffo-template/issues/644) | Sibling skeleton's lockfile shipped 4 high-severity advisories; it sits outside the pnpm workspace so no CI gate ever audited it | fail-open · visibility | biffo-template `_skeletons/` | biffo-template | **partly fixed** ([#645](https://github.com/keiranholloway/biffo-template/pull/645)) — 1 residual, no patched upstream release |
 | [#621](https://github.com/keiranholloway/biffo-template/issues/621) | `is_active` deactivation gate (#150) enforced on the bearer path, silently absent on the forwarded path — a suspended user's token kept working via plugins | **drift** | biffo-template `services/api` | biffo-template | step 1 **merged** ([#655](https://github.com/keiranholloway/biffo-template/pull/655)), step 2 **merged** ([#659](https://github.com/keiranholloway/biffo-template/pull/659)), step 3 open |
@@ -90,19 +94,19 @@ shape recurring across unrelated components is a design problem, not bad luck.
 ### What the classes say
 
 > Counted from `docs/practices/evidence.jsonl`, not asserted. Regenerate with
-> `node scripts/practices-evidence.mjs --report`. **46 rows.**
+> `node scripts/practices-evidence.mjs --report`. **57 rows.**
 
 | Primary class | Rows |
 | --- | --- |
-| **visibility** | 15 |
-| drift | 12 |
-| boundary | 8 |
-| fail-open | 6 |
-| process | 5 |
+| **visibility** | 16 |
+| drift | 13 |
+| boundary | 11 |
+| fail-open | 9 |
+| process | 8 |
 
 **This page previously said "fail-open is the dominant shape — three of the five
 filed issues".** That was true of a five-row sample and was never revised as the
-sample grew ninefold. Counted across all 46 rows, fail-open is *fourth*. The
+sample grew ninefold. Counted across all 57 rows, fail-open is *fourth*. The
 error is instructive and is the reason the rows are now a dataset: **a narrative
 appended to by hand drifts from the evidence above it, silently, and reads
 exactly as confidently while doing so.**
@@ -119,7 +123,7 @@ what it does when it cannot run, and make "inconclusive" a distinct, visible
 outcome from "passed".** A gate that cannot report its own inconclusiveness is
 just one more thing that cannot say what it did.
 
-**What the dataset cannot yet tell us.** Of 46 rows, **1** carries a cost figure
+**What the dataset cannot yet tell us.** Of 57 rows, **1** carries a cost figure
 and **33** carry a date — all of them in a single month, 2026-07. So rows can be
 ranked by *frequency* but not yet by *cost*, and there is no longitudinal trend
 to read. Recording wall-clock on every new row is what unlocks the ranking this
@@ -159,18 +163,27 @@ good — which is the only thing that found any of these.
 **Counting rule** (two sessions computed different totals in good faith, so it is
 now stated): count **every scoreboard row**, filed or not — an unfiled row is
 still work that has to land somewhere. A row naming two repos counts once for
-each, so the column sums exceed the row count. Recounted at **50 rows**
-(27 with a filed issue, 23 unfiled):
+each, so the column sums exceed the row count. Recounted at **57 rows**
+(46 with a filed issue, 11 unfiled):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 44 of 50 | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings |
-| **tabsii-platform** | 4 of 50 | Its own divergence ratchet and repo settings; every other tabsii-surfaced defect fixes upstream |
-| **biffo-platform** | 2 of 50 | Shares #647 and #652 — the instantiated infra (API Gateway routes, CDN) |
-| **tabsii-intake** | 2 of 50 | Its own stale lockfiles and its branch protection — both first *measured* rather than newly broken |
-| **biffo-plugin-ideation** | 1 of 50 | An admin UI rendering a 500 as an empty collection |
-| **biffo-plugin-idea-scout** | 1 of 50 | A missing `web-admin/dist` |
-| **biffo-runners** | 1 of 50 | Runner fleet docs + fail-fast |
+| **biffo-template** | 49 of 57 | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
+| **tabsii-platform** | 3 of 57 | Its own divergence ratchet and repo settings; every other tabsii-surfaced defect fixes upstream |
+| **biffo-platform** | 2 of 57 | Shares #647 and #652 — the instantiated infra (API Gateway routes, CDN) |
+| **tabsii-intake** | 2 of 57 | Its own stale lockfiles and branch protection — both first *measured* rather than newly broken |
+| **biffo-plugin-ideation** | 1 of 57 | An admin UI rendering a 500 as an empty collection |
+| **biffo-plugin-idea-scout** | 1 of 57 | A missing `web-admin/dist` |
+| **biffo-runners** | 1 of 57 | Runner fleet docs + fail-fast |
+
+**The shape has not changed, and that is now the finding.** `biffo-template`
+takes **49 of 57** — up from 44 of 50, so the proportion held (86% then, 86%
+now) across seven more rows. This is no longer "instances surface what the
+template must fix"; it is closer to a statement about what Biffo *is*. The
+template is the product, and the satellites are where its defects become
+visible. Read that way the number is not alarming, but it does mean **satellite
+repos are the test environment and should be resourced as one** — nobody is
+going to fix a template defect from inside a plugin.
 
 **The headline claim on this page was "the zero has held". It has not, and the
 previous count was stale in both directions.** The table said 44 rows when the
@@ -310,6 +323,31 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**"Prove the test fails without the fix" caught a guard that guarded nothing.**
+A new skeleton-drift guard passed 11 tests. Reintroducing the exact
+`runs-on: ubuntu-latest` drift it was written to catch **still passed** — its
+path resolution overshot to `/home`, and auditing a directory that does not
+exist returns no violations. Nothing else in the process would have found it:
+the code read correctly, the suite was green, and the guard would have shipped
+detecting nothing while stopping anyone else from looking. This is #695's shape,
+written the same day a row about #695 was added.
+
+**Establishing current state first turned three issues into one hour, not three.**
+#722 asked for a `pip-audit --ignore-vuln` suppression; the skeleton had already
+been migrated to `pyjwt` and audits clean, so the right answer was to close it
+with evidence and ship nothing. #652 was already fixed and deployed by two merged
+PRs. #685's generator already filtered inputs by declaration, so the change was
+two additions rather than a rewrite. In each case the first move was reading the
+current state rather than the issue's proposed fix.
+
+**Executing beats reading, and the gap is not small.** Three "defects" were
+identified by grep and disproved by running the code: two of four bare
+`httpx.AsyncClient()` calls pass a per-request timeout; ruff special-cases
+FastAPI so a `Depends()` default never trips B008; a skeleton's differing ruff
+`select` is correct in both directions. All three would have shipped as fixes to
+things that were not broken.
+
 
 **Read the headers, not the rendering.** Two plugin admin URLs both returned
 `200 text/html` and were read as one failure; `x-cache` and `<title>` — present
@@ -522,6 +560,26 @@ that lacks `users`**. That is a stronger result than any test: the fix was prove
 where the bug lived.
 
 ## What needs more thought
+
+**Guards that read a path can fail open, and nothing distinguishes that from
+passing.** `auditSkeleton` returning `[]` means either "no violations" or "that
+directory does not exist". The fix here was to assert the tree exists before
+auditing, but the same shape is available to every guard that walks a path —
+including ones already shipped. Worth a convention: **a guard that finds nothing
+to check must say so, not pass.**
+
+**A skeleton is only exercised when someone scaffolds from it.** #744 closes the
+specific case for two rules, but the general problem stands for anything
+`_skeletons/` contains that no test reads. The rules that exist are the ones
+whose violation was already observed to break something — which means the guard
+can only ever be as good as the last incident.
+
+**Three months of fixes have never been propagated backwards.** Every skeleton
+fix lands for repos created *after* it. `biffo check branch-protection --fix`
+(#740) is the first mechanism that touches an already-created repo, and it
+covers one setting. Nothing carries #649/#650/#651 into the two plugin repos
+that predate them, and nothing knows which satellites are behind.
+
 
 **Fail-open is our default, and it should not be.** Three separate gates passed
 when they could not run. There is no shared convention for "inconclusive" — each
@@ -758,6 +816,10 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `claude-in-chrome` | **worked** | The only thing that could close #652. `curl` returned clean `401` JSON at every stage; the failure was visible only in an authenticated session, and then only in the *network* panel — the rendered page showed "No catalog entries yet" over an HTTP 500. Without it the issue would have been closed on a screenshot. |
+| `biffo-verify` | **worked** | §3 caught the vacuous drift guard (above). §1 turned #722 into a close-with-evidence and stopped #652 being reimplemented. |
+| `biffo-verify` | **partial** | §8's "Skills used" and repo tally were done at the *end* of a long session, from memory, and the class counts were typed rather than regenerated — producing wrong numbers that the tool then corrected. The section warns about exactly this two paragraphs earlier. The step should say: run `--report` and paste, never type. |
+| `biffo-add-service` | **failed** (as found) | Described Steps 7–8 as manual work that `biffo deploy` had automated 3.5 weeks earlier (#337), the Step 1 pre-flight as missing when it exists (#151/#306), and the concurrency guard as unmerged (#145). Following it would have caused ~40 min of already-automated work and could have conflicted with what the tool writes. Corrected, and renamed to match intent. |
 | `biffo-workflow` | **worked** | Seven changes across two repos, start → merged → worktree reaped. The honest-push and remote-verify steps mattered once: a rebase onto a mid-flight core upgrade needed `--force-with-lease` and re-verification, and the step's insistence on re-checking the remote caught that the PR body's numbers were now stale. |
 | `biffo-workflow` | **partial** | Step 3's commit example does not mention that a `Core-Divergence:`/`Core-Convergence:` trailer must fit commitlint's 100-character footer limit *and* stay on one line for the guard's anchored regex. Two commits were rejected after the hooks had run. Worth one line in the step. |
 | `biffo-verify` | **worked** | §3 ("prove the test fails without the fix") caught a guard that passed against the bug it was written for, because its expected set was empty. Nothing else in the process would have found it — the test was green, the code was correct, and the assertion was vacuous. |
@@ -765,6 +827,10 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-workflow` | **partial** | Step 7 (`gh pr merge --squash`) assumes you can win the up-to-date race. `dev` was taking a merge every 3–5 min against a ~2.5 min CI cycle, so the branch was `BEHIND` on every attempt and **four rebases lost it**. The real fix was a repo setting (auto-merge), not a rebase. The step should offer an auto-merge path. |
 | `claude-in-chrome` | **worked** | The only thing that reproduced the reported bug. `curl` returned clean `401` JSON and looked healthy — the HTML only appears on an *authenticated* request, because 401 passes the CDN untouched while 403/404 are rewritten. An unauthenticated check would have concluded "works fine" and #647 would still be unfound. |
 | `biffo-verify` | **partial** | §1 caught that the planned #621 step 3 would have collapsed ADR-0014 §7's two-axis authorization boundary — a real save. But it was **not applied to its own author's output**: `core diff`'s `removed (5)` was reported to the user as fact without the dry run that disproves it in seconds. The step exists and was skipped. |
+| `claude-in-chrome` | **worked** | The only thing that could close #652. `curl` returned clean `401` JSON at every stage; the failure was visible only in an authenticated session, and then only in the *network* panel — the rendered page showed "No catalog entries yet" over an HTTP 500. Without it the issue would have been closed on a screenshot. |
+| `biffo-verify` | **worked** | §3 caught the vacuous drift guard (above). §1 turned #722 into a close-with-evidence and stopped #652 being reimplemented. |
+| `biffo-verify` | **partial** | §8's "Skills used" and repo tally were done at the *end* of a long session, from memory, and the class counts were typed rather than regenerated — producing wrong numbers that the tool then corrected. The section warns about exactly this two paragraphs earlier. The step should say: run `--report` and paste, never type. |
+| `biffo-add-service` | **failed** (as found) | Described Steps 7–8 as manual work that `biffo deploy` had automated 3.5 weeks earlier (#337), the Step 1 pre-flight as missing when it exists (#151/#306), and the concurrency guard as unmerged (#145). Following it would have caused ~40 min of already-automated work and could have conflicted with what the tool writes. Corrected, and renamed to match intent. |
 | `biffo-workflow` | **worked** | Nine changes across three repos, start → merged → worktree reaped. Its honest-push and remote-verify steps earned their place twice: once when a rebase onto a mid-flight core upgrade needed re-verification, and once when a **blocked commit still produced `push exit 0`** — the branch existed on the remote carrying none of the work. Only `git log origin/<branch>` showed it. |
 | `biffo-workflow` | **partial** | Step 7 assumes you merge by hand. Where the repo allows auto-merge that is wasted watching; where it does not it is unavoidable — `tabsii-platform` had it off and that cost ~2¼ hours this session, since fixed. The step should say: enable auto-merge, use it, and treat a repo without it as a defect to fix rather than a cadence to absorb. |
 | `biffo-verify` | **worked** | §3 caught **two** vacuous guards — one whose expected set was empty because `build_core_crud_router()` returns zero on a second call ([#695](https://github.com/keiranholloway/biffo-template/issues/695)), one that asserted a path existed when a hand-written route kept it alive regardless. Both were green, both protected nothing. Reverting the fix and watching the guard fail is the only step that distinguishes those from a real guard. |

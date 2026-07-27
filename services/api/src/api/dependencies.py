@@ -66,21 +66,36 @@ def require_tenant_context(caller: AuthenticatedUser = Depends(require_auth)) ->
 
 
 def require_plugin_tenant_context(
-    caller: AuthenticatedUser = Depends(require_auth),
+    principal: Principal = Depends(require_principal),
 ) -> str:
     """
     FastAPI dependency used by every dynamically-registered plugin route
     (ADR-0003 chunk 6 / issue #19).
 
-    Currently identical to require_tenant_context — every plugin route is
+    Tenant-scoping identical to require_tenant_context — every plugin route is
     tenant-scoped exactly like a native route (CLAUDE.md invariant #2).
     Deliberately kept as its own dependency, rather than plugin routes
     depending on require_tenant_context directly, so a future authorization
-    layer (ADR-0004's declarative per-table `permissions`/`required_role`)
-    has a single seam to extend without touching every generated plugin
+    layer has a single seam to extend without touching every generated plugin
     route handler in api.routing.plugin_router.
+
+    This is that seam being used (#652). It resolves the caller via
+    ``require_principal`` rather than ``require_auth``, so the same generated
+    handlers work whether the user's token arrived as ``Authorization: Bearer``
+    or as ``X-Biffo-User-Token`` on a SigV4-signed request. A bearer caller
+    resolves to ``Principal(user, service=None)`` and yields exactly the same
+    tenant_id as before, so nothing changes for the public routes.
+
+    It has to move in step with the guard: authorising a signed caller
+    (require_principal_crud_permission) while the handler's tenant dependency
+    stayed bearer-only would authorise the request and then 401 it inside the
+    handler. Both chokepoints accept the same principal, or neither does.
+
+    Note this does NOT widen the public ``/api/v1/plugins/*`` routes: those keep
+    ``require_crud_permission``, which is bearer-only, so a signed request is
+    still refused at the guard before reaching here.
     """
-    return require_tenant_context(caller)
+    return require_tenant_context(principal.user)
 
 
 def require_crud_permission(

@@ -21,6 +21,7 @@ from collections.abc import AsyncGenerator, Generator
 import pytest
 from api.database import get_db
 from api.middleware.auth import AuthenticatedUser, require_auth
+from api.middleware.principal import Principal, require_principal
 from api.models.base import Base, TenantScopedModel
 from api.routing.core_crud_router import build_core_crud_router
 from fastapi import FastAPI
@@ -101,6 +102,10 @@ def gadget_app() -> Generator[FastAPI]:
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[require_auth] = lambda: _caller("default", ["admin"])
 
+    app.dependency_overrides[require_principal] = lambda: Principal(
+        user=_caller("default", ["admin"])
+    )
+
     yield app
 
     asyncio.run(engine.dispose())
@@ -165,6 +170,10 @@ class TestRequiredRole:
 
     def test_create_as_non_admin_is_forbidden(self, gadget_app: FastAPI):
         gadget_app.dependency_overrides[require_auth] = lambda: _caller("default", [])
+
+        gadget_app.dependency_overrides[require_principal] = lambda: Principal(
+            user=_caller("default", [])
+        )
         resp = TestClient(gadget_app).post(_BASE, json={"label": "sneaky"})
         assert resp.status_code == 403
 
@@ -193,6 +202,10 @@ class TestTenantScoping:
 
         # Re-point the app at an admin caller in a different tenant.
         gadget_app.dependency_overrides[require_auth] = lambda: _caller("other-tenant", ["admin"])
+
+        gadget_app.dependency_overrides[require_principal] = lambda: Principal(
+            user=_caller("other-tenant", ["admin"])
+        )
         other_client = TestClient(gadget_app)
 
         list_resp = other_client.get(_BASE)

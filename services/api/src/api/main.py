@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 
 from .config import settings
+from .dependencies import require_principal_crud_permission
 from .routers import (
     agent_chat,
     auth,
@@ -105,6 +106,23 @@ app.include_router(admin_orchestration.router, prefix="/api/v1")
 # docstring for how each installed plugin's manifest reaches the deployed
 # Lambda.
 app.include_router(build_plugin_router(), prefix="/api/v1")
+# The same declared routes again, under /api/v1/internal/plugins/<name>/<path>
+# (#652). API Gateway sends ALL of /api/v1/plugins/* to the shared plugin host
+# (ADR-0021's `ANY /api/v1/plugins/{proxy+}`), so the public mount above — which
+# Core registers correctly — is unaddressable from outside: a plugin calling it
+# is routed back into the plugin host, never to Core. /api/v1/internal/* is
+# IAM-authorized and does reach Core, so this mount is what the host forwards to.
+#
+# Same routes, same handlers, same permission rules; the only difference is the
+# guard, which accepts the caller's token from either transport instead of
+# requiring a bearer header a SigV4-signed request cannot send.
+app.include_router(
+    build_plugin_router(
+        path_prefix="/internal/plugins",
+        guard_factory=require_principal_crud_permission,
+    ),
+    prefix="/api/v1",
+)
 # Owner-scoped, service-authenticated data routes (ADR-0017 §5) for plugin tables
 # that declare `owner_scoped_service`, under /api/v1/internal/owner-data/<table>.
 # Empty in the base deployment (no plugin installed); the owning module's Lambda

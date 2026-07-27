@@ -61,6 +61,14 @@ The reaction plumbing exists; the authority does not.
 - **No Core write path reachable by a service principal on behalf of a stored user.**
   `owner_data_handlers.py` (ADR-0017 §5) is the closest analogue but requires a *live*
   forwarded token (`X-Biffo-User-Token`), which an asynchronous completion does not have.
+- **No RLS in the template at all.** Confirmed: `dependencies.py` has no
+  `require_rls_context`, `database.py` has no `get_admin_db`, and `db_app_role.py`
+  states outright that RLS policies and the `SET LOCAL app.current_user_id` GUC
+  plumbing were *"deliberately not implemented here… deferred with the decision in
+  #229 — see ADR-0012's amendment."* Those exist only in `tabsii-platform`. So the
+  principal-session binding **cannot be template-owned**; it is a registered seam
+  with a refusing default (ADR-0027 §2). This reshapes M1/M5/M7 and is the single
+  most important thing to get right in this plan.
 
 ## Cross-repo boundary
 
@@ -143,6 +151,17 @@ not warn):
 **Tests:** each rejection above; unregistered lookup returns `None`; a valid target
 round-trips; registration is idempotent-by-replace like the other registries.
 
+Same module, second seam — the **principal-session provider**:
+`register_principal_session_provider(provider)` where
+`provider(db, user_id) -> Awaitable[bool]` binds the session to that user and
+reports whether it could. The template's default returns `False` — it has no RLS
+and no GUC plumbing (#229), so it must refuse rather than write on an unbound
+session. Same shape as `register_workflow_scope_authorizer`: exactly one active
+provider, last registration wins.
+
+**Tests:** the default refuses; a registered provider is consulted with the stored
+user id; a provider that raises is treated as a refusal, not a pass.
+
 ### M2 — `run_as` on the workflow definition (biffo-template)
 
 - `models/orchestration.py`: `WorkflowDefinition.run_as_user_id: str | None`,
@@ -209,8 +228,9 @@ Ordered steps, each failing closed:
    filtered through the allowlist; `derived` values from tenant/scope/literals. For
    `update`, select by the stored trigger event's selector field and apply each column's
    `overwrite` mode.
-7. Execute on the **RLS session** with `app.current_user_id` = the stored author. Never
-   `get_admin_db`.
+7. Bind the session to the stored author via the registered principal-session
+   provider; **a refusal (including the template's default) aborts the write** and
+   is recorded as a denial. Then execute. Never on an admin engine.
 8. Emit the table's state-change event via `emit_event`, carrying `causation_id` and
    `depth + 1` from the run (ADR-0014 §8 loop ceiling).
 9. Record an `ActionLog`; on denial also emit `workflow.writeback.denied` and increment the
@@ -220,8 +240,9 @@ Ordered steps, each failing closed:
 missing/inactive author → 403; a `WITH CHECK` violation maps to a failed `ActionLog` with a
 legible reason and no row; replay writes exactly once; `if_empty` does not overwrite a
 populated column; `append` concatenates; an update whose selector field is absent from the
-stored event fails closed; **an explicit assertion that this route never acquires the admin
-engine**.
+stored event fails closed; **with no principal-session provider registered the route
+writes nothing and records a denial**; and **an explicit assertion that this route never
+acquires an admin engine**.
 
 ### M6 — Orchestrator reaction (biffo-template plugin)
 
@@ -238,12 +259,19 @@ fire.
 
 1. `biffo core upgrade` PR carrying M1–M6. Expect conflicts in `crud_handlers.py` /
    `main.py`; resolve by hand.
-2. `services/api/src/api/domains/tabsii/writeback_targets.py` (new, user-owned): register
+2. `services/api/src/api/domains/tabsii/writeback_session.py` (new, user-owned):
+   register the principal-session provider — the same
+   `set_config('app.current_user_id', <user_id>, true)` that
+   `dependencies.require_rls_context` performs for a live request, and that
+   `domains/tabsii/orchestration_authz.py` already does by hand for the same
+   reason. Guards the non-PostgreSQL case by returning `False` (the suite runs on
+   SQLite), so a refusal is what a test environment sees.
+3. `services/api/src/api/domains/tabsii/writeback_targets.py` (new, user-owned): register
    `leads` per the Data model mapping above — `create` and `update`, `permission_code`
    `leads.create` / `leads.update`, `allowed_principals = ("system:orchestrator",)`,
    `brand_id` from `from_scope("brand")`, `notes` `overwrite="append"`. Imported from the
    domain module's `__init__` alongside `scope_resolver` and `orchestration_authz`.
-3. Deploy to dev; confirm the migration applied and the new route is live (401/404 unauthed).
+4. Deploy to dev; confirm the migration applied and the new route is live (401/404 unauthed).
 
 **Tests:** a `domains/tabsii/tests/` unit test asserting the registration's shape; plus M8's
 E2E below.

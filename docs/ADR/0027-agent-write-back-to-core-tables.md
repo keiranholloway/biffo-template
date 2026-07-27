@@ -110,10 +110,35 @@ authorizer (ADR-0025). Fail at save beats fail at run (§7's own principle), and
 catalog only offers targets the caller can already write, so the picker cannot
 produce an unsaveable definition.
 
-**At write time** — Core executes the statement on the **RLS-enforced application
-session** with `app.current_user_id` set to the stored `run_as_user_id`: exactly
-what `require_rls_context` does for a live request, sourced from stored state rather
-than a token. **Never on the admin/BYPASSRLS engine.**
+**At write time** — Core executes the statement on a session that has been **bound
+to the stored `run_as_user_id`**, so the instance's own row-level policies decide
+the outcome. **Never on an admin/BYPASSRLS engine.**
+
+How a session is bound to a principal is **not something this template knows**, and
+the distinction matters enough to be explicit. Row-level security and the
+`SET LOCAL app.current_user_id` GUC plumbing were deliberately deferred from the
+template (#229, ADR-0012's amendment): `db_app_role.py` splits privilege — the
+request path connects as a least-privilege, non-owning `biffo_app` role — but the
+template ships **no policies at all**. RLS is an instance concern, exactly as
+ADR-0011 says authorization is.
+
+So the binding is a **registered seam**, the third in the same family as ADR-0024's
+scope resolver and ADR-0025's scoped authorizer:
+
+- The **template** owns everything generic and testable once: resolving the target,
+  claiming the run, building the row from the allowlist, emitting, auditing.
+- The **instance** registers a principal-session provider — for tabsii, the
+  `set_config('app.current_user_id', …, true)` its `require_rls_context` already
+  performs for a live request, sourced here from stored state rather than a token.
+- The template's default provider **refuses**. An instance that has registered
+  nothing cannot write back at all, rather than writing on an unbound session where
+  no policy would scope it.
+
+That default is the important half. A template that wrote the row itself would be
+promising an enforcement it has no ability to deliver, and the failure would be
+silent and total: every write would succeed, unscoped, on a deployment with no
+policies. Refusing instead means write-back is available exactly where an
+enforcement mechanism actually exists.
 
 PostgreSQL therefore re-evaluates the instance's own row policies against the
 author's **current** role assignments, at the instant of the write. Demote the
@@ -386,6 +411,12 @@ undone.
 - Core now impersonates a stored principal on a database session. It is one route,
   fail-closed, and heavily tested — but it is a genuinely sensitive code path and
   should be reviewed as one.
+- **A deployment with no row-level security gets no write-back.** The template
+  ships no policies (#229), so an instance must register a principal-session
+  provider before a single row can be written. That is the correct default rather
+  than an incidental gap — but it does mean write-back is not a capability the
+  template alone confers, and a plain Biffo instance adopting it has RLS as a
+  prerequisite, not an option.
 - Agent-supplied values persist in `input_payload` / `result` / `trigger_event`
   JSON. Existing redaction covers declared **secrets**, not PII; write-back does not
   change that posture and does not claim to.
@@ -417,9 +448,10 @@ undone.
   ADR-0025 authorizer before persisting, and stamps `run_as_user_id` on every
   create, update and enable.
 - **Write authority.** The internal write route accepts `{agent_run_id}` only,
-  resolves everything else from stored state, and executes on the RLS session with
-  `app.current_user_id` = the stored author. A test asserts the route never acquires
-  the admin engine.
+  resolves everything else from stored state, and executes on a session bound to the
+  stored author by the instance's registered principal-session provider. Tests
+  assert that the route never acquires an admin engine, and that with no provider
+  registered the route writes nothing and records a denial.
 - **Exactly-once.** The route claims a `WorkflowRun` on
   `dedupe_key = "writeback:{agent_run_id}"` before writing; a replayed completion
   event is asserted to produce exactly one row.
@@ -442,7 +474,10 @@ undone.
 - **ADR-0020** (Agent result delivery on completion) — extended here: a
   non-message destination, and the delivery dedupe that ADR deferred.
 - **ADR-0010** (Database-enforced RBAC with RLS) — the enforcement point write-back
-  delegates to.
+  delegates to. Instance-side; the template ships no policies.
+- **ADR-0012** (Identity-provider seam), amendment / #229 — why RLS and the
+  `app.current_user_id` GUC are deferred from the template, and therefore why the
+  principal-session binding is a registered seam with a refusing default.
 - **ADR-0011** (Authorization is a core concern) — why the check is not in the
   plugin.
 - **ADR-0002** (API-only data integration) — why the plugin triggers and Core

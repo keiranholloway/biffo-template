@@ -34,9 +34,38 @@ import { z } from 'zod'
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/
 
+/**
+ * A core migration this instance has deliberately chosen not to carry (#735).
+ *
+ * `reason` is required, on the same principle `biffo.divergence.json` applies to
+ * declared drift: a decline with nothing recorded about why is a decision nobody
+ * can review later, and the next upgrade re-litigates it from scratch. `upstream`
+ * is optional because — unlike declared divergence — a decline is often
+ * temporary: #670 fixed the migration tabsii declined, at which point the entry
+ * should simply be deleted rather than tracked to closure.
+ */
+const DeclinedMigrationSchema = z.object({
+  /** The *template's* filename for the migration, e.g. `0010_add_organizations.py`. */
+  file: z
+    .string({ required_error: 'file is required — it must name a template migration' })
+    .min(1, 'file is required — it must name a template migration'),
+  // `required_error` as well as `min(1)`: zod reports a bare "Required" for an
+  // absent key, which would lose the guidance in the exact case most likely to
+  // occur — someone adding an entry and omitting the field.
+  reason: z
+    .string({ required_error: 'reason is required — a decline nobody can review is drift' })
+    .min(1, 'reason is required — a decline nobody can review is drift'),
+  /** Optional `owner/repo#123` recording where the decline is being resolved. */
+  upstream: z.string().optional(),
+})
+
 const CoreManifestSchema = z.object({
   version: z.string().regex(SEMVER, 'must be a semver, e.g. 1.2.3'),
+  declinedMigrations: z.array(DeclinedMigrationSchema).optional(),
 })
+
+/** @see DeclinedMigrationSchema */
+export type DeclinedMigration = z.infer<typeof DeclinedMigrationSchema>
 
 export const CORE_VERSION_FILE = 'core.version'
 export const INSTANCE_CORE_FILE = 'biffo.core.json'
@@ -221,6 +250,21 @@ export function readInstanceCoreVersion(cwd: string): string | null {
     const inherited = join(cwd, CORE_VERSION_FILE)
     return existsSync(inherited) ? readCoreVersionFile(inherited) : null
   }
+  return parseInstanceCoreManifest(path).validated.version
+}
+
+/**
+ * Read and validate `biffo.core.json`, returning both the validated view and the
+ * raw object it was parsed from.
+ *
+ * The raw copy exists so a write can round-trip fields this CLI does not know
+ * about — see `writeInstanceCoreVersion`. Zod strips unknown keys, so validated
+ * data alone is a lossy basis for rewriting the file.
+ */
+function parseInstanceCoreManifest(path: string): {
+  validated: z.infer<typeof CoreManifestSchema>
+  raw: Record<string, unknown>
+} {
   let parsed: unknown
   try {
     parsed = JSON.parse(readFileSync(path, 'utf8'))
@@ -232,7 +276,23 @@ export function readInstanceCoreVersion(cwd: string): string | null {
     const detail = result.error.issues[0]?.message ?? 'unexpected shape'
     throw new Error(`${INSTANCE_CORE_FILE} is invalid: ${detail}`)
   }
-  return result.data.version
+  return {
+    validated: result.data,
+    raw: (parsed ?? {}) as Record<string, unknown>,
+  }
+}
+
+/**
+ * The core migrations this instance has declined to carry (#735).
+ *
+ * Empty when the instance records none, or is not an instance at all — an
+ * absent list means "decline nothing", never an error, so this is safe to call
+ * against any tree.
+ */
+export function readDeclinedMigrations(cwd: string): DeclinedMigration[] {
+  const path = join(cwd, INSTANCE_CORE_FILE)
+  if (!existsSync(path)) return []
+  return parseInstanceCoreManifest(path).validated.declinedMigrations ?? []
 }
 
 /**
@@ -315,15 +375,38 @@ function coreVersionsEqual(a: string, b: string): boolean {
  * `biffo core upgrade`) and `biffo init`, which commits the same bytes into the
  * freshly scaffolded repo over the GitHub API rather than to disk.
  */
-export function serializeInstanceCoreVersion(version: string): string {
+export function serializeInstanceCoreVersion(
+  version: string,
+  rest: Record<string, unknown> = {},
+): string {
   parseCoreVersion(version) // validate
-  return `${JSON.stringify({ version }, null, 2)}\n`
+  // `version` first so the file still reads the way it always has.
+  return `${JSON.stringify({ version, ...rest }, null, 2)}\n`
 }
 
-/** Write `<cwd>/biffo.core.json` recording `version` — used by an upgrade to
- * bump the instance's recorded core version in the same commit. */
+/**
+ * Write `<cwd>/biffo.core.json` recording `version` — used by an upgrade to bump
+ * the instance's recorded core version in the same commit.
+ *
+ * **Every other field in the file is preserved.** This used to serialise
+ * `{ version }` and nothing else, which was harmless while that was the only
+ * field and silently destructive the moment it wasn't: `declinedMigrations`
+ * (#735) is read *during* an upgrade and the file rewritten *by* the same
+ * upgrade, so a wholesale overwrite would erase the declines it had just
+ * honoured. The instance would then re-propose them on the next run — the exact
+ * bug #735 exists to fix, reintroduced one layer down and much harder to see.
+ *
+ * Preserving unknown keys rather than an enumerated list is deliberate: a field
+ * added later is protected without anyone having to remember this function.
+ */
 export function writeInstanceCoreVersion(cwd: string, version: string): void {
-  writeFileSync(join(cwd, INSTANCE_CORE_FILE), serializeInstanceCoreVersion(version))
+  const path = join(cwd, INSTANCE_CORE_FILE)
+  let rest: Record<string, unknown> = {}
+  if (existsSync(path)) {
+    rest = { ...parseInstanceCoreManifest(path).raw }
+    delete rest.version // re-supplied by serializeInstanceCoreVersion, and first
+  }
+  writeFileSync(path, serializeInstanceCoreVersion(version, rest))
 }
 
 /**

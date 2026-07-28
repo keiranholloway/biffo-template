@@ -599,6 +599,27 @@ def test_a_duplicate_does_not_announce_the_run_a_second_time(client, publisher):
     assert publisher.events == [], "the duplicate must not re-request the run"
 
 
+def test_the_key_is_readable_back_so_the_guard_is_observable(client):
+    """A duplicate that was correctly collapsed and a run that never had a twin
+    look identical in every admin view unless the key is exposed. Without this
+    the #661 mechanism cannot be confirmed to have engaged on a real deployment
+    — which is the only place the race actually happens."""
+    key = "fan-in:chain-observable:synthesis"
+    created = _create(client, idempotency_key=key)
+
+    assert created.json()["idempotency_key"] == key
+    assert client.get(f"{_RUNS}/{created.json()['id']}").json()["idempotency_key"] == key
+
+
+def test_a_run_created_without_a_key_reports_null_not_a_missing_field(client):
+    """Guards the guard: a field that vanished when unset would make its absence
+    ambiguous — "no key" and "old response shape" must not look the same."""
+    body = client.get(f"{_RUNS}/{_create(client).json()['id']}").json()
+
+    assert "idempotency_key" in body
+    assert body["idempotency_key"] is None
+
+
 def test_creation_without_a_key_still_creates_and_announces(client, publisher):
     """Most callers pass no key. Their behaviour must be untouched — two
     requests are two runs, each announced."""

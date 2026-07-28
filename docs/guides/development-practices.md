@@ -135,6 +135,9 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **Two RLS policies compose, and the inner table gates the outer one.** `users_read` decides visibility by reading `tabsii.user_role_assignments`, which has its own RLS requiring `user_role_assignments.read`. A caller without that permission therefore sees **nobody, including themselves** — the outer policy looks broken while the real cause is a missing grant one table down. A test fixture whose role held no permissions produced empty reads that looked like a tenancy bug | **boundary** | tabsii-platform [#277](https://github.com/tabsii-com/tabsii-platform/pull/277) | tabsii-platform tests + the property itself is by design | **fixed** in the fixture; the composition is now documented where the next person will hit it |
 | — | **`str(make_url(...))` renders the password as a literal `***`.** SQLAlchemy masks it in the string form, so a DSN assembled that way looks correct in every log line and cannot authenticate. Cost one CI round trip on `InvalidPasswordError`. `render_as_string(hide_password=False)` is the spelling that carries it. Benign only by luck here — the tests failed loudly on connect, but a masked DSN that happened to connect as the owner would have passed them all while proving nothing | **visibility** | tabsii-platform [#277](https://github.com/tabsii-com/tabsii-platform/pull/277) | tabsii-platform tests | **fixed** |
 | — | **The stale-base clobber recurred on the same file it was recorded in, the same week.** [#774](https://github.com/keiranholloway/biffo-template/pull/774) appended **3 lines** of prose to this page and deleted **93** — the entire *Skills used* table (48 rows of skill evidence, from every session that had run one) and *Adding a row*, the section that tells the next person how to contribute. Its commit message describes only an extractor change and never mentions the deletion; CI was green; no conflict was raised. The scoreboard already carried *"3 sessions' documentation deleted by one stale-base merge — 215 insertions, 322 deletions, no conflict"*, and the recurrence removed the very table that records whether practices are working | **process** · visibility | biffo-template `docs/guides/development-practices.md` | biffo-template — the editing convention still does not exist | **restored** here from `dab7c79^`; the *cause* is **open** — nothing detects a docs PR whose deletions dwarf its insertions |
+| — | **A debug convenience keyed on an environment *name* copied the most sensitive columns into a store with a completely different access boundary.** `create_async_engine(..., echo=settings.environment == "dev")` — and SQLAlchemy's echo does not log statements, it logs statements **with their bound parameters**. Every deployed dev environment therefore wrote clear-text agent transcripts (`agent_runs.messages`), result payloads, the founder-profile snapshot inside each `input_payload`, and `owner_sub` beside the rows it owns into CloudWatch: **135 parameter-payload lines in one 48-hour sample**, the same in a second instance's account, retention **365 days**. The severity is not verbosity, it is that `logs:FilterLogEvents` is granted far more widely than RDS access and no log group's *name* says it holds user content — so it silently undid a seam Core fails **closed** on, `/api/v1/internal/*` correctly refusing a non-allowlisted principal while the same rows sat readable in the log group. `dev` is a shared deployment, not a laptop; a setting that infers "safe to dump data" from an environment string cannot tell the difference | **boundary** · visibility | biffo-platform [#85](https://github.com/keiranholloway/biffo-platform/issues/85), also live in tabsii-platform | biffo-template `services/api` ([#784](https://github.com/keiranholloway/biffo-template/pull/784)) | **fixed** upstream — explicit `sql_echo`, off everywhere, plus `hide_parameters=True`. Reaches instances only via `biffo core upgrade`; the **already-written logs in both accounts are untouched** and purging them is still **open** |
+| — | **The reported caller was 1 of 4, and the one nobody reported was the dangerous one.** The `echo` leak above was reported against the request-path engine. Three further `create_async_engine` calls had no `hide_parameters` — and `db_app_role.py` runs `CREATE ROLE … PASSWORD`, so a failing statement there puts the app role's generated password in a `StatementError` traceback. That route was never controlled by `echo` at all: SQLAlchemy embeds bound values in `StatementError` messages whether echo is on or off, so "turn the flag off" would have closed the reported hole and left a worse one open in a file nobody was looking at. This is the same shape as the `is_active` drift row (#621) and the "known trap fixed for one workflow by name" row — **a fix scoped to the reporter's symptom rather than the defect's class** | **drift** | biffo-template `services/api` (4 engines) | biffo-template ([#784](https://github.com/keiranholloway/biffo-template/pull/784)) | **fixed** — the guard walks the AST for *every* `create_async_engine`/`create_engine` under `src/` and `migrations/`, so a new engine without the flag fails the test rather than relying on a hand-kept list |
+
 ### What the classes say
 
 > Counted from `docs/practices/evidence.jsonl`, not asserted. Regenerate with
@@ -222,27 +225,33 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **102 rows** (`node scripts/practices-evidence.mjs --report` — never typed by hand, see *Adding a row*):
+`byFixRepo`, regenerated at **104 rows** (`node scripts/practices-evidence.mjs --report` — never typed by hand, see *Adding a row*):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 67 of 102 (66%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 10 of 102 (10%) | Divergence ratchet, repo settings, the RLS lane and the tests on it |
-| **biffo-platform** | 5 of 102 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 102 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-plugin-idea-scout** | 4 of 102 | Adapter seam, research search capability, its own styling |
-| **tabsii-marketplace** | 2 of 102 | `python-jose` removal; the credential-dependent build |
-| **biffo-plugin-ideation** | 1 of 102 | A UI rendering a 500 as an empty state |
-| **biffo-runners** | 1 of 102 | Runner fleet docs + fail-fast |
+| **biffo-template** | 69 of 104 (66%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
+| **tabsii-platform** | 10 of 104 (10%) | Divergence ratchet, repo settings, the RLS lane and the tests on it |
+| **biffo-platform** | 5 of 104 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 104 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-idea-scout** | 4 of 104 | Adapter seam, research search capability, its own styling |
+| **tabsii-marketplace** | 2 of 104 | `python-jose` removal; the credential-dependent build |
+| **biffo-plugin-ideation** | 1 of 104 | A UI rendering a 500 as an empty state |
+| **biffo-runners** | 1 of 104 | Runner fleet docs + fail-fast |
 
-**`biffo-template` takes 67 of 102 — 66%, and the slide is now a trend rather
-than noise.** It was 86% at 50 and 57 rows, 82% at 65, 70% at 94, 66% now. The
-rows landing elsewhere are increasingly *instances building test infrastructure
-the template does not offer* — `tabsii-platform` has gone from 3 to 10, and the
-newest six are its RLS lane and the tests on it. That is a different claim from
-the original "instances surface what the template must fix": satellites are
-starting to carry capability, not just symptoms. Worth watching rather than
-concluding from — a single session added six of those ten.
+**`biffo-template` takes 69 of 104 — 66%, and the slide has stopped rather than
+continued.** It was 86% at 50 and 57 rows, 82% at 65, 70% at 94, and 66% at both
+102 and 104. The rows landing elsewhere are increasingly *instances building test
+infrastructure the template does not offer* — `tabsii-platform` has gone from 3
+to 10, and the newest six are its RLS lane and the tests on it. That is a
+different claim from the original "instances surface what the template must fix":
+satellites are starting to carry capability, not just symptoms. Worth watching
+rather than concluding from — a single session added six of those ten.
+
+**Both rows added at 104 surfaced in an instance and landed here**, which is the
+older pattern reasserting itself: the SQL-echo exposure was found in
+`biffo-platform` (and independently live in `tabsii-platform`) and could only be
+fixed in `services/api/` upstream — the instance's own ownership guard said so
+and refused the patch. `surfacedNotFixedHere` is now **61 of 104**.
 
 > **This block was wrong on `dev` until 2026-07-28**, and the way it was wrong is
 > the lesson: it simultaneously read "at **65 rows**", a table of "of **89**",
@@ -860,6 +869,12 @@ the cost of confirming was seconds.
 
 **Asking "did it actually publish?" rather than "is it configured?".** Registering the trusted publisher was necessary and looked like the last step; the package would still never have published again. Only checking for an actual run — three tags, zero runs — found that the trigger could not fire. A configuration screenshot is not a release.
 
+**The core-ownership guard did exactly what it exists for, on a security fix.** A sub-agent went to patch the SQL-echo exposure in `biffo-platform` and was stopped: `services/api/` is template-owned. The instinct on a security fix is to route around a guard — the guard was right, the patch belonged upstream, and landing it in the instance would have produced a fix that the next `biffo core upgrade` silently reverted while everyone believed it was closed. The agent stopped, posted the full patch on the issue, and said it was blocked rather than improvising.
+
+**Writing the test to observe the leak, not to assert the flag.** The obvious test for "echo is off" reads `engine.echo` — and would pass against a build where the flag no longer controlled anything. The test that earned its place executes a statement carrying a secret and reads what the `sqlalchemy.engine.Engine` logger actually emitted; without the fix it fails with `assert 'founder-pro...never-appear' not in "BEGIN (impl...,)"`, which is the exposure itself, reproduced. It also takes `hide_parameters` from the shipped engine rather than hard-coding `True`, so it cannot pass by testing SQLAlchemy instead of Biffo.
+
+**Distrusting a sub-agent's scoping, not just its facts.** The agent's report was accurate on every claim it made, and its patch was still too narrow — it fixed the engine that was reported. Re-deriving the scope found three more engines, one of which handles `CREATE ROLE … PASSWORD`. Checking a delegated result means checking what it *left out*, which no amount of verifying its assertions would have surfaced.
+
 ## What needs more thought
 
 **The §1 discipline is written about tickets, and the expensive miss this session
@@ -1454,6 +1469,9 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-workflow` | **worked** | Invoked deliberately after two sessions of recording "should have been invoked". Step 6's guard check caught that `.github/` is template-owned **before** the push, so the `Core-Divergence:` trailer was added in the same commit rather than after a rejected CI run — the commit-time hook did not fire, and only running `sh scripts/biffo.sh check ownership` by hand surfaced it. |
 | `biffo-workflow` | **partial** | Step 4 says confirm the remote has your commit, and `git log origin/<branch> -1` satisfies it while proving nothing about the tree. A `git commit --amend -F msg.txt` with nothing staged then sent CI a byte-identical broken file, and the repeated failure read as "the fix did not work". The step should name the content check (`git show origin/<branch>:<path>`), because the failure it guards against is exactly a changed message over an unchanged tree. |
 | `biffo-workflow` | **worked** | Step 7's `--auto` warning earned its place in the negative: `RLS (real Postgres)` was not yet a *required* context, so `--auto` would have merged a PR with the lane red. Disabling auto-merge by hand and waiting was the right call, and the durable fix (making it required) came from the same reasoning the step already contains. |
+| `biffo-verify` | **worked — §3 was the whole value, and §7 was the honest half** | Reverting the implementation and keeping the tests turned four assertions into four *demonstrations*, one of which printed the leak itself (`assert 'founder-pro...never-appear' not in "BEGIN (impl...,)"`). §7 then did the unglamorous part: the PR says plainly that nothing is verified on a deployed instance and that 365 days of already-written transcripts are untouched, rather than letting a merged security fix imply the exposure is closed. |
+| `biffo-verify` | **partial — §8 has no step for checking a *delegated* result's scope** | The sub-agent's claims were all true and its patch was still too narrow: it fixed the one engine that was reported, leaving three without `hide_parameters`, including the one running `CREATE ROLE … PASSWORD`. Every §1–§7 step is about verifying assertions; none prompts *"what did this agent not look at?"*. Re-deriving the scope independently is what found the other three, and the skill should say so where it discusses trusting agent output. |
+| `biffo-workflow` | **worked** | §9's ownership boundary was load-bearing rather than procedural. The sub-agent hit the core-ownership guard in `biffo-platform`, correctly read it as "this belongs upstream", and stopped with the patch posted on the issue instead of routing around a guard on a security fix — which would have produced a fix the next `biffo core upgrade` silently reverted. |
 
 ## Adding a row
 

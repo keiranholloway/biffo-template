@@ -1316,6 +1316,26 @@ three separate round trips.
 
 ## What needs more thought
 
+**Findings are captured and published in one step, so neither happens.** Writing
+down "a saved plan is a zip, `strings | grep` cannot see inside it" costs about
+ten seconds. Landing it costs a worktree, a commit, a PR into a protected branch
+and a merge wait. §8 only describes the second, so at every decision point the
+free action — start the next task — beat the expensive one, and the ten-second
+version never happened either. Then compaction hit: those six findings survived
+only because the summary happened to carry them, which is luck, not process.
+
+The measurable cost is not the delay, it is the **weight of the evidence**. An
+estimate rebuilt two hours later under "you should have done this already"
+pressure is not the same datum as one written at the time, and the dashboard
+currently cannot tell them apart — 19% of today's entries are reconstructed and,
+until this edit, only the ones other sessions volunteered were marked.
+
+**No fix is proposed here.** The obvious one — separate capture from publication
+— is a guess from a single incident, and picking it now would be exactly the
+ad-hoc change this programme exists to replace. It is listed as evidence for the
+review to weigh against the other rows, not as an action.
+
+
 **Nothing decompresses an artefact before scanning it for secrets.** `gitleaks` reads blobs, `.gitignore` matches paths, and both are defeated by a credential inside a zip — which is what a Terraform plan file is. This is not specific to `tfplan`: any committed archive, fixture tarball or vendored bundle is a blind spot, and the only reason nothing leaked was a manual `unzip`. A pre-commit step that expands known archive types before scanning would close it; nothing does today.
 
 **No signal distinguishes "merged in the plugin repo" from "running on dev".** A change sat undeployed for a full working day and was found only because unrelated work forced a resync. The information exists — the vendored copy's content versus the plugin repo's `dev` — and nothing compares them. A scheduled drift check reporting "services/ideation is 3 commits behind" would have caught it on the first morning.
@@ -2083,6 +2103,7 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **worked** | §2 stopped a wrong filing: the challenger's stored row looked inert because `service.run_chat_turn` passes `system_prompt` and `model` into the adapter. Reading the adapter showed it sends neither — Core resolves both from the registration — so the row IS authoritative and the real defect is two dead parameters. An issue was about to be raised on the wrong premise. |
 | `biffo-verify` | **worked — §1 is the reason a security issue got de-escalated instead of "fixed"** | "Establish the current state before writing anything", applied to an issue's *framing* rather than to whether the work existed. `biffo-platform-app#4` said authorization bypass; three server-side layers already enforced and the exposure was an inert 428-byte shell. §1 usually reads as "check whether someone already did it"; this is the other half — **check whether the defect is what the ticket says it is**, which is worth adding to the step. |
 | `biffo-verify` | **worked — §4, on the half that keeps being skipped** | Artifact inspection said the admin UI shipped; the page was blank. This session the check became two: hash **matched against a prediction stated before the deploy**, then **fetch the served bundle and grep it for the change**, with the previous bundle as a control. §4 as written stops at "is the deployed artifact what I think"; the second step — *does the deployed artifact contain the change* — is where both of today's deploy defects hid. |
+| `biffo-verify` | **failed — §8 did not fire at all until the operator asked, twice in one day** | Six findings from ~2h20m of work sat unrecorded. §8 hangs off "when you finish the task", and this session had no finishes: every unit ended with the operator handing over the next one. The trigger is bound to an event the work never produced. The operator had already corrected this the same day (~14:00, "was that effort logged? that is pretty dire") and the behaviour returned within three hours, so it is the default rather than a lapse. **Not a personal slip:** 5 of 26 effort entries logged today (19%) were reconstructed after the fact, 4 of them marked `MISSED UNIT, logged retrospectively` by other sessions. |
 | `biffo-verify` | **partial — the Never list needs a rule about compressed artefacts** | "Never treat absence of evidence as evidence" is there, and I still ran `strings \| grep` over a **zip** and reported it clean. A saved Terraform plan contains the full state; the live GitHub App private key was inside. The existing rule is about *empty search results*; this is about **a search that cannot see**. Proposed: *decompress before you scan, or say you did not scan.* |
 | `biffo-workflow` | **worked** | §9's resync discipline, three times in one session, each with `diff -rq` plus a sorted `jq` diff against source before committing. It is also what surfaced #58 sitting undeployed for a day — the parity check found `effective_config.py` missing entirely, which no other step would have reported. |
 

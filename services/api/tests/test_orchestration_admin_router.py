@@ -1592,7 +1592,7 @@ def test_agent_delivery_survives_in_definition_snapshot():
             await conn.run_sync(Base.metadata.create_all)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
-            run = await create_run(
+            run, _ = await create_run(
                 session,
                 tenant_id="default",
                 agent_name="a",

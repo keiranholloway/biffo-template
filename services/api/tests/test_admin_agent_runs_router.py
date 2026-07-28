@@ -112,7 +112,7 @@ async def _seed(
     have deterministic, distinct timestamps.
     """
     async with session_factory() as session:
-        run = await create_run(
+        run, _ = await create_run(
             session,
             tenant_id=tenant_id,
             agent_name=agent_name,

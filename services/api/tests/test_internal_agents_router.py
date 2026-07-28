@@ -567,6 +567,54 @@ def test_reaping_twice_reaps_once(client, publisher, monkeypatch):
     assert publisher.events == []
 
 
+# ── Idempotent creation (#661) ───────────────────────────────────────────────
+#
+# The DB-level race is covered in test_agent_run_idempotency.py. These assert the
+# two things only the HTTP layer decides: the status code a duplicate gets, and
+# whether it re-announces a run it did not create.
+
+
+def test_a_duplicate_key_returns_the_first_run_with_200_not_a_second_run(client):
+    first = _create(client, idempotency_key="fan-in:chain-1:synthesis")
+    assert first.status_code == 201
+
+    second = _create(client, idempotency_key="fan-in:chain-1:synthesis")
+
+    assert second.status_code == 200, "a duplicate is not a creation"
+    assert second.json()["id"] == first.json()["id"]
+    assert len(client.get(_RUNS).json()) == 1
+
+
+def test_a_duplicate_does_not_announce_the_run_a_second_time(client, publisher):
+    """The load-bearing half. Re-announcing would dispatch the same work twice —
+    `claim_run` survives that (§5), but only by paying for an invocation that
+    exists solely to discover it lost. #661 is a billing defect; emitting again
+    would leave half of it unfixed."""
+    _create(client, idempotency_key="fan-in:chain-2:synthesis")
+    publisher.events.clear()
+
+    resp = _create(client, idempotency_key="fan-in:chain-2:synthesis")
+
+    assert resp.status_code == 200
+    assert publisher.events == [], "the duplicate must not re-request the run"
+
+
+def test_creation_without_a_key_still_creates_and_announces(client, publisher):
+    """Most callers pass no key. Their behaviour must be untouched — two
+    requests are two runs, each announced."""
+    publisher.events.clear()
+
+    first = _create(client)
+    second = _create(client)
+
+    assert first.status_code == second.status_code == 201
+    assert first.json()["id"] != second.json()["id"]
+    assert [e.detail_type for e in publisher.events] == [
+        "agent.run.requested",
+        "agent.run.requested",
+    ]
+
+
 def test_reap_is_not_shadowed_by_the_run_id_routes(client):
     # `/reap` is a literal segment where `{run_id}` also lives. If FastAPI ever
     # matched it as a run id, the sweep would silently 404 instead of running.

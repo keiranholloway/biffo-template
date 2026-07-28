@@ -83,7 +83,8 @@ async def run_chat_turn(
     }
     # A user-invoked run in a thread (ADR-0014 §6). No workflow, no event: the
     # synchronous path is request -> run, so this does not emit agent.run.requested.
-    run = await create_run(
+    # No idempotency key: this is the synchronous path, one run per user turn.
+    run, _ = await create_run(
         db,
         tenant_id=tenant_id,
         agent_name=agent.agent_name,

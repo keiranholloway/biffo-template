@@ -35,6 +35,11 @@ class CreateAgentRunRequest(BaseModel):
     depth: int = Field(default=0, ge=0)
     workflow_run_id: str | None = Field(default=None, max_length=36)
     thread_id: str | None = Field(default=None, max_length=36)
+    # Opt-in create-or-get (#661). A caller reached by at-least-once delivery
+    # that can name this work deterministically passes a key; a second create
+    # with the same key returns the first run and 200 instead of a second run,
+    # a second invoice, and a discarded result.
+    idempotency_key: str | None = Field(default=None, max_length=255)
 
 
 class ThreadMessagesResponse(BaseModel):

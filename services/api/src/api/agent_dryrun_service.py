@@ -91,7 +91,9 @@ async def start_dry_run(
         snapshot["max_turns"] = request.max_turns
 
     try:
-        run = await create_run(
+        # No idempotency key: a preview is explicitly requested each time, so a
+        # second request is a second preview, not a duplicate to collapse.
+        run, _ = await create_run(
             db,
             tenant_id=tenant_id,
             agent_name=request.agent_name,

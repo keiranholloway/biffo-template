@@ -138,20 +138,25 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **A debug convenience keyed on an environment *name* copied the most sensitive columns into a store with a completely different access boundary.** `create_async_engine(..., echo=settings.environment == "dev")` — and SQLAlchemy's echo does not log statements, it logs statements **with their bound parameters**. Every deployed dev environment therefore wrote clear-text agent transcripts (`agent_runs.messages`), result payloads, the founder-profile snapshot inside each `input_payload`, and `owner_sub` beside the rows it owns into CloudWatch: **135 parameter-payload lines in one 48-hour sample**, the same in a second instance's account, retention **365 days**. The severity is not verbosity, it is that `logs:FilterLogEvents` is granted far more widely than RDS access and no log group's *name* says it holds user content — so it silently undid a seam Core fails **closed** on, `/api/v1/internal/*` correctly refusing a non-allowlisted principal while the same rows sat readable in the log group. `dev` is a shared deployment, not a laptop; a setting that infers "safe to dump data" from an environment string cannot tell the difference | **boundary** · visibility | biffo-platform [#85](https://github.com/keiranholloway/biffo-platform/issues/85), also live in tabsii-platform | biffo-template `services/api` ([#784](https://github.com/keiranholloway/biffo-template/pull/784)) | **fixed** upstream — explicit `sql_echo`, off everywhere, plus `hide_parameters=True`. Reaches instances only via `biffo core upgrade`; the **already-written logs in both accounts are untouched** and purging them is still **open** |
 | — | **The reported caller was 1 of 4, and the one nobody reported was the dangerous one.** The `echo` leak above was reported against the request-path engine. Three further `create_async_engine` calls had no `hide_parameters` — and `db_app_role.py` runs `CREATE ROLE … PASSWORD`, so a failing statement there puts the app role's generated password in a `StatementError` traceback. That route was never controlled by `echo` at all: SQLAlchemy embeds bound values in `StatementError` messages whether echo is on or off, so "turn the flag off" would have closed the reported hole and left a worse one open in a file nobody was looking at. This is the same shape as the `is_active` drift row (#621) and the "known trap fixed for one workflow by name" row — **a fix scoped to the reporter's symptom rather than the defect's class** | **drift** | biffo-template `services/api` (4 engines) | biffo-template ([#784](https://github.com/keiranholloway/biffo-template/pull/784)) | **fixed** — the guard walks the AST for *every* `create_async_engine`/`create_engine` under `src/` and `migrations/`, so a new engine without the flag fails the test rather than relying on a hand-kept list |
 
+| — | **Reading correct data through a self-attached label, and inverting its meaning — twice in one day.** `aws sesv2 get-account` was queried with `ProductionAccessEnabled` aliased to a jq key named `sandbox`; it returned `false`, which was read as *"sandbox: false → out of the sandbox"* when it means production access is **disabled**. The account is sandboxed and can email only verified identities. That advice then shaped a plan for tabsii-crm#52. Earlier the same day, `id -nG` was read as the user's group memberships (it is the calling **process's** inherited set) and produced "not in the docker group" for a user who was. **Neither was a wrong command — both were the right data under a name the reader had chosen, and the name won over the field** | **visibility** | diagnostic practice (tabsii-platform, this machine) | practice — never alias a field to a word that could mean its negation | **corrected** in tabsii-platform#286's body and here; the *class* is unfiled and has now recurred once |
+| — | **A harness that exists and a harness that covers are different claims.** tabsii-crm#65 read as "no E2E harness" for three weeks while a full Playwright setup sat in CI — real static export, real browser, containerised job. Its only spec drove a **test-only route** that renders `null` outside E2E and mounts one component with inline fixtures, so against the issue's own goal ("the real app shell, navigation, API wiring, and user journey together") it covered **none of the four**. `e2e/fixtures.ts` said so in its header. The issue's first two acceptance boxes were tickable and its purpose was not met | **fail-open** · visibility | tabsii-crm [#65](https://github.com/tabsii-com/tabsii-crm/issues/65) | tabsii-crm [#116](https://github.com/tabsii-com/tabsii-crm/pull/116) | **fixed** — signed-in fixture + 5 flows through the real shell; the acceptance criteria now match the purpose |
+| — | **The data an email needed was in hand and simply not published.** tabsii-crm#52 ("the invitation email must name the granted role and scope") was framed as an email-delivery problem needing SES work. Half of it was an **event-payload** problem needing none: `invite()` looks the role up for its tenant and holds the scope column it is about to insert, and `user.invited` carried `role_id` (a UUID) and no scope at all — so a custom SES send, a Cognito `CustomMessage` Lambda and the orchestration engine this instance already runs all had nothing to render. **An issue's stated blocker can hide an unblocked half** | **visibility** | tabsii-crm [#52](https://github.com/tabsii-com/tabsii-crm/issues/52) | tabsii-platform [#286](https://github.com/tabsii-com/tabsii-platform/pull/286) | **fixed** — `role_name`/`scope_kind`/`scope_label` declared and emitted; the email itself still waits on DNS + production access |
+| — | **`allow_auto_merge` is `false` on `tabsii-crm` while every other active repo has it `true`.** `gh pr merge --auto` does not degrade — it is **rejected outright** (`Auto merge is not allowed for this repository`), so a wait-loop built on it reports failure and the PR sits unmerged until someone notices. This page already carries a row saying the setting was aligned across repos on 2026-07-27; that claim is now stale in one repo, and nothing reconciles "settings we believe are set" against "settings that are set" | **drift** · process | tabsii-crm [#116](https://github.com/tabsii-com/tabsii-crm/pull/116) | tabsii-crm settings — **deliberately not changed**: `biffo-workflow` records tabsii-crm as the `strict` comparator for H3 and it is unclear whether auto-merge is part of that | **open** — flagged on the issue, decision left with the owner |
+| — | **An issue can be complete and open, with nothing detecting it — including its own author.** tabsii-crm#100's two remaining milestones both shipped (#112, tabsii-platform#267). A comment was left saying M1 was "pending the remaining PR checks", the PR merged, and nobody returned. Found only by habitually re-listing open issues after an unrelated merge. This is the same drift the whole backlog pass existed to correct, committed *during* that pass | **process** · visibility | tabsii-crm [#100](https://github.com/tabsii-com/tabsii-crm/issues/100) | practice — re-check issues whose PRs merged, not just issues you edited | **fixed** — closed with evidence re-verified rather than recalled (the deployed bundle hash had changed since the earlier check) |
 ### What the classes say
 
 > Counted from `docs/practices/evidence.jsonl`, not asserted. Regenerate with
-> `node scripts/practices-evidence.mjs --report`. **102 rows** — the extractor's
+> `node scripts/practices-evidence.mjs --report`. **109 rows** — the extractor's
 > count still **equals the table's count**, now across a merge that had to be
 > reconciled by hand. See below.
 
 | Primary class | Rows |
 | --- | --- |
-| **visibility** | 30 |
-| fail-open | 21 |
-| drift | 21 |
-| boundary | 17 |
-| process | 13 |
+| **visibility** | 32 |
+| drift | 23 |
+| fail-open | 22 |
+| boundary | 18 |
+| process | 14 |
 
 **The extractor and the table now reconcile, and the cause was findable all
 along.** This page twice recorded that `--extract` "silently drops a row it
@@ -225,27 +230,35 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **104 rows** (`node scripts/practices-evidence.mjs --report` — never typed by hand, see *Adding a row*):
+`byFixRepo`, regenerated at **109 rows** (`node scripts/practices-evidence.mjs --report` — never typed by hand, see *Adding a row*):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 69 of 104 (66%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 10 of 104 (10%) | Divergence ratchet, repo settings, the RLS lane and the tests on it |
-| **biffo-platform** | 5 of 104 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 104 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-plugin-idea-scout** | 4 of 104 | Adapter seam, research search capability, its own styling |
-| **tabsii-marketplace** | 2 of 104 | `python-jose` removal; the credential-dependent build |
-| **biffo-plugin-ideation** | 1 of 104 | A UI rendering a 500 as an empty state |
-| **biffo-runners** | 1 of 104 | Runner fleet docs + fail-fast |
+| **biffo-template** | 69 of 109 (63%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
+| **tabsii-platform** | 11 of 109 (10%) | Divergence ratchet, repo settings, the RLS lane and the tests on it, the invite event's payload |
+| **biffo-platform** | 5 of 109 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 109 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-idea-scout** | 4 of 109 | Adapter seam, research search capability, its own styling |
+| **tabsii-marketplace** | 2 of 109 | `python-jose` removal; the credential-dependent build |
+| **tabsii-crm** | 2 of 109 | **First appearance** — its E2E harness, and a repo setting that diverged |
+| **biffo-plugin-ideation** | 1 of 109 | A UI rendering a 500 as an empty state |
+| **biffo-runners** | 1 of 109 | Runner fleet docs + fail-fast |
 
-**`biffo-template` takes 69 of 104 — 66%, and the slide has stopped rather than
-continued.** It was 86% at 50 and 57 rows, 82% at 65, 70% at 94, and 66% at both
-102 and 104. The rows landing elsewhere are increasingly *instances building test
-infrastructure the template does not offer* — `tabsii-platform` has gone from 3
-to 10, and the newest six are its RLS lane and the tests on it. That is a
-different claim from the original "instances surface what the template must fix":
-satellites are starting to carry capability, not just symptoms. Worth watching
-rather than concluding from — a single session added six of those ten.
+**`biffo-template` takes 69 of 109 — 63%, continuing a real slide:** 86% at 50
+and 57 rows, 82% at 65, 70% at 94, 66% at 102, 63% now. Five consecutive
+measurements in one direction is no longer noise.
+
+**`tabsii-crm` appears for the first time**, which is the more interesting
+change. Every previous satellite row was a *symptom* surfacing where someone hit
+it; these two are the repo owning something — an E2E harness it now maintains,
+and a repo setting only it can decide. Together with `tabsii-platform`'s rise
+from 3 to 11 (mostly its RLS lane and the tests on it), the shape is shifting
+from "instances surface what the template must fix" toward "instances carry
+capability the template does not offer".
+
+Worth watching rather than concluding from: one session contributed most of both
+increases, so the next few sessions decide whether this is a trend or an
+artefact of who was working.
 
 **Both rows added at 104 surfaced in an instance and landed here**, which is the
 older pattern reasserting itself: the SQL-echo exposure was found in
@@ -442,6 +455,8 @@ effort log exists to make visible, and this session logged it that way.
 | **3 `BEHIND` + full-CI cycles on a one-file docstring change** | #274 changed a migration docstring and nothing else. `dev` was absorbing merges from several concurrent sessions faster than a CI cycle completes, so the branch was invalidated three times before it could land. Making `RLS (real Postgres)` required — done earlier the same hour — lengthened that cycle by the lane's cold start and measurably widened the window | **structural, and the cost landed on the very next PR.** The right trade (the lane had caught two real defects by then), but the bill is immediate and falls on every PR including ones touching no Python |
 | **2 self-inflicted wait loops that reported false states** | One exited while every check was still `QUEUED` and printed "not merged"; another fired `update-branch` mid-run, which can cancel checks about to pass. Neither caused a wrong action — the merge decision is GitHub's — but both produced a readout that looked like a failure and had to be walked back | **fixed** in-session: the loop now breaks on exactly four terminal states (merged / a genuinely failing check / `BEHIND` **and settled** / keep waiting). Same class as the `gh pr checks --json` row above: **a poll you have not verified against a known state is indistinguishable from the thing it is polling** |
 | **~15 min re-deriving a conclusion the repo already held** | #207's blocker was diagnosed from scratch — read the four files, rule out the sibling destinations, identify the missing carve-out. `biffo.divergence.json`'s own entry for `nav.tsx` already said it: *"Product code with nowhere legitimate to go … there is no portal equivalent of ADR-0022's `domains/` carve-out, so #207 cannot relocate it."* A previous session had reached the answer and written it where it belonged | **avoidable** — the declaration file is a first-class record of *why*, not just *what*, and nothing in the §1 checklist points at it. Worth reading `biffo.divergence.json` reasons before investigating any ownership-boundary question |
+| **4 defects on one E2E file, found and fixed in ~20 min — the first measurement of what the docker fix is worth** | Building the signed-in harness surfaced four separate bugs: the board fixture is `{columns:[…]}` not `{stages,leads}` (a bare "client-side exception" naming no fixture), `Units` matching both the nav item and its collapse toggle, a created unit named "York Road" colliding with its own address "12 York Road", and shared fixture state across parallel workers. Each was a full local run of ~19s | **avoided cost, quantified.** The same four in the morning's regime — no local Postgres *or* browser — would have been **four CI round trips at 5–9 min each**, most of it spot-fleet queueing. The `sg docker` correction paid for itself within one task |
+| **1 PR merged by hand because `--auto` is rejected, not queued** | `tabsii-crm` has `allow_auto_merge=false`, so the armed merge failed immediately and the wait-loop reported failure while the PR sat green and unmerged. Cheap this time because the loop was watched; the failure mode is a green PR nobody merges | **open** — see the scoreboard row; the setting is deliberately untouched pending the H3 comparator question |
 ### The six hops are the root cost
 
 Every other row above is a *symptom* of the same shape: the chain from "merged
@@ -485,6 +500,28 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**Reading the component before writing the test, instead of probing it.** The
+onboarding wizard walk was written from `UnitOnboardingWizard.tsx`'s own
+declarations — four steps, `Next` on the first three, `Create unit` on the last,
+and `canContinue`'s per-step requirements — rather than discovered by trial. The
+first run reached the final step. A probe loop would have "worked" too, and would
+have absorbed a future flow change silently instead of failing on it.
+
+**§3 on an assertion about a request, not a return value.** The E2E claim "the UI
+cannot submit an owner, tenant or alternate brand" was proven by adding
+`brand_id: brandId` to the wizard's POST and watching it fail with *the wizard
+submitted a brand_id field*. The same property in a component test asserts what a
+handler was called with — not what crossed the wire, which is the thing the issue
+actually cares about.
+
+**A field-coverage guard, written because this page says one does not exist.**
+biffo-template#694 records that nothing asserts every declared event field is
+actually emitted. Applied to `user.invited`, that guard fails when a field is
+declared and never sent — the case that renders as an empty token in a workflow
+template, so the builder offers it, an author uses it, and the email ships with a
+blank where the role should be.
+
 
 **§1, applied to issues, was the highest-return step of the whole pass.** Ten
 open tabsii issues; checking each against the code rather than its title found
@@ -876,6 +913,28 @@ the cost of confirming was seconds.
 **Distrusting a sub-agent's scoping, not just its facts.** The agent's report was accurate on every claim it made, and its patch was still too narrow — it fixed the engine that was reported. Re-deriving the scope found three more engines, one of which handles `CREATE ROLE … PASSWORD`. Checking a delegated result means checking what it *left out*, which no amount of verifying its assertions would have surfaced.
 
 ## What needs more thought
+
+**Two misreads of the same shape in one day, and the class has no name.** Both
+`id -nG` and `ProductionAccessEnabled` were *correct data read through a label
+the reader had attached* — a jq key called `sandbox`, a mental model of `id` as
+"the user's groups" — and in both cases the label won over the field. Both then
+propagated: into a memory entry, a scoreboard row, a recommendation, a plan. The
+existing §1 discipline ("establish the current state") is written about tickets
+and code; nothing tells you to apply it to **an assertion you are about to make
+about your own environment**, which is exactly where both failures lived.
+
+**Nothing reconciles "settings we believe are set" with "settings that are set".**
+This page states that `allow_auto_merge` was aligned across repos on 2026-07-27.
+It is `false` on `tabsii-crm`. Neither the claim nor the drift is detectable
+without asking the API repo by repo, and the failure mode — `--auto` rejected
+rather than queued — produces a green PR that nobody merges.
+
+**An issue can be complete and open, and no mechanism notices.** tabsii-crm#100's
+milestones both shipped; the issue stayed open because the person who knew left a
+"pending checks" comment and never returned. Closing keywords do not help (they
+fire, or silently do not — both are already on this page). The gap is that
+*nothing re-reads an issue after the PR that finishes it merges*.
+
 
 **The §1 discipline is written about tickets, and the expensive miss this session
 was about the machine.** "Establish the current state before writing anything"
@@ -1472,6 +1531,10 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **worked — §3 was the whole value, and §7 was the honest half** | Reverting the implementation and keeping the tests turned four assertions into four *demonstrations*, one of which printed the leak itself (`assert 'founder-pro...never-appear' not in "BEGIN (impl...,)"`). §7 then did the unglamorous part: the PR says plainly that nothing is verified on a deployed instance and that 365 days of already-written transcripts are untouched, rather than letting a merged security fix imply the exposure is closed. |
 | `biffo-verify` | **partial — §8 has no step for checking a *delegated* result's scope** | The sub-agent's claims were all true and its patch was still too narrow: it fixed the one engine that was reported, leaving three without `hide_parameters`, including the one running `CREATE ROLE … PASSWORD`. Every §1–§7 step is about verifying assertions; none prompts *"what did this agent not look at?"*. Re-deriving the scope independently is what found the other three, and the skill should say so where it discusses trusting agent output. |
 | `biffo-workflow` | **worked** | §9's ownership boundary was load-bearing rather than procedural. The sub-agent hit the core-ownership guard in `biffo-platform`, correctly read it as "this belongs upstream", and stopped with the patch posted on the issue instead of routing around a guard on a security fix — which would have produced a fix the next `biffo core upgrade` silently reverted. |
+| `biffo-verify` | **worked** | §1 on tabsii-crm#52 found the stated blocker hid an unblocked half: the invite already knew the role and scope and published neither, so the payload work needed no SES at all. The issue had been read as "waiting on email infrastructure" for three weeks. |
+| `biffo-verify` | **worked** | §3 twice on assertions that are easy to write vacuously — the E2E security claim (proven by injecting `brand_id` into the wizard's POST) and the invite's declared-vs-emitted field guard (proven by declaring a field that is never sent). Both would have passed against the bug they name if written the obvious way. |
+| `biffo-verify` | **partial — §1 still does not cover claims about your own environment** | Recorded last session after the `id -nG` misread; it recurred within hours with `ProductionAccessEnabled` aliased to a jq key named `sandbox`. Both were correct data read under a self-chosen label that inverted the meaning, and both propagated into advice before being caught. The step says "establish the current state" and is written entirely about tickets and code. It needs a sentence about assertions you are about to make about the machine, the account, or the settings. |
+| `biffo-workflow` | **should have been invoked** | Followed by hand for tabsii-crm#116 and tabsii-platform#286 — fresh worktrees, deps synced, remote content verified, guards run. It held, but Step 7's `--auto` guidance would have caught `tabsii-crm`'s `allow_auto_merge=false` *before* arming a merge that was rejected outright; the skill explicitly says to confirm that setting rather than assume it. Missed because the work read as "write tests", not "land a change" — the same trigger-wording gap recorded twice before. |
 
 ## Adding a row
 

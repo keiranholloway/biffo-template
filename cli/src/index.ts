@@ -8,6 +8,7 @@ import { initCommand } from './commands/init.js'
 import { pluginCommand } from './commands/plugin.js'
 import { siblingCommand } from './commands/sibling.js'
 import { checkCommand } from './commands/check.js'
+import { doctorCommand } from './commands/doctor.js'
 import { teardownCommand } from './commands/teardown.js'
 import { getLatestCoreVersion } from './lib/core-version.js'
 import { NonInteractiveError, registerNonInteractive } from './lib/interactive.js'
@@ -55,6 +56,7 @@ program.addCommand(dataCommand)
 program.addCommand(coreCommand)
 program.addCommand(siblingCommand)
 program.addCommand(checkCommand)
+program.addCommand(doctorCommand)
 
 // `--non-interactive` is global: registered on the root program and on every
 // subcommand (Commander rejects unknown options on subcommands), so it may be

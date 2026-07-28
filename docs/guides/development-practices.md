@@ -176,6 +176,7 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | [ideation#58](https://github.com/keiranholloway/biffo-plugin-ideation/issues/58) | **A closing keyword on a satellite-repo PR closes the issue at *merge*, and in a plugin repo merge is not a deploy boundary.** `dev.biffo.io` serves the copy vendored in the instance, so #58 was auto-closed by [ideation#60](https://github.com/keiranholloway/biffo-plugin-ideation/pull/60) at 10:11:03 while the panel it was filed against was byte-for-byte unchanged. Seven hours later the reporter re-reported the same symptom. Nothing distinguishes "merged" from "reachable by the person who reported it", and the closing keyword asserts the stronger claim | **process** · visibility | biffo-plugin-ideation [#58](https://github.com/keiranholloway/biffo-plugin-ideation/issues/58) | biffo-platform resync [#101](https://github.com/keiranholloway/biffo-platform/pull/101); general fix is the preflight drift check ([#729](https://github.com/keiranholloway/biffo-template/issues/729)) | **open** — 4th recurrence of the resync row above. `cost ~35m` |
 | [ideation#65](https://github.com/keiranholloway/biffo-plugin-ideation/pull/65) | **A manifest key is silently ignored when a sibling flag is set, and the ignored copy was a full duplicate of a live prompt.** `chat_agents_dynamic: true` makes Core's `register_plugin_chat_agents()` `continue` past the entire manifest, so ideation's `chat_agents` block — 1221 bytes of `CHALLENGER_INSTRUCTIONS` — had never been read by anything. Nothing warns that a declared key is unreachable, and **no test could catch the unreachable copy drifting, because nothing executes it**. Still byte-identical when removed, so latent rather than realised | **drift** | biffo-plugin-ideation | biffo-plugin-ideation [#65](https://github.com/keiranholloway/biffo-plugin-ideation/pull/65) | **fixed** — block removed, regression test pins its absence |
 | [ideation#66](https://github.com/keiranholloway/biffo-plugin-ideation/pull/66) | **Two independent silent failures in one 40-line function, found hours apart because each surfaced through a different symptom.** The analyst ran on `anthropic/claude-opus-4-8` — absent from all 367 models OpenRouter serves — *and* depended on the `web_search` registry tool, which is only offered where a Brave key exists (this account's is the empty string). Either alone would have been invisible; together they meant competitive research was fabricated. The challenger's adjacent, valid `claude-sonnet-4` is what made it read as flakiness. **Neither was found by reading the module; each was found by chasing a separate report** | **fail-open** · drift | biffo-plugin-ideation | biffo-plugin-ideation [#66](https://github.com/keiranholloway/biffo-plugin-ideation/pull/66) + vendored resync [platform#104](https://github.com/keiranholloway/biffo-platform/pull/104) | **fixed** — `:online`, `tools` dropped, prompt forbids unsourced competitors |
+| — | **A self-reported effort figure was 45% low, and every incentive pointed the same way.** A 5.5-hour session was logged at 3 hours because the entry covered the last unit of work (the build) and silently omitted four completed earlier ones — two plans, an assessment, a third plan — each with its own PR and CI wait. The bias is **directional**: an agent reconstructs elapsed time from what is still in working memory, and finished work from the start of a long session is exactly what is not. So the error is always *low*, never high, which would make the inferred dashboard split look better-calibrated than it is — the precise failure the effort log exists to detect. Caught only because a human said "that was more like five hours" | **visibility** | biffo-template (the effort log) | practice — log each unit when its PR merges, not the session when it ends | **fixed** — four missing units logged retrospectively; §8 wording is right, the habit was not |
 
 ### What the classes say
 
@@ -264,24 +265,24 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **141 rows** (never typed by hand, see *Adding a row*):
+`byFixRepo`, regenerated at **142 rows** (never typed by hand, see *Adding a row*):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 78 of 141 (55%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 15 of 141 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
-| **biffo-plugin-idea-scout** | 7 of 141 | Adapter seam, research search capability, its own styling, release + publish workflows |
-| **biffo-platform** | 6 of 141 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 141 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **tabsii-marketplace** | 2 of 141 | `python-jose` removal; the credential-dependent build |
-| **tabsii-crm** | 2 of 141 | Its E2E harness, and a repo setting that diverged |
-| **biffo-plugin-ideation** | 3 of 141 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **biffo-runners** | 1 of 141 | Runner fleet docs + fail-fast |
+| **biffo-template** | 78 of 142 (55%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
+| **tabsii-platform** | 15 of 142 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
+| **biffo-plugin-idea-scout** | 7 of 142 | Adapter seam, research search capability, its own styling, release + publish workflows |
+| **biffo-platform** | 6 of 142 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 142 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **tabsii-marketplace** | 2 of 142 | `python-jose` removal; the credential-dependent build |
+| **tabsii-crm** | 2 of 142 | Its E2E harness, and a repo setting that diverged |
+| **biffo-plugin-ideation** | 3 of 142 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **biffo-runners** | 1 of 142 | Runner fleet docs + fail-fast |
 
-**`biffo-template` takes 78 of 141 — 55%.** The series: 86% at 50 and 57 rows,
+**`biffo-template` takes 78 of 142 — 55%.** The series: 86% at 50 and 57 rows,
 82% at 65, 70% at 94, 66% at 102, 63% at 109, 60% at 116 and 122, 58% at 126, 132
-and 134, 57% at 138. The absolute template count did **not** move this capture
-(78 → 78) while four rows landed elsewhere — the first capture where the template
+and 134, 57% at 138, 56% at 139. The absolute template count did **not** move
+across this capture (78 → 78) while five rows landed elsewhere — the first capture where the template
 absorbed none of the new work. One capture is not a trend, but it is the first
 evidence that the settling described above may be a genuine plateau rather than a
 slower slide.
@@ -633,8 +634,12 @@ run.
 
 ### Measured: one CRM feature across three repos, 2026-07-28
 
-**~3 hours wall clock, 9 PRs merged, one feature verified working end to end and
-one shipped inert.** The build was not the expensive part.
+**~5.5 hours wall clock, 12 PRs merged, one feature verified working end to end
+and one shipped inert.** The build was not the expensive part.
+
+> **This figure was first written as "~3 hours" and corrected by the operator.**
+> The correction is kept visible because it is the more useful finding — see
+> *The self-estimate was 45% low, and the cause was the unit* below.
 
 **The loop, not the keystrokes.** Nine PRs, each gated on a self-hosted fleet
 whose CI cycle is ~3–6 min but whose *queueing* was unbounded:
@@ -659,10 +664,6 @@ observable, and this feature needed the round trip **once** — the rest was
 avoided by putting the instance-specific half behind a generic registry, which
 is the design lesson worth keeping.
 
-**Where the time actually went:** roughly 60 min of building, 90 min of waiting
-on CI/deploy, and 30 min diagnosing a regression that did not exist (see the
-CloudWatch-attribution row). The last is the only genuinely wasted half hour,
-and it was caused by trusting an aggregate metric — a habit, not a tool gap.
 ### Measured: a fix that shipped, closed its issue, and reached nobody, 2026-07-28
 
 **~35 min, and the loop is one hop long.** The defect was found in ~10 minutes
@@ -730,6 +731,38 @@ empty diff that is indistinguishable from "already resynced" — a clean
 file for the string the change should have introduced. Had it shipped, the PR
 would have claimed a fix while carrying nothing: the same shape as the bug the
 session began with, one layer down.
+**Where the time actually went**, from the effort log once the missing units
+were added: **330 min — delivery 180, platform 45, toil 105.** The delivery half
+is three implementation plans, an assessment of three PRD requirements against a
+running system, three issues, and the feature itself. The toil is CI queue,
+deploy waits, and the recovery steps above.
+
+### The self-estimate was 45% low, and the cause was the unit
+
+The session was logged at **180 minutes**. The operator corrected it to 5–6
+hours; reconstructing from the log put it at **330**.
+
+The gap was not a bad guess about duration. It was **logging the task instead of
+the session**: the entry covered the build (`0007`) and silently omitted four
+earlier units of work that had already completed — two implementation plans, a
+three-requirement assessment against the deployed system, and a third plan. Each
+had its own PR and CI wait. Adding them retrospectively accounts for the missing
+150 minutes almost exactly.
+
+§8 says "one entry per unit of work", and that is precisely what went wrong: the
+last unit felt like *the* unit, because it was the one still in working memory
+when the log was written. An agent's sense of elapsed time is reconstructed from
+what it can still see, and completed work at the start of a long session is
+exactly what it can no longer see.
+
+**Two consequences worth acting on.** First, the bias is *directional* — always
+low, never high — so effort figures produced this way understate capacity spent
+and would make the inferred dashboard split look better-calibrated than it is.
+That is the specific failure this measurement exists to catch, and it caught
+itself only because someone said "that was more like five hours". Second, the
+fix is mechanical rather than exhortative: log each unit **when it completes**,
+not the session when it ends. Every one of the four missing entries was
+loggable at the moment its PR merged.
 
 ### What this is not
 
@@ -1897,6 +1930,15 @@ against what its deployment can supply. idea-scout hit the identical `web_search
 case (#19) and the fix was applied **only to idea-scout**, because nothing
 connects "this plugin declared it" to "every other plugin that also did".
 
+
+**The effort log's cadence is stated but not enforceable, and the error is
+one-directional.** §8 says "one entry per unit of work" and "run it when you
+finish the task". Nothing prompts at that moment, so in practice the log gets
+written once, at the end, from memory — and memory of a long session is
+dominated by its last unit. A five-and-a-half hour session was logged at three.
+Every mechanism that would fix this is cheap (log on merge; a post-merge
+reminder; deriving a floor from PR merge timestamps), and none exists. Until one
+does, every figure in this log should be read as a **lower bound**.
 
 ## Skills used
 

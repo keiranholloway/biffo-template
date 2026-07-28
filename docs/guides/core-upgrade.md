@@ -289,6 +289,31 @@ biffo core diff --to-template /tmp/biffo-template
   4 template-owned file(s) would change (1 modified, 3 added, 0 removed); 118 unchanged.
 ```
 
+### Machine-readable output
+
+Anything that consumes the *set* of diverged paths — divergence-declaration tooling, a governance check, an agent — should pass `--json` rather than parse the report above:
+
+```bash
+biffo core diff --json | jq -r '.modified[]'
+```
+
+```json
+{
+  "schemaVersion": 1,
+  "instanceCore": "0.140.1",
+  "templateCore": "0.148.2",
+  "modified": ["services/api/src/api/main.py"],
+  "added": ["services/api/src/api/permissions.py"],
+  "removed": [],
+  "instanceOnly": ["services/api/src/api/identity/acme.py"],
+  "unchanged": 118
+}
+```
+
+Parsing the prose instead fails **quietly and low**: a parse that drops a line reports *fewer* divergences than exist and looks authoritative doing it. That is not hypothetical — revalidating an instance's `biffo.divergence.json`, an extraction reported 4 undeclared files when the answer was 5, caught only because the section header happened to carry its own count.
+
+With `--json`, stdout carries the document and nothing else (errors go to stderr with a non-zero exit), so a failed run yields empty stdout rather than a truncated document. Note that `instanceOnly` is **not** `removed`: an upgrade deletes a path only when the template shipped it and later dropped it, so files your instance authored inside a template-owned tree are never at risk.
+
 ## 3. Open the upgrade PR
 
 `upgrade` three-way-merges base → yours → target so your local core edits survive. It **auto-resolves** both trees from the `core-v<version>` git tags — the base from your instance's current version, the target from the CLI's latest (or `--to <version>`) — so you don't supply any template checkouts:

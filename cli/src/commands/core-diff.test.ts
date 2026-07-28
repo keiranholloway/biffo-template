@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { capturedOutput } from '../test-utils/console.js'
-import { runCoreDiff } from './core-diff.js'
+import { type CoreDiffJson, runCoreDiff } from './core-diff.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -92,5 +92,80 @@ describe('runCoreDiff', () => {
     const out = output()
     expect(out).toContain('0.1.0')
     expect(out).toContain('0.2.0')
+  })
+
+  // #696 — the prose report was the only output, so consumers hand-parsed it and
+  // could silently under-report. These assert the parse is unnecessary.
+  describe('--json', () => {
+    /** Parse stdout as a whole. Throws if anything non-JSON was printed, which
+     * is the property under test — a banner or a success line makes the whole
+     * document unparseable, and that is exactly how a consumer would break. */
+    function json(): CoreDiffJson {
+      return JSON.parse(output()) as CoreDiffJson
+    }
+
+    it('classifies each bucket, keeping instance-only distinct from removed', async () => {
+      writeFileSync(join(instance, 'biffo.core.json'), JSON.stringify({ version: '0.1.0' }))
+      write(template, 'services/api/main.py', 'v2')
+      write(instance, 'services/api/main.py', 'v1') // modified
+      write(template, 'services/api/added.py', 'x') // added
+      write(instance, 'services/api/local.py', 'y') // instance-only, NOT removed (#689)
+      write(template, 'services/api/same.py', 'z') // unchanged
+      write(instance, 'services/api/same.py', 'z')
+      write(template, 'services/acme-crm/p.json', 'a') // user-owned, ignored
+      write(instance, 'services/acme-crm/p.json', 'b')
+
+      await runCoreDiff({ cwd: instance, templateRoot: template, json: true })
+
+      expect(json()).toEqual({
+        schemaVersion: 1,
+        instanceCore: '0.1.0',
+        templateCore: '0.2.0',
+        modified: ['services/api/main.py'],
+        added: ['services/api/added.py'],
+        removed: [],
+        instanceOnly: ['services/api/local.py'],
+        unchanged: 1,
+      })
+    })
+
+    it('emits only the JSON document — no banner, no prose, nothing to strip', async () => {
+      write(template, 'services/api/main.py', 'v2')
+      write(instance, 'services/api/main.py', 'v1')
+
+      await runCoreDiff({ cwd: instance, templateRoot: template, json: true })
+
+      // Exactly one console.log call, and it parses whole. The regression this
+      // guards is a later edit printing a header before the payload: the human
+      // report still looks right, and every consumer breaks at once.
+      expect(logSpy.mock.calls).toHaveLength(1)
+      expect(() => json()).not.toThrow()
+      expect(output()).not.toContain('Biffo core diff')
+      expect(output()).not.toContain('would change')
+    })
+
+    it('stays parseable when there are no changes at all', async () => {
+      // The prose path returns early through log.success here. That line goes to
+      // stdout, so a JSON caller would get `✔ No template-owned changes…` ahead
+      // of its document — the empty case is the one most likely to be mishandled
+      // and the one a consumer is least likely to test.
+      write(template, 'services/api/main.py', 'same')
+      write(instance, 'services/api/main.py', 'same')
+
+      await runCoreDiff({ cwd: instance, templateRoot: template, json: true })
+
+      expect(log.success).not.toHaveBeenCalled()
+      expect(json()).toMatchObject({ modified: [], added: [], removed: [], unchanged: 1 })
+    })
+
+    it('reports instanceCore as null when the instance records no version', async () => {
+      // Distinguishable from a version string, unlike the prose "(unrecorded)".
+      write(template, 'services/api/main.py', 'v2')
+      write(instance, 'services/api/main.py', 'v1')
+
+      await runCoreDiff({ cwd: instance, templateRoot: template, json: true })
+
+      expect(json().instanceCore).toBeNull()
+    })
   })
 })

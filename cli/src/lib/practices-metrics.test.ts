@@ -1134,6 +1134,64 @@ describe('mergeExtracted', () => {
     expect(merged).toHaveLength(2)
   })
 
+  /**
+   * Rewording must not read as delete-plus-add.
+   *
+   * Keeping orphans stopped three sessions' work disappearing, and immediately
+   * cost the opposite failure: matching on raw summary text meant editing a
+   * row's prose left the old wording behind as a duplicate, inflating every
+   * count derived from the dataset. This is the real case that appeared within
+   * a day — a single word wrapped in emphasis.
+   */
+  it('treats a row reworded only in formatting as the same row', () => {
+    const before = {
+      summary: 'the snapshot files it commits also exist on dev',
+      refs: [],
+      date: '2026-07-27',
+      costMinutes: 40,
+    }
+    const after = {
+      summary: 'the snapshot files it commits *also* exist on dev',
+      refs: [],
+      date: null,
+      costMinutes: null,
+    }
+
+    const merged = mergeExtracted([after], [before])
+
+    expect(merged).toHaveLength(1)
+    // And the enrichment survives the rewording, which is the whole point of
+    // matching at all.
+    expect(merged[0].date).toBe('2026-07-27')
+    expect(merged[0].costMinutes).toBe(40)
+  })
+
+  it('treats a substantively rewritten row as the same row when it cites the same issue', () => {
+    // refs are the closest thing to a real id the table has, and survive a
+    // rewrite that shares no wording at all.
+    const merged = mergeExtracted(
+      [{ summary: 'completely rewritten explanation', refs: ['owner/repo#714'], date: null }],
+      [{ summary: 'the original wording', refs: ['owner/repo#714'], date: '2026-07-01' }],
+    )
+
+    expect(merged).toHaveLength(1)
+    expect(merged[0].date).toBe('2026-07-01')
+  })
+
+  it('still orphans a row that is genuinely gone', () => {
+    // The protection must not become "never lose anything", or a deliberate
+    // deletion could never happen.
+    const orphans = orphanedRows(
+      [{ summary: 'a row that is still in the table', refs: [] }],
+      [
+        { summary: 'a row that is still in the table', refs: [] },
+        { summary: 'a row deleted on purpose', refs: [] },
+      ],
+    )
+
+    expect(orphans.map((r) => r.summary)).toEqual(['a row deleted on purpose'])
+  })
+
   it('reports which rows were orphaned, so a real deletion stays deliberate', () => {
     const orphans = orphanedRows(
       [{ summary: 'kept', date: null, costMinutes: null }],

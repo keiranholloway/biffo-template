@@ -199,10 +199,73 @@ export function extractRows(markdown) {
  * @param {Array<Record<string, any>>} fresh
  * @param {Array<Record<string, any>>} existing
  */
+/**
+ * A row's identity, independent of how its prose is currently worded.
+ *
+ * Matching on the raw summary made *rewording* a row look like deleting one and
+ * adding another: since orphans are kept (below), an edit as small as wrapping
+ * a word in `*emphasis*` left the old text behind as a duplicate and inflated
+ * every count derived from this file. That happened within a day of orphans
+ * being kept at all.
+ *
+ * Two keys, tried in order:
+ *
+ * 1. **refs** — the issue/PR links in the row's first column. Stable across any
+ *    rewrite, and the closest thing to a real id the table has. Only usable for
+ *    rows that cite something; a fifth of them are unfiled.
+ * 2. **normalised summary** — markdown stripped, whitespace collapsed, cased
+ *    down. Survives formatting churn (emphasis, backticks, a link added around
+ *    an issue number), which is what ordinary editing actually does to a row.
+ *
+ * A substantive rewrite of an unfiled row still reads as a new row plus an
+ * orphan. That is the honest answer: with no id and no shared text there is
+ * nothing left to match on, and the warning tells the author to prune it.
+ *
+ * @param {Record<string, any>} row
+ */
+export function rowKeys(row) {
+  const keys = []
+  if (Array.isArray(row.refs) && row.refs.length > 0) {
+    keys.push(`refs:${[...row.refs].sort().join(',')}`)
+  }
+  keys.push(`text:${normaliseSummary(row.summary)}`)
+  return keys
+}
+
+/**
+ * Strip the formatting an editor changes without changing the meaning.
+ *
+ * `[#714](https://…/714)` -> `#714`, `**bold**`/`*em*`/`` `code` `` -> the words
+ * inside, runs of whitespace -> one space.
+ *
+ * @param {string} summary
+ */
+export function normaliseSummary(summary) {
+  return String(summary ?? '')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[*`_]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+/** Index existing rows under every key they answer to. */
+function indexByKeys(rows) {
+  const index = new Map()
+  for (const row of rows) {
+    for (const key of rowKeys(row)) {
+      if (!index.has(key)) index.set(key, row)
+    }
+  }
+  return index
+}
+
 export function mergeExtracted(fresh, existing) {
-  const bySummary = new Map(existing.map((r) => [r.summary, r]))
+  const index = indexByKeys(existing)
   const merged = fresh.map((row) => {
-    const prior = bySummary.get(row.summary)
+    const prior = rowKeys(row)
+      .map((key) => index.get(key))
+      .find(Boolean)
     if (!prior) return row
     return {
       ...row,
@@ -237,8 +300,8 @@ export function mergeExtracted(fresh, existing) {
  * @param {Array<Record<string, any>>} existing
  */
 export function orphanedRows(fresh, existing) {
-  const freshSummaries = new Set(fresh.map((r) => r.summary))
-  return existing.filter((r) => !freshSummaries.has(r.summary))
+  const freshKeys = new Set(fresh.flatMap((r) => rowKeys(r)))
+  return existing.filter((r) => !rowKeys(r).some((key) => freshKeys.has(key)))
 }
 
 /** @param {string} file */

@@ -153,21 +153,31 @@ jobs:
           echo "OK: tarball ships tokens.css with $declared tokens"
           rm -f "$tarball" "$listing"
 
-      # Auth note: unlike @biffo/cli, this package cannot use npm trusted
-      # publishing yet — OIDC trust is registered against an *existing* package,
-      # and this one does not exist on the registry until its first publish. So
-      # the bootstrap uses the repo's existing NPM_TOKEN.
+      # Trusted publishing (OIDC) needs npm >= 11.5.1, and Node 22 still bundles
+      # npm 10.x. Without this npm never exchanges the OIDC token, silently
+      # falls back to a credential that is not there, and fails with a 404 that
+      # reads like a missing package — exactly what publish-cli.yml documents
+      # from #664, and exactly what this workflow's first run hit.
+      - name: Use an npm that supports trusted publishing
+        if: steps.guard.outputs.is_template == 'true' && !inputs.dry_run
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      # No NODE_AUTH_TOKEN, deliberately — same as @biffo/cli. npm exchanges the
+      # `id-token: write` credential this job already requests for a short-lived
+      # registry token, so there is no long-lived secret to expire or leak. The
+      # repo's NPM_TOKEN was tried first and returned 404; npm's own banner now
+      # says 2FA-bypassing tokens are being restricted (account changes Aug
+      # 2026, direct publishing Jan 2027), so that route was a dead end anyway.
       #
-      # FOLLOW-UP after the first successful publish: register a trusted
-      # publisher (npmjs.com → @biffo/design-tokens → Settings → Trusted
-      # Publisher, naming this repo and this workflow filename), then delete the
-      # NODE_AUTH_TOKEN line below so this package matches the CLI and depends
-      # on no long-lived secret.
+      # The trust is registered on the package: npmjs.com → @biffo/design-tokens
+      # → Settings → Trusted Publisher, naming this repository and this workflow
+      # filename. Renaming this file breaks publishing until that is updated.
       - name: Publish
         if: steps.guard.outputs.is_template == 'true' && !inputs.dry_run
         working-directory: packages/design-tokens
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
         run: |
           set -u

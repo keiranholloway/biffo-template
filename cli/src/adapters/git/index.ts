@@ -184,6 +184,57 @@ export class GitAdapter {
       // tokenized URL). Reference only the remote name.
       throw new Error(`Failed to push branch '${branch}' to remote '${remote}'.`)
     }
+    await this.setUpstreamAfterPush(cwd, branch, remote)
+  }
+
+  /**
+   * Record the pushed branch's upstream, the way `git push -u` would (#758).
+   *
+   * ## Why not just pass `-u`
+   *
+   * Because on the token path `target` is a **URL with the token embedded in
+   * it**, and `-u` persists whatever it pushed to into `.git/config` as
+   * `branch.<name>.remote`. That would write a live credential into the repo's
+   * config — permanently, in plain text — which is the precise leak `push`'s own
+   * contract promises never to allow. So the upstream is written by hand, always
+   * naming the *remote*, never the URL.
+   *
+   * ## Why it matters at all
+   *
+   * Without an upstream, a branch this tool created is invisible to **both**
+   * standard ways of finding a dead branch, at once:
+   *
+   *   - `git branch --merged <base>` misses it, because PRs are squash-merged
+   *     and the branch tip is never an ancestor of the base;
+   *   - `git branch -vv | grep ': gone]'` misses it, because there is no
+   *     upstream to be reported gone.
+   *
+   * `git branch -d` then refuses it too (not an ancestor), leaving only `-D`,
+   * which reads as unsafe. The result was 190 accumulated local branches across
+   * three repos, with nothing ever looking wrong. One flag's worth of metadata
+   * is the difference between that and a one-line cleanup.
+   *
+   * ## Why the remote-tracking ref is written too
+   *
+   * Pushing to a *URL* does not update `refs/remotes/<remote>/<branch>`, only
+   * pushing via a remote *name* does. Setting the config without that ref would
+   * make a freshly-pushed branch report `: gone]` immediately — marking a live
+   * branch dead, which is worse than the problem being fixed. The push just
+   * succeeded, so the remote is at `HEAD` by construction and the ref can be
+   * written offline.
+   *
+   * ## Why failures here are swallowed
+   *
+   * The push has already succeeded and the PR is about to be opened. Aborting
+   * now would fail an upgrade that actually landed. An upstream is a hygiene
+   * affordance, not correctness — the cost of missing it is a leftover branch,
+   * which is exactly the state this repo has lived in until now.
+   */
+  private async setUpstreamAfterPush(cwd: string, branch: string, remote: string): Promise<void> {
+    const opts = { cwd, reject: false } as const
+    await execa('git', ['update-ref', `refs/remotes/${remote}/${branch}`, 'HEAD'], opts)
+    await execa('git', ['config', `branch.${branch}.remote`, remote], opts)
+    await execa('git', ['config', `branch.${branch}.merge`, `refs/heads/${branch}`], opts)
   }
 }
 

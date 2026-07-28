@@ -221,4 +221,68 @@ describe('GitAdapter core-upgrade ops (ADR-0006 Phase 3b)', () => {
     )
     await expect(adapter.push('/r', 'biffo/x', { token: 'SECRET' })).rejects.not.toThrow(/SECRET/)
   })
+
+  // #758 — without an upstream the branch this tool creates is invisible to
+  // both `git branch --merged` (squash-merge) and `: gone]` (no upstream).
+  describe('push records the upstream (#758)', () => {
+    const argsOf = (verb: string, key?: string) =>
+      execaMock.mock.calls
+        .map((c) => c[1] as string[])
+        .filter((a) => a[0] === verb && (key === undefined || a[1] === key))
+
+    it('sets branch.<name>.remote and .merge, naming the remote', async () => {
+      execaMock.mockResolvedValue({} as never)
+      await adapter.push('/r', 'biffo/x')
+      expect(argsOf('config', 'branch.biffo/x.remote')[0]).toEqual([
+        'config',
+        'branch.biffo/x.remote',
+        'origin',
+      ])
+      expect(argsOf('config', 'branch.biffo/x.merge')[0]).toEqual([
+        'config',
+        'branch.biffo/x.merge',
+        'refs/heads/biffo/x',
+      ])
+    })
+
+    it('writes the remote-tracking ref, so a fresh branch is not reported gone', async () => {
+      // Pushing to a URL does not update refs/remotes/*, so without this a
+      // just-pushed branch reads as `: gone]` — a live branch marked dead.
+      execaMock.mockResolvedValue({} as never)
+      await adapter.push('/r', 'biffo/x')
+      expect(argsOf('update-ref')[0]).toEqual(['update-ref', 'refs/remotes/origin/biffo/x', 'HEAD'])
+    })
+
+    it('NEVER writes the tokenized URL into git config', async () => {
+      // The whole reason `-u` is not used: it would persist whatever it pushed
+      // to, and on this path that is a URL with a live credential in it.
+      execaMock
+        .mockResolvedValueOnce({ stdout: 'https://github.com/acme/app.git' } as never)
+        .mockResolvedValue({} as never)
+      await adapter.push('/r', 'biffo/x', { token: 'SECRET' })
+
+      const configWrites = argsOf('config').flat().join(' ')
+      expect(configWrites).not.toContain('SECRET')
+      expect(configWrites).not.toContain('x-access-token')
+      expect(configWrites).not.toContain('https://')
+      expect(argsOf('config', 'branch.biffo/x.remote')[0]?.[2]).toBe('origin')
+      // and no `-u`/`--set-upstream` on the push itself
+      expect(argsOf('push')[0]).not.toContain('-u')
+      expect(argsOf('push')[0]).not.toContain('--set-upstream')
+    })
+
+    it('honours a non-default remote name', async () => {
+      execaMock.mockResolvedValue({} as never)
+      await adapter.push('/r', 'biffo/x', { remote: 'upstream' })
+      expect(argsOf('config', 'branch.biffo/x.remote')[0]?.[2]).toBe('upstream')
+      expect(argsOf('update-ref')[0]?.[1]).toBe('refs/remotes/upstream/biffo/x')
+    })
+
+    it('does not set an upstream when the push failed', async () => {
+      execaMock.mockRejectedValueOnce(new Error('rejected'))
+      await expect(adapter.push('/r', 'biffo/x')).rejects.toThrow(/Failed to push/)
+      expect(argsOf('config')).toHaveLength(0)
+      expect(argsOf('update-ref')).toHaveLength(0)
+    })
+  })
 })

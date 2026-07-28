@@ -45,7 +45,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Index, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import TenantScopedModel
@@ -70,7 +79,27 @@ class AgentRun(TenantScopedModel):
         Index("ix_agent_run_thread", "tenant_id", "thread_id"),
         # Trace back to the orchestration run that requested this one.
         Index("ix_agent_run_workflow", "tenant_id", "workflow_run_id"),
+        # Create-or-get for at-least-once callers (#661). NULLs are not
+        # constrained by a UNIQUE in Postgres, which is exactly right: a run
+        # created without a key is unconstrained, and only callers that opt in
+        # get the guarantee.
+        Index("uq_agent_run_idempotency", "tenant_id", "idempotency_key", unique=True),
     )
+
+    # Caller-supplied de-duplication key, unique per tenant (#661).
+    #
+    # Agent-run creation is reached from at-least-once event delivery, and the
+    # `agent_fan_in` guard against firing twice is a check-then-act: two sibling
+    # completions landing within milliseconds both list the chain, both see no
+    # follow-on, and both POST. The result is two runs and two invoices for one
+    # join. Observed in production twice in one day — once visibly (both runs
+    # stranded) and once invisibly (both completed, one result discarded, the
+    # tenant billed for both).
+    #
+    # Nullable because most creations have no natural key and do not need one.
+    # A caller that can name the work deterministically passes it and the
+    # database, not a race, decides who wins.
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # The orchestration WorkflowRun that created this run, when there was one.
     # Nullable because a future synchronous invocation has no workflow run (§6.1).

@@ -699,6 +699,15 @@ async def fan_in_agent_runs(
                 },
                 "causation_id": causation_id,
                 "depth": depth,
+                # The join is uniquely identified by (chain, joining agent), so
+                # let the database decide who wins instead of the check-then-act
+                # above (#661). The existence check a few lines up closes the
+                # ordinary case — siblings finishing seconds apart — but two
+                # completions landing within milliseconds both see no follow-on
+                # and both arrive here. Core returns the first run and 200 to
+                # the loser rather than creating a second run and a second
+                # invoice.
+                "idempotency_key": f"fan-in:{causation_id}:{agent_name}",
             },
         )
     except BiffoAPIError as exc:

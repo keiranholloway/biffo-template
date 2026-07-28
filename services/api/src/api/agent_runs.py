@@ -36,6 +36,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, and_, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
@@ -122,7 +123,8 @@ async def create_run(
     run_as_kind: str = "system",
     run_as_user_id: str | None = None,
     dry_run: bool = False,
-) -> AgentRun:
+    idempotency_key: str | None = None,
+) -> tuple[AgentRun, bool]:
     """Record a requested run in ``pending``, refusing anything past the ceiling.
 
     The prompt library resolves here (ADR-0015 §3/§4): the snapshot's ordered
@@ -138,6 +140,21 @@ async def create_run(
     a preview that took a different path would not be previewing anything. It is
     read once, by the completion endpoint, to decide whether to announce the run
     on the bus.
+
+    ``idempotency_key`` makes this create-or-**get**. Agent-run creation is
+    reached from at-least-once event delivery, and `agent_fan_in`'s guard against
+    firing twice is a check-then-act — two sibling completions landing within
+    milliseconds both see no follow-on and both create one (#661). A caller that
+    can name the work deterministically passes a key, and the database decides
+    who wins instead of a race.
+
+    The insert runs inside a SAVEPOINT, the same shape as
+    ``orchestration._claim_run``: a duplicate rolls back only the insert, not the
+    caller's transaction, and the run already there is fetched and returned.
+
+    Returns ``(run, created)``. ``created`` is False when an existing run was
+    returned — the caller needs it, because announcing ``agent.run.requested``
+    for a run it did not create would dispatch the same work twice.
 
     Raises:
         DepthLimitExceededError: when ``depth`` is greater than ``max_depth``.
@@ -166,10 +183,27 @@ async def create_run(
         messages=[],
         workflow_run_id=workflow_run_id,
         dry_run=dry_run,
+        idempotency_key=idempotency_key,
     )
-    db.add(run)
-    await db.flush()
-    return run
+
+    if idempotency_key is None:
+        db.add(run)
+        await db.flush()
+        return run, True
+
+    try:
+        async with db.begin_nested():
+            db.add(run)
+            await db.flush()
+    except IntegrityError:
+        existing = await db.scalars(
+            select(AgentRun).where(
+                AgentRun.tenant_id == tenant_id,
+                AgentRun.idempotency_key == idempotency_key,
+            )
+        )
+        return existing.one(), False
+    return run, True
 
 
 async def list_runs(

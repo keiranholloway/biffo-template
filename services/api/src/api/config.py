@@ -156,6 +156,31 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     cors_origins: list[str] = ["http://localhost:3000"]
 
+    # SQLAlchemy engine statement logging. OFF by default, in every environment,
+    # and never to be set in a shared one.
+    #
+    # This was `echo=settings.environment == "dev"`, i.e. on for the whole of
+    # every dev deployment — which made CloudWatch a clear-text copy of the
+    # database's most sensitive columns. Echo does not log statements; it logs
+    # statements *with their bound parameters*, so every INSERT carried the
+    # values: complete agent transcripts as `agent_runs.messages` was written,
+    # result payloads, the founder-profile snapshot inside each run's
+    # `input_payload`, and `owner_sub` beside the rows it owns. Measured on a
+    # live dev account: 135 parameter-payload lines in one 48-hour sample, and
+    # the same exposure in a second instance's account.
+    #
+    # That is a different access boundary from the one the data is stored
+    # behind. `logs:FilterLogEvents` is granted far more widely than RDS access,
+    # and nothing about a Lambda log group's name signals it holds user content
+    # — so it also quietly undid a seam Core fails closed on: `/api/v1/internal/*`
+    # correctly refuses a non-allowlisted principal, and the same rows were then
+    # readable from the log group by anyone who could read logs at all.
+    #
+    # Paired with `hide_parameters=True` on every engine, because "off by
+    # default" alone relies on nobody ever flipping it on a shared deployment to
+    # debug something.
+    sql_echo: bool = False
+
     @model_validator(mode="after")
     def _derive_agent_runtime_function_name(self) -> "Settings":
         """Derive the agent-runtime function name by convention (ADR-0016).

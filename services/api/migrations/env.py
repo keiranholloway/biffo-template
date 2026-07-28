@@ -26,7 +26,9 @@ def run_migrations_offline() -> None:
 
 
 async def run_migrations_online() -> None:
-    engine = create_async_engine(settings.database_url)
+    # Keep bound values out of StatementError tracebacks here too (#85):
+    # a failing migration is exactly when the output gets read and pasted.
+    engine = create_async_engine(settings.database_url, hide_parameters=True)
     async with engine.connect() as connection:
         await connection.run_sync(
             lambda sync_conn: context.configure(

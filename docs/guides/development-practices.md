@@ -143,6 +143,12 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **The data an email needed was in hand and simply not published.** tabsii-crm#52 ("the invitation email must name the granted role and scope") was framed as an email-delivery problem needing SES work. Half of it was an **event-payload** problem needing none: `invite()` looks the role up for its tenant and holds the scope column it is about to insert, and `user.invited` carried `role_id` (a UUID) and no scope at all — so a custom SES send, a Cognito `CustomMessage` Lambda and the orchestration engine this instance already runs all had nothing to render. **An issue's stated blocker can hide an unblocked half** | **visibility** | tabsii-crm [#52](https://github.com/tabsii-com/tabsii-crm/issues/52) | tabsii-platform [#286](https://github.com/tabsii-com/tabsii-platform/pull/286) | **fixed** — `role_name`/`scope_kind`/`scope_label` declared and emitted; the email itself still waits on DNS + production access |
 | — | **`allow_auto_merge` is `false` on `tabsii-crm` while every other active repo has it `true`.** `gh pr merge --auto` does not degrade — it is **rejected outright** (`Auto merge is not allowed for this repository`), so a wait-loop built on it reports failure and the PR sits unmerged until someone notices. This page already carries a row saying the setting was aligned across repos on 2026-07-27; that claim is now stale in one repo, and nothing reconciles "settings we believe are set" against "settings that are set" | **drift** · process | tabsii-crm [#116](https://github.com/tabsii-com/tabsii-crm/pull/116) | tabsii-crm settings — **deliberately not changed**: `biffo-workflow` records tabsii-crm as the `strict` comparator for H3 and it is unclear whether auto-merge is part of that | **open** — flagged on the issue, decision left with the owner |
 | — | **An issue can be complete and open, with nothing detecting it — including its own author.** tabsii-crm#100's two remaining milestones both shipped (#112, tabsii-platform#267). A comment was left saying M1 was "pending the remaining PR checks", the PR merged, and nobody returned. Found only by habitually re-listing open issues after an unrelated merge. This is the same drift the whole backlog pass existed to correct, committed *during* that pass | **process** · visibility | tabsii-crm [#100](https://github.com/tabsii-com/tabsii-crm/issues/100) | practice — re-check issues whose PRs merged, not just issues you edited | **fixed** — closed with evidence re-verified rather than recalled (the deployed bundle hash had changed since the earlier check) |
+| — | **`aws logs ... --query 'length(events)'` returns a count PER PAGE, and the CLI auto-paginates.** Taking the first number gives one page's count and reads exactly like a total. It produced two wrong answers of very different severity in one session: an exposure reported as **135 lines** that was actually **7,772** (a 57× undercount, quoted to the user before it was checked), and then a purge script reporting **"0 kept"** for a log group that had 16 streams needing to be kept — read literally, that was about to justify an **irreversible delete** of live data. The same shape as the `id -nG` row: a command that answers a *slightly different question* than the one asked, and answers it plausibly. `--query '<list>' --output json` then counting client-side across concatenated pages is the spelling that is actually a total | **visibility** | biffo-platform CloudWatch (measurement, not code) | practice — never let `length()` cross a paginated CLI | **fixed** in practice; the count was re-derived client-side and the dry run re-run before deleting. **Nothing enforces this** — no gate exists for "a number you measured with the wrong tool" |
+| — | **A *configured* retention of 365 days was quoted as the exposure window; the oldest actual event was 7 days old.** The claim "365 days of clear-text transcripts in two accounts" came from `retentionInDays`, which is a ceiling, not a description of what is stored. Measured: biffo-platform's oldest core-api event was 2026-07-21 — the setting overstated the real window by ~52×. The same paragraph also called the exposure "complete agent transcripts"; measuring line lengths showed max 1,345 chars, median ~140, **zero** lines over 10 KB — high-volume *identifier* exposure (7,225 of 7,772 lines carried a UUID), not transcript dumping. Both errors inflate severity, which is the direction that still costs trust | **visibility** | biffo-platform (incident characterisation) | practice — measure the data, never quote the config | **fixed** — corrected to the user in the same session, before any remediation decision was made on the wrong number |
+| — | **A finding delegated to a sub-agent had its *code claims* verified and its *measurements* repeated verbatim.** The agent's assertions about the source were all checked and all true. Its numbers — "135 parameter-payload lines", "365-day retention", "complete agent transcripts" — were carried into a PR body, a scoreboard row and a user-facing summary without being re-measured, and all three were wrong. Verifying a delegated result has two halves and only one of them is instinctive; the same session separately found the agent's *scope* too narrow (1 of 4 engines), so both non-obvious halves failed on the same hand-off | **process** · visibility | biffo-platform#85 hand-off | practice + `biffo-verify` §8 wording | **unfiled** — §1–§7 are all about verifying assertions; nothing prompts "re-measure its numbers" or "what did it not look at?" |
+| — | **A template-owned test encoded the template's own file layout as though it were universal, so it could only fail downstream.** The `hide_parameters` guard walked every `.py` under `src/`. The template keeps all tests under `tests/` at the service root, so that was indistinguishable from "scan production code" *here* — it passed every gate, shipped in 0.157.1, and failed CI on the first instance it reached: biffo-platform's domain-driven layout puts fixture engines in `src/api/domains/<domain>/tests/`. Cost a full extra distribution lap (template PR → release → npm publish → re-cut the instance upgrade). tabsii has the same layout and would have been the second casualty | **drift** | biffo-platform#93 (CI) | biffo-template [#787](https://github.com/keiranholloway/biffo-template/pull/787) | **fixed** — exclusion matches a `tests` *path component*; the rule is now asserted on synthetic paths including the instance layout this repo has no example of, because a rule that can only fail on someone else's tree never gets tested here |
+| — | **A guard written for the reported repo found two unreported engines in a different one, including a password path.** The upstream `hide_parameters` fix reached the one engine the template has. tabsii has two more the template cannot see: `admin_engine` (master/owner, **BYPASSRLS** — so echoed parameters carried *cross-tenant* rows, plus identity resolution and the public lead-capture insert, i.e. personal data from unauthenticated visitors), and `_apply_app_role`'s engine, which is handed the Terraform-generated app-role password to run role DDL. Neither was reported by anyone. This is the case the AST-walking guard was written for, and the argument against a hand-kept file list | **drift** | tabsii-platform (found by the guard, not by a report) | tabsii-platform [#284](https://github.com/tabsii-com/tabsii-platform/pull/284) | **fixed** — though `hide_parameters` covers the SQLAlchemy layer only; the password reaches `pg.fetchval` on the raw asyncpg connection, and whether asyncpg's exceptions carry bound arguments is **explicitly not claimed** |
+
 ### What the classes say
 
 > Counted from `docs/practices/evidence.jsonl`, not asserted. Regenerate with
@@ -230,41 +236,46 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **109 rows** (`node scripts/practices-evidence.mjs --report` — never typed by hand, see *Adding a row*):
+`byFixRepo`, regenerated at **114 rows** (never typed by hand, see *Adding a row*):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 69 of 109 (63%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 11 of 109 (10%) | Divergence ratchet, repo settings, the RLS lane and the tests on it, the invite event's payload |
-| **biffo-platform** | 5 of 109 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 109 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-plugin-idea-scout** | 4 of 109 | Adapter seam, research search capability, its own styling |
-| **tabsii-marketplace** | 2 of 109 | `python-jose` removal; the credential-dependent build |
-| **tabsii-crm** | 2 of 109 | **First appearance** — its E2E harness, and a repo setting that diverged |
-| **biffo-plugin-ideation** | 1 of 109 | A UI rendering a 500 as an empty state |
-| **biffo-runners** | 1 of 109 | Runner fleet docs + fail-fast |
+| **biffo-template** | 70 of 114 (61%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
+| **tabsii-platform** | 12 of 114 (11%) | Divergence ratchet, repo settings, the RLS lane and the tests on it, its two extra DB engines |
+| **biffo-platform** | 5 of 114 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 114 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-idea-scout** | 4 of 114 | Adapter seam, research search capability, its own styling |
+| **tabsii-marketplace** | 2 of 114 | `python-jose` removal; the credential-dependent build |
+| **tabsii-crm** | 2 of 114 | Its E2E harness, and a repo setting only it can decide |
+| **biffo-plugin-ideation** | 1 of 114 | A UI rendering a 500 as an empty state |
+| **biffo-runners** | 1 of 114 | Runner fleet docs + fail-fast |
 
-**`biffo-template` takes 69 of 109 — 63%, continuing a real slide:** 86% at 50
-and 57 rows, 82% at 65, 70% at 94, 66% at 102, 63% now. Five consecutive
-measurements in one direction is no longer noise.
+**`biffo-template` takes 70 of 114 — 61%, and the slide has resumed.** It was 86%
+at 50 and 57 rows, 82% at 65, 70% at 94, 66% at 102–104, 61% now. The earlier
+note that the slide had "stopped" was true of a two-row sample and is now
+superseded — which is the third time a number in this section has had to be
+restated, and an argument for never writing a trend from fewer than ~10 new rows.
 
-**`tabsii-crm` appears for the first time**, which is the more interesting
-change. Every previous satellite row was a *symptom* surfacing where someone hit
-it; these two are the repo owning something — an E2E harness it now maintains,
-and a repo setting only it can decide. Together with `tabsii-platform`'s rise
-from 3 to 11 (mostly its RLS lane and the tests on it), the shape is shifting
-from "instances surface what the template must fix" toward "instances carry
-capability the template does not offer".
+**`tabsii-crm`'s first appearance still stands, and matters more than the
+percentage.** Every earlier satellite row was a *symptom* surfacing where someone
+hit it; `tabsii-crm`'s two are the repo **owning** something — an E2E harness it
+maintains and a repo setting only it can decide. With `tabsii-platform` up from 3
+to 12 (its RLS lane, the tests on it, and now its two extra DB engines), the shape
+keeps moving from "instances surface what the template must fix" toward
+"instances carry capability the template does not offer".
 
-Worth watching rather than concluding from: one session contributed most of both
-increases, so the next few sessions decide whether this is a trend or an
-artefact of who was working.
+**`visibility` is now the largest class at 34 of 114**, and it grew fastest this
+session: three of the five new rows are cases where *a measurement was
+confidently wrong*, not where the truth was hidden. That is a distinguishable
+sub-shape — a paginated `length()`, a retention ceiling read as a data
+description, a sub-agent's figures repeated unmeasured — and all three produced
+plausible numbers that were acted on. `surfacedNotFixedHere` is **68 of 114**.
 
-**Both rows added at 104 surfaced in an instance and landed here**, which is the
-older pattern reasserting itself: the SQL-echo exposure was found in
-`biffo-platform` (and independently live in `tabsii-platform`) and could only be
-fixed in `services/api/` upstream — the instance's own ownership guard said so
-and refused the patch. `surfacedNotFixedHere` is now **61 of 104**.
+**The SQL-echo rows are the older pattern reasserting itself:** the exposure was
+found in `biffo-platform` (and independently live in `tabsii-platform`) and could
+only be fixed in `services/api/` upstream — the instance's own ownership guard
+said so and refused the patch, which is the guard working exactly as designed on
+a security fix.
 
 > **This block was wrong on `dev` until 2026-07-28**, and the way it was wrong is
 > the lesson: it simultaneously read "at **65 rows**", a table of "of **89**",
@@ -490,6 +501,47 @@ Worth attacking in this order, cheapest first:
 5. **Shorten the loop itself.** The open question, and the biggest prize: does a
    dev-environment change need all six hops? Everything above makes the chain
    more honest; only this makes it shorter.
+
+### Measured: one security one-liner, 2026-07-28
+
+The clearest instance of the six-hop cost yet recorded, because the change itself
+was trivial and everything else was overhead. The fix was **two keyword
+arguments**. Landing it in both instances took **~100 minutes of wall clock** and
+produced **7 merged PRs, 3 npm releases, 1 closed PR, and 2 full traversals of
+the distribution chain**.
+
+| Hop | What it cost |
+| --- | --- |
+| Template PR → merge | ~10 min (#784) |
+| `core-v*` tag → npm publish | ~2–4 min, ×3 releases |
+| Instance upgrade PR → CI | ~10 min, ×3 (one closed unmerged) |
+| Instance merge → deploy | ~9 min |
+| Post-deploy verification | ~10 min (artifact download + log queries) |
+
+**The second lap was self-inflicted and is the single biggest line item.** The
+guard shipped in 0.157.1 encoded this repo's file layout as universal (scoreboard
+row above), passed every gate here, and failed on the first instance. That forced
+`#787` → `core-v0.157.3` → close biffo-platform#93 → re-cut #94: **a complete
+extra traversal, ~25 minutes, for a defect no local gate could have caught**.
+
+**The merge race is still unfixed and cost 28 of those minutes.**
+tabsii-platform#284 was created 10:47 and merged 11:25 — **38 minutes**, of which
+roughly **28 were spent green-but-unmerged**. All six required checks passed
+(including the RLS real-Postgres lane), auto-merge was armed since 10:51, and the
+PR simply sat at `BEHIND`. It moved only after a manual `gh pr update-branch`,
+which then triggered a **full CI re-run** before it could land.
+
+That is the H1 experiment's predicted refutation, observed live: **auto-merge does
+not update a head branch that falls behind under `strict` protection.** It removed
+the retry loop but not the wait. The next move is a merge queue, or relaxing
+`strict` — not more auto-merge.
+
+**What was NOT the cost.** Writing the fix, writing 10 tests, and proving each one
+failed first accounted for maybe 15 of the 100 minutes. The verification that
+actually mattered — downloading the deployed Lambda and reading it — took under a
+minute. **The expensive parts were all structural: waiting for the chain, and one
+lap of rework the chain made expensive.** A shorter chain would have made the
+mistake cheap rather than preventing it.
 
 ### What this is not
 
@@ -912,7 +964,17 @@ the cost of confirming was seconds.
 
 **Distrusting a sub-agent's scoping, not just its facts.** The agent's report was accurate on every claim it made, and its patch was still too narrow — it fixed the engine that was reported. Re-deriving the scope found three more engines, one of which handles `CREATE ROLE … PASSWORD`. Checking a delegated result means checking what it *left out*, which no amount of verifying its assertions would have surfaced.
 
+**Verifying the deployed artifact settled in one minute what traffic could not settle at all.** After the fix deployed, the post-deploy log count was zero — but only 2 invocations had hit the function and neither touched the database, so zero was indistinguishable from "nothing ran". Downloading the live Lambda package and reading `database.py`, `db_app_role.py`, `config.py` and `agent_runs.py` out of it, plus confirming `BIFFO_SQL_ECHO` was unset on the function, gave direct evidence that did not depend on traffic at all. §4 is written for the stale-deploy theory; it turns out to be just as good for *"I cannot generate the conditions to observe this"*.
+
+**A dry run before an irreversible delete caught a wrong count.** The purge script reported `0 kept` for a log group that had 16 streams that had to survive. Running it in dry-run mode first, comparing against an independently-computed number, and refusing to execute until the two agreed is what stood between a correct purge (1,323 deleted, 16 preserved) and deleting live logging. The rule that earned its keep: **if a number a script prints disagrees with a number you measured yourself, stop — do not reconcile it in your head.**
+
+**Re-deriving a delegated result's scope found three more engines.** The sub-agent's patch fixed the engine that was reported. Independently re-scanning found three others in the template, one of which administers `CREATE ROLE … PASSWORD`; the same guard later found two more in tabsii, including a BYPASSRLS engine and a second password path. None of the five were in any report. Verifying the agent's *claims* would never have surfaced them, because every claim it made was true.
+
 ## What needs more thought
+
+**Nothing checks that a template-owned test will pass on an instance's layout.** The engine guard was correct, well-tested, and structurally unable to fail here — it encoded `src/**` as production-only, which is true of this repo and false of both instances. There is no pre-flight that runs a template's own test suite against an instance tree before release, so this class of defect is *only* discoverable by shipping it. A `biffo core upgrade --dry-run` that also ran the incoming tests against the instance checkout would have caught it in seconds instead of a full release lap.
+
+**Two irreversible-action guards fired today; neither was a gate.** The wrong stream count and the wrong exposure figure were both caught by a human-style habit ("that number disagrees with the one I measured"), not by tooling. The measurement mistakes had a 57× and a potential-data-loss blast radius respectively, and nothing in CI, no linter and no skill step would have stopped either. Worth thinking about what a gate for *measurement* would even look like.
 
 **Two misreads of the same shape in one day, and the class has no name.** Both
 `id -nG` and `ProductionAccessEnabled` were *correct data read through a label
@@ -1535,6 +1597,11 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **worked** | §3 twice on assertions that are easy to write vacuously — the E2E security claim (proven by injecting `brand_id` into the wizard's POST) and the invite's declared-vs-emitted field guard (proven by declaring a field that is never sent). Both would have passed against the bug they name if written the obvious way. |
 | `biffo-verify` | **partial — §1 still does not cover claims about your own environment** | Recorded last session after the `id -nG` misread; it recurred within hours with `ProductionAccessEnabled` aliased to a jq key named `sandbox`. Both were correct data read under a self-chosen label that inverted the meaning, and both propagated into advice before being caught. The step says "establish the current state" and is written entirely about tickets and code. It needs a sentence about assertions you are about to make about the machine, the account, or the settings. |
 | `biffo-workflow` | **should have been invoked** | Followed by hand for tabsii-crm#116 and tabsii-platform#286 — fresh worktrees, deps synced, remote content verified, guards run. It held, but Step 7's `--auto` guidance would have caught `tabsii-crm`'s `allow_auto_merge=false` *before* arming a merge that was rejected outright; the skill explicitly says to confirm that setting rather than assume it. Missed because the work read as "write tests", not "land a change" — the same trigger-wording gap recorded twice before. |
+| `biffo-verify` | **worked — §4 was decisive in a way the skill does not yet advertise** | §4 is written for the stale-deploy theory. Here it solved a different problem: the post-deploy log count was zero, but only 2 invocations had run and neither touched the DB, so zero proved nothing. Downloading the deployed Lambda and reading four files out of it — plus `get-function-configuration` confirming `BIFFO_SQL_ECHO` unset — gave evidence independent of traffic. The step should also say: **use this when you cannot generate the conditions to observe the fix.** |
+| `biffo-verify` | **partial — §3's "fails for the RIGHT reason" caught my own weak proof, but only because I re-read it** | The first revert made all 6 new reaper tests fail with `AttributeError: no attribute 'agent_run_unclaimed_after_seconds'` — proving the *setting* was absent, not that the behaviour was wrong. Redone with the setting present and only the reap logic reverted, 5 failed behaviourally (`assert [] == ['cb12204b-…']`) and 1 passed, revealing it as a drift guard rather than a detector. §3 says "the right reason" but gives no worked example of a *wrong* right-reason; this is one, and it is the common shape when a fix adds config. |
+| `biffo-verify` | **partial — the Never list needs "never quote a config value as a measurement"** | "365-day retention" and "135 lines" and "complete agent transcripts" were all repeated from a sub-agent without measurement; actual values were ~7 days, 7,772 lines, and max 1,345 chars. The existing *"absence of evidence is not evidence"* rule covers empty results but not **confidently wrong non-empty ones**, which is what a paginated `length()` and a retention ceiling both produce. |
+| `biffo-workflow` | **partial — Step 7's auto-merge caveat is now confirmed, and the step should stop recommending it alone** | tabsii-platform#284: all six required checks green, auto-merge armed at 10:51, and it sat at `BEHIND` for ~28 minutes doing nothing. Merged only after a manual `gh pr update-branch`, which forced a full CI re-run first. The step already flags this as H1's likely refutation — it is now **observed**, so the wording should lead with "arm auto-merge *and* expect to update the branch by hand", or the experiment should be closed and a merge queue pursued. |
+
 
 ## Adding a row
 

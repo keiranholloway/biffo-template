@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -30,8 +30,58 @@ describe('CLI release dispatch', () => {
     expect(coreTag).toMatch(/^\s+actions:\s+write\s*$/m)
   })
 
+  /**
+   * The workflow names core-tag.yml actually dispatches.
+   *
+   * Accepts either shape — a literal `gh workflow run <name>.yml`, or the
+   * `for workflow in a.yml b.yml` loop it uses now. Deliberately not coupled to
+   * one: a test that fails when the step is *rewritten* rather than *broken*
+   * teaches the next person to weaken it.
+   */
+  const dispatched = (): string[] => {
+    const literal = [...coreTag.matchAll(/gh workflow run ([\w-]+\.yml)/g)].map((m) => m[1])
+    const loopAt = coreTag.indexOf('for workflow in')
+    const loop =
+      loopAt === -1
+        ? []
+        : (coreTag.slice(loopAt, coreTag.indexOf(';', loopAt)).match(/[\w-]+\.yml/g) ?? [])
+    return [...new Set([...literal, ...loop])].sort()
+  }
+
   it('core-tag.yml dispatches publish-cli.yml', () => {
-    expect(coreTag).toContain('gh workflow run publish-cli.yml')
+    expect(dispatched()).toContain('publish-cli.yml')
+  })
+
+  /**
+   * The generalisation, added after the CLI-only assertion above missed a real
+   * case.
+   *
+   * `publish-design-tokens.yml` was written with `on: push: tags: [core-v*]`
+   * and no dispatch. Three tags went by with **no run at all** and nothing said
+   * so — the package simply stopped being released. The assertion above passed
+   * throughout, because it only ever asked about the CLI.
+   *
+   * So this derives the expectation from the workflow directory rather than a
+   * hardcoded name: anything triggered by a `core-v*` tag must be dispatched,
+   * because for those tags the push trigger is decorative — GitHub suppresses
+   * events created by GITHUB_TOKEN. A fourth release workflow now fails here on
+   * the day it is added, instead of publishing nothing quietly.
+   */
+  it('dispatches every workflow a core-v* tag is supposed to release', () => {
+    const dir = resolve(repoRoot, '.github/workflows')
+    const coreTagged = readdirSync(dir)
+      .filter((f) => f.endsWith('.yml') && f !== 'core-tag.yml')
+      .filter((f) => {
+        const body = readFileSync(resolve(dir, f), 'utf8')
+        // The trigger block only — `core-v*` also appears in prose.
+        const on = body.slice(body.indexOf('\non:'), body.indexOf('\njobs:'))
+        return /tags:\s*\[?['"]?core-v\*/.test(on)
+      })
+      .sort()
+
+    expect(coreTagged.filter((f) => !dispatched().includes(f))).toEqual([])
+    // Guards the guard: an empty scan would make the line above vacuous.
+    expect(coreTagged.length).toBeGreaterThan(1)
   })
 
   it('dispatches against the tag, not the branch', () => {

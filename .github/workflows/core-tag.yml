@@ -106,7 +106,7 @@ jobs:
       # the default branch releases nothing. This is also why an existing tag is
       # a *published* tag, and so must never be repointed: every tag this job
       # writes is handed straight to publish-cli.yml.
-      - name: Dispatch CLI release
+      - name: Dispatch releases
         if: steps.sync.outputs.tag != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -114,6 +114,16 @@ jobs:
           ACTION: ${{ steps.sync.outputs.action }}
         run: |
           set -euo pipefail
-          echo "::notice::Tag $TAG was ${ACTION}d — dispatching publish-cli.yml against it."
-          gh workflow run publish-cli.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
-          echo "Dispatched publish-cli.yml for $TAG." >> "$GITHUB_STEP_SUMMARY"
+          # EVERY workflow released by a core-v* tag has to be listed here.
+          #
+          # `@biffo/design-tokens` was added with `on: push: tags: [core-v*]` and
+          # no dispatch, so it silently never published: three tags passed with
+          # no run at all, exactly the failure this step exists to prevent, by a
+          # route the CLI-only version could not catch. release-dispatch.test.ts
+          # now derives this list from the workflow files, so a fourth one fails
+          # the suite rather than going quiet.
+          for workflow in publish-cli.yml publish-design-tokens.yml; do
+            echo "::notice::Tag $TAG was ${ACTION}d — dispatching $workflow against it."
+            gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$TAG"
+            echo "Dispatched $workflow for $TAG." >> "$GITHUB_STEP_SUMMARY"
+          done

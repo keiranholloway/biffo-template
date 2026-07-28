@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import chalk from 'chalk'
@@ -6,6 +6,12 @@ import { Command } from 'commander'
 import { GitAdapter } from '../adapters/git/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
 import { resolveGithubToken } from '../lib/credentials.js'
+import {
+  addSource,
+  manifestUrlFor,
+  serialiseSources,
+  type SourcesFile,
+} from '../lib/registry-sources.js'
 import { workflowCheckContexts } from '../lib/workflow-check-contexts.js'
 import { INSTANCE_CORE_FILE } from '../lib/core-version.js'
 import { log } from '../lib/logger.js'
@@ -33,6 +39,7 @@ export const pluginCreateCommand = new Command('create')
     '--runner-label <label>',
     'With --org, the RUNNER_LABEL the new repo\u2019s CI should run on (defaults to mirroring this checkout\u2019s)',
   )
+  .option('--no-register', 'With --org, skip adding the plugin to the registry\u2019s sources.json')
   .option(
     '--skeleton <path>',
     'Path to the plugin skeleton (defaults to _skeletons/plugin-template)',
@@ -48,6 +55,7 @@ export const pluginCreateCommand = new Command('create')
         standalone?: boolean
         org?: string
         runnerLabel?: string
+        register?: boolean
         skeleton?: string
         dryRun?: boolean
         commit?: boolean
@@ -63,6 +71,7 @@ export const pluginCreateCommand = new Command('create')
             standalone: options.standalone ?? false,
             ...(options.org ? { org: options.org } : {}),
             ...(options.runnerLabel ? { runnerLabel: options.runnerLabel } : {}),
+            register: options.register !== false,
             ...(options.skeleton ? { skeletonRoot: resolve(options.skeleton) } : {}),
             dryRun: options.dryRun ?? false,
             commit: options.commit !== false,
@@ -115,6 +124,8 @@ export interface PluginCreateOptions {
   org?: string
   /** With `org`, the RUNNER_LABEL to set on the new repo. Mirrored when omitted. */
   runnerLabel?: string
+  /** With `org`, add the plugin to the registry's sources.json (default true). */
+  register?: boolean
   skeletonRoot?: string
   dryRun: boolean
   commit: boolean
@@ -408,7 +419,71 @@ async function createAndPushStandaloneRepo(
     await github.protectSingleBranch(org, names.dist, 'dev', contexts)
   }
 
+  if (options.register !== false) {
+    await registerInRegistrySources(names, cloneUrl, token, deps)
+  }
+
   printStandaloneRemoteNextSteps(names, org)
+}
+
+/** The registry repo whose sources.json drives the credential-free sync. */
+const REGISTRY_REPO = 'https://github.com/keiranholloway/biffo-plugins-registry'
+
+/**
+ * Add the new plugin to the registry's `sources.json`.
+ *
+ * Without this a new plugin repo is in neither of the registry's two paths: the
+ * push path needs a REGISTRY_PUBLISH_TOKEN it does not have, and the pull path
+ * only re-derives plugins already listed in sources.json. It would simply never
+ * appear in the store until somebody remembered — which is the exact failure
+ * that left `plugins.json` empty for months while real plugins ran in
+ * production.
+ *
+ * No stored credential is involved: this runs with the operator's own auth,
+ * which the command already holds because it just used it to create the repo.
+ *
+ * Best-effort and loud. By this point the plugin repo exists, is pushed and is
+ * protected; failing here would strand all of that over a registry entry that
+ * can be added in one commit.
+ */
+async function registerInRegistrySources(
+  names: ReturnType<typeof deriveNames>,
+  cloneUrl: string,
+  token: string,
+  deps: PluginCreateDeps,
+): Promise<void> {
+  let dir: string | undefined
+  try {
+    dir = await deps.git.cloneForEditing(REGISTRY_REPO, 'biffo-registry', token)
+    const path = join(dir, 'sources.json')
+    const file = JSON.parse(readFileSync(path, 'utf8')) as SourcesFile
+
+    const next = addSource(file, {
+      name: names.slug,
+      repo: cloneUrl.replace(/\.git$/, ''),
+      manifest: manifestUrlFor(cloneUrl),
+      tags: [],
+    })
+
+    if (next === null) {
+      log.info(`${names.slug} is already listed in the registry's sources.json`)
+      return
+    }
+
+    writeFileSync(path, serialiseSources(next))
+    await deps.git.add(dir, ['sources.json'])
+    await deps.git.commit(dir, `feat(registry): track ${names.slug} in sources.json`)
+    await deps.git.push(dir, 'main', { token })
+    log.success(`Registered ${names.slug} in the plugin registry's sources.json`)
+  } catch (err: unknown) {
+    log.warn(
+      `Could not add ${names.slug} to the registry's sources.json: ${(err as Error).message}. ` +
+        `Until it is listed there (or REGISTRY_PUBLISH_TOKEN is set on the new repo), the plugin ` +
+        `will not appear in the portal's plugin store.`,
+    )
+  } finally {
+    if (dir !== undefined) deps.git.cleanup(dir)
+  }
 }
 
 /**

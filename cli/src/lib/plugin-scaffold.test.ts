@@ -136,6 +136,48 @@ describe('scaffoldPlugin', () => {
     expect(existsSync(join(dest, 'registry-schema.json'))).toBe(false)
   })
 
+  it('defaults to the in-tree layout when no options are passed', () => {
+    // The 4th argument is optional so existing callers keep the monorepo
+    // behaviour; a standalone scaffold must be asked for explicitly.
+    const dest = join(root, 'out')
+    const result = scaffoldPlugin(makeSkeleton(), dest, deriveNames('acme-crm'), {})
+
+    expect(result.skipped.map((s) => s.entry).sort()).toEqual(
+      Object.keys(STANDALONE_ONLY_ENTRIES).sort(),
+    )
+  })
+
+  it('keeps the standalone-repo-only entries for the standalone layout', () => {
+    // ADR-0003 §2: a plugin lives in its own repository with a standardised
+    // layout that includes .github/workflows/ — an independent CI/CD pipeline.
+    // Dropping them here is what left the skeleton's workflows undeliverable
+    // by any command (#803).
+    const dest = join(root, 'out')
+    const result = scaffoldPlugin(makeSkeleton(), dest, deriveNames('acme-crm'), {
+      layout: 'standalone',
+    })
+
+    expect(result.skipped).toEqual([])
+    expect(existsSync(join(dest, '.github/workflows/ci.yml'))).toBe(true)
+    expect(existsSync(join(dest, 'registry-schema.json'))).toBe(true)
+    expect(result.files).toContain('.github/workflows/ci.yml')
+    expect(result.files).toContain('registry-schema.json')
+  })
+
+  it('still renames the plugin, and still skips detritus, in the standalone layout', () => {
+    // The layout decides which top-level entries survive — nothing else. A
+    // standalone scaffold that shipped node_modules or an unrenamed package
+    // would be a different bug wearing the same flag.
+    const dest = join(root, 'out')
+    const result = scaffoldPlugin(makeSkeleton(), dest, deriveNames('acme-crm'), {
+      layout: 'standalone',
+    })
+
+    expect(result.files).toContain('src/acme_crm/plugin.py')
+    expect(existsSync(join(dest, 'node_modules'))).toBe(false)
+    expect(existsSync(join(dest, '__pycache__'))).toBe(false)
+  })
+
   it('never copies build or VCS detritus', () => {
     const dest = join(root, 'out')
     scaffoldPlugin(makeSkeleton(), dest, deriveNames('acme-crm'))

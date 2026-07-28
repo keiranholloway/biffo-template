@@ -113,7 +113,15 @@ export function parseCost(row) {
 /** Status keyword the row ends with. */
 export function parseStatus(cell) {
   const text = cell.toLowerCase()
-  for (const s of ['fixed downstream', 'partly fixed', 'worked around', 'unfiled', 'closed', 'fixed', 'open']) {
+  for (const s of [
+    'fixed downstream',
+    'partly fixed',
+    'worked around',
+    'unfiled',
+    'closed',
+    'fixed',
+    'open',
+  ]) {
     if (text.includes(s)) return s
   }
   return 'unknown'
@@ -138,7 +146,22 @@ export function extractRows(markdown) {
   const rows = []
   for (const line of markdown.split('\n')) {
     if (!line.startsWith('|')) continue
-    const cells = line.split('|').slice(1, -1)
+    // Split on UNESCAPED pipes only. A cell may legitimately contain `\|` — a
+    // markdown-escaped pipe, e.g. a shell pipeline quoted inside a row. Splitting
+    // on every `|` turns such a row into 7 columns, so the destructure below
+    // lands `class` on the tail of the condition, `parseClasses` finds no primary,
+    // and the row is dropped **silently**.
+    //
+    // That was the long-standing row-count discrepancy this page flagged twice
+    // and could not locate ("the extractor silently drops a row it cannot
+    // parse"). Exactly one row triggers it: the `js-dependency-audit.sh` row,
+    // which quotes `echo "$out" \| jq`. A generator that under-reports without
+    // saying so is worse than a hand count, because it carries the authority of
+    // having been computed.
+    const cells = line
+      .split(/(?<!\\)\|/)
+      .slice(1, -1)
+      .map((c) => c.replace(/\\\|/g, '|'))
     if (cells.length < 6) continue
     const [ref, condition, klass, surfaced, fixes, status] = cells.map((c) => c.trim())
     // Skip the header and its separator, and the small legend table above.
@@ -160,7 +183,6 @@ export function extractRows(markdown) {
   }
   return rows
 }
-
 
 /**
  * Carry forward what a previous run already established.
@@ -299,7 +321,9 @@ function main() {
     mkdirSync(dirname(EVIDENCE), { recursive: true })
     writeFileSync(EVIDENCE, rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
     const kept = rows.filter((r) => r.date).length
-    process.stderr.write(`extracted ${rows.length} rows (${kept} keeping a known date) -> ${EVIDENCE}\n`)
+    process.stderr.write(
+      `extracted ${rows.length} rows (${kept} keeping a known date) -> ${EVIDENCE}\n`,
+    )
     return
   }
 

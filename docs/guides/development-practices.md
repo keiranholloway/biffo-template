@@ -169,6 +169,10 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **A copied Vite `base` sent one plugin's admin UI to another plugin's asset path, and NO gate could see it.** `web-admin/vite.config.ts` was scaffolded from ideation's and kept `base: '/api/v1/plugins/ideation/admin/'`. The deployed page loaded its HTML (correct title) and rendered **blank**: `GET …/idea-scout/admin` 200, then `GET …/**ideation**/admin/assets/index-KqUfZSuT.js` **503** — idea-scout's own asset *filenames* under the wrong plugin's *path*. eslint, tsc, 15 unit tests and `vite build` itself all passed, because `base` only affects URLs **inside the emitted HTML** and nothing that runs locally requests them. Found solely by loading the page and reading the network log | **drift** · visibility | biffo-plugin-idea-scout (deployed page) | biffo-plugin-idea-scout [#38](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/38) | **fixed** — plus two guards that do run per-PR: the configured base, and the **built** `index.html`'s asset refs. Both proven to fail against the shipped config |
 | — | **An edit whose anchor did not match reported success, shipped a half-feature, and left a validation guard dead behind it.** The API accepted `preferences`, validated their shape, echoed a stored value back — and discarded the input, because `app.py` never passed `body.preferences` to the service. The `python -c` replacement targeted a multi-line call site; the real code was one line; **every other edit in that batch asserted its anchor and this one did not**. Two things made it invisible: the service tests call `start_run` with preferences *directly* and the frontend tests assert `onStart` *receives* them — **both ends covered, the seam between them not** — and the response echoed a plausible-looking `[]`. The second-order finding is worse: the unknown-key 422 could **never fire**, because the keys it validates never reached the service holding it. A guard behind a broken pass-through is not a guard | **process** · visibility | biffo-plugin-idea-scout (live run on dev) | biffo-plugin-idea-scout [#39](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/39) | **fixed** — six transport-level tests; four fail against the shipped code, including `assert 201 == 422` for the dead guard |
 | — | **A guard that bans a spelling blocks the correct fix that legitimately contains it — twice in one day.** #30's guard asserted `"parent.parent.parent" not in admin_app.py`; hours later it **rejected the correct fix**, because ideation's proven `_resolve_static_dir` keeps exactly that expression as its local-dev fallback. Then, writing the base-path guard, the same shape recurred: *"the config mentions no other plugin"* failed on the **comment explaining the bug**, which names ideation's path deliberately. The defect in both cases was never the token — it was the absent property (a `BIFFO_PLUGINS_ROOT` anchor; a correct `base`). Both guards were rewritten to assert the property | **process** | biffo-plugin-idea-scout (twice) | practice — assert the property, never the spelling | **fixed** both; the rule is now stated in both test files so the next person meets it where they would repeat it |
+| — | **A unit test that encodes its own premise passes forever while the deployed path does nothing.** A run-outcome observer read `trigger_payload`, which unwraps `event["payload"]`. `WorkflowRun.trigger_event` stores the payload **flat**, so the unwrap returned `{}`, the lead id was never found, and the observer's designed early-return meant it wrote nothing and logged nothing for its entire existence. Ten unit tests passed because the fixture was written as `trigger_event={"payload": {...}}` — the assumption, not the shape. Found only by opening the deployed page and seeing "Nothing sent or logged yet" on a lead whose automation had demonstrably succeeded. The generalisation: when a test author also invents the fixture for an external contract, the test proves the author's belief, not the contract — one real sample from the running system (`/api/v1/orchestration/runs`) settled it in a minute | **visibility** · drift | tabsii-platform | tabsii-platform [#301](https://github.com/tabsii-com/tabsii-platform/pull/301) | **fixed** — fixture corrected to the real shape, and the four write-path tests watched failing against the old implementation first |
+| — | **A CloudWatch metric datapoint was read as proof of a specific send, twice, and was wrong both times.** `AWS/SES` `Send` was used to conclude "the automation still works after being repointed" and later "the automation has stopped". Neither followed: the metric is account-wide and 5-minute bucketed, and a **second, unknown automation** was also sending on every lead capture — visible only once the activity timeline attributed each row to its automation by name. Two hours of diagnosis were spent on a regression that never existed. An aggregate metric can support "something happened somewhere"; it cannot attribute. Attribution needs a per-entity record, which is what the feature under construction was *for* | **visibility** | tabsii-platform (dev) | practice — never attribute an aggregate metric to a specific action | **fixed** — run history (`/orchestration/runs`) is the attributable source and answered it immediately |
+| — | **`git commit --amend >/dev/null 2>&1` silenced a hook failure, and the push then succeeded carrying none of the work.** A lint hook rejected the amend; the redirect hid it; `git push` pushed the *unamended* commit. **`pre-push` pyright passed** — it type-checks the working tree, which had the fixes, not the commit, which did not. CI then failed on the three errors already fixed locally. AGENTS.md §4 warns that a push can fail while looking successful; this is the inverse — a push succeeding while carrying nothing, with a green local gate agreeing. Never redirect a git command that runs hooks | **visibility** · process | tabsii-platform | practice — `AGENTS.md` §4 deserves the inverse case | **unfiled** — worth a line in §4 |
+| — | **Infrastructure can be correctly wired and still never fire, and every component reports healthy.** An SES-bounce consumer Lambda deployed, its SNS subscription **confirmed**, its IAM correct — and it has never been invoked. A deliberate bounce raised `AWS/SES` `Bounce` = 1 (account-level, needing no configuration set) while the SNS destination (which does need one) saw nothing, so the send is not resolving through the configuration set the event destination hangs off. Nothing in Terraform, the console or the metrics says "this path is dead"; the only signal was the **absence of a CloudWatch log group**, which is what "never invoked" looks like | **visibility** · boundary | tabsii-platform | tabsii-platform [#302](https://github.com/tabsii-com/tabsii-platform/issues/302) | **filed** — feature shipped inert |
 
 ### What the classes say
 
@@ -257,25 +261,35 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **134 rows** (never typed by hand, see *Adding a row*):
+`byFixRepo`, regenerated at **138 rows** (never typed by hand, see *Adding a row*):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 78 of 134 (58%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 13 of 134 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
-| **biffo-plugin-idea-scout** | 7 of 134 | Adapter seam, research search capability, its own styling, release + publish workflows |
-| **biffo-platform** | 5 of 134 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 134 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **tabsii-marketplace** | 2 of 134 | `python-jose` removal; the credential-dependent build |
-| **tabsii-crm** | 2 of 134 | Its E2E harness, and a repo setting that diverged |
-| **biffo-plugin-ideation** | 1 of 134 | A UI rendering a 500 as an empty state; its publish workflow |
-| **biffo-runners** | 1 of 134 | Runner fleet docs + fail-fast |
+| **biffo-template** | 78 of 138 (57%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
+| **tabsii-platform** | 15 of 138 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
+| **biffo-plugin-idea-scout** | 7 of 138 | Adapter seam, research search capability, its own styling, release + publish workflows |
+| **biffo-platform** | 5 of 138 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 138 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **tabsii-marketplace** | 2 of 138 | `python-jose` removal; the credential-dependent build |
+| **tabsii-crm** | 2 of 138 | Its E2E harness, and a repo setting that diverged |
+| **biffo-plugin-ideation** | 1 of 138 | A UI rendering a 500 as an empty state; its publish workflow |
+| **biffo-runners** | 1 of 138 | Runner fleet docs + fail-fast |
 
-**`biffo-template` takes 78 of 134 — 58%.** The series: 86% at 50 and 57 rows,
+**`biffo-template` takes 78 of 138 — 57%.** The series: 86% at 50 and 57 rows,
 82% at 65, 70% at 94, 66% at 102, 63% at 109, 60% at 116 and 122, 58% at 126, 132
-and 134. Three consecutive captures at 58% with the absolute count still rising
-(73 → 78) says the ratio has settled rather than kept sliding: the template still
-takes the clear majority of fixes, but no longer a growing share of them.
+and 134, 57% at 138. The absolute template count did **not** move this capture
+(78 → 78) while four rows landed elsewhere — the first capture where the template
+absorbed none of the new work. One capture is not a trend, but it is the first
+evidence that the settling described above may be a genuine plateau rather than a
+slower slide.
+
+**All four new rows are `visibility`, and three of them are the same shape: a
+system reporting health it did not have.** A test proving its own premise, an
+aggregate metric read as attribution, a push carrying nothing while its gate went
+green, and infrastructure correctly wired but never invoked. None was caught by a
+gate; all four were caught by looking at the deployed thing. That is an argument
+for cheap observability of *what actually ran*, not for more gates — the gates
+were all green.
 
 **All four went to `biffo-plugin-idea-scout`, which jumps 4 → 7 and overtakes
 both `biffo-platform` and `tabsii-intake` to third.** This is the first capture
@@ -613,6 +627,39 @@ plugin do not each deserve a lap at ~15–20 minutes of mostly waiting.
 anything that shortens the lap: the two new guards (built-HTML asset paths,
 transport-level pass-through tests) are exactly that, and they cost nothing to
 run.
+
+### Measured: one CRM feature across three repos, 2026-07-28
+
+**~3 hours wall clock, 9 PRs merged, one feature verified working end to end and
+one shipped inert.** The build was not the expensive part.
+
+**The loop, not the keystrokes.** Nine PRs, each gated on a self-hosted fleet
+whose CI cycle is ~3–6 min but whose *queueing* was unbounded:
+
+- **Two jobs sat `queued` for 27 minutes** with an otherwise-empty org-wide
+  queue, while three jobs from the *same run* started and finished. Cancelling
+  and re-dispatching cleared it. Structural, not unlucky — nothing in the PR
+  page distinguishes "queued behind work" from "queued behind nothing".
+- **A force-push produced no workflow run at all** (AGENTS.md §6's documented
+  case). `workflow_dispatch` re-ran it green — and **did not satisfy the
+  `pull_request` required checks**, because a dispatch run is not a
+  `pull_request` event. The PR still showed the cancelled run's failure. Closing
+  and reopening the PR was what actually re-fired the checks. That two-step is
+  not written down anywhere and cost ~25 min.
+- **One rebase** after a sibling PR merged into the same router-registration
+  list. Unavoidable, cheap, correctly caught by the merge state.
+
+**Six deploy-and-verify hops.** Each upstream seam needed: merge to
+`biffo-template` → `core-tag` → npm publish → `biffo core upgrade` → instance CI
+→ instance deploy. ~40 min minimum for a one-line payload change to become
+observable, and this feature needed the round trip **once** — the rest was
+avoided by putting the instance-specific half behind a generic registry, which
+is the design lesson worth keeping.
+
+**Where the time actually went:** roughly 60 min of building, 90 min of waiting
+on CI/deploy, and 30 min diagnosing a regression that did not exist (see the
+CloudWatch-attribution row). The last is the only genuinely wasted half hour,
+and it was caused by trusting an aggregate metric — a habit, not a tool gap.
 
 ### What this is not
 
@@ -1107,6 +1154,22 @@ the cost of confirming was seconds.
 **Establishing the state before rebuilding, with a control.** Before building an admin UI I checked three places for an existing one and used `ideation` as a control to prove the check could find one. Without the control, "not found" is indistinguishable from "looked wrong" — and the user had explicitly challenged the claim.
 
 **Reading the run back through the API rather than trusting the UI.** The Past Scouts list showed the run happily; only `GET /runs` showed `preferences: []`. A green-looking UI over a dropped field is exactly the shape #26 warned about.
+
+**Bisect with the surface you just built.** A lead's activity timeline was empty
+after a send that had demonstrably succeeded. Rather than reason about the
+observer, the *manual* "Log activity" control on the same drawer was used — it
+wrote and rendered correctly, which in one click eliminated the table, RLS, the
+permission backfill, both proxy routes, the join and the refetch, and isolated
+the fault to the observer alone. Two adjacent write paths into one table make an
+excellent bisector, and it was free.
+
+**Run the local Postgres lane instead of pushing to find out.** Three defects
+were caught before CI: a seed colliding with `uq_pipeline_stages_brand_sequence`
+(brands are *born* with default stages), `tenant_id` taken from the run — ADR-0001's
+seam string — where `tabsii.*` needs a real UUID FK, and a `performed_at` mapped
+without a `server_default` sending explicit NULL into a NOT NULL column. Each
+would have been a red run at ~6 min plus queue; together they would have been
+three separate round trips.
 
 ## What needs more thought
 
@@ -1696,6 +1759,23 @@ Rows now carry an identity independent of their current wording: their **refs** 
 
 The residue, stated rather than hidden: a *substantive* rewrite of an **unfiled** row still reads as a new row plus an orphan. With no ref and no shared wording there is nothing left to match on, and the warning tells the author to prune it. Citing an issue on a row is now worth something beyond bookkeeping.
 
+**Nothing verifies that an event's stored shape matches what a consumer expects.**
+`WorkflowRun.trigger_event` stores a payload flat; `RunOutcome.trigger_payload`
+unwraps a `payload` key. Both are template-owned, both are reasonable, and
+nothing connects them — the mismatch was invisible until a consumer read `{}`
+forever without erroring. A single fixture generated *from* a real stored run,
+shared by the template's own tests, would have caught it. The general form: two
+halves of one contract, each individually tested against its own idea of the
+shape.
+
+**A `workflow_dispatch` re-run cannot satisfy a `pull_request` required check,
+and nothing says so.** After a force-push produced no run, re-dispatching gave a
+green run that the PR ignored, still showing the cancelled `pull_request` run as
+failed. Closing and reopening the PR was the only thing that re-fired the real
+checks. AGENTS.md §6 tells you to re-trigger via `workflow_dispatch`; it does not
+say that this works for *observing* CI and not for *satisfying* it. Worth a
+sentence, because the failure mode is a PR that can never go green.
+
 ## Skills used
 
 Skills cannot be iterated on impressions. Every invocation, with an honest outcome.
@@ -1786,6 +1866,10 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 
 
+| `biffo-sib-imp` | **worked** | Three plans (`0005`, `0006`, `0007`) from PRD rows. Step 2's "read the target repo's actual current code" is what turned each one from prose into something buildable — `0005` found the tables already live and unexposed rather than missing, `0006` found `Lead` still settable through generic CRUD (which decided trigger-vs-application capture), `0007` found `core-manifest.json` made the approved design unimplementable as written. All three findings changed the plan *before* code. |
+| `biffo-sib-build` | **partial** | Executed `0007` end to end, 9 PRs. But its Step 2 says "implement exactly what the milestone describes", and two milestones could not be: M5's timeline could not use generic CRUD (`make_list_handler` takes no filters) and M4's consumer could not be a plugin without touching template-owned registration. The skill's "when to stop and ask" list covers *"the plan's approach doesn't work against the real code"* — correct trigger, but it reads as an escalation gate when the honest action for a contained change is "do it and flag it loudly in the PR". Worth distinguishing a design change (ask) from a mechanism change (flag). |
+| `biffo-verify` | **worked** | Invoked on a suspected regression. §2 ("reproduce, don't theorise") killed four successive theories — scope matching, tenant seam, trigger exclusion, deploy ordering — none of which survived contact with the live system. §Never ("absence of evidence is not evidence") is what forced reading the actual run history instead of a metric, which found the real bug in one call. §3 then caught that the corrected test genuinely fails without the fix. |
+| `biffo-verify` | **should have been invoked sooner** | It was run at the *end*, after the build. Two of the four scoreboard rows above (the self-proving fixture, the metric attribution) were live the whole time and would have been caught by §2/§Never on the first "is this working?" question rather than the last. The trigger list is debugging-shaped; a *verification* step inside a build is the same discipline and does not read as a match. |
 
 ## Adding a row
 

@@ -36,13 +36,18 @@ export const coreDiffCommand = new Command('diff')
     '--template <path>',
     'Path to a biffo-template checkout to compare against (defaults to the template this CLI ships with)',
   )
-  .action(async (options: { cwd?: string; template?: string }) => {
+  .option('--json', 'Emit the classification as JSON on stdout instead of the human report')
+  .action(async (options: { cwd?: string; template?: string; json?: boolean }) => {
     const cwd = options.cwd ? resolve(options.cwd) : process.cwd()
     const runOptions: CoreDiffOptions = { cwd }
     if (options.template) runOptions.templateRoot = resolve(options.template)
+    if (options.json) runOptions.json = true
     try {
       await runCoreDiff(runOptions)
     } catch (err) {
+      // Errors go to stderr (log.error), so --json's stdout stays parseable
+      // even on failure: a consumer sees empty stdout and a non-zero exit,
+      // never a half-written document.
       log.error((err as Error).message)
       process.exit(1)
     }
@@ -52,6 +57,41 @@ export interface CoreDiffOptions {
   cwd: string
   /** Template checkout to compare against; defaults to the one this CLI ships with. */
   templateRoot?: string
+  /** Emit `CoreDiffJson` on stdout instead of the human report. */
+  json?: boolean
+}
+
+/**
+ * The machine-readable contract of `biffo core diff --json` (#696).
+ *
+ * This exists because the prose report was the only output, so every consumer —
+ * an instance's divergence tooling, a governance check, an agent — hand-parsed
+ * section headers and indented file lists. That fails *quietly and low*: a parse
+ * that drops a line reports fewer divergences than exist and looks authoritative
+ * doing it. Revalidating tabsii's `biffo.divergence.json` against core-v0.133.4,
+ * an extraction reported 4 undeclared files when the answer was 5 — caught only
+ * because the header carried its own count.
+ *
+ * Buckets mirror `CoreDiff` exactly and carry the same meanings, including
+ * `instanceOnly` being distinct from `removed` (#689) — the distinction a
+ * consumer most needs and the prose most easily loses.
+ */
+export interface CoreDiffJson {
+  /** Bumped only on a breaking change to this shape, so consumers can fail loudly. */
+  schemaVersion: 1
+  /** The instance's recorded core version, or `null` when it records none. */
+  instanceCore: string | null
+  templateCore: string
+  /** Present in both, content differs — an upgrade three-way merges these. */
+  modified: string[]
+  /** Present in the template, absent here — an upgrade adds these. */
+  added: string[]
+  /** The template shipped this and later dropped it — an upgrade deletes it. */
+  removed: string[]
+  /** Present here, never in the template. An upgrade leaves these alone (#689). */
+  instanceOnly: string[]
+  /** Count of template-owned files that match. */
+  unchanged: number
 }
 
 /**
@@ -75,6 +115,23 @@ export async function runCoreDiff(options: CoreDiffOptions): Promise<void> {
 
   const diff = computeCoreDiff(templateRoot, options.cwd, manifest)
   const total = diff.added.length + diff.removed.length + diff.modified.length
+
+  if (options.json) {
+    // Nothing else may reach stdout on this path — not the banner, not the
+    // "no changes" success line — or the document stops being parseable.
+    const payload: CoreDiffJson = {
+      schemaVersion: 1,
+      instanceCore: instanceVersion ?? null,
+      templateCore: templateVersion,
+      modified: diff.modified,
+      added: diff.added,
+      removed: diff.removed,
+      instanceOnly: diff.instanceOnly,
+      unchanged: diff.unchanged,
+    }
+    console.log(JSON.stringify(payload, null, 2))
+    return
+  }
 
   console.log(chalk.bold('\n  Biffo core diff\n'))
   console.log(`  instance core:  ${instanceVersion ?? chalk.dim('(unrecorded)')}`)

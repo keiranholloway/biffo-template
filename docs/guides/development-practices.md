@@ -42,7 +42,7 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | [#647](https://github.com/keiranholloway/biffo-template/issues/647) | CloudFront rewrites API 403/404 to `200` + portal HTML, so every backend failure reads as a JSON parse error in the client | **fail-open** · visibility | biffo-plugin-ideation (admin UI) | biffo-template `modules/cloud/aws/cdn` + biffo-platform | **open** |
 | [#652](https://github.com/keiranholloway/biffo-template/issues/652) | ADR-0021's `/api/v1/plugins/{proxy+}` catch-all shadows ADR-0003's manifest-declared `api_routes`; a plugin's call to Core loops back into the plugin host | **boundary** | biffo-plugin-ideation (admin UI) | biffo-template + biffo-platform | **open** |
 | — | Auto-merge disabled and `delete_branch_on_merge` off, against a `dev` taking a merge every 3–5 min with a ~2.5 min CI cycle — four rebases lost to the race on one PR | process | biffo-template settings | biffo-template settings | **fixed** (both enabled 2026-07-27) |
-| — | Three Cognito client IDs in one origin's `localStorage`; two belong to destroyed pools. AWS has exactly one pool and one client — pure browser residue, but any code picking the "first" match grabs a dead token | drift | dev.biffo.io portal | portal / plugin `web-admin` | **unfiled** — prune non-matching `CognitoIdentityServiceProvider.*` keys |
+| — | **Now FOUR Cognito client IDs in one origin's `localStorage`, three of them dead.** Was three-and-two when first logged; re-measured 2026-07-28 by calling the admin API with each token in turn — exactly one (`1ccelk…`, its **idToken**, not its accessToken) returns 200, the other seven 401. AWS has one pool and one client; the rest is browser residue that **accumulates**, so any code picking the "first" match grabs a dead token with rising probability. The count in this row was stale within days of being written, which is the second-order lesson: a number in prose needs a re-measurement date attached or it silently becomes wrong | drift · visibility | dev.biffo.io portal | portal / plugin `web-admin` | **unfiled** — prune non-matching `CognitoIdentityServiceProvider.*` keys |
 | — | CI logs not retained for self-hosted runs, so a green check cannot be inspected to confirm *what it actually did* | visibility | biffo-template CI | biffo-template CI | **unfiled** |
 | — | `ci.yml` fires on both `push` and `pull_request`, leaving duplicate in-flight runs that make "are all checks done?" unanswerable to tooling | visibility · process | biffo-template CI | biffo-template CI | **unfiled** |
 | [#689](https://github.com/keiranholloway/biffo-template/issues/689) | `core diff` reports instance-authored files as `removed` — a false data-loss signal that `core upgrade` does not act on. Halted a deploy, produced an incorrect issue, and prompted a workaround hunt, all for something that would not happen | **visibility** | biffo-platform upgrade | biffo-template `cli/` | **open** |
@@ -151,6 +151,11 @@ shape recurring across unrelated components is a design problem, not bad luck.
 
 | — | **§1 checks the issue in front of you, not the repo around it — and with several sessions running, that is where the answer already was.** [tabsii-platform#282](https://github.com/tabsii-com/tabsii-platform/issues/282) ("SES is in the sandbox; publish DKIM, request production access") was filed at **09:08**. It was found at **11:20**, after two hours spent working on tabsii-crm#52 — whose blocker it *is* — and after writing a scoreboard row about misreading the sandbox state. Nothing was duplicated, but the sandbox state was re-derived independently **and got wrong**, while a two-hour-old issue had it right with better evidence. The §1 commands search by issue number and by error string; neither surfaces *"what else is in flight in this repo right now"* | **visibility** · process | biffo-template (this session) | practice — `gh issue list --state open` on the repo you are about to touch, not just the issue you were handed | **unfiled** — cost ~2h of an avoidable wrong belief, though not 2h of wasted work |
 | — | **Five milestones of candidate-facing email passed because every one was addressed to the same hand-verified mailbox.** SES on dev is sandboxed, so it rejects any unverified recipient — but every workflow built to date sent to `keiran@tabsii.com`, the one verified identity. The gate was never exercised, so it never failed, and the first genuinely external recipient (`{email}` on a "Thanks for registering" workflow) hit `MessageRejected` in front of a real user. **A constraint you never test looks identical to one you have satisfied** | **fail-open** | tabsii-platform [#282](https://github.com/tabsii-com/tabsii-platform/issues/282) | tabsii-platform (#280/#281 put the identity + config set in code; production access still to request) | **open** — recorded here because it is the strongest instance yet of this page's own headline: green is not evidence |
+| — | **A published version bump is not proof YOUR change shipped.** Waited for `npm view @biffo/cli version` to change, saw `0.160.0`, and reported the feature released. It was **#795 — another session's CLI change**; my PR was still one commit ahead of that tag. Caught only by grepping the tag's *contents* and finding one `idempotency_key` field where there should have been two. With several agents merging concurrently, "the version changed" answers *a* question, just not the one asked — the third instance in one session of a plausible signal answering a slightly different question, after the paginated `length()` and the retention ceiling. The reliable check is `git show <tag>:<path>` for the thing you added | **visibility** | biffo-template releases | practice — verify the tag's content, never the version number | **fixed** in practice; re-verified all five pieces in `core-v0.161.0` by content before upgrading. **Nothing enforces it** — no tooling links a release tag to the PR that caused it |
+| — | **The one admin view that would have exposed months of double-billing cannot group by what makes runs duplicates.** `AgentRunSummary` omits `causation_id`, so the agent-runs list — the surface an operator actually scans — cannot group runs by chain. Two `idea-scout-synthesis` runs one second apart on the same chain render as two ordinary rows. Establishing that #661 had fired required an **N+1 fetch of every detail record** through the API. The data was always there; the shape that makes the defect legible was not | **visibility** | biffo-platform admin portal | biffo-template `services/api` (`AgentRunSummary`) | **unfiled** — add `causation_id` to the summary, or a chain grouping/filter to the list |
+| [#22](https://github.com/keiranholloway/biffo-plugin-idea-scout/issues/22) | **A deploy step skipped an admin-UI build for a plugin that declared one, silently, for every environment.** The condition was `if jq -e '.admin_ingress' … && [ -d "$plugin_dir/web-admin" ]` — declare the ingress with no `web-admin/` and the build is skipped with **no error and no warning**, the deploy reports success, and `GET /admin/` 404s. A CDN rule then rewrites that 404 into the marketing portal's HTML (#647), so the visible symptom is an admin URL apparently serving an **unauthenticated page**. Same fail-open shape as the audit gates in #591/#644. Patching it, I asserted the occurrence count expecting two (the line numbers in the issue) and found **three** — `deploy-prod` carries the same block | **fail-open** · boundary | biffo-plugin-idea-scout (admin URL) | biffo-template [#793](https://github.com/keiranholloway/biffo-template/pull/793) + the plugin [#30](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/30) + vendored resync [platform#97](https://github.com/keiranholloway/biffo-platform/pull/97) | **fixed** — deploy now fails loudly; declaration removed at source and in the vendored copy |
+| — | **Shipping a new deploy-time gate can red an instance whose vendored copy is stale, and the ordering is invisible until it fails.** The guard above was correct and `biffo-platform`'s **vendored** `services/idea-scout/biffo.plugin.json` still declared `admin_ingress` — so the first core upgrade carrying the guard would have failed that instance's deploys. Merging the plugin repo does not reach the vendored copy; that needs its own resync PR. Caught before it fired, by checking both vendored manifests against the new condition rather than assuming the source fix propagated | **boundary** · process | biffo-platform deploys (predicted, not suffered) | ordering: plugin → vendored resync → core upgrade | **avoided** — resync landed first. **The general case is open**: nothing warns that a new gate will fail on an instance's current tree |
+
 ### What the classes say
 
 > Counted from `docs/practices/evidence.jsonl`, not asserted. Regenerate with
@@ -238,24 +243,28 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **116 rows** (never typed by hand, see *Adding a row*):
+`byFixRepo`, regenerated at **121 rows** (never typed by hand, see *Adding a row*):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 70 of 116 (60%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 13 of 116 (11%) | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
-| **biffo-platform** | 5 of 116 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 116 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-plugin-idea-scout** | 4 of 116 | Adapter seam, research search capability, its own styling |
-| **tabsii-marketplace** | 2 of 116 | `python-jose` removal; the credential-dependent build |
-| **tabsii-crm** | 2 of 116 | Its E2E harness, and a repo setting that diverged |
-| **biffo-plugin-ideation** | 1 of 116 | A UI rendering a 500 as an empty state |
-| **biffo-runners** | 1 of 116 | Runner fleet docs + fail-fast |
+| **biffo-template** | 72 of 121 (60%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
+| **tabsii-platform** | 13 of 121 (11%) | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
+| **biffo-platform** | 5 of 121 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 121 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-idea-scout** | 4 of 121 | Adapter seam, research search capability, its own styling |
+| **tabsii-marketplace** | 2 of 121 | `python-jose` removal; the credential-dependent build |
+| **tabsii-crm** | 2 of 121 | Its E2E harness, and a repo setting that diverged |
+| **biffo-plugin-ideation** | 1 of 121 | A UI rendering a 500 as an empty state |
+| **biffo-runners** | 1 of 121 | Runner fleet docs + fail-fast |
 
-**`biffo-template` takes 70 of 116 — 60%, a sixth consecutive measurement in the
-same direction:** 86% at 50 and 57 rows, 82% at 65, 70% at 94, 66% at 102, 63% at
-109, 60% now. The absolute count barely moved (69 → 70) while the total grew by
-seven; the slide is satellites accumulating rows, not the template shedding them.
+**`biffo-template` takes 72 of 121 — 60%, and the slide has flattened:** 86% at
+50 and 57 rows, 82% at 65, 70% at 94, 66% at 102, 63% at 109, 60% at 116, **60%
+now**. Two consecutive captures at the same figure is the first time that has
+happened since 50 rows. Note this capture moved the *opposite* way to the last
+one: the template gained 2 of the 5 new rows outright and satellites gained none,
+so the flattening is the template absorbing findings again, not satellites
+slowing down. One capture is not a turn — say so next time rather than declaring
+one.
 
 `tabsii-platform` is now 13 of 116 and owns the two newest: its RLS lane and its
 SES identity. Read with `tabsii-crm`'s first appearance last capture, the shape
@@ -270,12 +279,18 @@ to 12 (its RLS lane, the tests on it, and now its two extra DB engines), the sha
 keeps moving from "instances surface what the template must fix" toward
 "instances carry capability the template does not offer".
 
-**`visibility` is now the largest class at 34 of 114**, and it grew fastest this
-session: three of the five new rows are cases where *a measurement was
-confidently wrong*, not where the truth was hidden. That is a distinguishable
-sub-shape — a paginated `length()`, a retention ceiling read as a data
-description, a sub-agent's figures repeated unmeasured — and all three produced
-plausible numbers that were acted on. `surfacedNotFixedHere` is **68 of 114**.
+**`visibility` is now the largest class at 37 of 121**, and it keeps growing
+fastest. The sub-shape named last capture — *a measurement that is confidently
+wrong, rather than a truth that is hidden* — has now recurred **six times**: a
+paginated `length(events)` (57x undercount), a retention ceiling read as a data
+description, a sub-agent's figures repeated unmeasured, a purge script reporting
+"0 kept" for a group with 16 live streams, a stale `core.version` reading 114
+minor versions behind, and a published version bump attributed to the wrong PR.
+
+Six instances is no longer a sub-shape, it is the dominant failure mode on this
+page, and every one produced a **plausible non-empty answer that was acted on**.
+The existing rule (*absence of evidence is not evidence*) covers empty results
+and none of these. `surfacedNotFixedHere` is **74 of 121**.
 
 **The SQL-echo rows are the older pattern reasserting itself:** the exposure was
 found in `biffo-platform` (and independently live in `tabsii-platform`) and could
@@ -976,7 +991,19 @@ the cost of confirming was seconds.
 
 **Re-deriving a delegated result's scope found three more engines.** The sub-agent's patch fixed the engine that was reported. Independently re-scanning found three others in the template, one of which administers `CREATE ROLE … PASSWORD`; the same guard later found two more in tabsii, including a BYPASSRLS engine and a second password path. None of the five were in any report. Verifying the agent's *claims* would never have surfaced them, because every claim it made was true.
 
+**Refusing to read a clean result as a fix.** The live verification of #661 produced exactly what success looks like: one keyed chain, one synthesis run. But **6 of 8 pre-fix chains also produced exactly one run** — the observed double-fire rate is ~25%, so one clean sample is equally consistent with "the fix works" and "the race did not trigger". Checking the base rate before claiming prevention is what stopped this being closed on evidence that proves nothing. The issue stayed open.
+
+**Checking what a file actually served before deleting it.** Removing `admin_ingress` looked like it would take the working admin API with it — `/admin/build-types` and `/admin/chat-agents` live in `admin_app.py`, which only mounts because of that declaration. Reading the handlers showed every one is a thin proxy to Core (`_core_request`), and both capabilities remain at Core's own paths. Had I trusted the first reading, I would either have shipped a capability regression or abandoned the correct fix.
+
+**Predicting a distribution ordering failure instead of discovering it.** A new deploy-time gate plus a stale vendored manifest equals a red instance. Checking both vendored plugins against the new condition — with `ideation` as a deliberate control to prove the gate did not simply reject everything — surfaced the ordering requirement before any deploy ran.
+
+**Reading past the layer, again (§5), on a route nobody had documented.** A relative `fetch('/api/v1/admin/agent-runs')` from the portal origin returned 403 for every one of eight tokens, which reads as "all tokens are dead". The portal in fact calls the **API Gateway host directly**; the relative path went through CloudFront to the portal's S3 origin. One `read_network_requests` call turned eight false negatives into a working request.
+
 ## What needs more thought
+
+**Nothing links a release tag to the PR that produced it.** With several agents merging concurrently, `core-v*` tags appear continuously and none of them says which change it carries. The only reliable check is to grep the tag's tree for the thing you added — which works, but is manual and easy to skip precisely when you are in a hurry to distribute. A release note listing the squash subjects since the previous tag would make the check trivial.
+
+**A database constraint on a VPC-only RDS instance cannot be verified from outside.** #661's uniqueness guarantee rests on a unique index. The migration is in the deployed package and `db-init` runs `command.upgrade` inline, so a green deploy is strong indirect evidence — but nothing exposes "does this index exist". The options are DB access, a duplicate insert through the SigV4-authed internal API, or an introspection endpoint built solely to satisfy the check. All three are unattractive, which is itself the finding: **we can deploy a constraint we cannot confirm.**
 
 **Nothing checks that a template-owned test will pass on an instance's layout.** The engine guard was correct, well-tested, and structurally unable to fail here — it encoded `src/**` as production-only, which is true of this repo and false of both instances. There is no pre-flight that runs a template's own test suite against an instance tree before release, so this class of defect is *only* discoverable by shipping it. A `biffo core upgrade --dry-run` that also ran the incoming tests against the instance checkout would have caught it in seconds instead of a full release lap.
 
@@ -1607,6 +1634,11 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **partial — §3's "fails for the RIGHT reason" caught my own weak proof, but only because I re-read it** | The first revert made all 6 new reaper tests fail with `AttributeError: no attribute 'agent_run_unclaimed_after_seconds'` — proving the *setting* was absent, not that the behaviour was wrong. Redone with the setting present and only the reap logic reverted, 5 failed behaviourally (`assert [] == ['cb12204b-…']`) and 1 passed, revealing it as a drift guard rather than a detector. §3 says "the right reason" but gives no worked example of a *wrong* right-reason; this is one, and it is the common shape when a fix adds config. |
 | `biffo-verify` | **partial — the Never list needs "never quote a config value as a measurement"** | "365-day retention" and "135 lines" and "complete agent transcripts" were all repeated from a sub-agent without measurement; actual values were ~7 days, 7,772 lines, and max 1,345 chars. The existing *"absence of evidence is not evidence"* rule covers empty results but not **confidently wrong non-empty ones**, which is what a paginated `length()` and a retention ceiling both produce. |
 | `biffo-workflow` | **partial — Step 7's auto-merge caveat is now confirmed, and the step should stop recommending it alone** | tabsii-platform#284: all six required checks green, auto-merge armed at 10:51, and it sat at `BEHIND` for ~28 minutes doing nothing. Merged only after a manual `gh pr update-branch`, which forced a full CI re-run first. The step already flags this as H1's likely refutation — it is now **observed**, so the wording should lead with "arm auto-merge *and* expect to update the branch by hand", or the experiment should be closed and a merge queue pursued. |
+| `biffo-verify` | **worked — §7 was the whole value this time** | The live #661 result looked like success and §7's "say what you did not verify" forced the base-rate check that showed it wasn't evidence (6 of 8 pre-fix chains also produced one run). The same step kept three separate claims apart in the write-up: key **observed**, index **inferred from a green migration**, prevention **not demonstrated**. Under-claiming cost nothing; the issue stayed open and honest. |
+| `biffo-verify` | **worked** | §4 again, on a question it is not advertised for: after the upgrade I read the *deployed Lambda package* for all four pieces rather than trusting the deploy's green. §5 then salvaged the token work — eight tokens returning 403 read as "all dead" until `read_network_requests` showed the portal calls the API Gateway host directly, not `dev.biffo.io/api/v1`. |
+| `biffo-verify` | **partial — the Never list still has no rule for "a signal that answers a different question"** | Three instances in one session: a paginated `length(events)` (57x undercount), a retention *ceiling* read as a data description, and now a **version bump attributed to my own PR when it was another session's release**. All three are confidently wrong non-empty answers, which the existing *absence of evidence is not evidence* rule does not cover. A fourth rule is earned: **verify the artifact carries your change, not that something changed.** |
+| `biffo-workflow` | **worked** | §9's distribution ordering, applied predictively rather than after a failure: a new deploy gate + a stale vendored manifest = a red instance, so the sequence was plugin → vendored resync → core upgrade. Also caught myself writing `Closes #661` on a PR whose own body said the issue must stay open — amended to `Refs`, force-pushed, and verified the remote no longer carries the keyword. The closing-keyword trap is already on this page in both directions. |
+
 
 
 ## Adding a row

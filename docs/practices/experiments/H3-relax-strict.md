@@ -190,6 +190,60 @@ the duration.
   is the price of H1 having been abandoned rather than completed.
 - **Volume is not stable.** All primary metrics are rates or per-PR.
 
+## Interim observation — 2026-07-28, day 0
+
+**Not a result.** The review date is 2026-08-11 and the prediction is on a 7-day
+window; this is one day, most of which predates the intervention. It is recorded
+because the numbers do **not** point the way the change's advocate (me) expected,
+and an inconvenient early reading is exactly the thing that gets quietly dropped
+if it is not written down when seen.
+
+Measured with `node scripts/practices-metrics.mjs --windows 1`:
+
+| repo | `strict` | `racedShare` | `repushRate` |
+| --- | --- | --- | --- |
+| **biffo-template** | **false** | **11.9%** | **26.9%** |
+| biffo-platform | true | 13.3% | 26.7% |
+| biffo-plugin-idea-scout | true | 12.5% | 12.5% |
+| tabsii-platform | true | 30.0% | 36.7% |
+| biffo-plugin-ideation | true | 0% | 14.3% |
+
+Against the pre-registered targets for `biffo-template` (`racedShare` **<3%**,
+`repushRate` **<25%**, from 16.0% / 43.6%):
+
+- **`repushRate` has moved a long way** — 43.6% → 26.9%, just outside target.
+- **`racedShare` has barely moved** — 16.0% → 11.9%, nowhere near <3%, and
+  **statistically indistinguishable from two `strict: true` comparators**
+  (biffo-platform 13.3%, idea-scout 12.5%).
+
+If that holds for seven days it refutes the hypothesis as stated, and the
+pre-registration already says what that means: *"the race had a cause nobody has
+identified, which is itself worth knowing."* `tabsii-platform` at 30% is the one
+repo behaving as the theory predicts a `strict: true` repo should, which is a
+thread worth pulling — it is also the busiest instance.
+
+### A correction to how this was nearly recorded
+
+The first version of this observation was going to be an **anecdote**: on the day
+`strict` came off, `biffo-template` took 44 merges and not one of my ~9 PRs there
+went `BEHIND`, while the two instance PRs I merged both did. That reads as strong
+support and it is worthless — a personal sample of nine, selected by which PRs I
+happened to open, against a metric that says 11.9%.
+
+Computing `racedShare` instead took one command and reversed the conclusion. The
+lesson is not subtle and this page keeps relearning it: **a vivid sample is not a
+measurement**, and the direction of the error was toward believing my own change
+had worked.
+
+### Caveats on these numbers specifically
+
+- **One day, and `strict` came off partway through it.** The window contains PRs
+  from both regimes; day 0 flatters neither side reliably.
+- **`racedShare` counts "green >10 min *and* repushed".** A repush for any other
+  reason — a review comment, a fix — counts identically. At small n that is noise.
+- **The comparators are not controls.** Different repos, different workloads,
+  different merge rates.
+
 ## Result
 
 _To be completed on 2026-08-11. Verdict: `confirmed` / `refuted` /

@@ -278,3 +278,33 @@ def test_apply_overrides_whatever_the_plugin_supplied():
 def test_a_snapshot_with_no_writeback_is_returned_untouched():
     snapshot = {"agent_name": "researcher", "output_tools": [{"function": {"name": "keep_me"}}]}
     assert wb.apply_writeback_output_tool(snapshot) is snapshot
+
+
+# ── from_payload: a create's parent keys come from the trigger, not the model ──
+
+
+def test_from_payload_requires_the_field_it_reads():
+    """A derivation that names no field would silently resolve to nothing, and
+    the column it guards is exactly the one that must not be guessable."""
+    with pytest.raises(wb.WriteBackConfigurationError, match="names no payload field"):
+        wb.DerivedValue(column="lead_id", kind="from_payload")
+
+
+def test_from_payload_builds_a_derivation_bound_to_a_trigger_field():
+    derived = wb.from_payload("lead_id", "lead_id")
+    assert derived.kind == "from_payload"
+    assert derived.payload_field == "lead_id"
+    # Not scope-derived, so it places no requirement on a definition's scope —
+    # the value comes from the event instead.
+    assert _target(derived=(wb.from_payload("lead_id", "lead_id"),)).scope_levels == ()
+
+
+def test_a_payload_derived_column_is_still_not_agent_writeable():
+    """The guard that already refuses a column being both agent-writeable and
+    Core-set applies to this kind too — otherwise declaring it would hand the
+    model back the very column the derivation exists to keep from it."""
+    with pytest.raises(wb.WriteBackConfigurationError):
+        _target(
+            columns=(wb.WriteBackColumn(name="lead_id", label="Lead", type="text"),),
+            derived=(wb.from_payload("lead_id", "lead_id"),),
+        )

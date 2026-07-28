@@ -150,12 +150,25 @@ def _coerce(column: WriteBackColumn, value: Any) -> Any:
     return text
 
 
-def _derived_value(derived: DerivedValue, *, tenant_id: str, scope: dict[str, Any] | None) -> Any:
+def _derived_value(
+    derived: DerivedValue,
+    *,
+    tenant_id: str,
+    scope: dict[str, Any] | None,
+    event: dict[str, Any] | None = None,
+) -> Any:
     """Resolve one Core-set column from trusted state (ADR-0027 §4)."""
     if derived.kind == "from_tenant":
         return tenant_id
     if derived.kind == "literal":
         return derived.value
+    # from_payload — the trigger event, which was settled before the model
+    # produced anything. Same rule as RowSelector, one level up: a create's
+    # parent keys decide which row it belongs to and which policies judge it, so
+    # they can no more come from the agent than an update's target row can.
+    if derived.kind == "from_payload":
+        value = (event or {}).get(derived.payload_field or "")
+        return value if value not in (None, "") else None
     # from_scope — the definition's *validated* scope, which the authoring gate
     # already checked the author may act on. This is the value an instance's row
     # policies evaluate, which is exactly why it may not come from the model.
@@ -555,10 +568,30 @@ async def execute_writeback(
             ),
         )
 
+    event_payload = agent_run.input_payload or {}
+    missing = missing_payload_derivations(target, event_payload) if operation == "create" else []
+    if missing:
+        return await _deny(
+            db,
+            tenant_id=tenant_id,
+            run_id=workflow_run.id,
+            definition=definition,
+            reason=(
+                "the trigger event carries no "
+                + ", ".join(missing)
+                + " for this write-back to belong to"
+            ),
+        )
+
     try:
         if operation == "create":
             row = await _create_row(
-                db, target=target, tenant_id=tenant_id, scope=definition.scope, values=values
+                db,
+                target=target,
+                tenant_id=tenant_id,
+                scope=definition.scope,
+                values=values,
+                event=event_payload,
             )
         else:
             row = await _update_row(
@@ -566,7 +599,7 @@ async def execute_writeback(
                 target=target,
                 tenant_id=tenant_id,
                 values=values,
-                event=agent_run.input_payload or {},
+                event=event_payload,
             )
     except SQLAlchemyError as exc:
         # A row policy refusing the write arrives here (PostgreSQL 42501). It is
@@ -614,6 +647,21 @@ async def execute_writeback(
     return WriteBackOutcome(status="written", run_id=workflow_run.id, row_id=row_id)
 
 
+def missing_payload_derivations(target: WriteBackTarget, event: dict[str, Any] | None) -> list[str]:
+    """Columns the target derives from the trigger event that the event lacks.
+
+    Checked *before* the insert so the refusal names the missing field, rather
+    than surfacing as a NOT NULL violation the author has to decode — and so a
+    row is never half-written from a payload that could not identify its parent.
+    """
+    payload = event or {}
+    return sorted(
+        derived.column
+        for derived in target.derived
+        if derived.kind == "from_payload" and payload.get(derived.payload_field or "") in (None, "")
+    )
+
+
 async def _create_row(
     db: AsyncSession,
     *,
@@ -621,11 +669,12 @@ async def _create_row(
     tenant_id: str,
     scope: dict[str, Any] | None,
     values: dict[str, Any],
+    event: dict[str, Any] | None = None,
 ) -> Any:
     """Insert, with Core-set columns taken from trusted state, never the model."""
     fields = {name: value for name, value in values.items() if value is not None}
     for derived in target.derived:
-        resolved = _derived_value(derived, tenant_id=tenant_id, scope=scope)
+        resolved = _derived_value(derived, tenant_id=tenant_id, scope=scope, event=event)
         if resolved is not None:
             fields[derived.column] = resolved
     row = target.model(**fields)

@@ -79,7 +79,7 @@ RESERVED_COLUMNS: frozenset[str] = frozenset(
 #: How a derived value is produced. ``from_scope`` is the one that matters for
 #: security: it takes the id from the *definition's validated scope*, which is
 #: the only trustworthy source for a column an authorization decision turns on.
-DERIVED_KINDS: tuple[str, ...] = ("from_tenant", "from_scope", "literal")
+DERIVED_KINDS: tuple[str, ...] = ("from_tenant", "from_scope", "literal", "from_payload")
 
 
 class WriteBackConfigurationError(ValueError):
@@ -139,6 +139,8 @@ class DerivedValue:
     level: str | None = None
     #: The fixed value, when ``kind`` is ``literal``.
     value: Any = None
+    #: The trigger event's field to read, when ``kind`` is ``from_payload``.
+    payload_field: str | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in DERIVED_KINDS:
@@ -149,6 +151,10 @@ class DerivedValue:
         if self.kind == "from_scope" and not self.level:
             raise WriteBackConfigurationError(
                 f"Derived column {self.column!r} is from_scope but names no level."
+            )
+        if self.kind == "from_payload" and not self.payload_field:
+            raise WriteBackConfigurationError(
+                f"Derived column {self.column!r} is from_payload but names no payload field."
             )
 
 
@@ -165,6 +171,24 @@ def from_scope(column: str, level: str) -> DerivedValue:
 def literal(column: str, value: Any) -> DerivedValue:
     """A fixed value — provenance markers such as ``source="agent"``."""
     return DerivedValue(column=column, kind="literal", value=value)
+
+
+def from_payload(column: str, payload_field: str) -> DerivedValue:
+    """A value the **trigger event** carried — never the agent's output.
+
+    This is ``RowSelector``'s rule applied to a create. An update's row comes
+    from the event because letting the model choose would make "which row" an
+    LLM decision; a create's parent keys are the same question one level up. A
+    row written into ``candidate_scores`` belongs to the lead the run was *about*,
+    and the ``brand_id`` beside it is what the instance's row policies evaluate —
+    so if the model could supply either, LLM output would be feeding an
+    authorization decision.
+
+    The field is read from the run's ``input_payload``, which is the trigger
+    event as it was when the run was created — settled before the model produced
+    anything.
+    """
+    return DerivedValue(column=column, kind="from_payload", payload_field=payload_field)
 
 
 @dataclass(frozen=True)

@@ -1,8 +1,11 @@
 # H2 — a merge queue removes the race that auto-merge could not
 
-**Status:** `running`
-**Pre-registered:** 2026-07-28, **before** the queue was enabled
-**Review on:** 2026-08-11 (14 days)
+**Status:** `abandoned` on 2026-07-28, **hours after pre-registration and before
+the intervention was ever applied** — GitHub does not offer a merge queue on this
+account. The experiment never ran. Superseded by [H3](./H3-relax-strict.md).
+See [Result](#result).
+**Pre-registered:** 2026-07-28, before the queue was enabled
+**Review on:** ~~2026-08-11~~ — never reached; see Result
 
 > Written and committed before the intervention, like [H1](./H1-merge-race.md).
 > The ordering is the point: a prediction written afterwards is a description,
@@ -174,7 +177,42 @@ API call to put back. Nothing about the repo's history or contents changes.
 
 ## Result
 
-_To be completed on 2026-08-11. Verdict: `confirmed` / `refuted` /
-`inconclusive` / `abandoned`. A refuted hypothesis gets the change rolled back,
-not quietly kept because it felt better — and the counter-metric can refute it on
-its own._
+**Verdict: `abandoned`** — 2026-07-28, the same day it was pre-registered, before
+the intervention was applied. **The experiment never ran and produced no data
+about merge queues.**
+
+**GitHub does not offer a merge queue on this account.** Established, not
+assumed:
+
+| Check | Result |
+| --- | --- |
+| `merge_queue` ruleset rule on `keiranholloway/biffo-template` (public, personal account) | HTTP 422 `Invalid rule 'merge_queue'` |
+| The same rule on `tabsii-com/tabsii-geo` (private, org, Team plan) | HTTP 422, identical |
+| A `non_fast_forward` rule on the same repo | created successfully |
+| The `dev` branch protection UI | lists every other option — approvals, status checks, up-to-date, conversation resolution, signed commits, linear history, deployments, lock branch, force pushes, deletions — and **no merge queue option at all** |
+
+So it is the feature, not the payload, not permissions, and not the ruleset API.
+The most likely eligibility rule — inferred, not verified — is that GitHub gates
+merge queue to organization-owned public repositories and to Enterprise Cloud for
+private ones. Neither repo qualifies: `biffo-template` is public but
+personally owned; `tabsii-geo` is org-owned but private on Team.
+
+Both capability probes were deleted immediately; no ruleset survives, and no
+branch protection was modified. `#752` — which taught CI to report required
+checks for `merge_group` — is kept: it is inert without a queue, costs nothing,
+and is exactly the prerequisite that would be needed if this ever becomes
+available.
+
+**What this cost, and what it bought.** It cost the `merge_group` prerequisite
+and this file. It bought a hard constraint that was not previously written down
+anywhere: **the purpose-built fix for the merge race is unavailable to this
+estate.** H1 named two next moves; this eliminates one of them permanently. That
+narrowing is the result.
+
+**Next move: the other one.** H1's remaining pre-registered alternative is
+relaxing `strict`, described there as "cheaper, weaker". That is
+[H3](./H3-relax-strict.md), pre-registered before it was applied.
+
+> Recorded in full rather than deleted. An experiment that could not run is
+> evidence about the environment, and a file that quietly disappeared would take
+> that finding with it — leaving the next person to rediscover the 422 themselves.

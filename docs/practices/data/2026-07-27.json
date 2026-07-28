@@ -3269,5 +3269,9 @@
       }
     }
   },
-  "unmeasured": []
+  "unmeasured": [],
+  "provenance": {
+    "collector": "pre-#703 (as originally written)",
+    "note": "Computed by a collector predating #703/#706/#708, because practices-daily.sh was running from a tree stuck 45 commits behind dev. NOT regenerated: the collector anchors every window to Date.now() and names its output after today, so re-running it could only write today's data under this filename. Measured impact on the 2026-07-28 window was nil for 12 of 15 repos; the three that differed had gained merges in the interval, not been reclassified."
+  }
 }

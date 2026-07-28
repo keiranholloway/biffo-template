@@ -83,6 +83,7 @@ td.hot{color:var(--crit); font-weight:600}
 td.mid{color:var(--warn)}
 .side{font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:var(--ink-3); margin-left:6px}
 
+.stale{margin-top:4px; padding:8px 10px; border-left:3px solid var(--warn); background:var(--warn-bg); color:var(--ink-2); font-size:12px}
 .unvalidated{padding:16px 18px; border:1px dashed var(--warn); border-radius:3px; background:var(--warn-bg); color:var(--ink-2); font-size:13px}
 .unvalidated code{font-family:ui-monospace,monospace; font-size:12px}
 .sessions{display:flex; flex-direction:column; gap:6px; padding:16px 18px; background:var(--surface); border:1px solid var(--line); border-radius:3px; font-size:14px}
@@ -99,17 +100,17 @@ td.mid{color:var(--warn)}
       <h1>Are we building the product, or maintaining the machine?</h1>
     </div>
     <div class="stamp num">
-      collected 2026-07-28 06:34 UTC<br />
+      collected 2026-07-28 07:09 UTC<br />
       windows 1 / 7 / 90 days
     </div>
   </div>
 
   <div class="headline">
     <p class="q">Product features as a share of all merges — rolling 7 days</p>
-    <div class="v num">4.5%</div>
+    <div class="v num">4.4%</div>
     <div class="sub">
       <span class="pill critical">critical</span>
-      &nbsp;90-day baseline 13.8% · last 24h 4.9%
+      &nbsp;90-day baseline 13.6% · last 24h 5.9%
     </div>
   </div>
 
@@ -123,20 +124,20 @@ td.mid{color:var(--warn)}
     
     <div class="tile critical">
       <div class="label">Platform vs product · 7d</div>
-      <div class="value num">77.1% / 22.9%</div>
-      <div class="note">merges in biffo-* vs tabsii-* · baseline 63% / 37%</div>
+      <div class="value num">80.5% / 19.5%</div>
+      <div class="note">merges in biffo-* vs tabsii-* · baseline 65.6% / 34.4%</div>
     </div>
     
     <div class="tile critical">
       <div class="label">Green-but-unmerged · 7d</div>
-      <div class="value num">111.2h</div>
-      <div class="note">correct work that could not land · baseline 269.9h over 90d</div>
+      <div class="value num">112.2h</div>
+      <div class="note">correct work that could not land · baseline 270.8h over 90d</div>
     </div>
     
     <div class="tile unknown">
       <div class="label">Merges · 24h</div>
-      <div class="value num">144</div>
-      <div class="note">7d 536 · 90d 1118</div>
+      <div class="value num">152</div>
+      <div class="note">7d 544 · 90d 1126</div>
     </div>
   </div>
 
@@ -148,12 +149,12 @@ td.mid{color:var(--warn)}
   </div>
 
   <h2>Wall-clock vs the merge proxy — is the headline believable?</h2>
-  <div class="unvalidated">
-      <strong>No sessions recorded.</strong> Every figure above is inferred from merge
-      metadata — commit types and repo names — and nothing has tested that inference
-      against a real day's wall-clock. Record one with
-      <code>node scripts/practices-session.mjs --minutes N --delivery N --platform N --toil N</code>.
-    </div>
+  <div class="sessions">
+    <div><span class="k">recorded</span> <strong class="num">12</strong> tasks · <strong class="num">45.1h</strong></div>
+    <div><span class="k">wall-clock</span> delivery <strong class="num">8.9%</strong> · platform <strong class="num">59.5%</strong> · toil <strong class="num">31.6%</strong></div>
+    <div><span class="k">merge proxy</span> toil <strong class="num">42.9%</strong> — proxy is off by -11.3 points — treat the headline with suspicion</div>
+    
+  </div>
 
   <h2>By repository — 90-day baseline, with last 24h merges</h2>
   <div class="scroll">
@@ -166,35 +167,35 @@ td.mid{color:var(--warn)}
       </thead>
       <tbody><tr>
       <td><strong>biffo-template</strong><span class="side">platform</span></td>
-      <td class="num">75</td>
-      <td class="num">499</td>
-      <td class="num mid">16.4%</td>
-      <td class="num hot">36.9%</td>
-      <td class="num hot">14.6%</td>
+      <td class="num">79</td>
+      <td class="num">503</td>
+      <td class="num mid">16.3%</td>
+      <td class="num hot">36.8%</td>
+      <td class="num hot">14.5%</td>
       <td class="num hot">172.7h</td>
       <td class="num mid">45.7%</td>
-      <td class="num">2.7h</td>
+      <td class="num">2.8h</td>
     </tr>
 <tr>
       <td><strong>tabsii-platform</strong><span class="side">product</span></td>
-      <td class="num">22</td>
-      <td class="num">216</td>
-      <td class="num mid">23.1%</td>
-      <td class="num hot">33.8%</td>
-      <td class="num mid">6.5%</td>
-      <td class="num hot">60.1h</td>
-      <td class="num mid">43.3%</td>
+      <td class="num">25</td>
+      <td class="num">219</td>
+      <td class="num mid">22.8%</td>
+      <td class="num hot">34.2%</td>
+      <td class="num mid">7.3%</td>
+      <td class="num hot">60.7h</td>
+      <td class="num mid">43.2%</td>
       <td class="num">1.3h</td>
     </tr>
 <tr>
       <td><strong>tabsii-crm</strong><span class="side">product</span></td>
-      <td class="num">5</td>
-      <td class="num">84</td>
-      <td class="num ">13.1%</td>
-      <td class="num ">8.3%</td>
+      <td class="num">6</td>
+      <td class="num">85</td>
+      <td class="num ">12.9%</td>
+      <td class="num ">8.2%</td>
       <td class="num ">0%</td>
-      <td class="num ">8.1h</td>
-      <td class="num ">20%</td>
+      <td class="num ">8.4h</td>
+      <td class="num ">19.8%</td>
       <td class="num">1.8h</td>
     </tr>
 <tr>

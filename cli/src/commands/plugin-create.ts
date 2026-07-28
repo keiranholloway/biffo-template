@@ -30,6 +30,10 @@ export const pluginCreateCommand = new Command('create')
     'With --standalone, also create the GitHub repo under this org (or user), push, and protect dev',
   )
   .option(
+    '--runner-label <label>',
+    'With --org, the RUNNER_LABEL the new repo\u2019s CI should run on (defaults to mirroring this checkout\u2019s)',
+  )
+  .option(
     '--skeleton <path>',
     'Path to the plugin skeleton (defaults to _skeletons/plugin-template)',
   )
@@ -43,6 +47,7 @@ export const pluginCreateCommand = new Command('create')
         firstParty?: boolean
         standalone?: boolean
         org?: string
+        runnerLabel?: string
         skeleton?: string
         dryRun?: boolean
         commit?: boolean
@@ -57,6 +62,7 @@ export const pluginCreateCommand = new Command('create')
             firstParty: options.firstParty ?? false,
             standalone: options.standalone ?? false,
             ...(options.org ? { org: options.org } : {}),
+            ...(options.runnerLabel ? { runnerLabel: options.runnerLabel } : {}),
             ...(options.skeleton ? { skeletonRoot: resolve(options.skeleton) } : {}),
             dryRun: options.dryRun ?? false,
             commit: options.commit !== false,
@@ -96,6 +102,8 @@ export interface StandaloneGitHub {
     branch: string,
     statusChecks: string[],
   ): Promise<void>
+  setRepoVariable(org: string, repo: string, name: string, value: string): Promise<void>
+  getRepoVariable(org: string, repo: string, name: string): Promise<string | undefined>
 }
 
 export interface PluginCreateOptions {
@@ -104,6 +112,8 @@ export interface PluginCreateOptions {
   standalone: boolean
   /** With `standalone`, the GitHub org (or user) to create the repo under (#803). */
   org?: string
+  /** With `org`, the RUNNER_LABEL to set on the new repo. Mirrored when omitted. */
+  runnerLabel?: string
   skeletonRoot?: string
   dryRun: boolean
   commit: boolean
@@ -329,7 +339,7 @@ async function runStandaloneCreate(
           'steps printed by a --no-commit run.',
       )
     }
-    await createAndPushStandaloneRepo(options.org, names, destDir, deps)
+    await createAndPushStandaloneRepo(options.org, names, destDir, options, deps)
     return
   }
 
@@ -359,6 +369,7 @@ async function createAndPushStandaloneRepo(
   org: string,
   names: ReturnType<typeof deriveNames>,
   destDir: string,
+  options: PluginCreateOptions,
   deps: PluginCreateDeps,
 ): Promise<void> {
   if (deps.makeGitHub === undefined || deps.resolveToken === undefined) {
@@ -370,6 +381,14 @@ async function createAndPushStandaloneRepo(
 
   const cloneUrl = await github.createEmptyRepo(org, names.dist, `${names.slug} — a Biffo plugin`)
 
+  // BEFORE the push, deliberately. The push is what triggers the first CI run,
+  // and `runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}` is resolved from
+  // whatever the variable is at that moment. Setting it afterwards is a race
+  // that is only ever won by the API call being faster than GitHub's dispatcher
+  // — and losing it sends the first run to hosted runners, which is the exact
+  // billing failure this exists to prevent.
+  await propagateRunnerLabel(org, names.dist, options, deps, github)
+
   await deps.git.addRemote(destDir, 'origin', cloneUrl)
   await deps.git.push(destDir, 'dev', { token })
   log.success(`Pushed dev to ${org}/${names.dist}`)
@@ -378,6 +397,7 @@ async function createAndPushStandaloneRepo(
 
   const ciPath = join(destDir, '.github', 'workflows', 'ci.yml')
   const contexts = existsSync(ciPath) ? workflowCheckContexts(readFileSync(ciPath, 'utf8')) : []
+
   if (contexts.length === 0) {
     log.warn(
       `Could not determine required status checks from ${ciPath} — skipping branch protection. ` +
@@ -388,6 +408,86 @@ async function createAndPushStandaloneRepo(
   }
 
   printStandaloneRemoteNextSteps(names, org)
+}
+
+/**
+ * Give the new repo a runner to run on (#803 follow-up).
+ *
+ * ## Why this is not optional
+ *
+ * The skeleton's workflows run on `${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}`.
+ * A brand-new repo has no such variable, so it falls back to GitHub-hosted
+ * runners — and where the account's hosted-Actions minutes are exhausted, every
+ * job fails before it starts:
+ *
+ *     The job was not started because recent account payments have failed
+ *     or your spending limit needs to be increased
+ *
+ * On its own that is merely broken CI. Combined with the branch protection this
+ * command has just configured, it is worse: protection requires those exact
+ * jobs, so **every PR on the new repo is blocked for ever** by checks that can
+ * never report. Observed end to end on a real repo before this was added.
+ *
+ * `sibling create` already solves the same problem the same way
+ * (`sibling-create.ts`, "Mirror the core project's RUNNER_LABEL"). The value is
+ * fleet-specific — `biffo` and `tabsii` are both in use — so it is read from the
+ * checkout this command runs in rather than hardcoded, and `--runner-label`
+ * overrides.
+ *
+ * Best-effort, and loud when it cannot: a repo that exists with an unset label
+ * is fixable in one command, whereas aborting here would strand a repo that has
+ * already been created and pushed.
+ */
+async function propagateRunnerLabel(
+  org: string,
+  repo: string,
+  options: PluginCreateOptions,
+  deps: PluginCreateDeps,
+  github: StandaloneGitHub,
+): Promise<void> {
+  try {
+    let label = options.runnerLabel?.trim()
+
+    if (!label) {
+      const source = await currentRepoSlug(options.cwd, deps)
+      if (source) {
+        label = (await github.getRepoVariable(source.org, source.repo, 'RUNNER_LABEL'))?.trim()
+      }
+    }
+
+    if (!label) {
+      log.warn(
+        `No RUNNER_LABEL set on ${org}/${repo} — its CI will use GitHub-hosted runners. ` +
+          `If this account routes CI to a self-hosted fleet, every job will fail before it ` +
+          `starts, and the branch protection just configured will block every PR on checks ` +
+          `that never report. Fix with: gh variable set RUNNER_LABEL --repo ${org}/${repo}`,
+      )
+      return
+    }
+
+    await github.setRepoVariable(org, repo, 'RUNNER_LABEL', label)
+    log.success(`RUNNER_LABEL=${label} set on ${org}/${repo}`)
+  } catch (err: unknown) {
+    log.warn(
+      `Could not set RUNNER_LABEL on ${org}/${repo}: ${(err as Error).message}. ` +
+        `Set it manually if this account uses self-hosted runners.`,
+    )
+  }
+}
+
+/** `owner/repo` of the checkout this command is running in, if it has one. */
+async function currentRepoSlug(
+  cwd: string,
+  deps: PluginCreateDeps,
+): Promise<{ org: string; repo: string } | null> {
+  try {
+    const url = await deps.git.getRemoteUrl(cwd, 'origin')
+    const match = /[:/]([^/:]+)\/([^/]+?)(?:\.git)?$/.exec(url.trim())
+    if (match?.[1] === undefined || match[2] === undefined) return null
+    return { org: match[1], repo: match[2] }
+  } catch {
+    return null
+  }
 }
 
 function printStandaloneRemoteNextSteps(names: ReturnType<typeof deriveNames>, org: string): void {

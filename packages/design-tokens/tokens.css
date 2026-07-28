@@ -1,0 +1,91 @@
+/**
+ * Biffo design tokens — the single definition of the platform's visual
+ * language, for the portal, sibling apps and plugin frontends alike.
+ *
+ * WHY THIS EXISTS
+ *
+ * These values were previously defined only in one sibling app's `globals.css`
+ * — the most downstream repo in the fleet — and every other surface either
+ * re-declared them by hand or invented its own. That produced three different
+ * brand blues across surfaces a founder sees in one page: the portal's
+ * `#5457ee`, the Ideation Engine's `#4338ca`, and whatever a new plugin's
+ * skeleton happened to carry. Since plugin frontends are embedded in the portal
+ * as same-origin iframes, the difference reads as three different products.
+ *
+ * HOW IT REACHES A SEPARATELY-DEPLOYED APP
+ *
+ * Plugin and sibling frontends are their own repos with their own builds; they
+ * share no bundler with the portal, so a workspace import cannot reach them.
+ * This package is published to npm on every `core-v*` tag at the core version
+ * (the same rule as `@biffo/cli` — one number, no mapping table), and consumers
+ * take an ordinary dependency:
+ *
+ *     import '@biffo/design-tokens/tokens.css'
+ *
+ * A runtime `@import` from a CDN URL was the alternative and was rejected: it
+ * makes every plugin's appearance depend on a network fetch it does not
+ * control, so a CDN blip unstyles the product rather than shipping it stale.
+ *
+ * CHANGING A TOKEN
+ *
+ * Values here are consumed by surfaces that deploy independently, so a change
+ * lands unevenly: the portal may show the new brand colour before a plugin
+ * does. Prefer adding a token over redefining one, and expect a value change to
+ * need a release plus one PR per consumer.
+ *
+ * Consumers must not re-declare these locally. `tokens.test.ts` in this package
+ * is the definition's own guard; the consuming repos assert against the
+ * published file so a local copy cannot drift back in.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* ── Surfaces ─────────────────────────────────────────────────────────── */
+  --bg: #ffffff;
+  --bg-subtle: #f6f7fb;
+  --surface: #ffffff;
+  --ink: #0b0f24;
+  --ink-2: #141a3c;
+
+  /* ── Text ─────────────────────────────────────────────────────────────── */
+  --text: #0f172a;
+  --text-muted: #545d72;
+  --text-invert: #f8fafc;
+  --text-invert-muted: #b6bcd4;
+
+  /* ── Brand ────────────────────────────────────────────────────────────── */
+  --brand: #5457ee;
+  --brand-strong: #4043c9;
+  --brand-soft: #eef0ff;
+  --accent: #22d3ee;
+
+  /* ── Lines & elevation ────────────────────────────────────────────────── */
+  --border: #e7e9f1;
+  --border-strong: #d7dae6;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 10px 30px -12px rgba(15, 23, 42, 0.18);
+  --shadow-lg: 0 30px 60px -24px rgba(15, 23, 42, 0.28);
+
+  /* ── Shape & rhythm ───────────────────────────────────────────────────── */
+  --radius: 14px;
+  --radius-lg: 22px;
+  --container: 1120px;
+  --nav-h: 64px;
+
+  /* ── Status ───────────────────────────────────────────────────────────────
+   *
+   * Added here rather than left to each app because every surface that reports
+   * a state needs them, and they were being invented per-app. Deliberately
+   * muted rather than signal red/amber/green: most Biffo surfaces score or
+   * grade something on a scale, where a "good/bad" reading is often wrong (a
+   * build-complexity score of 5 means *simple*, not *excellent*). Use these for
+   * magnitude and standing; reserve saturated colour for genuine alerts.
+   */
+  --state-positive: #3f8f6b;
+  --state-positive-soft: #e8f5ef;
+  --state-caution: #9a7b2f;
+  --state-caution-soft: #fdf6e6;
+  --state-negative: #8a5a5a;
+  --state-negative-soft: #fbeeee;
+}

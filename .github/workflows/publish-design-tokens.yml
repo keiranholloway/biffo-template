@@ -1,0 +1,199 @@
+name: Publish design tokens
+
+# Publishes `@biffo/design-tokens` to npm.
+#
+# Why this package publishes at all, when every other `packages/*` entry is
+# `private: true`: plugin and sibling frontends are separate repos with their
+# own builds, so a workspace import cannot reach them. npm is the only channel
+# that does. See packages/design-tokens/tokens.css for why a CDN `@import` was
+# rejected.
+#
+# The published version IS the core version, exactly as `@biffo/cli`'s is — one
+# number, no mapping table (ADR-0006, #423). That means a tag with no change to
+# tokens.css still publishes a new version carrying identical content. That is
+# deliberate: a consumer resolving `@biffo/design-tokens@<core version>` should
+# always find it, and the CLI has published on the same rule for months.
+#
+# Separate from publish-cli.yml rather than a job inside it, so that a token
+# release cannot fail the CLI's release or vice versa, and so each package's
+# npm trusted-publisher registration names its own workflow file.
+on:
+  push:
+    tags: ['core-v*']
+  # Publishing fails for reasons unrelated to the code — an expired credential,
+  # an npm outage, a dispatch that never fired (#293). A release you cannot
+  # re-trigger is a trap.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'core-v<version> tag to publish (defaults to the ref this was dispatched on)'
+        required: false
+        type: string
+      dry_run:
+        description: 'Pack and validate only — do not publish to npm'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Required for `npm publish --provenance` to mint a Sigstore attestation.
+  id-token: write
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  publish:
+    name: Publish @biffo/design-tokens to npm
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      # This workflow lives in a template-owned path, so it ships to every
+      # scaffolded instance — which must never publish the template's packages
+      # to npm under its own tags. Detected the way core-tag.yml does it:
+      # biffo.core.json exists in an instance and never in the template.
+      - name: Skip in instances
+        id: guard
+        run: |
+          set -euo pipefail
+          if [ -f biffo.core.json ]; then
+            echo "biffo.core.json present — this is an instance, not the template. Skipping."
+            echo "is_template=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_template=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve version
+        id: version
+        if: steps.guard.outputs.is_template == 'true'
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          case "$tag" in
+            core-v*) version="${tag#core-v}" ;;
+            *)
+              echo "::error::'$tag' is not a core-v* tag. Publish only from a core version tag."
+              exit 1
+              ;;
+          esac
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Tag '$tag' does not carry a semver version."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing @biffo/design-tokens@$version from $tag"
+
+      - uses: pnpm/action-setup@v4
+        if: steps.guard.outputs.is_template == 'true'
+      - uses: actions/setup-node@v5
+        if: steps.guard.outputs.is_template == 'true'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: pnpm install --frozen-lockfile
+        if: steps.guard.outputs.is_template == 'true'
+
+      # The definition's own guards — the published surface, no duplicates, a
+      # single :root, and that `files` actually ships tokens.css. Run before
+      # publishing rather than only in CI, because this workflow fires on a tag
+      # and a tag can be pushed to a tree CI never gated.
+      - name: Test
+        if: steps.guard.outputs.is_template == 'true'
+        working-directory: packages/design-tokens
+        run: pnpm vitest run
+
+      # package.json carries a 0.0.0 placeholder; the version comes from the tag.
+      - name: Stamp package version
+        if: steps.guard.outputs.is_template == 'true'
+        working-directory: packages/design-tokens
+        run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version --allow-same-version
+
+      # A package that installs cleanly and contains no tokens.css is the exact
+      # silent-empty failure this whole effort exists to stop: consumers would
+      # import it, get nothing, and fall back to unstyled defaults with no error
+      # anywhere. `files` is easy to get wrong, so assert on the real tarball.
+      - name: Verify the tarball carries tokens.css
+        if: steps.guard.outputs.is_template == 'true'
+        working-directory: packages/design-tokens
+        run: |
+          set -euo pipefail
+          tarball="$(npm pack --silent | tail -n1)"
+
+          # Listed once into a file, then grepped. `tar -tzf … | grep -q` is a
+          # trap under pipefail: grep exits on first match, tar dies of SIGPIPE,
+          # and the check reports "missing" for a file that is present. That
+          # broke a real publish here once — see AGENTS.md §4.
+          listing="$(mktemp)"
+          tar -tzf "$tarball" > "$listing"
+
+          if ! grep -qx 'package/tokens.css' "$listing"; then
+            echo "::error::Tarball has no tokens.css — refusing to publish an empty token package."
+            cat "$listing"
+            exit 1
+          fi
+
+          # Non-trivial content, not just an existing file. An empty or
+          # comment-only stylesheet would install and style nothing.
+          declared="$(tar -xzOf "$tarball" package/tokens.css | grep -cE '^\s*--[a-z0-9-]+\s*:' || true)"
+          if [ "$declared" -lt 20 ]; then
+            echo "::error::tokens.css declares only $declared custom properties — expected the full set."
+            exit 1
+          fi
+          echo "OK: tarball ships tokens.css with $declared tokens"
+          rm -f "$tarball" "$listing"
+
+      # Auth note: unlike @biffo/cli, this package cannot use npm trusted
+      # publishing yet — OIDC trust is registered against an *existing* package,
+      # and this one does not exist on the registry until its first publish. So
+      # the bootstrap uses the repo's existing NPM_TOKEN.
+      #
+      # FOLLOW-UP after the first successful publish: register a trusted
+      # publisher (npmjs.com → @biffo/design-tokens → Settings → Trusted
+      # Publisher, naming this repo and this workflow filename), then delete the
+      # NODE_AUTH_TOKEN line below so this package matches the CLI and depends
+      # on no long-lived secret.
+      - name: Publish
+        if: steps.guard.outputs.is_template == 'true' && !inputs.dry_run
+        working-directory: packages/design-tokens
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'
+        run: |
+          set -u
+          log="$(mktemp)"
+
+          # Deliberately no `pipefail`/`-e`: either would abort before the
+          # failure could be classified, and PIPESTATUS[0] is npm's own status
+          # through the tee (AGENTS.md §4).
+          set +e
+          npm publish 2>&1 | tee "$log"
+          status="${PIPESTATUS[0]}"
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            echo "Published @biffo/design-tokens@${{ steps.version.outputs.version }}"
+            exit 0
+          fi
+
+          # "Already published" and "npm is broken" arrive looking the same and
+          # only one is fixed by pressing re-run. Re-running this workflow on a
+          # tag whose version already shipped is legitimate and must not read as
+          # a release failure; anything else must.
+          if grep -qiE 'cannot publish over|previously published|EPUBLISHCONFLICT|409' "$log"; then
+            echo "::notice::@biffo/design-tokens@${{ steps.version.outputs.version }} is already on npm; nothing to do."
+            exit 0
+          fi
+
+          echo "::error::Publishing @biffo/design-tokens@${{ steps.version.outputs.version }} failed. See the log above."
+          exit "$status"

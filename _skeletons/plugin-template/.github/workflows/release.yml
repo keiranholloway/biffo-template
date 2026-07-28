@@ -1,15 +1,40 @@
 name: Release
 
-# Runs on every push of a `v*` tag: bumps/verifies the version via
-# python-semantic-release, builds the sdist/wheel, and publishes to PyPI.
+# Runs on every push of a `v*` tag: checks that every version this plugin
+# declares agrees with the tag, builds the sdist/wheel, and cuts a GitHub
+# Release. Publishing to PyPI is opt-in — see below.
 #
-# ASPIRATIONAL PYPI PUBLISH: this repo (and every plugin repo forked from
-# this template) has no real PyPI project or publishing credential yet, so
-# the publish job below runs and fails at the
-# `pypa/gh-action-pypi-publish` step — that's expected, not a bug in this
-# template. Configure a publisher for *your* plugin's own PyPI project and
-# it starts publishing on the next tag push with no further changes. See
-# README.md's "PyPI publishing" section.
+# ## Three versions have to agree
+#
+# A plugin declares its version twice, and the tag is a third:
+#
+#   - `pyproject.toml`     -> the Python package
+#   - `biffo.plugin.json`  -> what the plugin registry publishes, and therefore
+#                             the version the portal's plugin store shows
+#   - the `v*` tag itself
+#
+# The manifest one is the easy one to forget, and it fails in the worst way
+# available: silently. Tagging v0.2.0 with a stale manifest gives you a v0.2.0
+# release, a 0.2.0 package, and a plugin store still advertising 0.1.0 —
+# indefinitely, with nothing anywhere reporting a problem. The registry sync
+# faithfully re-derives whatever the manifest says, so it propagates the stale
+# value rather than catching it. Both files are therefore checked against the
+# tag below, and a mismatch fails the release rather than shipping a lie to the
+# store.
+#
+# ## PyPI publishing is opt-in
+#
+# No plugin scaffolded from this skeleton has a PyPI project or publishing
+# credential. Rather than ship a workflow whose last step always fails — which
+# only teaches people that a red release means nothing, and is how a real
+# failure later goes unnoticed — the publish step is gated on the
+# `PYPI_PUBLISH` repository variable and skips with a notice.
+#
+# To enable for YOUR plugin: create the PyPI project, configure a trusted
+# publisher (OIDC — no stored secret to rotate or leak; the `id-token: write`
+# permission below is already in place for it), then
+# `gh variable set PYPI_PUBLISH --body true`. See README.md's
+# "Releasing" section.
 #
 # Note this is about *this plugin's* own distribution. The SDK it depends
 # on, biffo-plugin-sdk, has its own release path upstream —
@@ -17,6 +42,11 @@ name: Release
 # `sdk-v*` tag — and its own independent semver. See README.md's
 # "biffo-plugin-sdk dependency" section for what that means for `uv sync`
 # before the SDK's first release lands.
+#
+# Registry publishing is NOT done here. `publish-registry.yml` owns that,
+# triggered by `biffo.plugin.json` changing on `dev` — i.e. when the version is
+# merged, not when it is tagged. The marketplace should reflect `dev`, and
+# tagging is an independent decision.
 #
 # Prefer PyPI Trusted Publishing (OIDC) over a long-lived PYPI_API_TOKEN
 # when you set this up: it needs no stored secret to rotate or leak. The
@@ -44,11 +74,12 @@ env:
 
 jobs:
   release:
-    name: Build, Version & Publish
+    name: Verify, Build & Release
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    environment:
-      name: pypi
-      url: https://pypi.org/project/biffo-plugin-example/
+    # No `environment: pypi` here: a job-level environment gates the WHOLE job,
+    # and this job now verifies and releases whether or not it publishes. If you
+    # enable PyPI and want environment protection on it, split publishing into
+    # its own job (passing dist/ as an artifact) and put the environment there.
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -72,13 +103,24 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Verify pyproject.toml version matches tag
+      - name: Verify pyproject.toml and biffo.plugin.json match the tag
+        env:
+          TAG_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          project_version=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          if [ "$project_version" != "${{ steps.version.outputs.version }}" ]; then
-            echo "::error::pyproject.toml version ($project_version) does not match tag ${GITHUB_REF_NAME}"
-            exit 1
+          set -euo pipefail
+          project_version="$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          manifest_version="$(python3 -c "import json; print(json.load(open('biffo.plugin.json'))['version'])")"
+          failed=0
+          if [ "$project_version" != "$TAG_VERSION" ]; then
+            echo "::error file=pyproject.toml::pyproject.toml version ($project_version) does not match tag $GITHUB_REF_NAME"
+            failed=1
           fi
+          if [ "$manifest_version" != "$TAG_VERSION" ]; then
+            echo "::error file=biffo.plugin.json::biffo.plugin.json version ($manifest_version) does not match tag $GITHUB_REF_NAME. The plugin registry publishes this field, so releasing with it stale would leave the portal's plugin store advertising $manifest_version."
+            failed=1
+          fi
+          [ "$failed" -eq 0 ] || exit 1
+          echo "pyproject.toml, biffo.plugin.json and the tag all agree on $TAG_VERSION"
 
       - name: Install python-semantic-release
         run: uv tool install python-semantic-release
@@ -89,13 +131,12 @@ jobs:
       - name: Build distribution
         run: uv build
 
-      # PYPI PUBLISH — see the file-level comment above. This step is real
-      # and will run on every `v*` tag push, but has no credentials
-      # configured yet anywhere in the plugin ecosystem (this template, the
-      # SDK, or the RBAC reference plugin) and is expected to fail here
-      # until a PyPI project + trusted publisher (or PYPI_API_TOKEN) is set
-      # up for this specific plugin package.
+      # PYPI PUBLISH — opt-in; see the file-level comment above. Off until
+      # `PYPI_PUBLISH` is set, so a plugin with no PyPI project (which is every
+      # plugin, on the day it is scaffolded) gets a green release rather than
+      # one that always fails at the last step.
       - name: Publish to PyPI
+        if: vars.PYPI_PUBLISH == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           # Prefer PyPI's trusted publishing (OIDC, via the `id-token: write`
@@ -106,6 +147,11 @@ jobs:
           # ${{ secrets.PYPI_API_TOKEN }}` if trusted publishing isn't set
           # up for this project yet.
           skip-existing: true
+
+      - name: Note that PyPI publishing is not enabled
+        if: vars.PYPI_PUBLISH != 'true'
+        run: |
+          echo "::notice title=PyPI publish skipped::The PYPI_PUBLISH repository variable is not set to 'true', so the built distribution was not uploaded to PyPI. The GitHub Release below still carries it. See this workflow's header comment to enable."
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

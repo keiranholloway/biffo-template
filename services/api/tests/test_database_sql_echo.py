@@ -90,9 +90,29 @@ def test_every_engine_in_the_service_hides_parameters() -> None:
 
     ``db_app_role`` is the one that matters most: it runs ``CREATE ROLE …
     PASSWORD`` for the app role.
+
+    **Test engines are excluded**, and that exclusion is not a convenience. A
+    fixture engine is built per-test against in-memory SQLite and never touches
+    a deployment's data or its log group, so requiring the flag there would be
+    ceremony — and ceremony is what gets a guard relaxed wholesale later.
+
+    The exclusion exists because this guard shipped without it and broke an
+    instance. The template happens to keep every test under ``tests/`` at the
+    service root, so scanning all of ``src/`` was indistinguishable from
+    scanning production code *here*. An instance using a domain-driven layout
+    (``src/api/domains/<domain>/tests/``) has fixture engines inside ``src/``,
+    and the guard failed its CI on five of them. The bug was that this test
+    encoded the template's own file layout as though it were a property of
+    every Biffo service.
     """
     root = Path(__file__).resolve().parents[1]
-    sources = [*(root / "src").rglob("*.py"), *(root / "migrations").rglob("*.py")]
+    sources = [
+        path
+        for path in (*(root / "src").rglob("*.py"), *(root / "migrations").rglob("*.py"))
+        # Matches a `tests` *directory component*, not a substring, so a
+        # production module named e.g. `latest_run.py` is still scanned.
+        if "tests" not in path.relative_to(root).parts
+    ]
 
     missing: list[str] = []
     for path in sources:
@@ -107,5 +127,41 @@ def test_every_engine_in_the_service_hides_parameters() -> None:
                 missing.append(f"{path.relative_to(root)}:{node.lineno}")
 
     assert missing == []
-    # Guards the guard: an empty scan would make the assertion above vacuous.
-    assert len(sources) > 5
+
+    # Guards the guard. `missing == []` is also what a scan of nothing returns,
+    # so the exclusion above could be widened until this test asserted nothing
+    # and still looked green. Naming the four engines it must reach makes that
+    # failure loud instead: they are the files the fix was actually about.
+    scanned = {str(path.relative_to(root)) for path in sources}
+    assert {
+        "src/api/database.py",
+        "src/api/db_app_role.py",
+        "src/api/main.py",
+        "migrations/env.py",
+    } <= scanned
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "scanned"),
+    [
+        ("src/api/database.py", True),
+        ("src/api/db_app_role.py", True),
+        # The layout that broke biffo-platform: fixture engines nested inside
+        # `src/`, which the template itself has no example of. Asserted on
+        # synthetic paths precisely because this repo cannot demonstrate it —
+        # a test that could only fail on someone else's layout is a test that
+        # never runs here.
+        ("src/api/domains/early_access/tests/test_public_router.py", False),
+        ("src/api/domains/user_profile/tests/conftest.py", False),
+        # Not a substring match: a production module whose name merely contains
+        # "tests" must still be scanned.
+        ("src/api/latest_runs.py", True),
+        ("src/api/contests.py", True),
+    ],
+)
+def test_the_engine_scan_skips_test_directories_without_skipping_production(
+    relative_path: str, scanned: bool
+) -> None:
+    """The exclusion rule, checked independently of this repo's file tree."""
+    parts = Path(relative_path).parts
+    assert ("tests" not in parts) is scanned

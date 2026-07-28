@@ -62,6 +62,14 @@ class AgentRunResponse(BiffoBaseSchema):
     # look identical once terminal. Defaulted so a caller reading an older
     # response shape still parses.
     dry_run: bool = False
+    # Exposed for the same reason as `dry_run` above: without it the mechanism
+    # that prevents duplicate runs (#661) is invisible to the people who would
+    # need it. A duplicate that was correctly collapsed and a run that simply
+    # never had a twin look identical in every admin view, so an operator
+    # investigating a double-bill cannot tell whether the guard engaged, and
+    # cannot tell which chain a run belongs to when the key is the only thing
+    # naming it. Defaulted so a caller reading an older response shape parses.
+    idempotency_key: str | None = None
     agent_name: str
     status: str
     run_as_kind: str

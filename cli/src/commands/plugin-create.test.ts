@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -18,6 +26,29 @@ function makeGitMock() {
     init: vi.fn().mockResolvedValue(undefined),
     add: vi.fn().mockResolvedValue(undefined),
     commit: vi.fn().mockResolvedValue(undefined),
+    addRemote: vi.fn().mockResolvedValue(undefined),
+    push: vi.fn().mockResolvedValue(undefined),
+  }
+}
+
+function makeGitHubMock() {
+  return {
+    createEmptyRepo: vi.fn().mockResolvedValue('https://github.com/acme/biffo-plugin-acme-crm.git'),
+    setDefaultBranch: vi.fn().mockResolvedValue(undefined),
+    protectSingleBranch: vi.fn().mockResolvedValue(undefined),
+  }
+}
+
+/** Deps wired for the `--org` path, with no real GitHub anywhere. */
+function remoteDeps(git = makeGitMock(), github = makeGitHubMock()) {
+  return {
+    deps: {
+      git: git as never,
+      makeGitHub: () => github as never,
+      resolveToken: () => Promise.resolve('t0ken'),
+    },
+    git,
+    github,
   }
 }
 
@@ -230,6 +261,111 @@ describe.runIf(SKELETON)('runPluginCreate', () => {
 
       expect(existsSync(join(projectRoot, 'biffo-plugin-acme-crm'))).toBe(false)
       expect(git.init).not.toHaveBeenCalled()
+    })
+
+    // #803 remote half — creating the repo, pushing, and protecting dev.
+    describe('--org', () => {
+      it('creates the repo, pushes dev, and sets it as the default branch', async () => {
+        const { deps, git, github } = remoteDeps()
+
+        await runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), deps)
+
+        expect(github.createEmptyRepo).toHaveBeenCalledWith(
+          'acme',
+          'biffo-plugin-acme-crm',
+          expect.stringContaining('acme-crm'),
+        )
+        const dir = join(projectRoot, 'biffo-plugin-acme-crm')
+        expect(git.addRemote).toHaveBeenCalledWith(
+          dir,
+          'origin',
+          'https://github.com/acme/biffo-plugin-acme-crm.git',
+        )
+        expect(git.push).toHaveBeenCalledWith(dir, 'dev', { token: 't0ken' })
+        expect(github.setDefaultBranch).toHaveBeenCalledWith('acme', 'biffo-plugin-acme-crm', 'dev')
+      })
+
+      it('protects dev ONLY, with the plugin CI\u2019s own job names', async () => {
+        // The deployable path would protect dev/staging/main with the core
+        // workflow's contexts — two branches a plugin repo never has, and
+        // checks its CI never reports, which blocks every PR for ever.
+        const { deps, github } = remoteDeps()
+
+        await runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), deps)
+
+        expect(github.protectSingleBranch).toHaveBeenCalledTimes(1)
+        const [, , branch, contexts] = github.protectSingleBranch.mock.calls[0] as [
+          string,
+          string,
+          string,
+          string[],
+        ]
+        expect(branch).toBe('dev')
+        expect(contexts).toContain('Lint')
+        expect(contexts).toContain('Validate biffo.plugin.json')
+        // Not the core workflow's contexts.
+        expect(contexts).not.toContain('JS (lint, types, test, audit)')
+        expect(contexts).not.toContain('Terraform Validate & Security')
+      })
+
+      it('reads the contexts from the workflow it just wrote, not a hardcoded list', async () => {
+        const { deps, github } = remoteDeps()
+
+        await runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), deps)
+
+        const dir = join(projectRoot, 'biffo-plugin-acme-crm')
+        const ci = readFileSync(join(dir, '.github', 'workflows', 'ci.yml'), 'utf8')
+        const [, , , contexts] = github.protectSingleBranch.mock.calls[0] as [
+          string,
+          string,
+          string,
+          string[],
+        ]
+        for (const context of contexts) expect(ci).toContain(context)
+      })
+
+      it('creates and pushes the repo but skips protection when contexts cannot be determined', async () => {
+        // A half-made repo is worse than an unprotected one: the push has
+        // already happened by this point, so failing here would strand it.
+        // Protection must be skipped rather than applied with an empty
+        // contexts list, which would read as configured while gating nothing.
+        const skeleton = join(projectRoot, 'skeleton-no-jobs')
+        cpSync(SKELETON!, skeleton, { recursive: true })
+        writeFileSync(join(skeleton, '.github/workflows/ci.yml'), 'name: CI\non: [push]\n')
+
+        const { deps, git, github } = remoteDeps()
+        await runPluginCreate(
+          'acme-crm',
+          options({ standalone: true, org: 'acme', skeletonRoot: skeleton }),
+          deps,
+        )
+
+        expect(github.createEmptyRepo).toHaveBeenCalled()
+        expect(git.push).toHaveBeenCalled()
+        expect(github.setDefaultBranch).toHaveBeenCalled()
+        expect(github.protectSingleBranch).not.toHaveBeenCalled()
+      })
+
+      it('refuses --org together with --no-commit, since there is nothing to push', async () => {
+        const { deps } = remoteDeps()
+
+        await expect(
+          runPluginCreate(
+            'acme-crm',
+            options({ standalone: true, org: 'acme', commit: false }),
+            deps,
+          ),
+        ).rejects.toThrow(/needs a commit to push/)
+      })
+
+      it('does not touch GitHub without --org', async () => {
+        const { deps, github } = remoteDeps()
+
+        await runPluginCreate('acme-crm', options({ standalone: true }), deps)
+
+        expect(github.createEmptyRepo).not.toHaveBeenCalled()
+        expect(github.protectSingleBranch).not.toHaveBeenCalled()
+      })
     })
   })
 })

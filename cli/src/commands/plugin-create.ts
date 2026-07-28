@@ -4,6 +4,9 @@ import { fileURLToPath } from 'node:url'
 import chalk from 'chalk'
 import { Command } from 'commander'
 import { GitAdapter } from '../adapters/git/index.js'
+import { GitHubAdapter } from '../adapters/source-control/github/index.js'
+import { resolveGithubToken } from '../lib/credentials.js'
+import { workflowCheckContexts } from '../lib/workflow-check-contexts.js'
 import { INSTANCE_CORE_FILE } from '../lib/core-version.js'
 import { log } from '../lib/logger.js'
 import { pluginDir, type PluginChannel } from '../lib/plugin-locations.js'
@@ -23,6 +26,10 @@ export const pluginCreateCommand = new Command('create')
     'Scaffold a standalone plugin repo (ADR-0003 section 2) into ./biffo-plugin-<name>/ instead of into this checkout, keeping its own CI/CD workflows',
   )
   .option(
+    '--org <org>',
+    'With --standalone, also create the GitHub repo under this org (or user), push, and protect dev',
+  )
+  .option(
     '--skeleton <path>',
     'Path to the plugin skeleton (defaults to _skeletons/plugin-template)',
   )
@@ -35,6 +42,7 @@ export const pluginCreateCommand = new Command('create')
       options: {
         firstParty?: boolean
         standalone?: boolean
+        org?: string
         skeleton?: string
         dryRun?: boolean
         commit?: boolean
@@ -48,12 +56,17 @@ export const pluginCreateCommand = new Command('create')
           {
             firstParty: options.firstParty ?? false,
             standalone: options.standalone ?? false,
+            ...(options.org ? { org: options.org } : {}),
             ...(options.skeleton ? { skeletonRoot: resolve(options.skeleton) } : {}),
             dryRun: options.dryRun ?? false,
             commit: options.commit !== false,
             cwd,
           },
-          { git: new GitAdapter() },
+          {
+            git: new GitAdapter(),
+            makeGitHub: (token: string) => new GitHubAdapter(token),
+            resolveToken: resolveGithubToken,
+          },
         )
       } catch (err) {
         log.error((err as Error).message)
@@ -64,12 +77,33 @@ export const pluginCreateCommand = new Command('create')
 
 export interface PluginCreateDeps {
   git: GitAdapter
+  /**
+   * Only needed for `--standalone --org`. Injected rather than constructed
+   * inline so the remote path is unit-testable without a GitHub token, and so
+   * a purely local scaffold never resolves credentials it does not use.
+   */
+  makeGitHub?: (token: string) => StandaloneGitHub
+  resolveToken?: () => Promise<string>
+}
+
+/** The slice of GitHubAdapter the standalone remote path needs. */
+export interface StandaloneGitHub {
+  createEmptyRepo(org: string, repo: string, description?: string): Promise<string>
+  setDefaultBranch(org: string, repo: string, branch: string): Promise<void>
+  protectSingleBranch(
+    org: string,
+    repo: string,
+    branch: string,
+    statusChecks: string[],
+  ): Promise<void>
 }
 
 export interface PluginCreateOptions {
   firstParty: boolean
   /** Scaffold the standalone-repo authoring shape rather than into this checkout (#803). */
   standalone: boolean
+  /** With `standalone`, the GitHub org (or user) to create the repo under (#803). */
+  org?: string
   skeletonRoot?: string
   dryRun: boolean
   commit: boolean
@@ -288,7 +322,90 @@ async function runStandaloneCreate(
     log.success(`Initialised a git repo on dev with an initial commit`)
   }
 
+  if (options.org !== undefined && options.org !== '') {
+    if (!options.commit) {
+      throw new Error(
+        '--org needs a commit to push. Drop --no-commit, or create the repo yourself using the ' +
+          'steps printed by a --no-commit run.',
+      )
+    }
+    await createAndPushStandaloneRepo(options.org, names, destDir, deps)
+    return
+  }
+
   printStandaloneNextSteps(names, minorOf(manifest.version))
+}
+
+/**
+ * Create the GitHub repo for a freshly scaffolded standalone plugin, push it,
+ * and protect `dev` (#803).
+ *
+ * ## Why not `configureBranchProtection`
+ *
+ * That path is for **deployable** repos: it protects `dev`, `staging` and
+ * `main` with the core workflow's job names. A plugin repo is non-deployable
+ * and has `dev` only (AGENTS.md §2), and its checks are its own CI's job names.
+ * Reusing it would wait two minutes each for two branches that will never
+ * exist, then require checks that are never reported — protection that reads as
+ * configured while blocking every PR for ever.
+ *
+ * The required contexts are read from the workflow **the scaffold just wrote**,
+ * so they cannot drift from the CI they gate. If they cannot be determined the
+ * repo is still created and pushed, and protection is skipped loudly — a
+ * half-made repo is worse than an unprotected one, and the next steps say what
+ * to run.
+ */
+async function createAndPushStandaloneRepo(
+  org: string,
+  names: ReturnType<typeof deriveNames>,
+  destDir: string,
+  deps: PluginCreateDeps,
+): Promise<void> {
+  if (deps.makeGitHub === undefined || deps.resolveToken === undefined) {
+    throw new Error('No GitHub adapter available — cannot create a repository.')
+  }
+
+  const token = await deps.resolveToken()
+  const github = deps.makeGitHub(token)
+
+  const cloneUrl = await github.createEmptyRepo(org, names.dist, `${names.slug} — a Biffo plugin`)
+
+  await deps.git.addRemote(destDir, 'origin', cloneUrl)
+  await deps.git.push(destDir, 'dev', { token })
+  log.success(`Pushed dev to ${org}/${names.dist}`)
+
+  await github.setDefaultBranch(org, names.dist, 'dev')
+
+  const ciPath = join(destDir, '.github', 'workflows', 'ci.yml')
+  const contexts = existsSync(ciPath) ? workflowCheckContexts(readFileSync(ciPath, 'utf8')) : []
+  if (contexts.length === 0) {
+    log.warn(
+      `Could not determine required status checks from ${ciPath} — skipping branch protection. ` +
+        'Configure it manually on dev once you know the CI job names.',
+    )
+  } else {
+    await github.protectSingleBranch(org, names.dist, 'dev', contexts)
+  }
+
+  printStandaloneRemoteNextSteps(names, org)
+}
+
+function printStandaloneRemoteNextSteps(names: ReturnType<typeof deriveNames>, org: string): void {
+  console.log(chalk.bold('\n  Standalone plugin repo created!\n'))
+  console.log(`  https://github.com/${org}/${names.dist}  (dev, protected)\n`)
+  console.log('  Next:')
+  console.log(chalk.dim(`    1. cd ${names.dist} && edit biffo.plugin.json`))
+  console.log(
+    chalk.dim('    2. Add it to the registry so it appears in the plugin store — either set'),
+  )
+  console.log(
+    chalk.dim(
+      '       REGISTRY_PUBLISH_TOKEN on the repo, or add it to the registry\u2019s sources.json',
+    ),
+  )
+  console.log(
+    chalk.dim(`    3. Consumers install it with: biffo plugin install ${names.slug}@<minor>\n`),
+  )
 }
 
 /**

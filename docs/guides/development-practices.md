@@ -178,6 +178,12 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | [ideation#66](https://github.com/keiranholloway/biffo-plugin-ideation/pull/66) | **Two independent silent failures in one 40-line function, found hours apart because each surfaced through a different symptom.** The analyst ran on `anthropic/claude-opus-4-8` — absent from all 367 models OpenRouter serves — *and* depended on the `web_search` registry tool, which is only offered where a Brave key exists (this account's is the empty string). Either alone would have been invisible; together they meant competitive research was fabricated. The challenger's adjacent, valid `claude-sonnet-4` is what made it read as flakiness. **Neither was found by reading the module; each was found by chasing a separate report** | **fail-open** · drift | biffo-plugin-ideation | biffo-plugin-ideation [#66](https://github.com/keiranholloway/biffo-plugin-ideation/pull/66) + vendored resync [platform#104](https://github.com/keiranholloway/biffo-platform/pull/104) | **fixed** — `:online`, `tools` dropped, prompt forbids unsourced competitors |
 | — | **A self-reported effort figure was 45% low, and every incentive pointed the same way.** A 5.5-hour session was logged at 3 hours because the entry covered the last unit of work (the build) and silently omitted four completed earlier ones — two plans, an assessment, a third plan — each with its own PR and CI wait. The bias is **directional**: an agent reconstructs elapsed time from what is still in working memory, and finished work from the start of a long session is exactly what is not. So the error is always *low*, never high, which would make the inferred dashboard split look better-calibrated than it is — the precise failure the effort log exists to detect. Caught only because a human said "that was more like five hours" | **visibility** | biffo-template (the effort log) | practice — log each unit when its PR merges, not the session when it ends | **fixed** — four missing units logged retrospectively; §8 wording is right, the habit was not |
 
+| — | **`strings`/`grep` over a compressed artefact is a false-negative machine, and it nearly put a live private key in git.** Committing the runner fleet's Terraform (biffo-runners#1), I pre-checked `terraform/tfplan2` for credential markers and reported it clean-but-not-authoritative. It was **wrong**: a saved Terraform plan is a **DEFLATE zip**. Unzipped, its embedded `tfstate` holds the live GitHub App **private key**, App ID and generated `webhook_secret` in plaintext — confirmed by extracting the real key from `terraform.tfvars` and finding it inside the archive. `.gitignore`'s `*.tfstate` rule could never have caught it, because the state is a **member file within an archive**, not a file on disk. The generalisation is the point: **gitleaks scans blobs the same way I did**, so any compressed artefact is a hole in content-based secret scanning — plan files, `.zip` fixtures, vendored tarballs | **visibility** · fail-open | biffo-runners (pre-commit check) | practice + `tfplan*` ignored; **the estate-wide gap is open** — nothing decompresses before scanning | **avoided**, not suffered. History is 1 commit, so it was one `git add` from being permanent |
+| — | **An issue's own framing said "authorization bypass"; it was a UX gap, and the backend had enforced correctly all along.** `biffo-platform-app#4` reported the Ideation role gate as client-side only and therefore bypassable. Establishing what actually enforces — rather than accepting the framing — found **three independent server-side layers** (API Gateway's JWT authorizer, the plugin host's `group_gate` re-verifying the Cognito JWT against the pool JWKS, the plugin's own `require_group`), with Core owner-scoping every read. Measured unauthenticated **against the API Gateway origin directly**, because CloudFront rewrites API errors into `200` + portal HTML (#647): every route `401`s, and `/ideation/` is **428 bytes** of empty `<div id="root">`. The real defect was narrower and real — the manifest declares `user_frontend.required_group` and ADR-0018 §2 says that gates the UI, and **nothing implemented it** — but "the shell renders" is not "data is returned", and those have different severities and different fixes | **process** · visibility | biffo-platform-app#4 (as filed) | biffo-plugin-ideation [#63](https://github.com/keiranholloway/biffo-plugin-ideation/pull/63) | **fixed** (the UX gate); the issue's **severity is still wrong on the ticket** and it stays open for a non-founder click-through nobody has done |
+| — | **A merged plugin change sat undeployed for a whole working day, and nothing anywhere said so.** Resyncing ideation to carry the founder gate revealed the vendored copy was **three changes behind**: `effective_config.py` was missing **entirely** — that is #58, merged in the morning and never resynced. No dashboard, check or alert distinguishes "merged in the plugin repo" from "running on dev". The trap is already on this page; what is new is the measurement — **one day of drift, three changes, discovered only because something else forced a resync** | **visibility** · drift | biffo-plugin-ideation → biffo-platform | biffo-platform [#102](https://github.com/keiranholloway/biffo-platform/pull/102) | **fixed** for these three; the general case is **open** — nothing reports vendored-vs-source drift |
+| — | **A plugin repo ships a deploy workflow that cannot run, and the instance has a different mechanism that supersedes it.** A sub-agent correctly concluded the ideation frontend needed `deploy-frontend.yml` with `frontend_bucket_name` and a distribution id — reading the **plugin repo's** workflow. That workflow's `workflow_dispatch` path falls back to `secrets.PLUGIN_OIDC_ROLE_ARN`, **which does not exist in that repo**, so a dispatch dies at the credentials step. The instance's `deploy-app.yml` already builds `services/<name>/web/` and syncs it to `<prefix>-plugin-<name>-web`. Two mechanisms for one job, one of them dead, and nothing marks which is live | **boundary** · drift | biffo-plugin-ideation `deploy-frontend.yml` | undecided — delete the dead one, or wire its secret | **unfiled** — the deploy went via the instance; the duplicate remains |
+| — | **A test fake conflated two states, and the conflation only surfaced when production learned to tell them apart.** `FakeAgentRun.fail()` left `started_at` unset, so a run that was claimed-and-errored was indistinguishable from one nothing ever picked up. That was invisible while the service treated both as "failed" — and became a failing test the moment it stopped. The related shape: `AgentRunView` carried neither `error` nor `started_at`, so the plugin was **structurally incapable** of telling a founder the truth, and the misleading copy was a consequence of the model, not of the wording | **drift** | biffo-plugin-idea-scout tests | biffo-plugin-idea-scout [#41](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/41) | **fixed** — the fake models both shapes; the existing test that broke was right to break |
+
 ### What the classes say
 
 > Counted from `docs/practices/evidence.jsonl`, not asserted. Regenerate with
@@ -265,21 +271,29 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **142 rows** (never typed by hand, see *Adding a row*):
+`byFixRepo`, regenerated at **147 rows** (never typed by hand, see *Adding a row*):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 78 of 142 (55%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 15 of 142 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
-| **biffo-plugin-idea-scout** | 7 of 142 | Adapter seam, research search capability, its own styling, release + publish workflows |
-| **biffo-platform** | 6 of 142 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 142 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **tabsii-marketplace** | 2 of 142 | `python-jose` removal; the credential-dependent build |
-| **tabsii-crm** | 2 of 142 | Its E2E harness, and a repo setting that diverged |
-| **biffo-plugin-ideation** | 3 of 142 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **biffo-runners** | 1 of 142 | Runner fleet docs + fail-fast |
+| **biffo-template** | 78 of 147 (53%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
+| **tabsii-platform** | 15 of 147 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
+| **biffo-plugin-idea-scout** | 8 of 147 | Adapter seam, research search capability, its own styling, release + publish workflows |
+| **biffo-platform** | 7 of 147 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 147 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **tabsii-marketplace** | 2 of 147 | `python-jose` removal; the credential-dependent build |
+| **tabsii-crm** | 2 of 147 | Its E2E harness, and a repo setting that diverged |
+| **biffo-plugin-ideation** | 4 of 147 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **biffo-runners** | 1 of 147 | Runner fleet docs + fail-fast; **its whole source was uncommitted until today** |
 
-**`biffo-template` takes 78 of 142 — 55%.** The series: 86% at 50 and 57 rows,
+**`biffo-template` takes 78 of 147 — 53%, and its absolute count did not move
+at all this capture (78 → 78).** All five new rows landed on satellites:
+`biffo-plugin-idea-scout` 7 → 8, `biffo-platform` 6 → 7, `biffo-plugin-ideation`
+3 → 4. That is the second consecutive capture where the template absorbed none
+of a session's findings, which is now worth saying out loud rather than
+attributing to noise — though note both captures came from work deliberately
+aimed at the satellites, so the sampling is not neutral.
+
+The series: 86% at 50 and 57 rows,
 82% at 65, 70% at 94, 66% at 102, 63% at 109, 60% at 116 and 122, 58% at 126, 132
 and 134, 57% at 138, 56% at 139. The absolute template count did **not** move
 across this capture (78 → 78) while five rows landed elsewhere — the first capture where the template
@@ -1288,7 +1302,21 @@ without a `server_default` sending explicit NULL into a NOT NULL column. Each
 would have been a red run at ~6 min plus queue; together they would have been
 three separate round trips.
 
+**Predicting the artefact hash before the deploy, then matching against it.** Twice this session I built the vendored source first, stated the expected bundle name in the PR (`index-D76LRuF_.js`, `index-DLF7vZoc.js`), and checked afterwards. That converts "something changed" — which is all a hash diff proves — into a match against a stated expectation. It also forced the second, better check: **fetching the served bundle and grepping it for the new copy**, with the old bundle as a control. A changed hash proves *a* different file shipped, never the *right* one, and that gap is exactly what let a blank admin page through earlier the same day.
+
+**Delegating with the brief "do not assume the issue's framing is right".** `biffo-platform-app#4` was filed as an authorization bypass. Instructing the agent to establish what actually enforces, and to say plainly if no change was warranted rather than manufacture one, produced a correct de-escalation instead of a fix for a defect that did not exist. The counterfactual matters: an agent told to "fix the bypass" would have found something to change.
+
+**Verifying a sub-agent's security claim rather than relaying it.** The same agent reported "the backend already enforces, no data is reachable". That downgrades a security issue, so I re-ran the unauthenticated checks against the API Gateway origin myself before repeating it. My own grep then produced a false positive (`3 matches` for `session|idea|report|prompt` — all from the word *ideation* in asset paths), which would have kept a security issue open on nothing had I not looked at what actually matched.
+
+**Pre-checking a delegated task's risk before spawning.** Before handing over the runner-fleet commit I established what `.gitignore` covered and what would actually stage, which turned "commit the Terraform" into a brief naming the specific hazard. That is what put `tfplan` in front of the agent at all — the issue never mentioned it.
+
 ## What needs more thought
+
+**Nothing decompresses an artefact before scanning it for secrets.** `gitleaks` reads blobs, `.gitignore` matches paths, and both are defeated by a credential inside a zip — which is what a Terraform plan file is. This is not specific to `tfplan`: any committed archive, fixture tarball or vendored bundle is a blind spot, and the only reason nothing leaked was a manual `unzip`. A pre-commit step that expands known archive types before scanning would close it; nothing does today.
+
+**No signal distinguishes "merged in the plugin repo" from "running on dev".** A change sat undeployed for a full working day and was found only because unrelated work forced a resync. The information exists — the vendored copy's content versus the plugin repo's `dev` — and nothing compares them. A scheduled drift check reporting "services/ideation is 3 commits behind" would have caught it on the first morning.
+
+**A founder-facing promise is coupled to a Core setting, and nothing links them.** The new copy says a scout "will not sit there indefinitely", which is true only because `agent_run_unclaimed_after_seconds` is 1800s. Change that materially and the copy becomes a lie, with no test and no comment connecting the two repos. The general shape — UI copy asserting a timing guarantee owned by another service — has no mechanism here at all.
 
 **Manual repo hygiene does not survive this concurrency.** The estate was swept
 to zero errors; ~20 minutes later, while the write-up was being committed, other
@@ -2042,6 +2070,11 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 | `biffo-verify` | **partial** | §1 ("establish the current state") was applied to the *issue* and not to the *source tree*. The first resync for platform#104 was rsynced from a primary checkout still on `316fecb`, missing both plugin PRs, and produced an empty diff that reads exactly like "already resynced". §1 says never branch from a stale local ref; it does not say **never copy from one**, and the copy case has no honest-push equivalent to catch it. Worth a line in the step. |
 | `biffo-verify` | **worked** | §2 stopped a wrong filing: the challenger's stored row looked inert because `service.run_chat_turn` passes `system_prompt` and `model` into the adapter. Reading the adapter showed it sends neither — Core resolves both from the registration — so the row IS authoritative and the real defect is two dead parameters. An issue was about to be raised on the wrong premise. |
+| `biffo-verify` | **worked — §1 is the reason a security issue got de-escalated instead of "fixed"** | "Establish the current state before writing anything", applied to an issue's *framing* rather than to whether the work existed. `biffo-platform-app#4` said authorization bypass; three server-side layers already enforced and the exposure was an inert 428-byte shell. §1 usually reads as "check whether someone already did it"; this is the other half — **check whether the defect is what the ticket says it is**, which is worth adding to the step. |
+| `biffo-verify` | **worked — §4, on the half that keeps being skipped** | Artifact inspection said the admin UI shipped; the page was blank. This session the check became two: hash **matched against a prediction stated before the deploy**, then **fetch the served bundle and grep it for the change**, with the previous bundle as a control. §4 as written stops at "is the deployed artifact what I think"; the second step — *does the deployed artifact contain the change* — is where both of today's deploy defects hid. |
+| `biffo-verify` | **partial — the Never list needs a rule about compressed artefacts** | "Never treat absence of evidence as evidence" is there, and I still ran `strings \| grep` over a **zip** and reported it clean. A saved Terraform plan contains the full state; the live GitHub App private key was inside. The existing rule is about *empty search results*; this is about **a search that cannot see**. Proposed: *decompress before you scan, or say you did not scan.* |
+| `biffo-workflow` | **worked** | §9's resync discipline, three times in one session, each with `diff -rq` plus a sorted `jq` diff against source before committing. It is also what surfaced #58 sitting undeployed for a day — the parity check found `effective_config.py` missing entirely, which no other step would have reported. |
+
 
 
 ## Adding a row

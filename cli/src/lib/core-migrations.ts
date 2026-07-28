@@ -100,6 +100,20 @@ export interface MigrationCarryPlan {
    * deleted from `biffo.core.json`.
    */
   staleDeclines: string[]
+  /**
+   * Already-carried migrations whose body the template has since changed (#739).
+   *
+   * The carry treats an applied migration as immutable — correctly, you cannot
+   * re-run one — so a fix to a migration's body never reaches an instance that
+   * already carried it. That is tolerable on its own. It becomes a broken
+   * upgrade when a *test* asserting the new body arrives in the same PR, which
+   * it does, because tests are ordinary template-owned files that merge
+   * normally. Result: green upstream, red in every instance that already has
+   * the migration.
+   *
+   * The planner already knew both halves and simply never related them.
+   */
+  divergedBodies: DivergedMigrationBody[]
 }
 
 /** A declined migration, as reported back in the plan. */
@@ -108,6 +122,16 @@ export interface DeclinedCarry {
   file: string
   reason: string
   upstream?: string
+}
+
+/** An already-carried migration the template has since edited. @see MigrationCarryPlan.divergedBodies */
+export interface DivergedMigrationBody {
+  /** The template's filename for it. */
+  file: string
+  /** What the instance calls its copy. */
+  instanceFile: string
+  /** How the instance's copy was recognised as this migration. */
+  how: CarryMatchKind
 }
 
 export const MIGRATIONS_VERSIONS_DIR = 'services/api/migrations/versions'
@@ -417,6 +441,7 @@ export function planMigrationCarry(options: PlanMigrationCarryOptions): Migratio
   const recognised: RecognisedCarry[] = []
   const declinedIndex = new Map((options.declined ?? []).map((d) => [d.file, d]))
   const declined: DeclinedCarry[] = []
+  const divergedBodies: DivergedMigrationBody[] = []
   let head = instanceHead
 
   for (const m of chainOrder(template)) {
@@ -439,6 +464,17 @@ export function planMigrationCarry(options: PlanMigrationCarryOptions): Migratio
       skipped.push(m.file)
       if (already.how !== 'filename') {
         recognised.push({ file: m.file, instanceFile: already.instance.file, how: already.how })
+      }
+      // #739. Compared with the body hash, so a legitimately re-chained copy
+      // (different revision/down_revision, same DDL) does not read as drift —
+      // only a real change to what the migration *does*. A `how: 'body'` match
+      // cannot land here, the hashes being equal by construction.
+      if (migrationBodyHash(m.content) !== migrationBodyHash(already.instance.content)) {
+        divergedBodies.push({
+          file: m.file,
+          instanceFile: already.instance.file,
+          how: already.how,
+        })
       }
       continue
     }
@@ -496,7 +532,63 @@ export function planMigrationCarry(options: PlanMigrationCarryOptions): Migratio
   const templateFiles = new Set(template.map((m) => m.file))
   const staleDeclines = [...declinedIndex.keys()].filter((f) => !templateFiles.has(f))
 
-  return { entries, instanceHead, skipped, recognised, declined, staleDeclines }
+  return {
+    entries,
+    instanceHead,
+    skipped,
+    recognised,
+    declined,
+    staleDeclines,
+    divergedBodies,
+  }
+}
+
+/**
+ * A test the upgrade is bringing in whose subject is a migration it declined to
+ * update — the pairing that turns #739 from a tolerable gap into a red PR.
+ */
+export interface MigrationTestPairing {
+  /** Repo-relative path of the arriving test. */
+  testPath: string
+  /** The template migration filename the test names. */
+  migration: string
+  /** What the instance calls its copy of that migration. */
+  instanceFile: string
+}
+
+/** Matches a Python test file anywhere in a `tests/` directory. */
+const TEST_PATH_RE = /(^|\/)tests?\/.*\btest_[^/]*\.py$/
+
+/**
+ * Relate two facts the upgrade already has: a migration whose body it declined
+ * to update, and an arriving test that names that migration.
+ *
+ * Detection is by the test's *content* naming the migration file, not by
+ * filename convention — the real case is
+ * `test_migration_0010_optional_users.py` testing
+ * `0010_add_organizations_and_user_profile_fields.py`, where the names share
+ * only a revision prefix, and it reads the migration by full filename.
+ *
+ * `changes` is typed structurally so this stays independent of the merge
+ * engine's own types.
+ */
+export function findMigrationTestPairings(
+  changes: readonly { path: string; content?: string | undefined }[],
+  divergedBodies: readonly DivergedMigrationBody[],
+): MigrationTestPairing[] {
+  if (divergedBodies.length === 0) return []
+  const pairings: MigrationTestPairing[] = []
+  for (const change of changes) {
+    if (!TEST_PATH_RE.test(change.path)) continue
+    const content = change.content
+    if (content === undefined) continue
+    for (const d of divergedBodies) {
+      if (content.includes(d.file)) {
+        pairings.push({ testPath: change.path, migration: d.file, instanceFile: d.instanceFile })
+      }
+    }
+  }
+  return pairings
 }
 
 /** How a template migration was recognised as already present in the instance. */

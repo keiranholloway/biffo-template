@@ -151,6 +151,24 @@ class Settings(BaseSettings):
     # over the worst case while still bounding "stuck for ever" to half an hour.
     agent_run_stale_after_seconds: int = 1800
 
+    # How long a run may sit in `pending` — requested but never claimed — before
+    # the reaper fails it (idea-scout#27).
+    #
+    # This is a *separate* number from the one above, deliberately, even though
+    # both currently read 1800. They are bounded by different things: the
+    # `running` threshold is derived from AWS's 900s invocation cap, whereas an
+    # unclaimed run is waiting on event delivery, which no Lambda limit
+    # constrains. Collapsing them into one setting would couple two unrelated
+    # ceilings, so that raising one to accommodate a slow runtime would silently
+    # move the other.
+    #
+    # The gap this closes: the sweep only ever looked at `running`, and a run
+    # that is never claimed never leaves `pending`. So the runs most completely
+    # abandoned — nothing ever picked them up — were the only ones invisible to
+    # the mechanism built to catch abandoned work. One observed run survived
+    # ~17 sweeps over 255 minutes, still presenting to the founder as "Running".
+    agent_run_unclaimed_after_seconds: int = 1800
+
     # Application
     environment: str = "dev"
     log_level: str = "INFO"

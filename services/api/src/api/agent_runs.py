@@ -18,9 +18,12 @@ The lifecycle is three steps, mirroring the orchestration engine's shape:
    the run to exactly one terminal state. A run already in a terminal state is
    refused, so a retried completion cannot rewrite a finished run.
 
-And one step outside the happy path: ``reap_stale_runs`` fails runs a dead
-runtime left in ``running``, so a subscriber waiting on ``agent.run.completed``
-is released rather than waiting for ever (§5).
+And one step outside the happy path: ``reap_stale_runs`` fails runs that can no
+longer progress — both those a dead runtime left in ``running`` and those
+**nothing ever claimed**, still sitting in ``pending`` — so a subscriber waiting
+on ``agent.run.completed`` is released rather than waiting for ever (§5). The
+second shape was missing until idea-scout#27, which meant a run that was never
+picked up was invisible to the sweep built to catch abandoned work.
 
 Emission is **not** done here: the routers call ``emit_event`` so the event is
 buffered on the session and published by ``get_db`` only after the transaction
@@ -32,7 +35,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
@@ -344,42 +347,79 @@ REAPED_ERROR = (
     "claimed it is presumed dead (ADR-0014 §5)."
 )
 
+UNCLAIMED_ERROR = (
+    "Reaped: the run was requested but never claimed by a runtime. The "
+    "`agent.run.requested` event is presumed undelivered (ADR-0014 §5)."
+)
+
 
 async def reap_stale_runs(
     db: AsyncSession,
     *,
     tenant_id: str,
     stale_after_seconds: int,
+    unclaimed_after_seconds: int | None = None,
     now: datetime | None = None,
 ) -> list[AgentRun]:
-    """Fail runs stuck in ``running`` past *stale_after_seconds*, returning them.
+    """Fail runs that can no longer make progress, returning them.
 
-    A run reaches ``running`` only by being claimed, so one still there long
-    after any invocation could have finished is a runtime that died holding it.
-    The model work is already paid for and Core holds no result, so the run
-    never terminates — and anything waiting on ``agent.run.completed`` waits for
-    ever, because §5's whole point is telling "failed" from "still running".
-    This makes that a definite "failed".
+    Two kinds of abandonment, which look nothing alike and strand a caller
+    identically:
+
+    ``running`` past *stale_after_seconds* — a run reaches ``running`` only by
+    being claimed, so one still there long after any invocation could have
+    finished is a runtime that died holding it. The model work is already paid
+    for and Core holds no result.
+
+    ``pending`` past *unclaimed_after_seconds* — the run was requested and
+    **nothing ever picked it up**, because the ``agent.run.requested`` event was
+    never delivered or its handler never ran. Aged from ``created_at``, since a
+    run that was never claimed has no ``started_at`` to measure from. This was
+    the gap in idea-scout#27: the sweep looked only at ``running``, so a run
+    that never left ``pending`` was invisible to it — the *most* abandoned runs
+    were the only ones it could not see. One survived ~17 sweeps over 255
+    minutes while still presenting to the founder as "Running".
+
+    Either way, §5's whole point is telling "failed" from "still running"; a
+    stranded run says neither, and anything waiting on ``agent.run.completed``
+    waits for ever. This makes it a definite "failed".
 
     Each run is flipped by its **own** conditional UPDATE, the same shape as
-    ``claim_run``: a reap that raced a real completion matches zero rows and is
-    skipped, so a late-arriving result is never overwritten. Whichever lands
-    first wins, and the other becomes a no-op — which is what makes calling this
-    on a schedule safe.
+    ``claim_run``: a reap that raced a real completion — or, for a pending run,
+    raced the claim itself — matches zero rows and is skipped, so a late arrival
+    is never overwritten. Whichever lands first wins, and the other becomes a
+    no-op, which is what makes calling this on a schedule safe.
+
+    *unclaimed_after_seconds* defaults to *stale_after_seconds* so an existing
+    caller keeps working, but the two are configured separately: they are
+    bounded by different things (a Lambda invocation cap versus event-delivery
+    latency), and collapsing them would let one be moved by a change meant for
+    the other.
 
     ``now`` is injectable so a test can age a run without sleeping.
     """
     moment = now or datetime.now(UTC)
     cutoff = moment - timedelta(seconds=stale_after_seconds)
+    unclaimed_cutoff = moment - timedelta(
+        seconds=stale_after_seconds if unclaimed_after_seconds is None else unclaimed_after_seconds
+    )
 
     candidates = list(
         (
             await db.scalars(
                 select(AgentRun).where(
                     AgentRun.tenant_id == tenant_id,
-                    AgentRun.status == "running",
-                    AgentRun.started_at.is_not(None),
-                    AgentRun.started_at < cutoff,
+                    or_(
+                        and_(
+                            AgentRun.status == "running",
+                            AgentRun.started_at.is_not(None),
+                            AgentRun.started_at < cutoff,
+                        ),
+                        and_(
+                            AgentRun.status == "pending",
+                            AgentRun.created_at < unclaimed_cutoff,
+                        ),
+                    ),
                 )
             )
         ).all()
@@ -387,6 +427,11 @@ async def reap_stale_runs(
 
     reaped: list[AgentRun] = []
     for candidate in candidates:
+        # Which state it was found in decides both the re-check and the message.
+        # A pending run must not be failed with "the runtime that claimed it is
+        # presumed dead" — nothing claimed it, and that wording would send the
+        # next person looking at the runtime instead of at event delivery.
+        was_running = candidate.status == "running"
         result = cast(
             CursorResult[Any],
             await db.execute(
@@ -395,10 +440,15 @@ async def reap_stale_runs(
                     AgentRun.tenant_id == tenant_id,
                     AgentRun.id == candidate.id,
                     # Re-checked, because the SELECT above is a snapshot: the
-                    # runtime may have completed the run in between.
-                    AgentRun.status == "running",
+                    # runtime may have completed — or, for a pending run,
+                    # claimed — it in between.
+                    AgentRun.status == ("running" if was_running else "pending"),
                 )
-                .values(status="failed", error=REAPED_ERROR, completed_at=moment)
+                .values(
+                    status="failed",
+                    error=REAPED_ERROR if was_running else UNCLAIMED_ERROR,
+                    completed_at=moment,
+                )
             ),
         )
         if result.rowcount == 0:

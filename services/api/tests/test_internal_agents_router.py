@@ -419,14 +419,104 @@ def test_reap_leaves_a_run_that_is_still_within_its_budget(client, monkeypatch):
     assert client.get(f"{_RUNS}/{run_id}").json()["status"] == "running"
 
 
-def test_reap_never_touches_a_pending_run(client, monkeypatch):
-    # Pending means nobody claimed it, so nothing was spent and nothing is
-    # waiting on it — re-delivery can still pick it up.
+def test_reap_leaves_a_pending_run_inside_its_grace_period(client, monkeypatch):
+    # This test used to be `test_reap_never_touches_a_pending_run`, and its
+    # stated reason was "pending means nothing was spent and nothing is waiting
+    # on it — re-delivery can still pick it up". idea-scout#27 disproved the
+    # second half: a run whose `agent.run.requested` was never delivered is
+    # never re-delivered either, so it sits in `pending` for ever while the
+    # founder-facing UI reports "Running". Only the *grace period* survives from
+    # that reasoning, and that is what this now asserts.
     monkeypatch.setattr(settings, "agent_run_stale_after_seconds", STALE_IMMEDIATELY)
+    monkeypatch.setattr(settings, "agent_run_unclaimed_after_seconds", NEVER_STALE)
     run_id = _create(client).json()["id"]
 
     assert client.post(f"{_RUNS}/reap", json={}).json() == []
     assert client.get(f"{_RUNS}/{run_id}").json()["status"] == "pending"
+
+
+def test_reap_fails_a_run_left_unclaimed_past_the_threshold(client, monkeypatch):
+    # The idea-scout#27 reproduction. A run nothing ever claimed never leaves
+    # `pending`, so it was invisible to the very sweep built to catch abandoned
+    # work — one survived ~17 sweeps over 255 minutes.
+    monkeypatch.setattr(settings, "agent_run_unclaimed_after_seconds", STALE_IMMEDIATELY)
+    run_id = _create(client).json()["id"]
+
+    resp = client.post(f"{_RUNS}/reap", json={})
+
+    assert resp.status_code == 200
+    assert [r["id"] for r in resp.json()] == [run_id]
+
+    after = client.get(f"{_RUNS}/{run_id}").json()
+    assert after["status"] == "failed"
+    assert after["completed_at"] is not None
+
+
+def test_an_unclaimed_reap_does_not_blame_a_runtime_that_never_ran(client, monkeypatch):
+    # The two abandonment shapes need different messages. Telling someone "the
+    # runtime that claimed it is presumed dead" about a run nothing ever claimed
+    # sends the next person to inspect the runtime instead of event delivery,
+    # which is where the actual fault is.
+    monkeypatch.setattr(settings, "agent_run_unclaimed_after_seconds", STALE_IMMEDIATELY)
+    run_id = _create(client).json()["id"]
+
+    client.post(f"{_RUNS}/reap", json={})
+
+    error = client.get(f"{_RUNS}/{run_id}").json()["error"]
+    assert "never claimed" in error
+    assert "presumed dead" not in error
+
+
+def test_the_two_thresholds_move_independently(client, monkeypatch):
+    # They are bounded by different things — a Lambda invocation cap versus
+    # event-delivery latency — so they are separate settings. This is the guard
+    # against them being quietly collapsed into one: raising the budget for a
+    # slow runtime must not also extend how long a never-claimed run is
+    # invisible, and vice versa.
+    monkeypatch.setattr(settings, "agent_run_stale_after_seconds", STALE_IMMEDIATELY)
+    monkeypatch.setattr(settings, "agent_run_unclaimed_after_seconds", NEVER_STALE)
+    running_id = _claimed_run(client)
+    pending_id = _create(client).json()["id"]
+
+    assert [r["id"] for r in client.post(f"{_RUNS}/reap", json={}).json()] == [running_id]
+    assert client.get(f"{_RUNS}/{pending_id}").json()["status"] == "pending"
+
+    # Now the other way round: the unclaimed one goes, an in-budget claimed run stays.
+    monkeypatch.setattr(settings, "agent_run_stale_after_seconds", NEVER_STALE)
+    monkeypatch.setattr(settings, "agent_run_unclaimed_after_seconds", STALE_IMMEDIATELY)
+    still_running_id = _claimed_run(client)
+
+    assert [r["id"] for r in client.post(f"{_RUNS}/reap", json={}).json()] == [pending_id]
+    assert client.get(f"{_RUNS}/{still_running_id}").json()["status"] == "running"
+
+
+def test_reaping_an_unclaimed_run_releases_its_subscribers(client, publisher, monkeypatch):
+    # The whole point of reaping it. idea-scout#27's stuck scout had a plugin
+    # polling a run that would never terminate; §5 exists so a subscriber can
+    # tell "failed" from "still running", and a stranded run says neither.
+    monkeypatch.setattr(settings, "agent_run_unclaimed_after_seconds", STALE_IMMEDIATELY)
+    run_id = _create(client).json()["id"]
+    publisher.events.clear()
+
+    client.post(f"{_RUNS}/reap", json={})
+
+    assert [e.detail_type for e in publisher.events] == ["agent.run.completed"]
+    assert publisher.events[0].payload["run_id"] == run_id
+    assert publisher.events[0].payload["status"] == "failed"
+
+
+def test_a_claim_cannot_resurrect_a_reaped_unclaimed_run(client, monkeypatch):
+    # The race the conditional UPDATE exists for, in its new direction: a late
+    # `agent.run.requested` delivery arriving after the sweep must not start
+    # paying for a run already reported as failed.
+    monkeypatch.setattr(settings, "agent_run_unclaimed_after_seconds", STALE_IMMEDIATELY)
+    run_id = _create(client).json()["id"]
+    client.post(f"{_RUNS}/reap", json={})
+
+    resp = client.post(f"{_RUNS}/{run_id}/claim", json={})
+
+    assert resp.status_code == 409
+    assert client.get(f"{_RUNS}/{run_id}").json()["status"] == "failed"
 
 
 def test_reap_never_rewrites_a_finished_run(client, monkeypatch):

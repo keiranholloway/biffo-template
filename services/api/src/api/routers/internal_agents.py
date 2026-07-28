@@ -17,9 +17,10 @@ user. Four steps matching the run lifecycle, plus a scheduled sweep:
 4. ``POST /agent-runs/{id}/complete`` — the terminal report, emitting
    ``agent.run.completed`` for failures as well as successes so a subscriber can
    distinguish "failed" from "still running".
-5. ``POST /agent-runs/reap`` — scheduled sweep that fails runs a dead runtime
-   left in ``running``, emitting the same completion event so whatever was
-   waiting on them is released (§5, issue #402).
+5. ``POST /agent-runs/reap`` — scheduled sweep that fails runs which can no
+   longer progress: those a dead runtime left in ``running``, and those nothing
+   ever claimed, still in ``pending``. Both emit the same completion event so
+   whatever was waiting on them is released (§5, issue #402, idea-scout#27).
 6. ``GET /agent-runs?causation_id=`` — the runs of one chain, as summaries. How a
    fan-in discovers the siblings of the run that just completed and decides
    whether the rest are done (§8, issue #656).
@@ -305,7 +306,12 @@ async def reap_stale_agent_runs(
     principal: ServicePrincipal = Depends(require_service_principal),
     db: AsyncSession = Depends(get_db),
 ) -> list[AgentRunResponse]:
-    """Fail runs a dead runtime left in ``running``, and announce each one.
+    """Fail runs that can no longer progress, and announce each one.
+
+    Two shapes: a run a dead runtime left in ``running``, and a run **nothing
+    ever claimed**, still sitting in ``pending``. The second was invisible to
+    this sweep until idea-scout#27 — which meant the runs that had most
+    definitely been abandoned were the only ones it could not reap.
 
     Called on a schedule, so it must be safe to call when there is nothing to do
     — and it is: with nothing stale it reaps nothing and emits nothing.
@@ -325,6 +331,7 @@ async def reap_stale_agent_runs(
         db,
         tenant_id=principal.tenant_id,
         stale_after_seconds=settings.agent_run_stale_after_seconds,
+        unclaimed_after_seconds=settings.agent_run_unclaimed_after_seconds,
     )
     for run in reaped:
         if run.dry_run:

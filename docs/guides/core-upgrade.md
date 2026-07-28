@@ -148,6 +148,36 @@ Each decline is printed as `declined` in the plan, with its reason, on every run
 
 A decline naming a migration the target template does not ship is reported as `stale decline`. That is either a typo — declining nothing at all — or a decline that has outlived its cause and should be deleted.
 
+#### When the template edits a migration you already have
+
+An applied migration cannot be re-run, so the carry never rewrites one you already have. The consequence is that a **fix to a migration's body does not reach you** — your copy keeps the old behaviour while fresh environments get the new one.
+
+On its own that is a convergence gap, not a break. It becomes a break when a **test asserting the new body** arrives in the same PR, because tests are ordinary template-owned files that merge normally. The result is green upstream and red in your instance, on a file you never wrote.
+
+The upgrade now relates the two facts it already had. Any already-carried migration whose body the template has since changed is printed as `body drift`:
+
+```
+  body drift      0010_add_organizations_and_user_profile_fields.py
+                  The template has changed this migration since you carried it.
+                  An applied migration cannot be re-run, so the carry left yours
+                  alone and this change will NOT reach you.
+```
+
+Re-chaining alone is not drift — the comparison ignores `revision` / `down_revision`, so a copy that was renumbered onto your own head but has the same DDL stays silent.
+
+If an arriving test names that migration, the plan says so before you open the PR:
+
+```
+  This upgrade will not go green. 1 arriving test(s) assert a migration body you will not receive:
+    services/api/tests/test_migration_0010_optional_users.py → asserts 0010_add_organizations_and_user_profile_fields.py
+```
+
+Three ways out, in rough order of preference:
+
+1. **Ask upstream to ship the change as a follow-on migration.** The only option that actually converges an already-applied chain, at the cost of a revision.
+2. **Port the body change into your copy by hand**, keeping its `# biffo:carried-from:` marker. Safe only when re-stating the DDL is a no-op against your already-migrated database — and it is a hand-edit of a template-owned file, which is the divergence the ownership boundary exists to prevent.
+3. **Drop the arriving test from the PR** and raise it upstream, if the property it asserts genuinely cannot hold in your instance.
+
 ## Destroying stateful infrastructure
 
 `terraform apply` runs with `-auto-approve`, so nothing pauses for a human. A guard in the **Plan** job (before Apply, so refusing costs nothing) fails the deploy if the plan would destroy a database, a Cognito user pool, an S3 bucket or another resource whose data no re-apply can recreate.

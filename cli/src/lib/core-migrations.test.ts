@@ -16,6 +16,7 @@ import { isInstanceRepo } from './core-version.js'
 import {
   MIGRATIONS_VERSIONS_DIR,
   applyMigrationCarry,
+  findMigrationTestPairings,
   migrationBodyHash,
   parseCarriedFrom,
   stampCarriedFrom,
@@ -499,6 +500,56 @@ describe('planMigrationCarry — recognising an already-carried migration', () =
     expect(plan.entries.map((e) => e.file)).toEqual(['0004_tables.py'])
   })
 
+  // #739. The carry treats an applied migration as immutable — correctly — but
+  // the merge engine happily brings in the test asserting its new body. Green
+  // upstream, red in every instance that already carried it.
+  describe('body drift on an already-carried migration', () => {
+    it('flags a template edit to a migration the instance already has', () => {
+      write(templateDir, '0001_base.py', migration('0001', null))
+      write(templateDir, '0010_orgs.py', migration('0010', '0001', ddl('with_guard')))
+      write(instanceDir, '0001_base.py', migration('0001', null))
+      write(
+        instanceDir,
+        '0010_orgs.py',
+        stampCarriedFrom(migration('0010', '0001', ddl('no_guard')), '0010_orgs.py'),
+      )
+
+      const plan = planMigrationCarry({ templateDir, instanceDir })
+      expect(plan.skipped).toContain('0010_orgs.py')
+
+      expect(plan.divergedBodies).toEqual([
+        { file: '0010_orgs.py', instanceFile: '0010_orgs.py', how: 'provenance' },
+      ])
+    })
+
+    it('does not flag a copy that only differs by re-chaining', () => {
+      // The common case: the instance's copy was re-chained onto its own head
+      // and renumbered. Same DDL, different revision metadata — not drift, and
+      // reporting it would train everyone to ignore the warning.
+      write(templateDir, '0001_base.py', migration('0001', null))
+      write(templateDir, '0010_orgs.py', migration('0010', '0001', ddl('same')))
+      write(instanceDir, '0001_base.py', migration('0001', null))
+      write(instanceDir, '0013_local.py', migration('0013', '0001'))
+      write(
+        instanceDir,
+        '0014_orgs.py',
+        stampCarriedFrom(migration('0014', '0013', ddl('same')), '0010_orgs.py'),
+      )
+
+      const plan = planMigrationCarry({ templateDir, instanceDir })
+
+      expect(plan.skipped).toContain('0010_orgs.py')
+      expect(plan.divergedBodies).toEqual([])
+    })
+
+    it('reports nothing when the instance has not carried the migration at all', () => {
+      write(templateDir, '0010_orgs.py', migration('0010', null, ddl('x')))
+      const plan = planMigrationCarry({ templateDir, instanceDir })
+      expect(plan.entries.map((e) => e.file)).toEqual(['0010_orgs.py'])
+      expect(plan.divergedBodies).toEqual([])
+    })
+  })
+
   it('provenance survives a renumber that also changes the revision id', () => {
     const carried = stampCarriedFrom(migration('core_abc12345', '0009', ddl('x')), '0003_x.py')
     expect(parseCarriedFrom(carried)).toBe('0003_x.py')
@@ -595,6 +646,57 @@ describe('planMigrationCarry — recognising an already-carried migration', () =
       expect(plan.declined).toEqual([])
       expect(plan.staleDeclines).toEqual([])
     })
+  })
+})
+
+describe('findMigrationTestPairings (#739)', () => {
+  // The real case, named as it actually occurred: the test and the migration
+  // share only a revision prefix, and the test reads the migration by full
+  // filename. Filename-convention matching would miss this entirely.
+  const MIGRATION = '0010_add_organizations_and_user_profile_fields.py'
+  const TEST_PATH = 'services/api/tests/test_migration_0010_optional_users.py'
+  const diverged = [{ file: MIGRATION, instanceFile: MIGRATION, how: 'provenance' as const }]
+
+  const testBody = `source = (_REAL_VERSIONS / "${MIGRATION}").read_text()`
+
+  it('pairs an arriving test with the migration body it will not receive', () => {
+    const pairings = findMigrationTestPairings([{ path: TEST_PATH, content: testBody }], diverged)
+    expect(pairings).toEqual([
+      { testPath: TEST_PATH, migration: MIGRATION, instanceFile: MIGRATION },
+    ])
+  })
+
+  it('ignores an arriving test that does not name a diverged migration', () => {
+    const pairings = findMigrationTestPairings(
+      [{ path: 'services/api/tests/test_auth.py', content: 'assert True' }],
+      diverged,
+    )
+    expect(pairings).toEqual([])
+  })
+
+  it('ignores non-test files that happen to mention the migration', () => {
+    // The upgrade legitimately carries the migration's own docs and the chain
+    // itself; only an arriving *test* predicts a red CI run.
+    const pairings = findMigrationTestPairings(
+      [
+        { path: 'docs/guides/core-upgrade.md', content: `see ${MIGRATION}` },
+        { path: `services/api/migrations/versions/${MIGRATION}`, content: 'op.create_table("x")' },
+      ],
+      diverged,
+    )
+    expect(pairings).toEqual([])
+  })
+
+  it('reports nothing when no migration body has diverged', () => {
+    // The overwhelmingly common case — this must stay silent, or the warning
+    // becomes noise everyone learns to skip past.
+    expect(findMigrationTestPairings([{ path: TEST_PATH, content: testBody }], [])).toEqual([])
+  })
+
+  it('skips entries with no resolved content (keep-ours / removed)', () => {
+    expect(findMigrationTestPairings([{ path: TEST_PATH, content: undefined }], diverged)).toEqual(
+      [],
+    )
   })
 })
 

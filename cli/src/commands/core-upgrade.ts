@@ -19,7 +19,9 @@ import {
 } from '../lib/core-version.js'
 import {
   type MigrationCarryPlan,
+  type MigrationTestPairing,
   applyMigrationCarry,
+  findMigrationTestPairings,
   planMigrationCarry,
 } from '../lib/core-migrations.js'
 import {
@@ -405,6 +407,10 @@ async function runCoreUpgradeResolved(
 
   printPlan(plan)
   printMigrationCarry(migrations)
+  printMigrationBodyDrift(
+    migrations,
+    findMigrationTestPairings(plan.changes, migrations.divergedBodies),
+  )
   printCoreVersionCleanup(coreVersionCleanup, options.apply === true)
   warnStaleFirstPartyCopies(options.cwd)
   console.log(
@@ -763,6 +769,67 @@ function printMigrationCarry(migrations: MigrationCarryPlan): void {
       : chalk.dim(` (revision ${e.revision}; revises ${e.downRevision ?? 'base'})`)
     console.log(`  ${chalk.green('migration'.padEnd(15))} ${e.path}${suffix}`)
   }
+}
+
+/**
+ * #739. The carry declined to update an already-applied migration's body — right,
+ * you cannot re-run one — while the merge engine happily brought in the test that
+ * asserts the new body. Green upstream, red in every instance that already has
+ * the migration, and nothing in the plan connected the two.
+ *
+ * Both facts were already known here. This says so, before the PR is opened.
+ */
+function printMigrationBodyDrift(
+  migrations: MigrationCarryPlan,
+  pairings: MigrationTestPairing[],
+): void {
+  if (migrations.divergedBodies.length === 0) return
+
+  console.log()
+  for (const d of migrations.divergedBodies) {
+    const alias =
+      d.instanceFile === d.file ? '' : chalk.dim(` (this instance calls it ${d.instanceFile})`)
+    console.log(
+      `  ${chalk.yellow('body drift'.padEnd(15))} ${d.file}${alias}\n` +
+        chalk.dim(
+          '                  The template has changed this migration since you carried it.\n' +
+            '                  An applied migration cannot be re-run, so the carry left yours\n' +
+            '                  alone and this change will NOT reach you.',
+        ),
+    )
+  }
+
+  if (pairings.length === 0) {
+    console.log(
+      chalk.dim(
+        '\n  No arriving test asserts the new body, so this upgrade should still go green.\n' +
+          '  It stays a convergence gap: fresh environments get the new body, you keep the old.',
+      ),
+    )
+    return
+  }
+
+  // The red-PR case. Loud, because the failure it predicts otherwise surfaces as
+  // an unexplained CI failure in a file the instance never wrote.
+  console.log(
+    `\n  ${chalk.red.bold('This upgrade will not go green.')} ` +
+      `${pairings.length} arriving test(s) assert a migration body you will not receive:`,
+  )
+  for (const p of pairings) {
+    console.log(`    ${chalk.red(p.testPath)} ${chalk.dim(`→ asserts ${p.migration}`)}`)
+  }
+  console.log(
+    chalk.dim(
+      '\n  Resolve before merging, by one of:\n' +
+        '    - port the migration body change into your copy by hand, keeping its\n' +
+        '      `# biffo:carried-from:` marker — safe only if re-stating the DDL is a\n' +
+        '      no-op against your already-migrated database;\n' +
+        '    - drop the arriving test from this PR and raise it upstream, if the\n' +
+        '      property it asserts cannot hold here;\n' +
+        '    - ask upstream to ship the change as a follow-on migration instead, which\n' +
+        '      is the only option that actually converges an applied chain.\n',
+    ),
+  )
 }
 
 /**

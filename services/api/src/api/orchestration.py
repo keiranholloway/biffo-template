@@ -33,6 +33,7 @@ from .models.orchestration import (
     WorkflowDefinition,
     WorkflowRun,
 )
+from .run_observers import RunOutcome, notify_run_outcome
 from .scope_resolvers import resolve_scope_chain, scope_matches_chain
 
 logger = Logger()
@@ -368,6 +369,23 @@ async def record_result(
             response=response,
             error=error,
         )
+    )
+    await db.flush()
+    # Instance-registered observers, in the same transaction as the ActionLog
+    # above, so a domain record of the send commits with the send's own outcome
+    # rather than as a second step that can fail alone. Never raises (see
+    # run_observers) — a run's outcome has already happened by this point.
+    await notify_run_outcome(
+        RunOutcome(
+            run=run,
+            action_type=action_type,
+            status=status,
+            trigger_event=run.trigger_event or {},
+            request=request,
+            response=response,
+            error=error,
+        ),
+        db,
     )
     await db.flush()
     # onupdate/server_default columns (updated_at) are expired after the flush;

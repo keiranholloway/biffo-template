@@ -15,6 +15,8 @@ import { type BranchRef } from './upgrade-branch-reaper.js'
 function healthy(overrides: Partial<RepoFacts> = {}): RepoFacts {
   return {
     currentBranch: 'dev',
+    isPrimary: true,
+    isDirty: false,
     integrationBranch: 'dev',
     ahead: 0,
     behind: 0,
@@ -79,6 +81,42 @@ describe('checkCheckoutCurrency', () => {
     expect(checkCheckoutCurrency(healthy({ hasUpstream: false, behind: 9 }))).toEqual([])
   })
 
+  it('does NOT call a worktree on a feature branch a problem', () => {
+    // AGENTS.md §1 requires work to happen in a worktree on its own branch, so
+    // this is the mandated state. Reporting it was a false positive in the one
+    // place everybody works — and a diagnostic that cries wolf gets ignored.
+    const found = checkCheckoutCurrency(
+      healthy({ isPrimary: false, currentBranch: 'feat/whatever' }),
+    )
+    expect(found).toEqual([])
+  })
+
+  it('still flags a detached worktree, which is nobody\u2019s mandated state', () => {
+    const found = checkCheckoutCurrency(healthy({ isPrimary: false, currentBranch: 'HEAD' }))
+    expect(checks(found)).toEqual(['checkout-detached'])
+  })
+
+  it('downgrades behind-ness in a worktree to a warning', () => {
+    // A worktree behind its own upstream means someone else pushed to the
+    // branch — worth knowing, not a reason to distrust everything read from it
+    // the way a stale primary is.
+    const primary = checkCheckoutCurrency(healthy({ behind: 3 }))
+    const worktree = checkCheckoutCurrency(healthy({ isPrimary: false, behind: 3 }))
+    expect(primary[0]?.severity).toBe('error')
+    expect(worktree[0]?.severity).toBe('warn')
+    expect(worktree[0]?.detail).toContain('This worktree')
+  })
+
+  it('flags a dirty primary, because editing it directly is what §1 forbids', () => {
+    const found = checkCheckoutCurrency(healthy({ isDirty: true }))
+    expect(checks(found)).toEqual(['checkout-dirty'])
+  })
+
+  it('says nothing about uncommitted changes in a worktree', () => {
+    // That is just work in progress, which is what a worktree is for.
+    expect(checkCheckoutCurrency(healthy({ isPrimary: false, isDirty: true }))).toEqual([])
+  })
+
   it('reports both conditions when both hold', () => {
     const found = checkCheckoutCurrency(healthy({ currentBranch: 'feat/x', behind: 2 }))
     expect(checks(found)).toEqual(['checkout-off-integration', 'checkout-behind'])
@@ -95,6 +133,16 @@ describe('checkCoreVersionCurrency', () => {
     expect(checks(found)).toEqual(['core-version-stale'])
     expect(found[0]?.detail).toContain('0.153.2')
     expect(found[0]?.detail).toContain('0.157.3')
+  })
+
+  it('does not call a worktree branched before the last upgrade stale', () => {
+    // A branch legitimately records the version it was cut from; that is a
+    // branch being a branch, not a checkout nobody has pulled.
+    expect(
+      checkCoreVersionCurrency(
+        healthy({ isPrimary: false, localCoreVersion: '0.153.2', remoteCoreVersion: '0.157.3' }),
+      ),
+    ).toEqual([])
   })
 
   it('stays silent when either side is unknown', () => {

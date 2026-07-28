@@ -45,13 +45,25 @@ export interface DoctorFinding {
 
 /** Everything the checks need, gathered once by the command. */
 export interface RepoFacts {
-  /** Checked-out branch of the primary worktree; 'HEAD' when detached. */
+  /** Checked-out branch of this checkout; 'HEAD' when detached. */
   currentBranch: string
+  /**
+   * Is this the primary checkout, rather than a linked worktree?
+   *
+   * AGENTS.md §2 requires the *primary* to stay on the integration branch,
+   * while §1 requires all work to happen in a worktree on its own branch. So
+   * "not on dev" is a defect in one and the mandated state in the other, and
+   * a check that cannot tell them apart cries wolf in the place everybody
+   * works.
+   */
+  isPrimary: boolean
   /** The repo's integration branch — `dev` in every Biffo repo (AGENTS.md §2). */
   integrationBranch: string
   ahead: number
   behind: number
   hasUpstream: boolean
+  /** Does this checkout have uncommitted changes? */
+  isDirty: boolean
   /** `biffo.core.json`'s version in this checkout, null when absent. */
   localCoreVersion: string | null
   /** The same file's version on the integration branch, null when unknown. */
@@ -92,7 +104,9 @@ export function checkCheckoutCurrency(facts: RepoFacts): DoctorFinding[] {
     return findings
   }
 
-  if (facts.currentBranch !== facts.integrationBranch) {
+  // Only the PRIMARY is required to sit on the integration branch. A linked
+  // worktree on a feature branch is AGENTS.md §1 being followed, not a defect.
+  if (facts.isPrimary && facts.currentBranch !== facts.integrationBranch) {
     findings.push({
       check: 'checkout-off-integration',
       severity: 'error',
@@ -104,13 +118,34 @@ export function checkCheckoutCurrency(facts: RepoFacts): DoctorFinding[] {
     })
   }
 
+  // A dirty PRIMARY means someone edited it directly, which AGENTS.md §1
+  // forbids — all work belongs in a worktree. Beyond the rule, it means what
+  // you read from it is neither `dev` nor anything reviewed. In a worktree,
+  // uncommitted changes are just work in progress.
+  if (facts.isPrimary && facts.isDirty) {
+    findings.push({
+      check: 'checkout-dirty',
+      severity: 'warn',
+      detail:
+        'The primary checkout has uncommitted changes, so what it contains is neither the ' +
+        'integration branch nor anything reviewed. Editing the primary directly is what ' +
+        'AGENTS.md §1 exists to prevent; work belongs in a worktree.',
+      remedy:
+        'git stash push -m "<what this is>" or commit it on a branch, then work in a worktree',
+    })
+  }
+
   if (facts.hasUpstream && facts.behind > 0) {
     const diverged = facts.ahead > 0 ? `, and ${String(facts.ahead)} ahead (diverged)` : ''
+    const where = facts.isPrimary ? 'The primary checkout' : 'This worktree'
     findings.push({
       check: 'checkout-behind',
-      severity: 'error',
+      // In a worktree, behind-its-own-upstream means someone else pushed to the
+      // branch — worth knowing, but not a reason to distrust everything read
+      // from it the way a stale primary is.
+      severity: facts.isPrimary ? 'error' : 'warn',
       detail:
-        `The primary checkout is ${String(facts.behind)} commit(s) behind its upstream${diverged}. ` +
+        `${where} is ${String(facts.behind)} commit(s) behind its upstream${diverged}. ` +
         `Every file read from it may be stale, including the ones that look like authoritative state.`,
       remedy: 'git pull --ff-only',
     })
@@ -130,6 +165,9 @@ export function checkCheckoutCurrency(facts: RepoFacts): DoctorFinding[] {
 export function checkCoreVersionCurrency(facts: RepoFacts): DoctorFinding[] {
   if (facts.localCoreVersion === null || facts.remoteCoreVersion === null) return []
   if (facts.localCoreVersion === facts.remoteCoreVersion) return []
+  // A worktree branched before the last upgrade legitimately records an older
+  // version; that is a branch being a branch, not a stale checkout.
+  if (!facts.isPrimary) return []
 
   return [
     {

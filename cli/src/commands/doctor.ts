@@ -40,6 +40,8 @@ export interface DoctorDeps {
     GitAdapter,
     | 'isGitRepo'
     | 'currentBranch'
+    | 'isPrimaryWorktree'
+    | 'hasUncommittedChanges'
     | 'fetchPrune'
     | 'aheadBehind'
     | 'listBranchRefs'
@@ -75,6 +77,8 @@ export async function runDoctor(
   if (options.fetch) await git.fetchPrune(options.cwd)
 
   const currentBranch = await git.currentBranch(options.cwd)
+  const isPrimary = await git.isPrimaryWorktree(options.cwd)
+  const isDirty = await git.hasUncommittedChanges(options.cwd)
   const { ahead, behind, hasUpstream } = await git.aheadBehind(options.cwd)
   const branches = await git.listBranchRefs(options.cwd)
 
@@ -88,10 +92,12 @@ export async function runDoctor(
 
   const facts: RepoFacts = {
     currentBranch,
+    isPrimary,
     integrationBranch: INTEGRATION_BRANCH,
     ahead,
     behind,
     hasUpstream,
+    isDirty,
     localCoreVersion: readLocalCoreVersion(options.cwd),
     remoteCoreVersion: parseCoreRecord(
       await git.showFileAtRef(options.cwd, `origin/${INTEGRATION_BRANCH}`, INSTANCE_CORE_FILE),

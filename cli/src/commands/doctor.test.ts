@@ -22,6 +22,8 @@ function gitMock(overrides: Record<string, unknown> = {}) {
   return {
     isGitRepo: vi.fn().mockResolvedValue(true),
     currentBranch: vi.fn().mockResolvedValue('dev'),
+    isPrimaryWorktree: vi.fn().mockResolvedValue(true),
+    hasUncommittedChanges: vi.fn().mockResolvedValue(false),
     fetchPrune: vi.fn().mockResolvedValue(undefined),
     aheadBehind: vi.fn().mockResolvedValue({ ahead: 0, behind: 0, hasUpstream: true }),
     listBranchRefs: vi.fn().mockResolvedValue([]),
@@ -115,6 +117,18 @@ describe('runDoctor', () => {
     writeFileSync(join(cwd, 'biffo.core.json'), '{ not json')
     const found = await runDoctor({ cwd, fetch: true }, { git: gitMock() as never })
     expect(checks(found)).not.toContain('core-version-stale')
+  })
+
+  it('asks git whether this is the primary, rather than assuming', async () => {
+    const git = gitMock({
+      isPrimaryWorktree: vi.fn().mockResolvedValue(false),
+      currentBranch: vi.fn().mockResolvedValue('feat/in-a-worktree'),
+    })
+
+    const found = await runDoctor({ cwd, fetch: true }, { git: git as never })
+
+    expect(git.isPrimaryWorktree).toHaveBeenCalledWith(cwd)
+    expect(checks(found)).not.toContain('checkout-off-integration')
   })
 
   it('reports the full 2026-07-28 shape end to end', async () => {

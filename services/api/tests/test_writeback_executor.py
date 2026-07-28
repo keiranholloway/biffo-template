@@ -669,3 +669,100 @@ def test_a_write_that_would_change_nothing_is_refused_not_reported_as_success(ap
             return (await session.execute(select(Note).where(Note.id == "note-88"))).scalar_one()
 
     assert asyncio.run(_read()).notes == "untouched"
+
+
+# ── from_payload: a create's parent keys come from the trigger, not the model ──
+
+
+def test_a_create_takes_its_parent_key_from_the_trigger_event(app, client):
+    """The row belongs to whatever the run was *about*.
+
+    `brand_id` here stands for any parent key an instance's row policies
+    evaluate. It is resolved from the run's `input_payload` — the trigger event
+    as it stood before the model produced anything.
+    """
+    _, factory = app
+    wb.register_writeback_target(
+        _target(
+            operations=("create",),
+            row_selector=None,
+            derived=(wb.from_payload("brand_id", "brand_id"),),
+        )
+    )
+    run_id = asyncio.run(
+        _seed(
+            factory,
+            writeback={"table": "wb_notes", "operation": "create", "columns": {"email": "x"}},
+            result={"email": "new@b.com"},
+            input_payload={"brand_id": "brand-from-the-event"},
+        )
+    )
+    assert _post(client, run_id).json()["status"] == "written"
+
+    async def _read() -> Note:
+        async with factory() as session:
+            return (await session.execute(select(Note))).scalars().one()
+
+    assert asyncio.run(_read()).brand_id == "brand-from-the-event"
+
+
+def test_the_agent_cannot_supply_a_payload_derived_key(app, client):
+    """Even naming it in the result changes nothing — a derived column is not in
+    the agent-writeable set, so the submitted value is dropped before the insert.
+    This is the whole point: if the model could set it, LLM output would be
+    feeding an authorization decision."""
+    _, factory = app
+    wb.register_writeback_target(
+        _target(
+            operations=("create",),
+            row_selector=None,
+            derived=(wb.from_payload("brand_id", "brand_id"),),
+        )
+    )
+    run_id = asyncio.run(
+        _seed(
+            factory,
+            writeback={"table": "wb_notes", "operation": "create", "columns": {"email": "x"}},
+            result={"email": "new@b.com", "brand_id": "brand-the-model-picked"},
+            input_payload={"brand_id": "brand-from-the-event"},
+        )
+    )
+    assert _post(client, run_id).json()["status"] == "written"
+
+    async def _read() -> Note:
+        async with factory() as session:
+            return (await session.execute(select(Note))).scalars().one()
+
+    assert asyncio.run(_read()).brand_id == "brand-from-the-event"
+
+
+def test_a_create_whose_trigger_lacks_the_key_is_denied_by_name(app, client):
+    """Refused before the insert, and the reason names the column — otherwise
+    this surfaces as a NOT NULL violation the author has to decode, or worse, a
+    row written without the parent that decides who may see it."""
+    _, factory = app
+    wb.register_writeback_target(
+        _target(
+            operations=("create",),
+            row_selector=None,
+            derived=(wb.from_payload("brand_id", "brand_id"),),
+        )
+    )
+    run_id = asyncio.run(
+        _seed(
+            factory,
+            writeback={"table": "wb_notes", "operation": "create", "columns": {"email": "x"}},
+            result={"email": "new@b.com"},
+            input_payload={},
+        )
+    )
+    body = _post(client, run_id).json()
+    assert body["status"] == "denied"
+    assert "brand_id" in body["reason"]
+
+    async def _count() -> int:
+        async with factory() as session:
+            return len((await session.execute(select(Note))).scalars().all())
+
+    # Nothing half-written.
+    assert asyncio.run(_count()) == 0

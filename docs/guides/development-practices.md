@@ -115,6 +115,8 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **Two ways of getting Python in one repo, and the one I added does not work on the runner fleet.** `publish-registry.yml` used `actions/setup-python`, which fetches a prebuilt interpreter from `actions/python-versions` — no build matches the self-hosted fleet's OS, so every run died on "The version '3.13' with architecture 'x64' was not found". The same repos' `ci.yml` gets 3.13 on those runners via `astral-sh/setup-uv`, which installs it. Invisible for weeks because the job exited before reaching that step | **drift** | biffo-plugin-ideation, biffo-plugin-idea-scout (live run) | biffo-template `_skeletons/`, both plugin repos | **fixed** ([ideation#64](https://github.com/keiranholloway/biffo-plugin-ideation/pull/64), [idea-scout#40](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/40), [#816](https://github.com/keiranholloway/biffo-template/pull/816)), cost ~20m |
 | — | **A workflow reported `success` with all 11 steps green while its write path had never executed once.** Every `publish-registry` run exited at "Registry entry already current — nothing to publish", so read access was exercised and write access never was. Step-level green was not evidence either — only deliberately breaking the registry entry, so there was something to write, proved the token could push. The correcting bot commit is the first write in the mechanism's history | **fail-open** | biffo-plugins-registry [#4](https://github.com/keiranholloway/biffo-plugins-registry/issues/4) | verification practice | **proven** — perturb-then-correct; a no-op path cannot be verified by observing it succeed |
 | — | **`raw.githubusercontent.com` served a stale value while the API showed the commit had landed**, so the verification of the above reported "WRITE NOT PROVEN" when the write had in fact succeeded seconds earlier. Trusting the CDN would have concluded the operator's freshly-minted token was read-only, and sent them back to regenerate a credential that was fine | **visibility** | biffo-plugins-registry (this session) | verification practice | **avoided** — check `gh api .../contents` or the commit list, never the raw CDN, when the question is "did this just change?" |
+| — | **A cleanup was declared impossible after asking only one of the two available questions.** 35 leftover branches had no PR of any state, so they were reported — in the issue, in writing — as "indistinguishable from unlanded work; no safe rule touches them". GitHub had been asked *was there a PR?*; git was never asked *does this branch contain anything?*. It does answer: `git merge-base --is-ancestor` proved **32 of 34** fully contained in `dev`, and `git branch -d` — the refusing, non-forcing delete — accepted every one. Only 2 held unique commits | **process** | biffo-template [#798](https://github.com/keiranholloway/biffo-template/issues/798) | verification practice | **corrected same day** — 68 branches → 24, 18 worktrees → 6, doctor errors 3 → 0, cost ~30m |
+| — | **Nothing reaps a worktree once its PR merges, so they accumulate exactly as branches do.** 18 worktrees across three repos; 12 sat on already-merged PRs, all clean. AGENTS.md §1 tells the operator to remove them and nothing checks. `core upgrade --reap` ([#795](https://github.com/keiranholloway/biffo-template/pull/795)) covers only `biffo/core-upgrade-*` branches and no worktrees at all | **process** | all three repos | biffo-template `cli/` | **detected** ([#812](https://github.com/keiranholloway/biffo-template/pull/812) `doctor` reports both); reaping worktrees is still manual |
 
 | — | `tabsii-intake`'s `dev`/`staging`/`main` required **11 status-check contexts**; the consolidated CI workflow it adopted produces **4**. Nine contexts could never report again, so a green PR sat permanently `BLOCKED`. Renaming a CI job and repointing branch protection are one change that nothing couples | **boundary** · process | tabsii-intake [#9](https://github.com/tabsii-com/tabsii-intake/pull/9) | tabsii-intake settings + biffo-template (`biffo check branch-protection` cannot see this class) | protection **repointed** on all three branches; the *detection* gap **unfiled** |
 | — | Migrating a **live sibling** onto the consolidated CI switched on two dependency gates that repo had never run, surfacing **20 pre-existing advisories** (16 JS, 4 Python) in one go. Same shape as [#644](https://github.com/keiranholloway/biffo-template/issues/644) but on a deployed service rather than a skeleton: not a new defect, a first measurement | **fail-open** · visibility | tabsii-intake [#9](https://github.com/tabsii-com/tabsii-intake/pull/9) | tabsii-intake (lockfiles + overrides) + biffo-template [#722](https://github.com/keiranholloway/biffo-template/issues/722) | intake **fixed** (20 → 0); skeleton suppression **open** ([#722](https://github.com/keiranholloway/biffo-template/issues/722)) |
@@ -255,26 +257,25 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **132 rows** (never typed by hand, see *Adding a row*):
+`byFixRepo`, regenerated at **134 rows** (never typed by hand, see *Adding a row*):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 77 of 132 (58%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 13 of 132 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
-| **biffo-plugin-idea-scout** | 7 of 132 | Adapter seam, research search capability, its own styling, release + publish workflows |
-| **biffo-platform** | 5 of 132 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 132 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **tabsii-marketplace** | 2 of 132 | `python-jose` removal; the credential-dependent build |
-| **tabsii-crm** | 2 of 132 | Its E2E harness, and a repo setting that diverged |
-| **biffo-plugin-ideation** | 1 of 132 | A UI rendering a 500 as an empty state; its publish workflow |
-| **biffo-runners** | 1 of 132 | Runner fleet docs + fail-fast |
+| **biffo-template** | 78 of 134 (58%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
+| **tabsii-platform** | 13 of 134 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
+| **biffo-plugin-idea-scout** | 7 of 134 | Adapter seam, research search capability, its own styling, release + publish workflows |
+| **biffo-platform** | 5 of 134 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 134 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **tabsii-marketplace** | 2 of 134 | `python-jose` removal; the credential-dependent build |
+| **tabsii-crm** | 2 of 134 | Its E2E harness, and a repo setting that diverged |
+| **biffo-plugin-ideation** | 1 of 134 | A UI rendering a 500 as an empty state; its publish workflow |
+| **biffo-runners** | 1 of 134 | Runner fleet docs + fail-fast |
 
-**`biffo-template` takes 77 of 132 — 58%.** The series: 86% at 50 and 57 rows,
-82% at 65, 70% at 94, 66% at 102, 63% at 109, 60% at 116 and 122, **58% at 126
-and again at 132**. The long slide has flattened rather than continued: across
-the six rows added since the last capture the template took four, which is
-roughly its standing share, so the ratio held while the absolute count moved
-73 → 77.
+**`biffo-template` takes 78 of 134 — 58%.** The series: 86% at 50 and 57 rows,
+82% at 65, 70% at 94, 66% at 102, 63% at 109, 60% at 116 and 122, 58% at 126, 132
+and 134. Three consecutive captures at 58% with the absolute count still rising
+(73 → 78) says the ratio has settled rather than kept sliding: the template still
+takes the clear majority of fixes, but no longer a growing share of them.
 
 **All four went to `biffo-plugin-idea-scout`, which jumps 4 → 7 and overtakes
 both `biffo-platform` and `tabsii-intake` to third.** This is the first capture
@@ -628,6 +629,17 @@ not for removing it.
 I wrote it to warn-and-skip on a missing token. Verifying the newly-set
 credential by reading the run *conclusion* would have proved nothing. The check
 that means something is the step list.
+
+**`git branch -d` is a proof, not just a delete.** It refuses any branch not
+fully contained in the base, so a bulk cleanup that only ever uses `-d` cannot
+destroy unlanded work — git checks each one for you. 32 of 34 were accepted;
+the two it would have refused were exactly the two carrying real commits. Using
+`-D` everywhere would have deleted all 34 and looked identical while running.
+
+**`biffo doctor` closed its own loop the day it shipped.** It quantified the
+mess (3 errors, 68 branches, 18 worktrees across the estate), and after the
+sweep reported `No findings` on the template and zero errors everywhere. First
+time any of these conditions was observed by a tool rather than a human noticing.
 
 **A no-op path cannot be verified by watching it succeed.** `publish-registry`
 ran green — eleven steps, all passing — and its write path had never executed,
@@ -1097,6 +1109,14 @@ the cost of confirming was seconds.
 **Reading the run back through the API rather than trusting the UI.** The Past Scouts list showed the run happily; only `GET /runs` showed `preferences: []`. A green-looking UI over a dropped field is exactly the shape #26 warned about.
 
 ## What needs more thought
+
+**"No PR" was treated as the end of the enquiry rather than the start of a
+second one.** The sweep asked GitHub whether a branch had merged; when the answer
+was "there was never a PR", it concluded the branch was unprovable and stopped.
+git could answer the actual question — *does this branch contain anything not
+already in `dev`?* — in one command, and did, for 32 of 34. The general form:
+when one authority returns "unknown", check whether a different authority
+returns "no".
 
 **Nothing distinguishes "this tool is for a local clone" from "this tool can run
 anywhere".** `biffo doctor` was proposed for CI and would have failed every run:

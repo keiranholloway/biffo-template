@@ -284,7 +284,10 @@ def _run_ddl_import(directory: str | None) -> dict:
         )
 
     async def _apply() -> dict:
-        engine = create_async_engine(settings.database_url)
+        # hide_parameters everywhere, not just on the request-path engine:
+        # SQLAlchemy embeds bound values in StatementError messages, so a failing
+        # statement leaks them via the traceback whether echo is on or not (#85).
+        engine = create_async_engine(settings.database_url, hide_parameters=True)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         try:
             result = await _apply_batch(engine, session_factory)

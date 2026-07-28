@@ -75,22 +75,24 @@ jobs:
           token: ${{ secrets.REGISTRY_PUBLISH_TOKEN }}
           path: registry
 
+      # astral-sh/setup-uv, NOT actions/setup-python. The latter fetches a
+      # prebuilt interpreter from actions/python-versions, which has no build
+      # matching the self-hosted runner fleet's OS — every run failed with
+      # "The version '3.13' ... was not found for this operating system". uv
+      # installs the interpreter itself, which is how this repo's own ci.yml
+      # gets 3.13 on the same runners.
       - name: Set up Python
         if: steps.token.outputs.present == 'true'
-        uses: actions/setup-python@v5
+        uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.13'
-
-      - name: Install jsonschema
-        if: steps.token.outputs.present == 'true'
-        run: pip install jsonschema
 
       - name: Upsert this plugin's entry
         if: steps.token.outputs.present == 'true'
         working-directory: registry
         run: |
           set -euo pipefail
-          python3 scripts/upsert_plugin.py \
+          uv run --with jsonschema python3 scripts/upsert_plugin.py \
             --manifest "../plugin/biffo.plugin.json" \
             --repo "${{ github.server_url }}/${{ github.repository }}"
 
@@ -103,8 +105,8 @@ jobs:
             echo "Registry entry already current — nothing to publish."
             exit 0
           fi
-          version="$(python3 -c "import json;print(json.load(open('../plugin/biffo.plugin.json'))['version'])")"
-          name="$(python3 -c "import json;print(json.load(open('../plugin/biffo.plugin.json'))['name'])")"
+          version="$(uv run python3 -c "import json;print(json.load(open('../plugin/biffo.plugin.json'))['version'])")"
+          name="$(uv run python3 -c "import json;print(json.load(open('../plugin/biffo.plugin.json'))['name'])")"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add plugins.json

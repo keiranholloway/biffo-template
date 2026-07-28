@@ -257,6 +257,11 @@ export function filterToWindow(data, since) {
           commits: data.rework.commits.filter((commit) => commit.at >= from),
         }
       : null,
+    // Deliberately NOT filtered by the window. An issue opened long before the
+    // PR that closed it is the long-latency case time-to-feature exists to find;
+    // windowing it away would discard the worst results and flatter the median.
+    // The window applies to the *merge*, which is the event being measured.
+    issues: data.issues ?? [],
   }
 }
 
@@ -270,6 +275,85 @@ export function filterToWindow(data, since) {
  * @param {number} p percentile in 0..100
  * @returns {number | null}
  */
+/**
+ * Time-to-feature, stop A: issue opened → the PR that closed it merged (#767).
+ *
+ * ## Why the clock starts at the issue and stops at the merge
+ *
+ * Start: `issue.createdAt`. Thinking time is deliberately out of scope — the
+ * clock starts when an intention is written down, which is the first moment the
+ * tooling can see.
+ *
+ * Stop: **not** `closedAt`. This estate has twice shipped a "fixed" issue that
+ * was not fixed — #275 was diagnosed, closed and shipped on a wrong cause with a
+ * green suite throughout, and #726 was auto-closed by `Closes #N` before
+ * anything had run against a deployed instance. A metric that stops at closure
+ * therefore *improves the more carelessly issues are closed*, rewarding the
+ * exact failure it should expose. The merge of the closing PR is the earliest
+ * moment supported by evidence rather than by someone's belief.
+ *
+ * Stop B — first successful deploy after that merge — is Phase 2, and needs the
+ * template→instance hop to become machine-readable first.
+ *
+ * ## What `unlinked` counts, and why it is not zero
+ *
+ * A merged PR with no resolvable closing issue is counted, not dropped. Two
+ * different things produce one: a PR that legitimately closes nothing, and a PR
+ * whose closing reference is malformed. The latter is already on this project's
+ * scoreboard — `closes tabsii-crm#100` is repo-qualified but owner-less, which
+ * GitHub does not recognise, and it left a shipped issue open for two days
+ * looking like unstarted work. Folding those into the denominator would report
+ * a sample as if it were the whole, so they are reported alongside it instead.
+ *
+ * @param {Array<Record<string, any>>} mergedPrs PRs with `mergedAt` and `closingIssuesReferences`
+ * @param {Map<string, string>} issueOpenedAt keyed `owner/repo#number` → ISO createdAt
+ */
+export function timeToFeature(mergedPrs, issueOpenedAt) {
+  const hours = []
+  let linked = 0
+  let unresolved = 0
+  for (const pr of mergedPrs) {
+    const refs = pr.closingIssuesReferences ?? []
+    for (const ref of refs) {
+      const owner = ref.repository?.owner?.login
+      const name = ref.repository?.name
+      const key = owner && name ? `${owner}/${name}#${ref.number}` : null
+      const openedAt = key ? issueOpenedAt.get(key) : undefined
+      if (!openedAt) {
+        // Referenced an issue we could not resolve — outside the fetched set, or
+        // in a repo not collected. Counted, never silently treated as instant.
+        unresolved += 1
+        continue
+      }
+      const delta = Date.parse(pr.mergedAt) - Date.parse(openedAt)
+      // A closing PR that merged *before* its issue was opened is not a fast
+      // feature — it is a mislinked reference. Excluded from the distribution
+      // and surfaced as unresolved rather than dragging the median toward zero.
+      if (!Number.isFinite(delta) || delta < 0) {
+        unresolved += 1
+        continue
+      }
+      hours.push(delta / 3_600_000)
+      linked += 1
+    }
+  }
+  const withNoClosingRef = mergedPrs.filter(
+    (pr) => (pr.closingIssuesReferences ?? []).length === 0,
+  ).length
+  return {
+    linked,
+    unresolved,
+    prsWithNoClosingIssue: withNoClosingRef,
+    // Coverage is the honesty check: a p50 over 4 of 143 merges is a statement
+    // about 4 merges. Reported next to the number so it cannot be read as the
+    // estate's feature latency.
+    coverage: rate(linked, mergedPrs.length),
+    hoursP50: round1(percentile(hours, 50)),
+    hoursP90: round1(percentile(hours, 90)),
+    hoursMax: hours.length ? round1(Math.max(...hours)) : null,
+  }
+}
+
 export function percentile(values, p) {
   if (!Array.isArray(values) || values.length === 0) return null
   const sorted = [...values].sort((a, b) => a - b)
@@ -670,7 +754,7 @@ export function summariseRework(fixes, merges) {
  * @param {{slug: string, role: string}} repo
  * @param {{prs: Array<Record<string, any>>, runs: Array<Record<string, any>>, defaultBranch: string, rework: {fixes: Array<{at: number, correctedAt: number | null}>, merges: number} | null}} data
  */
-export function summariseRepo(repo, data) {
+export function summariseRepo(repo, data, issueOpenedAt = new Map()) {
   const { prs, runs, defaultBranch, rework } = data
   const runsByBranch = indexRunsByBranch(runs)
   const merged = prs.filter((pr) => pr.mergedAt)
@@ -692,6 +776,10 @@ export function summariseRepo(repo, data) {
           docs: null, unconventional: null, toilRatio: null,
           counts: null, sideCounts: null, productDelivery: null,
         },
+    // How long from wanting a capability to having it (#767). Stop A only:
+    // issue opened → closing PR merged. Stop B (running in an instance) needs
+    // the template→instance hop to be machine-readable first.
+    timeToFeature: timeToFeature(merged, issueOpenedAt),
     // Consistency — two metrics, never one. See prChurn().
     ciFailureRate: rate(measured.filter((c) => c.ciFailed).length, measured.length),
     revisionsP50: percentile(
@@ -903,9 +991,29 @@ function fetchPrs(slug, since) {
     '--limit',
     '1000',
     '--json',
-    'number,title,createdAt,mergedAt,headRefName,baseRefName',
+    // closingIssuesReferences is what makes time-to-feature (#767) cost nothing
+    // extra: it rides along on a fetch that already happens. The alternative —
+    // one timeline API call per closed issue — is O(issues) requests for the
+    // same answer.
+    'number,title,createdAt,mergedAt,headRefName,baseRefName,closingIssuesReferences',
   ])
   return prs.filter((pr) => pr.mergedAt >= since)
+}
+
+/**
+ * Every closed issue's `createdAt`, in one request per repo (#767).
+ *
+ * Deliberately not filtered by the window: an issue opened months before the PR
+ * that closed it is exactly the long-latency case this metric exists to find, so
+ * filtering by open date would systematically discard the worst results and make
+ * the median look good. The cap is the API's, and an issue beyond it resolves to
+ * `unresolved` rather than being counted as fast.
+ *
+ * @param {string} slug
+ * @returns {Array<{number: number, createdAt: string}>}
+ */
+function fetchClosedIssues(slug) {
+  return gh(['issue', 'list', '-R', slug, '--state', 'closed', '--limit', '1000', '--json', 'number,createdAt'])
 }
 
 /**
@@ -987,14 +1095,27 @@ function main() {
       const prs = fetchPrs(repo.slug, fetchSince)
       const runs = fetchRuns(repo.slug, fetchSince)
       const rework = fetchRework(join(reposRoot, repo.path), fetchSince, defaultBranch)
-      raw[repo.slug] = { prs, runs, defaultBranch, rework }
-      process.stderr.write(`${prs.length} PRs, ${runs.length} runs\n`)
+      const issues = fetchClosedIssues(repo.slug)
+      raw[repo.slug] = { prs, runs, defaultBranch, rework, issues }
+      process.stderr.write(`${prs.length} PRs, ${runs.length} runs, ${issues.length} closed issues\n`)
     } catch (error) {
       // A repo that could not be read is recorded as such and excluded from
       // every aggregate. It is never allowed to contribute a zero.
       failures.push({ repo: repo.slug, error: String(error).split('\n')[0] })
       raw[repo.slug] = null
       process.stderr.write('FAILED\n')
+    }
+  }
+
+  // One index across every collected repo, not per-repo: an instance PR routinely
+  // closes a template issue, and a per-repo map would report every one of those
+  // as unresolved — losing exactly the cross-repo distribution cases this metric
+  // is most useful for.
+  /** @type {Map<string, string>} */
+  const issueOpenedAt = new Map()
+  for (const repo of targets) {
+    for (const issue of raw[repo.slug]?.issues ?? []) {
+      issueOpenedAt.set(`${repo.slug}#${issue.number}`, issue.createdAt)
     }
   }
 
@@ -1006,7 +1127,7 @@ function main() {
     const repos = {}
     for (const repo of targets) {
       repos[repo.slug] = raw[repo.slug]
-        ? summariseRepo(repo, filterToWindow(raw[repo.slug], since))
+        ? summariseRepo(repo, filterToWindow(raw[repo.slug], since), issueOpenedAt)
         : { error: 'unmeasured' }
     }
     windows[days] = { since, repos, estate: summariseEstate(repos) }

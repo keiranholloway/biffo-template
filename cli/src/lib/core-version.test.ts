@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -9,7 +9,9 @@ import {
   parseCoreVersion,
   planCoreVersionCleanup,
   readCoreVersionFile,
+  readDeclinedMigrations,
   readInstanceCoreVersion,
+  writeInstanceCoreVersion,
 } from './core-version.js'
 
 describe('parseCoreVersion', () => {
@@ -94,6 +96,89 @@ describe('readInstanceCoreVersion', () => {
   it('throws when version is missing or not semver', () => {
     writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: '1.2' }))
     expect(() => readInstanceCoreVersion(dir)).toThrow(/invalid/)
+  })
+})
+
+describe('declinedMigrations (#735)', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'biffo-declined-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const write = (body: unknown): void => {
+    writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify(body, null, 2))
+  }
+
+  it('is empty when the file is absent or records none', () => {
+    expect(readDeclinedMigrations(dir)).toEqual([])
+    write({ version: '1.4.0' })
+    expect(readDeclinedMigrations(dir)).toEqual([])
+  })
+
+  it('reads declared declines', () => {
+    write({
+      version: '1.4.0',
+      declinedMigrations: [
+        { file: '0010_orgs.py', reason: 'no public.users here', upstream: 'a/b#670' },
+      ],
+    })
+    expect(readDeclinedMigrations(dir)).toEqual([
+      { file: '0010_orgs.py', reason: 'no public.users here', upstream: 'a/b#670' },
+    ])
+  })
+
+  it('rejects a decline with no reason', () => {
+    // Same principle biffo.divergence.json applies: an entry nobody can review
+    // later is drift wearing a temporary label.
+    write({ version: '1.4.0', declinedMigrations: [{ file: '0010_orgs.py' }] })
+    expect(() => readDeclinedMigrations(dir)).toThrow(/reason is required/)
+  })
+
+  it('rejects an empty reason, not just a missing one', () => {
+    write({ version: '1.4.0', declinedMigrations: [{ file: '0010_orgs.py', reason: '' }] })
+    expect(() => readDeclinedMigrations(dir)).toThrow(/reason is required/)
+  })
+
+  // The trap this feature would otherwise have walked into: declines are read
+  // *during* an upgrade and biffo.core.json is rewritten *by* that same
+  // upgrade. Serialising `{ version }` alone would erase the declines it had
+  // just honoured, so they would survive exactly zero upgrades — and the file
+  // would look like the feature worked.
+  it('survives the version bump an upgrade performs in the same run', () => {
+    write({
+      version: '1.4.0',
+      declinedMigrations: [{ file: '0010_orgs.py', reason: 'no public.users here' }],
+    })
+
+    writeInstanceCoreVersion(dir, '1.5.0')
+
+    expect(readInstanceCoreVersion(dir)).toBe('1.5.0')
+    expect(readDeclinedMigrations(dir)).toEqual([
+      { file: '0010_orgs.py', reason: 'no public.users here' },
+    ])
+  })
+
+  it('preserves fields this CLI does not know about', () => {
+    // A future field must not need anyone to remember this function exists.
+    write({ version: '1.4.0', somethingAddedLater: { keep: true } })
+    writeInstanceCoreVersion(dir, '1.5.0')
+    const raw = JSON.parse(readFileSync(join(dir, 'biffo.core.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >
+    expect(raw).toEqual({ version: '1.5.0', somethingAddedLater: { keep: true } })
+    // version stays first, so the file reads the way it always has
+    expect(Object.keys(raw)[0]).toBe('version')
+  })
+
+  it('writes a plain record when there is no existing file (biffo init)', () => {
+    writeInstanceCoreVersion(dir, '1.5.0')
+    expect(JSON.parse(readFileSync(join(dir, 'biffo.core.json'), 'utf8'))).toEqual({
+      version: '1.5.0',
+    })
   })
 })
 

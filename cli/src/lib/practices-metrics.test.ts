@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest'
 // as destructive-plan.mjs and packaged-root-assets.mjs.
 import {
   timeToFeature,
+  successfulDeploys,
+  firstDeployAfter,
   parseDiffHunks,
   cycleTimeMinutes,
   detectFlakes,
@@ -1240,5 +1242,110 @@ describe('timeToFeature (#767)', () => {
       hoursP90: null,
       hoursMax: null,
     })
+  })
+})
+
+describe('time-to-running, stop B (#767)', () => {
+  const run = (
+    name: string,
+    branch: string,
+    conclusion: string,
+    created: string,
+    updated: string,
+  ) => ({
+    name,
+    head_branch: branch,
+    event: 'push',
+    conclusion,
+    created_at: created,
+    updated_at: updated,
+  })
+
+  it('measures completion, not trigger — a deploy is not free', () => {
+    // The bug this pins: matching and measuring both on created_at reports a
+    // ~0 gap for every deploy, because a push-triggered run starts seconds
+    // after the merge however long it then takes.
+    const deploys = successfulDeploys(
+      [run('Deploy Application', 'dev', 'success', '2026-07-01T10:00:00Z', '2026-07-01T10:18:00Z')],
+      'dev',
+    )
+    expect(firstDeployAfter(deploys, '2026-07-01T09:59:00Z')).toBe(
+      Date.parse('2026-07-01T10:18:00Z'),
+    )
+  })
+
+  it('ignores a deploy that started BEFORE the merge — it cannot contain it', () => {
+    const deploys = successfulDeploys(
+      [run('Deploy Application', 'dev', 'success', '2026-07-01T09:00:00Z', '2026-07-01T09:10:00Z')],
+      'dev',
+    )
+    expect(firstDeployAfter(deploys, '2026-07-01T10:00:00Z')).toBeNull()
+  })
+
+  it('skips a failed deploy and takes the next success', () => {
+    const deploys = successfulDeploys(
+      [
+        run('Deploy Application', 'dev', 'failure', '2026-07-01T10:05:00Z', '2026-07-01T10:07:00Z'),
+        run('Deploy Application', 'dev', 'success', '2026-07-01T10:30:00Z', '2026-07-01T10:40:00Z'),
+      ],
+      'dev',
+    )
+    expect(firstDeployAfter(deploys, '2026-07-01T10:00:00Z')).toBe(
+      Date.parse('2026-07-01T10:40:00Z'),
+    )
+  })
+
+  it('ignores other workflows and other branches', () => {
+    const runs = [
+      run('CI', 'dev', 'success', '2026-07-01T10:05:00Z', '2026-07-01T10:08:00Z'),
+      run(
+        'Deploy Application',
+        'staging',
+        'success',
+        '2026-07-01T10:05:00Z',
+        '2026-07-01T10:08:00Z',
+      ),
+    ]
+    expect(successfulDeploys(runs, 'dev')).toEqual([])
+  })
+
+  it('counts a merged-but-undeployed issue as awaiting, never as instant', () => {
+    const opened = new Map([['acme/app#1', '2026-07-01T00:00:00Z']])
+    const prs = [
+      {
+        mergedAt: '2026-07-01T10:00:00Z',
+        closingIssuesReferences: [
+          { number: 1, repository: { name: 'app', owner: { login: 'acme' } } },
+        ],
+      },
+    ]
+    const out = timeToFeature(prs, opened, [])
+    expect(out.linked).toBe(1)
+    expect(out.running).toMatchObject({
+      measured: 0,
+      awaitingDeploy: 1,
+      hoursP50: null,
+      deployGapP50: null,
+    })
+  })
+
+  it('reports running and the merge-to-running gap separately', () => {
+    const opened = new Map([['acme/app#1', '2026-07-01T00:00:00Z']])
+    const prs = [
+      {
+        mergedAt: '2026-07-01T10:00:00Z',
+        closingIssuesReferences: [
+          { number: 1, repository: { name: 'app', owner: { login: 'acme' } } },
+        ],
+      },
+    ]
+    const deploys = successfulDeploys(
+      [run('Deploy Application', 'dev', 'success', '2026-07-01T10:01:00Z', '2026-07-01T10:31:00Z')],
+      'dev',
+    )
+    const out = timeToFeature(prs, opened, deploys)
+    expect(out.hoursP50).toBe(10) // opened -> merged
+    expect(out.running.hoursP50).toBe(10.5) // opened -> running
+    expect(out.running.deployGapP50).toBe(0.5) // merged -> running
   })
 })

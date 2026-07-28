@@ -95,6 +95,16 @@ export const REPOS = [
  */
 export const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out', 'startup_failure'])
 
+/**
+ * The workflow whose success means "this code is now running" (#767).
+ *
+ * Named identically across every deploying repo in the estate — checked on
+ * biffo-template, biffo-platform and tabsii-platform. A repo without it yields
+ * `null` for the running stop rather than 0: "does not deploy" and "deployed
+ * instantly" are different claims and only one is good news.
+ */
+export const DEPLOY_WORKFLOW = 'Deploy Application'
+
 /** Conclusions that mean the gate never evaluated the change. Never counted as a pass. */
 export const INCONCLUSIVE_CONCLUSIONS = new Set(['skipped', 'neutral', 'stale', null])
 
@@ -308,10 +318,13 @@ export function filterToWindow(data, since) {
  * @param {Array<Record<string, any>>} mergedPrs PRs with `mergedAt` and `closingIssuesReferences`
  * @param {Map<string, string>} issueOpenedAt keyed `owner/repo#number` → ISO createdAt
  */
-export function timeToFeature(mergedPrs, issueOpenedAt) {
+export function timeToFeature(mergedPrs, issueOpenedAt, deploys = []) {
   const hours = []
+  const runningHours = []
+  const deployGapHours = []
   let linked = 0
   let unresolved = 0
+  let awaitingDeploy = 0
   for (const pr of mergedPrs) {
     const refs = pr.closingIssuesReferences ?? []
     for (const ref of refs) {
@@ -335,6 +348,18 @@ export function timeToFeature(mergedPrs, issueOpenedAt) {
       }
       hours.push(delta / 3_600_000)
       linked += 1
+
+      // Stop B — running, not merely merged (#767).
+      const ranAt = firstDeployAfter(deploys, pr.mergedAt)
+      if (ranAt === null) {
+        // No successful deploy yet, or the deploy fell outside the fetched
+        // window. Either way it is *not* zero and not "instant" — the issue is
+        // merged and not yet known to be running.
+        awaitingDeploy += 1
+        continue
+      }
+      runningHours.push((ranAt - Date.parse(openedAt)) / 3_600_000)
+      deployGapHours.push((ranAt - Date.parse(pr.mergedAt)) / 3_600_000)
     }
   }
   const withNoClosingRef = mergedPrs.filter(
@@ -351,7 +376,73 @@ export function timeToFeature(mergedPrs, issueOpenedAt) {
     hoursP50: round1(percentile(hours, 50)),
     hoursP90: round1(percentile(hours, 90)),
     hoursMax: hours.length ? round1(Math.max(...hours)) : null,
+    // Stop B: issue opened → deployed and running.
+    running: {
+      measured: runningHours.length,
+      awaitingDeploy,
+      hoursP50: round1(percentile(runningHours, 50)),
+      hoursP90: round1(percentile(runningHours, 90)),
+      // B − A: merged, but not yet usable. This is the distribution cost the
+      // practices page has only ever been able to describe anecdotally.
+      deployGapP50: round1(percentile(deployGapHours, 50)),
+      deployGapP90: round1(percentile(deployGapHours, 90)),
+    },
   }
+}
+
+/**
+ * Successful deploy runs on the integration branch, oldest first (#767).
+ *
+ * @param {Array<Record<string, any>>} runs
+ * @param {string} branch
+ * @param {string} workflow
+ */
+export function successfulDeploys(runs, branch, workflow = DEPLOY_WORKFLOW) {
+  return runs
+    .filter(
+      (run) =>
+        run.name === workflow &&
+        run.head_branch === branch &&
+        run.event === 'push' &&
+        run.conclusion === 'success',
+    )
+    .map((run) => ({
+      // Two different instants, and conflating them makes deploys look free.
+      // `startedAt` decides *which* merges a run contains; `finishedAt` is when
+      // the code is actually running. A push-triggered run starts within
+      // seconds of the merge, so measuring the gap from `startedAt` reports ~0
+      // for every deploy no matter how long it took.
+      startedAt: Date.parse(String(run.created_at)),
+      finishedAt: Date.parse(String(run.updated_at ?? run.created_at)),
+    }))
+    .filter((d) => Number.isFinite(d.startedAt) && Number.isFinite(d.finishedAt))
+    .sort((a, b) => a.startedAt - b.startedAt)
+}
+
+/**
+ * When the first deploy that *necessarily contains* `mergedAt` finished.
+ *
+ * The rule is `created_at >= mergedAt`, and it is exact rather than a heuristic:
+ * a push-triggered run builds the branch tip at the moment it was created, so a
+ * run created after a merge necessarily includes that merge. A run created
+ * *before* it cannot. No commit-sha matching is needed, and none would be more
+ * correct — sha matching would additionally report `null` whenever deploys
+ * coalesce, which is common here and would look like "never shipped".
+ *
+ * Returns `null` when no successful deploy has happened yet, which is a
+ * different claim from "shipped instantly".
+ *
+ * Matches on `startedAt` and returns `finishedAt` — the code is running when the
+ * deploy *completes*, not when it is triggered.
+ *
+ * @param {Array<{startedAt: number, finishedAt: number}>} deploys ascending by startedAt
+ * @param {string} mergedAt
+ */
+export function firstDeployAfter(deploys, mergedAt) {
+  const from = Date.parse(mergedAt)
+  if (!Number.isFinite(from)) return null
+  for (const d of deploys) if (d.startedAt >= from) return d.finishedAt
+  return null
 }
 
 export function percentile(values, p) {
@@ -779,7 +870,7 @@ export function summariseRepo(repo, data, issueOpenedAt = new Map()) {
     // How long from wanting a capability to having it (#767). Stop A only:
     // issue opened → closing PR merged. Stop B (running in an instance) needs
     // the template→instance hop to be machine-readable first.
-    timeToFeature: timeToFeature(merged, issueOpenedAt),
+    timeToFeature: timeToFeature(merged, issueOpenedAt, successfulDeploys(runs, defaultBranch)),
     // Consistency — two metrics, never one. See prChurn().
     ciFailureRate: rate(measured.filter((c) => c.ciFailed).length, measured.length),
     revisionsP50: percentile(

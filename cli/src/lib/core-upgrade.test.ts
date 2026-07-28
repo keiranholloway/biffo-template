@@ -394,3 +394,42 @@ describe('upgradeBranchName', () => {
     expect(upgradeBranchName('0.1.0', '0.2.0')).toBe('biffo/core-upgrade-0.1.0-to-0.2.0')
   })
 })
+
+import {
+  CARRIED_PRS_MARKER,
+  carriedPrNumbers,
+  carriedPrsSection,
+} from '../commands/core-upgrade.js'
+
+describe('carried template PRs (#767)', () => {
+  it('extracts PR numbers from squash subjects', () => {
+    expect(
+      carriedPrNumbers([
+        'feat(cli): add --json output to `biffo core diff` (#746)',
+        'fix(cli): pin the ownership guard (#750)',
+        'chore: something with no PR number',
+      ]),
+    ).toEqual([746, 750])
+  })
+
+  it('ignores a number that is not the trailing squash marker', () => {
+    // "(#123)" mid-subject is a reference, not this merge's own PR.
+    expect(carriedPrNumbers(['fix(api): follow up on (#123) properly (#900)'])).toEqual([900])
+    expect(carriedPrNumbers(['docs: mention #123 in the guide'])).toEqual([])
+  })
+
+  it('dedupes and sorts', () => {
+    expect(carriedPrNumbers(['a (#5)', 'b (#3)', 'c (#5)'])).toEqual([3, 5])
+  })
+
+  it('emits a machine-readable marker, hidden from the reader', () => {
+    const out = carriedPrsSection([750, 746, 746])
+    expect(out.join('\n')).toContain(`<!-- ${CARRIED_PRS_MARKER}746,750 -->`)
+  })
+
+  it('emits nothing at all when there is nothing to record', () => {
+    // An upgrade that cannot read the template history must add no noise, and
+    // must not emit an empty marker that a parser would read as "carried none".
+    expect(carriedPrsSection([])).toEqual([])
+  })
+})

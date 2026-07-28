@@ -173,6 +173,30 @@ export class GitAdapter {
   }
 
   /**
+   * Is `cwd` the primary checkout, rather than a linked worktree?
+   *
+   * The distinction decides whether being off the integration branch is a
+   * defect or the mandated state: AGENTS.md §1 requires all work to happen in a
+   * worktree on its own branch, while §2 requires the primary to stay on `dev`.
+   * Reporting the former as a problem is a false positive in the one place
+   * everybody works.
+   *
+   * A linked worktree's git dir points inside `.git/worktrees/<name>`, while the
+   * common dir is the shared `.git`. They are equal only in the primary.
+   */
+  async isPrimaryWorktree(cwd: string): Promise<boolean> {
+    const opts = { cwd, reject: false } as const
+    const [dir, common] = await Promise.all([
+      execa('git', ['rev-parse', '--absolute-git-dir'], opts),
+      execa('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], opts),
+    ])
+    // Assume primary when it cannot be determined: the checks this gates are
+    // the strict ones, and inventing a false positive is the failure to avoid.
+    if (dir.exitCode !== 0 || common.exitCode !== 0) return true
+    return dir.stdout.trim() === common.stdout.trim()
+  }
+
+  /**
    * Worktrees other than the primary, with the branch each is on (#797).
    *
    * `--porcelain` rather than the human format: the latter's alignment and

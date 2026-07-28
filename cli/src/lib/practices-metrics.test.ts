@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 // home rather than a TypeScript copy that can drift from it — same arrangement
 // as destructive-plan.mjs and packaged-root-assets.mjs.
 import {
+  timeToFeature,
   parseDiffHunks,
   cycleTimeMinutes,
   detectFlakes,
@@ -1175,5 +1176,69 @@ describe('daysSince / nudge', () => {
     const m = nudge({ sessions: 4, lastDate: '2026-07-20' }, 3, now)
     expect(m).toContain('7 days ago')
     expect(m).toContain('4 recorded so far')
+  })
+})
+
+describe('timeToFeature (#767)', () => {
+  const ref = (owner: string, name: string, number: number) => ({
+    number,
+    repository: { name, owner: { login: owner } },
+  })
+  const opened = new Map([
+    ['acme/app#1', '2026-07-01T00:00:00Z'],
+    ['acme/tmpl#9', '2026-07-20T00:00:00Z'],
+  ])
+
+  it('measures issue opened to closing PR merged, in hours', () => {
+    const prs = [
+      { mergedAt: '2026-07-03T00:00:00Z', closingIssuesReferences: [ref('acme', 'app', 1)] },
+    ]
+    expect(timeToFeature(prs, opened)).toMatchObject({ linked: 1, hoursP50: 48, hoursMax: 48 })
+  })
+
+  it('resolves an issue closed from a DIFFERENT repo', () => {
+    // An instance PR closing a template issue is the routine case here, and a
+    // per-repo index would report every one of them as unresolved — losing the
+    // cross-repo distribution latency this metric most needs to see.
+    const prs = [
+      { mergedAt: '2026-07-21T00:00:00Z', closingIssuesReferences: [ref('acme', 'tmpl', 9)] },
+    ]
+    expect(timeToFeature(prs, opened)).toMatchObject({ linked: 1, unresolved: 0, hoursP50: 24 })
+  })
+
+  it('counts an unresolvable reference rather than dropping or zeroing it', () => {
+    const prs = [
+      { mergedAt: '2026-07-22T00:00:00Z', closingIssuesReferences: [ref('acme', 'app', 999)] },
+    ]
+    expect(timeToFeature(prs, opened)).toMatchObject({ linked: 0, unresolved: 1, hoursP50: null })
+  })
+
+  it('treats a PR merged BEFORE its issue was opened as unresolved, not instant', () => {
+    // A negative duration is a mislinked reference, not a fast feature. Letting
+    // it through would drag the median toward zero and read as an improvement.
+    const prs = [
+      { mergedAt: '2026-06-01T00:00:00Z', closingIssuesReferences: [ref('acme', 'app', 1)] },
+    ]
+    expect(timeToFeature(prs, opened)).toMatchObject({ linked: 0, unresolved: 1, hoursP50: null })
+  })
+
+  it('reports coverage, so a p50 over few merges cannot read as the whole estate', () => {
+    const prs = [
+      { mergedAt: '2026-07-03T00:00:00Z', closingIssuesReferences: [ref('acme', 'app', 1)] },
+      { mergedAt: '2026-07-23T00:00:00Z', closingIssuesReferences: [] },
+      { mergedAt: '2026-07-24T00:00:00Z', closingIssuesReferences: [] },
+    ]
+    const out = timeToFeature(prs, opened)
+    expect(out.coverage).toBe(33.3)
+    expect(out.prsWithNoClosingIssue).toBe(2)
+  })
+
+  it('returns null, never 0, when nothing could be measured', () => {
+    expect(timeToFeature([], opened)).toMatchObject({
+      coverage: null,
+      hoursP50: null,
+      hoursP90: null,
+      hoursMax: null,
+    })
   })
 })

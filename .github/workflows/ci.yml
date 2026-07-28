@@ -5,6 +5,16 @@ on:
     branches: [main, dev, staging]
   pull_request:
     branches: [main, dev, staging]
+  # The merge queue tests each entry on a temporary `gh-readonly-queue/*` ref,
+  # which is neither a push to an integration branch nor a pull request. Without
+  # this trigger the required checks are never reported for the queue entry, and
+  # every queued PR waits for checks that cannot arrive — the queue does not fall
+  # back to the PR's own results. This trigger must exist BEFORE a merge queue is
+  # enabled on the branch, or the first queued PR blocks the repo.
+  #
+  # Harmless where no queue is configured (every instance today): the event
+  # simply never fires.
+  merge_group:
   # Manual re-run. Without this there is no way to trigger CI on an integration
   # branch: AGENTS.md forbids pushing directly to one, so the only recourse is
   # an otherwise-pointless PR. On 2026-07-19 GitHub stopped dispatching
@@ -60,33 +70,68 @@ jobs:
   release-guards:
     name: Release Guards
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    if: github.event_name == 'pull_request'
+    # Runs on pull_request AND merge_group — but the guards themselves only do
+    # anything on a pull_request.
+    #
+    # The job has to run in the queue because "Release Guards" is a REQUIRED
+    # check, and a merge queue only counts checks reported for the merge_group
+    # event; it does not inherit the PR's results. Gating the whole job on
+    # pull_request would leave every queue entry waiting for a check that can
+    # never arrive.
+    #
+    # The guards are nonetheless skipped there, because both are PR-time gates
+    # that cannot be evaluated on a queue entry: `release-subject` validates the
+    # PR *title* (there is none), and the ownership guard diffs against
+    # `$GITHUB_BASE_REF` as a short branch name, which merge_group does not set —
+    # its payload carries `refs/heads/dev`, and `git diff origin/refs/heads/dev`
+    # is not a ref. Both already passed before the entry was queued.
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     steps:
+      # Explicit rather than an empty run: a job whose every step skipped reads
+      # as "did nothing, silently" in the log, which is the shape of a guard that
+      # guards nothing (#745). Say why instead.
+      - name: Queue entry — release guards already enforced on the PR
+        if: github.event_name == 'merge_group'
+        run: |
+          echo "Release guards are pull-request-time gates and ran when the PR did:"
+          echo "  - release-subject validates the PR title (a queue entry has none)"
+          echo "  - the ownership guard diffs the PR against its base branch"
+          echo "Nothing here is re-checkable on a queue entry. Reporting success."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        if: github.event_name == 'pull_request'
         with:
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
+        if: github.event_name == 'pull_request'
       - uses: actions/setup-node@v5
+        if: github.event_name == 'pull_request'
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - id: install
+        if: github.event_name == 'pull_request'
         run: pnpm install --frozen-lockfile
       # A template-owned change cuts a release on merge, and the release job
       # derives the bump from the squash-merge subject — which is this PR's
       # title. Fail if that title is not a Conventional Commits subject, or a
       # feature ships silently as a patch (ADR-0006, #423).
-      - run: sh scripts/biffo.sh check release-subject
+      - if: github.event_name == 'pull_request'
+        run: sh scripts/biffo.sh check release-subject
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
           PR_TITLE: ${{ github.event.pull_request.title }}
       # The mirror image, for instances: fail if an INSTANCE changed a
       # template-owned path (#370). Inert in the template, where that is the
       # point of every PR. Shares this job rather than adding its own — same
-      # toolchain, same full-depth checkout, same PR-only trigger, and GitHub
-      # bills each job's wall time rounded up to a full minute.
+      # toolchain, same full-depth checkout, same pull-request-only gate, and
+      # GitHub bills each job's wall time rounded up to a full minute.
+      #
+      # The event check is explicit rather than left to `install` being skipped
+      # on a queue entry. That would work, but only as a side effect — and this
+      # file already warns what happens when a step's gate depends on
+      # `steps.install.outcome` being what you assume.
       - name: Core ownership guard
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        if: ${{ github.event_name == 'pull_request' && !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/biffo.sh check ownership
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}

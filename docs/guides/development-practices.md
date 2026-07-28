@@ -91,22 +91,40 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | [#736](https://github.com/keiranholloway/biffo-template/pull/736) | The test written to catch template-only assumptions **contained one**: it rewrote migration 0010's `down_revision` by matching the literal `"0009"`, the template's value. `core upgrade` re-points distributed migrations onto the instance's head (`"0011"` in tabsii), so all four cases failed on arrival — green in the template, red in the instance, which is the exact shape the test existed to prevent | **drift** | tabsii-platform [#263](https://github.com/tabsii-com/tabsii-platform/pull/263) | biffo-template `services/api/tests/` | **fixed** ([#736](https://github.com/keiranholloway/biffo-template/pull/736)) |
 | — | **Auto-merge does not update a `BEHIND` branch.** `gh pr merge --auto` was armed on a PR whose checks were all green; it sat indefinitely because the repo does not auto-update branches, and auto-merge only waits on *checks*. The scoreboard already records auto-merge as the fix for the rebase race — it is only half of it without branch auto-update | process | biffo-template [#734](https://github.com/keiranholloway/biffo-template/pull/734) | biffo-template repo settings | **unfiled** — enable "Always suggest updating pull request branches", or drive `update-branch` in the wait loop |
 | — | The workflow dry-run's 502 **discards `str(exc)`** and returns a fixed string, so a 20s timeout, a bad model slug and a missing credential are indistinguishable to the person who can act on them. The reason was already in the log; the user had to ask an agent to read it | **visibility** | tabsii-platform (orchestration admin) | biffo-template `agent_dryrun_service` | **unfiled** — noted while fixing [#726](https://github.com/keiranholloway/biffo-template/issues/726), deliberately not bundled |
+| [tabsii#265](https://github.com/tabsii-com/tabsii-platform/issues/265) | The suite runs entirely on SQLite, and `authorize_workflow_scope` returns `False` at a dialect guard on anything that is not Postgres. So the scoped-workflow authorizer returned **deny for every input in CI**, its body never executed, and its two *"fails closed"* tests passed **trivially** — not by exercising the guard they name. An allow/deny matrix was not merely missing but **impossible to write**: every row would have asserted `False`. The feature was live on dev throughout | **fail-open** | tabsii-platform (found reviewing [tabsii-crm#100](https://github.com/tabsii-com/tabsii-crm/issues/100)) | tabsii-platform [#267](https://github.com/tabsii-com/tabsii-platform/pull/267) | **fixed** — Postgres+PostGIS lane, 28-case matrix; 8 rows assert *allow*, which was unreachable before |
+| — | **The schema is two stacks, and nothing says so.** `db/imports/tabsii/036` seeds `public.orchestration_workflow_definitions` — a Core **Alembic** table — so applying the DDL import alone dies at module 036. Under `--single-transaction` that rolls back all 48 modules, and the resulting error is `relation "tabsii.tenants" does not exist`, which points at the *first* module rather than the failing one. `_run_db_init` → `_run_ddl_import` encodes the order; nothing else does | **boundary** · visibility | tabsii-platform [#267](https://github.com/tabsii-com/tabsii-platform/pull/267) | tabsii-platform (lane ordering); biffo-template could state the dependency in ADR-0005 | **fixed** in the lane; the undocumented coupling **unfiled** · cost ~15m + 1 CI cycle |
+| [#755](https://github.com/keiranholloway/biffo-template/issues/755) | **An instance cannot add a CI workflow of its own.** `.github/` is template-owned wholesale, so a lane testing an instance-only schema — something `core upgrade` could never carry — can only land under a `Core-Divergence:` trailer. That trailer means *"this instance must differ from a template file"*; here there is no template counterpart to differ from, so the divergence ledger gains an entry that can never converge. `infra/environments/` has the `*.core.tf` convention for the mirror-image case; the inverse has no expression | **boundary** · process | tabsii-platform [#267](https://github.com/tabsii-com/tabsii-platform/pull/267) | biffo-template `core-manifest.json` | **open** — proposed as a `*.instance.yml` userOwned glob |
+| — | **The `steps.install.outcome` gate is a template idiom that does not generalise.** `ci.yml` gates its check steps on dependency install because that is its only prerequisite. Copied verbatim into a job with a *second*, later prerequisite (schema provisioning), the tests ran against an empty database after the schema step had already failed — turning one honest failure into **28 misleading errors** that named the wrong module | **fail-open** · drift | tabsii-platform [#267](https://github.com/tabsii-com/tabsii-platform/pull/267) | tabsii-platform (each step now gates on the one before); biffo-template idiom needs the caveat | **fixed** — same class as the gates this page already tracks, but self-inflicted by copying a convention |
+| — | **A PR closing keyword that is silently not a closing keyword.** [tabsii-crm#106](https://github.com/tabsii-com/tabsii-crm/pull/106) wrote `closes tabsii-crm#100` — repo-qualified but **owner-less**, which GitHub does not recognise. The PR merged to the default branch, the work shipped, and the issue stayed open for two days looking like unstarted work. Nothing warns, and the malformed ref renders as plain text rather than an obviously broken link | **visibility** · process | tabsii-crm [#100](https://github.com/tabsii-com/tabsii-crm/issues/100) | practice (or a PR-body lint) | **unfiled** — three of ten open tabsii issues turned out to be complete; this was one cause |
+| — | **"Adopt the skeleton" is not unconditionally safe.** `tabsii-marketplace` could take the sibling skeleton's `ci.yml` verbatim; `tabsii-geo` could not — it has an `E2E (Playwright)` job the skeleton has no equivalent for. Copying wholesale would have **silently deleted real coverage and not failed a merge**, because that job is not one of the four required status-check contexts. The right move was adding the Build step to geo's existing job instead | **drift** · fail-open | tabsii-geo (2026-07-27) | practice — diff before adopting, never copy | **avoided** — caught before adoption |
+| — | **A latent defect is worse than a live one.** Eager `CognitoUserPool` construction at module load broke `tabsii-geo` and `tabsii-marketplace` builds outright, so both got fixed. `tabsii-intake` had **identical code and a passing build**, only because no page imported the module — it would have surfaced in whatever future PR first added such a page, *looking like that PR's fault* | **drift** · visibility | tabsii-intake (2026-07-27) | tabsii-intake + siblings | **fixed** — geo, marketplace, app and intake all construct lazily and carry `auth.test.ts` |
 ### What the classes say
 
 > Counted from `docs/practices/evidence.jsonl`, not asserted. Regenerate with
-> `node scripts/practices-evidence.mjs --report`. **57 rows.**
+> `node scripts/practices-evidence.mjs --report`. **65 rows** — and, for the
+> first time, the extractor's count **equals the table's count**. See below.
 
 | Primary class | Rows |
 | --- | --- |
-| **visibility** | 16 |
-| drift | 13 |
-| boundary | 11 |
-| fail-open | 9 |
+| **visibility** | 17 |
+| drift | 15 |
+| boundary | 13 |
+| fail-open | 12 |
 | process | 8 |
+
+**The extractor and the table now reconcile, and the cause was findable all
+along.** This page twice recorded that `--extract` "silently drops a row it
+cannot parse" (53 vs 54) and asked someone to reconcile the two before pasting
+any generated figure. Exactly one row triggered it: the `js-dependency-audit.sh`
+row quotes a shell pipeline as `echo "$out" \| jq`, and the parser split on
+**every** `|` including the markdown-escaped one — producing 7 columns, landing
+`class` on the tail of the condition, failing the class parse, and `continue`-ing
+without a word. Splitting on unescaped pipes only fixes it: **65 rows extracted,
+65 rows in the table.** Every figure below is now pasted from `--report`.
 
 **This page previously said "fail-open is the dominant shape — three of the five
 filed issues".** That was true of a five-row sample and was never revised as the
-sample grew ninefold. Counted across all 57 rows, fail-open is *fourth*. The
+sample grew thirteenfold. Counted across all 65 rows, fail-open is *fourth*. The
 error is instructive and is the reason the rows are now a dataset: **a narrative
 appended to by hand drifts from the evidence above it, silently, and reads
 exactly as confidently while doing so.**
@@ -163,22 +181,26 @@ good — which is the only thing that found any of these.
 **Counting rule** (two sessions computed different totals in good faith, so it is
 now stated): count **every scoreboard row**, filed or not — an unfiled row is
 still work that has to land somewhere. A row naming two repos counts once for
-each, so the column sums exceed the row count. Recounted at **57 rows**
-(46 with a filed issue, 11 unfiled):
+each, so the column sums exceed the row count.
+
+**Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
+`byFixRepo`, at **65 rows**:
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 49 of 57 | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 3 of 57 | Its own divergence ratchet and repo settings; every other tabsii-surfaced defect fixes upstream |
-| **biffo-platform** | 2 of 57 | Shares #647 and #652 — the instantiated infra (API Gateway routes, CDN) |
-| **tabsii-intake** | 2 of 57 | Its own stale lockfiles and branch protection — both first *measured* rather than newly broken |
-| **biffo-plugin-ideation** | 1 of 57 | An admin UI rendering a 500 as an empty collection |
-| **biffo-plugin-idea-scout** | 1 of 57 | A missing `web-admin/dist` |
-| **biffo-runners** | 1 of 57 | Runner fleet docs + fail-fast |
+| **biffo-template** | 53 of 65 | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
+| **tabsii-platform** | 6 of 65 | Its divergence ratchet, repo settings, and now its own RLS test lane — the first row here that is *infrastructure the template does not offer* rather than instance-local config |
+| **tabsii-intake** | 3 of 65 | Its own stale lockfiles, branch protection and a latent eager-Cognito construction — all first *measured* rather than newly broken |
+| **biffo-platform** | 2 of 65 | Shares #647 and #652 — the instantiated infra (API Gateway routes, CDN) |
+| **biffo-plugin-ideation** | 1 of 65 | An admin UI rendering a 500 as an empty collection |
+| **biffo-plugin-idea-scout** | 1 of 65 | A missing `web-admin/dist` |
+| **biffo-runners** | 1 of 65 | Runner fleet docs + fail-fast |
 
 **The shape has not changed, and that is now the finding.** `biffo-template`
-takes **49 of 57** — up from 44 of 50, so the proportion held (86% then, 86%
-now) across seven more rows. This is no longer "instances surface what the
+takes **53 of 65** — 82%, against 86% at 57 rows and 86% at 50. The proportion
+has now moved for the first time, and slightly *down*: the four newest rows
+landing elsewhere are all `tabsii-platform` building test infrastructure the
+template does not provide. This is no longer "instances surface what the
 template must fix"; it is closer to a statement about what Biffo *is*. The
 template is the product, and the satellites are where its defects become
 visible. Read that way the number is not alarming, but it does mean **satellite
@@ -237,23 +259,24 @@ the template's integration test, and currently the only one.
 
 ### How wide one feature reaches
 
-> **These counts do not currently reconcile, and the discrepancy is the finding.**
-> The scoreboard table holds **54** rows; `practices-evidence.mjs --extract`
-> captures **53** of them; the prose above says **65**. The 65 was written in the
-> edit that introduced "regenerated from the file, not incremented by hand" — so
-> the fix for stale counts shipped with a stale count, which is the fourth time
-> this page has done this and the first time it happened *inside* the remedy.
+> **Reconciled 2026-07-28.** This note previously recorded that the counts did
+> not agree — table 54, extractor 53, prose 65 — and asked whoever fixed it to
+> reconcile the extractor against the table *before* pasting any generated
+> figure. Done: the extractor split on every `|`, including markdown-escaped
+> `\|`, which silently dropped exactly one row (the `js-dependency-audit.sh` row
+> quotes `echo "$out" \| jq`). It now splits on unescaped pipes only, and
+> **65 extracted = 65 in the table**.
 >
-> Two separate defects, worth separating: the extractor **silently drops a row**
-> it cannot parse (53 vs 54), and the prose figure matches neither. A generator
-> that under-reports without saying so is worse than a hand count, because it
-> carries the authority of having been computed.
+> The per-repo table above is now pasted from `--report`'s `byFixRepo` rather
+> than typed, which is what the paragraph above it promised and nothing
+> previously delivered.
 >
-> `--report` now emits `byFixRepo`, so the per-repo split can be generated rather
-> than typed — which is what the paragraph above promises and nothing previously
-> delivered. It is deliberately **not** pasted into the table yet: replacing one
-> unverified number with another is how this page got here. Reconcile the
-> extractor against the table first, then paste, then delete this note.
+> The general lesson stands and is worth keeping after the specific defect is
+> gone: **a generator that under-reports without saying so is worse than a hand
+> count**, because it carries the authority of having been computed. The
+> extractor discarded that row via a bare `continue` — no warning, no count of
+> skipped lines. It now cannot drop a row for *this* reason, but it would still
+> be silent about any other, and that is the residual gap.
 
 
 ## Where the cycles go
@@ -280,6 +303,9 @@ Measured on the 2026-07-27 session, which shipped one bug fix end to end.
 | **~10 min waiting on a loop that could never exit** | A poll used `gh pr checks <N> --json state`; this `gh` has no `--json` on that subcommand, so the `jq` produced empty output that never equalled `0`, and the loop spun to its full timeout **while CI had already gone green**. A wrong flag and slow CI are indistinguishable from inside the loop | **fixed** in-session — poll `gh pr view --json statusCheckRollup`, or the commit's `check-runs`, and assert the result is non-empty before trusting it |
 | **3 full release cycles to land one distribution** | Getting the async dry-run into tabsii took `0.146.0` → `0.146.1` → `0.146.2`, because each defect only became visible at the *next* hop: 0.146.0's chain failed only when run against a real PostgreSQL, and 0.146.1's test failed only once it reached an instance whose migration chain differs. Each cycle is a template PR + CI + tag + npm publish + re-run `core upgrade` — **the six-hop loop billed three times for one feature** | **structural**, not carelessness. Both defects were invisible in the template by construction. Shortening this needs the template to be able to run *an instance's* chain, not more care at each hop |
 | **~10 min armed on a merge that could not happen** | `--auto` was set on a green PR that was `BEHIND`; auto-merge waits on checks, not on branch freshness, so nothing moved until `update-branch` was driven by hand | **fixed** in-session — the wait loop now updates the branch when it sees `BEHIND`. The durable fix is the repo setting |
+| **3 full CI round trips to land one CI workflow, because none of it could be run locally** | Building the Postgres lane needed a real Postgres. This machine has Docker installed but the user is **not in the `docker` group**, `sudo` is **not passwordless**, the local PG 18 cluster is **down** (starting it needs root) and **PostGIS is not installed** — so every hypothesis cost a full push → spot-runner scale-up → run. Three iterations: the two-stack schema discovery, then Secret Scan, then green. Each ~5–9 min, most of it queueing | **structural** — the "verify locally first" step in `biffo-verify` §2/§3 was **unavailable**, not skipped. A rootless dev Postgres (or a documented `docker` group prerequisite) would convert all three into seconds |
+| **~4–8 min of pure queue on every single push** | The scale-to-zero spot fleet has no warm runner, and this PR fanned out to **7 checks**. Every push pays cold-start before anything executes, so the feedback loop is dominated by scheduling rather than by the work. Cheap at idle (the point of the fleet) and expensive exactly when iterating | **open** — inherent to scale-to-zero; a single warm runner for the first job would cut the iteration loop roughly in half |
+| **1 wasted CI cycle to a documented trap** | AGENTS.md §7 states that `.gitleaks.toml`'s `biffo-aws-account-id` rule is `\b\d{12}\b` and warns *"two agents hit this in one day"*. A UUID's final segment is exactly 12 characters, so fixture ids like `…-000000000001` are indistinguishable from an account id. **Read the rule, wrote the fixtures anyway** — the brand/region/unit ids happened to end in a hex letter and passed, which made the user/role/tenant ids look fine by association | **process**, now three agents. The doc says the right thing; it is not reachable at the moment of writing a fixture. A `.gitleaks.toml` comment, or a fixture-id convention in the skeleton, would sit closer to the point of use |
 ### The six hops are the root cost
 
 Every other row above is a *symptom* of the same shape: the chain from "merged
@@ -323,6 +349,45 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**Establishing current state first turned "work the backlog" into "close three,
+rescope two, build one".** Ten open issues across the tabsii repos. Checking each
+against the code rather than reading its title found that **three were already
+done**: the branch-protection audit in tabsii#261 was fixed on every repo it
+named, tabsii#209's `biffo.divergence.json` existed and carried its own
+revalidation note, and tabsii-crm#100's surface had **shipped two days earlier**.
+Two more (tabsii#207, tabsii-crm#65) were most of the way done and materially
+misdescribed — #207 read as ~45 files of relocation with 3 left, and #65 claimed
+no E2E harness against a repo with a containerised Playwright job in CI. Writing
+code first would have re-derived work that already existed, and the two rescoped
+issues would still be lying to the next reader.
+
+**Probing the runner beat reasoning about it, and one of the four answers
+changed the design.** The Postgres lane needed to know whether service containers
+work on the self-hosted AL2023 spot fleet — no workflow in the repo had ever used
+`services:`. A throwaway probe job returned: Docker present, daemon reachable as
+`ec2-user`, sudo passwordless, and **`postgis` not in the AL2023 dnf repos**. That
+last one is the one that mattered: the plausible fallback (`dnf install
+postgresql-server`) would have produced a Postgres without PostGIS, which module
+000's `CREATE EXTENSION IF NOT EXISTS postgis` rejects on the *first file* — a
+second failed round trip, discovered the same slow way as the first.
+
+**§4 on a frontend change: grep the deployed bundle, not the merge.** The CRM
+region/unit mounts merged green and deployed green, which proves a pipeline ran,
+not that the code shipped. Fetching `dev.tabsii.com/crm` and grepping the emitted
+chunk found `Region automations`, `Unit automations`, and all three scope literals
+(`level:"brand"`, `level:"region"`, `level:"unit"`) where only `brand` existed
+before. Cheap, unauthenticated, and it converts "the deploy was green" into "the
+artifact contains the change".
+
+**Asserting the wiring instead of the chrome, and proving it fails.** The
+mount-point tests originally asserted the drawer's heading and eyebrow — which a
+panel pinned to the *wrong node* would render just as convincingly. Rewritten to
+capture the `scope` prop and assert it, then verified by swapping `region` for
+`brand` in the component: `expected { level: 'brand', id: 'r1' } to deeply equal
+{ level: 'region', id: 'r1' }`. The first version would have passed against the
+bug it was written for — the same shape as the two vacuous guards already on this
+page, caught before shipping this time rather than after.
 
 **"Prove the test fails without the fix" caught a guard that guarded nothing.**
 A new skeleton-drift guard passed 11 tests. Reintroducing the exact
@@ -560,6 +625,43 @@ that lacks `users`**. That is a stronger result than any test: the fix was prove
 where the bug lived.
 
 ## What needs more thought
+
+**Nothing reconciles an open issue against shipped code, and the one mechanism
+that should fails silently.** Three of ten open tabsii issues were complete. One
+of them — tabsii-crm#100 — had its PR merged to the default branch two days
+earlier with `closes tabsii-crm#100` in the body; that ref is repo-qualified but
+**owner-less**, which GitHub does not treat as a closing keyword, so nothing
+fired and nothing complained. But the closing keyword is only the proximate
+cause: the other two issues had no such PR and would have stayed open regardless.
+The backlog drifts from the code in one direction only — toward *overstating*
+remaining work — and the cost is paid by whoever plans from it.
+
+**A `Core-Divergence:` trailer is doing two incompatible jobs.** It means "this
+instance must differ from a template file", and the divergence ledger exists so
+that difference can be audited and eventually converged. It is also the *only*
+way to add a file the template has no counterpart for — an instance-specific CI
+lane — where there is nothing to converge toward and the entry will sit in the
+ledger for ever. Both look identical to anyone auditing it later. `*.instance.yml`
+(biffo-template#755) would separate them, but the general question is bigger:
+every template-owned prefix with a legitimate instance-authored file inside it has
+this problem, and `.github/` is just the one that surfaced.
+
+**The `steps.install.outcome` idiom teaches a wrong lesson by example.**
+`ci.yml`'s gate is correct *for `ci.yml`*, where dependency install is the only
+prerequisite — and its comment explains the reasoning well enough that copying it
+feels like following the convention. In a job with a second prerequisite it fails
+open, and the resulting error names the wrong component entirely (28 errors about
+a missing table, from a step that should never have run). The convention needs to
+be stated as "gate each step on its own prerequisite", not "gate on install".
+
+**The local development environment cannot run the thing being tested, and this
+is now load-bearing.** `biffo-verify` §2 and §3 both assume you can reproduce
+locally. For anything touching Postgres — which is the entire RLS layer, every
+DDL-imported function, and #76's staging/prod work — that is currently false on
+this machine: no `docker` group membership, no passwordless `sudo`, a stopped
+cluster and no PostGIS. Every hypothesis costs a CI round trip on a scale-to-zero
+fleet. This will get worse as more RLS-dependent work lands on the lane just
+built, and it is a one-off setup cost against an unbounded stream of round trips.
 
 **Guards that read a path can fail open, and nothing distinguishes that from
 passing.** `auditSkeleton` returning `[]` means either "no violations" or "that
@@ -852,6 +954,12 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **worked** | §1 stopped a duplicate fix: the migration-0010 failure was already filed as [#670](https://github.com/keiranholloway/biffo-template/issues/670), with the correct remedy written out. Two minutes of looking replaced re-deriving a decision someone had already made — and revealed the more interesting fact, that the issue had been *declined downstream* and had silently recurred. |
 | `biffo-verify` | **worked** | §7 kept [#726](https://github.com/keiranholloway/biffo-template/issues/726) open after its PR merged. `Closes #726` had auto-closed it; nothing had run against a deployed instance at that point, so the close was a claim the evidence did not support. Reopened with the four things still unproven. |
 | `clear_queue` | **partial** | Step 5's `gh pr merge --squash` fails outright where branches must be up to date — every PR in a queue is `BEHIND` the moment the one before it lands. No update-branch step, and no mention of `--auto`, which the repo already had enabled and which makes the queue self-draining. Step 4's `gh pr checks --watch` also assumes a `--json` this `gh` does not have on that subcommand, so a poll built on it burns its full timeout while CI is already green. |
+| `biffo-verify` | **invoked too late — after everything had merged** | The user invoked it at the end. The §1–§7 disciplines were mostly applied anyway (probe before designing, prove the test fails, grep the deployed bundle), but **§8 nearly did not happen**, and §8 is the half that only exists if the skill runs. That is the second consecutive session where the write-up was at risk — the previous one deferred it entirely. The trigger list is debugging-shaped ("why is this failing?", "is this actually fixed?"); a session that is *building* something and succeeding never matches, which is exactly when the lessons are cheapest to record and most likely to be lost. |
+| `biffo-verify` | **worked** | §1 was the highest-value step of the session by a distance: checking ten open issues against the code found **three already complete** (one shipped two days earlier) and two materially misdescribed. Roughly an hour of building work that did not need doing, plus two issues that would have kept lying to the next reader. |
+| `biffo-verify` | **worked** | §3 caught that the region/unit mount tests asserted drawer *chrome* — a panel pinned to the wrong node renders identical chrome. Rewriting them to capture the `scope` prop and then swapping `region` for `brand` produced the exact expected failure. The original version would have passed against the bug it was written for. |
+| `biffo-verify` | **worked** | §4 on a frontend change: the merge was green and the deploy was green, neither of which says the code shipped. Grepping the deployed bundle found all three scope literals where only `brand` existed before. |
+| `biffo-verify` | **partial** | §2/§3 assume local reproduction is possible. For a Postgres-dependent change on this machine it is **not** (no `docker` group, no passwordless sudo, stopped cluster, no PostGIS), so three hypotheses each cost a full CI round trip on a cold spot fleet. The skill has no guidance for "you cannot run this locally" beyond §7's *say what you did not verify* — which covers honesty but not the iteration cost. Worth a step: check the local environment can run the subject **before** designing the change, and treat a gap as the first task. |
+| `biffo-workflow` | **should have been invoked** | Followed AGENTS.md by hand across two repos and two PRs. It mostly held — fresh worktrees off `dev`, deps synced, `git ls-remote` after every push, worktrees reaped — but two things slipped that the skill encodes: the probe commit was pushed with `core.hooksPath=/dev/null` (verified on the remote afterwards, so honest, but the hooks were bypassed rather than satisfied), and the ownership guard was only run **after** the files were written, when running it first would have surfaced the `.github/` block before the workflow was designed around landing there. Missed for the same reason as last time: the work read as "build a lane", not "land a change". |
 
 ## Adding a row
 

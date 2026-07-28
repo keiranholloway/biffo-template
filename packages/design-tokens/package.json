@@ -1,0 +1,30 @@
+{
+  "name": "@biffo/design-tokens",
+  "version": "0.0.0",
+  "description": "Biffo's design tokens — one definition of the platform's visual language, for the portal, sibling apps and plugin frontends.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/keiranholloway/biffo-template.git",
+    "directory": "packages/design-tokens"
+  },
+  "sideEffects": [
+    "*.css"
+  ],
+  "exports": {
+    "./tokens.css": "./tokens.css",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "tokens.css"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.0"
+  }
+}

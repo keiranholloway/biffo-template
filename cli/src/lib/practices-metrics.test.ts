@@ -5,6 +5,10 @@ import { describe, expect, it } from 'vitest'
 // as destructive-plan.mjs and packaged-root-assets.mjs.
 import {
   timeToFeature,
+  parseCarriedPrs,
+  indexClosingIssues,
+  crossRepoTimeToFeature,
+  isUpgradePr,
   successfulDeploys,
   firstDeployAfter,
   parseDiffHunks,
@@ -1347,5 +1351,82 @@ describe('time-to-running, stop B (#767)', () => {
     expect(out.hoursP50).toBe(10) // opened -> merged
     expect(out.running.hoursP50).toBe(10.5) // opened -> running
     expect(out.running.deployGapP50).toBe(0.5) // merged -> running
+  })
+})
+
+describe('cross-repo time-to-feature (#767)', () => {
+  const marker = (ns: string) =>
+    `Automated core upgrade.\n\n<!-- biffo:carries-template-prs:${ns} -->\n`
+  const tmplPr = (n: number, issue?: number) => ({
+    number: n,
+    closingIssuesReferences: issue
+      ? [{ number: issue, repository: { name: 'biffo-template', owner: { login: 'acme' } } }]
+      : [],
+  })
+  const idx = () =>
+    indexClosingIssues('acme/biffo-template', [tmplPr(746, 696), tmplPr(747, 735), tmplPr(770)])
+  const opened = new Map([
+    ['acme/biffo-template#696', '2026-07-27T12:00:00Z'],
+    ['acme/biffo-template#735', '2026-07-27T18:00:00Z'],
+  ])
+  const deploys = [
+    {
+      startedAt: Date.parse('2026-07-28T10:05:00Z'),
+      finishedAt: Date.parse('2026-07-28T10:20:00Z'),
+    },
+  ]
+  const upgradePr = (body: string) => ({
+    headRefName: 'biffo/core-upgrade-0.152.0-to-0.155.0',
+    mergedAt: '2026-07-28T10:00:00Z',
+    body,
+  })
+
+  it('parses the marker', () => {
+    expect(parseCarriedPrs(marker('746,747,770'))).toEqual([746, 747, 770])
+    expect(parseCarriedPrs('no marker here')).toEqual([])
+    expect(parseCarriedPrs(null)).toEqual([])
+  })
+
+  it('IGNORES a PR that merely documents the marker', () => {
+    // Fired on the very first real run: biffo-template reported an upgrade PR
+    // carrying four template PRs, which is impossible — the template does not
+    // upgrade itself. The marker had been matched inside PR #772's own body,
+    // where it appears as documentation of the format. The branch name is the
+    // discriminator because only the CLI creates it.
+    const documenting = {
+      headRefName: 'feat/time-to-running',
+      mergedAt: '2026-07-28T10:00:00Z',
+      body: marker('746,747'),
+    }
+    expect(isUpgradePr(documenting)).toBe(false)
+    expect(crossRepoTimeToFeature([documenting], idx(), opened, deploys)).toMatchObject({
+      upgradePrs: 0,
+      carriedPrs: 0,
+      measured: 0,
+    })
+  })
+
+  it('measures template issue opened → running in the instance', () => {
+    const out = crossRepoTimeToFeature([upgradePr(marker('746,747'))], idx(), opened, deploys)
+    expect(out).toMatchObject({ upgradePrs: 1, carriedPrs: 2, measured: 2, carriedWithoutIssue: 0 })
+    // #696 opened 12:00 on the 27th, running 10:20 on the 28th = 22.3h
+    expect(out.hoursMax).toBe(22.3)
+  })
+
+  it('counts a carried PR that closes no issue, rather than hiding it', () => {
+    // The binding constraint on this metric, and it must be visible: the first
+    // marker ever emitted carried 12 PRs and every one used `Refs #N`.
+    const out = crossRepoTimeToFeature([upgradePr(marker('770'))], idx(), opened, deploys)
+    expect(out).toMatchObject({
+      carriedPrs: 1,
+      carriedWithoutIssue: 1,
+      measured: 0,
+      hoursP50: null,
+    })
+  })
+
+  it('counts an upgrade merged but not yet deployed as awaiting, not instant', () => {
+    const out = crossRepoTimeToFeature([upgradePr(marker('746'))], idx(), opened, [])
+    expect(out).toMatchObject({ awaitingDeploy: 1, measured: 0, hoursP50: null })
   })
 })

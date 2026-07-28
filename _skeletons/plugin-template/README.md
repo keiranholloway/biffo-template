@@ -219,14 +219,59 @@ equivalent `github_branch_protection` resource. If you're setting this up
 by hand via the GitHub UI instead: **Settings → Branches → Add branch
 protection rule**, pattern `main`, and set each field above to match.
 
-## PyPI publishing
+## Releasing
 
-`release.yml` triggers on `v*` tag pushes, re-runs the full CI gate against
-the tagged commit, verifies the tag matches `pyproject.toml`'s
-`project.version`, builds the sdist/wheel, and publishes to PyPI via
-`pypa/gh-action-pypi-publish`. **This publish step will not succeed until a
-real PyPI project exists for this plugin and either a trusted publisher (OIDC)
-or a `PYPI_API_TOKEN` secret is configured** — see `release.yml`'s header
-comment for the full rationale (this is intentional, per issue #26's
-decision to build the release workflow as if publishing were real even
-though no plugin in the ecosystem is on PyPI yet).
+`release.yml` triggers on `v*` tag pushes: it re-runs the full CI gate against
+the tagged commit, verifies the versions agree, builds the sdist/wheel, and
+cuts a GitHub Release.
+
+### Three versions have to agree
+
+Your plugin declares its version twice, and the tag is a third:
+
+| where | what reads it |
+| --- | --- |
+| `pyproject.toml` `project.version` | the Python package |
+| `biffo.plugin.json` `version` | the plugin registry — **and therefore the version the portal's plugin store shows** |
+| the `v*` tag | the GitHub Release |
+
+`release.yml` checks all three and fails the release on any mismatch.
+
+The manifest one is the one to watch. It is easy to forget and it fails
+silently: tag `v0.2.0` with a stale manifest and you get a `v0.2.0` release, a
+`0.2.0` package, and a plugin store still advertising `0.1.0` — indefinitely,
+with nothing anywhere reporting a problem. The registry sync re-derives
+whatever the manifest says, so it propagates the stale value rather than
+catching it. Bump both.
+
+Note that the registry entry is published by `publish-registry.yml` when
+`biffo.plugin.json` changes on `dev`, not by this workflow on a tag — the
+marketplace reflects `dev`, and tagging is an independent decision.
+
+### Getting into the plugin store
+
+`publish-registry.yml` publishes your entry to the Biffo plugin registry, which
+is what the portal's plugin store reads. It needs a `REGISTRY_PUBLISH_TOKEN`
+secret (a fine-grained PAT with `contents: write` on the registry repo) and
+warns-and-skips without one, so check its header comment before assuming your
+plugin will appear.
+
+If your repo is public you may not need the token: the registry also runs a
+credential-free pull-based sync over the repos listed in its `sources.json`.
+Adding yours there is enough.
+
+### PyPI publishing is opt-in
+
+The publish step is gated on a `PYPI_PUBLISH` repository variable and skips
+with a notice until you set it, so a freshly-scaffolded plugin gets a green
+release instead of one that always fails at the last step. The built
+distribution still ships on the GitHub Release either way.
+
+To enable it for your plugin:
+
+1. Create the PyPI project.
+2. Configure a **trusted publisher** (OIDC) for this repo at
+   `https://pypi.org/manage/project/<name>/settings/publishing/` — preferred
+   over a long-lived `PYPI_API_TOKEN`, since there is no stored secret to
+   rotate or leak. The `id-token: write` permission is already in place.
+3. `gh variable set PYPI_PUBLISH --body true`

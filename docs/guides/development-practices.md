@@ -83,6 +83,30 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | [#697](https://github.com/keiranholloway/biffo-template/issues/697) | Two open issues described one npm outage ([#664](https://github.com/keiranholloway/biffo-template/issues/664), [#671](https://github.com/keiranholloway/biffo-template/issues/671)), filed independently days apart. Nothing prompts a search before filing, and the duplicate was found only when listing open issues for an unrelated reason — after one had already been closed on its own | **process** · visibility | biffo-template issue tracker | practice, not code | **closed** — both closed, residue split to #697 |
 | [#666](https://github.com/keiranholloway/biffo-template/pull/666) | Template tests asserted **ambient process state** — an empty write-back registry, and whichever identity provider happened to be installed. Both are properties only a bare template has, so 14 tests were green upstream and red the moment they were distributed | **drift** · fail-open | tabsii-platform [#241](https://github.com/tabsii-com/tabsii-platform/pull/241) | biffo-template `services/api/tests` | **fixed** ([#666](https://github.com/keiranholloway/biffo-template/pull/666)) |
 | — | [#665](https://github.com/keiranholloway/biffo-template/pull/665) was written, reviewed, merged and **wrong** — it pinned the *default* identity provider, which reads `public.users`, a table the instance also lacks. It was never run against the instance it existed to unblock; [#666](https://github.com/keiranholloway/biffo-template/pull/666) corrects it | **process** | biffo-template | biffo-template | **fixed** — verify a distribution fix *against the distribution* |
+| — | A deployed frontend fix verified as **still broken** — the page requested the old URL and failed. The bundle on the Lambda was correct; the *browser* had cached the previous one. A cache-busting reload showed it working. A stale client produces a perfect false negative: the deploy is fine and the evidence says otherwise | **visibility** | biffo-platform (ideation admin) | verification practice | **unfiled** — check *which URL the page requested*, not just that you reloaded |
+| — | ADR-0003's manifest-declared `api_routes` had **never once worked in a deployed instance**, and #684's forwarder had never been exercised either — every gateway log entry for the route predated the deploy that shipped it. Closing #652 took changes in **four repos** and was only provable by an authenticated click-through | **boundary** · visibility | biffo-template [#652](https://github.com/keiranholloway/biffo-template/issues/652) | biffo-template + ideation + biffo-platform | **fixed** — verified live 2026-07-27 |
+| — | `gh` was **2.46.0 from Ubuntu universe — 7 months and ~50 minor versions stale**. `gh issue view <n>` failed outright on a deprecated Projects-classic GraphQL field, and `gh pr update-branch` **printed its help text and exited 0** instead of running. Both were worked around as quirks across two sessions; neither prompted anyone to check the version. Nothing in either failure said "your tool is old" | **visibility** | agents working in every Biffo repo | workstation tooling (GitHub's apt repo, not Ubuntu's) | **fixed** — 2.96.0, auto-updating |
+| [#715](https://github.com/keiranholloway/biffo-template/issues/715) | Scaffolding **skips branch protection entirely on a 403** (GitHub's answer for a private org repo below Team plan), logs one warning, and reports success. Nothing re-attempts and nothing audits, so a repo scaffolded during a 403 window stays unprotected after the plan is upgraded — three tabsii repos for three weeks, the **live core platform** among them, with 8 PRs merged into an ungated default branch in one session | **fail-open** · visibility | tabsii-platform [#261](https://github.com/tabsii-com/tabsii-platform/issues/261) | biffo-template `cli` (guard shipped, [#718](https://github.com/keiranholloway/biffo-template/pull/718)); repo settings | **fixed** — all 8 repos protected, `biffo check branch-protection` added |
+| — | `gh pr merge --auto` refuses with *"Pull request is in clean status"*, and `gh pr checks` reports *"no checks reported"*, when runs have not yet **registered** — not when they passed. Both readings are indistinguishable from the real thing, and they mislead in opposite directions: one invites merging unverified code, the other looks like the genuine "GitHub created no run" case AGENTS.md §6 says never to paper over | **visibility** | tabsii-platform [#260](https://github.com/tabsii-com/tabsii-platform/pull/260) | practice / tooling wrapper | **unfiled** |
+| [tabsii-intake#10](https://github.com/tabsii-com/tabsii-intake/issues/10) | CI had **not run on `dev` for three weeks**. A merge on 2026-07-22 produced a Deploy run and no CI run; triggers were correct, GitHub simply created none. `dev` shipped with no CI evidence and carried unpatched advisories nobody could see. The repo also had no `workflow_dispatch`, so there was no way to re-trigger CI on a protected branch without pushing | **visibility** | tabsii-intake | tabsii-intake (CI adopted from skeleton, adds `workflow_dispatch`) | **fixed** |
+| [tabsii-marketplace#9](https://github.com/tabsii-com/tabsii-marketplace/issues/9) | A repo's **production build is broken and its CI is green, consistently** — `pnpm run build` dies on `Both UserPoolId and ClientId are required` (a Cognito pool built at module scope, evaluated during prerender), but marketplace's `js` job runs only lint/typecheck/test/audit. The skeleton's `js` job also **builds without credentials**, precisely to catch this ([#286](https://github.com/keiranholloway/biffo-template/issues/286)) | **fail-open** · visibility | tabsii-marketplace [#8](https://github.com/tabsii-com/tabsii-marketplace/pull/8) | tabsii-marketplace (lazy pool construction, then adopt the skeleton CI) | **open** |
+| — | **CI generations drift by *step*, while job *names* stay identical.** marketplace has all four current consolidated job names and looks migrated; its `js` job is missing the Build step added later. Nothing compares a repo's workflow against the skeleton, so "are we on the current CI?" is answered by a name match that can be true while the content is a generation behind | **drift** · visibility | tabsii-marketplace | biffo-template (a workflow-drift check) | **unfiled** |
+| — | **Nothing tracks when CI last ran on `dev`.** Two sibling repos were found independently, hours apart, each with no CI run for three weeks — intake (2026-07-06) and marketplace (2026-07-06). In both the branch was green-by-absence: no failing run, because no run. A "last successful CI on the default branch" age is not surfaced anywhere | **visibility** | tabsii-intake, tabsii-marketplace | biffo-template (`biffo check`, or a scheduled sweep) | **unfiled** |
+| [#722](https://github.com/keiranholloway/biffo-template/issues/722) | An issue was filed on a **wrong premise** and proposed a fix that would have been dead config: it claimed pip-audit "reds every sibling" on an unfixable `ecdsa` advisory and asked the *skeleton* to carry a CVE suppression. The skeleton already declares `pyjwt[crypto]`, so a new sibling never sees it; only two legacy siblings did. Nothing checks an issue's claims before someone implements them | **drift** · process | biffo-template | tabsii-intake / tabsii-marketplace (drop `python-jose`) | **corrected** — intake done ([#11](https://github.com/tabsii-com/tabsii-intake/pull/11)), marketplace outstanding |
+| [#714](https://github.com/keiranholloway/biffo-template/issues/714) | Plugin repos are born with **no branch protection on `dev` at all** (`404 Branch not protected`), while their own AGENTS.md states "branch protection stays on". A PR was squash-merged with both CI jobs still in progress; nothing could have stopped it | **fail-open** · process | biffo-plugin-ideation [#54](https://github.com/keiranholloway/biffo-plugin-ideation/pull/54) | biffo-template `_skeletons/` + repo settings | **partly fixed** — both repos protected by hand; skeleton still produces unprotected repos |
+| — | Merging a plugin repo changes **nothing** on the deployed site: `dev.biffo.io` serves `services/<plugin>/` vendored inside the instance. The plugin's own `deploy-frontend.yml` is `workflow_call`/`dispatch` only and never fires on merge. Nothing warns that the two have diverged | **drift** · visibility | biffo-plugin-ideation [#54](https://github.com/keiranholloway/biffo-plugin-ideation/pull/54) | biffo-platform resync PRs; no drift check exists | **worked around** — 3 resync PRs this session |
+| [idea-scout#18](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/18) | A **second instance of [#652](https://github.com/keiranholloway/biffo-template/issues/652)**: the adapter read build types from `/api/v1/plugins/idea-scout/build-types`, which API Gateway routes to the plugin host, not Core. The host's gate reads `Authorization`/`X-Biffo-Founder-Token`; the transport forwards `X-Biffo-User-Token`. Every `start_run` 401'd, so no scout run could ever be created | **boundary** · drift | biffo-plugin-idea-scout (first live click-through) | biffo-plugin-idea-scout — use Core's `/api/v1/internal` mount | **fixed** ([#18](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/18)) |
+| [idea-scout#19](https://github.com/keiranholloway/biffo-plugin-idea-scout/issues/19) | A **declared-but-unconfigured tool is dropped with a warning and the run proceeds**. `web_search` is gated on a Brave credential dev does not have, so three research agents each told the model to use a tool it had not been given, returned nothing, and synthesis failed — after four paid model calls (~$0.07) | **fail-open** · visibility | biffo-plugin-idea-scout | biffo-plugin-idea-scout [#21](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/21) (`:online`); preflight proposed in [#729](https://github.com/keiranholloway/biffo-template/issues/729) | **fixed** — research now returns real sourced findings |
+| [#729](https://github.com/keiranholloway/biffo-template/issues/729) | `agent_fan_in` could start an agent but **not tell it how to answer** — no `output_tools` config field, so an agent instructed to "call `submit_x` exactly once, do not answer in prose" was offered no such tool and could not comply. Declaring the field is also what makes it *survive*: the portal's save path keeps only declared fields, so a hand-seeded value was dropped on the next edit | **boundary** · drift | biffo-plugin-idea-scout [#19](https://github.com/keiranholloway/biffo-plugin-idea-scout/issues/19) | biffo-template [#731](https://github.com/keiranholloway/biffo-template/pull/731) | **fixed** ([#731](https://github.com/keiranholloway/biffo-template/pull/731)) |
+| — | The workflow builder's **non-agent** branch rendered every config field generically, with no structured-type exclusion — so `agent_fan_in`'s `delivery` and `writeback` were already drawn as plain text inputs. Typing in one stores a *string* where Core expects an object; the file's own comment warns about exactly this, for the agent branch only | **drift** | biffo-template `apps/portal` | biffo-template [#731](https://github.com/keiranholloway/biffo-template/pull/731) | **fixed** — exclusion applied to both branches |
+| [platform#85](https://github.com/keiranholloway/biffo-platform/issues/85) | SQLAlchemy engine echo is on in dev and logs **bound parameters**, so complete agent transcripts, prompts, run results and `owner_sub` values sit in CloudWatch in clear text — readable by anyone with `logs:FilterLogEvents`, a far wider grant than RDS. Core correctly fail-closes the equivalent internal API route, then the same data is readable from logs | **visibility** | biffo-platform dev (diagnosing idea-scout#19) | biffo-platform config | **open** |
+| — | **The practices page silently lost a session's contribution to a concurrent merge.** A branch created before another session's PR merged rewrote `development-practices.md` **wholesale** rather than patching it, and squash-merged an hour later: 215 insertions against 322 deletions. No conflict, because a full-file replacement from a stale base merges cleanly. **18 scoreboard rows and 23 narrative entries from three different sessions were deleted**, including the day's headline finding. The commits are in history; the content is not | **process** · visibility | biffo-template `docs/` | append-only editing + a rebase before writing; the loss is invisible without diffing an old commit | **restored** — rows and entries merged back; the two mechanisms are separately recorded |
+| — | **`--extract` treats the markdown as the source of truth and deleted every stored row absent from it.** `mergeExtracted` returned `fresh.map(...)`, so running it from a stale checkout rewrote `evidence.jsonl` without the other session's rows. This is the mechanism that propagates the loss above into the dataset — so the advice to *regenerate counts from the data rather than trust prose* carried the deletion with it. The destructive path had three unit tests around it and none covering it | **fail-open** · drift | biffo-template `scripts/practices-evidence.mjs` | biffo-template — orphaned rows are now kept and reported | **fixed** — plus two tests that fail against the old implementation |
+| — | **Relaxing `strict` removes the guard against exactly this.** H3 turned `strict` off on `biffo-template` on 2026-07-28 to end the rebase race. A side effect nobody costed: a branch no longer has to be up to date before merging, so a stale whole-file rewrite is now *more* likely to land silently. The experiment's falsification criteria measure merge friction and say nothing about content loss | **process** | biffo-template branch protection | H3 review 2026-08-11 — add content loss to what the experiment watches | **open** |
+| — | **A plugin shipped with another plugin's stylesheet.** `biffo-plugin-idea-scout`'s `index.css` was the Ideation Engine's file copied verbatim at scaffold time: every rule keyed on `.ide-*` while the components emit `.candidate`/`.scorecard`/`.run-form`. **0 of 35 class names matched.** 57 rules loaded and styled nothing but bare `button`/`input`, so the app rendered as one run-on line of browser defaults — `.layout` computed to `display: block`, the sidebar was full-bleed at 1920px, rationales ran ~234 characters per line. Every test passed, the build was clean, the CSS returned 200; the only symptom was visual | **drift** · visibility | biffo-plugin-idea-scout | biffo-plugin-idea-scout [#24](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/24) — real stylesheet + a class-coverage guard | **fixed** |
+| — | **There was no shared design system, and the canonical tokens lived in the most downstream repo.** The token set existed only in `biffo-platform-app`'s `globals.css` — a sibling app — while the template's own `apps/portal/globals.css` is three lines of Tailwind declaring nothing. Every other surface re-declared or invented its own, so three brand blues were reachable in one page through same-origin iframes | **drift** | biffo-platform-app / plugin frontends | biffo-template [#753](https://github.com/keiranholloway/biffo-template/pull/753) — `@biffo/design-tokens` published to npm | **fixed** — consumers not yet adopted |
+| — | **OIDC trusted publishing cannot bootstrap a new package.** Trust registers *against an existing package*, and the package does not exist until its first publish — so the first release of `@biffo/design-tokens` had no credential path at all. `NPM_TOKEN` returned 404, and OIDC returned the same 404 even with npm upgraded to 12.0.1 (well past the 11.5.1 threshold). npm answers 404 rather than 403 for unauthorised writes, so all three causes looked identical | **process** · visibility | biffo-template publishing | one manual publish, then register the trusted publisher | **partly fixed** — package published; trusted publisher **still unregistered**, so the next tag's publish will 404 |
+| — | **`biffo:ddl-import` skips applied files by filename, so amending a seeded row by editing its `.sql` does nothing.** The workflow seed for Idea Scout's synthesis agent needed a *new* file (`005_…`) to add `output_tools`; editing `003_…` would have been a silent no-op everywhere it had already run | **visibility** | biffo-platform `db/imports/` | practice, not code — documented in the new file's header | **worked around** |
 
 | — | `tabsii-intake`'s `dev`/`staging`/`main` required **11 status-check contexts**; the consolidated CI workflow it adopted produces **4**. Nine contexts could never report again, so a green PR sat permanently `BLOCKED`. Renaming a CI job and repointing branch protection are one change that nothing couples | **boundary** · process | tabsii-intake [#9](https://github.com/tabsii-com/tabsii-intake/pull/9) | tabsii-intake settings + biffo-template (`biffo check branch-protection` cannot see this class) | protection **repointed** on all three branches; the *detection* gap **unfiled** |
 | — | Migrating a **live sibling** onto the consolidated CI switched on two dependency gates that repo had never run, surfacing **20 pre-existing advisories** (16 JS, 4 Python) in one go. Same shape as [#644](https://github.com/keiranholloway/biffo-template/issues/644) but on a deployed service rather than a skeleton: not a new defect, a first measurement | **fail-open** · visibility | tabsii-intake [#9](https://github.com/tabsii-com/tabsii-intake/pull/9) | tabsii-intake (lockfiles + overrides) + biffo-template [#722](https://github.com/keiranholloway/biffo-template/issues/722) | intake **fixed** (20 → 0); skeleton suppression **open** ([#722](https://github.com/keiranholloway/biffo-template/issues/722)) |
@@ -101,16 +125,17 @@ shape recurring across unrelated components is a design problem, not bad luck.
 ### What the classes say
 
 > Counted from `docs/practices/evidence.jsonl`, not asserted. Regenerate with
-> `node scripts/practices-evidence.mjs --report`. **65 rows** — and, for the
-> first time, the extractor's count **equals the table's count**. See below.
+> `node scripts/practices-evidence.mjs --report`. **89 rows** — the extractor's
+> count still **equals the table's count**, now across a merge that had to be
+> reconciled by hand. See below.
 
 | Primary class | Rows |
 | --- | --- |
-| **visibility** | 17 |
-| drift | 15 |
-| boundary | 13 |
-| fail-open | 12 |
-| process | 8 |
+| **visibility** | 24 |
+| drift | 21 |
+| fail-open | 17 |
+| boundary | 16 |
+| process | 11 |
 
 **The extractor and the table now reconcile, and the cause was findable all
 along.** This page twice recorded that `--extract` "silently drops a row it
@@ -188,13 +213,14 @@ each, so the column sums exceed the row count.
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 53 of 65 | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 6 of 65 | Its divergence ratchet, repo settings, and now its own RLS test lane — the first row here that is *infrastructure the template does not offer* rather than instance-local config |
-| **tabsii-intake** | 3 of 65 | Its own stale lockfiles, branch protection and a latent eager-Cognito construction — all first *measured* rather than newly broken |
-| **biffo-platform** | 2 of 65 | Shares #647 and #652 — the instantiated infra (API Gateway routes, CDN) |
-| **biffo-plugin-ideation** | 1 of 65 | An admin UI rendering a 500 as an empty collection |
-| **biffo-plugin-idea-scout** | 1 of 65 | A missing `web-admin/dist` |
-| **biffo-runners** | 1 of 65 | Runner fleet docs + fail-fast |
+| **biffo-template** | 62 of 89 | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, design tokens, the practices tooling itself |
+| **tabsii-platform** | 6 of 89 | Divergence ratchet, repo settings, the RLS lane |
+| **biffo-platform** | 5 of 89 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
+| **tabsii-intake** | 5 of 89 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-idea-scout** | 4 of 89 | Adapter seam, research search capability, its own stylesheet |
+| **tabsii-marketplace** | 2 of 89 | `python-jose` removal; the credential-dependent build |
+| **biffo-plugin-ideation** | 1 of 89 | A UI rendering a 500 as an empty state |
+| **biffo-runners** | 1 of 89 | Runner fleet docs + fail-fast |
 
 **The shape has not changed, and that is now the finding.** `biffo-template`
 takes **53 of 65** — 82%, against 86% at 57 rows and 86% at 50. The proportion
@@ -287,6 +313,62 @@ minutes and a defect that ate an afternoon get one row each up there.
 
 Measured on the 2026-07-27 session, which shipped one bug fix end to end.
 
+### The headline: ~10 hours, no working feature
+
+A second 2026-07-27 session spent **roughly nine to ten hours** on Idea Scout and
+**did not ship the feature**. That is the single most important number on this
+page, and it is worth stating plainly rather than leaving it to be inferred from
+a cost table.
+
+What it did ship: two small integration pieces, both verified live — the
+dashboard tab embed and the Ideation `?seed=` deep-link. What it did not ship:
+**Idea Scout still cannot produce a single ranked candidate**, which is the
+entire point of the feature. It fails today exactly as it did this morning, one
+step further down the pipeline.
+
+The instinct is to read that as four unrelated bugs and bad luck. It is not. The
+defects were **serialised by the feedback loop**:
+
+| # | Defect | Only discoverable once… |
+| --- | --- | --- |
+| 1 | Build-types read hit the plugin host, not Core → every `start_run` 401'd | …a founder actually clicked **Run now** on a deployed instance |
+| 2 | `web_search` declared but unconfigured → dropped with a warning, research returned nothing | …#1 was fixed, merged, resynced, deployed, and re-clicked |
+| 3 | `agent_fan_in` cannot declare `output_tools` → synthesis told to call a tool it was never given | …#2 was fixed, merged, resynced, deployed, and re-clicked |
+| 4 | Synthesis never receives the founder profile or build type | …#3 is fixed, merged, upgraded, resynced, deployed — **still pending** |
+
+**All four were present in the code this morning.** None could be seen until the
+one before it was fixed *and shipped all the way to a running deployment*. Each
+discovery therefore cost a full round trip — plugin PR → instance resync PR →
+deploy → browser click — of **~30–45 minutes when nothing goes wrong**. Four of
+those is most of a day before a line of the *actual* fixing is counted.
+
+So the honest post-mortem is not "we hit four bugs". It is:
+
+> **The loop only reveals one defect per traversal, and the traversal costs the
+> better part of an hour.** A pipeline with four latent faults therefore takes
+> four traversals to even *enumerate*, regardless of how quickly each is fixed.
+
+Two consequences worth acting on, both cheaper than shortening the loop:
+
+1. **Fail loudly at the first missing capability, not the last.** Three of the
+   four are the same shape — *the prompt names a capability the run does not
+   offer* — and each failed **open**, mid-chain, after spend. A preflight check
+   that asserts every declared tool actually resolves before the first paid model
+   call would have surfaced #1, #2 and #3 **in one traversal instead of three**.
+   Proposed in [#729](https://github.com/keiranholloway/biffo-template/issues/729).
+2. **Make one traversal test the whole pipeline.** Nothing exercises
+   fan-out → fan-in → synthesis → projection end to end below a live click. A
+   staging harness that runs the real chain against stub agents would have
+   collapsed all four into a single failing run on a laptop.
+
+The platform work the day *did* produce (branch protection across the fleet,
+`agent_fan_in` output tools, the `:online` switch) is real and mostly upstream —
+but it was **unplanned**, discovered by walking into it, and none of it was the
+feature. A day of unchosen platform work is exactly what the `toil` bucket in the
+effort log exists to make visible, and this session logged it that way.
+
+
+
 | Cost | Cause | Status |
 | --- | --- | --- |
 | **~4 rebase cycles on one PR** | `dev` takes a merge every 3–5 min; CI is ~2.5 min. The branch is `BEHIND` again before its checks finish, so the manual `merge → rejected → rebase → re-verify → push` loop is **structurally unwinnable**, not unlucky | **fixed** — auto-merge enabled on `biffo-template` and `biffo-platform`; GitHub now owns the update-and-merge |
@@ -299,6 +381,20 @@ Measured on the 2026-07-27 session, which shipped one bug fix end to end.
 | **2 wasted hook cycles** | `commitlint` (footer >100 chars) and the ownership guard both reject **after** `lint-staged` has run ruff+prettier over the staged set. A rejected commit costs the whole hook cycle, and neither constraint is discoverable before tripping it | **open** — cheap fix: validate the message first, or document both limits in AGENTS.md §3 |
 | **2 false 'no checks' reads** | `gh pr checks --watch` run immediately after `gh pr create` returns *no checks reported* and exits 1, because it races GitHub registering the runs. Indistinguishable from the genuine "GitHub created no run" case AGENTS.md §6 warns about, which is the one you must not paper over | **open** — needs a settle delay, or a way to tell the two apart |
 
+| **biffo-template** | 58 of 81 (72%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, design tokens, the practices tooling itself |
+| **biffo-template** | 47 of 65 (72%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema |
+| **8 repos audited by hand before a tool existed** | Establishing which branches were protected meant a `gh api` loop per repo per branch, because nothing reported settings drift. That audit *is* the finding: it took writing `biffo check branch-protection` ([#718](https://github.com/keiranholloway/biffo-template/pull/718)) to make it a one-liner — and the guard then immediately caught an incomplete fix the hand audit had missed | **fixed** — guard shipped; not yet scheduled anywhere |
+| **One wrong conclusion from re-running the wrong workflow** | Testing "does intake's old CI fail today?" I re-ran the newest successful `dev` run — which was **Deploy**, not CI — and it passed, appearing to disprove the hypothesis. Redone against an actual `ci.yml` run it failed, confirming it. A run id is not self-describing; filter by workflow, not by branch and conclusion | **process** — cost one wrong belief, caught by checking the job names |
+| **2 dependency-alignment rounds on one repo** | Mirroring another sibling's known-good versions cleared 8 of 13 advisories; the last 5 were transitives with no direct upgrade path (`postcss`, `sharp`, `brace-expansion`) and needed the same repo's `pnpm.overrides` copied across too. The fix existed and was found twice, by hand, because **nothing shares a remediation between siblings** | **open** — the overrides live in two package.json files with no common source |
+| **4 × ~30–45 min round trips to discover 4 latent defects** | A plugin defect is only visible on a deployed instance, and one traversal reveals **one** defect. Fix → plugin PR → instance resync PR → deploy → browser click, then the next fault appears. See *The headline* above | **open** — the preflight check ([#729](https://github.com/keiranholloway/biffo-template/issues/729)) collapses three of the four into one traversal |
+| **Every plugin change costs two PRs** | `dev.biffo.io` serves the copy vendored in `biffo-platform/services/<plugin>/`, not the plugin repo. Merging upstream changes nothing live; a second "resync vendored plugin" PR into the instance is always required, and **nothing warns when the two have drifted** | **open** — 3 resync PRs this session; a drift check would at least make the gap visible |
+| **2 rebase races with auto-merge already on** | Auto-merge does **not** update a head branch that falls `BEHIND` under strict protection. Both PRs sat green-and-blocked until manually rebased and force-pushed — so auto-merge removed the *retry* loop, not the *race* | **open** — refutes the H1-merge-race experiment's open assumption; next move is a merge queue |
+| **~25 min auditing branch protection by hand, again** | Two plugin repos had **no protection at all** on `dev` (`404 Branch not protected`) while their own AGENTS.md claimed otherwise. Found only because a PR merged with checks still running | **fixed** for both repos; skeleton gap filed ([#714](https://github.com/keiranholloway/biffo-template/issues/714)). `biffo check branch-protection` exists but is **still not scheduled anywhere**, so nothing would have caught this either |
+| **1 full reinstall + rebuild to answer "did I break this?"** | A build failed after a dependency upgrade. Establishing that it failed *identically* before the upgrade meant stashing the lockfile changes, reinstalling the original tree and rebuilding — several minutes to convert a suspicion into a fact. Worth every second: the alternative was shipping a fix for a defect I had not caused, or abandoning an upgrade that was fine | **structural** — no cheaper way to get a before/after on a lockfile |
+| **~5 publish attempts to put one 2 kB package on npm** | A new package cannot use OIDC (no trust to register against) and the fallback token did not work. Token → 404, OIDC at npm 12.0.1 → 404, local publish → `ENEEDAUTH`, web login → `EOTP`, passkey → done. npm answers **404 for unauthorised writes**, so three unrelated causes were indistinguishable | **structural** — a first publish has no credential-free path; once per package |
+| **A trusted-publisher registration filled twice and lost twice** | Saving it triggers a WebAuthn ceremony, which by design fires only on a genuine user gesture. Filling the form is automatable; completing it is not. Re-loading showed the config had silently reset | **open** — still unregistered, so the next tag's publish will 404 |
+| **A local preview harness instead of a deploy cycle** | Before shipping the Idea Scout stylesheet, the built CSS was rendered against markup copied from the components and screenshotted locally. ~5 min, against a ~35 min plugin-PR → resync-PR → deploy round trip to discover a layout mistake | **avoided cost** — worth repeating for anything visual |
+| **3 sessions' documentation deleted by one stale-base merge** | A whole-file rewrite from a branch that predated another session's merge: 215 insertions, 322 deletions, no conflict. Recovering it meant diffing an old commit and re-merging by hand | **restored**, and the code vector fixed; the editing convention that would prevent it does not exist |
 | **~4 serial `update-branch` + full-CI cycles on a 5-PR queue** | `biffo-template` requires branches be up to date, so **every merge invalidates every other open PR**. Clearing a 5-deep queue is therefore N sequential ~2.5 min CI cycles, not one. Auto-merge was enabled on this repo the same day precisely to hand this to GitHub — and it was **merged by hand anyway**, re-paying a cost that had already been fixed | **self-inflicted** — the row above records the fix; this records not using it. `gh pr merge --auto` should be the default verb, not `--squash` |
 | **~10 min waiting on a loop that could never exit** | A poll used `gh pr checks <N> --json state`; this `gh` has no `--json` on that subcommand, so the `jq` produced empty output that never equalled `0`, and the loop spun to its full timeout **while CI had already gone green**. A wrong flag and slow CI are indistinguishable from inside the loop | **fixed** in-session — poll `gh pr view --json statusCheckRollup`, or the commit's `check-runs`, and assert the result is non-empty before trusting it |
 | **3 full release cycles to land one distribution** | Getting the async dry-run into tabsii took `0.146.0` → `0.146.1` → `0.146.2`, because each defect only became visible at the *next* hop: 0.146.0's chain failed only when run against a real PostgreSQL, and 0.146.1's test failed only once it reached an instance whose migration chain differs. Each cycle is a template PR + CI + tag + npm publish + re-run `core upgrade` — **the six-hop loop billed three times for one feature** | **structural**, not carelessness. Both defects were invisible in the template by construction. Shortening this needs the template to be able to run *an instance's* chain, not more care at each hop |
@@ -624,6 +720,83 @@ migration cleared the exact failure it was written for, **on the real database
 that lacks `users`**. That is a stronger result than any test: the fix was proven
 where the bug lived.
 
+**A live click-through found four defects a green suite could not.** Idea Scout
+had merged M1–M7 with 172 passing tests and was, in practice, completely
+non-functional: `start_run` 401'd on every call. Nothing in the test suite could
+have known — the adapter tests asserted against the module's own path constant,
+so they passed whatever it said. **The unit tests and the production code agreed
+with each other and both were wrong.** The first real click is what disagreed.
+
+**Proving a test fails without the fix caught a vacuous assertion — twice.** The
+build-types fix looked well-tested until the check was run properly: against the
+pre-fix source, the *round-trip* test still passed, because Core stores unknown
+keys and the value is dropped later, in the portal. Only the catalog test
+actually discriminates. Shipping without checking would have left a test suite
+that "covered" the fix while proving nothing about it.
+
+**Refusing the convenient workaround.** The `agent_fan_in` fix could have been a
+one-line `output_tools` key in the seed SQL — it works at runtime today. It was
+rejected because the field was *undeclared*, so the portal's save path (which
+keeps only declared fields) would silently drop it on the next edit, re-breaking
+synthesis with nothing in the diff to explain why. Trading a visible bug for an
+invisible one is a bad trade, and the temptation was strongest precisely because
+the day was already long.
+
+**Characterisation tests before a swap, not after.** Replacing `python-jose`
+with PyJWT touched an auth verifier with **zero tests**. Eight tests were written
+against the *existing* implementation and had to pass there first; the same eight,
+unchanged, then had to pass on PyJWT. Written the other way round they would have
+proved the new library works and said nothing about whether the two agree — which
+is the only question a swap actually raises.
+
+**A guard's first job is to fail its author.** `biffo check branch-protection`
+caught, within seconds of existing, that the fix applied an hour earlier had
+covered `dev` on three repos and left `staging` and `main` unprotected. A guard
+that only ever agrees with the person who wrote it has not been tested.
+
+**Verify an issue's premise before implementing its proposal.** #722 asked for a
+CVE suppression in the sibling skeleton. Two greps showed the skeleton already
+uses PyJWT and cannot hit that advisory, and that only two legacy siblings could
+— so the proposed fix would have been dead config teaching future readers the
+advisory was unavoidable. The issue was filed in good faith; nothing had checked
+it.
+
+**Read the run before repointing the gate.** Migrating intake's CI changes every
+required-status-check name. Rather than predicting the four new names and
+repointing branch protection to them, the PR was opened first and the names read
+off its own run — which also surfaced that the new jobs *failed*, for reasons
+that had nothing to do with the migration.
+
+---
+
+**Run the build, even when everything else is green.** marketplace's audit,
+lint, typecheck and 26 tests all passed; `pnpm run build` failed outright. The
+repo's own CI never builds, so nothing had contradicted the green. "All checks
+passed" meant four checks passed, and the fifth did not exist.
+
+**Prove a failure predates you before owning it.** The build broke right after a
+dependency upgrade, which is exactly when it is tempting to assume cause. Stashing
+the lockfile changes and rebuilding on the original `next` reproduced the failure
+identically — turning "my upgrade broke the build" into "this build has been
+broken and unwatched", which is a different issue with a different owner.
+
+**Re-run the whole proof on the second repo, despite identical inputs.**
+marketplace's `auth.py` was byte-identical to intake's pre-swap file, so copying
+the proven implementation was safe. Re-running the 8 characterisation tests
+against *marketplace's* `python-jose` first was still the right call: identical
+source does not mean identical settings, dependencies or test environment, and
+the cost of confirming was seconds.
+
+---
+
+**Diffing an old commit against `dev` before writing.** The intent was to append this session's rows. Reading the file first showed the count had gone *down* — 65 rows to 57 — which is the only reason the deletion of three sessions' contributions was found. Nothing else would have surfaced it: every commit is present, the page reads fine, and the counts on it had simply become smaller.
+
+**Testing the destructive path, not just the happy one.** `mergeExtracted` had three unit tests, all covering rows the markdown still mentions. The one case nobody wrote — a stored row the markdown *doesn't* mention — was the one deleting the data. Both new tests fail against the old implementation.
+
+**Re-checking a settings change instead of trusting the click.** The npm trusted-publisher form was filled and submitted; re-loading the page showed it had reset to "Select your publisher". Reporting it as done would have left the next release failing with an unexplained 404.
+
+**Rendering the CSS locally before shipping it.** The Idea Scout stylesheet was checked against a static harness built from the real components, so the first deploy confirmed the result rather than discovering it.
+
 ## What needs more thought
 
 **Nothing reconciles an open issue against shipped code, and the one mechanism
@@ -912,6 +1085,100 @@ missing is a way to run template-owned migrations and tests against a
 *representative instance chain* in the template's own CI; until that exists, this
 class is found by shipping.
 
+**Nothing tests a plugin's pipeline below a live click.** Fan-out → fan-in →
+synthesis → projection has no harness. Every one of the four defects found on
+2026-07-27 was reachable only by clicking a deployed instance, and each cost a
+full ~40-minute round trip to reach. A harness running the real chain against
+stub agents would have collapsed four traversals into one failing local run.
+This is the single highest-value gap on the page right now.
+
+**Three defects in one day were the same shape: the prompt names a capability
+the run does not offer.** A tool gated on an unset credential is dropped with a
+warning; an output tool that cannot be declared is simply absent; a path that
+resolves to the wrong service authenticates differently. All three **fail open,
+mid-chain, after spend**, and surface as a vague user-facing error. A preflight
+assertion that every capability a run depends on actually resolves — before the
+first paid model call — would have caught all three at once
+([#729](https://github.com/keiranholloway/biffo-template/issues/729)). Nothing
+currently owns "does this run's declared world exist?".
+
+**A feature can be declared done seven milestones deep without ever being run.**
+M1–M7 merged, deployed and were reported complete; the handover even recorded
+"nothing has run against a real deployment" as a known gap — and that gap was not
+treated as blocking. The process has no step that says *a feature is not done
+until someone has used it*. The handover document was honest and it still did not
+stop the milestone being closed.
+
+**`biffo check branch-protection` exists and is scheduled nowhere.** It was built
+precisely to catch settings drift, and two plugin repos were sitting completely
+unprotected while it existed. A guard nobody runs is indistinguishable from one
+that was never written.
+
+**The instance vendors plugin source, and nothing notices when they diverge.**
+`dev.biffo.io` serves `services/<plugin>/`, not the plugin repo, so a merged
+plugin fix is live nowhere until a second resync PR lands. Three were needed this
+session. The failure mode is silent and reads exactly like "the fix didn't work".
+
+**A tool behaving oddly is evidence about the tool, not just an obstacle.** Two
+separate `gh` commands misbehaved — one erroring on a deprecated API field, one
+silently printing help and exiting 0 — and both were routed around with a
+workaround rather than diagnosed. The cause was a package 7 months stale, which
+one `gh --version` would have exposed. The workarounds were even *written into a
+subagent's brief*, propagating the symptom instead of removing it. Worth asking,
+the second time a tool surprises you: **is this tool the version I think it is?**
+
+**`gh` misreports during the check-registration window, in both directions.**
+`gh pr merge --auto` says *"Pull request is in clean status"* and `gh pr checks`
+says *"no checks reported"* — both before runs register, neither distinguishable
+from the real state. One invites merging unverified code; the other mimics the
+genuine "GitHub created no run" case that AGENTS.md §6 says never to paper over.
+Every agent here will hit both, and the current answer is "sleep and re-check",
+which is a habit rather than a fix.
+
+**Nothing audits repo settings drift on a schedule.** `biffo check
+branch-protection` now exists, but nothing runs it. The condition it detects took
+three weeks to notice by accident; a weekly job over the managed repos would have
+found it on day one. Shipping the detector without scheduling it is half a fix.
+
+**An issue can be wrong and still be actioned.** #722 would have been implemented
+as written by anyone who trusted it — the reasoning was plausible and the author
+was careful. There is no cheap norm here for "state the premise you checked" when
+filing, and the cost lands on whoever picks the issue up.
+
+**One repo still carries the dead dependency.** `tabsii-marketplace` declares
+`python-jose` and will hit the same unfixable `ecdsa` advisory the moment its
+pip-audit runs. It is known, unfiled, and exactly the shape of thing that gets
+rediscovered expensively.
+
+---
+
+**A remediation found once has to be found again per repo.** The
+`pnpm.overrides` block that clears `postcss`/`sharp`/`brace-expansion` now exists
+in two sibling `package.json` files, copied by hand, with nothing linking them.
+The third sibling to hit it will rediscover it. Siblings share a skeleton but not
+a dependency policy.
+
+**"Is this repo on the current CI?" has no reliable answer.** Job names are the
+only thing anyone compares, and they match across generations while steps differ.
+marketplace looked migrated and was a generation behind on the one step that
+mattered. A workflow-drift check against the skeleton would be cheap and would
+have caught it before the build defect became load-bearing.
+
+**Green-by-absence is indistinguishable from green.** Two repos had no CI run for
+three weeks and neither surfaced as unhealthy — a branch with no failing run looks
+exactly like a branch that passed. Both were found by accident, hours apart, while
+looking for something else.
+
+---
+
+**Nothing prevents a whole-file rewrite from a stale base.** This is the largest content loss recorded here and it was invisible: no conflict, no failing check, no reviewer signal. Tools that rewrite a file wholesale — a script, a full-file write — turn "my branch is slightly behind" into "I silently replaced everyone else's work". A row-count floor in CI, or an append-only convention for this file, would catch it. Neither exists.
+
+**Relaxing `strict` traded a known cost for an unmeasured one.** H3 removed the rebase race, which was real and expensive. It also removed the only mechanism forcing a branch up to date before merge — the thing that would have turned the loss above into a conflict. H3 measures merge friction and does not watch content loss, so a recurrence before 2026-08-11 will not appear in its result.
+
+**The advice to "regenerate from the data, not the prose" carried the loss.** This page is explicit that prose counts drift and `evidence.jsonl` is the antidote. But `--extract` rebuilds the dataset *from the prose*, so a markdown that had already lost rows produced a dataset that lost them too — and the regenerated counts then looked authoritative. Fixed in code; the shape (a derived artefact treated as a source of truth) is worth looking for elsewhere.
+
+**A first npm publish has no credential-free path.** Trusted publishing is the right end state and cannot bootstrap itself, so every new package needs one manual, 2FA-bearing publish by a human. That is precisely the step a fleet of agents cannot perform, and it recurs for every future `@biffo/*` package.
+
 ## Skills used
 
 Skills cannot be iterated on impressions. Every invocation, with an honest outcome.
@@ -960,6 +1227,10 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **worked** | §4 on a frontend change: the merge was green and the deploy was green, neither of which says the code shipped. Grepping the deployed bundle found all three scope literals where only `brand` existed before. |
 | `biffo-verify` | **partial** | §2/§3 assume local reproduction is possible. For a Postgres-dependent change on this machine it is **not** (no `docker` group, no passwordless sudo, stopped cluster, no PostGIS), so three hypotheses each cost a full CI round trip on a cold spot fleet. The skill has no guidance for "you cannot run this locally" beyond §7's *say what you did not verify* — which covers honesty but not the iteration cost. Worth a step: check the local environment can run the subject **before** designing the change, and treat a gap as the first task. |
 | `biffo-workflow` | **should have been invoked** | Followed AGENTS.md by hand across two repos and two PRs. It mostly held — fresh worktrees off `dev`, deps synced, `git ls-remote` after every push, worktrees reaped — but two things slipped that the skill encodes: the probe commit was pushed with `core.hooksPath=/dev/null` (verified on the remote afterwards, so honest, but the hooks were bypassed rather than satisfied), and the ownership guard was only run **after** the files were written, when running it first would have surfaced the `.github/` block before the workflow was designed around landing there. Missed for the same reason as last time: the work read as "build a lane", not "land a change". |
+| `biffo-verify` | **worked** | §8 is the reason a three-session documentation loss was found at all. Following it meant reading the file before appending, which showed the row count had *fallen* from 65 to 57. Every commit was present and the page read fine; nothing else in the process looks at whether the record still contains what it used to. |
+| `biffo-workflow` | **worked** | Six PRs across three repos this session, all merged with worktrees reaped. The honest-push step mattered once: a `pkill -f "http.server 8899"` matched its own command line and killed the shell mid-commit, so the commit never happened — `git status` afterwards caught it, where a "committed and pushed" assumption would not have. |
+| `claude-in-chrome` | **worked** | Produced the visual assessment that reframed the whole design task: measured `.layout` computing to `display: block`, a 1920px full-bleed sidebar and ~234 characters per line on the deployed app, which is what identified a stylesheet targeting another plugin's classes rather than "the design is clumsy". |
+| `claude-in-chrome` | **partial** | Drove npm far enough to fill the trusted-publisher form, then hit a hard stop: WebAuthn fires only on a genuine user gesture, so a form can be completed but not *saved* by automation. Worth stating in the skill — "the browser can do everything except the second factor" is a boundary that will recur on any account with passkeys. Window resizing was also unreliable: `resize_window` reported success while `innerWidth` stayed 1920, so the mobile breakpoint could not be exercised. |
 
 ## Adding a row
 

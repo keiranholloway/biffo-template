@@ -970,6 +970,7 @@ import {
   parseCost,
   parseStatus,
   mergeExtracted,
+  orphanedRows,
 } from '../../../scripts/practices-evidence.mjs'
 
 describe('extractRefs', () => {
@@ -1102,6 +1103,44 @@ describe('mergeExtracted', () => {
   it('leaves a genuinely new row untouched', () => {
     const merged = mergeExtracted([{ summary: 'brand new', date: null, costMinutes: null }], [])
     expect(merged[0].date).toBeNull()
+  })
+
+  /**
+   * The destructive case, which was untested and fired.
+   *
+   * `--extract` treats the markdown as the source of truth. Run from a branch
+   * whose markdown predates another session's rows, the old implementation
+   * (`return fresh.map(...)`) rewrote evidence.jsonl *without* them — silently,
+   * because the only symptom is that the counts it feeds get smaller. On
+   * 2026-07-27 that removed 18 scoreboard rows and 23 narrative entries
+   * contributed by three different sessions.
+   *
+   * Deleting a row is legitimate; doing it by accident is not. So an orphan is
+   * kept, and the CLI says so.
+   */
+  it('keeps a stored row the markdown no longer mentions', () => {
+    const merged = mergeExtracted(
+      [{ summary: 'still in the table', date: null, costMinutes: null }],
+      [
+        { summary: 'still in the table', date: '2026-07-01', costMinutes: null },
+        { summary: 'another session added this an hour ago', date: '2026-07-27', costMinutes: 40 },
+      ],
+    )
+
+    expect(merged.map((r) => r.summary)).toContain('another session added this an hour ago')
+    expect(merged).toHaveLength(2)
+  })
+
+  it('reports which rows were orphaned, so a real deletion stays deliberate', () => {
+    const orphans = orphanedRows(
+      [{ summary: 'kept', date: null, costMinutes: null }],
+      [
+        { summary: 'kept', date: null, costMinutes: null },
+        { summary: 'dropped from the table', date: null, costMinutes: null },
+      ],
+    )
+
+    expect(orphans.map((r) => r.summary)).toEqual(['dropped from the table'])
   })
 })
 

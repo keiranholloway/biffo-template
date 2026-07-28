@@ -175,7 +175,7 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **Infrastructure can be correctly wired and still never fire, and every component reports healthy.** An SES-bounce consumer Lambda deployed, its SNS subscription **confirmed**, its IAM correct — and it has never been invoked. A deliberate bounce raised `AWS/SES` `Bounce` = 1 (account-level, needing no configuration set) while the SNS destination (which does need one) saw nothing, so the send is not resolving through the configuration set the event destination hangs off. Nothing in Terraform, the console or the metrics says "this path is dead"; the only signal was the **absence of a CloudWatch log group**, which is what "never invoked" looks like | **visibility** · boundary | tabsii-platform | tabsii-platform [#302](https://github.com/tabsii-com/tabsii-platform/issues/302) | **filed** — feature shipped inert |
 | [ideation#58](https://github.com/keiranholloway/biffo-plugin-ideation/issues/58) | **A closing keyword on a satellite-repo PR closes the issue at *merge*, and in a plugin repo merge is not a deploy boundary.** `dev.biffo.io` serves the copy vendored in the instance, so #58 was auto-closed by [ideation#60](https://github.com/keiranholloway/biffo-plugin-ideation/pull/60) at 10:11:03 while the panel it was filed against was byte-for-byte unchanged. Seven hours later the reporter re-reported the same symptom. Nothing distinguishes "merged" from "reachable by the person who reported it", and the closing keyword asserts the stronger claim | **process** · visibility | biffo-plugin-ideation [#58](https://github.com/keiranholloway/biffo-plugin-ideation/issues/58) | biffo-platform resync [#101](https://github.com/keiranholloway/biffo-platform/pull/101); general fix is the preflight drift check ([#729](https://github.com/keiranholloway/biffo-template/issues/729)) | **open** — 4th recurrence of the resync row above. `cost ~35m` |
 | [ideation#65](https://github.com/keiranholloway/biffo-plugin-ideation/pull/65) | **A manifest key is silently ignored when a sibling flag is set, and the ignored copy was a full duplicate of a live prompt.** `chat_agents_dynamic: true` makes Core's `register_plugin_chat_agents()` `continue` past the entire manifest, so ideation's `chat_agents` block — 1221 bytes of `CHALLENGER_INSTRUCTIONS` — had never been read by anything. Nothing warns that a declared key is unreachable, and **no test could catch the unreachable copy drifting, because nothing executes it**. Still byte-identical when removed, so latent rather than realised | **drift** | biffo-plugin-ideation | biffo-plugin-ideation [#65](https://github.com/keiranholloway/biffo-plugin-ideation/pull/65) | **fixed** — block removed, regression test pins its absence |
-| [ideation#66](https://github.com/keiranholloway/biffo-plugin-ideation/pull/66) | **Two independent silent failures in one 40-line function, found hours apart because each surfaced through a different symptom.** The analyst ran on `anthropic/claude-opus-4-8` — absent from all 367 models OpenRouter serves — *and* depended on the `web_search` registry tool, which is only offered where a Brave key exists (this account's is the empty string). Either alone would have been invisible; together they meant competitive research was fabricated. The challenger's adjacent, valid `claude-sonnet-4` is what made it read as flakiness. **Neither was found by reading the module; each was found by chasing a separate report** | **fail-open** · drift | biffo-plugin-ideation | biffo-plugin-ideation [#66](https://github.com/keiranholloway/biffo-plugin-ideation/pull/66) + vendored resync [platform#104](https://github.com/keiranholloway/biffo-platform/pull/104) | **fixed** — `:online`, `tools` dropped, prompt forbids unsourced competitors |
+| [ideation#66](https://github.com/keiranholloway/biffo-plugin-ideation/pull/66) | **Two independent silent failures in one 40-line function, found hours apart because each surfaced through a different symptom.** The analyst ran on `anthropic/claude-opus-4-8` — absent from all 367 models OpenRouter serves — *and* depended on the `web_search` registry tool, which is only offered where a Brave key exists (this account's is the empty string). Either alone would have been invisible; together they meant competitive research was fabricated. The challenger's adjacent, valid `claude-sonnet-4` is what made it read as flakiness. **Neither was found by reading the module; each was found by chasing a separate report** | **fail-open** · drift | biffo-plugin-ideation | biffo-plugin-ideation [#66](https://github.com/keiranholloway/biffo-plugin-ideation/pull/66) + vendored resync [platform#104](https://github.com/keiranholloway/biffo-platform/pull/104) | **fixed and verified end to end** — `:online`, `tools` dropped, prompt forbids unsourced competitors. Proven on dev by a live session: 7/7 cited URLs resolve, including one with a typo in the source's own slug. The general gap (nothing audits declared capabilities against the runtime supplying them) is open as [#822](https://github.com/keiranholloway/biffo-template/issues/822) |
 | — | **A self-reported effort figure was 45% low, and every incentive pointed the same way.** A 5.5-hour session was logged at 3 hours because the entry covered the last unit of work (the build) and silently omitted four completed earlier ones — two plans, an assessment, a third plan — each with its own PR and CI wait. The bias is **directional**: an agent reconstructs elapsed time from what is still in working memory, and finished work from the start of a long session is exactly what is not. So the error is always *low*, never high, which would make the inferred dashboard split look better-calibrated than it is — the precise failure the effort log exists to detect. Caught only because a human said "that was more like five hours" | **visibility** | biffo-template (the effort log) | practice — log each unit when its PR merges, not the session when it ends | **fixed** — four missing units logged retrospectively; §8 wording is right, the habit was not |
 
 | — | **`strings`/`grep` over a compressed artefact is a false-negative machine, and it nearly put a live private key in git.** Committing the runner fleet's Terraform (biffo-runners#1), I pre-checked `terraform/tfplan2` for credential markers and reported it clean-but-not-authoritative. It was **wrong**: a saved Terraform plan is a **DEFLATE zip**. Unzipped, its embedded `tfstate` holds the live GitHub App **private key**, App ID and generated `webhook_secret` in plaintext — confirmed by extracting the real key from `terraform.tfvars` and finding it inside the archive. `.gitignore`'s `*.tfstate` rule could never have caught it, because the state is a **member file within an archive**, not a file on disk. The generalisation is the point: **gitleaks scans blobs the same way I did**, so any compressed artefact is a hole in content-based secret scanning — plan files, `.zip` fixtures, vendored tarballs | **visibility** · fail-open | biffo-runners (pre-commit check) | practice + `tfplan*` ignored; **the estate-wide gap is open** — nothing decompresses before scanning | **avoided**, not suffered. History is 1 commit, so it was one `git add` from being permanent |
@@ -1309,6 +1309,32 @@ three separate round trips.
 **Verifying a sub-agent's security claim rather than relaying it.** The same agent reported "the backend already enforces, no data is reachable". That downgrades a security issue, so I re-ran the unauthenticated checks against the API Gateway origin myself before repeating it. My own grep then produced a false positive (`3 matches` for `session|idea|report|prompt` — all from the word *ideation* in asset paths), which would have kept a security issue open on nothing had I not looked at what actually matched.
 
 **Pre-checking a delegated task's risk before spawning.** Before handing over the runner-fleet commit I established what `.gitignore` covered and what would actually stage, which turned "commit the Terraform" into a brief naming the specific hazard. That is what put `tfplan` in front of the agent at all — the issue never mentioned it.
+**Prove research is real by picking a discriminator the failure mode cannot
+fake.** After fixing the analyst's silent no-search (#66), the obvious check —
+"does the report name plausible competitors?" — proves nothing, because
+fabricated competitors are *exactly* what a well-known domain produces from
+parametric recall. Three choices made the run decisive instead:
+
+1. **A deliberately niche prompt** (UK farm-shop surplus to restaurants), where
+   recall has little to draw on and invention is more detectable.
+2. **Resolve every cited URL**, not just eyeball the names. Seven cited, seven
+   resolved (one 429 — rate limiting, not absence).
+3. **The clincher was a typo.** One URL was
+   `craftguildofchefs.org/news/...restaurantss-surplus-ingredients...` — a
+   misspelling *in the source's own slug* — and it returned 200. A model
+   inventing a plausible URL does not invent a typo that happens to resolve. It
+   copied a real link, warts and all.
+
+Corroborated by timing: the analyst run took **78.1s** against **2.7–3.3s** for
+each challenger turn, consistent with multi-turn retrieval rather than one
+completion. The lesson generalises: when the failure mode is *plausible output*,
+the test must key on something the failure mode has no way to produce — not on
+whether the output looks right.
+
+**Not claimed:** the model slug was never found in CloudWatch. The runtime may
+not log it, so that is an unknown, not a confirmation. The URL evidence stands on
+its own.
+
 
 ## What needs more thought
 
@@ -1967,6 +1993,16 @@ dominated by its last unit. A five-and-a-half hour session was logged at three.
 Every mechanism that would fix this is cheap (log on merge; a post-merge
 reminder; deriving a floor from PR merge timestamps), and none exists. Until one
 does, every figure in this log should be read as a **lower bound**.
+**A verification that lands after the write-up merges never reaches the log.**
+This session's practices PR merged at 18:42, before the fix was proven, before
+the four follow-up issues existed, and before the end-to-end run. Everything
+after that point — including the single most reusable finding, *how* you tell
+fabricated research from real research — needed a second PR that only happened
+because someone asked whether the log was complete. §8 says to write up "when you
+finish the task", but a task whose last act is *verification* finishes after the
+natural moment to write. Nothing prompts the second pass, and the highest-value
+content sits on the far side of it.
+
 
 ## Skills used
 
@@ -2075,6 +2111,9 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **partial — the Never list needs a rule about compressed artefacts** | "Never treat absence of evidence as evidence" is there, and I still ran `strings \| grep` over a **zip** and reported it clean. A saved Terraform plan contains the full state; the live GitHub App private key was inside. The existing rule is about *empty search results*; this is about **a search that cannot see**. Proposed: *decompress before you scan, or say you did not scan.* |
 | `biffo-workflow` | **worked** | §9's resync discipline, three times in one session, each with `diff -rq` plus a sorted `jq` diff against source before committing. It is also what surfaced #58 sitting undeployed for a day — the parity check found `effective_config.py` missing entirely, which no other step would have reported. |
 
+
+| `biffo-verify` | **worked** | §7 held the line under pressure to declare victory. `:online` was set, the deploy was green and the artifact verified — every signal said done. §7's "never close an issue you have not seen fixed by the route it was reported on" is why an actual session was run, and why the report's URLs were resolved rather than read. Without it the claim would have been "search is working" on the strength of a config change. |
+| `biffo-verify` | **partial** | §8's cadence assumes the write-up is the last act. Here the practices PR merged **before** the fix was verified, the issues were filed, or the E2E run happened, so the log was complete-looking and missing its best finding. The step needs a "if verification is still outstanding, the write-up is not finished" clause. |
 
 
 ## Adding a row

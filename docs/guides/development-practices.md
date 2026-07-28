@@ -157,6 +157,11 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | [#22](https://github.com/keiranholloway/biffo-plugin-idea-scout/issues/22) | **A deploy step skipped an admin-UI build for a plugin that declared one, silently, for every environment.** The condition was `if jq -e '.admin_ingress' … && [ -d "$plugin_dir/web-admin" ]` — declare the ingress with no `web-admin/` and the build is skipped with **no error and no warning**, the deploy reports success, and `GET /admin/` 404s. A CDN rule then rewrites that 404 into the marketing portal's HTML (#647), so the visible symptom is an admin URL apparently serving an **unauthenticated page**. Same fail-open shape as the audit gates in #591/#644. Patching it, I asserted the occurrence count expecting two (the line numbers in the issue) and found **three** — `deploy-prod` carries the same block | **fail-open** · boundary | biffo-plugin-idea-scout (admin URL) | biffo-template [#793](https://github.com/keiranholloway/biffo-template/pull/793) + the plugin [#30](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/30) + vendored resync [platform#97](https://github.com/keiranholloway/biffo-platform/pull/97) | **fixed** — deploy now fails loudly; declaration removed at source and in the vendored copy |
 | — | **Shipping a new deploy-time gate can red an instance whose vendored copy is stale, and the ordering is invisible until it fails.** The guard above was correct and `biffo-platform`'s **vendored** `services/idea-scout/biffo.plugin.json` still declared `admin_ingress` — so the first core upgrade carrying the guard would have failed that instance's deploys. Merging the plugin repo does not reach the vendored copy; that needs its own resync PR. Caught before it fired, by checking both vendored manifests against the new condition rather than assuming the source fix propagated | **boundary** · process | biffo-platform deploys (predicted, not suffered) | ordering: plugin → vendored resync → core upgrade | **avoided** — resync landed first. **The general case is open**: nothing warns that a new gate will fail on an instance's current tree |
 
+| [#22](https://github.com/keiranholloway/biffo-plugin-idea-scout/issues/22) | **A milestone was closed by a manifest declaration rather than a delivery, and the tracker then asserted the opposite of the truth for a fortnight.** Idea Scout's M5 — *"admin surface: build types, seeds, admin UI"* — is CLOSED. There was never a `web-admin/` directory: not in the repo, **not in any commit in its history**, not in the vendored copy, not in the deployed package. Declaring `admin_ingress` in `biffo.plugin.json` was enough to close it. So v1 success criterion 5 (*"an admin can add/edit/deactivate build-type categories in a UI without a code change"*) was unmet while the epic read complete, and changing a build type required an API call or a DB write. Verified before rebuilding, with `ideation` as a control proving the check works: its `web-admin` IS present in all three places | **visibility** · process | biffo-plugin-idea-scout (the epic itself) | biffo-plugin-idea-scout [#36](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/36) | **fixed** — the UI now exists and renders on dev. The general defect is **open**: nothing checks that a milestone's *acceptance criteria* were met before it closes |
+| — | **A copied Vite `base` sent one plugin's admin UI to another plugin's asset path, and NO gate could see it.** `web-admin/vite.config.ts` was scaffolded from ideation's and kept `base: '/api/v1/plugins/ideation/admin/'`. The deployed page loaded its HTML (correct title) and rendered **blank**: `GET …/idea-scout/admin` 200, then `GET …/**ideation**/admin/assets/index-KqUfZSuT.js` **503** — idea-scout's own asset *filenames* under the wrong plugin's *path*. eslint, tsc, 15 unit tests and `vite build` itself all passed, because `base` only affects URLs **inside the emitted HTML** and nothing that runs locally requests them. Found solely by loading the page and reading the network log | **drift** · visibility | biffo-plugin-idea-scout (deployed page) | biffo-plugin-idea-scout [#38](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/38) | **fixed** — plus two guards that do run per-PR: the configured base, and the **built** `index.html`'s asset refs. Both proven to fail against the shipped config |
+| — | **An edit whose anchor did not match reported success, shipped a half-feature, and left a validation guard dead behind it.** The API accepted `preferences`, validated their shape, echoed a stored value back — and discarded the input, because `app.py` never passed `body.preferences` to the service. The `python -c` replacement targeted a multi-line call site; the real code was one line; **every other edit in that batch asserted its anchor and this one did not**. Two things made it invisible: the service tests call `start_run` with preferences *directly* and the frontend tests assert `onStart` *receives* them — **both ends covered, the seam between them not** — and the response echoed a plausible-looking `[]`. The second-order finding is worse: the unknown-key 422 could **never fire**, because the keys it validates never reached the service holding it. A guard behind a broken pass-through is not a guard | **process** · visibility | biffo-plugin-idea-scout (live run on dev) | biffo-plugin-idea-scout [#39](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/39) | **fixed** — six transport-level tests; four fail against the shipped code, including `assert 201 == 422` for the dead guard |
+| — | **A guard that bans a spelling blocks the correct fix that legitimately contains it — twice in one day.** #30's guard asserted `"parent.parent.parent" not in admin_app.py`; hours later it **rejected the correct fix**, because ideation's proven `_resolve_static_dir` keeps exactly that expression as its local-dev fallback. Then, writing the base-path guard, the same shape recurred: *"the config mentions no other plugin"* failed on the **comment explaining the bug**, which names ideation's path deliberately. The defect in both cases was never the token — it was the absent property (a `BIFFO_PLUGINS_ROOT` anchor; a correct `base`). Both guards were rewritten to assert the property | **process** | biffo-plugin-idea-scout (twice) | practice — assert the property, never the spelling | **fixed** both; the rule is now stated in both test files so the next person meets it where they would repeat it |
+
 ### What the classes say
 
 > Counted from `docs/practices/evidence.jsonl`, not asserted. Regenerate with
@@ -244,30 +249,34 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **122 rows** (never typed by hand, see *Adding a row*):
+`byFixRepo`, regenerated at **126 rows** (never typed by hand, see *Adding a row*):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 73 of 122 (60%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 13 of 122 (11%) | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
-| **biffo-platform** | 5 of 122 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 122 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-plugin-idea-scout** | 4 of 122 | Adapter seam, research search capability, its own styling |
-| **tabsii-marketplace** | 2 of 122 | `python-jose` removal; the credential-dependent build |
-| **tabsii-crm** | 2 of 122 | Its E2E harness, and a repo setting that diverged |
-| **biffo-plugin-ideation** | 1 of 122 | A UI rendering a 500 as an empty state |
-| **biffo-runners** | 1 of 122 | Runner fleet docs + fail-fast |
+| **biffo-template** | 73 of 126 (60%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
+| **tabsii-platform** | 13 of 126 (11%) | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
+| **biffo-platform** | 5 of 126 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 126 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-idea-scout** | 7 of 126 | Adapter seam, research capability, styling, **and now its own admin UI, asset base path and transport seam** |
+| **tabsii-marketplace** | 2 of 126 | `python-jose` removal; the credential-dependent build |
+| **tabsii-crm** | 2 of 126 | Its E2E harness, and a repo setting that diverged |
+| **biffo-plugin-ideation** | 1 of 126 | A UI rendering a 500 as an empty state |
+| **biffo-runners** | 1 of 126 | Runner fleet docs + fail-fast |
 
-**`biffo-template` takes 73 of 122 — 60%, and the slide has flattened:** 86% at
-50 and 57 rows, 82% at 65, 70% at 94, 66% at 102, 63% at 109, 60% at 116, **60%
-now**. Two consecutive captures at the same figure is the first time that has
-happened since 50 rows. Note this capture moved the *opposite* way to the last
-one: the template gained 2 of the 5 new rows outright and satellites gained none,
-so the flattening is the template absorbing findings again, not satellites
-slowing down. One capture is not a turn — say so next time rather than declaring
-one.
+**`biffo-template` takes 73 of 126 — 58%.** The series: 86% at 50 and 57 rows,
+82% at 65, 70% at 94, 66% at 102, 63% at 109, 60% at 116 and 122, **58% now**.
+The two captures at 60% did not mark a floor; the template's absolute count did
+not move at all this time (73 → 73) while four rows landed elsewhere.
 
-`tabsii-platform` is now 13 of 116 and owns the two newest: its RLS lane and its
+**All four went to `biffo-plugin-idea-scout`, which jumps 4 → 7 and overtakes
+both `biffo-platform` and `tabsii-intake` to third.** This is the first capture
+where a *plugin* repo absorbed a whole session's findings, and the rows are not
+symptoms surfacing there — they are defects the plugin **owns**: its own admin
+UI, its own asset base path, its own transport seam, its own closed-but-undone
+milestone. The satellite story so far has been instances carrying capability;
+this is the same move one layer further out.
+
+`tabsii-platform` is now 13 of 126 and owns the two newest: its RLS lane and its
 SES identity. Read with `tabsii-crm`'s first appearance last capture, the shape
 continues to move from "instances surface what the template must fix" toward
 "instances carry capability the template does not offer".
@@ -280,7 +289,7 @@ to 12 (its RLS lane, the tests on it, and now its two extra DB engines), the sha
 keeps moving from "instances surface what the template must fix" toward
 "instances carry capability the template does not offer".
 
-**`visibility` is now the largest class at 37 of 121**, and it keeps growing
+**`visibility` is now the largest class at 38 of 126**, and it keeps growing
 fastest. The sub-shape named last capture — *a measurement that is confidently
 wrong, rather than a truth that is hidden* — has now recurred **six times**: a
 paginated `length(events)` (57x undercount), a retention ceiling read as a data
@@ -291,7 +300,7 @@ minor versions behind, and a published version bump attributed to the wrong PR.
 Six instances is no longer a sub-shape, it is the dominant failure mode on this
 page, and every one produced a **plausible non-empty answer that was acted on**.
 The existing rule (*absence of evidence is not evidence*) covers empty results
-and none of these. `surfacedNotFixedHere` is **74 of 121**.
+and none of these. `surfacedNotFixedHere` is **75 of 126**.
 
 **The SQL-echo rows are the older pattern reasserting itself:** the exposure was
 found in `biffo-platform` (and independently live in `tabsii-platform`) and could
@@ -564,6 +573,37 @@ actually mattered — downloading the deployed Lambda and reading it — took un
 minute. **The expensive parts were all structural: waiting for the chain, and one
 lap of rework the chain made expensive.** A shorter chain would have made the
 mistake cheap rather than preventing it.
+
+### Measured: shipping two plugin features to *working*, 2026-07-28
+
+The six-hop chain again, but the instructive part is different from the
+SQL-echo capture. There the cost was **waiting**; here it was **discovering, only
+after each deploy, that the thing did not work** — and each discovery cost a
+whole further lap.
+
+Three deploys to land two features:
+
+| lap | carried | what the deploy revealed |
+| --- | --- | --- |
+| 1 | admin UI + preferences + migration | admin page **blank**; preferences **silently dropped** |
+| 2 | base-path fix | (folded, see below) |
+| 3 | pass-through fix, folded into lap 2's PR | both verified working |
+
+**Neither defect could have been caught before deploying.** The Vite `base` only
+affects URLs inside the emitted HTML, so lint/types/tests/build all pass. The
+pass-through was covered at both *ends* — service tests and frontend tests — and
+broken in the *seam*, where nothing looked.
+
+**The saving that did work:** folding the third fix into lap 2's still-open PR
+rather than opening a third resync. One-line source fixes to the same vendored
+plugin do not each deserve a lap at ~15–20 minutes of mostly waiting.
+
+**The structural read.** The distribution chain is not the problem here — the
+*feedback* chain is. Every one of these defects was a 30-second fix found in a
+20-minute round trip. Anything that moves discovery earlier is worth more than
+anything that shortens the lap: the two new guards (built-HTML asset paths,
+transport-level pass-through tests) are exactly that, and they cost nothing to
+run.
 
 ### What this is not
 
@@ -1016,7 +1056,19 @@ the cost of confirming was seconds.
 
 **Reading past the layer, again (§5), on a route nobody had documented.** A relative `fetch('/api/v1/admin/agent-runs')` from the portal origin returned 403 for every one of eight tokens, which reads as "all tokens are dead". The portal in fact calls the **API Gateway host directly**; the relative path went through CloudFront to the portal's S3 origin. One `read_network_requests` call turned eight false negatives into a working request.
 
+**Loading the page is a different test from checking the artifact, and today only the first one worked.** After the deploy I confirmed `services/idea-scout/web-admin/dist/` was present in the Lambda package with real assets — correct, and it proved nothing. The page was blank. Artifact inspection answers *"did it ship?"*; only a browser answers *"does it work?"*. The same pair recurred an hour later: the deployed `app.py` had the request field and the response line, and lacked the one line between them.
+
+**Capturing the request body separated two failures that looked like one.** Intercepting `fetch` to read the actual POST proved the UI half was correct — `{"preferences":["recurring-revenue","regulated-markets"]}` — at the same moment the stored run came back `[]`. Without that, "preferences do not work" would have sent me to the checkbox code first.
+
+**Establishing the state before rebuilding, with a control.** Before building an admin UI I checked three places for an existing one and used `ideation` as a control to prove the check could find one. Without the control, "not found" is indistinguishable from "looked wrong" — and the user had explicitly challenged the claim.
+
+**Reading the run back through the API rather than trusting the UI.** The Past Scouts list showed the run happily; only `GET /runs` showed `preferences: []`. A green-looking UI over a dropped field is exactly the shape #26 warned about.
+
 ## What needs more thought
+
+**Nothing tests the seam between a validated request model and the service it calls.** Both ends of the preferences feature had tests and the wiring between them had none, so an accepted-then-discarded field passed everything. This is a general shape for FastAPI plugins here: a Pydantic model can accept a field the handler never forwards, and both the request and the response still look right. A convention — every request-model field asserted at the transport level — would close it, and no plugin currently has one.
+
+**A closed milestone is not evidence its acceptance criteria were met.** M5 closed with its central criterion undelivered, and nothing noticed for a fortnight. The epic's success criteria are prose in an issue body; nothing links them to the milestones that claim to satisfy them, and nothing re-checks them when an epic is reviewed.
 
 **Nothing links a release tag to the PR that produced it.** With several agents merging concurrently, `core-v*` tags appear continuously and none of them says which change it carries. The only reliable check is to grep the tag's tree for the thing you added — which works, but is manual and easy to skip precisely when you are in a hurry to distribute. A release note listing the squash subjects since the previous tag would make the check trivial.
 
@@ -1657,6 +1709,11 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **worked** | §4 again, on a question it is not advertised for: after the upgrade I read the *deployed Lambda package* for all four pieces rather than trusting the deploy's green. §5 then salvaged the token work — eight tokens returning 403 read as "all dead" until `read_network_requests` showed the portal calls the API Gateway host directly, not `dev.biffo.io/api/v1`. |
 | `biffo-verify` | **partial — the Never list still has no rule for "a signal that answers a different question"** | Three instances in one session: a paginated `length(events)` (57x undercount), a retention *ceiling* read as a data description, and now a **version bump attributed to my own PR when it was another session's release**. All three are confidently wrong non-empty answers, which the existing *absence of evidence is not evidence* rule does not cover. A fourth rule is earned: **verify the artifact carries your change, not that something changed.** |
 | `biffo-workflow` | **worked** | §9's distribution ordering, applied predictively rather than after a failure: a new deploy gate + a stale vendored manifest = a red instance, so the sequence was plugin → vendored resync → core upgrade. Also caught myself writing `Closes #661` on a PR whose own body said the issue must stay open — amended to `Refs`, force-pushed, and verified the remote no longer carries the keyword. The closing-keyword trap is already on this page in both directions. |
+| `biffo-verify` | **worked — §4 and §2 together, and they are not the same check** | §4 (verify the deployed artifact) confirmed `web-admin/dist` shipped with real assets. The page was still blank. §2 (reproduce by the reporter's route) is what found it — loading the page and reading the network log. Recording this because §4 is the more *tempting* check: it is fast, scriptable, and produces a satisfying green. It answers "did it ship?", never "does it work?". Both defects today sat in that gap. |
+| `biffo-verify` | **worked — §7 stopped two premature "done" claims** | After lap 1 I could have reported both features shipped: the artifact carried them, the migration applied, the tests were green. Saying instead which of the three claims I had actually verified — and that the admin UI had **not** been loaded in a browser — is what led to loading it, which is what found the blank page. Under-claiming cost nothing and bought the finding. |
+| `biffo-verify` | **partial — nothing in §3 covers a change that cannot be reverted to test** | §3's "prove the test fails without the fix" worked for the code fixes. It has no advice for the two defects that only exist *deployed*: reverting the Vite `base` locally proves nothing until a build and a page load. I ended up rebuilding and re-reading `dist/index.html`, which is the right move but is not in the skill. A sub-step — *for build-time config, assert on the build output, not the source* — would generalise. |
+| `biffo-workflow` | **worked** | §1's freshly-fetched worktree and the parity checks caught nothing dramatic, but the resync discipline (`diff -rq` + a sorted `jq` diff against source, every time) is what let me fold #39 into #100's branch with confidence rather than opening a third lap. |
+
 
 
 

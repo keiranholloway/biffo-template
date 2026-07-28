@@ -44,6 +44,7 @@ import {
   readBreakingChanges,
 } from '../lib/breaking-changes.js'
 import { GLOBAL_DISPATCH_REF, GLOBAL_DISPATCH_WORKFLOW_PATHS } from '../lib/global-workflows.js'
+import { classifyUpgradeBranches, type BranchRef } from '../lib/upgrade-branch-reaper.js'
 import { staleFirstPartyCopies } from '../lib/plugin-terraform-wiring.js'
 import {
   type LockfileRefreshOutcome,
@@ -94,6 +95,10 @@ export const coreUpgradeCommand = new Command('upgrade')
   )
   .option('--base <branch>', 'Base branch for the PR (defaults to the repo’s default branch)')
   .option('--remote <name>', 'Git remote to push to and open the PR on (default: origin)')
+  .option(
+    '--reap',
+    'Delete local branches previous upgrade runs left behind, once their PR has merged (#758)',
+  )
   .action(
     async (options: {
       cwd?: string
@@ -107,6 +112,7 @@ export const coreUpgradeCommand = new Command('upgrade')
       allowDirty?: boolean
       base?: string
       remote?: string
+      reap?: boolean
     }) => {
       const cwd = options.cwd ? resolve(options.cwd) : process.cwd()
       const runOptions: CoreUpgradeOptions = {
@@ -122,6 +128,7 @@ export const coreUpgradeCommand = new Command('upgrade')
       if (options.toTemplate) runOptions.theirsDir = resolve(options.toTemplate)
       if (options.base) runOptions.base = options.base
       if (options.remote) runOptions.remote = options.remote
+      if (options.reap) runOptions.reap = true
       try {
         await runCoreUpgrade(runOptions)
       } catch (err) {
@@ -153,6 +160,8 @@ export interface CoreUpgradeOptions {
   acknowledgeBreaking?: boolean
   base?: string
   remote?: string
+  /** Delete previous upgrade branches this tool left behind (#758). */
+  reap?: boolean
 }
 
 // Minimal adapter interfaces so the apply path is unit-testable with fakes.
@@ -170,6 +179,14 @@ export interface CoreUpgradeGit {
   add(cwd: string, paths: string[]): Promise<void>
   commit(cwd: string, message: string): Promise<void>
   push(cwd: string, branch: string, opts?: { remote?: string; token?: string }): Promise<void>
+  /**
+   * Branch hygiene (#758). Optional so the many existing fakes in the test
+   * suite — which implement this interface literally — keep compiling; the
+   * reaper simply reports nothing when a fake omits them.
+   */
+  fetchPrune?(cwd: string, remote?: string): Promise<void>
+  listBranchRefs?(cwd: string): Promise<BranchRef[]>
+  deleteBranch?(cwd: string, branch: string): Promise<boolean>
 }
 export interface CoreUpgradeGitHub {
   /** The repo's default branch, as GitHub reports it. */
@@ -239,8 +256,77 @@ export async function runCoreUpgrade(
   const cleanups: Array<() => void> = []
   try {
     await runCoreUpgradeResolved(options, deps, cleanups)
+    // After the run, so the branch this run just created is never a candidate
+    // (its upstream is live, and it is the current branch besides).
+    await reportUpgradeBranches(options, deps)
   } finally {
     for (const c of cleanups) c()
+  }
+}
+
+/**
+ * Report — and with `--reap`, delete — the local branches previous upgrade runs
+ * left behind (#758).
+ *
+ * Every `--apply` creates a branch whose PR is squash-merged and whose remote
+ * copy `--delete-branch` then removes, so the local one is dead but provable by
+ * neither `git branch --merged` (squash) nor `git branch -d` (not an ancestor).
+ * 190 accumulated across three repos with nothing ever looking wrong. #761
+ * made them detectable by recording an upstream; this closes the loop.
+ *
+ * Runs on the dry-run path too: noticing the mess costs nothing and does not
+ * require committing to an upgrade.
+ *
+ * Best-effort throughout. This is hygiene reporting appended to a run that has
+ * already done its real work — an upgrade that opened a PR must not report
+ * failure because a branch listing did.
+ */
+async function reportUpgradeBranches(
+  options: CoreUpgradeOptions,
+  deps: CoreUpgradeDeps,
+): Promise<void> {
+  const git = deps.git
+  if (git.listBranchRefs === undefined || git.fetchPrune === undefined) return
+
+  try {
+    if (!(await git.isGitRepo(options.cwd))) return
+
+    // Without a prune, a branch whose remote copy was deleted still looks
+    // alive, and nothing is ever reapable.
+    await git.fetchPrune(options.cwd, options.remote)
+    const refs = await git.listBranchRefs(options.cwd)
+    const current = await git.currentBranch(options.cwd)
+    const { reapable, unverifiable } = classifyUpgradeBranches(refs, current)
+
+    if (reapable.length === 0 && unverifiable.length === 0) return
+
+    if (reapable.length > 0 && options.reap === true && git.deleteBranch !== undefined) {
+      let deleted = 0
+      for (const branch of reapable) {
+        if (await git.deleteBranch(options.cwd, branch)) deleted++
+      }
+      log.success(`Reaped ${String(deleted)} merged upgrade branch(es).`)
+    } else if (reapable.length > 0) {
+      console.log(
+        chalk.dim(
+          `\n  ${String(reapable.length)} previous upgrade branch(es) are merged and their remote ` +
+            `copies are gone. Re-run with --reap to delete them.`,
+        ),
+      )
+    }
+
+    if (unverifiable.length > 0) {
+      // Deliberately never deleted: with no upstream recorded these are
+      // indistinguishable from local work that was never pushed.
+      console.log(
+        chalk.dim(
+          `  ${String(unverifiable.length)} older upgrade branch(es) have no upstream recorded ` +
+            `(created before #761), so they cannot be proven merged and are left alone.`,
+        ),
+      )
+    }
+  } catch {
+    // Hygiene only — never fail an upgrade that landed.
   }
 }
 

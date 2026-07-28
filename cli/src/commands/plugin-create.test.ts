@@ -12,11 +12,19 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { INSTANCE_CORE_FILE } from '../lib/core-version.js'
 import { findSkeletonRoot } from '../lib/plugin-scaffold.js'
+import { log } from '../lib/logger.js'
 import { runPluginCreate } from './plugin-create.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
+
+/** Messages passed to log.warn so far, for assertions about advice given. */
+function logWarnings(): string[] {
+  return (log.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) =>
+    String(c[0]),
+  )
+}
 
 const SKELETON = findSkeletonRoot(new URL('.', import.meta.url).pathname, 'plugin-template')
 
@@ -39,6 +47,7 @@ function makeGitHubMock() {
     protectSingleBranch: vi.fn().mockResolvedValue(undefined),
     setRepoVariable: vi.fn().mockResolvedValue(undefined),
     getRepoVariable: vi.fn().mockResolvedValue(undefined),
+    repoRunnerCount: vi.fn().mockResolvedValue(3),
   }
 }
 
@@ -58,6 +67,9 @@ function remoteDeps(git = makeGitMock(), github = makeGitHubMock()) {
 let projectRoot: string
 
 beforeEach(() => {
+  // The mocked logger is module-level, so its calls accumulate across tests —
+  // an assertion about "did this warn?" would otherwise see a previous test's.
+  vi.mocked(log.warn).mockClear()
   projectRoot = mkdtempSync(join(tmpdir(), 'biffo-project-'))
   mkdirSync(join(projectRoot, 'services'), { recursive: true })
 })
@@ -447,6 +459,41 @@ describe.runIf(SKELETON)('runPluginCreate', () => {
           })
 
           expect(order).toEqual(['setRepoVariable', 'push'])
+        })
+
+        it('warns when the repo points at a fleet it cannot see', async () => {
+          // biffo-runners#2, observed live: setting RUNNER_LABEL does not grant
+          // the fleet's GitHub App access, so a new repo sees 0 runners and
+          // every job queues for ever with no error — which under the
+          // protection just applied blocks every PR, same as the billing wall.
+          const { deps, github } = remoteDeps()
+          github.getRepoVariable.mockResolvedValue('biffo')
+          github.repoRunnerCount.mockResolvedValue(0)
+
+          await runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), deps)
+
+          expect(github.repoRunnerCount).toHaveBeenCalledWith('acme', 'biffo-plugin-acme-crm')
+          expect(logWarnings()).toEqual(
+            expect.arrayContaining([expect.stringMatching(/can see 0 runners/)]),
+          )
+        })
+
+        it('says nothing when runners are visible, or when the count is unknown', async () => {
+          // null means "could not read", which is not the same claim as 0 and
+          // must not produce a warning about a problem that may not exist.
+          for (const count of [3, null]) {
+            const { deps, github } = remoteDeps()
+            github.getRepoVariable.mockResolvedValue('biffo')
+            github.repoRunnerCount.mockResolvedValue(count)
+            rmSync(join(projectRoot, 'biffo-plugin-acme-crm'), { recursive: true, force: true })
+            vi.mocked(log.warn).mockClear()
+
+            await runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), deps)
+
+            expect(logWarnings()).not.toEqual(
+              expect.arrayContaining([expect.stringMatching(/can see 0 runners/)]),
+            )
+          }
         })
 
         it('still finishes when setting the label fails', async () => {

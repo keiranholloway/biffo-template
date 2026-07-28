@@ -792,6 +792,35 @@ export class GitHubAdapter {
     }
   }
 
+  /**
+   * How many self-hosted runners this repo can actually see (#803, biffo-runners#2).
+   *
+   * Setting `RUNNER_LABEL` points a repo's jobs at a self-hosted fleet. It does
+   * not grant the fleet's GitHub App access to that repo — and until someone
+   * does, the repo sees **zero** runners and every job queues for ever with no
+   * error at all. Measured on a freshly created plugin repo: 0 runners, while an
+   * established one in the same fleet saw 3.
+   *
+   * Queuing for ever and failing at the billing wall look completely different
+   * in the UI and are the same outcome under branch protection: nothing can
+   * merge. Callers use this to say so at create time rather than leaving it to
+   * be discovered on the first PR.
+   *
+   * Returns `null` when the count cannot be read (permissions, API error) —
+   * distinct from `0`, which is a real and actionable answer.
+   */
+  async repoRunnerCount(org: string, repo: string): Promise<number | null> {
+    try {
+      const { data } = await this.octokit.actions.listSelfHostedRunnersForRepo({
+        owner: org,
+        repo,
+      })
+      return data.total_count
+    } catch {
+      return null
+    }
+  }
+
   async setRepoVariable(org: string, repo: string, name: string, value: string): Promise<void> {
     log.info(`Setting variable: ${name}`)
     // GitHub variables API has no upsert endpoint — PATCH updates, POST creates.

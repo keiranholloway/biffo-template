@@ -104,6 +104,7 @@ export interface StandaloneGitHub {
   ): Promise<void>
   setRepoVariable(org: string, repo: string, name: string, value: string): Promise<void>
   getRepoVariable(org: string, repo: string, name: string): Promise<string | undefined>
+  repoRunnerCount(org: string, repo: string): Promise<number | null>
 }
 
 export interface PluginCreateOptions {
@@ -467,6 +468,22 @@ async function propagateRunnerLabel(
 
     await github.setRepoVariable(org, repo, 'RUNNER_LABEL', label)
     log.success(`RUNNER_LABEL=${label} set on ${org}/${repo}`)
+
+    // Pointing at a fleet is not the same as being able to reach it. Until the
+    // fleet's GitHub App is granted access to this repo it sees no runners, and
+    // every job queues for ever with NO error (biffo-runners#2) — which, under
+    // the branch protection this command applies, blocks every PR just as
+    // surely as the billing wall did. Observed on a real new repo: 0 runners
+    // here, 3 on an established repo in the same fleet.
+    const runners = await github.repoRunnerCount(org, repo)
+    if (runners === 0) {
+      log.warn(
+        `${org}/${repo} points at the '${label}' runner fleet but can see 0 runners. ` +
+          `Jobs will queue indefinitely with no error until the fleet's GitHub App is granted ` +
+          `access to this repo (biffo-runners#2) — and the branch protection just applied will ` +
+          `block every PR until then.`,
+      )
+    }
   } catch (err: unknown) {
     log.warn(
       `Could not set RUNNER_LABEL on ${org}/${repo}: ${(err as Error).message}. ` +

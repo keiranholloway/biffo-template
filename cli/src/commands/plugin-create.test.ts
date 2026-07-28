@@ -12,11 +12,19 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { INSTANCE_CORE_FILE } from '../lib/core-version.js'
 import { findSkeletonRoot } from '../lib/plugin-scaffold.js'
+import { log } from '../lib/logger.js'
 import { runPluginCreate } from './plugin-create.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
+
+/** Messages passed to log.warn so far, for assertions about advice given. */
+function logWarnings(): string[] {
+  return (log.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) =>
+    String(c[0]),
+  )
+}
 
 const SKELETON = findSkeletonRoot(new URL('.', import.meta.url).pathname, 'plugin-template')
 
@@ -28,6 +36,7 @@ function makeGitMock() {
     commit: vi.fn().mockResolvedValue(undefined),
     addRemote: vi.fn().mockResolvedValue(undefined),
     push: vi.fn().mockResolvedValue(undefined),
+    getRemoteUrl: vi.fn().mockResolvedValue('https://github.com/acme/core-project.git'),
   }
 }
 
@@ -36,6 +45,9 @@ function makeGitHubMock() {
     createEmptyRepo: vi.fn().mockResolvedValue('https://github.com/acme/biffo-plugin-acme-crm.git'),
     setDefaultBranch: vi.fn().mockResolvedValue(undefined),
     protectSingleBranch: vi.fn().mockResolvedValue(undefined),
+    setRepoVariable: vi.fn().mockResolvedValue(undefined),
+    getRepoVariable: vi.fn().mockResolvedValue(undefined),
+    repoRunnerCount: vi.fn().mockResolvedValue(3),
   }
 }
 
@@ -55,6 +67,9 @@ function remoteDeps(git = makeGitMock(), github = makeGitHubMock()) {
 let projectRoot: string
 
 beforeEach(() => {
+  // The mocked logger is module-level, so its calls accumulate across tests —
+  // an assertion about "did this warn?" would otherwise see a previous test's.
+  vi.mocked(log.warn).mockClear()
   projectRoot = mkdtempSync(join(tmpdir(), 'biffo-project-'))
   mkdirSync(join(projectRoot, 'services'), { recursive: true })
 })
@@ -365,6 +380,134 @@ describe.runIf(SKELETON)('runPluginCreate', () => {
 
         expect(github.createEmptyRepo).not.toHaveBeenCalled()
         expect(github.protectSingleBranch).not.toHaveBeenCalled()
+      })
+
+      // Found by running --org against a real account: a brand-new repo has no
+      // RUNNER_LABEL, so the skeleton CI falls back to ubuntu-latest, every job
+      // fails at the billing wall before starting, and the protection this
+      // command just applied then blocks every PR for ever on checks that can
+      // never report.
+      describe('RUNNER_LABEL', () => {
+        it('mirrors the label from the checkout it runs in', async () => {
+          const { deps, github } = remoteDeps()
+          github.getRepoVariable.mockResolvedValue('biffo')
+
+          await runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), deps)
+
+          expect(github.getRepoVariable).toHaveBeenCalledWith(
+            'acme',
+            'core-project',
+            'RUNNER_LABEL',
+          )
+          expect(github.setRepoVariable).toHaveBeenCalledWith(
+            'acme',
+            'biffo-plugin-acme-crm',
+            'RUNNER_LABEL',
+            'biffo',
+          )
+        })
+
+        it('prefers an explicit --runner-label over the mirrored one', async () => {
+          const { deps, github } = remoteDeps()
+          github.getRepoVariable.mockResolvedValue('biffo')
+
+          await runPluginCreate(
+            'acme-crm',
+            options({ standalone: true, org: 'acme', runnerLabel: 'tabsii' }),
+            deps,
+          )
+
+          expect(github.setRepoVariable).toHaveBeenCalledWith(
+            'acme',
+            'biffo-plugin-acme-crm',
+            'RUNNER_LABEL',
+            'tabsii',
+          )
+          // No point reading the source when the caller has already said.
+          expect(github.getRepoVariable).not.toHaveBeenCalled()
+        })
+
+        it('warns rather than setting an empty label when there is nothing to mirror', async () => {
+          const { deps, github } = remoteDeps()
+          github.getRepoVariable.mockResolvedValue(undefined)
+
+          await runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), deps)
+
+          expect(github.setRepoVariable).not.toHaveBeenCalled()
+        })
+
+        it('sets the label BEFORE the push that triggers the first CI run', async () => {
+          // Observed live: `runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}`
+          // resolves from whatever the variable is when the push dispatches the
+          // run. Setting it afterwards is a race whose losing side sends the
+          // first run to hosted runners — the billing failure this prevents.
+          const order: string[] = []
+          const git = makeGitMock()
+          const github = makeGitHubMock()
+          github.getRepoVariable.mockResolvedValue('biffo')
+          github.setRepoVariable.mockImplementation(async () => {
+            order.push('setRepoVariable')
+          })
+          git.push.mockImplementation(async () => {
+            order.push('push')
+          })
+
+          await runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), {
+            git: git as never,
+            makeGitHub: () => github as never,
+            resolveToken: () => Promise.resolve('t0ken'),
+          })
+
+          expect(order).toEqual(['setRepoVariable', 'push'])
+        })
+
+        it('warns when the repo points at a fleet it cannot see', async () => {
+          // biffo-runners#2, observed live: setting RUNNER_LABEL does not grant
+          // the fleet's GitHub App access, so a new repo sees 0 runners and
+          // every job queues for ever with no error — which under the
+          // protection just applied blocks every PR, same as the billing wall.
+          const { deps, github } = remoteDeps()
+          github.getRepoVariable.mockResolvedValue('biffo')
+          github.repoRunnerCount.mockResolvedValue(0)
+
+          await runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), deps)
+
+          expect(github.repoRunnerCount).toHaveBeenCalledWith('acme', 'biffo-plugin-acme-crm')
+          expect(logWarnings()).toEqual(
+            expect.arrayContaining([expect.stringMatching(/can see 0 runners/)]),
+          )
+        })
+
+        it('says nothing when runners are visible, or when the count is unknown', async () => {
+          // null means "could not read", which is not the same claim as 0 and
+          // must not produce a warning about a problem that may not exist.
+          for (const count of [3, null]) {
+            const { deps, github } = remoteDeps()
+            github.getRepoVariable.mockResolvedValue('biffo')
+            github.repoRunnerCount.mockResolvedValue(count)
+            rmSync(join(projectRoot, 'biffo-plugin-acme-crm'), { recursive: true, force: true })
+            vi.mocked(log.warn).mockClear()
+
+            await runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), deps)
+
+            expect(logWarnings()).not.toEqual(
+              expect.arrayContaining([expect.stringMatching(/can see 0 runners/)]),
+            )
+          }
+        })
+
+        it('still finishes when setting the label fails', async () => {
+          // The repo is already created and pushed by this point; aborting
+          // would strand it for a variable that can be set in one command.
+          const { deps, github } = remoteDeps()
+          github.getRepoVariable.mockResolvedValue('biffo')
+          github.setRepoVariable.mockRejectedValue(new Error('403'))
+
+          await expect(
+            runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), deps),
+          ).resolves.toBeUndefined()
+          expect(github.protectSingleBranch).toHaveBeenCalled()
+        })
       })
     })
   })

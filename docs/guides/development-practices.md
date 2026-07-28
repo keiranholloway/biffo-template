@@ -107,6 +107,7 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **There was no shared design system, and the canonical tokens lived in the most downstream repo.** The token set existed only in `biffo-platform-app`'s `globals.css` — a sibling app — while the template's own `apps/portal/globals.css` is three lines of Tailwind declaring nothing. Every other surface re-declared or invented its own, so three brand blues were reachable in one page through same-origin iframes | **drift** | biffo-platform-app / plugin frontends | biffo-template [#753](https://github.com/keiranholloway/biffo-template/pull/753) — `@biffo/design-tokens` published to npm | **fixed** — consumers not yet adopted |
 | — | **OIDC trusted publishing cannot bootstrap a new package.** Trust registers *against an existing package*, and the package does not exist until its first publish — so the first release of `@biffo/design-tokens` had no credential path at all. `NPM_TOKEN` returned 404, and OIDC returned the same 404 even with npm upgraded to 12.0.1 (well past the 11.5.1 threshold). npm answers 404 rather than 403 for unauthorised writes, so all three causes looked identical | **process** · visibility | biffo-template publishing | one manual publish, then register the trusted publisher | **partly fixed** — package published; trusted publisher **still unregistered**, so the next tag's publish will 404 |
 | — | **`biffo:ddl-import` skips applied files by filename, so amending a seeded row by editing its `.sql` does nothing.** The workflow seed for Idea Scout's synthesis agent needed a *new* file (`005_…`) to add `output_tools`; editing `003_…` would have been a silent no-op everywhere it had already run | **visibility** | biffo-platform `db/imports/` | practice, not code — documented in the new file's header | **worked around** |
+| — | **A repo created by `plugin create --standalone --org` is born unable to merge anything.** A brand-new repo has no `RUNNER_LABEL`, so the skeleton's `runs-on` default of `ubuntu-latest` falls back to hosted runners the account cannot pay for — every job fails **before it starts** — while the same command has just configured branch protection requiring those exact six jobs. Protection demanding checks that can never report blocks every PR for ever. Every unit test passed; all remote calls were behind fakes | **boundary** · fail-open | biffo-template [#809](https://github.com/keiranholloway/biffo-template/pull/809) (found by live run, not by CI) | biffo-template `cli/` | **fixed** ([#810](https://github.com/keiranholloway/biffo-template/pull/810)) — mirror the label, and set it *before* the push that triggers the first run, cost ~35m |
 | — | **A release workflow's trigger was decorative, and the symptom was silence.** `publish-design-tokens.yml` declared `on: push: tags: ['core-v*']`, which can never fire: `core-tag.yml` pushes those tags with the job's `GITHUB_TOKEN`, and GitHub suppresses events created by it to stop workflows recursing. That gap was already known — the CLI dispatch exists *because of it* — but the dispatch named `publish-cli.yml` and nothing else, so the next release workflow inherited the original bug. **Three tags (0.153.0/.1/.2) cut with zero runs**; npm kept serving the hand-published 0.152.0. The tell was in plain sight and read past: every `Publish CLI` run is `event: workflow_dispatch`, never `push` | **fail-open** · visibility | biffo-template `.github/workflows/` | biffo-template — the dispatch step now loops over the release list, and `release-dispatch.test.ts` derives the expectation from the workflow directory rather than a hardcoded name | **fixed** — verified by the next tag publishing `0.154.1` unattended |
 
 | — | `tabsii-intake`'s `dev`/`staging`/`main` required **11 status-check contexts**; the consolidated CI workflow it adopted produces **4**. Nine contexts could never report again, so a green PR sat permanently `BLOCKED`. Renaming a CI job and repointing branch protection are one change that nothing couples | **boundary** · process | tabsii-intake [#9](https://github.com/tabsii-com/tabsii-intake/pull/9) | tabsii-intake settings + biffo-template (`biffo check branch-protection` cannot see this class) | protection **repointed** on all three branches; the *detection* gap **unfiled** |
@@ -243,21 +244,21 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **121 rows** (never typed by hand, see *Adding a row*):
+`byFixRepo`, regenerated at **122 rows** (never typed by hand, see *Adding a row*):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 72 of 121 (60%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 13 of 121 (11%) | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
-| **biffo-platform** | 5 of 121 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 121 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-plugin-idea-scout** | 4 of 121 | Adapter seam, research search capability, its own styling |
-| **tabsii-marketplace** | 2 of 121 | `python-jose` removal; the credential-dependent build |
-| **tabsii-crm** | 2 of 121 | Its E2E harness, and a repo setting that diverged |
-| **biffo-plugin-ideation** | 1 of 121 | A UI rendering a 500 as an empty state |
-| **biffo-runners** | 1 of 121 | Runner fleet docs + fail-fast |
+| **biffo-template** | 73 of 122 (60%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
+| **tabsii-platform** | 13 of 122 (11%) | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
+| **biffo-platform** | 5 of 122 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 122 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-idea-scout** | 4 of 122 | Adapter seam, research search capability, its own styling |
+| **tabsii-marketplace** | 2 of 122 | `python-jose` removal; the credential-dependent build |
+| **tabsii-crm** | 2 of 122 | Its E2E harness, and a repo setting that diverged |
+| **biffo-plugin-ideation** | 1 of 122 | A UI rendering a 500 as an empty state |
+| **biffo-runners** | 1 of 122 | Runner fleet docs + fail-fast |
 
-**`biffo-template` takes 72 of 121 — 60%, and the slide has flattened:** 86% at
+**`biffo-template` takes 73 of 122 — 60%, and the slide has flattened:** 86% at
 50 and 57 rows, 82% at 65, 70% at 94, 66% at 102, 63% at 109, 60% at 116, **60%
 now**. Two consecutive captures at the same figure is the first time that has
 happened since 50 rows. Note this capture moved the *opposite* way to the last
@@ -573,6 +574,22 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**Verify by the reporter's route, even when the "reporter" is a future user.**
+`plugin create --standalone --org` had 16 unit tests, all green, every remote
+call behind an injected fake. Running it **once** against a real GitHub account
+produced a repo whose every PR would be blocked for ever: no `RUNNER_LABEL`, so
+CI died at the billing wall, while the branch protection the same command had
+just applied required those six jobs. The fakes were not wrong — they modelled
+the API faithfully. They could not model an account that cannot pay for runners.
+The PR had said "not verified against the real GitHub API" and that sentence is
+what prompted the run.
+
+**A negative control is what separates a test from a decoration.** Both fixes in
+this session were checked by reverting the implementation and confirming the new
+test failed — the empty-contexts guard, and the set-label-before-push ordering.
+The ordering test in particular would have passed against the racy code it was
+written to prevent, since the race is usually won.
 
 **Reading the component before writing the test, instead of probing it.** The
 onboarding wizard walk was written from `UnitOnboardingWizard.tsx`'s own
@@ -1582,6 +1599,8 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **partial** | §8's "Skills used" and repo tally were done at the *end* of a long session, from memory, and the class counts were typed rather than regenerated — producing wrong numbers that the tool then corrected. The section warns about exactly this two paragraphs earlier. The step should say: run `--report` and paste, never type. |
 | `biffo-add-service` | **failed** (as found) | Described Steps 7–8 as manual work that `biffo deploy` had automated 3.5 weeks earlier (#337), the Step 1 pre-flight as missing when it exists (#151/#306), and the concurrency guard as unmerged (#145). Following it would have caused ~40 min of already-automated work and could have conflicted with what the tool writes. Corrected, and renamed to match intent. |
 | `biffo-workflow` | **worked** | Nine changes across three repos, start → merged → worktree reaped. Its honest-push and remote-verify steps earned their place twice: once when a rebase onto a mid-flight core upgrade needed re-verification, and once when a **blocked commit still produced `push exit 0`** — the branch existed on the remote carrying none of the work. Only `git log origin/<branch>` showed it. |
+| `biffo-verify` | **worked** | §7 ("say what you did not verify") is the whole reason the RUNNER_LABEL defect was found. #809 shipped with an explicit *"no repository has been created against the real GitHub API"* note; that sentence is what turned into a live run, and the live run is what found a repo that could never merge a PR. Under-claiming did not just avoid an over-claim — it generated the next action. §4 ("verify the artifact, not the source") then mattered twice: the command reported protection configured, and only `gh api .../branches/dev/protection` showed *which* contexts, and only comparing them against the **pushed** `ci.yml` proved they matched. |
+| `biffo-verify` | **partial** | §8 says record what it cost, but nothing in the skill prompts a **negative control** — §3 covers "prove the test fails without the fix" for a bug fix, and reads as not applying when you are adding a *feature*. Both negative controls this session were done from habit, not prompting, and one of them (the ordering test) would otherwise have shipped as a decoration. §3 should say it applies to any new assertion, not only to bug fixes. |
 | `biffo-workflow` | **partial** | Step 7 assumes you merge by hand. Where the repo allows auto-merge that is wasted watching; where it does not it is unavoidable — `tabsii-platform` had it off and that cost ~2¼ hours this session, since fixed. The step should say: enable auto-merge, use it, and treat a repo without it as a defect to fix rather than a cadence to absorb. |
 | `biffo-verify` | **worked** | §3 caught **two** vacuous guards — one whose expected set was empty because `build_core_crud_router()` returns zero on a second call ([#695](https://github.com/keiranholloway/biffo-template/issues/695)), one that asserted a path existed when a hand-written route kept it alive regardless. Both were green, both protected nothing. Reverting the fix and watching the guard fail is the only step that distinguishes those from a real guard. |
 | `biffo-verify` | **worked** | §1 and §7 changed two outcomes: #221 was closed on evidence rather than its own summary (finding a guard it credited does not exist), and #190 on the registry showing `greenlet==3.5.3` where PyPI serves `3.5.4` — the exact package that broke it — rather than on "the flag is present". |

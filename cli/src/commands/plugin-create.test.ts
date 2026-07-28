@@ -15,6 +15,7 @@ const SKELETON = findSkeletonRoot(new URL('.', import.meta.url).pathname, 'plugi
 function makeGitMock() {
   return {
     isGitRepo: vi.fn().mockResolvedValue(true),
+    init: vi.fn().mockResolvedValue(undefined),
     add: vi.fn().mockResolvedValue(undefined),
     commit: vi.fn().mockResolvedValue(undefined),
   }
@@ -34,6 +35,7 @@ afterEach(() => {
 function options(overrides: Record<string, unknown> = {}) {
   return {
     firstParty: false,
+    standalone: false,
     skeletonRoot: SKELETON!,
     dryRun: false,
     commit: true,
@@ -137,5 +139,97 @@ describe.runIf(SKELETON)('runPluginCreate', () => {
         git: makeGitMock() as never,
       }),
     ).rejects.toThrow(/Could not find the plugin skeleton/)
+  })
+
+  // #803 — the authoring shape ADR-0003 section 2 specifies, which until now no
+  // command emitted, leaving the skeleton's own workflows delivered by nothing.
+  describe('--standalone', () => {
+    it('scaffolds a standalone repo directory rather than into services/', async () => {
+      await runPluginCreate('acme-crm', options({ standalone: true }), {
+        git: makeGitMock() as never,
+      })
+
+      const dir = join(projectRoot, 'biffo-plugin-acme-crm')
+      expect(existsSync(dir)).toBe(true)
+      expect(existsSync(join(projectRoot, 'services', 'acme-crm'))).toBe(false)
+      expect(JSON.parse(readFileSync(join(dir, 'biffo.plugin.json'), 'utf8')).name).toBe('acme-crm')
+    })
+
+    it('keeps the CI/CD workflows the in-tree layout drops', async () => {
+      // The entire point of #803: ADR-0003 section 2 says a plugin repo has an
+      // independent CI/CD pipeline, and the in-tree scaffold correctly strips it.
+      await runPluginCreate('acme-crm', options({ standalone: true }), {
+        git: makeGitMock() as never,
+      })
+
+      const dir = join(projectRoot, 'biffo-plugin-acme-crm')
+      expect(existsSync(join(dir, '.github', 'workflows', 'ci.yml'))).toBe(true)
+      expect(existsSync(join(dir, '.github', 'workflows', 'release.yml'))).toBe(true)
+      expect(existsSync(join(dir, '.github', 'workflows', 'publish-registry.yml'))).toBe(true)
+      expect(existsSync(join(dir, 'registry-schema.json'))).toBe(true)
+    })
+
+    it('carries terraform/ too, same as the in-tree shape (#194)', async () => {
+      await runPluginCreate('acme-crm', options({ standalone: true }), {
+        git: makeGitMock() as never,
+      })
+
+      expect(existsSync(join(projectRoot, 'biffo-plugin-acme-crm', 'terraform', 'main.tf'))).toBe(
+        true,
+      )
+    })
+
+    it('initialises a NEW repo in the scaffold, not a commit into the current checkout', async () => {
+      // The in-tree path commits into options.cwd. Doing that here would drop a
+      // whole plugin repo into whatever checkout the user happened to run from.
+      const git = makeGitMock()
+      await runPluginCreate('acme-crm', options({ standalone: true }), { git: git as never })
+
+      const dir = join(projectRoot, 'biffo-plugin-acme-crm')
+      expect(git.init).toHaveBeenCalledWith(dir)
+      expect(git.add).toHaveBeenCalledWith(dir, ['.'])
+      expect(git.commit).toHaveBeenCalledWith(dir, expect.stringContaining('acme-crm'))
+      expect(git.add).not.toHaveBeenCalledWith(projectRoot, expect.anything())
+    })
+
+    it('does not require a Biffo checkout — no services/ needed', async () => {
+      // A standalone plugin repo is authored anywhere; demanding services/
+      // would be the in-tree assumption leaking.
+      rmSync(join(projectRoot, 'services'), { recursive: true, force: true })
+
+      await runPluginCreate('acme-crm', options({ standalone: true }), {
+        git: makeGitMock() as never,
+      })
+
+      expect(existsSync(join(projectRoot, 'biffo-plugin-acme-crm'))).toBe(true)
+    })
+
+    it('refuses to combine with --first-party', async () => {
+      await expect(
+        runPluginCreate('acme-crm', options({ standalone: true, firstParty: true }), {
+          git: makeGitMock() as never,
+        }),
+      ).rejects.toThrow(/opposites/)
+    })
+
+    it('refuses to overwrite an existing directory', async () => {
+      mkdirSync(join(projectRoot, 'biffo-plugin-acme-crm'), { recursive: true })
+
+      await expect(
+        runPluginCreate('acme-crm', options({ standalone: true }), {
+          git: makeGitMock() as never,
+        }),
+      ).rejects.toThrow(/already exists/)
+    })
+
+    it('writes nothing on a dry run', async () => {
+      const git = makeGitMock()
+      await runPluginCreate('acme-crm', options({ standalone: true, dryRun: true }), {
+        git: git as never,
+      })
+
+      expect(existsSync(join(projectRoot, 'biffo-plugin-acme-crm'))).toBe(false)
+      expect(git.init).not.toHaveBeenCalled()
+    })
   })
 })

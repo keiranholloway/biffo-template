@@ -122,6 +122,10 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **A PR closing keyword that is silently not a closing keyword.** [tabsii-crm#106](https://github.com/tabsii-com/tabsii-crm/pull/106) wrote `closes tabsii-crm#100` — repo-qualified but **owner-less**, which GitHub does not recognise. The PR merged to the default branch, the work shipped, and the issue stayed open for two days looking like unstarted work. Nothing warns, and the malformed ref renders as plain text rather than an obviously broken link | **visibility** · process | tabsii-crm [#100](https://github.com/tabsii-com/tabsii-crm/issues/100) | practice (or a PR-body lint) | **unfiled** — three of ten open tabsii issues turned out to be complete; this was one cause |
 | — | **"Adopt the skeleton" is not unconditionally safe.** `tabsii-marketplace` could take the sibling skeleton's `ci.yml` verbatim; `tabsii-geo` could not — it has an `E2E (Playwright)` job the skeleton has no equivalent for. Copying wholesale would have **silently deleted real coverage and not failed a merge**, because that job is not one of the four required status-check contexts. The right move was adding the Build step to geo's existing job instead | **drift** · fail-open | tabsii-geo (2026-07-27) | practice — diff before adopting, never copy | **avoided** — caught before adoption |
 | — | **A latent defect is worse than a live one.** Eager `CognitoUserPool` construction at module load broke `tabsii-geo` and `tabsii-marketplace` builds outright, so both got fixed. `tabsii-intake` had **identical code and a passing build**, only because no page imported the module — it would have surfaced in whatever future PR first added such a page, *looking like that PR's fault* | **drift** · visibility | tabsii-intake (2026-07-27) | tabsii-intake + siblings | **fixed** — geo, marketplace, app and intake all construct lazily and carry `auth.test.ts` |
+| [#758](https://github.com/keiranholloway/biffo-template/issues/758) | `core upgrade` pushes with a **refspec and no `-u`**, so the local branch it creates never gets an upstream. Squash-merge then makes that branch a non-ancestor of `dev`. The leftover is therefore invisible to **both** standard staleness checks at once — `git branch --merged` cannot see it (not an ancestor), `git branch -vv \| grep ': gone]'` cannot see it (no upstream to report gone) — and `git branch -d` refuses it, leaving only `-D`, which reads as unsafe. **190 local branches** across three repos; `biffo-platform` held upgrade branches back to core 0.41.18 | **visibility** · process | biffo-platform, tabsii-platform | biffo-template `cli/` | **open** — 132 branches + 5 worktrees swept by hand this session; the tool still regenerates them |
+| — | A **primary checkout parked on a merged upgrade branch**, 10 commits behind `dev`, was read as an instance's current state. It reported core `0.136.0` and a pre-#670 migration `0010`; `origin/dev` actually carried `0.146.2` with the guard already ported. The wrong figures reached a PR description and a user-facing summary before `git show origin/dev:` disproved them. AGENTS.md §2 predicts this exact failure in prose — nothing enforces it | **visibility** | biffo-platform (checkout, not code) | biffo-template (hygiene check) + diagnostic practice | **open** — folded into [#758](https://github.com/keiranholloway/biffo-template/issues/758); nothing detects a primary parked off the integration branch |
+| — | The **purpose-built remedy for the measured merge race is unavailable on this account.** GitHub rejects the `merge_queue` ruleset rule with a bare `422 Invalid rule` on *both* a public personal repo and a private org repo on Team, and the branch-protection UI offers no merge-queue option at all — while other rule types create fine on the same repo. H1 pre-registered exactly two next moves; this eliminates one permanently | **process** | biffo-template (H2) | — (environment constraint, not a defect) | **closed** — recorded in full in `docs/practices/experiments/H2-merge-queue.md` rather than deleted, so the constraint outlives the experiment |
+| — | **The daily practices job computed its numbers with a superseded collector, and every surface signal said it was healthy.** `practices-daily.sh` rebases its snapshot branch onto `dev`; the snapshot files it commits *also* exist on `dev`, so the rebase hit a content conflict on **every run**. The script caught that, logged to stderr and **carried on** — so the branch froze 45 commits behind while the collector still ran, the dashboard still rendered, the snapshot still pushed and cron still exited 0. The code actually executing predated [#703](https://github.com/keiranholloway/biffo-template/pull/703), which **changed how merges are classified**, plus #706/#708. The stale tree also lacked `scripts/practices-session.mjs`, so the nudge crashed `MODULE_NOT_FOUND` daily — hidden by its own `\|\| true`. **Metrics that look right and are computed by the wrong code are worse than metrics that are missing** | **fail-open** · visibility | biffo-template `scripts/practices-daily.sh` | biffo-template `scripts/` | **fixed** — `rebase -X theirs` (the branch's snapshot is the live series; `dev`'s copy is a stale import), and a rebase failure is now **fatal** because every step after it runs the wrong code |
 ### What the classes say
 
 > Counted from `docs/practices/evidence.jsonl`, not asserted. Regenerate with
@@ -209,24 +213,32 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, at **65 rows**:
+`byFixRepo`, regenerated at **93 rows** (`node scripts/practices-evidence.mjs --report` — never typed by hand, see *Adding a row*):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 62 of 89 | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, design tokens, the practices tooling itself |
-| **tabsii-platform** | 6 of 89 | Divergence ratchet, repo settings, the RLS lane |
-| **biffo-platform** | 5 of 89 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
-| **tabsii-intake** | 5 of 89 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-plugin-idea-scout** | 4 of 89 | Adapter seam, research search capability, its own stylesheet |
-| **tabsii-marketplace** | 2 of 89 | `python-jose` removal; the credential-dependent build |
-| **biffo-plugin-ideation** | 1 of 89 | A UI rendering a 500 as an empty state |
-| **biffo-runners** | 1 of 89 | Runner fleet docs + fail-fast |
+| **biffo-template** | 65 of 93 | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, design tokens, the practices tooling itself |
+| **tabsii-platform** | 6 of 93 | Divergence ratchet, repo settings, the RLS lane |
+| **biffo-platform** | 5 of 93 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
+| **tabsii-intake** | 5 of 93 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-idea-scout** | 4 of 93 | Adapter seam, research search capability, its own stylesheet |
+| **tabsii-marketplace** | 2 of 93 | `python-jose` removal; the credential-dependent build |
+| **biffo-plugin-ideation** | 1 of 93 | A UI rendering a 500 as an empty state |
+| **biffo-runners** | 1 of 93 | Runner fleet docs + fail-fast |
 
-**The shape has not changed, and that is now the finding.** `biffo-template`
-takes **53 of 65** — 82%, against 86% at 57 rows and 86% at 50. The proportion
-has now moved for the first time, and slightly *down*: the four newest rows
-landing elsewhere are all `tabsii-platform` building test infrastructure the
-template does not provide. This is no longer "instances surface what the
+**The shape has held, and that is the finding.** `biffo-template` takes **65 of
+93** — 70%, against 82% at 65 rows and 86% at both 57 and 50. The proportion is
+drifting *down* as satellite repos start carrying their own test infrastructure,
+which is the first time this number has moved for a structural reason rather
+than sampling.
+
+> **This block was wrong on `dev` until 2026-07-28**, and the way it was wrong is
+> the lesson: it simultaneously read "at **65 rows**", a table of "of **89**",
+> and prose saying "**53 of 65**" — three different totals in one section, from
+> two sessions each hand-editing part of it. Regenerate the whole block from
+> `--report` in one go; never update a number in place.
+
+This is no longer "instances surface what the
 template must fix"; it is closer to a statement about what Biffo *is*. The
 template is the product, and the satellites are where its defects become
 visible. Read that way the number is not alarming, but it does mean **satellite
@@ -402,6 +414,9 @@ effort log exists to make visible, and this session logged it that way.
 | **3 full CI round trips to land one CI workflow, because none of it could be run locally** | Building the Postgres lane needed a real Postgres. This machine has Docker installed but the user is **not in the `docker` group**, `sudo` is **not passwordless**, the local PG 18 cluster is **down** (starting it needs root) and **PostGIS is not installed** — so every hypothesis cost a full push → spot-runner scale-up → run. Three iterations: the two-stack schema discovery, then Secret Scan, then green. Each ~5–9 min, most of it queueing | **structural** — the "verify locally first" step in `biffo-verify` §2/§3 was **unavailable**, not skipped. A rootless dev Postgres (or a documented `docker` group prerequisite) would convert all three into seconds |
 | **~4–8 min of pure queue on every single push** | The scale-to-zero spot fleet has no warm runner, and this PR fanned out to **7 checks**. Every push pays cold-start before anything executes, so the feedback loop is dominated by scheduling rather than by the work. Cheap at idle (the point of the fleet) and expensive exactly when iterating | **open** — inherent to scale-to-zero; a single warm runner for the first job would cut the iteration loop roughly in half |
 | **1 wasted CI cycle to a documented trap** | AGENTS.md §7 states that `.gitleaks.toml`'s `biffo-aws-account-id` rule is `\b\d{12}\b` and warns *"two agents hit this in one day"*. A UUID's final segment is exactly 12 characters, so fixture ids like `…-000000000001` are indistinguishable from an account id. **Read the rule, wrote the fixtures anyway** — the brand/region/unit ids happened to end in a hex letter and passed, which made the user/role/tenant ids look fine by association | **process**, now three agents. The doc says the right thing; it is not reachable at the moment of writing a fixture. A `.gitleaks.toml` comment, or a fixture-id convention in the skeleton, would sit closer to the point of use |
+| **10 × `update-branch` + full CI re-run, in one session** | The same loop as the rows above, now counted properly across three repos: #747 once, #750 twice, #754 once (*the PR carrying H1's verdict that this happens*), #270 five times, #89 once. Each costs a full CI cycle (~2.5 min template, 6–8 min tabsii). **Nine of the ten were in repos with `strict: true`; zero occurred on `biffo-template` after `strict` came off.** That split is the whole reason the fix is a setting and not more diligence | **partly fixed** — `strict: false` on `biffo-template` only, as experiment H3 (review 2026-08-11). The other repos keep it deliberately: `tabsii-crm` is the comparator, and changing everything at once would destroy the only baseline |
+| **~45 min proving a planned fix was impossible** | H1 named a merge queue as its preferred next move. Enabling it took a prerequisite PR (#752, teaching CI to report on `merge_group`), a ruleset attempt, four API probes to isolate the failure, and finally a look at the branch-protection UI — to conclude GitHub does not offer merge queues on this account at all | **not waste, but not free.** The 422 message is a bare `Invalid rule 'merge_queue':` with an empty reason, so nothing short of probing distinguishes "bad payload" from "unavailable feature". Recorded in H2 so the next person spends zero minutes on it |
+| **1 hand-resolved rebase conflict inside one sprint** | #747 and #748 were sequential fixes to the *same two functions* in `core-migrations.ts`. Merging the first made the second `DIRTY`, needing a manual three-way resolution of both the code and the doc section they had each appended to | **structural, and cheap to avoid** — the two issues were known to touch the same file before either started. Sequencing them as one PR, or explicitly stacking them, would have cost nothing. Splitting by *issue* rather than by *file* is what created it |
 ### The six hops are the root cost
 
 Every other row above is a *symptom* of the same shape: the chain from "merged
@@ -799,6 +814,52 @@ the cost of confirming was seconds.
 
 ## What needs more thought
 
+**The recurring mechanism is not carelessness — it is `catch the error, log it,
+carry on`.** This page reads like a long list of unrelated mistakes. It is not.
+Look at what the failures share rather than what broke:
+
+| Where | The swallow | What it hid |
+| --- | --- | --- |
+| `practices-daily.sh` | `git rebase … \|\| { echo …; abort; }` | a 45-commit-stale collector computing the daily numbers from superseded definitions |
+| same file, next step | `NUDGE="$(node … \|\| true)"` | `MODULE_NOT_FOUND` on every run, for weeks |
+| same file, latent | `[ -f "$EFFORT" ] && cp …` under `set -e` | would abort the job *after* the push — reporting failure for work that landed |
+| `GitAdapter.push` | no `-u` (an omission, not a catch) | 190 undetectable branches |
+| dependency audits ([#591](https://github.com/keiranholloway/biffo-template/issues/591)) | non-zero on "couldn't parse" is identical to non-zero on "found a vulnerability" | a registry hiccup reds every PR; a real finding looks the same |
+| CDN ([#647](https://github.com/keiranholloway/biffo-template/issues/647)) | 403/404 rewritten to `200` + portal HTML | every backend failure read as a client-side JSON parse error |
+
+Nine rows here are classed `fail-open` and eighteen `visibility`. They are largely
+the same mechanism from two angles: **something continued after it should have
+stopped, and nothing downstream could tell.**
+
+Each individual fix is cheap. What is missing is a convention, and it is one
+sentence: **when you catch an error and continue, you must be able to say what
+the next step will do with wrong input.** If the answer is "produce a plausible
+result", it was never a recoverable error — it is a fatal one wearing a log line.
+`practices-daily.sh` now exits non-zero at that point and explains why, because
+every step after it writes numbers that look correct and are not.
+
+This reframing matters for how the page is read. The error *rate* is not
+obviously high against several hundred merges a week. The **detection** rate is
+the problem — and that is a design property, not a diligence one, which is why
+"be more careful" has never moved it and a `-X theirs` plus an `exit 1` will.
+
+**Reading something in motion, and reporting its state as settled — twice in one
+session.** Both were mine, and both reached the user as fact:
+
+1. A primary checkout parked on a merged upgrade branch was read for an
+   instance's core version. Reported `0.136.0`; the answer was `0.146.2`.
+2. The daily job was inspected **mid-run** and reported as "persisting nothing,
+   dashboard 17 hours stale". It finished three minutes later, having pushed the
+   snapshot and rendered the page. The real defect was different — and worse —
+   than the one announced.
+
+Same shape both times: **a single observation of a moving target, presented as
+its outcome.** `biffo-verify` §4 covers deployed artifacts, §1 covers the issue's
+state; neither says *check whether what you are looking at has finished, or is
+what you assume it is*. Two cheap habits cover both: read instance state from
+`origin/<branch>` rather than a working tree, and before reporting on a job,
+check whether its process is still running.
+
 **Nothing reconciles an open issue against shipped code, and the one mechanism
 that should fails silently.** Three of ten open tabsii issues were complete. One
 of them — tabsii-crm#100 — had its PR merged to the default branch two days
@@ -835,6 +896,71 @@ this machine: no `docker` group membership, no passwordless `sudo`, a stopped
 cluster and no PostGIS. Every hypothesis costs a CI round trip on a scale-to-zero
 fleet. This will get worse as more RLS-dependent work lands on the lane just
 built, and it is a one-off setup cost against an unbounded stream of round trips.
+**Asking "who else writes this file?" caught a feature that would have erased its
+own state.** [#735](https://github.com/keiranholloway/biffo-template/issues/735)
+adds `declinedMigrations` to `biffo.core.json`. That file is read *during* an
+upgrade and rewritten *by the same upgrade* — and `writeInstanceCoreVersion`
+serialised `{ version }` and nothing else. The declines would have survived
+**exactly zero upgrades**, silently, while the file looked like the feature
+worked: the very bug #735 exists to fix, reintroduced one layer down and much
+harder to see. Nothing in the issue, the tests, or the review would have surfaced
+it; the question that did was "what else touches this file?" asked before writing
+the schema.
+
+**A negative control distinguished a guard from a decoration, twice in one
+sprint.** For [#696](https://github.com/keiranholloway/biffo-template/issues/696)
+a single stray `console.log` before the payload failed all four `--json` tests —
+proving the "stdout carries only the document" assertion is load-bearing rather
+than incidentally true. For
+[#735](https://github.com/keiranholloway/biffo-template/issues/735), neutralising
+the decline lookup reproduced the reported plan *exactly*
+(`['0010_orgs.py', '0012_agent.py']` where `['0012_agent.py']` was expected). §3
+costs about two minutes per fix and is the only thing that separates these from
+the vacuous guards this page has now logged four times.
+
+**Pre-registering before the intervention paid off precisely when the
+intervention turned out to be impossible.** H2 was written and committed, and
+*then* the merge queue was found to be unavailable. Because the prediction
+already existed, the outcome is a recorded constraint with evidence
+(`H2-merge-queue.md`) instead of a decision quietly re-narrated as "we looked at
+a merge queue and decided against it". The discipline's value is usually argued
+for the case where results are disappointing; this is the case where the
+experiment cannot run at all, and it holds there too.
+
+**Nothing verifies that the checkout you are measuring is the tree you think it
+is.** `biffo-verify` §4 says verify the *deployed artifact* rather than the
+source, and §1 says establish the state of the *issue* first. Neither covers the
+step between them: confirming the working tree in front of you is on the branch
+and commit you assume. A primary checkout parked on a merged upgrade branch, ten
+commits behind `dev`, was read for an instance's core version and migration
+state — and produced figures that were wrong in a direction that looked
+plausible (0.136.0 instead of 0.146.2, a migration missing a guard it already
+had). Those went into a PR description and a user-facing summary before
+`git show origin/dev:<path>` disproved them.
+
+The cheap habit that would have caught it: **read instance state from
+`origin/<branch>`, never from the working tree**, unless you have just confirmed
+what the working tree is on. It costs one `git show` and removes a whole class of
+confidently-wrong measurement. AGENTS.md §2 already warns that a parked primary
+"is how an audit gets run against dead code" — that warning is prose with nothing
+enforcing it, which is exactly the gap [#758](https://github.com/keiranholloway/biffo-template/issues/758)
+proposes closing with a hygiene check.
+
+**A one-line omission can make a whole class of debris undetectable.** The
+missing `-u` in `core upgrade`'s push is not a bug in any observable behaviour —
+the push works, the PR opens, the merge lands. Its only effect is that the
+leftover branch is invisible to *both* standard staleness checks simultaneously,
+which is why 190 of them accumulated without anyone noticing a problem to fix.
+Worth asking of other tooling: **not "does this work?" but "does this leave
+anything behind, and would the normal way of noticing find it?"**
+
+**H3 has one green data point and it means nothing yet.** `strict` came off
+`biffo-template` hours ago and one `dev` CI run has passed since. The
+counter-metric (`integration.failures` on `dev`) is the entire risk of that
+change, and it needs the full window to 2026-08-11 with ≥50 merges. The temptation
+to read an early quiet period as confirmation is exactly what the pre-registered
+review date exists to resist — recorded here so it is on the page before the
+number is.
 
 **Guards that read a path can fail open, and nothing distinguishes that from
 passing.** `auditSkeleton` returning `[]` means either "no violations" or "that
@@ -1231,6 +1357,11 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-workflow` | **worked** | Six PRs across three repos this session, all merged with worktrees reaped. The honest-push step mattered once: a `pkill -f "http.server 8899"` matched its own command line and killed the shell mid-commit, so the commit never happened — `git status` afterwards caught it, where a "committed and pushed" assumption would not have. |
 | `claude-in-chrome` | **worked** | Produced the visual assessment that reframed the whole design task: measured `.layout` computing to `display: block`, a 1920px full-bleed sidebar and ~234 characters per line on the deployed app, which is what identified a stylesheet targeting another plugin's classes rather than "the design is clumsy". |
 | `claude-in-chrome` | **partial** | Drove npm far enough to fill the trusted-publisher form, then hit a hard stop: WebAuthn fires only on a genuine user gesture, so a form can be completed but not *saved* by automation. Worth stating in the skill — "the browser can do everything except the second factor" is a boundary that will recur on any account with passkeys. Window resizing was also unreliable: `resize_window` reported success while `innerWidth` stayed 1920, so the mobile breakpoint could not be exercised. |
+| `biffo-workflow` | **worked** | Nine PRs across three repos (four Sprint 1 fixes, two experiment pre-registrations, one CI prerequisite, two instance upgrades), each start → PR → merged → worktree reaped. Step 1's "install deps in the *new* worktree" mattered immediately: the very first `pnpm --filter` run escaped the worktree because the shell's cwd had been reset by an earlier `cd`, and ran against a sibling repo — caught only because the output named the wrong path. Step 4's remote-verify caught nothing this time, which is the correct outcome, not a reason to drop it. |
+| `biffo-workflow` | **partial** | Step 7 now says to enable auto-merge and treat `BEHIND` as a rebase. Across this session that step fired **ten times** and cost a full CI cycle each; it reads as an occasional hiccup rather than the dominant recurring cost it is. It also had no guidance for the case that actually applied — that the durable fix is a *repo setting*, and which setting depends on whether a merge queue is available. Updated in-session with the H1/H2/H3 outcomes and an explicit "do not spend time trying to enable a merge queue". |
+| `biffo-verify` | **worked** | §3 twice, on changes that were green either way. A stray `console.log` failed all four of #696's `--json` tests, proving the "stdout carries only the document" assertion is load-bearing; neutralising #735's decline lookup reproduced the reported broken chain exactly. Both took ~2 minutes and are the only step separating these from the four vacuous guards already on this page. |
+| `biffo-verify` | **partial — a real gap, not a misuse** | §4 ("verify the deployed artifact, not the source") has no counterpart for *"verify the checkout is the tree you think it is"*. A primary parked on a merged upgrade branch was read for an instance's core version and migration state; the figures were wrong, plausible, and reached a PR description before `git show origin/dev:` disproved them. The skill's own §1 is about the *issue's* state, not the *tree's*. Worth a line: read instance state from `origin/<branch>`, or confirm what the working tree is on first. |
+| `biffo-verify` | **worked** | §7 ("say what you did not verify") kept #739's PR honest — it stated that nothing exercised the pairing detection against a real upgrade, because nothing could until one ran. That caveat is what made the later correction cheap rather than embarrassing: when the real upgrade showed the detection correctly staying *silent*, the claim being revised was already labelled unproven. |
 
 ## Adding a row
 

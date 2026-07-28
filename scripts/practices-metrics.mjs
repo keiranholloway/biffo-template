@@ -43,7 +43,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** Snapshot schema version. Bump when a field's meaning changes, never when one is added. */
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 /** Default observation window. 90 days is long enough to survive a quiet fortnight. */
 export const DEFAULT_WINDOW_DAYS = 90
@@ -1071,13 +1071,26 @@ export function summariseRepo(repo, data, issueOpenedAt = new Map(), templateClo
 /**
  * Roll every repo up into the estate-level view the daily page leads with.
  *
- * The question this answers is the one that decides where effort goes: **are we
- * building the product or maintaining the machine?** Biffo is the platform
- * Tabsii runs on, so `biffo-*` merges are investment in the machine and
- * `tabsii-*` merges are product delivery.
+ * The question this answers is the one that decides where effort goes: **how
+ * much of what we do is building a capability at all?**
  *
- * `productFeatureShare` is the headline. On the first 90-day measurement it was
- * **14.4%** — roughly one merge in seven was a feature in the thing being sold.
+ * ## Why the headline changed (#768)
+ *
+ * This used to lead with `productFeatureShare` — delivery merges in `tabsii-*`
+ * as a share of everything — on the framing that "Biffo is the machine, Tabsii
+ * is the product". **The north star set on 2026-07-27 inverts that: Biffo is
+ * the fundable product and Tabsii is the proving ground that exercises it.**
+ *
+ * Under the old label the same 152 merges read **5.9%**, and it was quoted as
+ * "we are barely shipping features". Re-cut on the Biffo/Tabsii axis the answer
+ * is **35.5% capability** — Biffo 29.6%, Tabsii 5.9%. Same day, same merges,
+ * **6× difference**, purely from which repo family is called "the product". The
+ * arithmetic was never wrong; the denominator was the wrong product.
+ *
+ * That number had already been identified as measuring the wrong thing the day
+ * before and stayed on the dashboard, so it was read as a headline again. The
+ * old figure survives as `tabsiiCapabilityShare`, which is what it always was —
+ * a legitimate number about the proving ground.
  *
  * Caveat carried in the output rather than left to memory: **merges are not
  * time.** A one-line `chore:` and a week-long `feat:` count the same. This is a
@@ -1093,7 +1106,9 @@ export function summariseEstate(repos) {
       platformShare: null,
       productShare: null,
       toilRatio: null,
-      productFeatureShare: null,
+      capabilityShare: null,
+      capabilityBySide: {},
+      tabsiiCapabilityShare: null,
       contentionHours: null,
       bySide: {},
       note: 'merges are a proxy for effort, not a measure of time',
@@ -1106,6 +1121,11 @@ export function summariseEstate(repos) {
   const product = sum((r) => r.workMix.sideCounts.product)
   const toil = sum((r) => r.workMix.counts.toil)
   const rework = sum((r) => r.workMix.counts.rework)
+  // Capability = a merge that built something, wherever it landed. Split by
+  // family, because "which product" is the question the old headline got wrong.
+  const capability = sum((r) => r.workMix.counts.delivery)
+  const tabsiiCapability = sum((r) => r.workMix.productDelivery)
+  const biffoCapability = capability - tabsiiCapability
 
   /**
    * Per-side rollup. A repo contributes to *both* sides when its merges do —
@@ -1132,9 +1152,16 @@ export function summariseEstate(repos) {
     productShare: rate(product, merges),
     // SRE framing: toil + rework is effort that added no product value.
     toilRatio: rate(toil + rework, merges),
-    // The headline. Features shipped in the product, as a share of ALL merges —
-    // now excluding core upgrades that land in a product repo.
-    productFeatureShare: rate(sum((r) => r.workMix.productDelivery), merges),
+    // The headline: capability built anywhere, as a share of all merges.
+    capabilityShare: rate(capability, merges),
+    capabilityBySide: {
+      // Biffo is the fundable product; Tabsii is the proving ground.
+      platform: { merges: biffoCapability, share: rate(biffoCapability, merges) },
+      product: { merges: tabsiiCapability, share: rate(tabsiiCapability, merges) },
+    },
+    // Formerly `productFeatureShare`, renamed rather than dropped: it is a real
+    // number about the proving ground, and only its label was wrong (#768).
+    tabsiiCapabilityShare: rate(tabsiiCapability, merges),
     contentionHours: round1(sum((r) => r.contention?.greenButUnmergedHours ?? 0)),
     bySide,
     note: 'merges are a proxy for effort, not a measure of time',

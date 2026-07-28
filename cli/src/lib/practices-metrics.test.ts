@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 // home rather than a TypeScript copy that can drift from it — same arrangement
 // as destructive-plan.mjs and packaged-root-assets.mjs.
 import {
+  summariseEstate,
   timeToFeature,
   parseCarriedPrs,
   indexClosingIssues,
@@ -22,7 +23,6 @@ import {
   prChurn,
   rate,
   runsForPr,
-  summariseEstate,
   summariseRepo,
   summariseRework,
   summariseWorkMix,
@@ -698,16 +698,16 @@ describe('summariseEstate', () => {
     expect(estate.platformShare).toBe(50)
     expect(estate.productShare).toBe(50)
     // Only the two feats count as product delivery; the upgrades do not.
-    expect(estate.productFeatureShare).toBe(50)
+    expect(estate.tabsiiCapabilityShare).toBe(50)
   })
 
-  it('reports the product-feature share as a fraction of ALL merges', () => {
+  it('reports the Tabsii capability share as a fraction of ALL merges', () => {
     const estate = summariseEstate({
       plat: repo('platform', ['feat: a', 'fix: b']),
       prod: repo('product', ['feat: c', 'fix: d']),
     })
     // 1 product feature out of 4 total merges
-    expect(estate.productFeatureShare).toBe(25)
+    expect(estate.tabsiiCapabilityShare).toBe(25)
   })
 
   it('sums contention hours across repos', () => {
@@ -722,7 +722,7 @@ describe('summariseEstate', () => {
     const estate = summariseEstate({ a: { error: 'unmeasured' } })
     expect(estate.merges).toBe(0)
     expect(estate.toilRatio).toBeNull()
-    expect(estate.productFeatureShare).toBeNull()
+    expect(estate.tabsiiCapabilityShare).toBeNull()
   })
 })
 
@@ -757,6 +757,11 @@ describe('fmt', () => {
 })
 
 describe('renderDashboard', () => {
+  // These fixtures deliberately carry the RETIRED `productFeatureShare` rather
+  // than `capabilityShare`: they are a snapshot written before #768, and they
+  // exercise the dashboard's fallback. Every snapshot already committed looks
+  // like this, and a page that renders `unmeasured` for the historical series
+  // would be worse than the mislabelling it replaced.
   const snapshot = {
     collectedAt: '2026-07-27T13:00:00.000Z',
     windowDays: [1, 7, 90],
@@ -1486,5 +1491,50 @@ describe('cross-repo time-to-feature (#767)', () => {
   it('counts an upgrade merged but not yet deployed as awaiting, not instant', () => {
     const out = crossRepoTimeToFeature([upgradePr(marker('746'))], idx(), opened, [])
     expect(out).toMatchObject({ awaitingDeploy: 1, measured: 0, hoursP50: null })
+  })
+})
+
+describe('estate headline is capability, not the proving ground (#768)', () => {
+  const repo = (side: string, merges: number, delivery: number, productDelivery: number) => ({
+    workMix: {
+      merges,
+      counts: { delivery, rework: 0, toil: 0, quality: 0, docs: merges - delivery },
+      sideCounts: {
+        platform: side === 'platform' ? merges : 0,
+        product: side === 'product' ? merges : 0,
+      },
+      productDelivery,
+    },
+    contention: { greenButUnmergedHours: 0 },
+  })
+
+  it('counts capability built ANYWHERE, split by family', () => {
+    // The bug this replaces: the headline was Tabsii's delivery over ALL merges,
+    // so the same day read 6.7% instead of 32.9% — a 5x difference decided
+    // purely by which repo family is called "the product". Under the north star
+    // Biffo IS the product and Tabsii is the proving ground.
+    const out = summariseEstate({
+      biffo: repo('platform', 100, 30, 0),
+      tabsii: repo('product', 100, 10, 10),
+    })
+    expect(out.capabilityShare).toBe(20) // 40 of 200
+    expect(out.capabilityBySide.platform).toEqual({ merges: 30, share: 15 })
+    expect(out.capabilityBySide.product).toEqual({ merges: 10, share: 5 })
+  })
+
+  it('keeps the old number under an honest name', () => {
+    const out = summariseEstate({
+      biffo: repo('platform', 100, 30, 0),
+      tabsii: repo('product', 100, 10, 10),
+    })
+    // Same arithmetic as the retired productFeatureShare — only the label was wrong.
+    expect(out.tabsiiCapabilityShare).toBe(5)
+    expect('productFeatureShare' in out).toBe(false)
+  })
+
+  it('reports null, not 0, when nothing is measurable', () => {
+    const out = summariseEstate({})
+    expect(out.capabilityShare).toBeNull()
+    expect(out.tabsiiCapabilityShare).toBeNull()
   })
 })

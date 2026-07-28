@@ -138,7 +138,7 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **A debug convenience keyed on an environment *name* copied the most sensitive columns into a store with a completely different access boundary.** `create_async_engine(..., echo=settings.environment == "dev")` — and SQLAlchemy's echo does not log statements, it logs statements **with their bound parameters**. Every deployed dev environment therefore wrote clear-text agent transcripts (`agent_runs.messages`), result payloads, the founder-profile snapshot inside each `input_payload`, and `owner_sub` beside the rows it owns into CloudWatch: **135 parameter-payload lines in one 48-hour sample**, the same in a second instance's account, retention **365 days**. The severity is not verbosity, it is that `logs:FilterLogEvents` is granted far more widely than RDS access and no log group's *name* says it holds user content — so it silently undid a seam Core fails **closed** on, `/api/v1/internal/*` correctly refusing a non-allowlisted principal while the same rows sat readable in the log group. `dev` is a shared deployment, not a laptop; a setting that infers "safe to dump data" from an environment string cannot tell the difference | **boundary** · visibility | biffo-platform [#85](https://github.com/keiranholloway/biffo-platform/issues/85), also live in tabsii-platform | biffo-template `services/api` ([#784](https://github.com/keiranholloway/biffo-template/pull/784)) | **fixed** upstream — explicit `sql_echo`, off everywhere, plus `hide_parameters=True`. Reaches instances only via `biffo core upgrade`; the **already-written logs in both accounts are untouched** and purging them is still **open** |
 | — | **The reported caller was 1 of 4, and the one nobody reported was the dangerous one.** The `echo` leak above was reported against the request-path engine. Three further `create_async_engine` calls had no `hide_parameters` — and `db_app_role.py` runs `CREATE ROLE … PASSWORD`, so a failing statement there puts the app role's generated password in a `StatementError` traceback. That route was never controlled by `echo` at all: SQLAlchemy embeds bound values in `StatementError` messages whether echo is on or off, so "turn the flag off" would have closed the reported hole and left a worse one open in a file nobody was looking at. This is the same shape as the `is_active` drift row (#621) and the "known trap fixed for one workflow by name" row — **a fix scoped to the reporter's symptom rather than the defect's class** | **drift** | biffo-template `services/api` (4 engines) | biffo-template ([#784](https://github.com/keiranholloway/biffo-template/pull/784)) | **fixed** — the guard walks the AST for *every* `create_async_engine`/`create_engine` under `src/` and `migrations/`, so a new engine without the flag fails the test rather than relying on a hand-kept list |
 
-| — | **Reading correct data through a self-attached label, and inverting its meaning — twice in one day.** `aws sesv2 get-account` was queried with `ProductionAccessEnabled` aliased to a jq key named `sandbox`; it returned `false`, which was read as *"sandbox: false → out of the sandbox"* when it means production access is **disabled**. The account is sandboxed and can email only verified identities. That advice then shaped a plan for tabsii-crm#52. Earlier the same day, `id -nG` was read as the user's group memberships (it is the calling **process's** inherited set) and produced "not in the docker group" for a user who was. **Neither was a wrong command — both were the right data under a name the reader had chosen, and the name won over the field** | **visibility** | diagnostic practice (tabsii-platform, this machine) | practice — never alias a field to a word that could mean its negation | **corrected** in tabsii-platform#286's body and here; the *class* is unfiled and has now recurred once |
+| — | **Reading correct data through a self-attached label, and inverting its meaning — twice in one day.** `aws sesv2 get-account` was queried with `ProductionAccessEnabled` aliased to a jq key named `sandbox`; it returned `false`, which was read as *"sandbox: false → out of the sandbox"* when it means production access is **disabled**. The account is sandboxed and can email only verified identities. That advice then shaped a plan for tabsii-crm#52. Earlier the same day, `id -nG` was read as the user's group memberships (it is the calling **process's** inherited set) and produced "not in the docker group" for a user who was. **Neither was a wrong command — both were the right data under a name the reader had chosen, and the name won over the field** | **visibility** | diagnostic practice (tabsii-platform, this machine) | practice — never alias a field to a word that could mean its negation | **corrected** in tabsii-platform#286's body and here; the *class* is unfiled and has now recurred once. Settled independently and far more convincingly by [tabsii-platform#282](https://github.com/tabsii-com/tabsii-platform/issues/282): a real workflow addressed to `{email}` failed with `SES send failed: MessageRejected`. **A failing send is unambiguous in a way a settings field under a name you chose is not** |
 | — | **A harness that exists and a harness that covers are different claims.** tabsii-crm#65 read as "no E2E harness" for three weeks while a full Playwright setup sat in CI — real static export, real browser, containerised job. Its only spec drove a **test-only route** that renders `null` outside E2E and mounts one component with inline fixtures, so against the issue's own goal ("the real app shell, navigation, API wiring, and user journey together") it covered **none of the four**. `e2e/fixtures.ts` said so in its header. The issue's first two acceptance boxes were tickable and its purpose was not met | **fail-open** · visibility | tabsii-crm [#65](https://github.com/tabsii-com/tabsii-crm/issues/65) | tabsii-crm [#116](https://github.com/tabsii-com/tabsii-crm/pull/116) | **fixed** — signed-in fixture + 5 flows through the real shell; the acceptance criteria now match the purpose |
 | — | **The data an email needed was in hand and simply not published.** tabsii-crm#52 ("the invitation email must name the granted role and scope") was framed as an email-delivery problem needing SES work. Half of it was an **event-payload** problem needing none: `invite()` looks the role up for its tenant and holds the scope column it is about to insert, and `user.invited` carried `role_id` (a UUID) and no scope at all — so a custom SES send, a Cognito `CustomMessage` Lambda and the orchestration engine this instance already runs all had nothing to render. **An issue's stated blocker can hide an unblocked half** | **visibility** | tabsii-crm [#52](https://github.com/tabsii-com/tabsii-crm/issues/52) | tabsii-platform [#286](https://github.com/tabsii-com/tabsii-platform/pull/286) | **fixed** — `role_name`/`scope_kind`/`scope_label` declared and emitted; the email itself still waits on DNS + production access |
 | — | **`allow_auto_merge` is `false` on `tabsii-crm` while every other active repo has it `true`.** `gh pr merge --auto` does not degrade — it is **rejected outright** (`Auto merge is not allowed for this repository`), so a wait-loop built on it reports failure and the PR sits unmerged until someone notices. This page already carries a row saying the setting was aligned across repos on 2026-07-27; that claim is now stale in one repo, and nothing reconciles "settings we believe are set" against "settings that are set" | **drift** · process | tabsii-crm [#116](https://github.com/tabsii-com/tabsii-crm/pull/116) | tabsii-crm settings — **deliberately not changed**: `biffo-workflow` records tabsii-crm as the `strict` comparator for H3 and it is unclear whether auto-merge is part of that | **open** — flagged on the issue, decision left with the owner |
@@ -149,20 +149,22 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **A template-owned test encoded the template's own file layout as though it were universal, so it could only fail downstream.** The `hide_parameters` guard walked every `.py` under `src/`. The template keeps all tests under `tests/` at the service root, so that was indistinguishable from "scan production code" *here* — it passed every gate, shipped in 0.157.1, and failed CI on the first instance it reached: biffo-platform's domain-driven layout puts fixture engines in `src/api/domains/<domain>/tests/`. Cost a full extra distribution lap (template PR → release → npm publish → re-cut the instance upgrade). tabsii has the same layout and would have been the second casualty | **drift** | biffo-platform#93 (CI) | biffo-template [#787](https://github.com/keiranholloway/biffo-template/pull/787) | **fixed** — exclusion matches a `tests` *path component*; the rule is now asserted on synthetic paths including the instance layout this repo has no example of, because a rule that can only fail on someone else's tree never gets tested here |
 | — | **A guard written for the reported repo found two unreported engines in a different one, including a password path.** The upstream `hide_parameters` fix reached the one engine the template has. tabsii has two more the template cannot see: `admin_engine` (master/owner, **BYPASSRLS** — so echoed parameters carried *cross-tenant* rows, plus identity resolution and the public lead-capture insert, i.e. personal data from unauthenticated visitors), and `_apply_app_role`'s engine, which is handed the Terraform-generated app-role password to run role DDL. Neither was reported by anyone. This is the case the AST-walking guard was written for, and the argument against a hand-kept file list | **drift** | tabsii-platform (found by the guard, not by a report) | tabsii-platform [#284](https://github.com/tabsii-com/tabsii-platform/pull/284) | **fixed** — though `hide_parameters` covers the SQLAlchemy layer only; the password reaches `pg.fetchval` on the raw asyncpg connection, and whether asyncpg's exceptions carry bound arguments is **explicitly not claimed** |
 
+| — | **§1 checks the issue in front of you, not the repo around it — and with several sessions running, that is where the answer already was.** [tabsii-platform#282](https://github.com/tabsii-com/tabsii-platform/issues/282) ("SES is in the sandbox; publish DKIM, request production access") was filed at **09:08**. It was found at **11:20**, after two hours spent working on tabsii-crm#52 — whose blocker it *is* — and after writing a scoreboard row about misreading the sandbox state. Nothing was duplicated, but the sandbox state was re-derived independently **and got wrong**, while a two-hour-old issue had it right with better evidence. The §1 commands search by issue number and by error string; neither surfaces *"what else is in flight in this repo right now"* | **visibility** · process | biffo-template (this session) | practice — `gh issue list --state open` on the repo you are about to touch, not just the issue you were handed | **unfiled** — cost ~2h of an avoidable wrong belief, though not 2h of wasted work |
+| — | **Five milestones of candidate-facing email passed because every one was addressed to the same hand-verified mailbox.** SES on dev is sandboxed, so it rejects any unverified recipient — but every workflow built to date sent to `keiran@tabsii.com`, the one verified identity. The gate was never exercised, so it never failed, and the first genuinely external recipient (`{email}` on a "Thanks for registering" workflow) hit `MessageRejected` in front of a real user. **A constraint you never test looks identical to one you have satisfied** | **fail-open** | tabsii-platform [#282](https://github.com/tabsii-com/tabsii-platform/issues/282) | tabsii-platform (#280/#281 put the identity + config set in code; production access still to request) | **open** — recorded here because it is the strongest instance yet of this page's own headline: green is not evidence |
 ### What the classes say
 
 > Counted from `docs/practices/evidence.jsonl`, not asserted. Regenerate with
-> `node scripts/practices-evidence.mjs --report`. **109 rows** — the extractor's
+> `node scripts/practices-evidence.mjs --report`. **116 rows** — the extractor's
 > count still **equals the table's count**, now across a merge that had to be
 > reconciled by hand. See below.
 
 | Primary class | Rows |
 | --- | --- |
-| **visibility** | 32 |
-| drift | 23 |
-| fail-open | 22 |
+| **visibility** | 35 |
+| drift | 25 |
+| fail-open | 23 |
 | boundary | 18 |
-| process | 14 |
+| process | 15 |
 
 **The extractor and the table now reconcile, and the cause was findable all
 along.** This page twice recorded that `--extract` "silently drops a row it
@@ -236,25 +238,29 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **114 rows** (never typed by hand, see *Adding a row*):
+`byFixRepo`, regenerated at **116 rows** (never typed by hand, see *Adding a row*):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 70 of 114 (61%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 12 of 114 (11%) | Divergence ratchet, repo settings, the RLS lane and the tests on it, its two extra DB engines |
-| **biffo-platform** | 5 of 114 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 114 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-plugin-idea-scout** | 4 of 114 | Adapter seam, research search capability, its own styling |
-| **tabsii-marketplace** | 2 of 114 | `python-jose` removal; the credential-dependent build |
-| **tabsii-crm** | 2 of 114 | Its E2E harness, and a repo setting only it can decide |
-| **biffo-plugin-ideation** | 1 of 114 | A UI rendering a 500 as an empty state |
-| **biffo-runners** | 1 of 114 | Runner fleet docs + fail-fast |
+| **biffo-template** | 70 of 116 (60%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
+| **tabsii-platform** | 13 of 116 (11%) | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
+| **biffo-platform** | 5 of 116 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 116 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-idea-scout** | 4 of 116 | Adapter seam, research search capability, its own styling |
+| **tabsii-marketplace** | 2 of 116 | `python-jose` removal; the credential-dependent build |
+| **tabsii-crm** | 2 of 116 | Its E2E harness, and a repo setting that diverged |
+| **biffo-plugin-ideation** | 1 of 116 | A UI rendering a 500 as an empty state |
+| **biffo-runners** | 1 of 116 | Runner fleet docs + fail-fast |
 
-**`biffo-template` takes 70 of 114 — 61%, and the slide has resumed.** It was 86%
-at 50 and 57 rows, 82% at 65, 70% at 94, 66% at 102–104, 61% now. The earlier
-note that the slide had "stopped" was true of a two-row sample and is now
-superseded — which is the third time a number in this section has had to be
-restated, and an argument for never writing a trend from fewer than ~10 new rows.
+**`biffo-template` takes 70 of 116 — 60%, a sixth consecutive measurement in the
+same direction:** 86% at 50 and 57 rows, 82% at 65, 70% at 94, 66% at 102, 63% at
+109, 60% now. The absolute count barely moved (69 → 70) while the total grew by
+seven; the slide is satellites accumulating rows, not the template shedding them.
+
+`tabsii-platform` is now 13 of 116 and owns the two newest: its RLS lane and its
+SES identity. Read with `tabsii-crm`'s first appearance last capture, the shape
+continues to move from "instances surface what the template must fix" toward
+"instances carry capability the template does not offer".
 
 **`tabsii-crm`'s first appearance still stands, and matters more than the
 percentage.** Every earlier satellite row was a *symptom* surfacing where someone

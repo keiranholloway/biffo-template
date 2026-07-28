@@ -58,11 +58,35 @@ fi
 
 cd "$WORKTREE"
 git reset --hard --quiet
+
 # Rebase onto dev so the branch carries the current collector, not the one that
 # existed when the branch was cut.
-git rebase origin/dev --quiet || {
-  echo "practices-daily: rebase onto dev failed; leaving branch as-is" >&2
-  git rebase --abort || true
+#
+# `-X theirs` is load-bearing, and it is the fix for a failure that ran silently
+# for weeks. The snapshot files this branch commits (`$DATA_DIR/*.json`, `$PAGE`)
+# also exist on `dev`, because the branch has been merged there before. A plain
+# rebase therefore hits a content conflict on every single run, forever. In a
+# rebase, "theirs" is the commit being replayed — this branch's snapshot — which
+# is exactly the side that should win: `dev`'s copy is a stale point-in-time
+# import, the branch's is the live series.
+#
+# The old code caught that failure, logged to stderr, and CARRIED ON. That is
+# what made it invisible: the collector still ran, the dashboard still rendered,
+# the snapshot still pushed, and cron still exited 0 — while the tree was frozen
+# 45 commits behind. The job had been producing its numbers with the #701-era
+# collector, missing #703, which *changed how merges are classified*. Metrics
+# that look fine and are computed by superseded definitions are worse than
+# metrics that are missing.
+#
+# So a failure here is now fatal. There is no safe way to continue: every step
+# below runs the wrong code and writes a plausible-looking result.
+git rebase -X theirs origin/dev --quiet || {
+  git rebase --abort >/dev/null 2>&1 || true
+  echo "practices-daily: rebase onto dev failed — refusing to run against a stale tree." >&2
+  echo "  The collector and dashboard below would be the versions from" >&2
+  echo "  $(git log -1 --format=%h) rather than current dev, and would produce" >&2
+  echo "  numbers that look correct and are not. Resolve the branch by hand." >&2
+  exit 1
 }
 
 node scripts/practices-metrics.mjs --windows 1,7,90 --out "$DATA_DIR"
@@ -86,7 +110,10 @@ git add "$DATA_DIR" "$PAGE" docs/practices/sessions.jsonl 2>/dev/null || git add
 # whole-project pyright is irrelevant to it. Every other gate still applies when
 # the branch is reviewed.
 git -c commit.gpgsign=false commit --no-verify -q -m "chore(practices): snapshot $(date -u +%F)"
-git push origin "$BRANCH" --quiet
+# --force-with-lease because the reset above rewrites this branch every run.
+# `--force-with-lease` rather than `--force`: if someone else has pushed to the
+# branch, fail loudly instead of discarding their commit silently.
+git push origin "$BRANCH" --force-with-lease --quiet
 echo "practices-daily: pushed snapshot $(date -u +%F)"
 
 # Nudge, if the ground truth is going stale. Every headline figure on the page is
@@ -98,7 +125,11 @@ echo "practices-daily: pushed snapshot $(date -u +%F)"
 # checkout, and so a PR is not needed per entry. Copy it onto the snapshot
 # branch here, which is what version-controls the history.
 EFFORT="${PRACTICES_EFFORT_LOG:-$HOME/.practices-sessions.jsonl}"
-[ -f "$EFFORT" ] && cp "$EFFORT" docs/practices/sessions.jsonl
+# `|| true` matters under `set -e`: a bare `[ -f x ] && cp` is a compound whose
+# status is the test's, so on a machine with no effort log yet this line would
+# abort the whole script — after the push, so the day's work would land and the
+# job would still report failure.
+{ [ -f "$EFFORT" ] && cp "$EFFORT" docs/practices/sessions.jsonl; } || true
 
 NUDGE="$(node scripts/practices-session.mjs --nudge --file "$EFFORT" || true)"
 if [ -n "$NUDGE" ]; then

@@ -2,6 +2,9 @@
 
 **Status:** `running`
 **Pre-registered:** 2026-07-28, **before** `strict` was turned off
+**Amended:** 2026-07-28 — counter-metric extended to cover silent content loss,
+which the original could not see. Adds a way to refute; removes none. See
+[Amendment](#amendment--2026-07-28-hours-after-pre-registration).
 **Review on:** 2026-08-11 (14 days)
 
 > Written and committed before the intervention, like [H1](./H1-merge-race.md)
@@ -101,6 +104,46 @@ Note the honest circularity: `integration.failures` is 0 **partly because
 measures the thing the gate was buying, so its movement is the price of removing
 it.
 
+### Amendment — 2026-07-28, hours after pre-registration
+
+**The counter-metric above was incomplete, and the gap is one this change makes
+more likely rather than less.**
+
+`integration.failures` and `redMinutes` only see failures that **redden the
+build**. The dominant risk of relaxing `strict` turns out to include a failure
+mode that never does: a branch rewriting a shared append-only file **wholesale
+from a stale base**, which merges with no conflict, no failing check, and no
+reviewer prompt. The practices corpus lost content this way three times in 24
+hours — 18 scoreboard rows and 23 narrative entries in one incident — and every
+one was found by a human noticing a count had gone down.
+
+`strict` is precisely what forced a rebase before merge, and a rebase is what
+would have surfaced that stale-base rewrite as a conflict. **Removing it removes
+the barrier**, and the counter-metric as pre-registered would have reported H3
+healthy throughout.
+
+So the counter-metric gains a third condition, effective immediately:
+
+- **A silent-content-loss incident** — a PR merging that deletes rows from
+  `docs/practices/evidence.jsonl` or a table in `development-practices.md`
+  without a `Practices-Removal:` trailer. **More than one in the review window
+  refutes H3**, regardless of `racedShare` or `integration.failures`.
+
+Two things about this amendment, recorded so it cannot be read charitably later:
+
+1. **It only adds a way to refute, never removes one.** Every original condition
+   stands unchanged. An amendment that loosened a threshold mid-flight would be
+   worthless; this makes the experiment easier to fail, not harder.
+2. **It was made before any result was known.** No reading has been taken since
+   `strict` came off beyond five green `dev` runs. Amending after seeing the
+   number would be indistinguishable from fitting the test to the answer.
+
+A guard now fails a PR that shrinks either corpus (#778), so from today an
+incident of this class should be *prevented* rather than merely counted. That
+does not retire the condition — a guard that has never fired and a risk that
+does not exist look identical, which is the mistake this whole file exists to
+avoid.
+
 ## Falsification
 
 **Refuted if `racedShare` is still above 8% on 2026-08-11** with at least 50
@@ -109,6 +152,11 @@ merged PRs in the window.
 **Also refuted, independently of `racedShare`,** if `integration.failures` > 2 or
 `integration.redMinutes` > 60. Declaring success on contention while `dev` starts
 breaking is the failure this section exists to prevent.
+
+**Also refuted** if more than one silent-content-loss incident occurs in the
+window (see the amendment above). This is the condition the original
+counter-metric could not see, and the one this intervention most plausibly
+worsens.
 
 **Inconclusive** if fewer than 50 PRs merge in the window.
 

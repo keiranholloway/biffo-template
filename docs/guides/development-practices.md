@@ -173,6 +173,9 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **A CloudWatch metric datapoint was read as proof of a specific send, twice, and was wrong both times.** `AWS/SES` `Send` was used to conclude "the automation still works after being repointed" and later "the automation has stopped". Neither followed: the metric is account-wide and 5-minute bucketed, and a **second, unknown automation** was also sending on every lead capture — visible only once the activity timeline attributed each row to its automation by name. Two hours of diagnosis were spent on a regression that never existed. An aggregate metric can support "something happened somewhere"; it cannot attribute. Attribution needs a per-entity record, which is what the feature under construction was *for* | **visibility** | tabsii-platform (dev) | practice — never attribute an aggregate metric to a specific action | **fixed** — run history (`/orchestration/runs`) is the attributable source and answered it immediately |
 | — | **`git commit --amend >/dev/null 2>&1` silenced a hook failure, and the push then succeeded carrying none of the work.** A lint hook rejected the amend; the redirect hid it; `git push` pushed the *unamended* commit. **`pre-push` pyright passed** — it type-checks the working tree, which had the fixes, not the commit, which did not. CI then failed on the three errors already fixed locally. AGENTS.md §4 warns that a push can fail while looking successful; this is the inverse — a push succeeding while carrying nothing, with a green local gate agreeing. Never redirect a git command that runs hooks | **visibility** · process | tabsii-platform | practice — `AGENTS.md` §4 deserves the inverse case | **unfiled** — worth a line in §4 |
 | — | **Infrastructure can be correctly wired and still never fire, and every component reports healthy.** An SES-bounce consumer Lambda deployed, its SNS subscription **confirmed**, its IAM correct — and it has never been invoked. A deliberate bounce raised `AWS/SES` `Bounce` = 1 (account-level, needing no configuration set) while the SNS destination (which does need one) saw nothing, so the send is not resolving through the configuration set the event destination hangs off. Nothing in Terraform, the console or the metrics says "this path is dead"; the only signal was the **absence of a CloudWatch log group**, which is what "never invoked" looks like | **visibility** · boundary | tabsii-platform | tabsii-platform [#302](https://github.com/tabsii-com/tabsii-platform/issues/302) | **filed** — feature shipped inert |
+| [ideation#58](https://github.com/keiranholloway/biffo-plugin-ideation/issues/58) | **A closing keyword on a satellite-repo PR closes the issue at *merge*, and in a plugin repo merge is not a deploy boundary.** `dev.biffo.io` serves the copy vendored in the instance, so #58 was auto-closed by [ideation#60](https://github.com/keiranholloway/biffo-plugin-ideation/pull/60) at 10:11:03 while the panel it was filed against was byte-for-byte unchanged. Seven hours later the reporter re-reported the same symptom. Nothing distinguishes "merged" from "reachable by the person who reported it", and the closing keyword asserts the stronger claim | **process** · visibility | biffo-plugin-ideation [#58](https://github.com/keiranholloway/biffo-plugin-ideation/issues/58) | biffo-platform resync [#101](https://github.com/keiranholloway/biffo-platform/pull/101); general fix is the preflight drift check ([#729](https://github.com/keiranholloway/biffo-template/issues/729)) | **open** — 4th recurrence of the resync row above. `cost ~35m` |
+| [ideation#65](https://github.com/keiranholloway/biffo-plugin-ideation/pull/65) | **A manifest key is silently ignored when a sibling flag is set, and the ignored copy was a full duplicate of a live prompt.** `chat_agents_dynamic: true` makes Core's `register_plugin_chat_agents()` `continue` past the entire manifest, so ideation's `chat_agents` block — 1221 bytes of `CHALLENGER_INSTRUCTIONS` — had never been read by anything. Nothing warns that a declared key is unreachable, and **no test could catch the unreachable copy drifting, because nothing executes it**. Still byte-identical when removed, so latent rather than realised | **drift** | biffo-plugin-ideation | biffo-plugin-ideation [#65](https://github.com/keiranholloway/biffo-plugin-ideation/pull/65) | **fixed** — block removed, regression test pins its absence |
+| [ideation#66](https://github.com/keiranholloway/biffo-plugin-ideation/pull/66) | **Two independent silent failures in one 40-line function, found hours apart because each surfaced through a different symptom.** The analyst ran on `anthropic/claude-opus-4-8` — absent from all 367 models OpenRouter serves — *and* depended on the `web_search` registry tool, which is only offered where a Brave key exists (this account's is the empty string). Either alone would have been invisible; together they meant competitive research was fabricated. The challenger's adjacent, valid `claude-sonnet-4` is what made it read as flakiness. **Neither was found by reading the module; each was found by chasing a separate report** | **fail-open** · drift | biffo-plugin-ideation | biffo-plugin-ideation [#66](https://github.com/keiranholloway/biffo-plugin-ideation/pull/66) + vendored resync [platform#104](https://github.com/keiranholloway/biffo-platform/pull/104) | **fixed** — `:online`, `tools` dropped, prompt forbids unsourced competitors |
 
 ### What the classes say
 
@@ -261,21 +264,21 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **138 rows** (never typed by hand, see *Adding a row*):
+`byFixRepo`, regenerated at **141 rows** (never typed by hand, see *Adding a row*):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 78 of 138 (57%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 15 of 138 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
-| **biffo-plugin-idea-scout** | 7 of 138 | Adapter seam, research search capability, its own styling, release + publish workflows |
-| **biffo-platform** | 5 of 138 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 138 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **tabsii-marketplace** | 2 of 138 | `python-jose` removal; the credential-dependent build |
-| **tabsii-crm** | 2 of 138 | Its E2E harness, and a repo setting that diverged |
-| **biffo-plugin-ideation** | 1 of 138 | A UI rendering a 500 as an empty state; its publish workflow |
-| **biffo-runners** | 1 of 138 | Runner fleet docs + fail-fast |
+| **biffo-template** | 78 of 141 (55%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
+| **tabsii-platform** | 15 of 141 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
+| **biffo-plugin-idea-scout** | 7 of 141 | Adapter seam, research search capability, its own styling, release + publish workflows |
+| **biffo-platform** | 6 of 141 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 141 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **tabsii-marketplace** | 2 of 141 | `python-jose` removal; the credential-dependent build |
+| **tabsii-crm** | 2 of 141 | Its E2E harness, and a repo setting that diverged |
+| **biffo-plugin-ideation** | 3 of 141 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **biffo-runners** | 1 of 141 | Runner fleet docs + fail-fast |
 
-**`biffo-template` takes 78 of 138 — 57%.** The series: 86% at 50 and 57 rows,
+**`biffo-template` takes 78 of 141 — 55%.** The series: 86% at 50 and 57 rows,
 82% at 65, 70% at 94, 66% at 102, 63% at 109, 60% at 116 and 122, 58% at 126, 132
 and 134, 57% at 138. The absolute template count did **not** move this capture
 (78 → 78) while four rows landed elsewhere — the first capture where the template
@@ -660,6 +663,73 @@ is the design lesson worth keeping.
 on CI/deploy, and 30 min diagnosing a regression that did not exist (see the
 CloudWatch-attribution row). The last is the only genuinely wasted half hour,
 and it was caused by trusting an aggregate metric — a habit, not a tool gap.
+### Measured: a fix that shipped, closed its issue, and reached nobody, 2026-07-28
+
+**~35 min, and the loop is one hop long.** The defect was found in ~10 minutes
+(unzip the deployed Lambda, `grep effective`, zero hits) and the fix already
+existed and was already merged. The other ~25 minutes went on establishing that
+a *merged, closed, green* change was not deployed — which no artefact on the
+plugin side can tell you, because every signal there was truthful about the
+plugin and silent about the instance.
+
+**This is the fourth recurrence of one condition, not a fourth incident.** The
+resync row above has been "worked around — 3 resync PRs this session" since it
+was written; this session added a fourth. The cost per occurrence is small
+(~35m) and that is exactly why it keeps being paid rather than fixed: no single
+occurrence clears the bar to restructure, and the row's own status field records
+the workaround as though it were a resolution.
+
+**Structural, not carelessness.** The 45-minute gap that caused it — resync
+[#92](https://github.com/keiranholloway/biffo-platform/pull/92) carried the
+plugin's #59 at 09:26; #60 merged at 10:11 — is unwinnable by hand: a resync PR
+is only correct for the commits that exist when it is opened, and any plugin PR
+merged after it is silently excluded with no warning at either end. The fix is
+the preflight drift check ([#729](https://github.com/keiranholloway/biffo-template/issues/729)),
+not more diligence.
+
+### Measured: one symptom, six defects, four repos, 2026-07-28
+
+**The session that prompted "we seem to be redoing so much work here."** It
+started as *"the ideation admin page is empty"* and ended having merged six PRs
+across four repos. That is not scope creep — every defect was real and each
+blocked the next — but the **order they were found in is the finding**:
+
+| # | Defect | Surfaced by |
+| --- | --- | --- |
+| 1 | #60 never resynced; deployed Lambda predated the fix | the empty panel |
+| 2 | Manifest carried a dead duplicate of a live prompt | reading the manifest while fixing 1 |
+| 3 | Storing a built-in froze its prompt — no edit field anywhere | doing what the panel invited |
+| 4 | `web_search` declared but never offered (empty Brave key) | a user asking "is it passing `:online`?" |
+| 5 | Analyst model slug absent from OpenRouter | verifying 4 against the live model list |
+| 6 | Models still env-hardcoded, not in the DB | reading the panel after 1 deployed |
+
+**Five of the six were discovered by chasing a symptom, not by reading the
+code.** Defects 4 and 5 sit in the *same 40-line function*; one `grep` of
+`definitions.py` against the deployed configuration would have found both in one
+pass. They were found hours apart, by two unrelated routes, and only because
+someone asked a good question. Defect 6 is visible on the same screen as defect
+1 and was still missed on the first look.
+
+**This is the traversal cost above, but the diagnosis is sharper than "one hop
+reveals one defect".** The hops are real, yet the deeper waste is
+**symptom-driven discovery serialising defects that a single audit would have
+found in parallel.** Each symptom costs a full plugin → resync → deploy → click
+round trip to *reach*, and then reveals exactly one thing.
+
+**What would have changed it:** on first touching a plugin whose behaviour is
+suspect, read its definition module against the deployed runtime configuration —
+model ids against the provider's live model list, declared tools against the
+runtime's availability predicates — before fixing the reported symptom. That is
+one ~10-minute pass. It would have collapsed defects 4, 5 and 6 into the first
+round trip and removed two full traversals.
+
+**Near-miss worth its own line.** The resync for #104 was first taken from a
+**stale primary checkout** (local `dev` missing both plugin PRs). It produced an
+empty diff that is indistinguishable from "already resynced" — a clean
+`git status` as *evidence of completion*. Caught only by grepping the vendored
+file for the string the change should have introduced. Had it shipped, the PR
+would have claimed a fix while carrying nothing: the same shape as the bug the
+session began with, one layer down.
 
 ### What this is not
 
@@ -1154,6 +1224,20 @@ the cost of confirming was seconds.
 **Establishing the state before rebuilding, with a control.** Before building an admin UI I checked three places for an existing one and used `ideation` as a control to prove the check could find one. Without the control, "not found" is indistinguishable from "looked wrong" — and the user had explicitly challenged the claim.
 
 **Reading the run back through the API rather than trusting the UI.** The Past Scouts list showed the run happily; only `GET /runs` showed `preferences: []`. A green-looking UI over a dropped field is exactly the shape #26 warned about.
+**Verify the deployed artifact, not the source.** The reported symptom ("admin
+panel still empty despite issues being raised") had two plausible causes: a data
+problem, or an undeployed fix. Downloading the `biffo-platform-dev-plugin-host`
+Lambda and grepping its `admin_app.py` for `effective` returned **zero hits**,
+settling it in one step — the deployed code predated the fix. Without that, the
+obvious next move was debugging an empty database that was working correctly.
+
+**Compare the two copies rather than asserting the drift.** The dead `chat_agents`
+manifest block looked like a drift defect and was written up as one. Diffing it
+against the live `CHALLENGER_INSTRUCTIONS` showed the two were **byte-identical**,
+so the PR claims a *latent* risk, not a realised divergence. The weaker, true
+claim is the one that survives review; the stronger one would have been caught
+and would have cost the reviewer's trust in the rest of the write-up.
+
 
 **Bisect with the surface you just built.** A lead's activity timeline was empty
 after a send that had demonstrably succeeded. Rather than reason about the
@@ -1768,6 +1852,24 @@ looking for something else.
 Rows now carry an identity independent of their current wording: their **refs** (the issue/PR links, stable across any rewrite) and failing that a **normalised summary** with markdown stripped and whitespace collapsed. Measured on the real 94-row table, reformatting a row used to yield 95 rows and now yields 94.
 
 The residue, stated rather than hidden: a *substantive* rewrite of an **unfiled** row still reads as a new row plus an orphan. With no ref and no shared wording there is nothing left to match on, and the warning tells the author to prune it. Citing an issue on a row is now worth something beyond bookkeeping.
+**A closing keyword asserts something the repo cannot know.** `Closes #N` on a
+plugin-repo PR is evaluated at merge, but the issue was filed against
+`dev.biffo.io`, which merge does not touch. Every gate on the plugin side was
+honest and green; none of them is *about* the thing the issue was about. Nothing
+in the workflow marks an issue as "fixed at source, not yet reachable", so the
+only two states available are open and closed, and closed is a lie for as long
+as the resync is outstanding. `Refs` is the honest keyword here, but it stops
+the time-to-feature clock from ever starting — the metric and the honesty pull
+in opposite directions, and that tension is unresolved.
+
+**The scoreboard records recurrences as a status string, so frequency is
+invisible.** The resync row has said "worked around — 3 resync PRs this session"
+since it was written. This session made it four, and the only way to know that is
+to read the prose. A row that recurs is a different animal from a row that
+happened once, and the table cannot currently express the difference — which is
+precisely how a ~35-minute cost gets paid four times without ever clearing the
+bar to fix it.
+
 
 **Nothing verifies that an event's stored shape matches what a consumer expects.**
 `WorkflowRun.trigger_event` stores a payload flat; `RunOutcome.trigger_payload`
@@ -1785,6 +1887,16 @@ failed. Closing and reopening the PR was the only thing that re-fired the real
 checks. AGENTS.md §6 tells you to re-trigger via `workflow_dispatch`; it does not
 say that this works for *observing* CI and not for *satisfying* it. Worth a
 sentence, because the failure mode is a PR that can never go green.
+**Nothing audits a plugin's declared capabilities against the runtime that has
+to provide them.** ideation declared `web_search`; the runtime offers it only
+with a Brave credential and drops it silently otherwise ("unconfigured means not
+offered, not broken" — deliberate, and correct for the runtime). ideation named a
+model OpenRouter does not serve. Both are *declarations checked by nobody*: no
+test, no deploy gate, and no startup warning compares what a plugin asks for
+against what its deployment can supply. idea-scout hit the identical `web_search`
+case (#19) and the fix was applied **only to idea-scout**, because nothing
+connects "this plugin declared it" to "every other plugin that also did".
+
 
 ## Skills used
 
@@ -1881,6 +1993,14 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-sib-build` | **partial** | Executed `0007` end to end, 9 PRs. But its Step 2 says "implement exactly what the milestone describes", and two milestones could not be: M5's timeline could not use generic CRUD (`make_list_handler` takes no filters) and M4's consumer could not be a plugin without touching template-owned registration. The skill's "when to stop and ask" list covers *"the plan's approach doesn't work against the real code"* — correct trigger, but it reads as an escalation gate when the honest action for a contained change is "do it and flag it loudly in the PR". Worth distinguishing a design change (ask) from a mechanism change (flag). |
 | `biffo-verify` | **worked** | Invoked on a suspected regression. §2 ("reproduce, don't theorise") killed four successive theories — scope matching, tenant seam, trigger exclusion, deploy ordering — none of which survived contact with the live system. §Never ("absence of evidence is not evidence") is what forced reading the actual run history instead of a metric, which found the real bug in one call. §3 then caught that the corrected test genuinely fails without the fix. |
 | `biffo-verify` | **should have been invoked sooner** | It was run at the *end*, after the build. Two of the four scoreboard rows above (the self-proving fixture, the metric attribution) were live the whole time and would have been caught by §2/§Never on the first "is this working?" question rather than the last. The trigger list is debugging-shaped; a *verification* step inside a build is the same discipline and does not read as a match. |
+| `biffo-verify` | **worked** | §4 ("verify the deployed artifact, not the source") cracked this in one step: unzipping the plugin-host Lambda and grepping for `effective` returned zero hits, proving the deployed code predated the merged fix. §2's warning about 401-vs-CDN also stopped a wrong conclusion — `GET /admin/effective-config` returns `{"message":"Unauthorized"}` to a plain browser navigation whether or not the route exists, so the endpoint check proved nothing and the artifact check proved everything. |
+| `biffo-verify` | **worked** | §7 ("never close an issue you have not seen fixed by the route it was reported on") is the whole finding. #58 had been closed on merge; reopening it with the artifact evidence is what turned "already fixed, user must be wrong" into a real, still-open defect. |
+| `biffo-workflow` | **partial** | Step 1 says `pnpm install` in the new worktree. In a vendored plugin's `web-admin/` that **succeeds and installs nothing** — no error, no `node_modules`, and the failure only surfaces later as `sh: 1: vitest: not found` at test time. It needs `pnpm install --ignore-workspace`, which is recorded in the core-upgrade notes but not in the step that tells you to run it. |
+| `biffo-workflow` | **worked** | Two changes across two repos, start → merged → reaped, including the honest-push check. Auto-merge did what Step 7 promises: #101 landed without a single rebase. |
+
+| `biffo-verify` | **partial** | §1 ("establish the current state") was applied to the *issue* and not to the *source tree*. The first resync for platform#104 was rsynced from a primary checkout still on `316fecb`, missing both plugin PRs, and produced an empty diff that reads exactly like "already resynced". §1 says never branch from a stale local ref; it does not say **never copy from one**, and the copy case has no honest-push equivalent to catch it. Worth a line in the step. |
+| `biffo-verify` | **worked** | §2 stopped a wrong filing: the challenger's stored row looked inert because `service.run_chat_turn` passes `system_prompt` and `model` into the adapter. Reading the adapter showed it sends neither — Core resolves both from the registration — so the row IS authoritative and the real defect is two dead parameters. An issue was about to be raised on the wrong premise. |
+
 
 ## Adding a row
 

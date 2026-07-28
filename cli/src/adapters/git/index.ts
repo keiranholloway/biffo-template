@@ -11,6 +11,11 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execa } from 'execa'
+import {
+  BRANCH_REF_FORMAT,
+  parseBranchRefs,
+  type BranchRef,
+} from '../../lib/upgrade-branch-reaper.js'
 
 export class GitAdapter {
   /** True if `cwd` is inside a git working tree. */
@@ -151,6 +156,45 @@ export class GitAdapter {
   async getRemoteUrl(cwd: string, remote = 'origin'): Promise<string> {
     const { stdout } = await execa('git', ['remote', 'get-url', remote], { cwd })
     return stdout.trim()
+  }
+
+  /**
+   * Prunes remote-tracking refs whose remote branch is gone, so `upstream:track`
+   * reports `[gone]` for a merged-and-deleted branch (#758).
+   *
+   * `fetch()` above deliberately does NOT prune: it exists to make the currency
+   * check compare against reality, and pruning is a side effect no caller of it
+   * asked for. Reaping genuinely needs it — without a prune, a branch whose
+   * remote copy was deleted last month still looks alive — so it is a separate,
+   * equally best-effort call.
+   */
+  async fetchPrune(cwd: string, remote = 'origin'): Promise<void> {
+    await execa('git', ['fetch', '--quiet', '--prune', remote], { cwd, reject: false })
+  }
+
+  /** Every local branch with its upstream and tracking state (#758). */
+  async listBranchRefs(cwd: string): Promise<BranchRef[]> {
+    const { stdout, exitCode } = await execa(
+      'git',
+      ['for-each-ref', `--format=${BRANCH_REF_FORMAT}`, 'refs/heads'],
+      { cwd, reject: false },
+    )
+    if (exitCode !== 0) return []
+    return parseBranchRefs(stdout)
+  }
+
+  /**
+   * Force-deletes a local branch, returning whether it went.
+   *
+   * `-D` rather than `-d` because these branches are squash-merged: their tips
+   * are never ancestors of the base, so `-d` refuses every one of them. That is
+   * precisely why nobody ever cleaned them up by hand. The safety that `-d`
+   * would have provided is supplied instead by the caller, which only ever
+   * passes branches whose upstream git reports as gone.
+   */
+  async deleteBranch(cwd: string, branch: string): Promise<boolean> {
+    const { exitCode } = await execa('git', ['branch', '-D', branch], { cwd, reject: false })
+    return exitCode === 0
   }
 
   /** Create and switch to a new branch. Fails if it already exists. */

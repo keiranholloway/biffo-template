@@ -172,6 +172,53 @@ export class GitAdapter {
     await execa('git', ['fetch', '--quiet', '--prune', remote], { cwd, reject: false })
   }
 
+  /**
+   * Worktrees other than the primary, with the branch each is on (#797).
+   *
+   * `--porcelain` rather than the human format: the latter's alignment and
+   * annotations vary, and this has to survive paths with spaces.
+   */
+  async listWorktrees(cwd: string): Promise<Array<{ path: string; branch: string }>> {
+    const { stdout, exitCode } = await execa('git', ['worktree', 'list', '--porcelain'], {
+      cwd,
+      reject: false,
+    })
+    if (exitCode !== 0) return []
+
+    const out: Array<{ path: string; branch: string }> = []
+    let path = ''
+    for (const line of stdout.split('\n')) {
+      if (line.startsWith('worktree ')) path = line.slice('worktree '.length)
+      else if (line.startsWith('branch ')) {
+        const branch = line.slice('branch '.length).replace('refs/heads/', '')
+        // The first entry is the primary checkout, which `doctor` reports on
+        // separately — including it here would double-count it.
+        if (out.length > 0 || path !== cwd) out.push({ path, branch })
+      }
+    }
+    return out.filter((w) => w.path !== cwd)
+  }
+
+  /** How many commits `branch` is behind `base`; null when it cannot be measured. */
+  async countBehind(cwd: string, branch: string, base: string): Promise<number | null> {
+    const { stdout, exitCode } = await execa('git', ['rev-list', '--count', `${branch}..${base}`], {
+      cwd,
+      reject: false,
+    })
+    if (exitCode !== 0) return null
+    const n = Number.parseInt(stdout.trim(), 10)
+    return Number.isNaN(n) ? null : n
+  }
+
+  /** A file's contents at a ref, or null when it is absent there. */
+  async showFileAtRef(cwd: string, ref: string, path: string): Promise<string | null> {
+    const { stdout, exitCode } = await execa('git', ['show', `${ref}:${path}`], {
+      cwd,
+      reject: false,
+    })
+    return exitCode === 0 ? stdout : null
+  }
+
   /** Every local branch with its upstream and tracking state (#758). */
   async listBranchRefs(cwd: string): Promise<BranchRef[]> {
     const { stdout, exitCode } = await execa(

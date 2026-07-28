@@ -983,3 +983,93 @@ async def test_core_being_briefly_unwell_is_retried():
 
 async def test_the_action_is_registered_under_its_catalog_type():
     assert ACTION_HANDLERS["agent_fan_in"] is fan_in_agent_runs
+
+
+def _record_with_input(output: str, input_payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": "x",
+        "status": "completed",
+        "result": {"output": output},
+        "input_payload": input_payload,
+    }
+
+
+async def test_the_join_forwards_what_every_sibling_was_briefed_with():
+    """The fan-in agent reasons over its siblings' outputs; until now that was
+    all it got.
+
+    What those outputs are *about* — who the work is for, what was asked — lives
+    in the siblings' `input_payload`, which this action already fetched in full
+    and then threw away. An Idea Scout synthesis agent asked to weigh a founder's
+    profile was never given one, and said so in its own output
+    (biffo-plugin-idea-scout#26).
+    """
+    brief = {"build_type": {"key": "micro-saas"}, "complexity": "moderate"}
+    core = _fan_in_core(
+        [_summary("ra", "research-a"), _summary("rb", "research-b")],
+        {
+            "ra": _record_with_input("findings A", {**brief, "angle": "community"}),
+            "rb": _record_with_input("findings B", {**brief, "angle": "competitive"}),
+        },
+    )
+
+    await fan_in_agent_runs(_FAN_IN_CONFIG, _completion(), core_client=core.client())
+
+    posted = [b for m, p, b in core.requests if m == "POST" and p.endswith("/agent-runs")][0]
+    assert posted["input_payload"]["context"] == brief
+    # `angle` differs per sibling, so it is that sibling's own input and not
+    # context about the fan-out. Forwarding it would tell the joining agent that
+    # the whole run was about one angle.
+    assert "angle" not in posted["input_payload"]["context"]
+
+
+async def test_the_joined_outputs_keep_their_existing_shape():
+    """`context` is additive. Anything already reading `fan_in` is untouched."""
+    core = _fan_in_core(
+        [_summary("ra", "research-a"), _summary("rb", "research-b")],
+        {
+            "ra": _record_with_input("findings A", {"brief": 1}),
+            "rb": _record_with_input("findings B", {"brief": 1}),
+        },
+    )
+
+    await fan_in_agent_runs(_FAN_IN_CONFIG, _completion(), core_client=core.client())
+
+    posted = [b for m, p, b in core.requests if m == "POST" and p.endswith("/agent-runs")][0]
+    assert posted["input_payload"]["fan_in"] == {
+        "research-a": "findings A",
+        "research-b": "findings B",
+    }
+
+
+async def test_no_context_key_when_the_siblings_share_nothing():
+    """An empty object would read as "briefed with nothing", which is a
+    different claim from "we cannot tell". Omit the key instead."""
+    core = _fan_in_core(
+        [_summary("ra", "research-a"), _summary("rb", "research-b")],
+        {
+            "ra": _record_with_input("findings A", {"only": "a"}),
+            "rb": _record_with_input("findings B", {"only": "b"}),
+        },
+    )
+
+    await fan_in_agent_runs(_FAN_IN_CONFIG, _completion(), core_client=core.client())
+
+    posted = [b for m, p, b in core.requests if m == "POST" and p.endswith("/agent-runs")][0]
+    assert "context" not in posted["input_payload"]
+
+
+async def test_a_failed_sibling_does_not_narrow_the_context():
+    """Only completed siblings are read, so a failed one cannot drag the shared
+    set down to nothing — and is not fetched, which would be one more way for
+    the join to fail transiently on a run it does not need."""
+    core = _fan_in_core(
+        [_summary("ra", "research-a"), _summary("rb", "research-b", status="failed")],
+        {"ra": _record_with_input("findings A", {"brief": "shared"})},
+    )
+
+    result = await fan_in_agent_runs(_FAN_IN_CONFIG, _completion(), core_client=core.client())
+
+    assert result["status"] == "requested"
+    posted = [b for m, p, b in core.requests if m == "POST" and p.endswith("/agent-runs")][0]
+    assert posted["input_payload"]["context"] == {"brief": "shared"}

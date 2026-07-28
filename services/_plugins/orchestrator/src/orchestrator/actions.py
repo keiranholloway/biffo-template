@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -641,21 +642,37 @@ async def fan_in_agent_runs(
             "run_id": already[0].get("id"),
         }
 
-    outputs: dict[str, Any] = {}
+    # Only completed siblings are fetched, and both the outputs and the shared
+    # context are derived from those.
+    #
+    # Reading the failed ones too was the first attempt — a sibling that failed
+    # was still *told* the same thing, so it is an equally good witness to the
+    # briefing. It is not worth it: it adds an HTTP call per failed sibling and,
+    # with it, a fresh way for the join to fail transiently on a run it does not
+    # actually need. The action already refuses to proceed with no completed
+    # sibling, so there is always at least one witness left.
+    #
+    # The honest consequence: `context` is what every *contributing* sibling was
+    # given, not literally every sibling. For a fan-out briefed once and split by
+    # angle — the shape this exists for — those are the same thing.
+    fulls: dict[str, dict[str, Any]] = {}
     for name, summary in terminal.items():
         if summary.get("status") != "completed":
             continue  # failed sibling: terminal, but has nothing to contribute
         run_id = summary.get("id")
         if not run_id:
             continue
-        full = await _get_run(core_client, run_id=str(run_id))
-        outputs[name] = _delivery_output(full)
+        fulls[name] = await _get_run(core_client, run_id=str(run_id))
+
+    outputs: dict[str, Any] = {name: _delivery_output(full) for name, full in fulls.items()}
 
     if not outputs:
         raise ActionError(
             f"agent_fan_in has nothing to run {agent_name!r} on: every agent in "
             f"{expected} failed in chain {causation_id}"
         )
+
+    shared = _shared_input(fulls.values())
 
     snapshot: dict[str, Any] = {
         **AGENT_CONFIG_DEFAULTS,
@@ -673,8 +690,13 @@ async def fan_in_agent_runs(
                 "definition_snapshot": snapshot,
                 # The joined outputs, keyed by which agent produced each, plus the
                 # completion that happened to trip the join — a handler that wants
-                # to know what it was reacting to still can.
-                "input_payload": {"fan_in": outputs, "trigger": payload},
+                # to know what it was reacting to still can — plus whatever the
+                # whole fan-out was briefed with (see `_shared_input`).
+                "input_payload": {
+                    "fan_in": outputs,
+                    "trigger": payload,
+                    **({"context": shared} if shared else {}),
+                },
                 "causation_id": causation_id,
                 "depth": depth,
             },
@@ -760,6 +782,36 @@ DELIVERY_BODY_FIELDS: dict[str, str] = {
     "google_chat": "message",
     "whatsapp": "message",
 }
+
+
+def _shared_input(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """What every agent in the fan-out was given — the run's shared briefing.
+
+    A fan-in agent reasons over its siblings' *outputs*, and until now that was
+    all it got. But the thing those outputs are about — who the work is for,
+    what was asked — lives in the siblings' `input_payload`, which this action
+    already fetches in full and then discarded. An agent asked to weigh a
+    founder's profile was never given one, and said so
+    (biffo-plugin-idea-scout#26).
+
+    Only keys **every** contributing sibling carries with an equal value survive. That is the
+    whole definition: shared means shared. A key one sibling holds privately —
+    its own angle, its own instructions — is not context about the fan-out and
+    must not reach the joining agent dressed as if it were.
+
+    Returns `{}` when the siblings agree on nothing, and the caller then omits
+    the key rather than sending an empty object.
+    """
+    payloads = [r.get("input_payload") for r in runs]
+    dicts = [p for p in payloads if isinstance(p, dict)]
+    if not dicts:
+        return {}
+    first, *rest = dicts
+    return {
+        key: value
+        for key, value in first.items()
+        if all(key in other and other[key] == value for other in rest)
+    }
 
 
 def _delivery_output(run: dict[str, Any]) -> str:

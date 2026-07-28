@@ -505,6 +505,97 @@ describe('planMigrationCarry — recognising an already-carried migration', () =
     // ...and re-chaining does not disturb it.
     expect(parseCarriedFrom(rechainMigration(carried, '0012', '0011'))).toBe('0003_x.py')
   })
+
+  // #735. A migration an instance deliberately did not carry is otherwise
+  // indistinguishable from one it has simply not reached yet, so the tool
+  // re-offered it on every upgrade — and re-pointed the chain *through* it.
+  describe('declined migrations', () => {
+    const decline = (
+      file: string,
+      reason = 'assumes a public.users table this instance dropped',
+    ) => ({
+      file,
+      reason,
+    })
+
+    it('does not carry a declined migration, and reports why', () => {
+      write(templateDir, '0001_a.py', migration('0001', null))
+      write(templateDir, '0010_orgs.py', migration('0010', '0001'))
+      write(instanceDir, '0001_a.py', migration('0001', null))
+
+      const plan = planMigrationCarry({
+        templateDir,
+        instanceDir,
+        declined: [{ ...decline('0010_orgs.py'), upstream: 'acme/repo#670' }],
+      })
+
+      expect(plan.entries).toEqual([])
+      expect(plan.declined).toEqual([
+        {
+          file: '0010_orgs.py',
+          reason: 'assumes a public.users table this instance dropped',
+          upstream: 'acme/repo#670',
+        },
+      ])
+      // Not "skipped" — that bucket means "the instance already has it", which
+      // is the opposite situation and would read as converged.
+      expect(plan.skipped).toEqual(['0001_a.py'])
+    })
+
+    // The actual failure in #735: the plan reported 0 conflicts and produced a
+    // chain that dies on `alembic upgrade head`, because later migrations were
+    // re-pointed through the revision the instance never took.
+    it('closes the chain over the gap so later migrations do not revise a missing id', () => {
+      write(templateDir, '0001_a.py', migration('0001', null))
+      write(templateDir, '0010_orgs.py', migration('0010', '0001'))
+      write(templateDir, '0012_agent.py', migration('0012', '0010'))
+      write(instanceDir, '0001_a.py', migration('0001', null))
+      write(instanceDir, '0011_local.py', migration('0011', '0001'))
+
+      const plan = planMigrationCarry({
+        templateDir,
+        instanceDir,
+        declined: [decline('0010_orgs.py')],
+      })
+
+      expect(plan.entries.map((e) => e.file)).toEqual(['0012_agent.py'])
+      const [entry] = plan.entries
+      // The instance's real head — NOT 0010, which it does not have.
+      expect(entry?.downRevision).toBe('0011')
+      expect(entry?.content).toContain('down_revision: str | None = "0011"')
+      // planMigrationCarry validates the post-carry chain, so a revision
+      // pointing at the declined id would have thrown before reaching here.
+      expect(plan.entries.every((e) => e.downRevision !== '0010')).toBe(true)
+    })
+
+    it('flags a decline that matches no migration in the target template', () => {
+      // Either a typo — declining nothing at all, silently — or a decline whose
+      // cause was fixed upstream and which should now be deleted.
+      write(templateDir, '0001_a.py', migration('0001', null))
+      write(instanceDir, '0001_a.py', migration('0001', null))
+
+      const plan = planMigrationCarry({
+        templateDir,
+        instanceDir,
+        declined: [decline('0010_typo.py')],
+      })
+
+      expect(plan.staleDeclines).toEqual(['0010_typo.py'])
+      expect(plan.declined).toEqual([])
+    })
+
+    it('carries normally when nothing is declined', () => {
+      write(templateDir, '0001_a.py', migration('0001', null))
+      write(templateDir, '0010_orgs.py', migration('0010', '0001'))
+      write(instanceDir, '0001_a.py', migration('0001', null))
+
+      const plan = planMigrationCarry({ templateDir, instanceDir, declined: [] })
+
+      expect(plan.entries.map((e) => e.file)).toEqual(['0010_orgs.py'])
+      expect(plan.declined).toEqual([])
+      expect(plan.staleDeclines).toEqual([])
+    })
+  })
 })
 
 // Skipped in an instance (issue #327). services/api/migrations/versions/ is

@@ -121,6 +121,33 @@ If a file looks like a carried migration — same description — but its conten
 
 Anything the upgrade recognises by something other than its filename is printed as `already carried`, so you can see when your instance is in this shape.
 
+#### Declining a core migration
+
+Sometimes an instance decides a core migration does not apply to it — it assumes a table the instance dropped, say. Removing it from your chain is not enough on its own: a migration you deliberately did **not** carry is indistinguishable from one you have simply not reached yet, so the next upgrade re-proposes it and re-points your chain *through* it. That plan reports `0 conflicts` and produces a chain that dies on `alembic upgrade head` — after CI has gone green on everything else.
+
+Record the decision in `biffo.core.json` instead:
+
+```json
+{
+  "version": "0.148.2",
+  "declinedMigrations": [
+    {
+      "file": "0010_add_organizations_and_user_profile_fields.py",
+      "reason": "assumes a public.users mirror row; this instance dropped that table in 0006",
+      "upstream": "acme/biffo-template#670"
+    }
+  ]
+}
+```
+
+- `file` is the **template's** filename — you have no copy of your own to match against, which is the point.
+- `reason` is required, on the same principle `biffo.divergence.json` applies to declared drift: a decline nobody can review later is drift wearing a temporary label.
+- `upstream` is optional. Unlike declared divergence, a decline is often temporary — when the migration is fixed upstream, delete the entry and let the next upgrade carry it.
+
+Each decline is printed as `declined` in the plan, with its reason, on every run — a decline that applied invisibly would be indistinguishable from a tool that forgot the migration existed. The chain closes over the gap, so later migrations chain onto your real head rather than a revision you never took.
+
+A decline naming a migration the target template does not ship is reported as `stale decline`. That is either a typo — declining nothing at all — or a decline that has outlived its cause and should be deleted.
+
 ## Destroying stateful infrastructure
 
 `terraform apply` runs with `-auto-approve`, so nothing pauses for a human. A guard in the **Plan** job (before Apply, so refusing costs nothing) fails the deploy if the plan would destroy a database, a Cognito user pool, an S3 bucket or another resource whose data no re-apply can recreate.

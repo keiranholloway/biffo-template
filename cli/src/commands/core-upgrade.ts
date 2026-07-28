@@ -13,6 +13,7 @@ import {
   latestCoreVersionFromTags,
   planCoreVersionCleanup,
   readCoreVersionFile,
+  readDeclinedMigrations,
   readInstanceCoreVersion,
   writeInstanceCoreVersion,
 } from '../lib/core-version.js'
@@ -372,7 +373,11 @@ async function runCoreUpgradeResolved(
   // migrations still have to reach the instance or a table-adding core feature
   // arrives with no schema. Planned before any output so a broken/ambiguous
   // instance chain aborts loudly instead of producing a half-described plan.
-  const migrations = planMigrationCarry({ templateDir: theirsDir, instanceDir: options.cwd })
+  const migrations = planMigrationCarry({
+    templateDir: theirsDir,
+    instanceDir: options.cwd,
+    declined: readDeclinedMigrations(options.cwd),
+  })
 
   // An instance may still carry an orphaned `core.version` file inherited before
   // #423 retired it from the template. Nothing reads it as an authority, so an
@@ -726,6 +731,28 @@ function printMigrationCarry(migrations: MigrationCarryPlan): void {
     console.log(
       `  ${chalk.dim('already carried'.padEnd(15))} ${r.file} ` +
         chalk.dim(`→ this instance calls it ${r.instanceFile} (matched by ${r.how})`),
+    )
+  }
+  // A decline that applies invisibly is indistinguishable from a tool that
+  // forgot the migration existed, so say so every time (#735).
+  for (const d of migrations.declined) {
+    const upstream = d.upstream ? chalk.dim(` [${d.upstream}]`) : ''
+    console.log(
+      `  ${chalk.yellow('declined'.padEnd(15))} ${d.file} ` +
+        chalk.dim(`→ skipped per biffo.core.json: ${d.reason}`) +
+        upstream,
+    )
+  }
+  for (const f of migrations.staleDeclines) {
+    console.log(
+      `  ${chalk.yellow('stale decline'.padEnd(15))} ${f} ` +
+        chalk.dim('→ declined in biffo.core.json, but the target template has no such migration.'),
+    )
+    console.log(
+      chalk.dim(
+        '                  Either the filename is wrong (declining nothing) or the decline\n' +
+          '                  has outlived its cause and should be deleted.',
+      ),
     )
   }
   for (const e of migrations.entries) {

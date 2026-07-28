@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import type { DeclinedMigration } from './core-version.js'
 
 /**
  * Append-only carry of the template's *core* Alembic migrations into an
@@ -87,6 +88,26 @@ export interface MigrationCarryPlan {
    * their instance has a renamed carry (#366).
    */
   recognised: RecognisedCarry[]
+  /**
+   * Template migrations skipped because `biffo.core.json` declines them (#735).
+   * Reported rather than merely omitted: a decline that applies invisibly is
+   * indistinguishable from a tool that forgot the migration existed.
+   */
+  declined: DeclinedCarry[]
+  /**
+   * Declared declines that match no migration in the target template — a typo,
+   * or a decline whose cause has been fixed upstream and which should now be
+   * deleted from `biffo.core.json`.
+   */
+  staleDeclines: string[]
+}
+
+/** A declined migration, as reported back in the plan. */
+export interface DeclinedCarry {
+  /** The template filename that was skipped. */
+  file: string
+  reason: string
+  upstream?: string
 }
 
 export const MIGRATIONS_VERSIONS_DIR = 'services/api/migrations/versions'
@@ -360,6 +381,12 @@ export interface PlanMigrationCarryOptions {
   templateDir: string
   /** The instance repo root. */
   instanceDir: string
+  /**
+   * Migrations this instance has declined to carry, from `biffo.core.json`
+   * (#735). Matched on the *template's* filename, which is the stable identity —
+   * the instance has no copy to match by provenance, that being the point.
+   */
+  declined?: DeclinedMigration[]
 }
 
 /**
@@ -388,9 +415,24 @@ export function planMigrationCarry(options: PlanMigrationCarryOptions): Migratio
   const entries: MigrationCarryEntry[] = []
   const skipped: string[] = []
   const recognised: RecognisedCarry[] = []
+  const declinedIndex = new Map((options.declined ?? []).map((d) => [d.file, d]))
+  const declined: DeclinedCarry[] = []
   let head = instanceHead
 
   for (const m of chainOrder(template)) {
+    const decline = declinedIndex.get(m.file)
+    if (decline) {
+      // Skipped without advancing `head`, so the chain closes over the gap and
+      // the next carried migration points at whatever the instance's real head
+      // is — never at a revision the instance does not have.
+      declined.push({
+        file: m.file,
+        reason: decline.reason,
+        ...(decline.upstream !== undefined && { upstream: decline.upstream }),
+      })
+      continue
+    }
+
     const already = alreadyCarried(m, identity, templateBodyCounts)
     if (already) {
       // Already in the instance — immutable history, never re-chained.
@@ -446,7 +488,15 @@ export function planMigrationCarry(options: PlanMigrationCarryOptions): Migratio
     `${MIGRATIONS_VERSIONS_DIR} (after carry)`,
   )
 
-  return { entries, instanceHead, skipped, recognised }
+  // A decline naming a migration the target template no longer ships matched
+  // nothing. That is either a typo — silently declining nothing, which is the
+  // worst outcome here — or a decline that has outlived its cause, as #670 did
+  // by fixing the migration tabsii declined. Both want surfacing, neither is
+  // fatal.
+  const templateFiles = new Set(template.map((m) => m.file))
+  const staleDeclines = [...declinedIndex.keys()].filter((f) => !templateFiles.has(f))
+
+  return { entries, instanceHead, skipped, recognised, declined, staleDeclines }
 }
 
 /** How a template migration was recognised as already present in the instance. */

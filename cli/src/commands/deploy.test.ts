@@ -112,9 +112,47 @@ describe('readRemoteCoreVersion', () => {
     await expect(readRemoteCoreVersion(gh, 'o', 'r', 'dev')).resolves.toBeNull()
   })
 
-  it('falls through a malformed biffo.core.json to core.version', async () => {
+  // #788 — this used to assert the opposite, and the opposite was the bug.
+  //
+  // `core.version` is a fossil: written once at `biffo init`, never maintained,
+  // and no longer shipped by the template at all since #423. In `biffo-platform`
+  // it reads 0.41.17 against a real 0.155.0 — 114 minor versions wrong. Falling
+  // back to it when the authoritative record is *present but unreadable* turns a
+  // defect that should be loud into a plausible wrong number, and the caller
+  // then warns about a version mismatch that is an artefact of reading a fossil.
+  it('returns null for a malformed biffo.core.json rather than trusting the fossil', async () => {
     const gh = fakeGithub({ dev: { 'biffo.core.json': '{ not json', 'core.version': '0.4.0\n' } })
+    await expect(readRemoteCoreVersion(gh, 'o', 'r', 'dev')).resolves.toBeNull()
+  })
+
+  it('returns null when the record parses but carries no usable version', async () => {
+    // Same reasoning: present-and-unusable is not the same as absent.
+    for (const body of ['{}', '{"version": 5}', '{"version": "not-a-version"}']) {
+      const gh = fakeGithub({ dev: { 'biffo.core.json': body, 'core.version': '0.4.0\n' } })
+      await expect(readRemoteCoreVersion(gh, 'o', 'r', 'dev')).resolves.toBeNull()
+    }
+  })
+
+  it('still falls back when the record is genuinely ABSENT, not merely unreadable', async () => {
+    // The fallback exists for instances scaffolded before biffo.core.json; the
+    // fix narrows it to that case rather than removing it.
+    const gh = fakeGithub({ dev: { 'core.version': '0.4.0\n' } })
     await expect(readRemoteCoreVersion(gh, 'o', 'r', 'dev')).resolves.toBe('0.4.0')
+  })
+
+  it('does not warn about a mismatch it inferred from a fossil', async () => {
+    // The consequence, end to end: dev's record is unreadable, so there is
+    // nothing to compare and the deploy must stay silent — rather than
+    // "main 0.4.0 is behind dev 0.9.0" read off a file nobody maintains.
+    vi.mocked(log.warn).mockClear()
+    const gh = fakeGithub({
+      main: { 'biffo.core.json': coreJson('0.4.0') },
+      dev: { 'biffo.core.json': '{ not json', 'core.version': '0.9.0\n' },
+    })
+
+    await warnIfDispatchRefStale(gh, 'o', 'r', 'deploy-global.yml', 'main', 'dev')
+
+    expect(log.warn).not.toHaveBeenCalled()
   })
 })
 

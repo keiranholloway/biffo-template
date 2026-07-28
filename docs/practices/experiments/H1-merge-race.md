@@ -167,6 +167,11 @@ writing it down here.
 That brings it to **six occurrences across four repositories, with zero cases
 where auto-merge updated a behind branch.** The mechanism is no longer in doubt.
 
+A seventh followed immediately, and is worth recording for what it says about how
+routine this is: **[#754](https://github.com/keiranholloway/biffo-template/pull/754)
+— the PR carrying this very verdict — was itself knocked `BEHIND`** and needed a
+hand `gh pr update-branch` plus a full CI re-run before it could land.
+
 ## Result
 
 **Verdict: `abandoned`** — 2026-07-28, thirteen days before the review date.

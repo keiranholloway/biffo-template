@@ -230,12 +230,18 @@ export function renderDashboard(snapshot, sessions = null) {
    */
   const e = (days) => w(days)?.estate ?? {}
 
-  const featureShare = e(7).productFeatureShare
+  // #768: the headline is capability built ANYWHERE, not features in the
+  // proving ground. `?? productFeatureShare` keeps snapshots written before the
+  // rename rendering — they are the historical series, and a page that reports
+  // `unmeasured` for last week's data is worse than one that shows it.
+  const capShare = (d) => e(d).capabilityShare ?? e(d).productFeatureShare
+  const featureShare = capShare(7)
   const featureGrade = grade(featureShare, {
     warn: PRODUCT_FEATURE_FLOOR,
     crit: PRODUCT_FEATURE_FLOOR / 2,
     higherIsBetter: true,
   })
+  const bySide = e(7).capabilityBySide ?? {}
 
   const tile = (label, value, note, g) => `
     <div class="tile ${g}">
@@ -301,11 +307,12 @@ export function renderDashboard(snapshot, sessions = null) {
   </div>
 
   <div class="headline">
-    <p class="q">Product features as a share of all merges — rolling 7 days</p>
+    <p class="q">Capability built — merges that shipped something, rolling 7 days</p>
     <div class="v num">${fmt(featureShare, '%')}</div>
     <div class="sub">
       <span class="pill ${featureGrade}">${featureGrade}</span>
-      &nbsp;90-day baseline ${fmt(e(90).productFeatureShare, '%')} · last 24h ${fmt(e(1).productFeatureShare, '%')}
+      &nbsp;90-day baseline ${fmt(capShare(90), '%')} · last 24h ${fmt(capShare(1), '%')}
+      ${bySide.platform ? `· Biffo ${fmt(bySide.platform.share, '%')} · Tabsii ${fmt(bySide.product.share, '%')}` : ''}
     </div>
   </div>
 

@@ -105,6 +105,150 @@ export const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out', 'startup_fai
  */
 export const DEPLOY_WORKFLOW = 'Deploy Application'
 
+/** Marker `biffo core upgrade` writes into its PR body (#767). */
+export const CARRIED_PRS_MARKER = 'biffo:carries-template-prs:'
+
+/**
+ * Branch prefix `biffo core upgrade` always creates. Mirrors
+ * `UPGRADE_BRANCH_PREFIX` in `cli/src/lib/core-upgrade.ts`.
+ */
+export const UPGRADE_BRANCH_PREFIX = 'biffo/core-upgrade-'
+
+/**
+ * Is this PR actually an upgrade, rather than one that merely *mentions* the
+ * marker?
+ *
+ * Not paranoia — this fired on the first real run. `biffo-template` reported an
+ * upgrade PR carrying four template PRs, which is impossible: the template does
+ * not upgrade itself. The parser had matched the marker inside PR #772's own
+ * body, where it appears as **documentation of the format**. A PR describing the
+ * mechanism was counted as one emitting it.
+ *
+ * The branch name is the discriminator because the CLI controls it absolutely:
+ * `upgradeBranchName()` is the only thing that opens these PRs. Body text is
+ * written by whoever is describing the feature.
+ *
+ * @param {Record<string, any>} pr
+ */
+export function isUpgradePr(pr) {
+  return typeof pr.headRefName === 'string' && pr.headRefName.startsWith(UPGRADE_BRANCH_PREFIX)
+}
+
+/**
+ * Template PR numbers an instance's upgrade PR carries (#767).
+ *
+ * Returns `[]` for any body without the marker, which is every PR except an
+ * upgrade — and every upgrade opened before the marker shipped. That is a
+ * *coverage* fact, not an error: the metric simply has nothing to say about
+ * those, and says nothing rather than guessing.
+ *
+ * @param {string | null | undefined} body
+ */
+export function parseCarriedPrs(body) {
+  if (typeof body !== 'string') return []
+  const match = new RegExp(`${CARRIED_PRS_MARKER}([0-9,]+)`).exec(body)
+  if (!match?.[1]) return []
+  const numbers = match[1]
+    .split(',')
+    .map((n) => Number(n.trim()))
+    .filter((n) => Number.isInteger(n) && n > 0)
+  return [...new Set(numbers)].sort((a, b) => a - b)
+}
+
+/**
+ * Template PR number → the issue keys it closed.
+ *
+ * @param {string} templateSlug
+ * @param {Array<Record<string, any>>} templatePrs
+ * @returns {Map<number, string[]>}
+ */
+export function indexClosingIssues(templateSlug, templatePrs) {
+  /** @type {Map<number, string[]>} */
+  const index = new Map()
+  for (const pr of templatePrs) {
+    const keys = (pr.closingIssuesReferences ?? [])
+      .map((ref) => {
+        const owner = ref.repository?.owner?.login
+        const name = ref.repository?.name
+        return owner && name ? `${owner}/${name}#${ref.number}` : null
+      })
+      .filter((key) => key !== null)
+    if (keys.length > 0) index.set(pr.number, keys)
+  }
+  return index
+}
+
+/**
+ * Time from a **template** issue being opened to it running in an instance —
+ * the whole six-hop distribution, measured rather than described (#767).
+ *
+ * A template feature is not usable when its template PR merges. It becomes
+ * usable when an instance deploys it, five hops later: tag → npm publish →
+ * `core upgrade` → instance PR → deploy. `development-practices.md` prices that
+ * at "~40 min minimum" and once at three full release cycles for one feature,
+ * but only ever from anecdote, because nothing recorded which issues an upgrade
+ * carried. The marker does; this reads it.
+ *
+ * `carriedWithoutIssue` is reported deliberately. The first marker ever emitted
+ * carried twelve template PRs and **none of them closed an issue** — every one
+ * used `Refs #N`, correctly, because the issues were not finished. That is the
+ * binding constraint on this metric and it must be visible, not inferred from a
+ * small `measured`.
+ *
+ * @param {Array<Record<string, any>>} instancePrs merged, with `body`
+ * @param {Map<number, string[]>} closingIssues template PR → issue keys
+ * @param {Map<string, string>} issueOpenedAt issue key → ISO createdAt
+ * @param {Array<{startedAt: number, finishedAt: number}>} deploys instance deploys
+ */
+export function crossRepoTimeToFeature(instancePrs, closingIssues, issueOpenedAt, deploys) {
+  const hours = []
+  let upgradePrs = 0
+  let carriedPrs = 0
+  let carriedWithoutIssue = 0
+  let awaitingDeploy = 0
+  for (const pr of instancePrs) {
+    // Branch name first: a PR that merely documents the marker is not an
+    // upgrade, and counting one as such is how the template reported carrying
+    // its own PRs on the first real run.
+    if (!isUpgradePr(pr)) continue
+    const carried = parseCarriedPrs(pr.body)
+    if (carried.length === 0) continue
+    upgradePrs += 1
+    carriedPrs += carried.length
+    // One deploy carries every issue in the upgrade, so it is resolved once
+    // rather than per issue.
+    const ranAt = firstDeployAfter(deploys, pr.mergedAt)
+    for (const number of carried) {
+      const keys = closingIssues.get(number)
+      if (!keys || keys.length === 0) {
+        carriedWithoutIssue += 1
+        continue
+      }
+      for (const key of keys) {
+        const openedAt = issueOpenedAt.get(key)
+        if (!openedAt) continue
+        if (ranAt === null) {
+          awaitingDeploy += 1
+          continue
+        }
+        const delta = ranAt - Date.parse(openedAt)
+        if (!Number.isFinite(delta) || delta < 0) continue
+        hours.push(delta / 3_600_000)
+      }
+    }
+  }
+  return {
+    upgradePrs,
+    carriedPrs,
+    carriedWithoutIssue,
+    awaitingDeploy,
+    measured: hours.length,
+    hoursP50: round1(percentile(hours, 50)),
+    hoursP90: round1(percentile(hours, 90)),
+    hoursMax: hours.length ? round1(Math.max(...hours)) : null,
+  }
+}
+
 /** Conclusions that mean the gate never evaluated the change. Never counted as a pass. */
 export const INCONCLUSIVE_CONCLUSIONS = new Set(['skipped', 'neutral', 'stale', null])
 
@@ -845,7 +989,7 @@ export function summariseRework(fixes, merges) {
  * @param {{slug: string, role: string}} repo
  * @param {{prs: Array<Record<string, any>>, runs: Array<Record<string, any>>, defaultBranch: string, rework: {fixes: Array<{at: number, correctedAt: number | null}>, merges: number} | null}} data
  */
-export function summariseRepo(repo, data, issueOpenedAt = new Map()) {
+export function summariseRepo(repo, data, issueOpenedAt = new Map(), templateClosingIssues = new Map()) {
   const { prs, runs, defaultBranch, rework } = data
   const runsByBranch = indexRunsByBranch(runs)
   const merged = prs.filter((pr) => pr.mergedAt)
@@ -870,7 +1014,17 @@ export function summariseRepo(repo, data, issueOpenedAt = new Map()) {
     // How long from wanting a capability to having it (#767). Stop A only:
     // issue opened → closing PR merged. Stop B (running in an instance) needs
     // the template→instance hop to be machine-readable first.
-    timeToFeature: timeToFeature(merged, issueOpenedAt, successfulDeploys(runs, defaultBranch)),
+    timeToFeature: {
+      ...timeToFeature(merged, issueOpenedAt, successfulDeploys(runs, defaultBranch)),
+      // Template issue opened -> running here. Empty for the template itself and
+      // for any repo that takes no core upgrades.
+      crossRepo: crossRepoTimeToFeature(
+        merged,
+        templateClosingIssues,
+        issueOpenedAt,
+        successfulDeploys(runs, defaultBranch),
+      ),
+    },
     // Consistency — two metrics, never one. See prChurn().
     ciFailureRate: rate(measured.filter((c) => c.ciFailed).length, measured.length),
     revisionsP50: percentile(
@@ -1086,7 +1240,8 @@ function fetchPrs(slug, since) {
     // extra: it rides along on a fetch that already happens. The alternative —
     // one timeline API call per closed issue — is O(issues) requests for the
     // same answer.
-    'number,title,createdAt,mergedAt,headRefName,baseRefName,closingIssuesReferences',
+    // `body` carries the core-upgrade marker (#767). Same request, one more field.
+    'number,title,createdAt,mergedAt,headRefName,baseRefName,closingIssuesReferences,body',
   ])
   return prs.filter((pr) => pr.mergedAt >= since)
 }
@@ -1210,6 +1365,15 @@ function main() {
     }
   }
 
+  // Template PR -> the issues it closed, built once. An instance upgrade PR
+  // names template PR numbers; this is what turns those into issues, and hence
+  // into a start time.
+  const templateRepo = REPOS.find((r) => r.role === 'template')
+  const templateClosingIssues = indexClosingIssues(
+    templateRepo?.slug ?? '',
+    raw[templateRepo?.slug ?? '']?.prs ?? [],
+  )
+
   /** @type {Record<string, any>} */
   const windows = {}
   for (const days of args.windows) {
@@ -1218,7 +1382,7 @@ function main() {
     const repos = {}
     for (const repo of targets) {
       repos[repo.slug] = raw[repo.slug]
-        ? summariseRepo(repo, filterToWindow(raw[repo.slug], since), issueOpenedAt)
+        ? summariseRepo(repo, filterToWindow(raw[repo.slug], since), issueOpenedAt, templateClosingIssues)
         : { error: 'unmeasured' }
     }
     windows[days] = { since, repos, estate: summariseEstate(repos) }

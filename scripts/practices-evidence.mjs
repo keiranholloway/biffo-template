@@ -201,7 +201,7 @@ export function extractRows(markdown) {
  */
 export function mergeExtracted(fresh, existing) {
   const bySummary = new Map(existing.map((r) => [r.summary, r]))
-  return fresh.map((row) => {
+  const merged = fresh.map((row) => {
     const prior = bySummary.get(row.summary)
     if (!prior) return row
     return {
@@ -212,6 +212,33 @@ export function mergeExtracted(fresh, existing) {
       costMinutes: row.costMinutes ?? prior.costMinutes ?? null,
     }
   })
+  // Orphans are KEPT, not dropped.
+  //
+  // This used to `return fresh.map(...)`, which silently deleted every stored
+  // row the markdown no longer mentioned. That is a data-loss fail-open, and it
+  // fired: running `--extract` from a branch whose markdown predated another
+  // session's rows rewrote evidence.jsonl without them, and the loss was
+  // invisible because the counts it feeds simply got smaller.
+  //
+  // Deleting a row is legitimate, but it has to be *deliberate*. Keeping the
+  // orphan and reporting it makes an accidental loss a no-op and an intentional
+  // one an explicit edit to this file.
+  return [...merged, ...orphanedRows(fresh, existing)]
+}
+
+/**
+ * Stored rows the freshly-extracted markdown no longer mentions.
+ *
+ * Usually one of two things: a row genuinely deleted from the table, or — the
+ * case this exists for — an extract run against a stale markdown that never had
+ * another session's rows in the first place.
+ *
+ * @param {Array<Record<string, any>>} fresh
+ * @param {Array<Record<string, any>>} existing
+ */
+export function orphanedRows(fresh, existing) {
+  const freshSummaries = new Set(fresh.map((r) => r.summary))
+  return existing.filter((r) => !freshSummaries.has(r.summary))
 }
 
 /** @param {string} file */
@@ -317,10 +344,22 @@ function main() {
   const has = (f) => argv.includes(f)
 
   if (has('--extract')) {
-    const rows = mergeExtracted(extractRows(readFileSync(SOURCE, 'utf8')), readEvidence(EVIDENCE))
+    const fresh = extractRows(readFileSync(SOURCE, 'utf8'))
+    const existing = readEvidence(EVIDENCE)
+    const rows = mergeExtracted(fresh, existing)
     mkdirSync(dirname(EVIDENCE), { recursive: true })
     writeFileSync(EVIDENCE, rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
     const kept = rows.filter((r) => r.date).length
+    // Loud, because the alternative is a dataset that quietly shrinks.
+    const orphans = orphanedRows(fresh, existing)
+    if (orphans.length > 0) {
+      process.stderr.write(
+        `\nWARNING: ${orphans.length} stored row(s) are not in the markdown and were KEPT.\n` +
+          `If your checkout predates another session's rows, rebase before re-extracting.\n` +
+          `To delete one deliberately, remove it from ${EVIDENCE} as well.\n`,
+      )
+      for (const row of orphans) process.stderr.write(`  - ${row.summary.slice(0, 90)}\n`)
+    }
     process.stderr.write(
       `extracted ${rows.length} rows (${kept} keeping a known date) -> ${EVIDENCE}\n`,
     )

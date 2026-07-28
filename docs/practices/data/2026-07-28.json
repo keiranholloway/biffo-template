@@ -1,0 +1,4264 @@
+{
+  "schema": 2,
+  "collectedAt": "2026-07-28T14:47:07.520Z",
+  "windowDays": [
+    1,
+    7,
+    90
+  ],
+  "windows": {
+    "1": {
+      "since": "2026-07-27T14:47:07.487Z",
+      "repos": {
+        "keiranholloway/biffo-template": {
+          "error": "unmeasured"
+        },
+        "keiranholloway/biffo-platform": {
+          "role": "instance",
+          "side": "platform",
+          "defaultBranch": "dev",
+          "mergedPrs": 15,
+          "workMix": {
+            "merges": 15,
+            "delivery": 26.7,
+            "rework": 33.3,
+            "toil": 33.3,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 6.7,
+            "toilRatio": 66.7,
+            "counts": {
+              "delivery": 4,
+              "rework": 5,
+              "toil": 5,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 1,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 15,
+              "product": 0
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 1,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 14,
+            "coverage": 6.7,
+            "hoursP50": 0.4,
+            "hoursP90": 0.4,
+            "hoursMax": 0.4,
+            "running": {
+              "measured": 1,
+              "awaitingDeploy": 0,
+              "hoursP50": 0.5,
+              "hoursP90": 0.5,
+              "deployGapP50": 0.2,
+              "deployGapP90": 0.2
+            },
+            "crossRepo": {
+              "upgradePrs": 4,
+              "carriedPrs": 32,
+              "carriedWithoutIssue": 32,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 6.7,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 73.3,
+          "cycleTimeP50Minutes": 9,
+          "cycleTimeP90Minutes": 25.9,
+          "rework": {
+            "merges": 15,
+            "fixMerges": 5,
+            "fixShare": 33.3,
+            "attributed": 4,
+            "medianHoursToRework": 6.5,
+            "p90HoursToRework": 26.4,
+            "correctedWithin1hShare": 0,
+            "correctedWithin24hShare": 75
+          },
+          "contention": {
+            "greenButUnmergedHours": 0.7,
+            "greenToMergeP50Minutes": 0,
+            "greenToMergeP90Minutes": 19.1,
+            "greenToMergeMaxMinutes": 21.1,
+            "repushRate": 26.7,
+            "racedShare": 13.3,
+            "prsMeasured": 15,
+            "prsWithGreen": 15
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 61,
+            "failures": 0,
+            "redMinutes": 0,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 15,
+            "prsUnmeasured": 0,
+            "workflowRuns": 103,
+            "reworkSource": "git-blame"
+          }
+        },
+        "keiranholloway/biffo-platform-app": {
+          "role": "sibling",
+          "side": "platform",
+          "defaultBranch": "dev",
+          "mergedPrs": 2,
+          "workMix": {
+            "merges": 2,
+            "delivery": 100,
+            "rework": 0,
+            "toil": 0,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 0,
+            "counts": {
+              "delivery": 2,
+              "rework": 0,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 2,
+              "product": 0
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 1,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 1,
+            "coverage": 50,
+            "hoursP50": 7,
+            "hoursP90": 7,
+            "hoursMax": 7,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 1,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 0,
+          "revisionsP50": 0,
+          "revisionsP90": 0,
+          "landedFirstPushRate": 100,
+          "cycleTimeP50Minutes": 6.1,
+          "cycleTimeP90Minutes": 9,
+          "rework": {
+            "merges": 2,
+            "fixMerges": 0,
+            "fixShare": 0,
+            "attributed": 0,
+            "medianHoursToRework": null,
+            "p90HoursToRework": null,
+            "correctedWithin1hShare": null,
+            "correctedWithin24hShare": null
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": 0,
+            "greenToMergeP90Minutes": 0,
+            "greenToMergeMaxMinutes": 0,
+            "repushRate": 0,
+            "racedShare": 0,
+            "prsMeasured": 1,
+            "prsWithGreen": 1
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 6,
+            "failures": 0,
+            "redMinutes": 0,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 1,
+            "prsUnmeasured": 1,
+            "workflowRuns": 9,
+            "reworkSource": "git-blame"
+          }
+        },
+        "keiranholloway/biffo-plugin-ideation": {
+          "role": "plugin",
+          "side": "platform",
+          "defaultBranch": "dev",
+          "mergedPrs": 7,
+          "workMix": {
+            "merges": 7,
+            "delivery": 28.6,
+            "rework": 42.9,
+            "toil": 28.6,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 71.4,
+            "counts": {
+              "delivery": 2,
+              "rework": 3,
+              "toil": 2,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 7,
+              "product": 0
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 3,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 4,
+            "coverage": 42.9,
+            "hoursP50": 0.9,
+            "hoursP90": 6.9,
+            "hoursMax": 6.9,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 3,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 0,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 85.7,
+          "cycleTimeP50Minutes": 4.9,
+          "cycleTimeP90Minutes": 11,
+          "rework": {
+            "merges": 7,
+            "fixMerges": 3,
+            "fixShare": 42.9,
+            "attributed": 2,
+            "medianHoursToRework": 16.7,
+            "p90HoursToRework": 26.5,
+            "correctedWithin1hShare": 0,
+            "correctedWithin24hShare": 50
+          },
+          "contention": {
+            "greenButUnmergedHours": 0.1,
+            "greenToMergeP50Minutes": 0.3,
+            "greenToMergeP90Minutes": 6.1,
+            "greenToMergeMaxMinutes": 6.1,
+            "repushRate": 14.3,
+            "racedShare": 0,
+            "prsMeasured": 7,
+            "prsWithGreen": 6
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 7,
+            "failures": 0,
+            "redMinutes": 0,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 7,
+            "prsUnmeasured": 0,
+            "workflowRuns": 16,
+            "reworkSource": "git-blame"
+          }
+        },
+        "keiranholloway/biffo-plugin-idea-scout": {
+          "role": "plugin",
+          "side": "platform",
+          "defaultBranch": "dev",
+          "mergedPrs": 8,
+          "workMix": {
+            "merges": 8,
+            "delivery": 25,
+            "rework": 50,
+            "toil": 25,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 75,
+            "counts": {
+              "delivery": 2,
+              "rework": 4,
+              "toil": 2,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 8,
+              "product": 0
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 3,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 5,
+            "coverage": 37.5,
+            "hoursP50": 7.9,
+            "hoursP90": 18.7,
+            "hoursMax": 18.7,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 3,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 0,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 87.5,
+          "cycleTimeP50Minutes": 4.8,
+          "cycleTimeP90Minutes": 14.9,
+          "rework": {
+            "merges": 8,
+            "fixMerges": 4,
+            "fixShare": 50,
+            "attributed": 4,
+            "medianHoursToRework": 7.2,
+            "p90HoursToRework": 18.8,
+            "correctedWithin1hShare": 0,
+            "correctedWithin24hShare": 100
+          },
+          "contention": {
+            "greenButUnmergedHours": 0.3,
+            "greenToMergeP50Minutes": 0,
+            "greenToMergeP90Minutes": 10.9,
+            "greenToMergeMaxMinutes": 10.9,
+            "repushRate": 12.5,
+            "racedShare": 12.5,
+            "prsMeasured": 8,
+            "prsWithGreen": 8
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 9,
+            "failures": 0,
+            "redMinutes": 0,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 8,
+            "prsUnmeasured": 0,
+            "workflowRuns": 18,
+            "reworkSource": "git-blame"
+          }
+        },
+        "keiranholloway/biffo-runners": {
+          "role": "infra",
+          "side": "platform",
+          "defaultBranch": "",
+          "mergedPrs": 0,
+          "workMix": {
+            "merges": null,
+            "delivery": null,
+            "rework": null,
+            "toil": null,
+            "quality": null,
+            "docs": null,
+            "unconventional": null,
+            "toilRatio": null,
+            "counts": null,
+            "sideCounts": null,
+            "productDelivery": null
+          },
+          "timeToFeature": {
+            "linked": 0,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 0,
+            "coverage": null,
+            "hoursP50": null,
+            "hoursP90": null,
+            "hoursMax": null,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": null,
+          "revisionsP50": null,
+          "revisionsP90": null,
+          "landedFirstPushRate": null,
+          "cycleTimeP50Minutes": null,
+          "cycleTimeP90Minutes": null,
+          "rework": {
+            "merges": null,
+            "fixMerges": null,
+            "fixShare": null,
+            "attributed": null,
+            "medianHoursToRework": null,
+            "p90HoursToRework": null,
+            "correctedWithin1hShare": null,
+            "correctedWithin24hShare": null
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": null,
+            "greenToMergeP90Minutes": null,
+            "greenToMergeMaxMinutes": null,
+            "repushRate": null,
+            "racedShare": null,
+            "prsMeasured": 0,
+            "prsWithGreen": 0
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 0,
+            "failures": null,
+            "redMinutes": null,
+            "unresolvedFailures": null
+          },
+          "coverage": {
+            "prsMeasured": 0,
+            "prsUnmeasured": 0,
+            "workflowRuns": 0,
+            "reworkSource": "unavailable"
+          }
+        },
+        "tabsii-com/tabsii-platform": {
+          "role": "instance",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 30,
+          "workMix": {
+            "merges": 30,
+            "delivery": 30,
+            "rework": 3.3,
+            "toil": 30,
+            "quality": 6.7,
+            "docs": 26.7,
+            "unconventional": 3.3,
+            "toilRatio": 33.3,
+            "counts": {
+              "delivery": 9,
+              "rework": 1,
+              "toil": 9,
+              "quality": 2,
+              "docs": 8,
+              "unconventional": 1,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 1,
+              "product": 29
+            },
+            "productDelivery": 9
+          },
+          "timeToFeature": {
+            "linked": 4,
+            "unresolved": 1,
+            "prsWithNoClosingIssue": 25,
+            "coverage": 13.3,
+            "hoursP50": 3.6,
+            "hoursP90": 21.5,
+            "hoursMax": 21.5,
+            "running": {
+              "measured": 4,
+              "awaitingDeploy": 0,
+              "hoursP50": 3.8,
+              "hoursP90": 21.7,
+              "deployGapP50": 0.2,
+              "deployGapP90": 0.2
+            },
+            "crossRepo": {
+              "upgradePrs": 3,
+              "carriedPrs": 27,
+              "carriedWithoutIssue": 27,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 10,
+          "revisionsP50": 0,
+          "revisionsP90": 3,
+          "landedFirstPushRate": 63.3,
+          "cycleTimeP50Minutes": 8.9,
+          "cycleTimeP90Minutes": 24.3,
+          "rework": {
+            "merges": 30,
+            "fixMerges": 1,
+            "fixShare": 3.3,
+            "attributed": 1,
+            "medianHoursToRework": 4.4,
+            "p90HoursToRework": 4.4,
+            "correctedWithin1hShare": 0,
+            "correctedWithin24hShare": 100
+          },
+          "contention": {
+            "greenButUnmergedHours": 4.3,
+            "greenToMergeP50Minutes": 4.8,
+            "greenToMergeP90Minutes": 19.7,
+            "greenToMergeMaxMinutes": 48.3,
+            "repushRate": 36.7,
+            "racedShare": 30,
+            "prsMeasured": 30,
+            "prsWithGreen": 29
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 140,
+            "failures": 0,
+            "redMinutes": 0,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 30,
+            "prsUnmeasured": 0,
+            "workflowRuns": 303,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-crm": {
+          "role": "sibling",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 5,
+          "workMix": {
+            "merges": 5,
+            "delivery": 60,
+            "rework": 20,
+            "toil": 0,
+            "quality": 20,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 20,
+            "counts": {
+              "delivery": 3,
+              "rework": 1,
+              "toil": 0,
+              "quality": 1,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 5
+            },
+            "productDelivery": 3
+          },
+          "timeToFeature": {
+            "linked": 0,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 5,
+            "coverage": 0,
+            "hoursP50": null,
+            "hoursP90": null,
+            "hoursMax": null,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 0,
+          "revisionsP50": 0,
+          "revisionsP90": 0,
+          "landedFirstPushRate": 100,
+          "cycleTimeP50Minutes": 24.3,
+          "cycleTimeP90Minutes": 45.7,
+          "rework": {
+            "merges": 5,
+            "fixMerges": 1,
+            "fixShare": 20,
+            "attributed": 0,
+            "medianHoursToRework": null,
+            "p90HoursToRework": null,
+            "correctedWithin1hShare": null,
+            "correctedWithin24hShare": null
+          },
+          "contention": {
+            "greenButUnmergedHours": 1.3,
+            "greenToMergeP50Minutes": 17.6,
+            "greenToMergeP90Minutes": 38.7,
+            "greenToMergeMaxMinutes": 38.7,
+            "repushRate": 0,
+            "racedShare": 0,
+            "prsMeasured": 5,
+            "prsWithGreen": 5
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 15,
+            "failures": 0,
+            "redMinutes": 0,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 5,
+            "prsUnmeasured": 0,
+            "workflowRuns": 26,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-intake": {
+          "role": "sibling",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 4,
+          "workMix": {
+            "merges": 4,
+            "delivery": 25,
+            "rework": 50,
+            "toil": 25,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 75,
+            "counts": {
+              "delivery": 1,
+              "rework": 2,
+              "toil": 1,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 4
+            },
+            "productDelivery": 1
+          },
+          "timeToFeature": {
+            "linked": 1,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 3,
+            "coverage": 25,
+            "hoursP50": 1.4,
+            "hoursP90": 1.4,
+            "hoursMax": 1.4,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 1,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 25,
+          "revisionsP50": 0,
+          "revisionsP90": 2,
+          "landedFirstPushRate": 75,
+          "cycleTimeP50Minutes": 6.1,
+          "cycleTimeP90Minutes": 88.5,
+          "rework": {
+            "merges": 4,
+            "fixMerges": 2,
+            "fixShare": 50,
+            "attributed": 2,
+            "medianHoursToRework": 0.3,
+            "p90HoursToRework": 2.5,
+            "correctedWithin1hShare": 50,
+            "correctedWithin24hShare": 100
+          },
+          "contention": {
+            "greenButUnmergedHours": 1.4,
+            "greenToMergeP50Minutes": 0.4,
+            "greenToMergeP90Minutes": 68.8,
+            "greenToMergeMaxMinutes": 68.8,
+            "repushRate": 25,
+            "racedShare": 25,
+            "prsMeasured": 4,
+            "prsWithGreen": 4
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 8,
+            "failures": 0,
+            "redMinutes": 0,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 4,
+            "prsUnmeasured": 0,
+            "workflowRuns": 14,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-map": {
+          "role": "package",
+          "side": "product",
+          "defaultBranch": "main",
+          "mergedPrs": 0,
+          "workMix": {
+            "merges": 0,
+            "delivery": null,
+            "rework": null,
+            "toil": null,
+            "quality": null,
+            "docs": null,
+            "unconventional": null,
+            "toilRatio": null,
+            "counts": {
+              "delivery": 0,
+              "rework": 0,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 0
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 0,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 0,
+            "coverage": null,
+            "hoursP50": null,
+            "hoursP90": null,
+            "hoursMax": null,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": null,
+          "revisionsP50": null,
+          "revisionsP90": null,
+          "landedFirstPushRate": null,
+          "cycleTimeP50Minutes": null,
+          "cycleTimeP90Minutes": null,
+          "rework": {
+            "merges": 0,
+            "fixMerges": null,
+            "fixShare": null,
+            "attributed": null,
+            "medianHoursToRework": null,
+            "p90HoursToRework": null,
+            "correctedWithin1hShare": null,
+            "correctedWithin24hShare": null
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": null,
+            "greenToMergeP90Minutes": null,
+            "greenToMergeMaxMinutes": null,
+            "repushRate": null,
+            "racedShare": null,
+            "prsMeasured": 0,
+            "prsWithGreen": 0
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 0,
+            "failures": null,
+            "redMinutes": null,
+            "unresolvedFailures": null
+          },
+          "coverage": {
+            "prsMeasured": 0,
+            "prsUnmeasured": 0,
+            "workflowRuns": 0,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-geo": {
+          "role": "sibling",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 1,
+          "workMix": {
+            "merges": 1,
+            "delivery": 0,
+            "rework": 100,
+            "toil": 0,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 100,
+            "counts": {
+              "delivery": 0,
+              "rework": 1,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 1
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 1,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 0,
+            "coverage": 100,
+            "hoursP50": 0.5,
+            "hoursP90": 0.5,
+            "hoursMax": 0.5,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 1,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 0,
+          "revisionsP50": 0,
+          "revisionsP90": 0,
+          "landedFirstPushRate": 100,
+          "cycleTimeP50Minutes": 8.7,
+          "cycleTimeP90Minutes": 8.7,
+          "rework": {
+            "merges": 1,
+            "fixMerges": 1,
+            "fixShare": 100,
+            "attributed": 1,
+            "medianHoursToRework": 458.9,
+            "p90HoursToRework": 458.9,
+            "correctedWithin1hShare": 0,
+            "correctedWithin24hShare": 0
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": 0.6,
+            "greenToMergeP90Minutes": 0.6,
+            "greenToMergeMaxMinutes": 0.6,
+            "repushRate": 0,
+            "racedShare": 0,
+            "prsMeasured": 1,
+            "prsWithGreen": 1
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 3,
+            "failures": 0,
+            "redMinutes": 0,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 1,
+            "prsUnmeasured": 0,
+            "workflowRuns": 6,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-marketplace": {
+          "role": "sibling",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 2,
+          "workMix": {
+            "merges": 2,
+            "delivery": 0,
+            "rework": 100,
+            "toil": 0,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 100,
+            "counts": {
+              "delivery": 0,
+              "rework": 2,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 2
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 1,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 1,
+            "coverage": 50,
+            "hoursP50": 0.4,
+            "hoursP90": 0.4,
+            "hoursMax": 0.4,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 1,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 50,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 50,
+          "cycleTimeP50Minutes": 6.4,
+          "cycleTimeP90Minutes": 14.5,
+          "rework": {
+            "merges": 2,
+            "fixMerges": 2,
+            "fixShare": 100,
+            "attributed": 2,
+            "medianHoursToRework": 537,
+            "p90HoursToRework": 538.2,
+            "correctedWithin1hShare": 0,
+            "correctedWithin24hShare": 0
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": 0.6,
+            "greenToMergeP90Minutes": 0.7,
+            "greenToMergeMaxMinutes": 0.7,
+            "repushRate": 50,
+            "racedShare": 0,
+            "prsMeasured": 2,
+            "prsWithGreen": 2
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 6,
+            "failures": 0,
+            "redMinutes": 0,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 2,
+            "prsUnmeasured": 0,
+            "workflowRuns": 14,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-app": {
+          "role": "sibling",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 0,
+          "workMix": {
+            "merges": 0,
+            "delivery": null,
+            "rework": null,
+            "toil": null,
+            "quality": null,
+            "docs": null,
+            "unconventional": null,
+            "toilRatio": null,
+            "counts": {
+              "delivery": 0,
+              "rework": 0,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 0
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 0,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 0,
+            "coverage": null,
+            "hoursP50": null,
+            "hoursP90": null,
+            "hoursMax": null,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": null,
+          "revisionsP50": null,
+          "revisionsP90": null,
+          "landedFirstPushRate": null,
+          "cycleTimeP50Minutes": null,
+          "cycleTimeP90Minutes": null,
+          "rework": {
+            "merges": 0,
+            "fixMerges": null,
+            "fixShare": null,
+            "attributed": null,
+            "medianHoursToRework": null,
+            "p90HoursToRework": null,
+            "correctedWithin1hShare": null,
+            "correctedWithin24hShare": null
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": null,
+            "greenToMergeP90Minutes": null,
+            "greenToMergeMaxMinutes": null,
+            "repushRate": null,
+            "racedShare": null,
+            "prsMeasured": 0,
+            "prsWithGreen": 0
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 0,
+            "failures": null,
+            "redMinutes": null,
+            "unresolvedFailures": null
+          },
+          "coverage": {
+            "prsMeasured": 0,
+            "prsUnmeasured": 0,
+            "workflowRuns": 1,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-runners": {
+          "role": "infra",
+          "side": "product",
+          "defaultBranch": "main",
+          "mergedPrs": 0,
+          "workMix": {
+            "merges": 0,
+            "delivery": null,
+            "rework": null,
+            "toil": null,
+            "quality": null,
+            "docs": null,
+            "unconventional": null,
+            "toilRatio": null,
+            "counts": {
+              "delivery": 0,
+              "rework": 0,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 0
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 0,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 0,
+            "coverage": null,
+            "hoursP50": null,
+            "hoursP90": null,
+            "hoursMax": null,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": null,
+          "revisionsP50": null,
+          "revisionsP90": null,
+          "landedFirstPushRate": null,
+          "cycleTimeP50Minutes": null,
+          "cycleTimeP90Minutes": null,
+          "rework": {
+            "merges": 0,
+            "fixMerges": null,
+            "fixShare": null,
+            "attributed": null,
+            "medianHoursToRework": null,
+            "p90HoursToRework": null,
+            "correctedWithin1hShare": null,
+            "correctedWithin24hShare": null
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": null,
+            "greenToMergeP90Minutes": null,
+            "greenToMergeMaxMinutes": null,
+            "repushRate": null,
+            "racedShare": null,
+            "prsMeasured": 0,
+            "prsWithGreen": 0
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 0,
+            "failures": null,
+            "redMinutes": null,
+            "unresolvedFailures": null
+          },
+          "coverage": {
+            "prsMeasured": 0,
+            "prsUnmeasured": 0,
+            "workflowRuns": 0,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-data-model-design": {
+          "role": "design",
+          "side": "product",
+          "defaultBranch": "main",
+          "mergedPrs": 0,
+          "workMix": {
+            "merges": 0,
+            "delivery": null,
+            "rework": null,
+            "toil": null,
+            "quality": null,
+            "docs": null,
+            "unconventional": null,
+            "toilRatio": null,
+            "counts": {
+              "delivery": 0,
+              "rework": 0,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 0
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 0,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 0,
+            "coverage": null,
+            "hoursP50": null,
+            "hoursP90": null,
+            "hoursMax": null,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": null,
+          "revisionsP50": null,
+          "revisionsP90": null,
+          "landedFirstPushRate": null,
+          "cycleTimeP50Minutes": null,
+          "cycleTimeP90Minutes": null,
+          "rework": {
+            "merges": 0,
+            "fixMerges": null,
+            "fixShare": null,
+            "attributed": null,
+            "medianHoursToRework": null,
+            "p90HoursToRework": null,
+            "correctedWithin1hShare": null,
+            "correctedWithin24hShare": null
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": null,
+            "greenToMergeP90Minutes": null,
+            "greenToMergeMaxMinutes": null,
+            "repushRate": null,
+            "racedShare": null,
+            "prsMeasured": 0,
+            "prsWithGreen": 0
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 0,
+            "failures": null,
+            "redMinutes": null,
+            "unresolvedFailures": null
+          },
+          "coverage": {
+            "prsMeasured": 0,
+            "prsUnmeasured": 0,
+            "workflowRuns": 0,
+            "reworkSource": "git-blame"
+          }
+        }
+      },
+      "estate": {
+        "merges": 74,
+        "platformShare": 44.6,
+        "productShare": 55.4,
+        "toilRatio": 51.4,
+        "capabilityShare": 31.1,
+        "capabilityBySide": {
+          "platform": {
+            "merges": 10,
+            "share": 13.5
+          },
+          "product": {
+            "merges": 13,
+            "share": 17.6
+          }
+        },
+        "tabsiiCapabilityShare": 17.6,
+        "contentionHours": 8.1,
+        "bySide": {
+          "platform": {
+            "merges": 33,
+            "share": 44.6
+          },
+          "product": {
+            "merges": 41,
+            "share": 55.4
+          }
+        },
+        "note": "merges are a proxy for effort, not a measure of time"
+      }
+    },
+    "7": {
+      "since": "2026-07-21T14:47:07.500Z",
+      "repos": {
+        "keiranholloway/biffo-template": {
+          "error": "unmeasured"
+        },
+        "keiranholloway/biffo-platform": {
+          "role": "instance",
+          "side": "platform",
+          "defaultBranch": "dev",
+          "mergedPrs": 81,
+          "workMix": {
+            "merges": 81,
+            "delivery": 22.2,
+            "rework": 16,
+            "toil": 50.6,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 11.1,
+            "toilRatio": 66.7,
+            "counts": {
+              "delivery": 18,
+              "rework": 13,
+              "toil": 41,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 9,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 81,
+              "product": 0
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 4,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 77,
+            "coverage": 4.9,
+            "hoursP50": 0.4,
+            "hoursP90": 2.6,
+            "hoursMax": 2.6,
+            "running": {
+              "measured": 4,
+              "awaitingDeploy": 0,
+              "hoursP50": 0.5,
+              "hoursP90": 2.6,
+              "deployGapP50": 0.1,
+              "deployGapP90": 0.2
+            },
+            "crossRepo": {
+              "upgradePrs": 4,
+              "carriedPrs": 32,
+              "carriedWithoutIssue": 32,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 11.1,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 72.8,
+          "cycleTimeP50Minutes": 7,
+          "cycleTimeP90Minutes": 25.9,
+          "rework": {
+            "merges": 81,
+            "fixMerges": 13,
+            "fixShare": 16,
+            "attributed": 12,
+            "medianHoursToRework": 4.6,
+            "p90HoursToRework": 20,
+            "correctedWithin1hShare": 33.3,
+            "correctedWithin24hShare": 91.7
+          },
+          "contention": {
+            "greenButUnmergedHours": 8.3,
+            "greenToMergeP50Minutes": 0.5,
+            "greenToMergeP90Minutes": 17.4,
+            "greenToMergeMaxMinutes": 171.7,
+            "repushRate": 27.2,
+            "racedShare": 4.9,
+            "prsMeasured": 81,
+            "prsWithGreen": 81
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 268,
+            "failures": 8,
+            "redMinutes": 369.3,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 81,
+            "prsUnmeasured": 0,
+            "workflowRuns": 466,
+            "reworkSource": "git-blame"
+          }
+        },
+        "keiranholloway/biffo-platform-app": {
+          "role": "sibling",
+          "side": "platform",
+          "defaultBranch": "dev",
+          "mergedPrs": 7,
+          "workMix": {
+            "merges": 9,
+            "delivery": 66.7,
+            "rework": 33.3,
+            "toil": 0,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 33.3,
+            "counts": {
+              "delivery": 6,
+              "rework": 3,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 9,
+              "product": 0
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 1,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 6,
+            "coverage": 14.3,
+            "hoursP50": 7,
+            "hoursP90": 7,
+            "hoursMax": 7,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 1,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 28.6,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 71.4,
+          "cycleTimeP50Minutes": 6.1,
+          "cycleTimeP90Minutes": 30.4,
+          "rework": {
+            "merges": 9,
+            "fixMerges": 3,
+            "fixShare": 33.3,
+            "attributed": 3,
+            "medianHoursToRework": 47.7,
+            "p90HoursToRework": 70.7,
+            "correctedWithin1hShare": 0,
+            "correctedWithin24hShare": 33.3
+          },
+          "contention": {
+            "greenButUnmergedHours": 0.4,
+            "greenToMergeP50Minutes": 0.6,
+            "greenToMergeP90Minutes": 18.5,
+            "greenToMergeMaxMinutes": 18.5,
+            "repushRate": 28.6,
+            "racedShare": 0,
+            "prsMeasured": 7,
+            "prsWithGreen": 7
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 27,
+            "failures": 1,
+            "redMinutes": 158.6,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 7,
+            "prsUnmeasured": 0,
+            "workflowRuns": 50,
+            "reworkSource": "git-blame"
+          }
+        },
+        "keiranholloway/biffo-plugin-ideation": {
+          "role": "plugin",
+          "side": "platform",
+          "defaultBranch": "dev",
+          "mergedPrs": 36,
+          "workMix": {
+            "merges": 37,
+            "delivery": 40.5,
+            "rework": 32.4,
+            "toil": 16.2,
+            "quality": 2.7,
+            "docs": 0,
+            "unconventional": 8.1,
+            "toilRatio": 48.6,
+            "counts": {
+              "delivery": 15,
+              "rework": 12,
+              "toil": 6,
+              "quality": 1,
+              "docs": 0,
+              "unconventional": 3,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 37,
+              "product": 0
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 18,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 26,
+            "coverage": 50,
+            "hoursP50": 1.9,
+            "hoursP90": 4.2,
+            "hoursMax": 6.9,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 18,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 11.4,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 82.9,
+          "cycleTimeP50Minutes": 3.8,
+          "cycleTimeP90Minutes": 21.3,
+          "rework": {
+            "merges": 37,
+            "fixMerges": 12,
+            "fixShare": 32.4,
+            "attributed": 10,
+            "medianHoursToRework": 4.4,
+            "p90HoursToRework": 16.7,
+            "correctedWithin1hShare": 10,
+            "correctedWithin24hShare": 90
+          },
+          "contention": {
+            "greenButUnmergedHours": 1.8,
+            "greenToMergeP50Minutes": 0.4,
+            "greenToMergeP90Minutes": 5.2,
+            "greenToMergeMaxMinutes": 41.5,
+            "repushRate": 17.1,
+            "racedShare": 2.9,
+            "prsMeasured": 35,
+            "prsWithGreen": 34
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 21,
+            "failures": 0,
+            "redMinutes": 0,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 35,
+            "prsUnmeasured": 1,
+            "workflowRuns": 80,
+            "reworkSource": "git-blame"
+          }
+        },
+        "keiranholloway/biffo-plugin-idea-scout": {
+          "role": "plugin",
+          "side": "platform",
+          "defaultBranch": "dev",
+          "mergedPrs": 17,
+          "workMix": {
+            "merges": 19,
+            "delivery": 47.4,
+            "rework": 31.6,
+            "toil": 21.1,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 52.6,
+            "counts": {
+              "delivery": 9,
+              "rework": 6,
+              "toil": 4,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 19,
+              "product": 0
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 9,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 8,
+            "coverage": 52.9,
+            "hoursP50": 1.9,
+            "hoursP90": 18.7,
+            "hoursMax": 18.7,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 9,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 0,
+          "revisionsP50": 0,
+          "revisionsP90": 0,
+          "landedFirstPushRate": 94.1,
+          "cycleTimeP50Minutes": 4.7,
+          "cycleTimeP90Minutes": 10.8,
+          "rework": {
+            "merges": 19,
+            "fixMerges": 6,
+            "fixShare": 31.6,
+            "attributed": 6,
+            "medianHoursToRework": 7.1,
+            "p90HoursToRework": 18.8,
+            "correctedWithin1hShare": 16.7,
+            "correctedWithin24hShare": 100
+          },
+          "contention": {
+            "greenButUnmergedHours": 0.4,
+            "greenToMergeP50Minutes": 0.4,
+            "greenToMergeP90Minutes": 6.3,
+            "greenToMergeMaxMinutes": 10.9,
+            "repushRate": 5.9,
+            "racedShare": 5.9,
+            "prsMeasured": 17,
+            "prsWithGreen": 17
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 20,
+            "failures": 2,
+            "redMinutes": 126.2,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 17,
+            "prsUnmeasured": 0,
+            "workflowRuns": 39,
+            "reworkSource": "git-blame"
+          }
+        },
+        "keiranholloway/biffo-runners": {
+          "role": "infra",
+          "side": "platform",
+          "defaultBranch": "",
+          "mergedPrs": 0,
+          "workMix": {
+            "merges": null,
+            "delivery": null,
+            "rework": null,
+            "toil": null,
+            "quality": null,
+            "docs": null,
+            "unconventional": null,
+            "toilRatio": null,
+            "counts": null,
+            "sideCounts": null,
+            "productDelivery": null
+          },
+          "timeToFeature": {
+            "linked": 0,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 0,
+            "coverage": null,
+            "hoursP50": null,
+            "hoursP90": null,
+            "hoursMax": null,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": null,
+          "revisionsP50": null,
+          "revisionsP90": null,
+          "landedFirstPushRate": null,
+          "cycleTimeP50Minutes": null,
+          "cycleTimeP90Minutes": null,
+          "rework": {
+            "merges": null,
+            "fixMerges": null,
+            "fixShare": null,
+            "attributed": null,
+            "medianHoursToRework": null,
+            "p90HoursToRework": null,
+            "correctedWithin1hShare": null,
+            "correctedWithin24hShare": null
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": null,
+            "greenToMergeP90Minutes": null,
+            "greenToMergeMaxMinutes": null,
+            "repushRate": null,
+            "racedShare": null,
+            "prsMeasured": 0,
+            "prsWithGreen": 0
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 0,
+            "failures": null,
+            "redMinutes": null,
+            "unresolvedFailures": null
+          },
+          "coverage": {
+            "prsMeasured": 0,
+            "prsUnmeasured": 0,
+            "workflowRuns": 0,
+            "reworkSource": "unavailable"
+          }
+        },
+        "tabsii-com/tabsii-platform": {
+          "role": "instance",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 97,
+          "workMix": {
+            "merges": 101,
+            "delivery": 12.9,
+            "rework": 8.9,
+            "toil": 37.6,
+            "quality": 10.9,
+            "docs": 7.9,
+            "unconventional": 21.8,
+            "toilRatio": 46.5,
+            "counts": {
+              "delivery": 13,
+              "rework": 9,
+              "toil": 38,
+              "quality": 11,
+              "docs": 8,
+              "unconventional": 22,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 22,
+              "product": 79
+            },
+            "productDelivery": 11
+          },
+          "timeToFeature": {
+            "linked": 14,
+            "unresolved": 1,
+            "prsWithNoClosingIssue": 82,
+            "coverage": 14.4,
+            "hoursP50": 4.3,
+            "hoursP90": 96.4,
+            "hoursMax": 99.9,
+            "running": {
+              "measured": 14,
+              "awaitingDeploy": 0,
+              "hoursP50": 4.5,
+              "hoursP90": 96.6,
+              "deployGapP50": 0.2,
+              "deployGapP90": 0.2
+            },
+            "crossRepo": {
+              "upgradePrs": 3,
+              "carriedPrs": 27,
+              "carriedWithoutIssue": 27,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 18.8,
+          "revisionsP50": 0,
+          "revisionsP90": 2,
+          "landedFirstPushRate": 65.6,
+          "cycleTimeP50Minutes": 10.4,
+          "cycleTimeP90Minutes": 37.8,
+          "rework": {
+            "merges": 101,
+            "fixMerges": 9,
+            "fixShare": 8.9,
+            "attributed": 9,
+            "medianHoursToRework": 19.7,
+            "p90HoursToRework": 356.5,
+            "correctedWithin1hShare": 11.1,
+            "correctedWithin24hShare": 55.6
+          },
+          "contention": {
+            "greenButUnmergedHours": 18.5,
+            "greenToMergeP50Minutes": 2.4,
+            "greenToMergeP90Minutes": 18.5,
+            "greenToMergeMaxMinutes": 538.5,
+            "repushRate": 34.4,
+            "racedShare": 12.5,
+            "prsMeasured": 96,
+            "prsWithGreen": 94
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 354,
+            "failures": 7,
+            "redMinutes": 161.4,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 96,
+            "prsUnmeasured": 1,
+            "workflowRuns": 692,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-crm": {
+          "role": "sibling",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 18,
+          "workMix": {
+            "merges": 18,
+            "delivery": 61.1,
+            "rework": 27.8,
+            "toil": 0,
+            "quality": 11.1,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 27.8,
+            "counts": {
+              "delivery": 11,
+              "rework": 5,
+              "toil": 0,
+              "quality": 2,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 18
+            },
+            "productDelivery": 11
+          },
+          "timeToFeature": {
+            "linked": 1,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 17,
+            "coverage": 5.6,
+            "hoursP50": 1.2,
+            "hoursP90": 1.2,
+            "hoursMax": 1.2,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 1,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 5.6,
+          "revisionsP50": 0,
+          "revisionsP90": 0,
+          "landedFirstPushRate": 94.4,
+          "cycleTimeP50Minutes": 7.7,
+          "cycleTimeP90Minutes": 29.9,
+          "rework": {
+            "merges": 18,
+            "fixMerges": 5,
+            "fixShare": 27.8,
+            "attributed": 4,
+            "medianHoursToRework": 1.8,
+            "p90HoursToRework": 14.8,
+            "correctedWithin1hShare": 25,
+            "correctedWithin24hShare": 100
+          },
+          "contention": {
+            "greenButUnmergedHours": 2.1,
+            "greenToMergeP50Minutes": 0.6,
+            "greenToMergeP90Minutes": 22.1,
+            "greenToMergeMaxMinutes": 38.7,
+            "repushRate": 5.6,
+            "racedShare": 0,
+            "prsMeasured": 18,
+            "prsWithGreen": 18
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 54,
+            "failures": 0,
+            "redMinutes": 0,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 18,
+            "prsUnmeasured": 0,
+            "workflowRuns": 94,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-intake": {
+          "role": "sibling",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 4,
+          "workMix": {
+            "merges": 4,
+            "delivery": 25,
+            "rework": 50,
+            "toil": 25,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 75,
+            "counts": {
+              "delivery": 1,
+              "rework": 2,
+              "toil": 1,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 4
+            },
+            "productDelivery": 1
+          },
+          "timeToFeature": {
+            "linked": 1,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 3,
+            "coverage": 25,
+            "hoursP50": 1.4,
+            "hoursP90": 1.4,
+            "hoursMax": 1.4,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 1,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 25,
+          "revisionsP50": 0,
+          "revisionsP90": 2,
+          "landedFirstPushRate": 75,
+          "cycleTimeP50Minutes": 6.1,
+          "cycleTimeP90Minutes": 88.5,
+          "rework": {
+            "merges": 4,
+            "fixMerges": 2,
+            "fixShare": 50,
+            "attributed": 2,
+            "medianHoursToRework": 0.3,
+            "p90HoursToRework": 2.5,
+            "correctedWithin1hShare": 50,
+            "correctedWithin24hShare": 100
+          },
+          "contention": {
+            "greenButUnmergedHours": 1.4,
+            "greenToMergeP50Minutes": 0.4,
+            "greenToMergeP90Minutes": 68.8,
+            "greenToMergeMaxMinutes": 68.8,
+            "repushRate": 25,
+            "racedShare": 25,
+            "prsMeasured": 4,
+            "prsWithGreen": 4
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 8,
+            "failures": 0,
+            "redMinutes": 0,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 4,
+            "prsUnmeasured": 0,
+            "workflowRuns": 15,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-map": {
+          "role": "package",
+          "side": "product",
+          "defaultBranch": "main",
+          "mergedPrs": 5,
+          "workMix": {
+            "merges": 5,
+            "delivery": 40,
+            "rework": 60,
+            "toil": 0,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 60,
+            "counts": {
+              "delivery": 2,
+              "rework": 3,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 5
+            },
+            "productDelivery": 2
+          },
+          "timeToFeature": {
+            "linked": 0,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 5,
+            "coverage": 0,
+            "hoursP50": null,
+            "hoursP90": null,
+            "hoursMax": null,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": null,
+          "revisionsP50": null,
+          "revisionsP90": null,
+          "landedFirstPushRate": null,
+          "cycleTimeP50Minutes": 0.4,
+          "cycleTimeP90Minutes": 3.2,
+          "rework": {
+            "merges": 5,
+            "fixMerges": 3,
+            "fixShare": 60,
+            "attributed": 3,
+            "medianHoursToRework": 1.7,
+            "p90HoursToRework": 4.8,
+            "correctedWithin1hShare": 33.3,
+            "correctedWithin24hShare": 100
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": null,
+            "greenToMergeP90Minutes": null,
+            "greenToMergeMaxMinutes": null,
+            "repushRate": null,
+            "racedShare": null,
+            "prsMeasured": 0,
+            "prsWithGreen": 0
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 0,
+            "failures": null,
+            "redMinutes": null,
+            "unresolvedFailures": null
+          },
+          "coverage": {
+            "prsMeasured": 0,
+            "prsUnmeasured": 5,
+            "workflowRuns": 5,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-geo": {
+          "role": "sibling",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 5,
+          "workMix": {
+            "merges": 5,
+            "delivery": 0,
+            "rework": 20,
+            "toil": 80,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 100,
+            "counts": {
+              "delivery": 0,
+              "rework": 1,
+              "toil": 4,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 5
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 2,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 3,
+            "coverage": 40,
+            "hoursP50": 0.5,
+            "hoursP90": 1.2,
+            "hoursMax": 1.2,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 2,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 20,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 80,
+          "cycleTimeP50Minutes": 6.9,
+          "cycleTimeP90Minutes": 18.6,
+          "rework": {
+            "merges": 5,
+            "fixMerges": 1,
+            "fixShare": 20,
+            "attributed": 1,
+            "medianHoursToRework": 458.9,
+            "p90HoursToRework": 458.9,
+            "correctedWithin1hShare": 0,
+            "correctedWithin24hShare": 0
+          },
+          "contention": {
+            "greenButUnmergedHours": 0.1,
+            "greenToMergeP50Minutes": 0.7,
+            "greenToMergeP90Minutes": 0.8,
+            "greenToMergeMaxMinutes": 0.8,
+            "repushRate": 20,
+            "racedShare": 0,
+            "prsMeasured": 5,
+            "prsWithGreen": 5
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 15,
+            "failures": 0,
+            "redMinutes": 0,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 5,
+            "prsUnmeasured": 0,
+            "workflowRuns": 29,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-marketplace": {
+          "role": "sibling",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 2,
+          "workMix": {
+            "merges": 2,
+            "delivery": 0,
+            "rework": 100,
+            "toil": 0,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 100,
+            "counts": {
+              "delivery": 0,
+              "rework": 2,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 2
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 1,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 1,
+            "coverage": 50,
+            "hoursP50": 0.4,
+            "hoursP90": 0.4,
+            "hoursMax": 0.4,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 1,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 50,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 50,
+          "cycleTimeP50Minutes": 6.4,
+          "cycleTimeP90Minutes": 14.5,
+          "rework": {
+            "merges": 2,
+            "fixMerges": 2,
+            "fixShare": 100,
+            "attributed": 2,
+            "medianHoursToRework": 537,
+            "p90HoursToRework": 538.2,
+            "correctedWithin1hShare": 0,
+            "correctedWithin24hShare": 0
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": 0.6,
+            "greenToMergeP90Minutes": 0.7,
+            "greenToMergeMaxMinutes": 0.7,
+            "repushRate": 50,
+            "racedShare": 0,
+            "prsMeasured": 2,
+            "prsWithGreen": 2
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 6,
+            "failures": 0,
+            "redMinutes": 0,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 2,
+            "prsUnmeasured": 0,
+            "workflowRuns": 15,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-app": {
+          "role": "sibling",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 2,
+          "workMix": {
+            "merges": 3,
+            "delivery": 66.7,
+            "rework": 33.3,
+            "toil": 0,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 33.3,
+            "counts": {
+              "delivery": 2,
+              "rework": 1,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 3
+            },
+            "productDelivery": 2
+          },
+          "timeToFeature": {
+            "linked": 0,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 2,
+            "coverage": 0,
+            "hoursP50": null,
+            "hoursP90": null,
+            "hoursMax": null,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 50,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 50,
+          "cycleTimeP50Minutes": 5.8,
+          "cycleTimeP90Minutes": 514.1,
+          "rework": {
+            "merges": 3,
+            "fixMerges": 1,
+            "fixShare": 33.3,
+            "attributed": 1,
+            "medianHoursToRework": 1.5,
+            "p90HoursToRework": 1.5,
+            "correctedWithin1hShare": 0,
+            "correctedWithin24hShare": 100
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": 0.2,
+            "greenToMergeP90Minutes": 0.4,
+            "greenToMergeMaxMinutes": 0.4,
+            "repushRate": 50,
+            "racedShare": 0,
+            "prsMeasured": 2,
+            "prsWithGreen": 2
+          },
+          "flakes": {
+            "pairs": 1,
+            "shas": [
+              "7f9401d50b4b79200b9b461eb104651a472434d8"
+            ]
+          },
+          "integration": {
+            "runs": 9,
+            "failures": 3,
+            "redMinutes": 1151.5,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 2,
+            "prsUnmeasured": 0,
+            "workflowRuns": 26,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-runners": {
+          "role": "infra",
+          "side": "product",
+          "defaultBranch": "main",
+          "mergedPrs": 1,
+          "workMix": {
+            "merges": 1,
+            "delivery": 0,
+            "rework": 0,
+            "toil": 0,
+            "quality": 0,
+            "docs": 100,
+            "unconventional": 0,
+            "toilRatio": 0,
+            "counts": {
+              "delivery": 0,
+              "rework": 0,
+              "toil": 0,
+              "quality": 0,
+              "docs": 1,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 1
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 0,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 1,
+            "coverage": 0,
+            "hoursP50": null,
+            "hoursP90": null,
+            "hoursMax": null,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": null,
+          "revisionsP50": null,
+          "revisionsP90": null,
+          "landedFirstPushRate": null,
+          "cycleTimeP50Minutes": 5488.4,
+          "cycleTimeP90Minutes": 5488.4,
+          "rework": {
+            "merges": 1,
+            "fixMerges": 0,
+            "fixShare": 0,
+            "attributed": 0,
+            "medianHoursToRework": null,
+            "p90HoursToRework": null,
+            "correctedWithin1hShare": null,
+            "correctedWithin24hShare": null
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": null,
+            "greenToMergeP90Minutes": null,
+            "greenToMergeMaxMinutes": null,
+            "repushRate": null,
+            "racedShare": null,
+            "prsMeasured": 0,
+            "prsWithGreen": 0
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 0,
+            "failures": null,
+            "redMinutes": null,
+            "unresolvedFailures": null
+          },
+          "coverage": {
+            "prsMeasured": 0,
+            "prsUnmeasured": 1,
+            "workflowRuns": 0,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-data-model-design": {
+          "role": "design",
+          "side": "product",
+          "defaultBranch": "main",
+          "mergedPrs": 0,
+          "workMix": {
+            "merges": 0,
+            "delivery": null,
+            "rework": null,
+            "toil": null,
+            "quality": null,
+            "docs": null,
+            "unconventional": null,
+            "toilRatio": null,
+            "counts": {
+              "delivery": 0,
+              "rework": 0,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 0
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 0,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 0,
+            "coverage": null,
+            "hoursP50": null,
+            "hoursP90": null,
+            "hoursMax": null,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": null,
+          "revisionsP50": null,
+          "revisionsP90": null,
+          "landedFirstPushRate": null,
+          "cycleTimeP50Minutes": null,
+          "cycleTimeP90Minutes": null,
+          "rework": {
+            "merges": 0,
+            "fixMerges": null,
+            "fixShare": null,
+            "attributed": null,
+            "medianHoursToRework": null,
+            "p90HoursToRework": null,
+            "correctedWithin1hShare": null,
+            "correctedWithin24hShare": null
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": null,
+            "greenToMergeP90Minutes": null,
+            "greenToMergeMaxMinutes": null,
+            "repushRate": null,
+            "racedShare": null,
+            "prsMeasured": 0,
+            "prsWithGreen": 0
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 0,
+            "failures": null,
+            "redMinutes": null,
+            "unresolvedFailures": null
+          },
+          "coverage": {
+            "prsMeasured": 0,
+            "prsUnmeasured": 0,
+            "workflowRuns": 0,
+            "reworkSource": "git-blame"
+          }
+        }
+      },
+      "estate": {
+        "merges": 285,
+        "platformShare": 58.9,
+        "productShare": 41.1,
+        "toilRatio": 53,
+        "capabilityShare": 27,
+        "capabilityBySide": {
+          "platform": {
+            "merges": 50,
+            "share": 17.5
+          },
+          "product": {
+            "merges": 27,
+            "share": 9.5
+          }
+        },
+        "tabsiiCapabilityShare": 9.5,
+        "contentionHours": 33,
+        "bySide": {
+          "platform": {
+            "merges": 168,
+            "share": 58.9
+          },
+          "product": {
+            "merges": 117,
+            "share": 41.1
+          }
+        },
+        "note": "merges are a proxy for effort, not a measure of time"
+      }
+    },
+    "90": {
+      "since": "2026-04-29T14:47:07.509Z",
+      "repos": {
+        "keiranholloway/biffo-template": {
+          "error": "unmeasured"
+        },
+        "keiranholloway/biffo-platform": {
+          "role": "instance",
+          "side": "platform",
+          "defaultBranch": "dev",
+          "mergedPrs": 82,
+          "workMix": {
+            "merges": 84,
+            "delivery": 21.4,
+            "rework": 15.5,
+            "toil": 51.2,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 11.9,
+            "toilRatio": 66.7,
+            "counts": {
+              "delivery": 18,
+              "rework": 13,
+              "toil": 43,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 10,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 84,
+              "product": 0
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 4,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 78,
+            "coverage": 4.9,
+            "hoursP50": 0.4,
+            "hoursP90": 2.6,
+            "hoursMax": 2.6,
+            "running": {
+              "measured": 4,
+              "awaitingDeploy": 0,
+              "hoursP50": 0.5,
+              "hoursP90": 2.6,
+              "deployGapP50": 0.1,
+              "deployGapP90": 0.2
+            },
+            "crossRepo": {
+              "upgradePrs": 4,
+              "carriedPrs": 32,
+              "carriedWithoutIssue": 32,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 11,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 73.2,
+          "cycleTimeP50Minutes": 7,
+          "cycleTimeP90Minutes": 25.9,
+          "rework": {
+            "merges": 84,
+            "fixMerges": 13,
+            "fixShare": 15.5,
+            "attributed": 12,
+            "medianHoursToRework": 4.6,
+            "p90HoursToRework": 20,
+            "correctedWithin1hShare": 33.3,
+            "correctedWithin24hShare": 91.7
+          },
+          "contention": {
+            "greenButUnmergedHours": 8.3,
+            "greenToMergeP50Minutes": 0.5,
+            "greenToMergeP90Minutes": 17.4,
+            "greenToMergeMaxMinutes": 171.7,
+            "repushRate": 26.8,
+            "racedShare": 4.9,
+            "prsMeasured": 82,
+            "prsWithGreen": 82
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 274,
+            "failures": 8,
+            "redMinutes": 369.3,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 82,
+            "prsUnmeasured": 0,
+            "workflowRuns": 493,
+            "reworkSource": "git-blame"
+          }
+        },
+        "keiranholloway/biffo-platform-app": {
+          "role": "sibling",
+          "side": "platform",
+          "defaultBranch": "dev",
+          "mergedPrs": 7,
+          "workMix": {
+            "merges": 10,
+            "delivery": 70,
+            "rework": 30,
+            "toil": 0,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 30,
+            "counts": {
+              "delivery": 7,
+              "rework": 3,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 10,
+              "product": 0
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 1,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 6,
+            "coverage": 14.3,
+            "hoursP50": 7,
+            "hoursP90": 7,
+            "hoursMax": 7,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 1,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 28.6,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 71.4,
+          "cycleTimeP50Minutes": 6.1,
+          "cycleTimeP90Minutes": 30.4,
+          "rework": {
+            "merges": 10,
+            "fixMerges": 3,
+            "fixShare": 30,
+            "attributed": 3,
+            "medianHoursToRework": 47.7,
+            "p90HoursToRework": 70.7,
+            "correctedWithin1hShare": 0,
+            "correctedWithin24hShare": 33.3
+          },
+          "contention": {
+            "greenButUnmergedHours": 0.4,
+            "greenToMergeP50Minutes": 0.6,
+            "greenToMergeP90Minutes": 18.5,
+            "greenToMergeMaxMinutes": 18.5,
+            "repushRate": 28.6,
+            "racedShare": 0,
+            "prsMeasured": 7,
+            "prsWithGreen": 7
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 30,
+            "failures": 2,
+            "redMinutes": 3019.2,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 7,
+            "prsUnmeasured": 0,
+            "workflowRuns": 61,
+            "reworkSource": "git-blame"
+          }
+        },
+        "keiranholloway/biffo-plugin-ideation": {
+          "role": "plugin",
+          "side": "platform",
+          "defaultBranch": "dev",
+          "mergedPrs": 36,
+          "workMix": {
+            "merges": 37,
+            "delivery": 40.5,
+            "rework": 32.4,
+            "toil": 16.2,
+            "quality": 2.7,
+            "docs": 0,
+            "unconventional": 8.1,
+            "toilRatio": 48.6,
+            "counts": {
+              "delivery": 15,
+              "rework": 12,
+              "toil": 6,
+              "quality": 1,
+              "docs": 0,
+              "unconventional": 3,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 37,
+              "product": 0
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 18,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 26,
+            "coverage": 50,
+            "hoursP50": 1.9,
+            "hoursP90": 4.2,
+            "hoursMax": 6.9,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 18,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 11.4,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 82.9,
+          "cycleTimeP50Minutes": 3.8,
+          "cycleTimeP90Minutes": 21.3,
+          "rework": {
+            "merges": 37,
+            "fixMerges": 12,
+            "fixShare": 32.4,
+            "attributed": 10,
+            "medianHoursToRework": 4.4,
+            "p90HoursToRework": 16.7,
+            "correctedWithin1hShare": 10,
+            "correctedWithin24hShare": 90
+          },
+          "contention": {
+            "greenButUnmergedHours": 1.8,
+            "greenToMergeP50Minutes": 0.4,
+            "greenToMergeP90Minutes": 5.2,
+            "greenToMergeMaxMinutes": 41.5,
+            "repushRate": 17.1,
+            "racedShare": 2.9,
+            "prsMeasured": 35,
+            "prsWithGreen": 34
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 21,
+            "failures": 0,
+            "redMinutes": 0,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 35,
+            "prsUnmeasured": 1,
+            "workflowRuns": 80,
+            "reworkSource": "git-blame"
+          }
+        },
+        "keiranholloway/biffo-plugin-idea-scout": {
+          "role": "plugin",
+          "side": "platform",
+          "defaultBranch": "dev",
+          "mergedPrs": 17,
+          "workMix": {
+            "merges": 19,
+            "delivery": 47.4,
+            "rework": 31.6,
+            "toil": 21.1,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 52.6,
+            "counts": {
+              "delivery": 9,
+              "rework": 6,
+              "toil": 4,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 19,
+              "product": 0
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 9,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 8,
+            "coverage": 52.9,
+            "hoursP50": 1.9,
+            "hoursP90": 18.7,
+            "hoursMax": 18.7,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 9,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 0,
+          "revisionsP50": 0,
+          "revisionsP90": 0,
+          "landedFirstPushRate": 94.1,
+          "cycleTimeP50Minutes": 4.7,
+          "cycleTimeP90Minutes": 10.8,
+          "rework": {
+            "merges": 19,
+            "fixMerges": 6,
+            "fixShare": 31.6,
+            "attributed": 6,
+            "medianHoursToRework": 7.1,
+            "p90HoursToRework": 18.8,
+            "correctedWithin1hShare": 16.7,
+            "correctedWithin24hShare": 100
+          },
+          "contention": {
+            "greenButUnmergedHours": 0.4,
+            "greenToMergeP50Minutes": 0.4,
+            "greenToMergeP90Minutes": 6.3,
+            "greenToMergeMaxMinutes": 10.9,
+            "repushRate": 5.9,
+            "racedShare": 5.9,
+            "prsMeasured": 17,
+            "prsWithGreen": 17
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 20,
+            "failures": 2,
+            "redMinutes": 126.2,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 17,
+            "prsUnmeasured": 0,
+            "workflowRuns": 39,
+            "reworkSource": "git-blame"
+          }
+        },
+        "keiranholloway/biffo-runners": {
+          "role": "infra",
+          "side": "platform",
+          "defaultBranch": "",
+          "mergedPrs": 0,
+          "workMix": {
+            "merges": null,
+            "delivery": null,
+            "rework": null,
+            "toil": null,
+            "quality": null,
+            "docs": null,
+            "unconventional": null,
+            "toilRatio": null,
+            "counts": null,
+            "sideCounts": null,
+            "productDelivery": null
+          },
+          "timeToFeature": {
+            "linked": 0,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 0,
+            "coverage": null,
+            "hoursP50": null,
+            "hoursP90": null,
+            "hoursMax": null,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": null,
+          "revisionsP50": null,
+          "revisionsP90": null,
+          "landedFirstPushRate": null,
+          "cycleTimeP50Minutes": null,
+          "cycleTimeP90Minutes": null,
+          "rework": {
+            "merges": null,
+            "fixMerges": null,
+            "fixShare": null,
+            "attributed": null,
+            "medianHoursToRework": null,
+            "p90HoursToRework": null,
+            "correctedWithin1hShare": null,
+            "correctedWithin24hShare": null
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": null,
+            "greenToMergeP90Minutes": null,
+            "greenToMergeMaxMinutes": null,
+            "repushRate": null,
+            "racedShare": null,
+            "prsMeasured": 0,
+            "prsWithGreen": 0
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 0,
+            "failures": null,
+            "redMinutes": null,
+            "unresolvedFailures": null
+          },
+          "coverage": {
+            "prsMeasured": 0,
+            "prsUnmeasured": 0,
+            "workflowRuns": 0,
+            "reworkSource": "unavailable"
+          }
+        },
+        "tabsii-com/tabsii-platform": {
+          "role": "instance",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 237,
+          "workMix": {
+            "merges": 261,
+            "delivery": 27.6,
+            "rework": 18,
+            "toil": 24.1,
+            "quality": 5.4,
+            "docs": 6.5,
+            "unconventional": 18,
+            "toilRatio": 42.1,
+            "counts": {
+              "delivery": 72,
+              "rework": 47,
+              "toil": 63,
+              "quality": 14,
+              "docs": 17,
+              "unconventional": 47,
+              "other": 1
+            },
+            "sideCounts": {
+              "platform": 32,
+              "product": 229
+            },
+            "productDelivery": 69
+          },
+          "timeToFeature": {
+            "linked": 21,
+            "unresolved": 1,
+            "prsWithNoClosingIssue": 215,
+            "coverage": 8.9,
+            "hoursP50": 4.4,
+            "hoursP90": 21.5,
+            "hoursMax": 99.9,
+            "running": {
+              "measured": 21,
+              "awaitingDeploy": 0,
+              "hoursP50": 4.5,
+              "hoursP90": 21.7,
+              "deployGapP50": 0.2,
+              "deployGapP90": 0.2
+            },
+            "crossRepo": {
+              "upgradePrs": 3,
+              "carriedPrs": 27,
+              "carriedWithoutIssue": 27,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 21.5,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 67.1,
+          "cycleTimeP50Minutes": 8.7,
+          "cycleTimeP90Minutes": 34.2,
+          "rework": {
+            "merges": 261,
+            "fixMerges": 47,
+            "fixShare": 18,
+            "attributed": 35,
+            "medianHoursToRework": 1.3,
+            "p90HoursToRework": 124.6,
+            "correctedWithin1hShare": 45.7,
+            "correctedWithin24hShare": 85.7
+          },
+          "contention": {
+            "greenButUnmergedHours": 62.9,
+            "greenToMergeP50Minutes": 0.6,
+            "greenToMergeP90Minutes": 17,
+            "greenToMergeMaxMinutes": 987.1,
+            "repushRate": 32.9,
+            "racedShare": 8,
+            "prsMeasured": 237,
+            "prsWithGreen": 229
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 666,
+            "failures": 41,
+            "redMinutes": 2725.6,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 237,
+            "prsUnmeasured": 0,
+            "workflowRuns": 1234,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-crm": {
+          "role": "sibling",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 86,
+          "workMix": {
+            "merges": 87,
+            "delivery": 64.4,
+            "rework": 12.6,
+            "toil": 6.9,
+            "quality": 3.4,
+            "docs": 9.2,
+            "unconventional": 3.4,
+            "toilRatio": 19.5,
+            "counts": {
+              "delivery": 56,
+              "rework": 11,
+              "toil": 6,
+              "quality": 3,
+              "docs": 8,
+              "unconventional": 3,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 87
+            },
+            "productDelivery": 56
+          },
+          "timeToFeature": {
+            "linked": 13,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 73,
+            "coverage": 15.1,
+            "hoursP50": 1.8,
+            "hoursP90": 11.1,
+            "hoursMax": 21.3,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 13,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 12.8,
+          "revisionsP50": 0,
+          "revisionsP90": 0,
+          "landedFirstPushRate": 91.9,
+          "cycleTimeP50Minutes": 4.9,
+          "cycleTimeP90Minutes": 28.3,
+          "rework": {
+            "merges": 87,
+            "fixMerges": 11,
+            "fixShare": 12.6,
+            "attributed": 7,
+            "medianHoursToRework": 1.8,
+            "p90HoursToRework": 24.5,
+            "correctedWithin1hShare": 14.3,
+            "correctedWithin24hShare": 85.7
+          },
+          "contention": {
+            "greenButUnmergedHours": 9.1,
+            "greenToMergeP50Minutes": 0.5,
+            "greenToMergeP90Minutes": 9.7,
+            "greenToMergeMaxMinutes": 286.2,
+            "repushRate": 8.1,
+            "racedShare": 0,
+            "prsMeasured": 86,
+            "prsWithGreen": 81
+          },
+          "flakes": {
+            "pairs": 1,
+            "shas": [
+              "051b28628d10165932e29a73b780b8a452dbfba5"
+            ]
+          },
+          "integration": {
+            "runs": 253,
+            "failures": 8,
+            "redMinutes": 519.4,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 86,
+            "prsUnmeasured": 0,
+            "workflowRuns": 457,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-intake": {
+          "role": "sibling",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 12,
+          "workMix": {
+            "merges": 13,
+            "delivery": 53.8,
+            "rework": 23.1,
+            "toil": 15.4,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 7.7,
+            "toilRatio": 38.5,
+            "counts": {
+              "delivery": 7,
+              "rework": 3,
+              "toil": 2,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 1,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 13
+            },
+            "productDelivery": 7
+          },
+          "timeToFeature": {
+            "linked": 1,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 11,
+            "coverage": 8.3,
+            "hoursP50": 1.4,
+            "hoursP90": 1.4,
+            "hoursMax": 1.4,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 1,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 8.3,
+          "revisionsP50": 0,
+          "revisionsP90": 0,
+          "landedFirstPushRate": 91.7,
+          "cycleTimeP50Minutes": 3.2,
+          "cycleTimeP90Minutes": 88.5,
+          "rework": {
+            "merges": 13,
+            "fixMerges": 3,
+            "fixShare": 23.1,
+            "attributed": 2,
+            "medianHoursToRework": 0.3,
+            "p90HoursToRework": 2.5,
+            "correctedWithin1hShare": 50,
+            "correctedWithin24hShare": 100
+          },
+          "contention": {
+            "greenButUnmergedHours": 17.5,
+            "greenToMergeP50Minutes": 0.5,
+            "greenToMergeP90Minutes": 68.8,
+            "greenToMergeMaxMinutes": 959.2,
+            "repushRate": 8.3,
+            "racedShare": 8.3,
+            "prsMeasured": 12,
+            "prsWithGreen": 12
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 26,
+            "failures": 2,
+            "redMinutes": 95.2,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 12,
+            "prsUnmeasured": 0,
+            "workflowRuns": 51,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-map": {
+          "role": "package",
+          "side": "product",
+          "defaultBranch": "main",
+          "mergedPrs": 13,
+          "workMix": {
+            "merges": 17,
+            "delivery": 47.1,
+            "rework": 29.4,
+            "toil": 11.8,
+            "quality": 5.9,
+            "docs": 0,
+            "unconventional": 5.9,
+            "toilRatio": 41.2,
+            "counts": {
+              "delivery": 8,
+              "rework": 5,
+              "toil": 2,
+              "quality": 1,
+              "docs": 0,
+              "unconventional": 1,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 17
+            },
+            "productDelivery": 8
+          },
+          "timeToFeature": {
+            "linked": 0,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 13,
+            "coverage": 0,
+            "hoursP50": null,
+            "hoursP90": null,
+            "hoursMax": null,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": null,
+          "revisionsP50": null,
+          "revisionsP90": null,
+          "landedFirstPushRate": null,
+          "cycleTimeP50Minutes": 0.1,
+          "cycleTimeP90Minutes": 0.8,
+          "rework": {
+            "merges": 17,
+            "fixMerges": 5,
+            "fixShare": 29.4,
+            "attributed": 5,
+            "medianHoursToRework": 0.9,
+            "p90HoursToRework": 4.8,
+            "correctedWithin1hShare": 60,
+            "correctedWithin24hShare": 100
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": null,
+            "greenToMergeP90Minutes": null,
+            "greenToMergeMaxMinutes": null,
+            "repushRate": null,
+            "racedShare": null,
+            "prsMeasured": 0,
+            "prsWithGreen": 0
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 0,
+            "failures": null,
+            "redMinutes": null,
+            "unresolvedFailures": null
+          },
+          "coverage": {
+            "prsMeasured": 0,
+            "prsUnmeasured": 13,
+            "workflowRuns": 18,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-geo": {
+          "role": "sibling",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 17,
+          "workMix": {
+            "merges": 18,
+            "delivery": 33.3,
+            "rework": 5.6,
+            "toil": 27.8,
+            "quality": 5.6,
+            "docs": 27.8,
+            "unconventional": 0,
+            "toilRatio": 33.3,
+            "counts": {
+              "delivery": 6,
+              "rework": 1,
+              "toil": 5,
+              "quality": 1,
+              "docs": 5,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 18
+            },
+            "productDelivery": 6
+          },
+          "timeToFeature": {
+            "linked": 2,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 15,
+            "coverage": 11.8,
+            "hoursP50": 0.5,
+            "hoursP90": 1.2,
+            "hoursMax": 1.2,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 2,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 5.9,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 88.2,
+          "cycleTimeP50Minutes": 6.6,
+          "cycleTimeP90Minutes": 18.6,
+          "rework": {
+            "merges": 18,
+            "fixMerges": 1,
+            "fixShare": 5.6,
+            "attributed": 1,
+            "medianHoursToRework": 458.9,
+            "p90HoursToRework": 458.9,
+            "correctedWithin1hShare": 0,
+            "correctedWithin24hShare": 0
+          },
+          "contention": {
+            "greenButUnmergedHours": 0.7,
+            "greenToMergeP50Minutes": 0.5,
+            "greenToMergeP90Minutes": 5.8,
+            "greenToMergeMaxMinutes": 24.9,
+            "repushRate": 11.8,
+            "racedShare": 0,
+            "prsMeasured": 17,
+            "prsWithGreen": 17
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 54,
+            "failures": 2,
+            "redMinutes": 97.2,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 17,
+            "prsUnmeasured": 0,
+            "workflowRuns": 111,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-marketplace": {
+          "role": "sibling",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 9,
+          "workMix": {
+            "merges": 10,
+            "delivery": 70,
+            "rework": 20,
+            "toil": 0,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 10,
+            "toilRatio": 20,
+            "counts": {
+              "delivery": 7,
+              "rework": 2,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 1,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 10
+            },
+            "productDelivery": 7
+          },
+          "timeToFeature": {
+            "linked": 1,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 8,
+            "coverage": 11.1,
+            "hoursP50": 0.4,
+            "hoursP90": 0.4,
+            "hoursMax": 0.4,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 1,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 22.2,
+          "revisionsP50": 0,
+          "revisionsP90": 3,
+          "landedFirstPushRate": 66.7,
+          "cycleTimeP50Minutes": 6.3,
+          "cycleTimeP90Minutes": 42.6,
+          "rework": {
+            "merges": 10,
+            "fixMerges": 2,
+            "fixShare": 20,
+            "attributed": 2,
+            "medianHoursToRework": 537,
+            "p90HoursToRework": 538.2,
+            "correctedWithin1hShare": 0,
+            "correctedWithin24hShare": 0
+          },
+          "contention": {
+            "greenButUnmergedHours": 0.1,
+            "greenToMergeP50Minutes": 0.7,
+            "greenToMergeP90Minutes": 2.8,
+            "greenToMergeMaxMinutes": 2.8,
+            "repushRate": 33.3,
+            "racedShare": 0,
+            "prsMeasured": 9,
+            "prsWithGreen": 9
+          },
+          "flakes": {
+            "pairs": 1,
+            "shas": [
+              "0a02e6a9f73ac80f3f083893bd862fa2a05e9cf8"
+            ]
+          },
+          "integration": {
+            "runs": 30,
+            "failures": 1,
+            "redMinutes": 1562.7,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 9,
+            "prsUnmeasured": 0,
+            "workflowRuns": 74,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-app": {
+          "role": "sibling",
+          "side": "product",
+          "defaultBranch": "dev",
+          "mergedPrs": 2,
+          "workMix": {
+            "merges": 3,
+            "delivery": 66.7,
+            "rework": 33.3,
+            "toil": 0,
+            "quality": 0,
+            "docs": 0,
+            "unconventional": 0,
+            "toilRatio": 33.3,
+            "counts": {
+              "delivery": 2,
+              "rework": 1,
+              "toil": 0,
+              "quality": 0,
+              "docs": 0,
+              "unconventional": 0,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 3
+            },
+            "productDelivery": 2
+          },
+          "timeToFeature": {
+            "linked": 0,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 2,
+            "coverage": 0,
+            "hoursP50": null,
+            "hoursP90": null,
+            "hoursMax": null,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": 50,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 50,
+          "cycleTimeP50Minutes": 5.8,
+          "cycleTimeP90Minutes": 514.1,
+          "rework": {
+            "merges": 3,
+            "fixMerges": 1,
+            "fixShare": 33.3,
+            "attributed": 1,
+            "medianHoursToRework": 1.5,
+            "p90HoursToRework": 1.5,
+            "correctedWithin1hShare": 0,
+            "correctedWithin24hShare": 100
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": 0.2,
+            "greenToMergeP90Minutes": 0.4,
+            "greenToMergeMaxMinutes": 0.4,
+            "repushRate": 50,
+            "racedShare": 0,
+            "prsMeasured": 2,
+            "prsWithGreen": 2
+          },
+          "flakes": {
+            "pairs": 1,
+            "shas": [
+              "7f9401d50b4b79200b9b461eb104651a472434d8"
+            ]
+          },
+          "integration": {
+            "runs": 9,
+            "failures": 3,
+            "redMinutes": 1151.5,
+            "unresolvedFailures": 0
+          },
+          "coverage": {
+            "prsMeasured": 2,
+            "prsUnmeasured": 0,
+            "workflowRuns": 26,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-runners": {
+          "role": "infra",
+          "side": "product",
+          "defaultBranch": "main",
+          "mergedPrs": 3,
+          "workMix": {
+            "merges": 7,
+            "delivery": 0,
+            "rework": 28.6,
+            "toil": 14.3,
+            "quality": 0,
+            "docs": 42.9,
+            "unconventional": 14.3,
+            "toilRatio": 42.9,
+            "counts": {
+              "delivery": 0,
+              "rework": 2,
+              "toil": 1,
+              "quality": 0,
+              "docs": 3,
+              "unconventional": 1,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 7
+            },
+            "productDelivery": 0
+          },
+          "timeToFeature": {
+            "linked": 0,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 3,
+            "coverage": 0,
+            "hoursP50": null,
+            "hoursP90": null,
+            "hoursMax": null,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": null,
+          "revisionsP50": null,
+          "revisionsP90": null,
+          "landedFirstPushRate": null,
+          "cycleTimeP50Minutes": 286.2,
+          "cycleTimeP90Minutes": 5488.4,
+          "rework": {
+            "merges": 7,
+            "fixMerges": 2,
+            "fixShare": 28.6,
+            "attributed": 2,
+            "medianHoursToRework": 0.7,
+            "p90HoursToRework": 5,
+            "correctedWithin1hShare": 50,
+            "correctedWithin24hShare": 100
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": null,
+            "greenToMergeP90Minutes": null,
+            "greenToMergeMaxMinutes": null,
+            "repushRate": null,
+            "racedShare": null,
+            "prsMeasured": 0,
+            "prsWithGreen": 0
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 0,
+            "failures": null,
+            "redMinutes": null,
+            "unresolvedFailures": null
+          },
+          "coverage": {
+            "prsMeasured": 0,
+            "prsUnmeasured": 3,
+            "workflowRuns": 0,
+            "reworkSource": "git-blame"
+          }
+        },
+        "tabsii-com/tabsii-data-model-design": {
+          "role": "design",
+          "side": "product",
+          "defaultBranch": "main",
+          "mergedPrs": 13,
+          "workMix": {
+            "merges": 21,
+            "delivery": 14.3,
+            "rework": 9.5,
+            "toil": 0,
+            "quality": 0,
+            "docs": 9.5,
+            "unconventional": 66.7,
+            "toilRatio": 9.5,
+            "counts": {
+              "delivery": 3,
+              "rework": 2,
+              "toil": 0,
+              "quality": 0,
+              "docs": 2,
+              "unconventional": 14,
+              "other": 0
+            },
+            "sideCounts": {
+              "platform": 0,
+              "product": 21
+            },
+            "productDelivery": 3
+          },
+          "timeToFeature": {
+            "linked": 0,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 13,
+            "coverage": 0,
+            "hoursP50": null,
+            "hoursP90": null,
+            "hoursMax": null,
+            "running": {
+              "measured": 0,
+              "awaitingDeploy": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "deployGapP50": null,
+              "deployGapP90": null
+            },
+            "crossRepo": {
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
+              "awaitingDeploy": 0,
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
+            }
+          },
+          "ciFailureRate": null,
+          "revisionsP50": null,
+          "revisionsP90": null,
+          "landedFirstPushRate": null,
+          "cycleTimeP50Minutes": 8.1,
+          "cycleTimeP90Minutes": 65.9,
+          "rework": {
+            "merges": 21,
+            "fixMerges": 2,
+            "fixShare": 9.5,
+            "attributed": 1,
+            "medianHoursToRework": 387.8,
+            "p90HoursToRework": 387.8,
+            "correctedWithin1hShare": 0,
+            "correctedWithin24hShare": 0
+          },
+          "contention": {
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": null,
+            "greenToMergeP90Minutes": null,
+            "greenToMergeMaxMinutes": null,
+            "repushRate": null,
+            "racedShare": null,
+            "prsMeasured": 0,
+            "prsWithGreen": 0
+          },
+          "flakes": {
+            "pairs": 0,
+            "shas": []
+          },
+          "integration": {
+            "runs": 0,
+            "failures": null,
+            "redMinutes": null,
+            "unresolvedFailures": null
+          },
+          "coverage": {
+            "prsMeasured": 0,
+            "prsUnmeasured": 13,
+            "workflowRuns": 0,
+            "reworkSource": "git-blame"
+          }
+        }
+      },
+      "estate": {
+        "merges": 587,
+        "platformShare": 31,
+        "productShare": 69,
+        "toilRatio": 40.9,
+        "capabilityShare": 35.8,
+        "capabilityBySide": {
+          "platform": {
+            "merges": 52,
+            "share": 8.9
+          },
+          "product": {
+            "merges": 158,
+            "share": 26.9
+          }
+        },
+        "tabsiiCapabilityShare": 26.9,
+        "contentionHours": 101.2,
+        "bySide": {
+          "platform": {
+            "merges": 182,
+            "share": 31
+          },
+          "product": {
+            "merges": 405,
+            "share": 69
+          }
+        },
+        "note": "merges are a proxy for effort, not a measure of time"
+      }
+    }
+  },
+  "unmeasured": [
+    {
+      "repo": "keiranholloway/biffo-template",
+      "error": "Error: Command failed: gh api repos/keiranholloway/biffo-template/actions/runs?per_page=100&page=8"
+    }
+  ]
+}

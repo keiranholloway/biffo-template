@@ -1,8 +1,10 @@
 # H1 — the merge race is unwinnable by hand
 
-**Status:** `running`
+**Status:** `abandoned` on 2026-07-28 — superseded by
+[H2](./H2-merge-queue.md), which tests this file's own pre-registered next move.
+See [Result](#result).
 **Pre-registered:** 2026-07-27, **before** the intervention landed
-**Review on:** 2026-08-10 (14 days)
+**Review on:** ~~2026-08-10~~ — never reached; see Result
 
 > This file was written and committed before the change it predicts. That
 > ordering is the entire point: a prediction written afterwards is a
@@ -155,8 +157,49 @@ metric's definition of raced. The prediction (`racedShare` below 5%) now looks
 **unlikely to hold**, and recording that before the review date is the point of
 writing it down here.
 
+### Three more on 2026-07-28, one of them twice in the same PR
+
+| PR | Occurrence |
+| --- | --- |
+| [#747](https://github.com/keiranholloway/biffo-template/pull/747) | auto-merge armed, all five checks green, `mergeStateStatus: BEHIND`; merged only after a hand `gh pr update-branch` and a full CI re-run |
+| [#750](https://github.com/keiranholloway/biffo-template/pull/750) | the same, **twice** — knocked `BEHIND` again by the merge that landed while its second CI cycle ran |
+
+That brings it to **six occurrences across four repositories, with zero cases
+where auto-merge updated a behind branch.** The mechanism is no longer in doubt.
+
 ## Result
 
-_To be completed on 2026-08-10. Verdict: `confirmed` / `refuted` /
-`inconclusive` / `abandoned`. A refuted hypothesis gets the change rolled back,
-not quietly kept because it felt better._
+**Verdict: `abandoned`** — 2026-07-28, thirteen days before the review date.
+
+**Not `refuted`.** The prediction (`racedShare` below 5% by 2026-08-10) was never
+tested and now cannot be: enabling a merge queue changes the intervention before
+the review date, so a 2026-08-10 reading would measure two changes at once and be
+attributable to whichever the reader preferred. Calling that "refuted" would
+claim a measurement that was not taken.
+
+**Why stop early rather than wait.** The pre-registration named one specific
+reason it might fail — that auto-merge may not update a behind branch under
+`strict: true` — and that is exactly what happened, six times across four repos
+within two days. Twelve more days of watching the same mechanism recur buys a
+number, not an insight. The pre-registered next move (a merge queue) is now
+[H2](./H2-merge-queue.md), pre-registered 2026-07-28 before the queue was
+enabled.
+
+**What H1 nonetheless established**, and it is the useful part:
+
+- Auto-merge under `strict: true` **does not** update a behind head branch. Not
+  repo-specific, not a one-off, not a race in the observation.
+- Therefore auto-merge removes the *manual retry loop* but not the *cost* — the
+  branch still has to be updated by someone, and that still costs a full CI
+  cycle. The distinction was hypothesised in the pre-registration and is now
+  observed.
+
+**The intervention is kept, not rolled back.** This file's rule is that a
+*refuted* hypothesis gets its change reverted. An abandoned one has no such
+verdict to act on, and auto-merge is in any case a prerequisite for H2 rather
+than a competitor to it — `gh pr merge --auto` is how a PR enters a merge queue.
+
+A reading was taken on 2026-07-28 (`racedShare` 16.0%, up from 13.2%). It is
+recorded in H2 as *that* experiment's baseline and explicitly **not** as evidence
+about H1: six of its seven days predate the intervention, so the window cannot
+show its effect.

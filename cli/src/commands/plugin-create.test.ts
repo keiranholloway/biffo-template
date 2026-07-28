@@ -37,6 +37,8 @@ function makeGitMock() {
     addRemote: vi.fn().mockResolvedValue(undefined),
     push: vi.fn().mockResolvedValue(undefined),
     getRemoteUrl: vi.fn().mockResolvedValue('https://github.com/acme/core-project.git'),
+    cloneForEditing: vi.fn(),
+    cleanup: vi.fn(),
   }
 }
 
@@ -507,6 +509,79 @@ describe.runIf(SKELETON)('runPluginCreate', () => {
             runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), deps),
           ).resolves.toBeUndefined()
           expect(github.protectSingleBranch).toHaveBeenCalled()
+        })
+      })
+
+      // Without this a new plugin is in neither registry path: no token for the
+      // push path, and not listed in sources.json for the credential-free pull.
+      // It would never appear in the store until somebody remembered — the
+      // exact failure that left plugins.json empty for months.
+      describe('registry sources.json', () => {
+        function withRegistry(sources: unknown[] = []) {
+          const registryDir = mkdtempSync(join(tmpdir(), 'biffo-registry-'))
+          writeFileSync(
+            join(registryDir, 'sources.json'),
+            JSON.stringify({ note: 'n', sources }, null, 2),
+          )
+          const { deps, git, github } = remoteDeps()
+          git.cloneForEditing.mockResolvedValue(registryDir)
+          return { deps, git, github, registryDir }
+        }
+
+        it('adds the new plugin, then commits and pushes it', async () => {
+          const { deps, git, registryDir } = withRegistry()
+
+          await runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), deps)
+
+          const written = JSON.parse(readFileSync(join(registryDir, 'sources.json'), 'utf8')) as {
+            sources: Array<{ name: string; manifest: string; repo: string }>
+          }
+          expect(written.sources.map((s) => s.name)).toEqual(['acme-crm'])
+          expect(written.sources[0]?.manifest).toBe(
+            'https://raw.githubusercontent.com/acme/biffo-plugin-acme-crm/dev/biffo.plugin.json',
+          )
+          // No .git suffix — the raw URL would 404 with it, and only a week
+          // later when the scheduled sync next ran.
+          expect(written.sources[0]?.repo).toBe('https://github.com/acme/biffo-plugin-acme-crm')
+
+          expect(git.add).toHaveBeenCalledWith(registryDir, ['sources.json'])
+          expect(git.push).toHaveBeenCalledWith(registryDir, 'main', { token: 't0ken' })
+          expect(git.cleanup).toHaveBeenCalledWith(registryDir)
+        })
+
+        it('does not commit when the plugin is already listed', async () => {
+          const { deps, git, registryDir } = withRegistry([
+            { name: 'acme-crm', repo: 'x', manifest: 'y', tags: [] },
+          ])
+
+          await runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), deps)
+
+          expect(git.add).not.toHaveBeenCalledWith(registryDir, ['sources.json'])
+          expect(git.cleanup).toHaveBeenCalledWith(registryDir)
+        })
+
+        it('warns but still finishes when the registry cannot be reached', async () => {
+          // The plugin repo already exists, is pushed and is protected by now.
+          // Failing here would strand all of that over one registry commit.
+          const { deps, git } = remoteDeps()
+          git.cloneForEditing.mockRejectedValue(new Error('network down'))
+
+          await expect(
+            runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), deps),
+          ).resolves.toBeUndefined()
+          expect(logWarnings()).toEqual(
+            expect.arrayContaining([expect.stringMatching(/will not appear in the portal/)]),
+          )
+        })
+
+        it('skips registration under --no-register', async () => {
+          const { deps, git } = withRegistry()
+          await runPluginCreate(
+            'acme-crm',
+            options({ standalone: true, org: 'acme', register: false }),
+            deps,
+          )
+          expect(git.cloneForEditing).not.toHaveBeenCalled()
         })
       })
     })

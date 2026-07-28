@@ -1969,10 +1969,9 @@ def test_the_state_change_event_carries_the_run_as_principal(app, client):
 # ── write-back config: ceiling, catalog and authoring authority (ADR-0027) ────
 
 
-@pytest.fixture
-def leads_target():
-    """A registered target, torn down after each test so the registry stays empty
-    for every other test in this module (the ceiling's default is 'nothing')."""
+@contextmanager
+def _use_leads_target():
+    """Make `leads` the ONLY registered target for the duration."""
     target = wb.WriteBackTarget(
         table="leads",
         model=WorkflowDefinition,  # any mapped class; the registry only holds it
@@ -1991,9 +1990,37 @@ def leads_target():
         ),
         row_selector=wb.RowSelector(payload_field="lead_id"),
     )
-    wb.register_writeback_target(target)
-    yield target
+    saved = dict(wb._targets)  # noqa: SLF001
     wb._targets.clear()  # noqa: SLF001
+    wb.register_writeback_target(target)
+    try:
+        yield target
+    finally:
+        wb._targets.clear()  # noqa: SLF001
+        wb._targets.update(saved)  # noqa: SLF001
+
+
+@pytest.fixture
+def leads_target():
+    """The one registered target for the duration of a test.
+
+    Isolates the *whole* registry rather than just this table, for the reason
+    ``test_catalog_offers_no_writeback_targets_until_an_instance_registers_one``
+    spells out: an instance registers its own targets as an import side effect of
+    its domain module, so the registry is only empty in a bare template. Merely
+    adding "leads" on top left those ambient targets visible, and every
+    assertion here that names the catalog's contents exactly would fail the
+    moment an instance registered a *second* table — passing upstream and
+    breaking on distribution, which is the failure shape this repo keeps
+    relearning.
+
+    Teardown restores what was there instead of clearing it. The previous
+    ``_targets.clear()`` threw away the instance's real registrations for every
+    later test in the process, so a suite's result depended on the order it
+    happened to run in.
+    """
+    with _use_leads_target() as registered:
+        yield registered
 
 
 @contextmanager
@@ -2054,6 +2081,44 @@ def test_catalog_offers_a_registered_target_with_its_allowlist(client, leads_tar
     # brand_id, source) are Core's and must never appear in a picker.
     assert [c["name"] for c in target["columns"]] == ["email", "notes"]
     assert next(c for c in target["columns"] if c["name"] == "notes")["overwrite"] == "append"
+
+
+def test_the_target_fixture_isolates_the_registry_from_an_instance_s_own(client):
+    """The guard for the fixture above, which an instance broke by growing.
+
+    Every assertion in this section names the catalog's contents exactly, so
+    they only hold while `leads` is the *only* registered target. An instance
+    registers its own as an import side effect, and the fixture used to add to
+    those rather than replace them — so the day tabsii registered a second
+    table, `assert [...] == ["leads"]` started failing on distribution while
+    passing here. It also used to clear the registry on teardown, taking the
+    instance's real targets with it.
+
+    This asserts both halves against a stand-in ambient target.
+    """
+    ambient = wb.WriteBackTarget(
+        table="wb_ambient",
+        model=WorkflowDefinition,
+        label="Ambient",
+        permission_code="ambient.create",
+        allowed_principals=("system:orchestrator",),
+        columns=(wb.WriteBackColumn(name="note", label="Note", type="textarea"),),
+        operations=("create",),
+    )
+    saved = dict(wb._targets)  # noqa: SLF001
+    wb.register_writeback_target(ambient)
+    try:
+        with _use_leads_target():
+            tables = [
+                t["table"] for t in client.get(f"{_BASE}/catalog").json()["writeback_targets"]
+            ]
+            # The instance's own target does not leak into a catalog assertion.
+            assert tables == ["leads"]
+        # …and survives the fixture's teardown.
+        assert "wb_ambient" in wb._targets  # noqa: SLF001
+    finally:
+        wb._targets.clear()  # noqa: SLF001
+        wb._targets.update(saved)  # noqa: SLF001
 
 
 def test_catalog_hides_a_target_the_caller_could_not_write(app, client, leads_target):

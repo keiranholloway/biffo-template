@@ -39,10 +39,40 @@ describe('PluginCard', () => {
     render(<PluginCard plugin={plugin({ name: 'analytics' })} />)
     // See InstalledPluginRow.test.tsx's equivalent assertion for why: only
     // /admin/plugins/placeholder/ is statically generated under output: 'export'.
-    expect(screen.getByRole('link')).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'analytics' })).toHaveAttribute(
       'href',
       '/admin/plugins/placeholder?source=marketplace&name=analytics',
     )
+  })
+
+  it('links to the source repository, opening it off-site in a new tab', () => {
+    render(<PluginCard plugin={plugin()} />)
+
+    const repoLink = screen.getByRole('link', { name: /view source/i })
+    expect(repoLink).toHaveAttribute('href', 'https://github.com/keiranholloway/biffo-plugin-rbac')
+    expect(repoLink).toHaveAttribute('target', '_blank')
+    // Without noopener the opened page gets a handle on this window via
+    // window.opener and can navigate the portal away from under the user.
+    expect(repoLink).toHaveAttribute('rel', expect.stringContaining('noopener'))
+  })
+
+  it('keeps the repo link separate from the card link rather than nesting anchors', () => {
+    const { container } = render(<PluginCard plugin={plugin()} />)
+
+    // An <a> inside an <a> is invalid HTML and React reports it as a
+    // hydration error, so the card must not be a link wrapping the repo link.
+    expect(container.querySelector('a a')).toBeNull()
+    expect(screen.getAllByRole('link')).toHaveLength(2)
+  })
+
+  it('marks a built-in plugin as shipping with core', () => {
+    render(<PluginCard plugin={plugin({ tags: ['built-in', 'events'] })} />)
+    expect(screen.getByText('Ships with Biffo core')).toBeInTheDocument()
+  })
+
+  it('does not claim an ordinary plugin ships with core', () => {
+    render(<PluginCard plugin={plugin()} />)
+    expect(screen.queryByText('Ships with Biffo core')).not.toBeInTheDocument()
   })
 
   it('falls back to Biffo Team when author is missing', () => {

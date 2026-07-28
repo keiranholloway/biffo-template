@@ -86,6 +86,12 @@ export function PluginDetail({ slug }: PluginDetailProps) {
 
   const { plugin } = state
   const installCommand = installCommandFor(plugin)
+  // Built-in plugins ship inside core at services/_plugins/ and are
+  // distributed by `biffo core upgrade`. `biffo plugin upgrade` guards on
+  // services/<name>/ and would tell you to run `biffo plugin install`, which
+  // would then clone the whole template into services/<name>/ — so the
+  // install command must not be offered for them at all.
+  const isBuiltIn = plugin.tags?.includes('built-in') ?? false
 
   return (
     <div className="flex flex-col gap-6">
@@ -131,41 +137,71 @@ export function PluginDetail({ slug }: PluginDetailProps) {
             <code className="font-mono text-gray-600">{plugin.required_core_version}</code>
           </p>
         )}
+
+        {plugin.repo !== '' && (
+          <p className="mt-4 text-sm">
+            <a
+              href={plugin.repo}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-blue-600 hover:underline"
+            >
+              View source on GitHub ↗
+            </a>
+          </p>
+        )}
       </div>
 
-      <div className="rounded-xl border bg-white p-6 shadow-sm">
-        <h2 className="text-sm font-semibold text-gray-900">Install</h2>
-        <p className="mt-1 text-sm text-gray-600">
-          Biffo plugins are installed from the command line, not from the portal — the CLI clones
-          the plugin&apos;s source into your project&apos;s own repo and commits it, so you can
-          review the diff before pushing. Run this from the root of your Biffo project checkout:
-        </p>
-
-        <div className="mt-3 flex items-center justify-between gap-3 rounded-lg bg-gray-900 px-4 py-3">
-          <code className="overflow-x-auto whitespace-pre font-mono text-sm text-gray-100">
-            {installCommand}
-          </code>
-          <Button
-            variant="secondary"
-            className="shrink-0 rounded-md bg-gray-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-600"
-            onClick={() => {
-              void navigator.clipboard.writeText(installCommand).then(() => {
-                setCopied(true)
-                setTimeout(() => {
-                  setCopied(false)
-                }, 2000)
-              })
-            }}
-          >
-            {copied ? 'Copied!' : 'Copy'}
-          </Button>
+      {isBuiltIn ? (
+        <div className="rounded-xl border bg-white p-6 shadow-sm">
+          <h2 className="text-sm font-semibold text-gray-900">Already installed</h2>
+          <p className="mt-1 text-sm text-gray-600">
+            This plugin ships inside Biffo core, so every instance already has it — there is nothing
+            to install. Its source lives in the core template under{' '}
+            <code className="font-mono text-gray-700">services/_plugins/{plugin.name}/</code>, and
+            it is distributed by <code className="font-mono text-gray-700">biffo core upgrade</code>{' '}
+            along with the rest of core.
+          </p>
+          <p className="mt-3 text-xs text-gray-400">
+            Do not run <code className="font-mono">biffo plugin install</code> against it — that
+            command is for third-party plugins that live in their own repository.
+          </p>
         </div>
+      ) : (
+        <div className="rounded-xl border bg-white p-6 shadow-sm">
+          <h2 className="text-sm font-semibold text-gray-900">Install</h2>
+          <p className="mt-1 text-sm text-gray-600">
+            Biffo plugins are installed from the command line, not from the portal — the CLI clones
+            the plugin&apos;s source into your project&apos;s own repo and commits it, so you can
+            review the diff before pushing. Run this from the root of your Biffo project checkout:
+          </p>
 
-        <p className="mt-3 text-xs text-gray-400">
-          Add <code className="font-mono">--dry-run</code> to preview the change without modifying
-          your repo.
-        </p>
-      </div>
+          <div className="mt-3 flex items-center justify-between gap-3 rounded-lg bg-gray-900 px-4 py-3">
+            <code className="overflow-x-auto whitespace-pre font-mono text-sm text-gray-100">
+              {installCommand}
+            </code>
+            <Button
+              variant="secondary"
+              className="shrink-0 rounded-md bg-gray-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-600"
+              onClick={() => {
+                void navigator.clipboard.writeText(installCommand).then(() => {
+                  setCopied(true)
+                  setTimeout(() => {
+                    setCopied(false)
+                  }, 2000)
+                })
+              }}
+            >
+              {copied ? 'Copied!' : 'Copy'}
+            </Button>
+          </div>
+
+          <p className="mt-3 text-xs text-gray-400">
+            Add <code className="font-mono">--dry-run</code> to preview the change without modifying
+            your repo.
+          </p>
+        </div>
+      )}
     </div>
   )
 }

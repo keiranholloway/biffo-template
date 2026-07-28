@@ -56,6 +56,39 @@ describe('PluginDetail', () => {
     expect(screen.queryByRole('button', { name: /upgrade/i })).not.toBeInTheDocument()
   })
 
+  it('links to the source repository', async () => {
+    fetchPluginBySlugMock.mockResolvedValue(INVOICING_PLUGIN)
+    render(<PluginDetail slug="invoicing" />)
+
+    const repoLink = await screen.findByRole('link', { name: /view source on github/i })
+    expect(repoLink).toHaveAttribute(
+      'href',
+      'https://github.com/keiranholloway/biffo-plugin-invoicing',
+    )
+    expect(repoLink).toHaveAttribute('target', '_blank')
+    expect(repoLink).toHaveAttribute('rel', expect.stringContaining('noopener'))
+  })
+
+  it('offers no install command for a built-in plugin', async () => {
+    // orchestrator and agent-runtime ship inside core at services/_plugins/.
+    // `biffo plugin install` would clone the whole core template into
+    // services/<name>/, so the portal must not hand out that command.
+    fetchPluginBySlugMock.mockResolvedValue({
+      ...INVOICING_PLUGIN,
+      name: 'orchestrator',
+      repo: 'https://github.com/keiranholloway/biffo-template',
+      tags: ['built-in', 'events'],
+    })
+    render(<PluginDetail slug="orchestrator" />)
+
+    expect(await screen.findByText(/already installed/i)).toBeInTheDocument()
+    // The runnable command specifically — the panel does still mention
+    // `biffo plugin install` by name, to say not to run it.
+    expect(screen.queryByText('biffo plugin install orchestrator@1.2')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /copy/i })).not.toBeInTheDocument()
+    expect(screen.getByText(/services\/_plugins\/orchestrator\//)).toBeInTheDocument()
+  })
+
   it('shows a graceful not-found message when the plugin is absent from the registry', async () => {
     fetchPluginBySlugMock.mockResolvedValue(null)
     render(<PluginDetail slug="does-not-exist" />)

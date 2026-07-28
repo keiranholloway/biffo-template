@@ -107,6 +107,7 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **There was no shared design system, and the canonical tokens lived in the most downstream repo.** The token set existed only in `biffo-platform-app`'s `globals.css` — a sibling app — while the template's own `apps/portal/globals.css` is three lines of Tailwind declaring nothing. Every other surface re-declared or invented its own, so three brand blues were reachable in one page through same-origin iframes | **drift** | biffo-platform-app / plugin frontends | biffo-template [#753](https://github.com/keiranholloway/biffo-template/pull/753) — `@biffo/design-tokens` published to npm | **fixed** — consumers not yet adopted |
 | — | **OIDC trusted publishing cannot bootstrap a new package.** Trust registers *against an existing package*, and the package does not exist until its first publish — so the first release of `@biffo/design-tokens` had no credential path at all. `NPM_TOKEN` returned 404, and OIDC returned the same 404 even with npm upgraded to 12.0.1 (well past the 11.5.1 threshold). npm answers 404 rather than 403 for unauthorised writes, so all three causes looked identical | **process** · visibility | biffo-template publishing | one manual publish, then register the trusted publisher | **partly fixed** — package published; trusted publisher **still unregistered**, so the next tag's publish will 404 |
 | — | **`biffo:ddl-import` skips applied files by filename, so amending a seeded row by editing its `.sql` does nothing.** The workflow seed for Idea Scout's synthesis agent needed a *new* file (`005_…`) to add `output_tools`; editing `003_…` would have been a silent no-op everywhere it had already run | **visibility** | biffo-platform `db/imports/` | practice, not code — documented in the new file's header | **worked around** |
+| — | **A release workflow's trigger was decorative, and the symptom was silence.** `publish-design-tokens.yml` declared `on: push: tags: ['core-v*']`, which can never fire: `core-tag.yml` pushes those tags with the job's `GITHUB_TOKEN`, and GitHub suppresses events created by it to stop workflows recursing. That gap was already known — the CLI dispatch exists *because of it* — but the dispatch named `publish-cli.yml` and nothing else, so the next release workflow inherited the original bug. **Three tags (0.153.0/.1/.2) cut with zero runs**; npm kept serving the hand-published 0.152.0. The tell was in plain sight and read past: every `Publish CLI` run is `event: workflow_dispatch`, never `push` | **fail-open** · visibility | biffo-template `.github/workflows/` | biffo-template — the dispatch step now loops over the release list, and `release-dispatch.test.ts` derives the expectation from the workflow directory rather than a hardcoded name | **fixed** — verified by the next tag publishing `0.154.1` unattended |
 
 | — | `tabsii-intake`'s `dev`/`staging`/`main` required **11 status-check contexts**; the consolidated CI workflow it adopted produces **4**. Nine contexts could never report again, so a green PR sat permanently `BLOCKED`. Renaming a CI job and repointing branch protection are one change that nothing couples | **boundary** · process | tabsii-intake [#9](https://github.com/tabsii-com/tabsii-intake/pull/9) | tabsii-intake settings + biffo-template (`biffo check branch-protection` cannot see this class) | protection **repointed** on all three branches; the *detection* gap **unfiled** |
 | — | Migrating a **live sibling** onto the consolidated CI switched on two dependency gates that repo had never run, surfacing **20 pre-existing advisories** (16 JS, 4 Python) in one go. Same shape as [#644](https://github.com/keiranholloway/biffo-template/issues/644) but on a deployed service rather than a skeleton: not a new defect, a first measurement | **fail-open** · visibility | tabsii-intake [#9](https://github.com/tabsii-com/tabsii-intake/pull/9) | tabsii-intake (lockfiles + overrides) + biffo-template [#722](https://github.com/keiranholloway/biffo-template/issues/722) | intake **fixed** (20 → 0); skeleton suppression **open** ([#722](https://github.com/keiranholloway/biffo-template/issues/722)) |
@@ -129,17 +130,17 @@ shape recurring across unrelated components is a design problem, not bad luck.
 ### What the classes say
 
 > Counted from `docs/practices/evidence.jsonl`, not asserted. Regenerate with
-> `node scripts/practices-evidence.mjs --report`. **89 rows** — the extractor's
+> `node scripts/practices-evidence.mjs --report`. **94 rows** — the extractor's
 > count still **equals the table's count**, now across a merge that had to be
 > reconciled by hand. See below.
 
 | Primary class | Rows |
 | --- | --- |
-| **visibility** | 24 |
+| **visibility** | 26 |
 | drift | 21 |
-| fail-open | 17 |
+| fail-open | 19 |
 | boundary | 16 |
-| process | 11 |
+| process | 12 |
 
 **The extractor and the table now reconcile, and the cause was findable all
 along.** This page twice recorded that `--extract` "silently drops a row it
@@ -217,14 +218,14 @@ each, so the column sums exceed the row count.
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 65 of 93 | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, design tokens, the practices tooling itself |
-| **tabsii-platform** | 6 of 93 | Divergence ratchet, repo settings, the RLS lane |
-| **biffo-platform** | 5 of 93 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
-| **tabsii-intake** | 5 of 93 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-plugin-idea-scout** | 4 of 93 | Adapter seam, research search capability, its own stylesheet |
-| **tabsii-marketplace** | 2 of 93 | `python-jose` removal; the credential-dependent build |
-| **biffo-plugin-ideation** | 1 of 93 | A UI rendering a 500 as an empty state |
-| **biffo-runners** | 1 of 93 | Runner fleet docs + fail-fast |
+| **biffo-template** | 66 of 94 (70%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, design tokens, the practices tooling itself |
+| **tabsii-platform** | 6 of 94 | Divergence ratchet, repo settings, the RLS lane |
+| **biffo-platform** | 5 of 94 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
+| **tabsii-intake** | 5 of 94 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-idea-scout** | 4 of 94 | Adapter seam, research search capability, its own stylesheet |
+| **tabsii-marketplace** | 2 of 94 | `python-jose` removal; the credential-dependent build |
+| **biffo-plugin-ideation** | 1 of 94 | A UI rendering a 500 as an empty state |
+| **biffo-runners** | 1 of 94 | Runner fleet docs + fail-fast |
 
 **The shape has held, and that is the finding.** `biffo-template` takes **65 of
 93** — 70%, against 82% at 65 rows and 86% at both 57 and 50. The proportion is
@@ -403,6 +404,7 @@ effort log exists to make visible, and this session logged it that way.
 | **2 rebase races with auto-merge already on** | Auto-merge does **not** update a head branch that falls `BEHIND` under strict protection. Both PRs sat green-and-blocked until manually rebased and force-pushed — so auto-merge removed the *retry* loop, not the *race* | **open** — refutes the H1-merge-race experiment's open assumption; next move is a merge queue |
 | **~25 min auditing branch protection by hand, again** | Two plugin repos had **no protection at all** on `dev` (`404 Branch not protected`) while their own AGENTS.md claimed otherwise. Found only because a PR merged with checks still running | **fixed** for both repos; skeleton gap filed ([#714](https://github.com/keiranholloway/biffo-template/issues/714)). `biffo check branch-protection` exists but is **still not scheduled anywhere**, so nothing would have caught this either |
 | **1 full reinstall + rebuild to answer "did I break this?"** | A build failed after a dependency upgrade. Establishing that it failed *identically* before the upgrade meant stashing the lockfile changes, reinstalling the original tree and rebuilding — several minutes to convert a suspicion into a fact. Worth every second: the alternative was shipping a fix for a defect I had not caused, or abandoning an upgrade that was fine | **structural** — no cheaper way to get a before/after on a lockfile |
+| **3 releases that silently never happened** | A workflow whose `on: push: tags:` cannot fire, with nothing reporting a missing run. Cost was not the fix (~20 min) but the fact that only a deliberate check found it — and it was found by luck of being asked, not by any signal | **fixed**, and the guard now derives from the workflow directory so a fourth release workflow cannot repeat it |
 | **~5 publish attempts to put one 2 kB package on npm** | A new package cannot use OIDC (no trust to register against) and the fallback token did not work. Token → 404, OIDC at npm 12.0.1 → 404, local publish → `ENEEDAUTH`, web login → `EOTP`, passkey → done. npm answers **404 for unauthorised writes**, so three unrelated causes were indistinguishable | **structural** — a first publish has no credential-free path; once per package |
 | **A trusted-publisher registration filled twice and lost twice** | Saving it triggers a WebAuthn ceremony, which by design fires only on a genuine user gesture. Filling the form is automatable; completing it is not. Re-loading showed the config had silently reset | **open** — still unregistered, so the next tag's publish will 404 |
 | **A local preview harness instead of a deploy cycle** | Before shipping the Idea Scout stylesheet, the built CSS was rendered against markup copied from the components and screenshotted locally. ~5 min, against a ~35 min plugin-PR → resync-PR → deploy round trip to discover a layout mistake | **avoided cost** — worth repeating for anything visual |
@@ -811,6 +813,8 @@ the cost of confirming was seconds.
 **Re-checking a settings change instead of trusting the click.** The npm trusted-publisher form was filled and submitted; re-loading the page showed it had reset to "Select your publisher". Reporting it as done would have left the next release failing with an unexplained 404.
 
 **Rendering the CSS locally before shipping it.** The Idea Scout stylesheet was checked against a static harness built from the real components, so the first deploy confirmed the result rather than discovering it.
+
+**Asking "did it actually publish?" rather than "is it configured?".** Registering the trusted publisher was necessary and looked like the last step; the package would still never have published again. Only checking for an actual run — three tags, zero runs — found that the trigger could not fire. A configuration screenshot is not a release.
 
 ## What needs more thought
 
@@ -1304,6 +1308,10 @@ looking for something else.
 **The advice to "regenerate from the data, not the prose" carried the loss.** This page is explicit that prose counts drift and `evidence.jsonl` is the antidote. But `--extract` rebuilds the dataset *from the prose*, so a markdown that had already lost rows produced a dataset that lost them too — and the regenerated counts then looked authoritative. Fixed in code; the shape (a derived artefact treated as a source of truth) is worth looking for elsewhere.
 
 **A first npm publish has no credential-free path.** Trusted publishing is the right end state and cannot bootstrap itself, so every new package needs one manual, 2FA-bearing publish by a human. That is precisely the step a fleet of agents cannot perform, and it recurs for every future `@biffo/*` package.
+
+**A fix for a known trap was written for one caller, not the class.** The `GITHUB_TOKEN`-suppresses-events gap was understood, documented at length in `core-tag.yml`, and fixed — for the CLI. The next workflow to hit the identical trap got no help from any of that, because the fix was a name rather than a rule. Worth asking of other one-caller fixes on this page: is it a rule, or is it one name?
+
+**Keeping orphaned rows trades a silent deletion for a silent duplicate.** `mergeExtracted` now preserves a stored row the markdown no longer mentions, which stopped three sessions' work disappearing. The cost showed up immediately: *rewording* a scoreboard row leaves the old wording behind as a second dataset entry, so counts inflate until someone prunes it. One appeared within a day (an added `*also*` was enough), and only the new warning surfaced it. The warning is doing its job, but "reword a row" is a normal edit and should not need a manual prune — matching on a stable row id rather than the summary text would fix it properly.
 
 ## Skills used
 

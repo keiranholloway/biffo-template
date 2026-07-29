@@ -324,3 +324,51 @@ describe('verify.sh discovers JS packages that are not at the repo root', () => 
     expect(out.filter((l) => l.includes('--dir'))).toEqual([])
   })
 })
+
+describe('the pytest fast/slow cache', () => {
+  const verify = readFileSync(join(repoRoot, 'scripts/verify.sh'), 'utf8')
+
+  /**
+   * The cache decides whether a check runs at all, so a stale one silently
+   * removes a check or silently slows every push. The first version was written
+   * once and read for ever (#877).
+   *
+   * The two directions need different mechanisms, and that asymmetry is the
+   * whole design:
+   *
+   *   fast -> the gate RUNS the suite, so it observes the true duration every
+   *           time. Recording it is free and exact; a suite that grows past the
+   *           budget excludes itself on the next push.
+   *   slow -> the gate never runs it, so it can never learn the suite got
+   *           faster. Only age can give it a way back in.
+   */
+  it('records the observed duration after every real run', () => {
+    expect(verify).toContain('pytest_record')
+    // Both call sites — root package and nested — or one of them keeps a
+    // verdict that can never be corrected.
+    // Exactly two call sites — root package and nested — because one of them
+    // missing keeps a verdict that can never be corrected.
+    expect(verify.match(/pytest_record "/g)?.length).toBe(2)
+    expect(verify).toContain('LAST_CHECK_SECONDS')
+  })
+
+  it('expires a measurement so a slow verdict can be retested', () => {
+    expect(verify).toContain('PYTEST_MAX_AGE_DAYS')
+    expect(verify).toMatch(/find "\$_cache" -mtime/)
+  })
+
+  /**
+   * The cache must not live in the working tree. The first version wrote
+   * `$_d/.pytest-duration` and was gitignored in biffo-template ONLY —
+   * .gitignore is not a synced file, so every other repo in the estate grew an
+   * untracked `?? services/api/.pytest-duration` the moment the gate ran.
+   */
+  it('keeps the cache out of the working tree', () => {
+    expect(verify).toContain('--git-common-dir')
+    expect(verify).not.toContain('"$_d/.pytest-duration"')
+    const ignore = readFileSync(join(repoRoot, '.gitignore'), 'utf8')
+    expect(ignore, 'the in-tree ignore entry should be gone, not load-bearing').not.toContain(
+      '.pytest-duration',
+    )
+  })
+})

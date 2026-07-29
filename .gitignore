@@ -85,4 +85,3 @@ htmlcov
 # AWS
 .aws-sam
 samconfig.toml
-.pytest-duration

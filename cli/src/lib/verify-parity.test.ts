@@ -198,6 +198,26 @@ describe('verify.sh discovers JS packages that are not at the repo root', () => 
     expect(listIn(dir)).toContain('pnpm --dir ./web run lint')
   })
 
+  /**
+   * `.terraform/` is a download cache of third-party modules. The two runner
+   * repos hold eight vendored lambda packages in it, each declaring `lint` and
+   * `test`. Linting someone else's vendored code is slow, always red, and not
+   * this repo's business. It is gitignored, so a fresh worktree never has it —
+   * the gap was invisible until a primary checkout was audited.
+   */
+  it('never walks into a vendored terraform module cache', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'verify-tf-'))
+    mkdirSync(join(dir, 'terraform', '.terraform', 'modules', 'runners', 'lambdas'), {
+      recursive: true,
+    })
+    writeFileSync(
+      join(dir, 'terraform', '.terraform', 'modules', 'runners', 'lambdas', 'package.json'),
+      JSON.stringify({ name: 'vendored', scripts: { lint: 'x', test: 'x' } }),
+    )
+    expect(listIn(dir).join('\n')).not.toContain('vendored')
+    expect(listIn(dir).filter((l) => l.includes('--dir'))).toEqual([])
+  })
+
   it('never walks into node_modules', () => {
     expect(listIn(repoWithNestedJs()).join('\n')).not.toContain('left-pad')
   })

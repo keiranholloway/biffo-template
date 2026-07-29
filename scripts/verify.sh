@@ -113,10 +113,16 @@ js_dirs() {
     echo "."
     return
   fi
+  # `.terraform/` is a DOWNLOAD CACHE of third-party modules, and the two runner
+  # repos carry eight vendored lambda packages in it -- each declaring lint and
+  # test scripts. Linting someone else's vendored code is slow, always red, and
+  # not this repo's business. It is gitignored, so a fresh worktree never has
+  # it and the omission was invisible until a primary checkout was audited.
   find . -name package.json \
     -not -path "*/node_modules/*" -not -path "*/dist/*" -not -path "*/.next/*" \
     -not -path "*/.turbo/*" -not -path "*/.worktrees/*" -not -path "*/out/*" \
-    -not -path "*/coverage/*" -not -path "*/.venv/*" 2>/dev/null |
+    -not -path "*/coverage/*" -not -path "*/.venv/*" \
+    -not -path "*/.terraform/*" -not -path "*/vendor/*" 2>/dev/null |
     sed 's|/package.json$||' | sort
 }
 

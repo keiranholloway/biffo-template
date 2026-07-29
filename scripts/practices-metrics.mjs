@@ -396,19 +396,33 @@ export function summariseWorkMix(commits, repoSide) {
  * worse — the three windows could then disagree because they were taken at
  * different moments.
  *
+ * `until` is what makes a **non-overlapping** baseline possible (#835). The 90d
+ * window contains the 7d window, so on 2026-07-29 exactly half the "90-day
+ * baseline" — 616 of 1232 merges — *was* the week being compared against it.
+ * A reference line that moves with the thing it is measuring cannot tell you
+ * the thing moved.
+ *
  * @param {{prs: Array<any>, runs: Array<any>, defaultBranch: string, rework: {fixes: Array<any>, commits: Array<any>} | null}} data
  * @param {string} since ISO timestamp
+ * @param {string | null} until ISO timestamp, exclusive; open-ended when null
  */
-export function filterToWindow(data, since) {
+export function filterToWindow(data, since, until = null) {
   const from = Date.parse(since)
+  const to = until === null ? Infinity : Date.parse(until)
   return {
     defaultBranch: data.defaultBranch,
-    prs: data.prs.filter((pr) => pr.mergedAt && Date.parse(pr.mergedAt) >= from),
-    runs: data.runs.filter((run) => Date.parse(run.created_at) >= from),
+    prs: data.prs.filter(
+      (pr) => pr.mergedAt && Date.parse(pr.mergedAt) >= from && Date.parse(pr.mergedAt) < to,
+    ),
+    runs: data.runs.filter(
+      (run) => Date.parse(run.created_at) >= from && Date.parse(run.created_at) < to,
+    ),
     rework: data.rework
       ? {
-          fixes: data.rework.fixes.filter((fix) => fix.at >= from),
-          commits: data.rework.commits.filter((commit) => commit.at >= from),
+          fixes: data.rework.fixes.filter((fix) => fix.at >= from && fix.at < to),
+          commits: data.rework.commits.filter(
+            (commit) => commit.at >= from && commit.at < to,
+          ),
         }
       : null,
     // Deliberately NOT filtered by the window. An issue opened long before the
@@ -416,6 +430,45 @@ export function filterToWindow(data, since) {
     // windowing it away would discard the worst results and flatter the median.
     // The window applies to the *merge*, which is the event being measured.
     issues: data.issues ?? [],
+  }
+}
+
+/**
+ * Work out the **independent baseline** window from the configured lookbacks.
+ *
+ * Every window here is a lookback from now, so the long one contains the short
+ * one and "7d vs the 90d baseline" is partly a comparison of the week with
+ * itself. On 2026-07-29 the overlap was total enough to make the baseline
+ * useless as a reference: 616 of the 1232 merges in the 90-day window — exactly
+ * half — had happened in the 7 days being compared against it. Merge rate that
+ * week was 88/day against the 90-day average of 13.7/day, so the "baseline" was
+ * dominated by the very regime it was supposed to give perspective on. A
+ * baseline that moves with the reading always looks reassuringly close to it.
+ *
+ * The fix is a span, not a lookback: everything from the long boundary up to
+ * the start of the rate window, which shares no merge with it.
+ *
+ * Returns `null` when there is nothing to cut — a single window, or windows so
+ * close together that the remainder would be too short to mean anything.
+ *
+ * @param {number[]} windowDays
+ * @returns {{ since: string, until: string, days: number } | null}
+ */
+export function priorWindow(windowDays, now = Date.now()) {
+  const sorted = [...new Set(windowDays)].sort((a, b) => a - b)
+  if (sorted.length < 2) return null
+  const baseline = sorted[sorted.length - 1]
+  // The rate window is the one the dashboard reads percentages from — the
+  // largest window that is not the baseline.
+  const rate = sorted[sorted.length - 2]
+  const days = baseline - rate
+  // A remainder shorter than the rate window itself is not a baseline, it is a
+  // second reading with fewer observations.
+  if (days < rate) return null
+  return {
+    since: new Date(now - baseline * 864e5).toISOString(),
+    until: new Date(now - rate * 864e5).toISOString(),
+    days,
   }
 }
 
@@ -1413,6 +1466,27 @@ function main() {
         : { error: 'unmeasured' }
     }
     windows[days] = { since, repos, estate: summariseEstate(repos) }
+  }
+
+  // The independent baseline (#835): the long window with the rate window cut
+  // out of it, so "vs baseline" compares two disjoint sets of merges. Keyed by
+  // name rather than a day count because it is a *span*, not a lookback, and
+  // reading it as one would put its start date 83 days ago instead of 90.
+  const prior = priorWindow(args.windows)
+  if (prior) {
+    /** @type {Record<string, any>} */
+    const repos = {}
+    for (const repo of targets) {
+      repos[repo.slug] = raw[repo.slug]
+        ? summariseRepo(
+            repo,
+            filterToWindow(raw[repo.slug], prior.since, prior.until),
+            issueOpenedAt,
+            templateClosingIssues,
+          )
+        : { error: 'unmeasured' }
+    }
+    windows.prior = { ...prior, repos, estate: summariseEstate(repos) }
   }
 
   const snapshot = {

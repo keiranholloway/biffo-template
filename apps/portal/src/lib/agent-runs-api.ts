@@ -109,3 +109,47 @@ export function fetchAgentRun(
 ): Promise<AgentRunResponse> {
   return client.get<AgentRunResponse>(`${BASE}/${encodeURIComponent(runId)}`)
 }
+
+/**
+ * Per-model cost aggregation. Mirrors `AgentRunCostAggregate` in
+ * services/api/src/api/schemas/agent_run.py. `model` is null for runs whose
+ * snapshot recorded none; render that row as explicit "unknown model" text, not
+ * an empty cell. `unpriced_runs` counts runs with cost_usd == null (billing
+ * failed, or provider did not report); they are excluded from total_cost_usd.
+ * A total with unpriced_runs > 0 is a floor, not a fact — render the count
+ * next to the total; do not hide it.
+ */
+export interface AgentRunCostAggregate {
+  model: string | null
+  runs: number
+  total_cost_usd: number
+  total_input_tokens: number
+  total_output_tokens: number
+  unpriced_runs: number
+}
+
+/** Filter options for cost aggregation. */
+export interface AgentRunCostFilters {
+  agent_name?: string | undefined
+  since?: string | undefined
+  until?: string | undefined
+}
+
+/** Per-model cost aggregates, newest-first 30-day window by default. */
+export function fetchAgentRunCosts(
+  client: Pick<Client, 'get'>,
+  filters: AgentRunCostFilters = {},
+): Promise<AgentRunCostAggregate[]> {
+  const params = new URLSearchParams()
+  if (filters.agent_name != null && filters.agent_name !== '') {
+    params.set('agent_name', filters.agent_name)
+  }
+  if (filters.since != null && filters.since !== '') {
+    params.set('since', filters.since)
+  }
+  if (filters.until != null && filters.until !== '') {
+    params.set('until', filters.until)
+  }
+  const query = params.toString()
+  return client.get<AgentRunCostAggregate[]>(`${BASE}/costs${query === '' ? '' : `?${query}`}`)
+}

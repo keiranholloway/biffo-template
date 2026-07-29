@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatCost, formatDuration } from './agent-runs-format'
+import { formatCost, formatDuration, formatMeanCost } from './agent-runs-format'
 
 describe('formatDuration', () => {
   it('renders sub-second, second, minute and null cases', () => {
@@ -16,5 +16,26 @@ describe('formatCost', () => {
   it('renders four-decimal dollars and a dash for null', () => {
     expect(formatCost(0.0123)).toBe('$0.0123')
     expect(formatCost(null)).toBe('—')
+  })
+})
+
+describe('formatMeanCost', () => {
+  it('calculates mean cost over priced runs only', () => {
+    // 10 runs with $1 total cost, 5 priced → mean is $0.20
+    // This test proves mean is computed over priced runs (5), not all runs (10)
+    const result = formatMeanCost(1.0, 5)
+    expect(result).toBe('$0.2000')
+  })
+
+  it('handles zero priced runs', () => {
+    expect(formatMeanCost(0, 0)).toBe('—')
+  })
+
+  it('handles null total cost', () => {
+    expect(formatMeanCost(null, 5)).toBe('—')
+  })
+
+  it('renders four-decimal dollars for typical values', () => {
+    expect(formatMeanCost(0.05, 10)).toBe('$0.0050')
   })
 })

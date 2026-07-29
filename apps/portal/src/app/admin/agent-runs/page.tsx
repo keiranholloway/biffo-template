@@ -4,8 +4,14 @@ import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/context/auth-context'
 import { createApiClient } from '@/lib/api-client'
-import { fetchAgentRuns, type AgentRunSummary, type AgentRunFilters } from '@/lib/agent-runs-api'
-import { formatCost, formatDuration, formatWhen } from '@/lib/agent-runs-format'
+import {
+  fetchAgentRuns,
+  fetchAgentRunCosts,
+  type AgentRunSummary,
+  type AgentRunCostAggregate,
+  type AgentRunFilters,
+} from '@/lib/agent-runs-api'
+import { formatCost, formatDuration, formatMeanCost, formatWhen } from '@/lib/agent-runs-format'
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error'
@@ -39,6 +45,7 @@ export default function AgentRunsPage() {
   const client = useMemo(() => createApiClient(getIdToken), [getIdToken])
 
   const [runs, setRuns] = useState<AgentRunSummary[] | null>(null)
+  const [costs, setCosts] = useState<AgentRunCostAggregate[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [agentName, setAgentName] = useState('')
   const [status, setStatus] = useState('')
@@ -46,9 +53,14 @@ export default function AgentRunsPage() {
   const reload = useCallback(
     async (filters: AgentRunFilters) => {
       setRuns(null)
+      setCosts(null)
       try {
-        const rows = await fetchAgentRuns(client, filters)
+        const [rows, costData] = await Promise.all([
+          fetchAgentRuns(client, filters),
+          fetchAgentRunCosts(client, { agent_name: filters.agent_name }),
+        ])
         setRuns(rows)
+        setCosts(costData)
         setError(null)
       } catch (err: unknown) {
         setError(errorMessage(err))
@@ -139,6 +151,53 @@ export default function AgentRunsPage() {
           <p className="mt-1 text-xs text-gray-400">
             Runs appear here once an agentic worker executes.
           </p>
+        </div>
+      )}
+
+      {costs != null && costs.length > 0 && (
+        <div className="mt-6 overflow-x-auto rounded-xl border bg-white shadow-sm">
+          <table className="min-w-full divide-y divide-gray-200 text-sm">
+            <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+              <tr>
+                <th className="px-4 py-2">Model</th>
+                <th className="px-4 py-2 text-right">Runs</th>
+                <th className="px-4 py-2 text-right">Total Cost</th>
+                <th className="px-4 py-2 text-right">Mean Cost / Run</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {costs.map((cost) => {
+                const pricedRunCount = cost.runs - cost.unpriced_runs
+                return (
+                  <tr key={cost.model ?? 'unknown'} className="hover:bg-gray-50">
+                    <td className="px-4 py-2 text-gray-800">
+                      {cost.model === null ? (
+                        <span className="text-gray-600">unknown model</span>
+                      ) : (
+                        cost.model
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-2 text-right text-gray-600">
+                      {cost.runs}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-2 text-right text-gray-600">
+                      <div className="flex flex-col items-end">
+                        <span>{formatCost(cost.total_cost_usd)}</span>
+                        {cost.unpriced_runs > 0 && (
+                          <span className="text-xs text-gray-400">
+                            {cost.unpriced_runs} unpriced
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-2 text-right text-gray-600">
+                      {formatMeanCost(cost.total_cost_usd, pricedRunCount)}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
       )}
 

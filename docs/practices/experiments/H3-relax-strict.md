@@ -5,7 +5,7 @@
 **Amended:** 2026-07-28 — counter-metric extended to cover silent content loss,
 which the original could not see. Adds a way to refute; removes none. See
 [Amendment](#amendment--2026-07-28-hours-after-pre-registration).
-**Review on:** 2026-08-11 (14 days)
+**Review on:** 2026-08-04 (**7 days** — cut from 14 on 2026-07-29, #850)
 
 > Written and committed before the intervention, like [H1](./H1-merge-race.md)
 > and [H2](./H2-merge-queue.md). A prediction written afterwards is a
@@ -146,7 +146,7 @@ avoid.
 
 ## Falsification
 
-**Refuted if `racedShare` is still above 8% on 2026-08-11** with at least 50
+**Refuted if `racedShare` is still above 8% on 2026-08-04** with at least 50
 merged PRs in the window.
 
 **Also refuted, independently of `racedShare`,** if `integration.failures` > 2 or
@@ -277,7 +277,7 @@ rather than quietly skipped because the race improved for another reason.
 
 ## Result
 
-_To be completed on 2026-08-11. Verdict: `confirmed` / `refuted` /
+_To be completed on 2026-08-04. Verdict: `confirmed` / `refuted` /
 `inconclusive` / `abandoned`. A refuted hypothesis gets the change rolled back,
 not quietly kept because it felt better — and the counter-metric can refute it on
 its own, whatever the primary metric says._

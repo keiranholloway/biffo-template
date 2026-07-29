@@ -24,26 +24,25 @@ CI is a standard that is out of step with CI.
 
 ## Why — the measurement that motivated it
 
-Over the 30 days to **2026-07-29**, across the twelve repos in the estate that
-run CI:
+Over the **7 days** to **2026-07-29** — the estate's review window since #850 —
+across the twelve repos that run CI:
 
-| | |
-| --- | --- |
-| CI runs | 4,748 |
-| failed runs | 373 |
-| **failing steps that were locally catchable** | **211 of 342 — 62%** |
+| | 7 days | (30 days, for reference) |
+| --- | ---: | ---: |
+| CI runs | 2,768 | 4,748 |
+| failed runs | 144 | 373 |
+| **locally-catchable failing steps** | **132 of 199 — 66%** | 211 of 342 — 62% |
 
-By kind:
+By kind, over the 7-day window:
 
 | count | failing step | local cost |
 | ---: | --- | --- |
-| 49 | Test | 16s |
-| 38 + 15 | Format check | 6s |
-| 20 | Type check | 4s |
-| 16 | Lint | 3s |
-| 12 | Terraform fmt check | 0.2s |
+| 47 | Test | 16s |
+| 26 | Format check | 6s |
+| 14 | Lint | 3s |
+| 13 | Type check | 4s |
 | 11 | **Core ownership guard** | already a commit hook |
-| 7 | pyright | 7s |
+| 7 | RLS-dependent tests | ~3s locally |
 
 Nearly two thirds of everything CI caught, it caught *second*. Each costs a full
 CI cycle to discover and another to confirm the fix, plus a re-entry into the
@@ -54,8 +53,8 @@ that check is *already wired as a `commit-msg` hook*. It was configured, present
 in the tree, reviewed — and discovered in the pipeline eleven times, because the
 hook was not running (see [Arming](#2-arming--the-hook-must-actually-execute)).
 
-Concentration matters for expectations: 200 of the 211 are in the three instance
-repos (`biffo-template` 112, `tabsii-platform` 64, `biffo-platform` 24). The
+Concentration matters for expectations: 128 of the 132 are in the three instance
+repos (`tabsii-platform` 64, `biffo-template` 40, `biffo-platform` 24). The
 sibling and plugin repos have far fewer failures, and a larger share of theirs
 are network or runner flakes this standard cannot touch.
 

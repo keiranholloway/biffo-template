@@ -57,6 +57,13 @@
 # at runtime from what the repo has, so grepping the file for `pnpm run lint`
 # proves nothing -- and a parity test that can be satisfied by a comment is not
 # a parity test.
+#
+# `--list` reports what THIS REPO requires, deliberately ignoring whether the
+# tooling happens to be installed here. Parity with CI is a property of the
+# repository; "can this machine run it" is a property of the machine. Conflating
+# them made the parity test pass locally and fail on a CI runner that has no
+# `uv` or `terraform` -- the gate-green/CI-red split this whole exercise exists
+# to remove, reproduced inside its own guard.
 
 set -u
 
@@ -71,7 +78,9 @@ PYTEST="${BIFFO_VERIFY_PYTEST:-}"
 
 have_script() {
   [ -f package.json ] || return 1
-  node -e "process.exit(JSON.parse(require('fs').readFileSync('package.json','utf8')).scripts?.['$1']?0:1)" 2>/dev/null
+  # grep rather than node: --list must work on a machine with no toolchain at
+  # all, because what it reports is a property of the repo, not of the machine.
+  grep -qE "^[[:space:]]*\"$1\"[[:space:]]*:" package.json
 }
 
 run_check() {
@@ -104,7 +113,7 @@ skip() {
 # Python first: ruff is near-instant, so the cheapest feedback on the largest
 # single class of failure comes back immediately.
 if [ -f pyproject.toml ]; then
-  if command -v uv >/dev/null 2>&1; then
+  if [ -n "$LIST" ] || command -v uv >/dev/null 2>&1; then
     run_check ruff-check uv run ruff check .
     run_check ruff-format uv run ruff format --check .
     run_check pyright uv run pyright
@@ -122,7 +131,7 @@ fi
 
 # Terraform, wherever this repo keeps it: modules/ in the template and
 # instances, infra/ and modules/ in siblings.
-if command -v terraform >/dev/null 2>&1; then
+if [ -n "$LIST" ] || command -v terraform >/dev/null 2>&1; then
   # Scope must match this repo's CI, not exceed it. The template and instances
   # deliberately fmt-check modules/ ONLY: infra/environments/ is user-owned, and
   # a template-shipped check asserting over paths the template does not own is

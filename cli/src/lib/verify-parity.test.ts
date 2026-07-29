@@ -78,6 +78,29 @@ describe('verify.sh mirrors CI', () => {
     expect(gateRuns.length).toBeGreaterThan(5)
   })
 
+  /**
+   * Regression: `--list` used to gate on `command -v uv` / `command -v
+   * terraform`, so it reported what THIS MACHINE could run. The parity test
+   * passed locally and failed on the CI runner, whose JS job has neither —
+   * the gate-green/CI-red split this whole exercise exists to remove,
+   * reproduced inside its own guard.
+   *
+   * Parity with CI is a property of the repository. What a machine happens to
+   * have installed is a separate question, answered at run time by a visible
+   * `n/a` line.
+   */
+  it('lists the same checks on a machine with no toolchain installed', () => {
+    const bare = execFileSync('sh', [join(repoRoot, 'scripts/verify.sh'), '--list'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: { PATH: '/usr/bin:/bin' },
+    })
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+    expect(bare).toEqual(gateRuns)
+  })
+
   it('finds the CI check commands to compare against', () => {
     // A parser that silently matches nothing would make every assertion below
     // vacuously true — the exact fail-open shape the practices work exists to

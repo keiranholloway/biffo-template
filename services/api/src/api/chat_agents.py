@@ -63,6 +63,9 @@ class ChatAgent:
     max_history_messages: int
     max_output_tokens: int
     timeout_seconds: float
+    #: The registry row id when resolved from PluginChatAgent, None for static agents.
+    #: Used to record which prompt version produced an agent run.
+    id: str | None = None
 
 
 class UnknownChatAgentError(KeyError):
@@ -140,4 +143,5 @@ async def get_dynamic_chat_agent(
         max_history_messages=row.max_history_messages,
         max_output_tokens=row.max_output_tokens,
         timeout_seconds=row.timeout_seconds,
+        id=row.id,
     )

@@ -40,6 +40,7 @@ from __future__ import annotations
 
 from aws_lambda_powertools import Logger
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..agent_runs import (
@@ -62,6 +63,7 @@ from ..events import emit_event
 from ..events.registry import AGENT_RUN_COMPLETED, AGENT_RUN_REQUESTED
 from ..middleware.service_auth import ServicePrincipal, require_service_principal
 from ..models.agent_run import AgentRun
+from ..models.plugin_chat_agent_history import PluginChatAgentHistory
 from ..prompt_parts import PromptPartsError
 from ..schemas.agent_run import (
     AgentRunResponse,
@@ -121,6 +123,8 @@ async def request_agent_run(
     # workflow that still names its instructions inline. Resolving only on a
     # missing prompt is what made the model field editable-but-inert.
     snapshot = dict(snapshot)
+    prompt_version_id: str | None = None
+    prompt_version: int | None = None
     if not snapshot.get("instructions") or not snapshot.get("model"):
         agent = await get_dynamic_chat_agent(
             db, tenant_id=principal.tenant_id, agent_key=body.agent_name
@@ -142,6 +146,18 @@ async def request_agent_run(
                 snapshot["instructions"] = agent.system_prompt
             if not snapshot.get("model"):
                 snapshot["model"] = agent.model
+            # Record which registry row (prompt version) produced this run.
+            # Generation = count of history rows for this agent + 1.
+            prompt_version_id = agent.id
+            history_count = await db.scalar(
+                select(func.count())
+                .select_from(PluginChatAgentHistory)
+                .where(
+                    PluginChatAgentHistory.tenant_id == principal.tenant_id,
+                    PluginChatAgentHistory.plugin_chat_agent_id == agent.id,
+                )
+            )
+            prompt_version = (history_count or 0) + 1
 
     # A missing model is never fatal — unlike a missing prompt there is a sane
     # estate-wide answer, and this is the single place it is written down.
@@ -161,6 +177,8 @@ async def request_agent_run(
             workflow_run_id=body.workflow_run_id,
             thread_id=body.thread_id,
             idempotency_key=body.idempotency_key,
+            prompt_version_id=prompt_version_id,
+            prompt_version=prompt_version,
         )
     except DepthLimitExceededError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

@@ -134,8 +134,27 @@ this mechanism exists.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>" >/dev/null 2>&1
 
-  if ! git -C "$wt" push -q -u origin HEAD >/dev/null 2>&1; then
-    printf '%-26s \033[31mPUSH REFUSED\033[0m (run the gate there and look)\n' "$label"
+  # --force-with-lease: this branch is regenerated from origin/<base> on every
+  # run, so a previous sync's branch is legitimately replaced -- but the lease
+  # still refuses if someone else has pushed to it.
+  #
+  # The output is CAPTURED and classified rather than discarded. The first
+  # version printed "PUSH REFUSED (run the gate there and look)" for every
+  # failure, and the first real cause was a plain non-fast-forward against a
+  # previous run's branch. The gate was green in that repo. A diagnostic that
+  # names the wrong cause sends you to read a passing log, which is the same
+  # class of defect as everything else this gate exists to catch.
+  push_out=$(git -C "$wt" push --force-with-lease -u origin HEAD 2>&1)
+  push_rc=$?
+  if [ "$push_rc" -ne 0 ]; then
+    case "$push_out" in
+      *"verify failed"*|*"verify ran NOTHING"*)
+        printf '%-26s \033[31mGATE REFUSED THE PUSH\033[0m - run scripts/verify.sh there\n' "$label" ;;
+      *"stale info"*|*"non-fast-forward"*)
+        printf '%-26s \033[31mbranch diverged\033[0m - someone else pushed to chore/sync-shared\n' "$label" ;;
+      *)
+        printf '%-26s \033[31mpush failed\033[0m: %s\n' "$label" "$(echo "$push_out" | tail -1)" ;;
+    esac
     return 1
   fi
   url=$(gh pr create --repo "$slug" --base "$base" --head chore/sync-shared \

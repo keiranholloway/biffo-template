@@ -1,4 +1,11 @@
-pnpm exec commitlint --edit "$1"
-# Refuse commits that edit template-owned paths (#370). Inert in the template;
-# enforces in instances. CI runs the same check, which --no-verify cannot skip.
-sh scripts/biffo.sh check ownership --staged "$1"
+# Forwarder, kept for the migration off husky (#838).
+#
+# The hooks now live in the TRACKED .githooks/ directory and `prepare` points
+# core.hooksPath there. A clone that has not re-run `pnpm install` since the
+# upgrade still has core.hooksPath=.husky/_, whose generated shim sources this
+# file. Deleting it would leave those clones running nothing, silently — the
+# precise failure this change exists to end (AGENTS.md section 7: never disable
+# a gate quietly).
+#
+# Safe to delete once every clone reports: git config core.hooksPath => .githooks
+exec sh "$(git rev-parse --show-toplevel)/.githooks/commit-msg" "$@"

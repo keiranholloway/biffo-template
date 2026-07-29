@@ -16,14 +16,14 @@
     "test": "turbo run test",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yaml,yml,css}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yaml,yml,css}\"",
-    "prepare": "husky"
+    "verify": "sh scripts/verify.sh",
+    "prepare": "git config core.hooksPath .githooks && echo 'hooks armed: .githooks (tracked — present in every worktree)'"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.6.1",
     "@commitlint/config-conventional": "^19.6.0",
     "@eslint/js": "^9.18.0",
     "eslint": "^9.0.0",
-    "husky": "^9.1.7",
     "lint-staged": "^15.3.0",
     "prettier": "^3.4.2",
     "prettier-plugin-tailwindcss": "^0.6.9",

@@ -48,10 +48,27 @@
 #
 # Usage:
 #   sh scripts/verify.sh          # everything applicable to this repo
+#   sh scripts/verify.sh --list   # print the checks it WOULD run, and stop
 #   pnpm run verify               # same
 #   BIFFO_SKIP_VERIFY=1 git push  # escape hatch, for when you mean it
+#
+# `--list` exists so parity with CI can be tested against what this script
+# actually does, rather than against its source text. The checks are assembled
+# at runtime from what the repo has, so grepping the file for `pnpm run lint`
+# proves nothing -- and a parity test that can be satisfied by a comment is not
+# a parity test.
+#
+# `--list` reports what THIS REPO requires, deliberately ignoring whether the
+# tooling happens to be installed here. Parity with CI is a property of the
+# repository; "can this machine run it" is a property of the machine. Conflating
+# them made the parity test pass locally and fail on a CI runner that has no
+# `uv` or `terraform` -- the gate-green/CI-red split this whole exercise exists
+# to remove, reproduced inside its own guard.
 
 set -u
+
+LIST=""
+[ "${1:-}" = "--list" ] && LIST=1
 
 FAILED=""
 PASSED=""
@@ -60,13 +77,56 @@ SKIPPED=""
 PYTEST="${BIFFO_VERIFY_PYTEST:-}"
 
 have_script() {
-  [ -f package.json ] || return 1
-  node -e "process.exit(JSON.parse(require('fs').readFileSync('package.json','utf8')).scripts?.['$1']?0:1)" 2>/dev/null
+  [ -f "$2/package.json" ] || return 1
+  # grep rather than node: --list must work on a machine with no toolchain at
+  # all, because what it reports is a property of the repo, not of the machine.
+  # Deliberately NOT anchored to line start: that only matches a pretty-printed
+  # package.json, and a minified one would silently report "no lint script" --
+  # a skip that looks like a considered decision. A false positive here costs a
+  # loud `pnpm run` failure; a false negative costs an unchecked push.
+  grep -qE "\"$1\"[[:space:]]*:" "$2/package.json"
+}
+
+# Every directory holding a JS package this repo owns.
+#
+# A repo with a root package.json is a workspace: `turbo run lint` fans out and
+# running per-package as well would double the work. A repo WITHOUT one keeps
+# its JS in subdirectories -- web/ and web-admin/ in the plugin repos,
+# apps/frontend/ in the siblings -- and their CI runs the same scripts there
+# with `working-directory:`.
+#
+# ## Why this exists (#852)
+#
+# The gate used to check the repo root and nothing else. In the ten repos with
+# no root package.json -- every plugin, every sibling, both runner repos -- it
+# printed `javascript n/a - no package.json in this repo` and then
+# `verify passed`, on repos whose entire frontend is JS. A 100% TypeScript
+# change pushed green with zero JavaScript verification.
+#
+# That is worse than the missing hooks this gate was built to fix. A repo with
+# no hooks makes no claim; this one claimed to have checked. And the standard
+# it was written to enforce says exactly that inapplicable and absent must not
+# look the same -- while reporting "not applicable" for the language the change
+# was written in.
+js_dirs() {
+  if [ -f package.json ]; then
+    echo "."
+    return
+  fi
+  find . -name package.json \
+    -not -path "*/node_modules/*" -not -path "*/dist/*" -not -path "*/.next/*" \
+    -not -path "*/.turbo/*" -not -path "*/.worktrees/*" -not -path "*/out/*" \
+    -not -path "*/coverage/*" -not -path "*/.venv/*" 2>/dev/null |
+    sed 's|/package.json$||' | sort
 }
 
 run_check() {
   name="$1"
   shift
+  if [ -n "$LIST" ]; then
+    echo "$*"
+    return 0
+  fi
   start=$(date +%s)
   if "$@" >"/tmp/biffo-verify.$$" 2>&1; then
     PASSED="$PASSED $name"
@@ -80,16 +140,17 @@ run_check() {
 }
 
 skip() {
+  [ -n "$LIST" ] && return 0
   SKIPPED="$SKIPPED $1"
   printf '  \033[90m--   %-16s n/a - %s\033[0m\n' "$1" "$2"
 }
 
-printf '\nverify - the checks CI runs, before the push\n\n'
+[ -n "$LIST" ] || printf '\nverify - the checks CI runs, before the push\n\n'
 
 # Python first: ruff is near-instant, so the cheapest feedback on the largest
 # single class of failure comes back immediately.
 if [ -f pyproject.toml ]; then
-  if command -v uv >/dev/null 2>&1; then
+  if [ -n "$LIST" ] || command -v uv >/dev/null 2>&1; then
     run_check ruff-check uv run ruff check .
     run_check ruff-format uv run ruff format --check .
     run_check pyright uv run pyright
@@ -107,7 +168,7 @@ fi
 
 # Terraform, wherever this repo keeps it: modules/ in the template and
 # instances, infra/ and modules/ in siblings.
-if command -v terraform >/dev/null 2>&1; then
+if [ -n "$LIST" ] || command -v terraform >/dev/null 2>&1; then
   # Scope must match this repo's CI, not exceed it. The template and instances
   # deliberately fmt-check modules/ ONLY: infra/environments/ is user-owned, and
   # a template-shipped check asserting over paths the template does not own is
@@ -138,19 +199,33 @@ fi
 
 # JS, cheapest first; `test` last because it is slowest and the most likely to
 # be interrupted by an impatient reader.
-if [ -f package.json ]; then
+JS_DIRS=$(js_dirs)
+if [ -n "$JS_DIRS" ]; then
   skip build "excluded - a full app build is too slow for a push gate"
-  for s in lint typecheck format:check test; do
-    label=$(printf '%s' "$s" | tr -d ':')
-    if have_script "$s"; then
-      run_check "$label" pnpm run "$s"
-    else
-      skip "$label" "no \"$s\" script in package.json"
-    fi
+  for d in $JS_DIRS; do
+    # Name the package in the label when there is more than one, so a failure
+    # says WHERE. A single unlabelled "lint" across three packages is how you
+    # end up fixing the wrong one.
+    suffix=""
+    [ "$d" != "." ] && suffix="(${d#./})"
+    for s in lint typecheck format:check test; do
+      label="$(printf '%s' "$s" | tr -d ':')$suffix"
+      if have_script "$s" "$d"; then
+        if [ "$d" = "." ]; then
+          run_check "$label" pnpm run "$s"
+        else
+          run_check "$label" pnpm --dir "$d" run "$s"
+        fi
+      else
+        skip "$label" "no \"$s\" script"
+      fi
+    done
   done
 else
-  skip javascript "no package.json in this repo"
+  skip javascript "no package.json anywhere in this repo"
 fi
+
+[ -n "$LIST" ] && exit 0
 
 printf '\n'
 if [ -n "$FAILED" ]; then

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 /**
@@ -128,5 +129,84 @@ describe('verify.sh mirrors CI', () => {
     for (const [cmd, reason] of Object.entries(EXCLUDED)) {
       expect(reason.length, `${cmd} needs a real reason`).toBeGreaterThan(20)
     }
+  })
+})
+
+describe('verify.sh discovers JS packages that are not at the repo root', () => {
+  /**
+   * The bug (#852). The gate checked the repo root and nothing else. In the ten
+   * estate repos with no root `package.json` — every plugin, every sibling,
+   * both runner repos — it printed
+   *
+   *     javascript  n/a - no package.json in this repo
+   *     verify passed
+   *
+   * on repos whose entire frontend is TypeScript. A 100% TypeScript change
+   * pushed green with zero JavaScript verification, and it was found by an
+   * agent noticing the gate had approved work it could not have checked.
+   *
+   * That is worse than the missing hooks this gate was built to fix: a repo
+   * with no hooks makes no claim, this one claimed to have checked. Their CI
+   * runs the same scripts with `working-directory: web` / `apps/frontend`, so
+   * the checks were always applicable — the gate just looked in one place.
+   */
+  const repoWithNestedJs = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'verify-nested-'))
+    for (const pkg of ['web', 'web-admin']) {
+      mkdirSync(join(dir, pkg), { recursive: true })
+      writeFileSync(
+        join(dir, pkg, 'package.json'),
+        JSON.stringify({ name: pkg, scripts: { lint: 'x', typecheck: 'x', test: 'x' } }),
+      )
+    }
+    // node_modules must never be walked into: it is full of package.json files
+    // and would turn the gate into a dependency audit.
+    mkdirSync(join(dir, 'web', 'node_modules', 'left-pad'), { recursive: true })
+    writeFileSync(
+      join(dir, 'web', 'node_modules', 'left-pad', 'package.json'),
+      JSON.stringify({ name: 'left-pad', scripts: { lint: 'x' } }),
+    )
+    return dir
+  }
+
+  const listIn = (cwd: string) =>
+    execFileSync('sh', [join(repoRoot, 'scripts/verify.sh'), '--list'], { cwd, encoding: 'utf8' })
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+
+  it('runs each nested package’s scripts instead of reporting n/a', () => {
+    const out = listIn(repoWithNestedJs())
+    expect(out).toContain('pnpm --dir ./web run lint')
+    expect(out).toContain('pnpm --dir ./web run typecheck')
+    expect(out).toContain('pnpm --dir ./web run test')
+    expect(out).toContain('pnpm --dir ./web-admin run lint')
+    // The regression in one line: this used to be the entire JS section.
+    expect(out.join('\n')).not.toContain('no package.json')
+  })
+
+  it('reads a minified package.json too', () => {
+    // The grep was anchored to line start, so it only saw pretty-printed
+    // manifests. A minified one would have reported "no lint script" — a skip
+    // that reads as a considered decision rather than a parser limitation.
+    const dir = mkdtempSync(join(tmpdir(), 'verify-min-'))
+    mkdirSync(join(dir, 'web'), { recursive: true })
+    writeFileSync(
+      join(dir, 'web', 'package.json'),
+      '{"name":"web","scripts":{"lint":"x","test":"x"}}',
+    )
+    expect(listIn(dir)).toContain('pnpm --dir ./web run lint')
+  })
+
+  it('never walks into node_modules', () => {
+    expect(listIn(repoWithNestedJs()).join('\n')).not.toContain('left-pad')
+  })
+
+  it('still uses the root workspace when there is one, rather than fanning out', () => {
+    // A root package.json means turbo already fans out; running per-package as
+    // well would double every check in the template and both instances.
+    const out = listIn(repoRoot)
+    expect(out).toContain('pnpm run lint')
+    expect(out.filter((l) => l.includes('--dir'))).toEqual([])
   })
 })

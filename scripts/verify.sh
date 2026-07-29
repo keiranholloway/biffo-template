@@ -77,10 +77,47 @@ SKIPPED=""
 PYTEST="${BIFFO_VERIFY_PYTEST:-}"
 
 have_script() {
-  [ -f package.json ] || return 1
+  [ -f "$2/package.json" ] || return 1
   # grep rather than node: --list must work on a machine with no toolchain at
   # all, because what it reports is a property of the repo, not of the machine.
-  grep -qE "^[[:space:]]*\"$1\"[[:space:]]*:" package.json
+  # Deliberately NOT anchored to line start: that only matches a pretty-printed
+  # package.json, and a minified one would silently report "no lint script" --
+  # a skip that looks like a considered decision. A false positive here costs a
+  # loud `pnpm run` failure; a false negative costs an unchecked push.
+  grep -qE "\"$1\"[[:space:]]*:" "$2/package.json"
+}
+
+# Every directory holding a JS package this repo owns.
+#
+# A repo with a root package.json is a workspace: `turbo run lint` fans out and
+# running per-package as well would double the work. A repo WITHOUT one keeps
+# its JS in subdirectories -- web/ and web-admin/ in the plugin repos,
+# apps/frontend/ in the siblings -- and their CI runs the same scripts there
+# with `working-directory:`.
+#
+# ## Why this exists (#852)
+#
+# The gate used to check the repo root and nothing else. In the ten repos with
+# no root package.json -- every plugin, every sibling, both runner repos -- it
+# printed `javascript n/a - no package.json in this repo` and then
+# `verify passed`, on repos whose entire frontend is JS. A 100% TypeScript
+# change pushed green with zero JavaScript verification.
+#
+# That is worse than the missing hooks this gate was built to fix. A repo with
+# no hooks makes no claim; this one claimed to have checked. And the standard
+# it was written to enforce says exactly that inapplicable and absent must not
+# look the same -- while reporting "not applicable" for the language the change
+# was written in.
+js_dirs() {
+  if [ -f package.json ]; then
+    echo "."
+    return
+  fi
+  find . -name package.json \
+    -not -path "*/node_modules/*" -not -path "*/dist/*" -not -path "*/.next/*" \
+    -not -path "*/.turbo/*" -not -path "*/.worktrees/*" -not -path "*/out/*" \
+    -not -path "*/coverage/*" -not -path "*/.venv/*" 2>/dev/null |
+    sed 's|/package.json$||' | sort
 }
 
 run_check() {
@@ -162,18 +199,30 @@ fi
 
 # JS, cheapest first; `test` last because it is slowest and the most likely to
 # be interrupted by an impatient reader.
-if [ -f package.json ]; then
+JS_DIRS=$(js_dirs)
+if [ -n "$JS_DIRS" ]; then
   skip build "excluded - a full app build is too slow for a push gate"
-  for s in lint typecheck format:check test; do
-    label=$(printf '%s' "$s" | tr -d ':')
-    if have_script "$s"; then
-      run_check "$label" pnpm run "$s"
-    else
-      skip "$label" "no \"$s\" script in package.json"
-    fi
+  for d in $JS_DIRS; do
+    # Name the package in the label when there is more than one, so a failure
+    # says WHERE. A single unlabelled "lint" across three packages is how you
+    # end up fixing the wrong one.
+    suffix=""
+    [ "$d" != "." ] && suffix="(${d#./})"
+    for s in lint typecheck format:check test; do
+      label="$(printf '%s' "$s" | tr -d ':')$suffix"
+      if have_script "$s" "$d"; then
+        if [ "$d" = "." ]; then
+          run_check "$label" pnpm run "$s"
+        else
+          run_check "$label" pnpm --dir "$d" run "$s"
+        fi
+      else
+        skip "$label" "no \"$s\" script"
+      fi
+    done
   done
 else
-  skip javascript "no package.json in this repo"
+  skip javascript "no package.json anywhere in this repo"
 fi
 
 [ -n "$LIST" ] && exit 0

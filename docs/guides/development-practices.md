@@ -293,19 +293,19 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **193 rows as rendered on this page**. `evidence.jsonl` separately holds **211**, because a reworded row is stored as a new one and its predecessor is retained — see the duplication row. The split below is counted from the page, since that is the corpus a reader can actually see:
+`byFixRepo`, regenerated at **196 rows as rendered on this page**. `evidence.jsonl` separately holds **214**, because a reworded row is stored as a new one and its predecessor is retained — see the duplication row. The split below is counted from the page, since that is the corpus a reader can actually see:
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 97 of 193 (50%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the git-hook chain, the scaffolder itself |
-| **tabsii-platform** | 17 of 193 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity **and its event-destination envelope** |
-| **biffo-plugin-idea-scout** | 9 of 193 | Adapter seam, research search capability, its own styling, release + publish workflows |
-| **biffo-platform** | 6 of 193 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 193 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-plugin-ideation** | 13 of 193 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **tabsii-crm** | 5 of 193 | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", **a proxy returning the wrong response shape, and a panel shipped with no CSS** |
-| **tabsii-marketplace** | 1 of 193 | `python-jose` removal; the credential-dependent build |
-| **biffo-runners** | 1 of 193 | Runner fleet configuration |
+| **biffo-template** | 98 of 196 (50%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the git-hook chain, the scaffolder itself |
+| **tabsii-platform** | 17 of 196 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity **and its event-destination envelope** |
+| **biffo-plugin-idea-scout** | 11 of 196 | Adapter seam, research search capability, its own styling, release + publish workflows |
+| **biffo-platform** | 6 of 196 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 196 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-ideation** | 13 of 196 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **tabsii-crm** | 5 of 196 | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", **a proxy returning the wrong response shape, and a panel shipped with no CSS** |
+| **tabsii-marketplace** | 1 of 196 | `python-jose` removal; the credential-dependent build |
+| **biffo-runners** | 1 of 196 | Runner fleet configuration |
 
 **The shape did not change, and that is the finding.** Seven new rows moved
 `biffo-template` from 86/159 to 90/166 — **54% either way**. Four sessions of
@@ -318,7 +318,7 @@ weeks, and it is a *recurrence* of a pattern already logged against
 first instance was recorded `unfiled` and never generalised. Two repos, same
 defect, and the corpus predicted it without anyone reading the prediction.
 
-**`biffo-template` takes 97 of 193 — 50%, and this capture is not evidence
+**`biffo-template` takes 98 of 196 — 50%, and this capture is not evidence
 about the estate.** All ten new rows are findings about the measurement
 apparatus itself, filed by auditing the dataset rather than by doing product
 work, so they inflate the template's share by construction. Read the ratio from
@@ -571,6 +571,9 @@ effort log exists to make visible, and this session logged it that way.
 | — | **154 of 155 scoreboard rows carry no cost, so the corpus can be counted but not ranked.** §8 requires "what it cost in wall-clock time"; one row has ever recorded it. A ten-minute fix and one that ate an afternoon are the same size in the dataset, which makes "what should we restructure?" — the question the scoreboard exists to answer — unanswerable from it. **Checked before blaming the extractor: only 5 rows state a duration in any form, so this is a capture failure, not a parsing one** | **visibility** | `docs/practices/evidence.jsonl` | biffo-template — the capture step, wherever it lands | unfiled |
 | — | **Both recoveries from earlier data loss silently corrupted the page.** #762 ("restore three sessions deleted by a stale-base merge") and #777 ("restore 93 lines #774 deleted") each re-inserted a repo-tally row into the *cost* table, where a 3-column row is structurally valid and therefore invisible — they sat there through every subsequent edit and every review of this page. Restoring deleted content is treated as self-evidently safe and is the one operation here with no verification step at all | **drift** | `docs/guides/development-practices.md` — found by grepping for a stale count | biffo-template — the restore practice, and whatever checks table shape | unfiled |
 | — | **`parseCost` takes the first match of the word "cost" and gives up, so a row that discusses cost before stating its figure loses the figure silently.** `"no cost, so the corpus … this cost 25m"` extracts `null`; `"cost 25m"` alone extracts 25. It also requires that exact keyword, so every row phrased `"~40 min round trip"` or `"ate an afternoon"` is invisible to it. Small today — it drops 5 rows — but it fails **in the direction of the discipline**: the more carefully a row explains what something cost, the likelier its number is discarded | **fail-open** | `scripts/practices-evidence.mjs` `parseCost` | biffo-template — `scripts/practices-evidence.mjs` | unfiled |
+| — | **A feature shipped, deployed, passed every test, and does not do the thing it was built for — measured only because someone asked for the measurement.** Cross-run dedup briefs the agents with titles the founder has already seen. Four runs on dev with identical inputs: **3 of 4 candidates were near-duplicates of prior ones**, one of them the same idea with the words reordered (`Compliance-Evidence Autopilot for Fintechs on AWS/GCP` → `PCI Autopilot — continuous compliance evidence for fintech teams on AWS`). The tests were all honest: they assert the list reaches synthesis, which it does. **Nothing in the suite could have been written to assert that a model obeys an instruction**, so the gap between "the mechanism works" and "the feature works" was invisible to every gate | **fail-open** | `biffo-plugin-idea-scout` #49, reopened on evidence | biffo-plugin-idea-scout #49 — needs semantic matching, not string matching | open |
+| — | **I put a made-up percentage in an issue and it became the argument for not doing the harder thing.** #49 said *"exact-ish title avoidance is the cheap 80%"* — a number with no measurement behind it, used to defer semantic deduplication as out of scope. Measured afterwards it is about **25%**. Worse, the evidence was already sitting in the product: across three pre-fix runs **no title repeated verbatim either**, so string matching could never have caught any of it, and five minutes reading the historical candidates before building would have shown that. Condition: **a quantified claim invented to justify a scope boundary is indistinguishable, in the issue text, from one that was measured** | **process** | `biffo-plugin-idea-scout` #49 as originally filed | biffo-template — a number in an issue needs its source or a hedge | unfiled |
+| — | **The state existed, was named, was documented, and one call site of three ignored it.** idea-scout's `App.tsx` declares `loaded` with a comment explaining that an unloaded app and an empty list are otherwise indistinguishable. Two call sites honour it; the Past Scouts sidebar does not, and tells a founder with eleven runs that they have none. Harder than the same-day sibling defect in ideation where the concept was simply absent — **a reader sees the flag and reasonably assumes it governs the empty-state copy everywhere**, so the bug is invisible to exactly the person checking for it | **drift** | `biffo-plugin-idea-scout` `web/src/App.tsx:171` | biffo-plugin-idea-scout #53 | open |
 | — | **The check I used as the resync gate all day confirms agreement between two copies, not that either is current.** Every vendored resync was verified with `diff -rq` against a local worktree of the plugin's `dev`. On the last one that worktree was stale: the vendored copy and the source were **both missing the merged change**, `diff` reported `identical` for `src` and `tests`, and the gate passed while carrying nothing. It fired only because I separately grepped the vendored file for the feature name and got zero. The condition generalises past this workflow — **any equality check between two artefacts is silent about the currency of the reference**, and a stale reference makes it pass in exactly the case it exists to catch | **fail-open** | `biffo-platform` resync of `biffo-plugin-idea-scout` #51 | biffo-platform — the resync check must establish the source's HEAD, not assume it | unfiled |
 | — | **A key added to the wrong brief is dropped by the fan-in with no error, and the run still produces plausible output.** `agent_fan_in` forwards only the keys **every** contributing sibling carries with an equal value, so data added to one research brief and not its siblings never reaches synthesis. Nothing fails: no exception, no empty result, just candidates that quietly ignore the input they were supposed to weigh. Building cross-run dedup, this decided the whole design — the list had to go in the shared brief or the feature would have shipped, passed its tests, and done nothing. The repo already had a test file written for this exact shape after #26, which is the only reason it was obvious | **visibility** | `biffo-plugin-idea-scout` synthesis path | biffo-plugin-idea-scout #51 — asserted in `test_idea_scout_shared_brief.py` | fixed |
 | — | **A severity estimate read off the code was wrong by roughly 8x, in the direction that argues for not doing the work.** Filing a UI defect I wrote that it *"self-corrects within a second"* and used that to classify it minor. Watching the deployed app, the window is **5–8 seconds** — still pending at a 3-second screenshot, resolved only after another five, because the plugin-host Lambda is cold. The error is not random: **reading code tells you the sequence of operations and nothing about how long each takes in the environment it runs in**, so a duration inferred that way omits every source of latency and is systematically optimistic. A founder staring at a false "you have no runs" for eight seconds is a materially different product than one seeing it for one | **visibility** | `biffo-plugin-ideation` #83, corrected on the issue after deploying | biffo-plugin-ideation #84 | fixed |
@@ -954,6 +957,21 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**Reading the historical data before trusting the new result.** The plan was two
+fresh runs. Looking first at three pre-existing runs with the same inputs showed
+that repetition was *thematic and never verbatim* — which reframed the whole
+test, because it meant exact-string dedup could not possibly have worked, and it
+made the post-fix run interpretable instead of just "different words again".
+The control existed in the product already and cost nothing but the looking.
+
+**The shape of the failure identified where the defect is.** Not one title
+repeated verbatim after the fix, which is the signature of a model that received
+the list and satisfied it lexically — precisely what the prompt forbade. That
+distinguishes "the data never arrived" from "the data arrived and was gamed",
+and those have completely different fixes. A bare "still repeats" verdict would
+have sent the next session to debug the plumbing, which is fine.
+
 
 **Adding a missing symbol on its own, so the tests failed for the right
 reason.** Four tests referencing a not-yet-existing constant failed with
@@ -1921,6 +1939,19 @@ deployed code was already correct. `git rev-list --count HEAD..origin/dev` befor
 trusting a tree is in AGENTS.md §1 precisely for this, and it is cheap.
 
 ## What needs more thought
+
+**No gate in this estate can assert that a model obeys an instruction.** Every
+test around cross-run dedup passes and the feature does not work, because the
+tests assert plumbing — the list is assembled, survives the fan-in, reaches
+synthesis with the prompt attached — and the actual requirement is behavioural.
+That requirement is testable, but only by running the thing and comparing, which
+costs a real agent run and a human judgement about whether two ideas are the
+same idea. Nothing currently budgets for that, so every prompt-dependent feature
+in this estate ships on the strength of its plumbing tests. **This is the second
+time today a measurement contradicted an argued position** — the other was a
+severity estimate wrong by 8x — and both times the measurement was cheap once
+someone asked for it.
+
 
 **Nothing makes a test double agree with the service it stands for.** The
 `FakeCore` row is not a mistake review would catch: the fake was consistent,

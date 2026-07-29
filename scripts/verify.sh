@@ -290,11 +290,31 @@ if [ -z "$PASSED" ]; then
   # conflating them is the exact failure this gate exists to remove -- the
   # standard's own principle, applied to the gate itself. tabsii-crm ran ONE
   # check on a 700-line change and printed a pass (#855).
+  #
+  # Whether that BLOCKS depends on one thing: does this repo have CI the gate
+  # should have mirrored?
+  #
+  #   - CI exists and the gate ran nothing -> that is the #855 bug. Block.
+  #   - No CI at all -> the repo has no shift-left obligation, and blocking
+  #     every push there is friction with no benefit. Friction is what drives
+  #     people to BIFFO_SKIP_VERIFY, which is a counter-metric H4 pre-registered
+  #     as refuting itself. Say it loudly, exit 0.
+  #
+  # Found immediately: the first run of this rule refused the push in the three
+  # repos that have no CI (tabsii-runners, biffo-runners,
+  # tabsii-data-model-design) -- blocking the very sync PR that was installing
+  # the gate.
   printf '\033[31mverify ran NOTHING - this is not a pass\033[0m\n'
-  printf 'No check in this repo was applicable. Either its toolchain is somewhere\n'
-  printf 'verify.sh does not look, or this repo should not carry a gate at all.\n'
+  if [ -f .github/workflows/ci.yml ]; then
+    printf 'This repo HAS CI, and the gate mirrored none of it. That is the #855 bug:\n'
+    printf 'a gate that reports on work it never checked. Run scripts/gate-coverage.sh\n'
+    printf 'to see which of its CI checks are missing.\n\n'
+    exit 1
+  fi
+  printf 'This repo has no CI for the gate to mirror, so there is nothing to shift\n'
+  printf 'left. Not blocking -- but nothing was verified here.\n'
   printf 'See docs/practices/standards/local-gates.md\n\n'
-  exit 1
+  exit 0
 fi
 printf '\033[32mverify passed\033[0m -%s\n' "$PASSED"
 [ -n "$SKIPPED" ] && printf '\033[90mnot applicable here:%s\033[0m\n' "$SKIPPED"

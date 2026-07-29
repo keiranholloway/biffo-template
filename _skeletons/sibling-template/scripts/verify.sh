@@ -110,6 +110,20 @@ pytest_is_fast() {
   _cache="$_d/.pytest-duration"
   if [ -f "$_cache" ]; then
     _secs=$(cat "$_cache" 2>/dev/null)
+  elif [ -n "$LIST" ]; then
+    # --list must not run a test suite to answer a question about the repo, so
+    # with no cached measurement it has to guess -- and the direction of the
+    # guess is the whole decision.
+    #
+    # Guessing "fast" makes --list CLAIM a check the gate may not run, which is
+    # the fail-open direction and exactly what this tooling exists to eliminate.
+    # Guessing "slow" makes it under-report a check the gate does run: visible,
+    # conservative, and self-correcting, because the first real run writes the
+    # measurement and every --list after that is exact.
+    #
+    # Both directions were tried. Under-reporting is the one that cannot lie
+    # about coverage.
+    _secs=99999
   else
     # First run in a repo: time it once, then decide from then on. A timeout
     # means "too slow", which is the correct verdict rather than a hang.
@@ -290,7 +304,7 @@ if [ -n "$PY_DIRS" ]; then
         [ -n "$bandit_paths" ] && ci_has "bandit" && run_check "bandit$suffix" uv run bandit -r $bandit_paths -ll -q
         if [ "$PYTEST" = "0" ]; then
           skip "pytest$suffix" "excluded by BIFFO_VERIFY_PYTEST=0"
-        elif [ -n "$PYTEST" ] || { [ -z "$LIST" ] && pytest_is_fast "."; }; then
+        elif [ -n "$PYTEST" ] || pytest_is_fast "."; then
           ci_has "pytest" && run_check "pytest$suffix" uv run pytest -q
         else
           skip "pytest$suffix" "suite is slower than ${PYTEST_BUDGET_SECONDS}s - CI keeps it"
@@ -302,7 +316,7 @@ if [ -n "$PY_DIRS" ]; then
         ci_has "bandit" && run_check "bandit$suffix" uv run --directory "$d" bandit -r src -ll -q
         if [ "$PYTEST" = "0" ]; then
           skip "pytest$suffix" "excluded by BIFFO_VERIFY_PYTEST=0"
-        elif [ -n "$PYTEST" ] || { [ -z "$LIST" ] && pytest_is_fast "$d"; }; then
+        elif [ -n "$PYTEST" ] || pytest_is_fast "$d"; then
           ci_has "pytest" && run_check "pytest$suffix" uv run --directory "$d" pytest -q
         else
           skip "pytest$suffix" "suite is slower than ${PYTEST_BUDGET_SECONDS}s - CI keeps it"

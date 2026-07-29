@@ -14,7 +14,15 @@ Three rules, all of which exist because the alternative is self-congratulation:
 
 | # | Hypothesis | Metric | Status | Pre-registered | Review |
 | --- | --- | --- | --- | --- | --- |
-| [H1](H1-merge-race.md) | The merge race is unwinnable by hand; auto-merge removes it | `racedShare` 13.2% → <5% | **running** | 2026-07-27 | 2026-08-10 |
+| [H1](H1-merge-race.md) | The merge race is unwinnable by hand; auto-merge removes it | `racedShare` 13.2% → <5% | `abandoned` | 2026-07-27 | superseded by H3 |
+| [H2](H2-merge-queue.md) | A merge queue removes the race without relaxing `strict` | — | `abandoned` | 2026-07-28 | never ran — GitHub offers no merge queue on this account |
+| [H3](H3-relax-strict.md) | Relaxing `strict` removes the race without breaking `dev` | `racedShare` 16.0% → <3% | **running** | 2026-07-28 | 2026-08-11 |
+| [H4](H4-shift-left-gates.md) | A local gate that actually runs removes most of what CI catches | locally-catchable share of failing CI steps 62% → <20% | **running** | 2026-07-29 | 2026-08-28 |
+
+> H2 and H3 were pre-registered on 2026-07-28 and never added here, so for a day
+> this register listed one of three live experiments. An index that is not
+> maintained is not a register — it is a claim that nothing else was tried.
+> Adding a row is part of pre-registering, not a follow-up.
 
 ## Open, not yet pre-registered
 

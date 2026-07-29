@@ -31,7 +31,13 @@ def _outcome(**overrides):
         run=object(),
         action_type="email",
         status="succeeded",
-        trigger_event={"payload": {"lead_id": "lead-1", "email": "a@example.com"}},
+        # FLAT, because that is what dispatch_event stores and what the engine
+        # reads back. This fixture used to wrap the fields in a "payload" key,
+        # which nothing in the system produces — so every test here passed while
+        # trigger_payload returned {} for every real run (tabsii-platform#301).
+        # test_orchestration_service.py pins the shape against the producer
+        # rather than against this literal.
+        trigger_event={"lead_id": "lead-1", "email": "a@example.com"},
         request=None,
         response={"MessageId": "msg-1"},
         error=None,
@@ -40,14 +46,31 @@ def _outcome(**overrides):
     return RunOutcome(**base)  # type: ignore[arg-type]
 
 
-def test_trigger_payload_unwraps_the_event_envelope():
-    """An observer reads its own event contract, not BiffoEvent's shape."""
+def test_trigger_payload_is_the_event_the_run_stored():
+    """The fields sit at the top level; an observer reads them directly."""
     assert _outcome().trigger_payload == {"lead_id": "lead-1", "email": "a@example.com"}
 
 
-@pytest.mark.parametrize("event", [{}, {"payload": None}, {"payload": "not-a-dict"}])
-def test_trigger_payload_is_empty_when_there_is_none(event):
-    assert _outcome(trigger_event=event).trigger_payload == {}
+def test_trigger_payload_still_unwraps_a_genuine_envelope():
+    """Kept so an instance that really does post an envelope keeps working."""
+    wrapped = _outcome(trigger_event={"payload": {"lead_id": "lead-9"}})
+    assert wrapped.trigger_payload == {"lead_id": "lead-9"}
+
+
+@pytest.mark.parametrize("event", [{"payload": None}, {"payload": "not-a-dict"}])
+def test_a_payload_key_that_is_not_a_dict_does_not_swallow_the_event(event):
+    """The regression itself: a non-dict ``payload`` must not yield ``{}``.
+
+    Returning {} here is what made the seam look like it worked. An event whose
+    own contract happens to include a ``payload`` field is still an event, and
+    the observer must see it rather than an empty dict it cannot distinguish
+    from "this event carried nothing".
+    """
+    assert _outcome(trigger_event=event).trigger_payload == event
+
+
+def test_trigger_payload_is_empty_only_when_the_event_is():
+    assert _outcome(trigger_event={}).trigger_payload == {}
 
 
 def test_succeeded_reflects_the_run_status():

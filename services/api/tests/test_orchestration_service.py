@@ -13,6 +13,7 @@ from api.models.orchestration import (  # noqa: F401 — registers tables on Bas
     WorkflowDefinition,
     WorkflowRun,
 )
+from api.run_observers import RunOutcome
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -337,3 +338,40 @@ async def test_record_result_unknown_run_returns_none(db_session):
 
     assert run is None
     assert await _count(db_session, ActionLog) == 0
+
+
+async def test_run_outcome_reads_the_payload_the_producer_actually_stored(db_session):
+    """The contract between dispatch_event and the observer seam, in one test.
+
+    This exists because both sides were unit-tested in isolation and still
+    disagreed: ``RunOutcome.trigger_payload`` unwrapped a ``payload`` key that
+    ``dispatch_event`` never writes, so it returned ``{}`` for every real run
+    while ten tests on either side passed (tabsii-platform#301). Neither suite
+    could catch it, because each built its own fixture from the same assumption.
+
+    So this one does not construct a ``trigger_event`` at all — it dispatches an
+    event, reads the run back out of the database, and hands the stored value to
+    the consumer. If the two ever drift again, this fails.
+    """
+    await _make_definition(db_session)
+    await svc.dispatch_event(
+        db_session,
+        tenant_id="default",
+        source="biffo.core",
+        detail_type="demo.requested",
+        idempotency_key="demo-1",
+        event={"lead_id": "lead-1", "email": "a@example.com"},
+    )
+
+    stored = (await db_session.execute(select(WorkflowRun))).scalars().one()
+    outcome = RunOutcome(
+        run=stored,
+        action_type="email",
+        status="succeeded",
+        trigger_event=stored.trigger_event,
+        request=None,
+        response=None,
+        error=None,
+    )
+
+    assert outcome.trigger_payload == {"lead_id": "lead-1", "email": "a@example.com"}

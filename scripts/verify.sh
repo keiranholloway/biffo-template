@@ -108,6 +108,30 @@ have_script() {
 # it was written to enforce says exactly that inapplicable and absent must not
 # look the same -- while reporting "not applicable" for the language the change
 # was written in.
+# Every directory holding a Python project this repo owns.
+#
+# ## Why this exists (#855)
+#
+# #853 fixed this for JavaScript and left Python with the identical bug. The
+# check was `[ -f pyproject.toml ]` — root only. Every sibling keeps its API at
+# `services/api/pyproject.toml`, so ruff, ruff-format and pyright were skipped
+# entirely, and #853's own rationale applies verbatim: a change pushed green
+# with zero verification of the language it was written in.
+#
+# Found by an agent whose 700-line TypeScript-and-Python change to tabsii-crm
+# ran exactly one check — terraform-fmt — and printed `verify passed`.
+py_dirs() {
+  if [ -f pyproject.toml ]; then
+    echo "."
+    return
+  fi
+  find . -name pyproject.toml \
+    -not -path "*/node_modules/*" -not -path "*/.venv/*" -not -path "*/dist/*" \
+    -not -path "*/.worktrees/*" -not -path "*/.terraform/*" -not -path "*/vendor/*" \
+    -not -path "*/site-packages/*" 2>/dev/null |
+    sed 's|/pyproject.toml$||' | sort
+}
+
 js_dirs() {
   if [ -f package.json ]; then
     echo "."
@@ -155,21 +179,42 @@ skip() {
 
 # Python first: ruff is near-instant, so the cheapest feedback on the largest
 # single class of failure comes back immediately.
-if [ -f pyproject.toml ]; then
+PY_DIRS=$(py_dirs)
+if [ -n "$PY_DIRS" ]; then
   if [ -n "$LIST" ] || command -v uv >/dev/null 2>&1; then
-    run_check ruff-check uv run ruff check .
-    run_check ruff-format uv run ruff format --check .
-    run_check pyright uv run pyright
-    if [ -n "$PYTEST" ]; then
-      run_check pytest uv run pytest -q
-    else
-      skip pytest "excluded - set BIFFO_VERIFY_PYTEST=1 where the suite is fast"
-    fi
+    for d in $PY_DIRS; do
+      suffix=""
+      [ "$d" != "." ] && suffix="(${d#./})"
+      if [ "$d" = "." ]; then
+        run_check "ruff-check$suffix" uv run ruff check .
+        run_check "ruff-format$suffix" uv run ruff format --check .
+        run_check "pyright$suffix" uv run pyright
+        # bandit is NOT excluded: it exits non-zero on findings and it is the
+        # RUN step that fails in CI, not the artefact upload. See the exclusion
+        # audit in verify-parity.test.ts (#855).
+        [ -d services ] && run_check "bandit$suffix" uv run bandit -r services -ll -q
+        if [ -n "$PYTEST" ]; then
+          run_check "pytest$suffix" uv run pytest -q
+        else
+          skip "pytest$suffix" "excluded - set BIFFO_VERIFY_PYTEST=1 where the suite is fast"
+        fi
+      else
+        run_check "ruff-check$suffix" uv run --directory "$d" ruff check .
+        run_check "ruff-format$suffix" uv run --directory "$d" ruff format --check .
+        run_check "pyright$suffix" uv run --directory "$d" pyright
+        run_check "bandit$suffix" uv run --directory "$d" bandit -r src -ll -q
+        if [ -n "$PYTEST" ]; then
+          run_check "pytest$suffix" uv run --directory "$d" pytest -q
+        else
+          skip "pytest$suffix" "excluded - set BIFFO_VERIFY_PYTEST=1 where the suite is fast"
+        fi
+      fi
+    done
   else
     skip python "uv not installed"
   fi
 else
-  skip python "no pyproject.toml in this repo"
+  skip python "no pyproject.toml anywhere in this repo"
 fi
 
 # Terraform, wherever this repo keeps it: modules/ in the template and
@@ -238,6 +283,17 @@ if [ -n "$FAILED" ]; then
   printf '\033[31mverify failed:\033[0m%s\n' "$FAILED"
   printf 'Fix these here - CI will find them anyway, three minutes and a merge race later.\n'
   printf 'Most format failures are one command: pnpm run format\n\n'
+  exit 1
+fi
+if [ -z "$PASSED" ]; then
+  # "Nothing applicable ran" is a different outcome from "checks passed", and
+  # conflating them is the exact failure this gate exists to remove -- the
+  # standard's own principle, applied to the gate itself. tabsii-crm ran ONE
+  # check on a 700-line change and printed a pass (#855).
+  printf '\033[31mverify ran NOTHING - this is not a pass\033[0m\n'
+  printf 'No check in this repo was applicable. Either its toolchain is somewhere\n'
+  printf 'verify.sh does not look, or this repo should not carry a gate at all.\n'
+  printf 'See docs/practices/standards/local-gates.md\n\n'
   exit 1
 fi
 printf '\033[32mverify passed\033[0m -%s\n' "$PASSED"

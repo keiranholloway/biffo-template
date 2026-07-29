@@ -54,9 +54,18 @@ const EXCLUDED: Record<string, string> = {
   'sh scripts/biffo.sh check release-subject':
     'validates the PR title, which does not exist at push time',
   'sh scripts/biffo.sh check ownership':
-    'diffs against the PR base branch; meaningless before a PR exists',
-  'uv run bandit -r services/api services/_plugins -ll --format json -o bandit-report.json':
-    'writes a report artefact CI uploads; the finding gate is the upload step, not the run',
+    'the CI form diffs against the PR base branch, which does not exist at push time — but the check is NOT skipped locally: the commit-msg hook runs `check ownership --staged`, earlier and per-commit',
+  // bandit is NOT excluded any more (#855). The rationale here used to say
+  // "writes a report artefact CI uploads; the finding gate is the upload step,
+  // not the run" — which is false. `bandit -ll` exits non-zero on findings and
+  // it is the RUN step that fails: tabsii-platform PR #313 job 90502765804,
+  // `SAST (Bandit)` → `##[error]Process completed with exit code 1`, on a change
+  // whose local verify had passed. It is ~2s, offline, and reads the working
+  // tree — it meets every inclusion criterion verify.sh states for itself.
+  //
+  // The lesson generalises to the rest of this list: an exclusion must describe
+  // what the CI step DOES, checked against a real run, not what it was assumed
+  // to do. This one was written from intent and was wrong for a fortnight.
 }
 
 /** Commands in ci.yml that are checks rather than setup or reporting. */
@@ -109,12 +118,48 @@ describe('verify.sh mirrors CI', () => {
     expect(ciCheckCommands().length).toBeGreaterThan(10)
   })
 
+  /**
+   * Compared by check KIND, not by command string.
+   *
+   * Exact-string matching is why this test only ever worked in the template: CI
+   * runs `pnpm run lint` under `working-directory: apps/frontend` while the gate
+   * runs `pnpm --dir ./apps/frontend run lint`, and `bandit -r services/api
+   * services/_plugins` vs `bandit -r services`. Same check, different string.
+   * A guard that only passes in one layout is the reason eight repos shipped a
+   * gate that checked nothing they were written in (#855).
+   *
+   * `scripts/gate-coverage.sh` applies the identical normalisation across every
+   * repo in the estate, which is where this comparison actually belongs; this
+   * keeps the template honest in CI.
+   */
+  const kindOf = (cmd: string): string => {
+    if (cmd.includes('run lint')) return 'lint'
+    if (cmd.includes('run typecheck')) return 'typecheck'
+    if (cmd.includes('run format:check')) return 'format'
+    if (cmd.includes('run build') || cmd.includes('portal build')) return 'build'
+    if (cmd.includes('run test')) return 'test'
+    if (cmd.includes('ruff check')) return 'ruff-check'
+    if (cmd.includes('ruff format')) return 'ruff-format'
+    if (cmd.includes('pyright')) return 'pyright'
+    if (cmd.includes('pytest')) return 'pytest'
+    if (cmd.includes('bandit')) return 'bandit'
+    if (cmd.includes('terraform fmt')) return 'terraform-fmt'
+    if (cmd.includes('dependency-audit')) return 'audit'
+    if (cmd.includes('gitleaks')) return 'gitleaks'
+    if (cmd.includes('check release-subject')) return 'release-subject'
+    if (cmd.includes('check ownership')) return 'ownership'
+    if (cmd.includes('check plugin-terraform')) return 'plugin-terraform'
+    if (cmd.includes('check plugin-collisions')) return 'plugin-collisions'
+    return ''
+  }
+
   it('runs every CI check that is not explicitly excluded', () => {
-    const missing = ciCheckCommands().filter((cmd) => {
-      if (cmd in EXCLUDED) return false
-      return !gateRuns.includes(cmd)
-    })
-    expect(missing).toEqual([])
+    const gateKinds = new Set(gateRuns.map(kindOf).filter(Boolean))
+    const missing = ciCheckCommands()
+      .filter((cmd) => !(cmd in EXCLUDED))
+      .map(kindOf)
+      .filter((k) => k && !gateKinds.has(k))
+    expect([...new Set(missing)]).toEqual([])
   })
 
   it('does not carry exclusions for checks CI no longer runs', () => {

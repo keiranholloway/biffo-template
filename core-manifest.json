@@ -30,6 +30,7 @@
     "pnpm-workspace.yaml",
     "pyproject.toml",
     "scripts/",
+    "scripts/gate-coverage.sh",
     "scripts/hook-audit.sh",
     "scripts/install-hooks.sh",
     "scripts/verify.sh",

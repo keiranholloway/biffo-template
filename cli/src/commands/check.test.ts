@@ -59,7 +59,9 @@ describe('biffo check', () => {
   })
 
   it('the commit hook uses the dispatcher too', () => {
-    const hook = readFileSync(join(repoRoot, '.husky/commit-msg'), 'utf8')
+    // The real hook moved to the tracked .githooks/ (#838); .husky/commit-msg is
+    // now only a forwarder for clones whose core.hooksPath has not moved yet.
+    const hook = readFileSync(join(repoRoot, '.githooks/commit-msg'), 'utf8')
     expect(hook).toContain('sh scripts/biffo.sh check ownership')
     expect(hook).not.toContain('pnpm --filter @biffo/cli')
   })

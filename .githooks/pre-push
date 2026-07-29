@@ -1,0 +1,25 @@
+#!/usr/bin/env sh
+# Run the checks CI runs, before paying for the round trip that would find them.
+#
+# This was a lone whole-project `pyright` (#374). Everything else CI checks --
+# eslint, prettier, tsc, vitest, ruff, terraform fmt, the plugin guards -- ran
+# for the first time on a runner. Over the 30 days to 2026-07-29 that produced
+# 129 failed CI runs here, ~100 of whose failing steps reproduce locally in
+# seconds with no network and no credentials. `scripts/verify.sh` documents the
+# breakdown and what it deliberately leaves out.
+#
+# Skip in CI. This is a *local* guard; CI runs each check in its own job with
+# its own reporting. CI jobs that push (notably the core-v* tag workflow) have
+# no `uv` on PATH, so firing here made tag pushes fail with `uv: not found`
+# (code 127) and blocked releases. GitHub Actions and every mainstream CI set $CI.
+[ -n "$CI" ] && exit 0
+
+# Escape hatch, deliberately explicit rather than a flag on git. `--no-verify`
+# would skip this too, but it also skips every other hook silently; this leaves
+# a decision in the shell history.
+[ -n "${BIFFO_SKIP_VERIFY:-}" ] && {
+  echo "pre-push: verify skipped (BIFFO_SKIP_VERIFY set) — CI will run it anyway."
+  exit 0
+}
+
+sh scripts/verify.sh

@@ -240,6 +240,64 @@ the exclusion removes a large part of the prize by design, and the honest
 response is to reconsider the exclusion per repo rather than to restate the
 target.
 
+## Interim observation — 2026-07-29, day 0: the secondary metric is met
+
+**Not the result.** The review date is 2026-08-28 and the primary metric needs a
+30-day window of CI history. This records the **arming** metric only, which was
+predicted to move near-immediately and did.
+
+`scripts/hook-audit.sh --estate ~/code`, same command as the baseline:
+
+| | baseline (07-29 am) | after rollout (07-29 pm) |
+| --- | ---: | ---: |
+| working trees | 37 | 51 |
+| **armed** | **7 (18%)** | **49 (96%)** |
+| **`DEAD`** | **5** | **0** |
+| `NO-HOOKS` | 25 | 2 |
+| audit exit code | 1 | **0** |
+
+Fourteen of fifteen repos are fully compliant. The tree count rose because the
+rollout created worktrees; the **share** is the metric, as pre-registered.
+
+`DEAD` reaching zero is the part that matters most. That is the state where a
+repo claims protection it does not have, and it is the state this whole
+experiment was written about.
+
+### What it took, recorded because the plan was wrong twice
+
+1. Tracked hooks in `.githooks/` with `core.hooksPath` pointing at them (#843).
+   **Insufficient**: `core.hooksPath` is relative, resolved per worktree, stored
+   in the *shared* config — so setting it disarms every worktree on a branch
+   predating `.githooks/`, and `AGENTS.md` §1 forbids rebasing those.
+2. Dispatchers in the **shared** `.git/hooks`, `core.hooksPath` cleared (#845).
+   Verified first: a dispatcher installed once fired in a pre-existing linked
+   worktree and in one created afterwards. This is what took `biffo-template`
+   from 6 armed of 10 to 10 of 10 without touching a branch.
+3. A portable gate and defensive hooks (#846), because siblings have no root
+   `package.json` and no commitlint config — hooks that assumed those would have
+   failed every commit there and been removed within a day.
+
+The measurement instrument was itself wrong in the flattering direction, twice:
+`hook-audit.sh` read `$tree/.git/hooks`, which does not exist in a linked
+worktree (`.git` is a file), so it would have scored the fix as a failure; and
+`verify.sh --list` reported what the *machine* could run rather than what the
+*repo* requires, which made the parity test pass locally and fail on a CI runner
+with no `uv`. Both were found by the tools disagreeing with each other.
+
+### The one gap, and why it is not closed
+
+`tabsii-app` (2 trees) is the only repo not at 100%. Its PR is green on every
+check except `Dependency audit`, which reports **14 vulnerabilities, 8 high** —
+pre-existing, and untouched by a change that adds only hook scripts.
+
+The cheap fix was tried and is not cheap: `pnpm update next --latest` resolves to
+**Next 16**, a major bump with real breaking-change risk, and constraining to
+`next@^15.5.21` clears one advisory of eight. Remediating the rest is a decision
+about major version bumps that belongs to the repo's owner, not to a hooks
+rollout, so the PR is left open with both options documented on it.
+
+Counted honestly against the metric rather than excluded: **96%, not 100%.**
+
 ## Cost and reversibility
 
 Building it: hours. Running it: ~40s per push, per developer.

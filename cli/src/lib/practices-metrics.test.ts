@@ -36,6 +36,8 @@ import {
   fmt,
   renderDashboard,
   renderSessions,
+  CAPABILITY_FLOOR,
+  CAPABILITY_CRITICAL,
 } from '../../../scripts/practices-dashboard.mjs'
 // @ts-expect-error -- plain .mjs, same arrangement as above.
 import {
@@ -853,6 +855,111 @@ describe('renderDashboard', () => {
     const html = renderDashboard(bare)
     expect(html).toContain('—')
   })
+
+  /**
+   * A pre-#768 snapshot carries `productFeatureShare` on the old, much smaller
+   * denominator. It still renders — it is the historical series — but grading
+   * it against a floor derived from the new definition would stamp `critical`
+   * on a number that was never measuring the same thing.
+   */
+  it('shows a pre-#768 reading but refuses to grade it', () => {
+    const html = renderDashboard(snapshot)
+    expect(html).toContain('>4%<')
+    expect(html).toContain('pill unknown')
+    expect(html).toContain('not graded')
+  })
+})
+
+/**
+ * The two defects this suite was written for, both found by reading the
+ * 2026-07-29 page rather than the code (#831). Fixtures use that day's real
+ * figures so the assertions are anchored to an observed failure.
+ */
+describe('renderDashboard — grading the capability headline', () => {
+  const capSnapshot = (capability7: number) => ({
+    collectedAt: '2026-07-29T03:35:00.000Z',
+    windowDays: [1, 7, 90],
+    windows: {
+      1: { estate: { merges: 145, capabilityShare: 33.1, toilRatio: 38.6 }, repos: {} },
+      7: {
+        estate: {
+          merges: 616,
+          capabilityShare: capability7,
+          toilRatio: 44.2,
+          platformShare: 81,
+          productShare: 19,
+          contentionHours: 91.8,
+        },
+        repos: {},
+      },
+      90: {
+        estate: { merges: 1232, capabilityShare: 35, toilRatio: 42.9, contentionHours: 278.2 },
+        repos: {},
+      },
+    },
+  })
+
+  it('derives the floor from the toil budget and the measured support share', () => {
+    expect(CAPABILITY_FLOOR).toBe(28)
+    expect(CAPABILITY_CRITICAL).toBe(20)
+  })
+
+  /**
+   * The regression. Under the inherited `PRODUCT_FEATURE_FLOOR` of 20 every one
+   * of these readings graded `good`, including the two that are plainly not —
+   * a pill ~15 points clear of its threshold in every window cannot move, and
+   * an unmovable grade is decoration.
+   */
+  it('grades a reading that clears the floor, and one that does not', () => {
+    expect(renderDashboard(capSnapshot(33)) as string).toContain('pill good')
+    // 24% would have been `good` against the old floor of 20.
+    expect(renderDashboard(capSnapshot(24)) as string).toContain('pill warning')
+    expect(renderDashboard(capSnapshot(15)) as string).toContain('pill critical')
+  })
+
+  it('states the floor, so the grade can be checked against it', () => {
+    expect(renderDashboard(capSnapshot(33)) as string).toContain('floor 28%')
+  })
+})
+
+describe('renderDashboard — corroboration window', () => {
+  /**
+   * 2026-07-29 as collected: an effort log of 34 tasks over 2 days, 33.1% of
+   * wall-clock on toil, against a merge proxy of 44.2% (7d) and 42.9% (90d).
+   */
+  const snapshot = {
+    collectedAt: '2026-07-29T03:35:00.000Z',
+    windowDays: [1, 7, 90],
+    windows: {
+      1: { estate: { merges: 145, capabilityShare: 33.1, toilRatio: 38.6 }, repos: {} },
+      7: { estate: { merges: 616, capabilityShare: 33, toilRatio: 44.2 }, repos: {} },
+      90: { estate: { merges: 1232, capabilityShare: 35, toilRatio: 42.9 }, repos: {} },
+    },
+  }
+  const sessions = {
+    sessions: 34,
+    tasks: 34,
+    days: 2,
+    hours: 86,
+    delivery: 16.1,
+    platform: 50.8,
+    toil: 33.1,
+    lastDate: '2026-07-29',
+  }
+
+  /**
+   * Fails against the page as it stood: it passed `e(90).toilRatio`, so the gap
+   * was 9.8 points and the panel read "proxy agrees within 9.8 points" — the
+   * only falsification test on the page, resolved in favour of the page by the
+   * choice of window.
+   */
+  it('checks the log against the 7-day proxy, not the 90-day baseline', () => {
+    const html = renderDashboard(snapshot, sessions) as string
+    expect(html).toContain('44.2%')
+    expect(html).toContain('proxy is off by -11.1 points')
+    expect(html).toContain('treat the headline with suspicion')
+    expect(html).not.toContain('agrees within 9.8 points')
+  })
 })
 
 describe('buildEntry', () => {
@@ -970,6 +1077,20 @@ describe('renderSessions', () => {
       null,
     )
     expect(html).toContain('not comparable yet')
+  })
+
+  /**
+   * The verdict is only readable if the window it was reached over is stated —
+   * a comparison whose window is implicit is the one that got picked wrongly.
+   */
+  it('names the window it compared against, and the span of the log', () => {
+    const html = renderSessions(
+      { sessions: 34, tasks: 34, days: 2, hours: 86, delivery: 16.1, platform: 50.8, toil: 33.1 },
+      44.2,
+      7,
+    )
+    expect(html).toContain('over 7d')
+    expect(html).toContain('over <strong class="num">2</strong> days')
   })
 })
 

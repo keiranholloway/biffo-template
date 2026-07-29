@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/context/auth-context'
 import { createApiClient } from '@/lib/api-client'
 import { fetchAgentRun, type AgentRunMessage, type AgentRunResponse } from '@/lib/agent-runs-api'
-import { formatWhen } from '@/lib/agent-runs-format'
+import { formatCost, formatWhen } from '@/lib/agent-runs-format'
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error'
@@ -232,7 +232,7 @@ export function AgentRunDetailClient() {
       <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Input tokens" value={run.input_tokens?.toLocaleString() ?? '—'} />
         <Stat label="Output tokens" value={run.output_tokens?.toLocaleString() ?? '—'} />
-        <Stat label="Cost" value={run.cost_usd == null ? '—' : `$${run.cost_usd.toFixed(4)}`} />
+        <Stat label="Cost" value={formatCost(run.cost_usd)} />
         <Stat label="Depth" value={String(run.depth)} />
         <Stat label="Started" value={formatWhen(run.started_at)} />
         <Stat label="Completed" value={formatWhen(run.completed_at)} />

@@ -347,9 +347,18 @@ class TestTablePermissions:
         }
         table = PluginTableDefinition.model_validate({"name": "roles", "permissions": block})
         dumped = table.model_dump(mode="json")["permissions"]
-        # allowed_principals (ADR-0014 §7) defaults to [] on every rule and is
-        # emitted by model_dump even though the source block omits it.
-        expected = {op: {**rule, "allowed_principals": []} for op, rule in block.items()}
+        # Both optional axes default and are emitted by model_dump even though
+        # the source block omits them: allowed_principals (ADR-0014 §7) to [],
+        # and permission_code (ADR-0004 second axis, #889) to "".
+        #
+        # This assertion is deliberately exhaustive rather than a subset check —
+        # it is what caught the field addition, and a new axis appearing in the
+        # serialised permission block is exactly the change that should have to
+        # be declared here rather than slip through.
+        expected = {
+            op: {**rule, "permission_code": "", "allowed_principals": []}
+            for op, rule in block.items()
+        }
         assert dumped == expected
 
 
@@ -388,3 +397,32 @@ def test_owner_data_insert_populates_timestamps_without_a_db_default() -> None:
         session.refresh(row)
         assert row.created_at is not None
         assert row.updated_at is not None
+
+
+def test_permission_code_defaults_to_empty_so_existing_rules_are_unchanged() -> None:
+    """The whole non-breaking claim rests on this default.
+
+    Every permission block already in the estate omits ``permission_code``, so
+    if the default were anything but "" this would silently deny traffic that
+    works today (#889).
+    """
+    rule = PermissionRule(allowed=True)
+    assert rule.permission_code == ""
+
+
+def test_permission_code_is_declarable_without_loosening_extra_forbid() -> None:
+    """An instance must be able to declare the second axis — and only that.
+
+    ``extra="forbid"`` stays, so the field has to exist upstream; the point of
+    #889 is that an instance could not add it from outside. A typo'd key must
+    still fail loudly on this security surface.
+    """
+    rule = PermissionRule.model_validate({"allowed": True, "permission_code": "crm.lead.read"})
+    assert rule.permission_code == "crm.lead.read"
+    # Validated from a dict, not kwargs, because that is how a permission block
+    # actually arrives — from a plugin manifest or a model's __crud_permissions__
+    # — and it is the only form in which a typo can reach the model at runtime.
+    # (As kwargs, pyright rejects it statically and the test proves nothing about
+    # extra="forbid".)
+    with pytest.raises(ValidationError):
+        PermissionRule.model_validate({"allowed": True, "permision_code": "typo"})

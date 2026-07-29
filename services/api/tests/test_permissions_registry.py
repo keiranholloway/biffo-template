@@ -124,14 +124,20 @@ class TestSerialize:
             )
         }
         dumped = serialize_registry(registry)
+        # Exhaustive on purpose: this is the serialised authorization surface,
+        # so a new axis appearing in it should have to be declared here rather
+        # than slip through. permission_code is ADR-0004's second axis (#889),
+        # defaulting to "" so every existing declaration is unchanged.
         assert dumped["widgets"]["read"] == {
             "allowed": True,
             "required_role": ["admin"],
+            "permission_code": "",
             "allowed_principals": [],
         }
         assert dumped["widgets"]["list"] == {
             "allowed": False,
             "required_role": [],
+            "permission_code": "",
             "allowed_principals": [],
         }
 

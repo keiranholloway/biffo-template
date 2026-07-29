@@ -305,13 +305,13 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **200 rows as rendered on this page**. `evidence.jsonl` separately holds **218**, because a reworded row is stored as a new one and its predecessor is retained — see the duplication row. The split below is counted from the page, since that is the corpus a reader can actually see:
+`byFixRepo`, regenerated at **210 rows as rendered on this page**. `evidence.jsonl` separately holds **238** — a reworded row is stored as a new one and its predecessor retained, see the duplication row. The split below is counted from the page:
 
 > **Two sessions collided on this table on 2026-07-29** and git could not merge it: both had edited the same hand-maintained totals from the same base (193), one adding 4 rows and one adding 3. Neither side was wrong and neither could simply win — the resolution is the sum of both deltas, which is the exact staleness this section's own warning describes. `evidence.jsonl` merged cleanly because it is append-only; the prose totals did not because they are transcribed. Prefer `node scripts/practices-evidence.mjs --report` over any number typed here.
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 101 of 200 (51%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the git-hook chain, the scaffolder itself |
+| **biffo-template** | 102 of 210 (49%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the git-hook chain, the scaffolder itself |
 | **tabsii-platform** | 17 of 200 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity and its event-destination envelope |
 | **biffo-plugin-ideation** | 13 of 200 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
 | **biffo-plugin-idea-scout** | 11 of 200 | Adapter seam, research search capability, its own styling, release + publish workflows |
@@ -360,7 +360,7 @@ weeks, and it is a *recurrence* of a pattern already logged against
 first instance was recorded `unfiled` and never generalised. Two repos, same
 defect, and the corpus predicted it without anyone reading the prediction.
 
-**`biffo-template` takes 98 of 196 — 50%, and this capture is not evidence
+**`biffo-template` takes 102 of 210 — 49%, and this capture is not evidence
 about the estate.** All ten new rows are findings about the measurement
 apparatus itself, filed by auditing the dataset rather than by doing product
 work, so they inflate the template's share by construction. Read the ratio from
@@ -533,6 +533,7 @@ defects were **serialised by the feedback loop**:
 
 | # | Defect | Only discoverable once… |
 | --- | --- | --- |
+| **3 build→resync→deploy laps for a net-zero outcome, plus a 4th to revert** | Each prompt-level dedup attempt is a plugin PR, an instance resync PR, a deploy and an artefact check — roughly four merge waits per attempt. Two attempts both failed their behavioural check and the second was worse than the first. **Structural, not careless:** the only test that can distinguish them costs a live agent run, so the loop is "ship it and look" by construction. **Stopped** by reverting and moving the problem upstream to idea sourcing rather than tuning the prompt again. |
 | 1 | Build-types read hit the plugin host, not Core → every `start_run` 401'd | …a founder actually clicked **Run now** on a deployed instance |
 | 2 | `web_search` declared but unconfigured → dropped with a warning, research returned nothing | …#1 was fixed, merged, resynced, deployed, and re-clicked |
 | 3 | `agent_fan_in` cannot declare `output_tools` → synthesis told to call a tool it was never given | …#2 was fixed, merged, resynced, deployed, and re-clicked |
@@ -613,6 +614,8 @@ effort log exists to make visible, and this session logged it that way.
 | — | **154 of 155 scoreboard rows carry no cost, so the corpus can be counted but not ranked.** §8 requires "what it cost in wall-clock time"; one row has ever recorded it. A ten-minute fix and one that ate an afternoon are the same size in the dataset, which makes "what should we restructure?" — the question the scoreboard exists to answer — unanswerable from it. **Checked before blaming the extractor: only 5 rows state a duration in any form, so this is a capture failure, not a parsing one** | **visibility** | `docs/practices/evidence.jsonl` | biffo-template — the capture step, wherever it lands | unfiled |
 | — | **Both recoveries from earlier data loss silently corrupted the page.** #762 ("restore three sessions deleted by a stale-base merge") and #777 ("restore 93 lines #774 deleted") each re-inserted a repo-tally row into the *cost* table, where a 3-column row is structurally valid and therefore invisible — they sat there through every subsequent edit and every review of this page. Restoring deleted content is treated as self-evidently safe and is the one operation here with no verification step at all | **drift** | `docs/guides/development-practices.md` — found by grepping for a stale count | biffo-template — the restore practice, and whatever checks table shape | unfiled |
 | — | **`parseCost` takes the first match of the word "cost" and gives up, so a row that discusses cost before stating its figure loses the figure silently.** `"no cost, so the corpus … this cost 25m"` extracts `null`; `"cost 25m"` alone extracts 25. It also requires that exact keyword, so every row phrased `"~40 min round trip"` or `"ate an afternoon"` is invisible to it. Small today — it drops 5 rows — but it fails **in the direction of the discipline**: the more carefully a row explains what something cost, the likelier its number is discarded | **fail-open** | `scripts/practices-evidence.mjs` `parseCost` | biffo-template — `scripts/practices-evidence.mjs` | unfiled |
+| — | **The obvious fix for a measured failure made it measurably worse, on both axes, and was only caught because the same measurement was repeated.** Title-only dedup produced 4 candidates, 1 genuinely new. Briefing the pitches as well — more information, better targeted, cheap in tokens — produced **2 candidates, 0 new**, and reused a prior product name verbatim that the weaker version had avoided. Two is half the documented floor of five, so it was a product regression independent of how novelty is scored. Hypothesis, not conclusion: **describing what to avoid in detail may anchor a model on it rather than steer it away.** Reverted rather than tuned | **visibility** | `biffo-plugin-idea-scout` #56, reverted by #58 | biffo-plugin-idea-scout — reverted; direction moved upstream to sourcing | fixed |
+| — | **Two features were built, merged, resynced across two repos and deployed before anyone asked whether they worked — and neither did.** Each attempt cost a plugin PR, an instance resync PR, a deploy and an artifact verification: **three full laps for a net-zero outcome**, plus a fourth to revert. Every gate was green throughout and every gate was honest; they assert plumbing, and the requirement was behavioural. The condition is not "we forgot to test" — **there was no cheap test to forget.** The acceptance test that settles it (run twice with identical inputs, count same-idea-different-name) costs a real agent run and a human judgement, so nothing in the pipeline will ever run it | **process** | `biffo-plugin-idea-scout` #49, twice | needs a budgeted behavioural check, not another gate | unfiled |
 | — | **A feature shipped, deployed, passed every test, and does not do the thing it was built for — measured only because someone asked for the measurement.** Cross-run dedup briefs the agents with titles the founder has already seen. Four runs on dev with identical inputs: **3 of 4 candidates were near-duplicates of prior ones**, one of them the same idea with the words reordered (`Compliance-Evidence Autopilot for Fintechs on AWS/GCP` → `PCI Autopilot — continuous compliance evidence for fintech teams on AWS`). The tests were all honest: they assert the list reaches synthesis, which it does. **Nothing in the suite could have been written to assert that a model obeys an instruction**, so the gap between "the mechanism works" and "the feature works" was invisible to every gate | **fail-open** | `biffo-plugin-idea-scout` #49, reopened on evidence | biffo-plugin-idea-scout #49 — needs semantic matching, not string matching | open |
 | — | **I put a made-up percentage in an issue and it became the argument for not doing the harder thing.** #49 said *"exact-ish title avoidance is the cheap 80%"* — a number with no measurement behind it, used to defer semantic deduplication as out of scope. Measured afterwards it is about **25%**. Worse, the evidence was already sitting in the product: across three pre-fix runs **no title repeated verbatim either**, so string matching could never have caught any of it, and five minutes reading the historical candidates before building would have shown that. Condition: **a quantified claim invented to justify a scope boundary is indistinguishable, in the issue text, from one that was measured** | **process** | `biffo-plugin-idea-scout` #49 as originally filed | biffo-template — a number in an issue needs its source or a hedge | unfiled |
 | — | **The state existed, was named, was documented, and one call site of three ignored it.** idea-scout's `App.tsx` declares `loaded` with a comment explaining that an unloaded app and an empty list are otherwise indistinguishable. Two call sites honour it; the Past Scouts sidebar does not, and tells a founder with eleven runs that they have none. Harder than the same-day sibling defect in ideation where the concept was simply absent — **a reader sees the flag and reasonably assumes it governs the empty-state copy everywhere**, so the bug is invisible to exactly the person checking for it | **drift** | `biffo-plugin-idea-scout` `web/src/App.tsx:171` | biffo-plugin-idea-scout #53 | open |
@@ -1058,6 +1061,169 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**Reverting on evidence instead of tuning toward a hope.** The pitch change was
+a reasonable idea, cheaply built, and the measurement said it was worse on both
+metrics it targeted. The tempting move is one more prompt tweak — that path is
+unbounded and the measured direction was negative. Reverting cost one PR and one
+resync and put the feature back to "does very little" rather than "suppresses
+output", which is strictly better while the real answer is designed.
+
+**Re-running the same measurement rather than a new one.** Because the first
+comparison had already been done the same way, the second was directly
+comparable: same founder, same build type, same complexity, same counting
+method. A different or "improved" measurement the second time would have made
+the two runs incomparable and the regression arguable.
+
+
+**Pricing four gaps before building any of them, and declining one.** H5's
+capture named four residual gaps. Rather than building all four, each was
+measured first — and `commit-msg` in siblings turned out to be worth **nothing**:
+**0 non-conventional subjects in 165 commits** across six repos with no hook at
+all. Building it would have looked like diligence. The register now says that
+**declining a fix is a result**, with the number and a re-open trigger, so the
+next person to notice the gap does not re-propose it and throw the measurement
+away.
+
+The same exercise made `pytest` the obvious first build rather than the last:
+**2.5s per push against a 14 min CI round trip is break-even at one catch per
+336 pushes**, against an observed rate of roughly one per 165. That is a decision
+someone can disagree with, which is the point of writing it as arithmetic.
+
+**Pre-registering the way a fix would most likely be made meaningless, then
+building against it.** H5 said in advance that gap 1's version stamp was the
+likeliest thing to render useless — *"generate it from the receiving repo rather
+than the template and it will always match, reporting perfect health forever"*.
+That is exactly the shape of every instrument defect found earlier the same day.
+So the stamp reads `$TEMPLATE_ROOT`, never the receiving worktree, and there is a
+test asserting the git call targets the template and not `$wt`. **Naming the
+failure mode in advance turned it from a thing to notice into a thing to test.**
+
+**Checking the instrument before believing its output — twice, and both were the
+instrument.** A conventional-commit audit reported 12% violations in
+`tabsii-platform`; the regex rejected `feat(db,api):`, and commas are legal in a
+scope. `biffo.sh check release-subject` printed `No base ref` and read like a
+fail-open until its exit code was checked: it exits **2**, loudly. Both would
+have become scoreboard rows asserting defects that do not exist. The habit that
+caught them is cheap: **when a measurement surprises you, suspect the ruler
+first.**
+
+**Reading the historical data before trusting the new result.** The plan was two
+fresh runs. Looking first at three pre-existing runs with the same inputs showed
+that repetition was *thematic and never verbatim* — which reframed the whole
+test, because it meant exact-string dedup could not possibly have worked, and it
+made the post-fix run interpretable instead of just "different words again".
+The control existed in the product already and cost nothing but the looking.
+
+**The shape of the failure identified where the defect is.** Not one title
+repeated verbatim after the fix, which is the signature of a model that received
+the list and satisfied it lexically — precisely what the prompt forbade. That
+distinguishes "the data never arrived" from "the data arrived and was gamed",
+and those have completely different fixes. A bare "still repeats" verdict would
+have sent the next session to debug the plumbing, which is fine.
+
+
+**Adding a missing symbol on its own, so the tests failed for the right
+reason.** Four tests referencing a not-yet-existing constant failed with
+`ImportError`, which demonstrates nothing about behaviour — a test can fail that
+way against a correct implementation. Committing only the constant first turned
+three of them into `KeyError: 'previously_suggested'`, which is the actual
+absence being guarded. "Watch it fail" is not enough on its own; it has to fail
+*at the assertion*, and a missing import never gets there.
+
+**Mutation-testing two guards rather than trusting them.** The omission test
+("no key when there is no history") would pass against an implementation that
+always writes the key — the same trap caught in review earlier. Mutating the
+code to always write it made the test fail, which is the only evidence that it
+guards anything. Same for the prompt/payload guard: renaming the key in one
+place and not the other must fail, and does.
+
+
+**The scoreboard produced a fix, and it is measurable.** Yesterday I recorded
+that a plugin repo's pre-push gate printed `javascript n/a - no package.json in
+this repo` and passed a 100%-TypeScript change with no JS verification. Within
+hours another session read that row and fixed the gate — `scripts/verify.sh`
+now enumerates every directory holding a package this repo owns, and its comment
+cites the capture by number:
+
+> *"The gate used to check the repo root and nothing else. In the ten repos with
+> no root package.json — every plugin, every sibling, both runner repos — it
+> printed `javascript n/a` and then `verify passed`, on repos whose entire
+> frontend is JS."*
+
+**And it immediately caught the person who reported it.** My next push to that
+repo was rejected because I had installed `web/` and not `web-admin/`. Under the
+previous gate that push passes green. This corpus mostly records things going
+wrong; this is a recorded instance of it working, start to finish, inside a day.
+
+**Going back to correct a severity estimate after seeing the real thing.** The
+issue said "self-corrects within a second" and that claim had already done its
+job — it was the argument for treating the defect as minor. Measuring 5–8
+seconds on the deployed app made the original classification wrong, so the issue
+now says so. An estimate that has already been used to make a decision is worth
+correcting even after the work is done, because the next person reads the
+estimate, not the decision.
+
+
+**Proving a guard is load-bearing by removing it, three times, before believing
+any of them.** `0006`'s three subtlest decisions were each verified by breaking
+them rather than by reasoning about them. Rebuilt as `SECURITY INVOKER`, the
+history trigger failed with `new row violates row-level security policy` — which
+means every stage move on dev would have broken, not merely that a test was
+weaker. With the trigger's value comparison stripped, a non-move wrote a spurious
+row (`assert 2 == 1`). With the cost index's `coalesce` removed, two
+contradictory January figures inserted cleanly (`DID NOT RAISE`). Each is a
+defect that would otherwise have shipped silently.
+
+**A test that passed against a deliberately broken query, caught by mutating the
+implementation rather than re-reading the test.** `test_time_in_stage_excludes_synthesised_rows`
+was green both with and without the exclusion it was named after. The fixture
+gave the backfilled lead a synthesised row and *nothing after it*, so it produced
+no span either way and the test could never have failed. The fix was a fixture
+change — a backfilled lead that later *moves* — and the strengthened version
+asserts the **aggregate** as well as the count, because counting alone still
+passes if the span is counted but excluded from the average. It was written
+deliberately as an exclusion test, by an author who knew the contract, and it
+read correctly.
+
+**Checking whether a suspicious local failure was real before acting on it.**
+Deleting merged branches was blocked by the pre-push gate reporting eight `tsc`
+errors — `Cannot find module 'recharts'`, plus `UnitMap` prop mismatches in two
+files I had never touched. The tempting readings were "my change broke something"
+and "the gate is noise, skip it". `pnpm install` in the primary checkout made all
+eight vanish: every one was stale-dependency noise from a checkout not synced
+since the dependency was added. The gate was right to block, and one command
+distinguished a regression from an artefact.
+
+
+**Mutation testing to decide whether a test is real.** A generated test looked
+plausible and passed. Changing the component to always render the element it
+claimed to check — the exact opposite of correct — left it passing, which
+settled in one run what reading it had not. This is now the cheapest available
+answer to "does this test actually defend anything?", and it took under a
+minute: mutate, run the one test, restore.
+
+**Reviewing a sub-agent's diff rather than its report.** The report was honest —
+it volunteered that one test had "no actual rendering issue". The gap was not
+candour but judgement about what that implied. Reading the diff turned an
+accurate self-assessment into a rejection and a rewrite, which is exactly the
+split the build skill describes: cheaper model implements, stronger model
+decides whether it holds.
+
+**Planning changed the design, which is the only reason planning was worth
+doing.** The issue's own sketch read the title from client state, which is
+empty in the window right after a live run completes. Researching before
+drafting found that the report endpoint already loaded the session and
+discarded it — so the feature became a one-line addition to an existing
+response with a single server-side derivation, instead of a second copy of
+`_derive_title` on the client.
+
+**Matching a local build's emitted hash to the deployed bundle.** `vite build`
+produced `index-BfXg-JPj.js` before anything was pushed; the CDN served exactly
+that filename after deploy. Not "the hash changed" but "the deployed artifact is
+this source", which is a strictly stronger claim and costs one command.
+
+
 
 **Pricing four gaps before building any of them, and declining one.** H5's
 capture named four residual gaps. Rather than building all four, each was
@@ -2116,6 +2282,20 @@ design.
 
 ## What needs more thought
 
+**A headline that cannot fail is measuring the wrong thing — including here.**
+Every gate around cross-run dedup was green through two shipped versions that
+did not work, because the gates assert the list is assembled and delivered, and
+that is always true once the code exists. There is no value those tests could
+have returned that would have read as "the feature does not work". The outcome
+metric — *do two runs with identical inputs produce the same ideas?* — did not
+exist until it was run by hand, and it read **3 of 4 repeats** on its first
+execution and **2 of 2** on its second. The gap is not a missing test; it is
+that the only test which can fail costs a live model run, and nothing in this
+estate budgets for a check with a per-execution cost.
+
+
+
+
 **Distributing a script does not change the workflow that calls it.**
 `shared-files.json` gets the hardened audits into the six siblings and two
 plugin repos, but each of those repos' `ci.yml` still runs the raw command until
@@ -2988,6 +3168,18 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `biffo-verify` | **worked — §7 is what made the revert possible** | Both dedup PRs carried an explicit "Verification not claimed: whether this reduces repeats is unknown until deployed and the comparison re-run". That sentence is why the measurement happened at all, and why a negative result was a planned outcome rather than an embarrassment. Under-claiming cost nothing and made the revert a decision rather than a retreat. |
+| `biffo-verify` | **worked — §4, on a revert rather than a feature** | Confirmed in the deployed Lambda that pitches were gone, the cap was back to 50 and the prompt was restored. A revert is exactly the change nobody verifies, because it is "just putting things back". |
+| `biffo-workflow` | **worked** | Four PRs across two repos in this loop, each rebased once for BEHIND, all landed by auto-merge with worktrees reaped. |
+| `biffo-verify` | **worked — §8's ROI framing changed what got built** | Pricing the four residual gaps before building any of them killed one outright (0 violations in 165 commits) and reordered the rest. The skill's insistence on *numbers, not adjectives* is what made "decline this" a defensible answer rather than laziness. |
+| `biffo-verify` | **worked — §2, again, and again it was the rollout that found it** | The `--no-cov` defect was invisible in the template and appeared the first time the gate ran in a repo whose pytest setup differed. Second time in one day that "reproduce by the reporter's route" meant "run it somewhere the assumption does not hold". |
+| `biffo-workflow` | **worked — 6 PRs, no lost commits, one caught refusal** | Unpiped `PUSH EXIT` surfaced the gate legitimately refusing a push mid-rollout. Its §1 deps step remains the difference between the gate running and erroring. |
+| `biffo-workflow` | **partial — commit bodies are shell-interpolated** | A backtick in a `-m` message silently ate a code snippet (`_out=$(cmd); _rc=$?` became blank), and a `"` -quoted `gh pr create --body` interpolated half a PR description into shell errors. The skill shows `-m "..."` throughout and never warns that message bodies containing backticks or `$(` need a heredoc or `-F`. Cost two amends. |
+| `biffo-sib-build` | **worked** | Its "When to stop and ask" step is what caught M3's unbuildable design — the plan specified a filter that could not match, and the skill's instruction to redraft rather than improvise turned a silent-inert feature into an approved correction. That step earned the whole skill |
+| `biffo-sib-build` | **partial** | Nothing in it sequences the plan's own E2E before the last milestone merges. Five milestones landed green; the browser then found four defects in an hour. The skill should require the testing plan's end-to-end check as a gate on the FINAL PR, not as an afterthought |
+| `biffo-verify` | **worked** | §3 (prove the test fails) ran on every fix this session and caught two silent bugs inside one PR. §4 (verify the deployed artifact) caught a watcher reporting the wrong commit's deploy, which would otherwise have produced a fabricated defect report |
+| `biffo-workflow` | **partial** | The `--delete-branch`-with-a-live-worktree trap hit **four more times**; the caveat sits after the command it invalidates. Separately: the masked-push trap it documents was walked into once (`| tail` reported exit 0 on a failed push) and caught only by re-running with the status visible |
+| `claude-in-chrome` | **worked** | Found all four post-merge defects. Two viewport rescales mid-session caused coordinate drift and one mis-click; using `find` refs instead of coordinates was reliable and should be the default advice in the skill |
 | `biffo-verify` | **worked — §8's ROI framing changed what got built** | Pricing the four residual gaps before building any of them killed one outright (0 violations in 165 commits) and reordered the rest. The skill's insistence on *numbers, not adjectives* is what made "decline this" a defensible answer rather than laziness. |
 | `biffo-verify` | **worked — §2, again, and again it was the rollout that found it** | The `--no-cov` defect was invisible in the template and appeared the first time the gate ran in a repo whose pytest setup differed. Second time in one day that "reproduce by the reporter's route" meant "run it somewhere the assumption does not hold". |
 | `biffo-workflow` | **worked — 6 PRs, no lost commits, one caught refusal** | Unpiped `PUSH EXIT` surfaced the gate legitimately refusing a push mid-rollout. Its §1 deps step remains the difference between the gate running and erroring. |

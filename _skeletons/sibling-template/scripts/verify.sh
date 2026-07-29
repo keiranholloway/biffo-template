@@ -100,15 +100,53 @@ SKIPPED=""
 # out. An override that only forces on would leave no way to escape a suite that
 # has quietly grown past the threshold.
 PYTEST_BUDGET_SECONDS="${BIFFO_VERIFY_PYTEST_BUDGET:-15}"
+# How long a measurement is trusted before being re-taken. Only ever matters for
+# a `slow` verdict; a `fast` one is re-measured by every run that uses it.
+PYTEST_MAX_AGE_DAYS="${BIFFO_VERIFY_PYTEST_MAX_AGE_DAYS:-7}"
 PYTEST="${BIFFO_VERIFY_PYTEST:-}"
 
 # Cached per directory, because timing the suite to decide whether to run the
 # suite would cost exactly what it is trying to save. The cache lives with the
 # repo, not in $HOME, so it cannot leak a fast verdict from one repo to another.
+# Where the measurement lives.
+#
+# NOT in the working tree. The first version wrote `$_d/.pytest-duration` and
+# was gitignored in biffo-template only -- .gitignore is not a synced file, so
+# every other repo in the estate grew an untracked `?? services/api/.pytest-duration`
+# the moment the gate ran. A cache that dirties `git status` in fifteen repos is
+# a defect regardless of what it caches.
+#
+# The git common dir is outside every working tree, shared by all worktrees of a
+# clone (they run the same suite), and cannot be committed by accident. Keyed by
+# the directory measured, so a root suite and services/api do not collide.
+pytest_cache_file() {
+  _cd=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/biffo-verify
+  mkdir -p "$_cd" 2>/dev/null || true
+  printf '%s/pytest-%s' "$_cd" "$(printf '%s' "$1" | tr '/.' '__')"
+}
+
+# Record what a real run actually took. The gate runs pytest whenever it believes
+# the suite is fast, so it observes the true duration every single time -- and
+# throwing that away was the whole bug. A suite that grows past the budget now
+# excludes itself on the next push, for free and exactly.
+pytest_record() {
+  [ -n "${2:-}" ] || return 0
+  printf '%s\n' "$2" > "$(pytest_cache_file "$1")" 2>/dev/null || true
+}
+
 pytest_is_fast() {
   _d="$1"
-  _cache="$_d/.pytest-duration"
-  if [ -f "$_cache" ]; then
+  _cache=$(pytest_cache_file "$_d")
+  # Age matters in ONE direction. A `fast` verdict is re-confirmed by every run
+  # (pytest_record), so it cannot go stale. A `slow` verdict is never re-tested,
+  # because the whole point of it is that the suite does not run -- so a suite
+  # that has since been split or sped up stays excluded for ever. Expiry is what
+  # gives it a way back in.
+  if [ -f "$_cache" ] && [ -n "$(find "$_cache" -mtime "-$PYTEST_MAX_AGE_DAYS" 2>/dev/null)" ]; then
+    _secs=$(cat "$_cache" 2>/dev/null)
+  elif [ -f "$_cache" ] && [ -n "$LIST" ]; then
+    # Expired, and --list must not run a suite to answer a question. Use the
+    # stale value rather than guessing: it is evidence, just old.
     _secs=$(cat "$_cache" 2>/dev/null)
   elif [ -n "$LIST" ]; then
     # --list must not run a test suite to answer a question about the repo, so
@@ -134,7 +172,7 @@ pytest_is_fast() {
       timeout "$((PYTEST_BUDGET_SECONDS * 4))" uv run --directory "$_d" pytest -q >/dev/null 2>&1 || true
     fi
     _secs=$(($(date +%s) - _start))
-    echo "$_secs" > "$_cache" 2>/dev/null || true
+    printf '%s\n' "$_secs" > "$_cache" 2>/dev/null || true
   fi
   [ "${_secs:-9999}" -le "$PYTEST_BUDGET_SECONDS" ]
 }
@@ -246,9 +284,11 @@ run_check() {
     return 0
   fi
   start=$(date +%s)
+  LAST_CHECK_SECONDS=""
   if "$@" >"/tmp/biffo-verify.$$" 2>&1; then
     PASSED="$PASSED $name"
-    printf '  \033[32mOK\033[0m   %-16s %ss\n' "$name" "$(($(date +%s) - start))"
+    LAST_CHECK_SECONDS=$(($(date +%s) - start))
+    printf '  \033[32mOK\033[0m   %-16s %ss\n' "$name" "$LAST_CHECK_SECONDS"
   else
     FAILED="$FAILED $name"
     printf '  \033[31mFAIL\033[0m %-16s %ss\n' "$name" "$(($(date +%s) - start))"
@@ -305,7 +345,14 @@ if [ -n "$PY_DIRS" ]; then
         if [ "$PYTEST" = "0" ]; then
           skip "pytest$suffix" "excluded by BIFFO_VERIFY_PYTEST=0"
         elif [ -n "$PYTEST" ] || pytest_is_fast "."; then
-          ci_has "pytest" && run_check "pytest$suffix" uv run pytest -q
+          if ci_has "pytest"; then
+            run_check "pytest$suffix" uv run pytest -q
+            # Re-confirm the verdict from what the run actually took. This is the
+            # invalidation that costs nothing: the gate has just measured the
+            # suite, so a suite that has grown past the budget excludes itself on
+            # the next push rather than slowing every push for ever.
+            pytest_record "." "$LAST_CHECK_SECONDS"
+          fi
         else
           skip "pytest$suffix" "suite is slower than ${PYTEST_BUDGET_SECONDS}s - CI keeps it"
         fi
@@ -317,7 +364,10 @@ if [ -n "$PY_DIRS" ]; then
         if [ "$PYTEST" = "0" ]; then
           skip "pytest$suffix" "excluded by BIFFO_VERIFY_PYTEST=0"
         elif [ -n "$PYTEST" ] || pytest_is_fast "$d"; then
-          ci_has "pytest" && run_check "pytest$suffix" uv run --directory "$d" pytest -q
+          if ci_has "pytest"; then
+            run_check "pytest$suffix" uv run --directory "$d" pytest -q
+            pytest_record "$d" "$LAST_CHECK_SECONDS"
+          fi
         else
           skip "pytest$suffix" "suite is slower than ${PYTEST_BUDGET_SECONDS}s - CI keeps it"
         fi

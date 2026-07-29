@@ -187,6 +187,7 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **A merged plugin change sat undeployed for a whole working day, and nothing anywhere said so.** Resyncing ideation to carry the founder gate revealed the vendored copy was **three changes behind**: `effective_config.py` was missing **entirely** — that is #58, merged in the morning and never resynced. No dashboard, check or alert distinguishes "merged in the plugin repo" from "running on dev". The trap is already on this page; what is new is the measurement — **one day of drift, three changes, discovered only because something else forced a resync** | **visibility** · drift | biffo-plugin-ideation → biffo-platform | biffo-platform [#102](https://github.com/keiranholloway/biffo-platform/pull/102) | **fixed** for these three; the general case is **open** — nothing reports vendored-vs-source drift |
 | — | **A plugin repo ships a deploy workflow that cannot run, and the instance has a different mechanism that supersedes it.** A sub-agent correctly concluded the ideation frontend needed `deploy-frontend.yml` with `frontend_bucket_name` and a distribution id — reading the **plugin repo's** workflow. That workflow's `workflow_dispatch` path falls back to `secrets.PLUGIN_OIDC_ROLE_ARN`, **which does not exist in that repo**, so a dispatch dies at the credentials step. The instance's `deploy-app.yml` already builds `services/<name>/web/` and syncs it to `<prefix>-plugin-<name>-web`. Two mechanisms for one job, one of them dead, and nothing marks which is live | **boundary** · drift | biffo-plugin-ideation `deploy-frontend.yml` | undecided — delete the dead one, or wire its secret | **unfiled** — the deploy went via the instance; the duplicate remains |
 | — | **A test fake conflated two states, and the conflation only surfaced when production learned to tell them apart.** `FakeAgentRun.fail()` left `started_at` unset, so a run that was claimed-and-errored was indistinguishable from one nothing ever picked up. That was invisible while the service treated both as "failed" — and became a failing test the moment it stopped. The related shape: `AgentRunView` carried neither `error` nor `started_at`, so the plugin was **structurally incapable** of telling a founder the truth, and the misleading copy was a consequence of the model, not of the wording | **drift** | biffo-plugin-idea-scout tests | biffo-plugin-idea-scout [#41](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/41) | **fixed** — the fake models both shapes; the existing test that broke was right to break |
+| — | **The same defect twice in one feature — an assumed payload shape — cost hours in one place and one log line in the other, and the only difference was whether the no-op branch said anything.** Both read a field that was not there and both then *chose not to act*. The run-outcome observer's miss ended in a bare `return`: no row, no error, no log, for its entire existence — found only by opening a deployed page, noticing an empty timeline, bisecting with an adjacent write path, and reading a real stored event off the API (tabsii-platform#301). The SES consumer's miss ended in `logger.info("Ignoring SES notification of type %s", kind)` — so its **first ever invocation** printed `type None` and named its own defect (tabsii-platform#305). Same class, same author, same week; discovery cost differing by orders of magnitude. **A silent early-return at an integration boundary is an unobservable failure mode**, and it is precisely the branch that fires when a shape assumption is wrong — so "I decided not to act" must say what it decided and on what. `type None` was still not enough to act on either: the fix logs the notification's **keys**, because naming the absent field tells you nothing about what actually arrived | **visibility** | tabsii-platform | practice — every no-op branch at a boundary logs its input's shape, not just its verdict | **fixed** — both paths now log; rule stated |
 
 ### What the classes say
 
@@ -275,19 +276,19 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **161 rows** (never typed by hand, see *Adding a row*):
+`byFixRepo`, regenerated at **162 rows** (never typed by hand, see *Adding a row*):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 88 of 161 (55%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 15 of 161 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
-| **biffo-plugin-idea-scout** | 8 of 161 | Adapter seam, research search capability, its own styling, release + publish workflows |
-| **biffo-platform** | 7 of 161 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 161 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **tabsii-marketplace** | 2 of 161 | `python-jose` removal; the credential-dependent build |
-| **tabsii-crm** | 2 of 161 | Its E2E harness, and a repo setting that diverged |
-| **biffo-plugin-ideation** | 4 of 161 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **biffo-runners** | 1 of 161 | Runner fleet docs + fail-fast; **its whole source was uncommitted until today** |
+| **biffo-template** | 88 of 162 (54%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
+| **tabsii-platform** | 15 of 162 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
+| **biffo-plugin-idea-scout** | 8 of 162 | Adapter seam, research search capability, its own styling, release + publish workflows |
+| **biffo-platform** | 7 of 162 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 162 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **tabsii-marketplace** | 2 of 162 | `python-jose` removal; the credential-dependent build |
+| **tabsii-crm** | 2 of 162 | Its E2E harness, and a repo setting that diverged |
+| **biffo-plugin-ideation** | 4 of 162 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **biffo-runners** | 1 of 162 | Runner fleet docs + fail-fast; **its whole source was uncommitted until today** |
 
 **`biffo-template` takes 88 of 161 — 55%, and this capture is not evidence
 about the estate.** All ten new rows are findings about the measurement
@@ -1317,6 +1318,14 @@ three separate round trips.
 **Verifying a sub-agent's security claim rather than relaying it.** The same agent reported "the backend already enforces, no data is reachable". That downgrades a security issue, so I re-ran the unauthenticated checks against the API Gateway origin myself before repeating it. My own grep then produced a false positive (`3 matches` for `session|idea|report|prompt` — all from the word *ideation* in asset paths), which would have kept a security issue open on nothing had I not looked at what actually matched.
 
 **Pre-checking a delegated task's risk before spawning.** Before handing over the runner-fleet commit I established what `.gitignore` covered and what would actually stage, which turned "commit the Terraform" into a brief naming the specific hazard. That is what put `tfplan` in front of the agent at all — the issue never mentioned it.
+
+**Logging the decision, not just the error, turned a repeat defect into a
+one-line diagnosis.** Two integration points in one feature made the identical
+mistake — reading a payload field that did not exist. The one whose no-op branch
+logged what it was ignoring announced its own bug on first run; the one that
+returned silently took a deployed page, a bisect and an API read to find. Nothing
+about the code quality differed. The observable one was cheap because it said
+what it did.
 
 ## What needs more thought
 

@@ -35,6 +35,14 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | A drift guard written to catch skeleton regressions **walked up a fixed number of directories** to find `_skeletons/`, overshot to `/home`, and its audit returned `[]` for a path that does not exist. Reintroducing the exact `runs-on: ubuntu-latest` drift it existed to catch did **not** fail it — 11 tests green against nothing | **fail-open** | biffo-template [#744](https://github.com/keiranholloway/biffo-template/pull/744) | biffo-template `cli/` | **fixed** — searches upward, throws when not found, asserts the tree exists before auditing |
 | — | Three defects "found" in one session by **pattern-matching without running the thing**, all wrong: four bare `httpx.AsyncClient()` reported as affected when two pass a per-request timeout; a `Depends()` default called a B008 defect when ruff special-cases FastAPI route handlers; a skeleton's differing ruff `select` called drift when the difference is correct in both directions | **process** | biffo-template (this session) | diagnostic practice | **corrected before shipping** — each was disproved by executing the code rather than reading it |
 | [#714](https://github.com/keiranholloway/biffo-template/issues/714) | `gh pr merge --auto` against a repo with `allow_auto_merge` **disabled does not queue — it merges immediately**. On a protected branch that is harmless; on an unprotected one it merges with checks still running. Every Biffo repo had it `false` until it was set by hand, so the documented flow silently meant its opposite | **boundary** · visibility | biffo-plugin-ideation#54 | biffo-template `cli/` | **fixed** ([#741](https://github.com/keiranholloway/biffo-template/pull/741)) — set at repo creation |
+| [#838](https://github.com/keiranholloway/biffo-template/issues/838) | `core.hooksPath` was `.husky/_` — a **relative** path git resolves against *each worktree's* root, pointing at a **gitignored** directory created only by `prepare` on `pnpm install`. AGENTS.md §1 *mandates* a fresh worktree per unit of work, so **the required workflow disarmed its own gates**: git skipped every hook with no warning, no error, no output. **7 of 37 working trees armed** | **fail-open** · visibility | tabsii-platform `.worktrees/discovery-rls` — three tracked hook files, no `.husky/_`, therefore no pyright, no lint-staged, no commitlint on anything committed there | biffo-template | **fixed** ([#845](https://github.com/keiranholloway/biffo-template/pull/845)) — dispatchers in the **shared** `.git/hooks`, which every worktree inherits |
+| [#855](https://github.com/keiranholloway/biffo-template/issues/855) | The local gate checked the repo **root only**. In the ten repos with no root `package.json`/`pyproject.toml` — every sibling, every plugin — it printed `n/a - no package.json in this repo` then **`verify passed`**, on repos whose frontend is TypeScript and whose API is Python. `tabsii-crm` ran **one** check on a 700-line change and reported a pass. Worse than the missing hooks it was built to fix: **a repo with no hooks makes no claim; this one claimed to have checked** | **fail-open** · drift | tabsii-crm, biffo-plugin-ideation | biffo-template | **fixed** ([#853](https://github.com/keiranholloway/biffo-template/pull/853), [#855](https://github.com/keiranholloway/biffo-template/pull/855)) — `js_dirs()` + `py_dirs()` |
+| — | **The parity guard ran only in `biffo-template`** — the single repo with both a root `package.json` and a root `pyproject.toml`, i.e. the one place the root-only assumption held. It validated the gate where the gate was already correct, and could not have caught the blind spot in any of the ten repos that had it | **fail-open** | biffo-template | biffo-template (`gate-coverage.sh`, per repo) | **fixed** — parity is now measured per repo against *that* repo's CI, and exits non-zero |
+| [#856](https://github.com/keiranholloway/biffo-template/pull/856) | Sibling and plugin repos have no `core-manifest.json`, so `biffo core upgrade` cannot reach them. The documented channel was *"vendor into the skeleton, plus a one-time manual copy-in"* — which only helps repos created **afterwards**, and nothing ever prompts the copy-in. **Second occurrence of the same absence**: it is how `AGENTS.md` drifted 68 lines behind in tabsii (#559), and how eight repos ended up two gate versions stale | **drift** · process | tabsii-crm | biffo-template (`shared-sync.sh`) | **fixed** — declared file list, `--check` reports drift and exits 1 |
+| — | `bandit` was excluded from the gate with the rationale *"the finding gate is the upload step, not the run"*. **False** — `bandit -ll` exits non-zero on findings and it is the **run** step that fails (tabsii-platform PR #313, job 90502765804, exit 1, on a change whose local verify had passed). The exclusion was written **from intent** and never checked against a real run | **fail-open** | tabsii-platform#313 | biffo-template | **fixed** ([#855](https://github.com/keiranholloway/biffo-template/pull/855)) — included, and every other exclusion re-audited against observed CI behaviour |
+| — | The gate ran a **fixed check list tuned against `biffo-template`**, so it was repeatedly **stricter than the repo's CI**: terraform over `infra/` where CI checks only `modules/`; bandit over `-r services` where CI scans only template-owned paths (three B310s in *user-owned* `services/idea-scout/` — a push CI would have passed); bandit at all in plugin repos whose CI has no bandit step. **Patched three times before the cause was fixed** | **drift** · process | biffo-platform, biffo-plugin-idea-scout | biffo-template (`ci_has`, derived per repo) | **fixed** ([#861](https://github.com/keiranholloway/biffo-template/pull/861)) — no check can run that CI does not run |
+| — | The shared-file drift detector compared the template against each **local working copy**, so twelve entirely-current repos reported `DRIFTED` right after their sync PRs merged — the clones had not been pulled. Resolving through `origin/HEAD` then reported three more as missing everything, because it points at `main` in several clones and `main` is a stale release branch | **visibility** · fail-open | biffo-template | biffo-template | **fixed** ([#862](https://github.com/keiranholloway/biffo-template/pull/862)) — compares `origin/dev`; verified by checking a clone out three commits back |
+| — | The sync tool reported `PUSH REFUSED (run the gate there and look)` for **every** push failure. The first real cause was a plain non-fast-forward against a previous run's branch — **and the gate was green in that repo**. The diagnostic sent you to read a passing log | **visibility** | tabsii-crm | biffo-template | **fixed** — push output captured and classified: gate refusal / branch divergence / actual error |
 | — | Auto-merge **does not update a head branch that falls behind** under `strict` protection. Armed, green, one commit behind, it simply waits — three PRs in one session merged only after a manual `gh pr update-branch` plus a full CI re-run | **process** | biffo-platform#84, biffo-template #742/#720 | biffo-template (merge queue, or relax `strict`) | **open** — pre-registered as H1's likely refutation, recorded before the review date |
 | [#591](https://github.com/keiranholloway/biffo-template/issues/591) | `pnpm audit`/`pip-audit` fail identically whether they found a vulnerability or couldn't parse the registry response — one flake reds every open PR | fail-open · process | biffo-template CI | biffo-template | **closed** ([#592](https://github.com/keiranholloway/biffo-template/pull/592), [#636](https://github.com/keiranholloway/biffo-template/pull/636)) |
 | [#644](https://github.com/keiranholloway/biffo-template/issues/644) | Sibling skeleton's lockfile shipped 4 high-severity advisories; it sits outside the pnpm workspace so no CI gate ever audited it | fail-open · visibility | biffo-template `_skeletons/` | biffo-template | **partly fixed** ([#645](https://github.com/keiranholloway/biffo-template/pull/645)) — 1 residual, no patched upstream release |
@@ -283,19 +291,19 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **183 rows** (the dataset also retains rows no longer on the page — see the duplication row; both numbers are reported so neither can drift unnoticed):
+`byFixRepo`, regenerated at **191 rows** (the dataset also retains rows no longer on the page — see the duplication row; both numbers are reported so neither can drift unnoticed):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 96 of 183 (52%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the git-hook chain, the scaffolder itself |
-| **tabsii-platform** | 19 of 183 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity **and its event-destination envelope** |
-| **biffo-plugin-idea-scout** | 8 of 183 | Adapter seam, research search capability, its own styling, release + publish workflows |
-| **biffo-platform** | 8 of 183 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 183 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-plugin-ideation** | 10 of 183 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **tabsii-crm** | 4 of 183 | Its E2E harness, a repo setting that diverged, **and a timeline rendering a failed fetch as "nothing sent"** |
-| **tabsii-marketplace** | 2 of 183 | `python-jose` removal; the credential-dependent build |
-| **biffo-runners** | 1 of 183 | Runner fleet configuration |
+| **biffo-template** | 104 of 191 (54%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the git-hook chain, the scaffolder itself |
+| **tabsii-platform** | 19 of 191 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity **and its event-destination envelope** |
+| **biffo-plugin-idea-scout** | 8 of 191 | Adapter seam, research search capability, its own styling, release + publish workflows |
+| **biffo-platform** | 8 of 191 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 191 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-ideation** | 10 of 191 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **tabsii-crm** | 4 of 191 | Its E2E harness, a repo setting that diverged, **and a timeline rendering a failed fetch as "nothing sent"** |
+| **tabsii-marketplace** | 2 of 191 | `python-jose` removal; the credential-dependent build |
+| **biffo-runners** | 1 of 191 | Runner fleet configuration |
 
 **The shape did not change, and that is the finding.** Seven new rows moved
 `biffo-template` from 86/159 to 90/166 — **54% either way**. Four sessions of
@@ -788,6 +796,32 @@ is three implementation plans, an assessment of three PRD requirements against a
 running system, three issues, and the feature itself. The toil is CI queue,
 deploy waits, and the recovery steps above.
 
+### Measured: verifying in one environment cost three estate rollouts, 2026-07-29
+
+**The loop, not the symptom.** Eight scoreboard rows came out of this session
+and they are not eight incidents — they are **one** feedback loop firing
+repeatedly: *build in `biffo-template`, verify in `biffo-template`, distribute
+to fourteen repos, discover the assumption was template-specific.*
+
+| Cost | Cause | Status |
+| --- | ---: | --- |
+| **3 full estate rollouts** — 13 repos each, ~39 PRs opened, ~36 merged | The gate was fixed three times *after* distribution (JS discovery, Python discovery, CI-derived checks). Each fix invalidated every copy already shipped | **fixed structurally** — `ci_has` derives every check from the repo's own CI, so the class cannot recur; `shared-sync.sh --check` makes staleness detectable without a rollout |
+| **8 template PRs to fix a gate that had already been declared complete** (#853–#862) | "100% armed" was reported as shift-left. Arming was a proxy; the outcome metric did not exist until `gate-coverage.sh` was written | **fixed** — coverage is the headline, arming a prerequisite (#863) |
+| **~14 verification runs in the one repo where the bug could not appear** | `biffo-template` is the only repo with both a root `package.json` and a root `pyproject.toml`. Every check — the gate, the parity test, the fail-first proofs — ran there | **structural, not carelessness.** The template is the natural place to build and the worst place to verify. The fix is the rule, now written down: verify where the environment differs most |
+| **3 patches of "gate stricter than CI"** before the cause was addressed | A fixed check list tuned against one repo. terraform over `infra/`, bandit over `-r services`, bandit at all in plugin repos | **fixed** ([#861](https://github.com/keiranholloway/biffo-template/pull/861)) |
+| **~2 false-alarm investigations** into the drift detector and the sync's push diagnostic | Both instruments reported a cause that was not the cause: "12 repos drifted" (my clones were stale) and "PUSH REFUSED — run the gate" (a non-fast-forward, gate green) | **fixed** (#862 and the sync classifier) — but both cost real minutes reading passing logs |
+
+**Say when the cost was structural.** It was. Nothing here was a slip: the
+template genuinely is where the gate belongs, and it genuinely is the layout
+that hides root-only bugs. A rollout script that copies files is easy to verify
+(*did the file land?*) and that is precisely why the wrong question got asked
+fourteen times. **Distribution was treated as a copy problem when it was a
+behaviour problem.**
+
+The one number worth carrying: **the first run of the gate in a non-template
+layout found the defect in under a minute**, after roughly seven hours of work
+built on the assumption it was fine.
+
 ### Measured: the CI tax is per-job cold start, not contention, 2026-07-29
 
 Prompted by *"this doesn't feel like a substantially complex change, but it took
@@ -876,6 +910,60 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**Running the tool in the environment that differs most, instead of the one it
+was built in.** Fourteen rollouts of the local gate passed because every check
+was run in `biffo-template` — the one repo with both a root `package.json` and a
+root `pyproject.toml`, i.e. the only layout where the gate's root-only
+assumption held. **The first time it was run in a plugin repo the blind spot
+appeared in under a minute.** That is now the rule the whole distribution rests
+on: verify where the environment differs, not where you wrote it. The cost of
+not doing it was an afternoon of rework; the cost of doing it was one command.
+
+**Reproducing the hook failure with one variable changed, in the same tree.**
+The dead-hooks fix could have been asserted. Instead: one fresh worktree, no
+install, two configs.
+
+| same worktree, no `pnpm install` | result |
+| --- | --- |
+| old (`core.hooksPath=.husky/_`) | `git commit -m "this subject is not conventional"` → **succeeded, exit 0** |
+| new (shared `.git/hooks`) | **blocked, exit 1**, `Command "lint-staged" not found` |
+
+That is the difference between "the fix looks right" and "the fix changes the
+observed behaviour, and nothing else did". It also produced the honest framing
+for the PR — the hook now *fires*; its tooling still needs installing. A silent
+skip became a loud failure, which is the actual claim.
+
+**Building the metric that could fail, and letting it.** Arming — *will a hook
+execute* — reached **100%** while six repos ran **one check in eight**.
+`gate-coverage.sh` asks the question that can be answered wrong: for each repo,
+what share of *its own* CI's check kinds does its gate run? It reported **45%**
+on its first run and named the six worst repos. An unfalsifiable 100% became a
+falsifiable 45%, and that is what made the rest of the work targetable.
+
+**Pre-registering H4 before the intervention.** The register's first rule forced
+the arming-vs-coverage confusion into writing rather than leaving it as a
+retrospective reinterpretation. When the headline turned out to be a proxy, the
+correction had to be recorded as an amendment with both numbers — which is
+exactly the mechanism working, on its author.
+
+**The gate earned its keep the day it landed**, before any of this was measured:
+
+- caught a `format` failure **in its own PR** (a rebase resolution had
+  reformatted `core-manifest.json`);
+- caught real `terraform fmt` drift sitting on `dev` in `plugin-host.core.tf`;
+- **refused the `biffo-platform` core-upgrade push** with `vitest: not found`,
+  because the upgrade had refreshed `pnpm-lock.yaml` and `node_modules` had not
+  been reinstalled — AGENTS.md §1's stale-deps case, caught locally on the
+  gate's first firing in that repo instead of in CI.
+
+**Two of my own instruments were wrong in the flattering direction, and the
+tools caught each other.** `hook-audit.sh` read `$tree/.git/hooks`, which does
+not exist in a linked worktree (`.git` is a *file*) — it would have scored the
+fix as a failure. `verify.sh --list` reported what the *machine* could run
+rather than what the *repo* requires, so the parity test passed locally and
+failed on a CI runner with no `uv`. Neither was found by inspection; both were
+found by two tools disagreeing. **Build the second instrument.**
 
 **Building the source locally and matching the emitted hash against the deployed
 artifact.** Verifying an admin-panel fix was live, every usual check failed to
@@ -1467,6 +1555,39 @@ deployed code was already correct. `git rev-list --count HEAD..origin/dev` befor
 trusting a tree is in AGENTS.md §1 precisely for this, and it is cheap.
 
 ## What needs more thought
+
+**Nothing runs the three estate audits automatically.** `gate-coverage.sh`,
+`hook-audit.sh` and `shared-sync.sh --check` all exit non-zero on a real
+problem, and **all three are invoked by hand**. The gate blind spot survived
+because nobody ran the check that would have shown it — and the checks did not
+exist, because arming looked green. They belong in the daily practices cron, or
+in a template CI job that fans out over the estate. Until then the estate is one
+forgotten command away from the same state.
+
+**A PR cannot tell you it is carrying a stale shared file.** Drift is detectable
+only when someone runs `--check` from a fresh clone of the template. A sibling
+merging a PR has no signal that its `verify.sh` is two versions behind — which
+is exactly the condition that produced `verify passed` on a 700-line change. A
+version stamp in the file plus a CI assertion would close it; neither exists.
+
+**`commit-msg` is inert in every sibling.** No root `commitlint` config, so
+subjects are not checked locally. CI still enforces Conventional Commits on the
+PR title, so it is a missed shift-left rather than a hole — but the release
+derives its version bump from that subject (ADR-0006), so the blast radius is
+larger than "a lint".
+
+**The exclusion list is still written by hand, and one entry was wrong for a
+fortnight.** `bandit`'s rationale described what the CI step was *assumed* to do.
+Re-auditing the rest found no other error, but nothing prevents the next one:
+an exclusion is a claim about a CI step's behaviour and nothing tests it. The
+same normalisation `gate-coverage.sh` already does could assert that an excluded
+kind genuinely cannot run locally.
+
+**`pytest` is excluded by a judgement that is right for one repo.** 56s in the
+template, ~2s in a sibling. It is opt-in per repo via `BIFFO_VERIFY_PYTEST=1`
+and nothing prompts a repo to opt in, so the fastest suites in the estate are
+the ones not being run.
+
 
 **A safety rule enforced by memory was broken by its own author in the session
 that quoted it.** AGENTS.md §6 forbids piping `git push`, because the pipe's
@@ -2207,6 +2328,11 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `biffo-workflow` | **worked — ~20 invocations, no lost commits** | Every change this session went through fresh-worktree → deps → honest unpiped push → CI-green squash-merge → reap. The `PUSH EXIT: ${PIPESTATUS[0]}` habit caught a real refusal (the gate blocking a `biffo-platform` upgrade push on stale deps) that a piped push would have reported as success. The step that earned the most was §1's "install dependencies in the new worktree" — it is the difference between the gate running and the gate erroring. |
+| `biffo-workflow` | **partial — §7's cleanup assumes one repo, not fourteen** | Rolling one change across the estate means fourteen worktrees, fourteen branches and fourteen PRs. The skill's per-repo reap loop is correct and does not scale; I wrote a throwaway script three times before keeping one. An estate-wide rollout is a real workflow and the skill has no shape for it. |
+| `biffo-verify` | **worked — §2 is the finding of the day** | "Reproduce by the reporter's route" is exactly what fourteen rollouts had skipped: everything was verified in `biffo-template`, the one layout where the bug could not appear. Running the gate once in a plugin repo exposed it in under a minute. The generalisation now in *What went well* — verify where the environment differs most — came straight out of this section. |
+| `biffo-verify` | **worked — §6, and it applies to gates you wrote yourself** | "Distrust a green check when the gate can fail open" was written about dependency audits. It applies verbatim to this session's own gate: `verify passed` while checking nothing is the same shape. The section did not need extending; it needed applying to a tool I had just built. |
+| `biffo-verify` | **missed — §8 was not run until asked** | Eight scoreboard-worthy findings accumulated across ~7 hours before the capture step ran, and only because the operator asked for it. The skill says "every unit of work"; the trigger that failed is that a long continuous session does not feel like a sequence of units. A prompt at merge time would have caught it. |
 | `biffo-verify` | **worked — §1 and §2 were the whole value** | Three issues checked before building turned out already delivered (`ideation#20`, the idea-scout v1 epic, `platform#75`). A fourth, `ideation#69`, carried a diagnosis that could not be true. Nothing was built for any of them. Establishing current state is not a preamble to the task here — several times this session it **was** the task. |
 | `biffo-verify` | **worked — §4, twice, and only §4 settled it** | "Verify the deployed artifact, not the source" was the only check that discriminated. Founder bundle: hash predicted before deploy, confirmed after. Admin bundle: built the source locally and matched the emitted hash to the one inside the deployed Lambda. Grepping identifiers failed (minified) and the old-asset control failed (403 after deploy) — both would otherwise have passed for evidence. |
 | `biffo-workflow` | **failed — §4's honest-push rule was violated by the session quoting it** | The rule is stated plainly, I quoted it earlier in the session, then piped a push to filter a dependabot banner and reported `push: 0` on a failure. The skill says not to pipe; it does not say what to do about output there is a real reason to filter — which is precisely when the temptation arises. That gap is where it broke. |

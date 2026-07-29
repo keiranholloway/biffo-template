@@ -33,6 +33,7 @@
     "scripts/gate-coverage.sh",
     "scripts/hook-audit.sh",
     "scripts/install-hooks.sh",
+    "scripts/protection-audit.sh",
     "scripts/shared-sync.sh",
     "scripts/verify.sh",
     "services/_plugin-host/",

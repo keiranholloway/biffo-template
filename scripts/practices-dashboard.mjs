@@ -365,6 +365,7 @@ export function renderAudits(a) {
     coverage: ['Gate coverage', 'does each repo&rsquo;s gate mirror that repo&rsquo;s CI?'],
     arming: ['Hook arming', 'will the hook actually fire?'],
     drift: ['Shared files', 'is every repo on the current gate?'],
+    protection: ['Branch protection', 'is every integration branch actually gated?'],
   }
   if (!a || !Array.isArray(a.audits) || a.audits.length === 0) {
     return `<div class="unvalidated"><strong>Estate audits not collected.</strong>

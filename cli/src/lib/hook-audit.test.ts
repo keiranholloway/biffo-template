@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, writeFileSync, chmodSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -88,5 +88,47 @@ describe('hook-audit', () => {
     const { stdout } = audit(estate)
     expect(stdout).toContain('NO-HOOKS')
     expect(stdout).not.toContain('ARMED')
+  })
+})
+
+/**
+ * #715: an audit that cannot see must never report health.
+ *
+ * The first version of `protection-audit.sh` read only stdout and matched with
+ * `case`. On an unprotected branch `gh` prints its 404 JSON *to stdout*, which
+ * fell through to the wildcard and was reported `ok` — so the audit passed
+ * three genuinely unprotected branches and exited 0 on its very first run.
+ *
+ * Writing a fail-open into a check built to catch fail-open is the reason these
+ * assertions exist. It was found by running it and reading every line, not by
+ * trusting the summary.
+ */
+describe('protection-audit', () => {
+  const script = readFileSync(
+    join(import.meta.dirname, '..', '..', '..', 'scripts', 'protection-audit.sh'),
+    'utf8',
+  )
+
+  it('believes the exit status, not the text gh printed', () => {
+    expect(script).toMatch(/rc=\$\?/)
+    expect(script).toMatch(/\[ "\$rc" -ne 0 \] && n=""/)
+  })
+
+  it('rejects a non-numeric response rather than treating it as a count', () => {
+    // `gh`'s 404 body is not a number; matching it as one is what reported
+    // "ok ... {"message":"Branch not protected"} required checks".
+    expect(script).toMatch(/\*\[!0-9\]\*/)
+  })
+
+  it('refuses to report anything when gh is not authenticated', () => {
+    expect(script).toContain('gh auth status')
+    expect(script).toContain('exit 2')
+    expect(script).toContain('Refusing to report health that was not observed')
+  })
+
+  it('counts a protected branch with zero required checks as a failure', () => {
+    // Protected-but-requiring-nothing reads as protected in the GitHub UI and
+    // gates nothing at all.
+    expect(script).toContain('protected but 0 required checks')
   })
 })

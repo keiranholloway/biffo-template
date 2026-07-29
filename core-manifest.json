@@ -33,12 +33,14 @@
     "scripts/gate-coverage.sh",
     "scripts/hook-audit.sh",
     "scripts/install-hooks.sh",
+    "scripts/shared-sync.sh",
     "scripts/verify.sh",
     "services/_plugin-host/",
     "services/_plugins/",
     "services/_template/",
     "services/api/",
     "services/pr-signer/",
+    "shared-files.json",
     "turbo.json"
   ],
   "userOwned": [

@@ -150,10 +150,16 @@ failing steps in the 7-day baseline.
 
 By **2026-08-05**, over a **7-day** window, measured identically to the baseline:
 
-- **Locally-catchable share of failing CI steps below 20%**, from **66%** — primary.
-- **Arming at 100%** of working trees that have hooks configured — i.e. **zero
-  `DEAD`** — secondary. This one should be near-immediate; if it is not, the
-  primary result is uninterpretable.
+- **Locally-catchable share of failing CI steps below 20%**, from **66%** — the
+  outcome metric.
+- **Gate coverage at 100%** in every repo with CI — every check kind that
+  repo's CI runs, minus written exclusions, is run by its gate. From **45%**
+  (42 of 93 check kinds across the eleven repos with CI). This is the
+  **headline**: it is the thing "shift-left" actually means, and it is the
+  metric that can fail.
+- **Arming at 100%**, zero `DEAD` — a **prerequisite**, not a result. A hook
+  that does not execute makes coverage unachievable; a hook that executes and
+  checks nothing makes it look achieved.
 - `ciFailureRate` below 5% in `biffo-template` (from 10.1%) and below 10% in
   `tabsii-platform` (from 21.4%) — tertiary.
 
@@ -299,7 +305,45 @@ the exclusion removes a large part of the prize by design, and the honest
 response is to reconsider the exclusion per repo rather than to restate the
 target.
 
-## Interim observation — 2026-07-29, day 0: the secondary metric is met
+## Amendment — 2026-07-29, the headline metric was wrong
+
+**Arming was reported as the headline and it is a prerequisite.** The two are
+not the same claim, and treating the first as the second is the failure this
+whole programme exists to find.
+
+`hook-audit.sh` answers one question: *will git execute a hook here?* It hit
+**100%** across the estate — while six repos ran **one check in eight**.
+`tabsii-crm` took a 700-line TypeScript-and-Python change, ran `terraform-fmt`,
+and printed `verify passed`. Every one of those repos was, by the headline,
+fully compliant.
+
+The number that was available and not computed: **0 of 8 sibling and plugin
+repos had a gate that checked their primary language.**
+
+So the headline is now **gate coverage** — for each repo, the share of its own
+CI's check kinds that its gate runs, measured by `scripts/gate-coverage.sh`.
+It can fail, it failed immediately, and it is what "shift-left" means.
+
+| | baseline | after rollout |
+| --- | ---: | ---: |
+| **gate coverage** (11 repos with CI) | **42 of 93 — 45%** | **93 of 93 — 100%** |
+| repos at full coverage | 1 | **11** |
+| worst repos | six at **1/8** | — |
+| shared-file drift | 13 repos | **0** |
+| arming (prerequisite) | 18% | **100%**, 0 `DEAD` |
+
+Per-repo baseline, for the review to compare against:
+
+| repo | baseline | now |
+| --- | ---: | ---: |
+| biffo-template, biffo-platform, tabsii-platform | 10/11 | **11/11** |
+| biffo-plugin-ideation, -idea-scout | 3/6 | **6/6** |
+| biffo-platform-app, tabsii-app, -crm, -geo, -intake, -marketplace | **1/8** | **8/8** |
+
+Arming stays in the register as a prerequisite with its own reading, because a
+dead hook and an empty gate fail in different ways and both had to be fixed.
+
+## Interim observation — 2026-07-29, day 0: the prerequisite is met
 
 **Not the result.** The review date is 2026-08-28 and the primary metric needs a
 30-day window of CI history. This records the **arming** metric only, which was

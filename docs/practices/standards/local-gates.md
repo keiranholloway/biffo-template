@@ -207,14 +207,24 @@ failed, and that has to be visible rather than inferred.
 ## 3. Verifying a repo complies
 
 ```bash
-sh scripts/hook-audit.sh          # is every working tree armed?
-pnpm run verify                   # does the gate pass?
-pnpm --filter @biffo/cli test -- verify-parity   # does the gate match CI?
+sh scripts/gate-coverage.sh --estate ~/code   # does each gate mirror its own CI?   <- headline
+sh scripts/hook-audit.sh --estate ~/code      # will the hook actually fire?
+sh scripts/shared-sync.sh --check --estate ~/code   # is every repo on the current gate?
+pnpm run verify                               # does this repo pass right now?
 ```
 
-Three questions, three commands: *does it run*, *does it pass*, *does it cover
-what CI covers*. The third is the one that rots without a test, which is why it
-is a test.
+Four questions, four commands, and **the order matters**: coverage first,
+because it is the only one that measures the thing the standard is for.
+
+Arming and drift are **prerequisites**, not results. A hook that does not
+execute makes coverage unachievable; a hook that executes and checks nothing
+makes it look achieved. On 2026-07-29 arming read **100%** while six repos ran
+**one check in eight** — `tabsii-crm` took a 700-line TypeScript-and-Python
+change, ran `terraform-fmt`, and printed `verify passed`. Reporting arming as
+the headline is what let that stand.
+
+Each of the three estate commands **exits non-zero** when it finds a problem, so
+they can gate something rather than be read.
 
 ## Distribution
 

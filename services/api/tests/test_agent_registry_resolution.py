@@ -8,6 +8,7 @@ import asyncio
 from collections.abc import AsyncGenerator, Generator
 
 import pytest
+from api.config import settings
 from api.database import get_db
 from api.middleware.auth import AuthenticatedUser, require_auth
 from api.models.agent_run import AgentRun  # noqa: F401 — registers the table
@@ -155,12 +156,21 @@ def test_create_request_with_instructions_keeps_them_precedence(app, client):
 
 
 def test_model_resolves_from_registry_when_snapshot_has_none(app, client):
-    """When model is missing, resolve it from the registry."""
+    """A missing model resolves from the registry — even with instructions inline.
+
+    The seeded model is deliberately **not** ``settings.agent_default_model``.
+    Seeding the default here would make the assertion pass whether the value came
+    from the registry or from the fallback, which is exactly how an editable but
+    inert model field survives its own test.
+    """
     fastapi, session_factory = app
+
+    registry_model = "anthropic/claude-opus-4-8"
+    assert registry_model != settings.agent_default_model
 
     async def seed_and_post():
         async with session_factory() as session:
-            await _seed_agent(session, model="moonshotai/kimi-k3")
+            await _seed_agent(session, model=registry_model)
             await session.commit()
 
     asyncio.run(seed_and_post())
@@ -169,6 +179,9 @@ def test_model_resolves_from_registry_when_snapshot_has_none(app, client):
         "/api/v1/internal/agent-runs",
         json={
             "agent_name": "demo-enricher",
+            # Instructions supplied inline: the registry must still be consulted
+            # for the model, which is the case that used to fall through to the
+            # default without ever reading the row.
             "definition_snapshot": {
                 "instructions": "Do the task.",
             },
@@ -178,7 +191,9 @@ def test_model_resolves_from_registry_when_snapshot_has_none(app, client):
 
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["definition_snapshot"]["model"] == "moonshotai/kimi-k3"
+    assert body["definition_snapshot"]["model"] == registry_model
+    # The inline prompt still wins over the registry's.
+    assert body["definition_snapshot"]["instructions"] == "Do the task."
 
 
 def test_model_stays_when_snapshot_has_one(app, client):
@@ -268,7 +283,8 @@ def test_default_model_when_no_registry_and_instructions_inline(app, client):
 
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    # The model should be filled from the default
-    assert body["definition_snapshot"]["model"] == "moonshotai/kimi-k3"
+    # The model should be filled from the default — read from settings rather than
+    # restated, so this test cannot drift from the value it is asserting about.
+    assert body["definition_snapshot"]["model"] == settings.agent_default_model
     # Instructions should be preserved
     assert body["definition_snapshot"]["instructions"] == "Do the task inline."

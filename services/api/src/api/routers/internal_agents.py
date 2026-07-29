@@ -115,30 +115,36 @@ async def request_agent_run(
     # field outside the ceiling. A snapshot with no write-back is untouched.
     snapshot = apply_writeback_output_tool(body.definition_snapshot)
 
-    # Resolve instructions and model from the registry when absent (biffo-template#910).
-    # Only look up the agent if instructions are missing (model resolution is optional).
-    if not snapshot.get("instructions"):
+    # Resolve instructions and model from the registry when absent (#910). The
+    # registry is consulted whenever *either* is missing, not only when the prompt
+    # is: an admin editing an agent's model must change what runs even for a
+    # workflow that still names its instructions inline. Resolving only on a
+    # missing prompt is what made the model field editable-but-inert.
+    snapshot = dict(snapshot)
+    if not snapshot.get("instructions") or not snapshot.get("model"):
         agent = await get_dynamic_chat_agent(
             db, tenant_id=principal.tenant_id, agent_key=body.agent_name
         )
-        if agent is None:
-            # Instructions are missing and the agent is not in the registry, fail loudly
-            # (an agent run must never be created with an empty or half-resolved prompt)
+        if agent is None and not snapshot.get("instructions"):
+            # No prompt anywhere. Fail loudly rather than create a run with an
+            # empty one: the runtime would refuse it later having already been
+            # dispatched, and a run that dies mid-flight has spent money.
             logger.warning(
-                "Agent run creation aborted: agent not found in registry (biffo-template#910)",
+                "Agent run creation aborted: agent not found in registry (#910)",
                 extra={"agent": body.agent_name},
             )
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Agent '{body.agent_name}' not found in registry",
             )
-        # Resolve instructions from the registry
-        snapshot["instructions"] = agent.system_prompt
-        # Also resolve model from the registry if not already set
-        if not snapshot.get("model"):
-            snapshot["model"] = agent.model
+        if agent is not None:
+            if not snapshot.get("instructions"):
+                snapshot["instructions"] = agent.system_prompt
+            if not snapshot.get("model"):
+                snapshot["model"] = agent.model
 
-    # Ensure model is always set: from snapshot, or from the default
+    # A missing model is never fatal — unlike a missing prompt there is a sane
+    # estate-wide answer, and this is the single place it is written down.
     if not snapshot.get("model"):
         snapshot["model"] = settings.agent_default_model
 

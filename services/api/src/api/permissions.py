@@ -52,21 +52,41 @@ PermissionsRegistry = dict[str, TablePermissions]
 
 
 def _iter_core_crud_models() -> list[type[Any]]:
-    """Every mapped ``TenantScopedModel`` subclass that opts into the generic
-    CRUD layer via a non-empty ``__crud_permissions__``.
+    """Every mapped model that opts into the generic CRUD layer via a non-empty
+    ``__crud_permissions__``.
 
     Walks the subclass tree so a model defined anywhere that's been imported is
     found. Dynamically-generated plugin models (``to_sqlalchemy_model``) are
-    also ``TenantScopedModel`` subclasses, but they inherit the empty default
+    also mapped models, but they inherit the empty default
     ``__crud_permissions__`` (their permissions come from the manifest path),
     so filtering on a *non-empty* block excludes them here — a plugin table is
     never counted twice.
+
+    ## Why this walks ``Base`` and not ``TenantScopedModel`` (#890)
+
+    It used to start at ``TenantScopedModel.__subclasses__()``, so **any
+    declarative base an instance defines was invisible to the permissions
+    registry** — and therefore to generic CRUD. The tables simply did not
+    appear, with no error and no failing test.
+
+    That is not a hypothetical shape. ADR-0022 makes ``domains/`` user-owned so
+    an instance owns model code, and ADR-0005 effectively forces a second base:
+    a DDL-imported schema has its own column conventions — native ``UUID``
+    primary keys, soft-delete, a real tenant foreign key — that
+    ``TenantScopedModel``'s ``String(36)`` id and ``"default"`` tenant seam
+    cannot express. An instance following both ADRs lands exactly here.
+
+    Walking from ``Base`` is a **strict superset that is behaviourally
+    identical today**: ``TenantScopedModel`` is itself a ``Base`` subclass so
+    nothing is lost, the ``perms and tablename`` filter is unchanged, and
+    ``TenantScopedModel`` itself is abstract with no ``__tablename__`` so it
+    filters out rather than being mistaken for a table.
     """
-    from .models.base import TenantScopedModel
+    from .models.base import Base
 
     seen: set[type[Any]] = set()
     out: list[type[Any]] = []
-    stack: list[type[Any]] = list(TenantScopedModel.__subclasses__())
+    stack: list[type[Any]] = list(Base.__subclasses__())
     while stack:
         cls = stack.pop()
         if cls in seen:

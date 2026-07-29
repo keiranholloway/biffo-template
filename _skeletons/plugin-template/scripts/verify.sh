@@ -192,7 +192,21 @@ if [ -n "$PY_DIRS" ]; then
         # bandit is NOT excluded: it exits non-zero on findings and it is the
         # RUN step that fails in CI, not the artefact upload. See the exclusion
         # audit in verify-parity.test.ts (#855).
-        [ -d services ] && run_check "bandit$suffix" uv run bandit -r services -ll -q
+        #
+        # Scoped to the SAME paths CI scans, never wider. CI runs
+        # `-r services/api services/_plugins` -- template-owned code only --
+        # because a template-shipped check asserting over paths the template
+        # does not own reds an instance on content it neither wrote nor can
+        # repair (#325). Running `-r services` here found three B310s in
+        # biffo-platform's user-owned services/idea-scout/ and refused a push CI
+        # would have passed: the gate being stricter than CI is its own defect,
+        # and it is what drives people to BIFFO_SKIP_VERIFY.
+        bandit_paths=""
+        [ -d services/api ] && bandit_paths="$bandit_paths services/api"
+        [ -d services/_plugins ] && bandit_paths="$bandit_paths services/_plugins"
+        [ -z "$bandit_paths" ] && [ -d src ] && bandit_paths="src"
+        # shellcheck disable=SC2086
+        [ -n "$bandit_paths" ] && run_check "bandit$suffix" uv run bandit -r $bandit_paths -ll -q
         if [ -n "$PYTEST" ]; then
           run_check "pytest$suffix" uv run pytest -q
         else

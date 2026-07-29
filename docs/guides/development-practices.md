@@ -67,6 +67,12 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | [tabsii-crm#118](https://github.com/tabsii-com/tabsii-crm/issues/118) | **RECURRENCE of the row directly above this block**, in a different repo. A lead's Activity timeline inferred `"Nothing sent or logged yet."` from an empty array — and the array is empty in **three** situations: in flight, genuinely empty, and **failed**, because `.catch(() => undefined)` swallowed the error into the same `[]`. So a 403 or 500 told the reader a candidate had never been contacted. The earlier instance was logged **unfiled** and never generalised, so it came back | **visibility** · drift | tabsii-crm (lead drawer) | tabsii-crm `apps/frontend` | **fixed** ([#119](https://github.com/tabsii-com/tabsii-crm/pull/119)) |
 | — | **Merging the upgrade that ships tracked `.githooks/` does not arm them.** `core.hooksPath` is per-clone config set by `prepare`, so an existing clone keeps pointing at the old generated dir until someone runs `pnpm install` once. The merge reads as *done* while the guard stays inert — the same shape as the defect it fixes. Verified: a fresh worktree off the merged `dev` still reported `hooksPath=.husky/_` with `.husky/_` absent | **fail-open** · process | tabsii-platform (post-upgrade check) | biffo-template (upgrade notes / `prepare`) | **unfiled** |
 | [#374](https://github.com/keiranholloway/biffo-template/issues/374) | The issue **described the worktree-hooks gap in its own body** — *"hooks do not run in a fresh clone… easy to hit when working in a throwaway clone or a worktree"* — called it *"arguably the larger issue"*, proposed two fixes, shipped only the pre-push hook, and closed. The named-but-unfixed half cost **1h43m five days later**. A closed issue is not evidence its stated findings were addressed | **process** | biffo-template#374 | biffo-template (issue hygiene) | **fixed** late ([#843](https://github.com/keiranholloway/biffo-template/pull/843)) |
+| [tabsii-crm#128](https://github.com/tabsii-com/tabsii-crm/pull/128) | **A cadence step could not be created at all.** `crm_cadence_steps.brand_id` is `NOT NULL` (denormalised for RLS) and the sibling never supplied it. **Every test built the `CadenceStep` *object*** — and a Python constructor makes you pass `brand_id`, so all of them did. Nothing exercised the HTTP path, the only place the omission exists. Unit suites green on both sides; the feature could not create a step | **drift** · visibility | tabsii-crm (step builder) | tabsii-crm `services/api` | **fixed** — brand derived from the cadence, never the body |
+| [tabsii-crm#129](https://github.com/tabsii-com/tabsii-crm/pull/129) | **Every compiled cadence email step failed at dispatch.** The `email` action declares `from` required with no default; the step builder hardcoded `to`/`subject`/`body` without it. Invisible everywhere before a real send — the compile reports success, the definition looks right in the database, and the failure exists only inside the orchestrator **past EventBridge** | **visibility** · drift | tabsii-crm (step builder) | tabsii-crm `apps/frontend` | **fixed** — From field, Add-step disabled without it |
+| [tabsii-crm#131](https://github.com/tabsii-com/tabsii-crm/pull/131) | **A merged PR asserted a verification nobody performed.** tabsii-platform#323 built `POST /leads/{id}/status` and its description said *"the CRM is pointed here"*. It was not — the drawer still used the generic `PUT`, so the fix existed in Core, **nothing in the product used it**, and #320 was closed while the failure it described still happened. Caught only by checking which endpoint the *deployed* UI actually calls | **process** · drift | tabsii-platform#323 (PR description) | tabsii-crm `apps/frontend` | **fixed** |
+| [tabsii-platform#327](https://github.com/tabsii-com/tabsii-platform/pull/327) | **RLS hardening blocked the write it was designed to permit.** Module `052` gave `lead_cadence_enrolments` a SELECT policy and no others, so a caller could not desynchronise it from its runs. RLS applies to the **endpoint's** session too: the transition matched zero rows, converting a lead 500'd with `StaleDataError`, and the cadence stayed armed. The logic was tested thoroughly **on SQLite, which has no policies** — every one of those tests ran against a session that could write anything | **fail-open** · drift | tabsii-platform (dev, real conversion) | tabsii-platform `db/imports` (053) | **fixed** — policy restored on its own permission code; `__crud_permissions__` was the real guard all along |
+| — | **A deploy watcher matched "the newest run named Deploy" without pinning the commit SHA**, and reported success for the *previous* commit's deploy — the new one had not been created yet, by one second. Nearly produced a fabricated defect report ("the fix does not work on dev") from a green signal about the wrong artifact. Earlier watchers in the same session **did** pin the SHA; the inconsistency was the bug | **visibility** · process | session tooling | watcher scripts / habit | **fixed** — SHA-pinned every check afterwards |
+| [tabsii-platform#317](https://github.com/tabsii-com/tabsii-platform/pull/317) | **An approved plan specified a mechanism that cannot work.** Cadence steps were to trigger on `lead.captured` with a synthetic `cadence_id` in `trigger_filter` — but `trigger_filter` is an exact match over the *event payload*, and `lead.captured` carries no `cadence_id`. Every compiled step would have been **silently inert**; dropping the filter instead makes two active cadences both fire for one lead. Caught by reading `_matches_trigger_filter` **before** building | **drift** | docs/implementation/0008 M3 (as approved) | tabsii-platform (new `lead.enrolled` event) | **fixed** — plan amended in the same PR |
 | — | `scripts/js-dependency-audit.sh` ran under dash, whose `echo` interprets backslash escapes. Advisory payloads contain them, so `echo "$out" \| jq` mangled the JSON and every run reported INCONCLUSIVE — the gate green while scanning nothing, inside the very fix (#591) that exists to stop it failing open | **fail-open** | biffo-template CI | biffo-template `scripts/` | **fixed** ([#717](https://github.com/keiranholloway/biffo-template/pull/717)) |
 | — | A cut `core-v*` tag is not an available artifact: the tag existed at 0.136.0 while npm still served 0.135.0. Upgrading in that window carries a *partial* fix that deploys green and still fails | visibility · process | biffo-template release chain | biffo-template CI | **unfiled** — caught before it bit |
 | [#671](https://github.com/keiranholloway/biffo-template/issues/671) | `scripts/biffo.sh` execs `npx @biffo/cli@$(biffo.core.json .version)`, so an unpublished core version reds **every guard on every instance**. npm publish has been failing (E404 on PUT) since 0.131.0 — the upgrade PR's own version bump is what breaks its guards, so it can never go green | **boundary** · visibility | tabsii-platform [#241](https://github.com/tabsii-com/tabsii-platform/pull/241) | biffo-template (npm token + `publish-cli.yml`) | publishing **fixed** ([#669](https://github.com/keiranholloway/biffo-template/pull/669), npm now at 0.133.3); the coupling itself still **open** ([#667](https://github.com/keiranholloway/biffo-template/issues/667)) |
@@ -312,6 +318,27 @@ each, so the column sums exceed the row count.
 | **tabsii-crm** | 5 of 200 | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent" |
 | **tabsii-marketplace** | 1 of 200 | `python-jose` removal; the credential-dependent build |
 | **biffo-runners** | 1 of 200 | Runner fleet configuration |
+`byFixRepo`, regenerated at **220 rows** on 2026-07-29:
+
+| Repo | Fixes landing here | Notes |
+| --- | --- | --- |
+| **biffo-template** | 117 of 220 (53%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, the git-hook chain, the scaffolder |
+| **tabsii-platform** | 21 of 220 | RLS lane, SES identity + envelope, the run-outcome seam, the enrolment write policy |
+| **biffo-plugin-ideation** | 13 of 220 | A UI rendering a 500 as an empty state; publish workflow; dead manifest block |
+| **biffo-plugin-idea-scout** | 11 of 220 | Adapter seam, research search, styling, release workflows |
+| **biffo-platform** | 9 of 220 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-crm** | 9 of 220 | E2E harness, repo settings, the activity timeline's empty state, **three cadence-surface defects a browser found** |
+| **tabsii-intake** | 5 of 220 | CI generation, branch-protection contexts, `python-jose` removal |
+| **tabsii-marketplace** | 2 of 220 | `python-jose` removal; credential-dependent build |
+| **biffo-runners** | 1 of 220 | Runner fleet configuration |
+
+**The shape held again.** 220 rows, `biffo-template` at 53% — it was 54% at 159
+rows and 54% at 166. Four sessions of unrelated work have not moved where fixes
+land: **more than half belong upstream, in the repo none of them surfaced in.**
+
+**`tabsii-crm` tripled (3 → 9) in one session, and every new row came from a
+browser, not a suite.** That is the first time a single repo's count has moved
+because of *how* it was checked rather than how much was built there.
 
 **The shape did not change, and that is the finding.** Seven new rows moved
 `biffo-template` from 86/159 to 90/166 — **54% either way**. Four sessions of
@@ -948,6 +975,43 @@ cheaply. A test asserting the *real* core response shape (a recorded fixture
 rather than a hand-written fake) and a lint rule for unresolvable class names
 would both be cheap; neither was tried, so "only a click-through could have found
 these" is asserted, not demonstrated.
+
+### Measured: five green milestones, four defects, one browser, 2026-07-29
+
+`0008-outreach-cadences` — five milestones, ~4,500 lines across two repos, every
+PR green, **1,600 backend and 181 frontend tests passing throughout**. The
+feature could not create a cadence step.
+
+| Found by | Defects |
+| --- | --- |
+| Unit tests, during the build | 3 (tenant-id conflation, orphaned definitions, and an unbuildable plan step caught by reading) |
+| **The browser, after every milestone merged** | **4** |
+
+The four the suites could not see, and why:
+
+| Defect | Why no test could reach it |
+| --- | --- |
+| step `brand_id` missing | every test built the **object**; a constructor forces the field |
+| step `from` missing | failure lives **past EventBridge**, not in the compile |
+| UI never called the new route | a PR **claimed** it did; nothing asserts a claim |
+| RLS blocked its own write | logic tested on **SQLite, which has no policies** |
+
+**The cost was not the fixes — it was the round trips.** Each defect needed
+fix → gate → PR → merge-race → deploy → re-test, and the deploy queue alone runs
+**7–13 minutes** on this fleet. Four of those is roughly **2 hours of wall clock
+for maybe 40 minutes of edits.** The loop, not the bugs.
+
+**Two of the four are the same structural gap**, and it is worth naming once
+rather than four times: *the tests mock the boundary the defect lives on.* An
+object test cannot see an HTTP body; a SQLite test cannot see a policy. Both
+suites were not weak — they were **pointed slightly to the left of the thing
+that breaks.**
+
+**One was not a defect at all but a false claim.** tabsii-platform#323's
+description asserted the CRM called the new endpoint. Nothing checks a PR body
+against the code, and the issue it "closed" stayed broken for an hour. The only
+reason it surfaced is that the E2E's next step depended on it, so the claim got
+tested by accident.
 
 ### The self-estimate was 45% low, and the cause was the unit
 
@@ -1998,6 +2062,31 @@ was nearly reported in the SES handler — `_reason()` still reading
 deployed code was already correct. `git rev-list --count HEAD..origin/dev` before
 trusting a tree is in AGENTS.md §1 precisely for this, and it is cheap.
 
+**Reading the producer before building the consumer killed an unbuildable plan
+step in ten minutes.** `0008` M3 specified a `trigger_filter` carrying a
+`cadence_id` that `lead.captured` does not contain — every compiled step would
+have been silently inert. Reading `_matches_trigger_filter` and the emit site
+*before* writing the compiler turned a whole milestone's rework into a design
+question asked up front.
+
+**Proving the test fails first caught two silent bugs inside one PR.** Writing
+M3's tests and running them against the unfixed compiler exposed a `tenant_id`
+conflation (Core's string vs tabsii's UUID — definitions would have been created
+under a tenant `dispatch_event` never scopes to) and orphaned definitions
+(a removed step's workflow stayed **enabled and sending**). Both pass every other
+assertion in the file.
+
+**Checking which endpoint the deployed UI calls, before trusting a PR body.**
+The E2E's conversion step depended on tabsii-platform#323's claim that the CRM
+was wired to the new route. Checking rather than assuming turned "the fix does
+not work" into "the fix was never connected" — and prevented an hour hunting a
+bug in Core that did not exist.
+
+**SHA-pinning a deploy check after an unpinned one lied.** A watcher matching
+"newest run named Deploy" reported success for the previous commit. Every check
+afterwards pinned the commit, and the next one correctly waited eleven more
+minutes rather than reporting a green that belonged to something else.
+
 ## What needs more thought
 
 **The `pytest` fast/slow verdict is cached and never invalidated.**
@@ -2836,6 +2925,26 @@ headline did.** `biffo-workflow` states all five active Biffo repos have
 fails outright rather than degrading, so it was caught, but the skill's own
 warning is what caught it, not the claim.
 
+**Nothing forces a policy-touching write path to be tested on Postgres.** The
+real-Postgres lane exists and is a required check, but it only runs `*_pg.py` —
+and a developer writing enrolment logic naturally writes it against the fast
+SQLite session like everything else. `0008` M4 had thorough cancellation tests,
+all of them against a backend with no row-level security, and shipped a 500 on
+the one path that mattered. A `*_pg.py` test is opt-in by filename; the decision
+to write one is exactly the decision someone confident in their logic will skip.
+
+**Nothing checks that a UI actually calls the endpoint a PR says it calls.**
+tabsii-platform#323 closed tabsii-crm's gap in prose only. A grep-level guard
+("this route has no caller in any sibling") would have caught it, and the same
+shape — Core endpoint shipped, sibling never wired — has now happened twice this
+week if you count the `trigger_payload` seam.
+
+**The plan's own E2E was the last thing done, and it should have been the
+first.** `0008`'s testing plan named the browser check explicitly, and running it
+found four defects in under an hour after five milestones had merged green. Every
+one would have been cheaper at M5's start than at its end. Nothing in
+`biffo-sib-build` sequences the plan's E2E before the final PR merges.
+
 ## Skills used
 
 Skills cannot be iterated on impressions. Every invocation, with an honest outcome.
@@ -2846,6 +2955,11 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **worked — §2, again, and again it was the rollout that found it** | The `--no-cov` defect was invisible in the template and appeared the first time the gate ran in a repo whose pytest setup differed. Second time in one day that "reproduce by the reporter's route" meant "run it somewhere the assumption does not hold". |
 | `biffo-workflow` | **worked — 6 PRs, no lost commits, one caught refusal** | Unpiped `PUSH EXIT` surfaced the gate legitimately refusing a push mid-rollout. Its §1 deps step remains the difference between the gate running and erroring. |
 | `biffo-workflow` | **partial — commit bodies are shell-interpolated** | A backtick in a `-m` message silently ate a code snippet (`_out=$(cmd); _rc=$?` became blank), and a `"` -quoted `gh pr create --body` interpolated half a PR description into shell errors. The skill shows `-m "..."` throughout and never warns that message bodies containing backticks or `$(` need a heredoc or `-F`. Cost two amends. |
+| `biffo-sib-build` | **worked** | Its "When to stop and ask" step is what caught M3's unbuildable design — the plan specified a filter that could not match, and the skill's instruction to redraft rather than improvise turned a silent-inert feature into an approved correction. That step earned the whole skill |
+| `biffo-sib-build` | **partial** | Nothing in it sequences the plan's own E2E before the last milestone merges. Five milestones landed green; the browser then found four defects in an hour. The skill should require the testing plan's end-to-end check as a gate on the FINAL PR, not as an afterthought |
+| `biffo-verify` | **worked** | §3 (prove the test fails) ran on every fix this session and caught two silent bugs inside one PR. §4 (verify the deployed artifact) caught a watcher reporting the wrong commit's deploy, which would otherwise have produced a fabricated defect report |
+| `biffo-workflow` | **partial** | The `--delete-branch`-with-a-live-worktree trap hit **four more times**; the caveat sits after the command it invalidates. Separately: the masked-push trap it documents was walked into once (`| tail` reported exit 0 on a failed push) and caught only by re-running with the status visible |
+| `claude-in-chrome` | **worked** | Found all four post-merge defects. Two viewport rescales mid-session caused coordinate drift and one mis-click; using `find` refs instead of coordinates was reliable and should be the default advice in the skill |
 | `new-plugin-feature` | **worked, and the research step was the whole value** | Steps 3–4 turned a plausible issue sketch into a different and better design: the issue proposed reading a title from client state, research found the server endpoint already had it. Also caught that the plan's own slug-collision check was broken — `gh search issues` returned unparseable output for a label that definitely exists, so the "no collision" answer was meaningless until re-run by listing labels per repo. |
 | `build-plugin-feature` | **worked — the review-the-diff step is what earned it** | The skill insists the orchestrating session read the combined diff rather than the sub-agent's summary, "because a subagent reporting tests pass is not the same as the change being correct". That is precisely what happened: implementation correct, one test vacuous, caught before assembly. Without that step a fake test ships green. |
 | `build-plugin-feature` | **partial — Step 3.6's local preview could not run as written, and the alternative it does not mention was available** | The step assumes a local preview is the way a human sees the UI, and documents fallbacks for when the backend cannot run locally. For this plugin none of them work. What it does not consider is looking at the *deployed* instance in a real browser — which was possible, and is what eventually validated the feature and found #83. |

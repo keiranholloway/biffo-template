@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 // @ts-expect-error -- plain .mjs so the collector runs on bare node from a
 // scheduled workflow that installs nothing. Imported here so the logic has one
 // home rather than a TypeScript copy that can drift from it — same arrangement
@@ -29,6 +32,7 @@ import {
   classifyMergeSide,
   classifyWork,
   filterToWindow,
+  priorWindow,
 } from '../../../scripts/practices-metrics.mjs'
 // @ts-expect-error -- plain .mjs, same arrangement as above.
 import {
@@ -38,6 +42,8 @@ import {
   renderSessions,
   CAPABILITY_FLOOR,
   CAPABILITY_CRITICAL,
+  GREEN_WAIT_WARN_MINUTES,
+  definitionBreak,
 } from '../../../scripts/practices-dashboard.mjs'
 // @ts-expect-error -- plain .mjs, same arrangement as above.
 import {
@@ -631,6 +637,54 @@ describe('filterToWindow', () => {
     const w = filterToWindow({ ...data, rework: null }, '2026-07-20T00:00:00Z')
     expect(w.rework).toBeNull()
   })
+
+  /**
+   * The upper bound is what makes a baseline that does not contain the reading
+   * it is compared against — the whole point of #835.
+   */
+  it('excludes everything at or after the upper bound', () => {
+    const w = filterToWindow(data, '2026-01-01T00:00:00Z', '2026-07-20T00:00:00Z')
+    expect(w.prs).toHaveLength(1)
+    expect(w.prs[0].headRefName).toBe('a')
+    expect(w.runs).toHaveLength(1)
+    expect(w.rework.commits).toHaveLength(1)
+    expect(w.rework.fixes).toHaveLength(1)
+  })
+
+  it('splits the data into two disjoint halves that partition the whole', () => {
+    const cut = '2026-07-20T00:00:00Z'
+    const before = filterToWindow(data, '2026-01-01T00:00:00Z', cut)
+    const after = filterToWindow(data, cut)
+    expect(before.prs.length + after.prs.length).toBe(data.prs.length)
+    expect(before.prs.map((p: { headRefName: string }) => p.headRefName)).not.toContain(
+      after.prs[0].headRefName,
+    )
+  })
+})
+
+describe('priorWindow', () => {
+  const now = Date.parse('2026-07-29T00:00:00Z')
+
+  it('spans the long window up to the start of the rate window', () => {
+    const p = priorWindow([1, 7, 90], now)
+    expect(p.days).toBe(83)
+    expect(p.since).toBe('2026-04-30T00:00:00.000Z')
+    expect(p.until).toBe('2026-07-22T00:00:00.000Z')
+  })
+
+  /**
+   * A baseline shorter than the reading it anchors is a second reading with a
+   * worse sample, not a reference line.
+   */
+  it('declines when the remainder would be shorter than the rate window', () => {
+    expect(priorWindow([7, 10], now)).toBeNull()
+    expect(priorWindow([7], now)).toBeNull()
+    expect(priorWindow([], now)).toBeNull()
+  })
+
+  it('takes the two longest windows, whatever order they are given in', () => {
+    expect(priorWindow([90, 1, 7], now)).toEqual(priorWindow([1, 7, 90], now))
+  })
 })
 
 describe('classifyMergeSide', () => {
@@ -919,6 +973,148 @@ describe('renderDashboard — grading the capability headline', () => {
 
   it('states the floor, so the grade can be checked against it', () => {
     expect(renderDashboard(capSnapshot(33)) as string).toContain('floor 28%')
+  })
+})
+
+describe('renderDashboard — independent baseline and normalised contention', () => {
+  /** 2026-07-29 as collected, plus the `prior` window the collector now emits. */
+  const base = {
+    collectedAt: '2026-07-29T03:35:00.000Z',
+    windowDays: [1, 7, 90],
+    windows: {
+      1: { estate: { merges: 145, capabilityShare: 33.1, toilRatio: 38.6 }, repos: {} },
+      7: {
+        estate: {
+          merges: 616,
+          capabilityShare: 33,
+          toilRatio: 44.2,
+          platformShare: 81,
+          productShare: 19,
+          contentionHours: 91.8,
+        },
+        repos: {},
+      },
+      90: {
+        estate: {
+          merges: 1232,
+          capabilityShare: 35,
+          toilRatio: 42.9,
+          platformShare: 66.6,
+          productShare: 33.4,
+          contentionHours: 278.2,
+        },
+        repos: {},
+      },
+    },
+  }
+  const withPrior = {
+    ...base,
+    windows: {
+      ...base.windows,
+      prior: {
+        days: 83,
+        since: '2026-04-30T03:35:00.000Z',
+        until: '2026-07-22T03:35:00.000Z',
+        estate: {
+          merges: 616,
+          capabilityShare: 37,
+          toilRatio: 41.6,
+          platformShare: 52.2,
+          productShare: 47.8,
+          contentionHours: 186.4,
+        },
+        repos: {},
+      },
+    },
+  }
+
+  it('compares against the prior window, not the lookback that contains the week', () => {
+    const html = renderDashboard(withPrior) as string
+    expect(html).toContain('prior 83d baseline 37%')
+    expect(html).toContain('prior 83d 41.6%')
+    expect(html).toContain('prior 83d 52.2% / 47.8%')
+    // The contaminated 90-day figures must not be presented as the reference.
+    expect(html).not.toContain('baseline 35%')
+    expect(html).not.toContain('90-day baseline')
+  })
+
+  /**
+   * Snapshots collected before the split have no `prior`. Falling back to 90d
+   * is right — a page of dashes would be worse — but the overlap has to be
+   * stated, because it is the reason the numbers look so agreeable.
+   */
+  it('discloses the overlap when it has to fall back to the lookback', () => {
+    const html = renderDashboard(base) as string
+    expect(html).toContain("50%</strong> of the baseline's merges are the same merges")
+  })
+
+  it('does not cry overlap once an independent baseline exists', () => {
+    expect(renderDashboard(withPrior) as string).not.toContain('the same merges')
+  })
+
+  /**
+   * The tile showed 91.8h against 278.2h — a week against a quarter, which read
+   * as a comfortable win. Per day it inverted to 4× worse. Per merge the volume
+   * cancels: 8.9 min against 18.2 min, and the tile finally answers "how long
+   * does a PR of mine sit green?".
+   */
+  it('normalises green wait by the merges that produced it', () => {
+    const html = renderDashboard(withPrior) as string
+    expect(html).toContain('Green wait per merge')
+    expect(html).toContain('8.9 min')
+    expect(html).toContain('18.2 min')
+    // The raw hours stay, as context rather than as the comparison.
+    expect(html).toContain('91.8h across 616 merges')
+  })
+
+  it('grades green wait against the ten-minute line, not a weekly total', () => {
+    expect(GREEN_WAIT_WARN_MINUTES).toBe(10)
+    // 91.8h over 616 merges is 8.9 min — under the line, where the old tile
+    // graded the same reading `critical` on 91.8 > 20 "hours".
+    expect(renderDashboard(withPrior) as string).toContain('tile good')
+    const congested = {
+      ...withPrior,
+      windows: {
+        ...withPrior.windows,
+        7: {
+          ...withPrior.windows[7],
+          estate: { ...withPrior.windows[7].estate, contentionHours: 300 },
+        },
+      },
+    }
+    expect(renderDashboard(congested) as string).toContain('tile critical')
+  })
+})
+
+describe('definitionBreak', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'practices-break-'))
+  const write = (date: string, schema: number) =>
+    writeFileSync(join(dir, `${date}.json`), JSON.stringify({ schema, windows: {} }))
+
+  it('finds the date the definitions changed', () => {
+    write('2026-07-27', 1)
+    write('2026-07-28', 1)
+    write('2026-07-29', 2)
+    expect(definitionBreak(dir)).toEqual({ date: '2026-07-29', from: 1, to: 2 })
+  })
+
+  it('reports nothing when the series is continuous', () => {
+    const clean = mkdtempSync(join(tmpdir(), 'practices-clean-'))
+    writeFileSync(join(clean, '2026-07-28.json'), JSON.stringify({ schema: 2 }))
+    writeFileSync(join(clean, '2026-07-29.json'), JSON.stringify({ schema: 2 }))
+    expect(definitionBreak(clean)).toBeNull()
+    expect(definitionBreak(mkdtempSync(join(tmpdir(), 'practices-empty-')))).toBeNull()
+  })
+
+  it('marks the break on the page, naming what it means', () => {
+    const html = renderDashboard(
+      { collectedAt: 'x', windowDays: [7], windows: { 7: { estate: {}, repos: {} } } },
+      null,
+      { date: '2026-07-29', from: 1, to: 2 },
+    ) as string
+    expect(html).toContain('Series break at')
+    expect(html).toContain('2026-07-29')
+    expect(html).toContain('schema 1 → 2')
   })
 })
 

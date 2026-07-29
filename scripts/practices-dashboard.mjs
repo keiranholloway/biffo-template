@@ -74,6 +74,32 @@ export const CAPABILITY_FLOOR = 100 - TOIL_BUDGET - SUPPORT_ALLOWANCE
 export const CAPABILITY_CRITICAL = 20
 
 /**
+ * Green wait above this many minutes **per merge** is a contention problem
+ * rather than ordinary settling.
+ *
+ * Ten minutes is not invented for this tile: it is the line the merge-race
+ * analysis already used — 13.2% of merged PRs were "green for over ten minutes
+ * *and* had to be repushed", the figure that motivated auto-merge and then H3.
+ * Crit is two of those.
+ *
+ * ## Why per merge (#835)
+ *
+ * The tile used to show the 7-day **total** against the 90-day **total**:
+ * 91.8h vs 278.2h on 2026-07-29, which reads as comfortably better and is not a
+ * comparison at all — a week against a quarter. Per day it inverts to 13.1h
+ * against 3.1h, four times worse. Both numbers are real and they disagree,
+ * because both are dominated by volume: that week ran 88 merges/day against a
+ * 90-day average of 13.7.
+ *
+ * Per merge the volume cancels and the tile answers the question a reader
+ * actually has — *how long does a PR of mine sit green?* — at 8.9 min against
+ * a 13.6 min baseline. Contention per PR was improving while the totals said
+ * it was collapsing. A metric that flips sign under a defensible change of
+ * denominator was measuring the denominator.
+ */
+export const GREEN_WAIT_WARN_MINUTES = 10
+
+/**
  * Grade a value against a budget, for the severity stripe on a tile.
  *
  * `null` grades as `unknown` and is styled distinctly — never as "good". A
@@ -116,6 +142,49 @@ export function latestSnapshotFile(dir) {
     .sort()
   if (files.length === 0) throw new Error(`no snapshots in ${dir}`)
   return join(dir, files[files.length - 1])
+}
+
+/**
+ * Find the most recent date at which the metric definitions changed (#835).
+ *
+ * The committed snapshots are a version-controlled series, and the page invites
+ * reading them as one — "90-day baseline", "last 24h". But `schema` bumps when
+ * a field's *meaning* changes, and on 2026-07-29 it went 1 → 2 for the #768
+ * re-cut of capability. Across that boundary the series is not a series: the
+ * 7-day capability share reads 4.4% on 07-28 and 33% on 07-29, a 7.5× jump
+ * caused entirely by a change of denominator. Nothing marked it, and the day
+ * after the change the number was read as a result.
+ *
+ * The break is detected from the data itself rather than a hardcoded date, so
+ * the next redefinition announces itself without anyone remembering to.
+ *
+ * Returns `null` when every snapshot agrees — including a directory of one.
+ *
+ * @param {string} dir
+ * @returns {{date: string, from: number, to: number} | null}
+ */
+export function definitionBreak(dir) {
+  const files = readdirSync(dir)
+    .filter((f) => /^\d{4}-\d{2}-\d{2}\.json$/.test(f))
+    .sort()
+  let previous = null
+  let found = null
+  for (const file of files) {
+    let schema
+    try {
+      schema = JSON.parse(readFileSync(join(dir, file), 'utf8')).schema ?? 1
+    } catch {
+      // A snapshot that cannot be read cannot be compared. Skipping it is right:
+      // reporting a break here would be a claim about definitions drawn from a
+      // parse error.
+      continue
+    }
+    if (previous !== null && schema !== previous) {
+      found = { date: file.slice(0, 10), from: previous, to: schema }
+    }
+    previous = schema
+  }
+  return found
 }
 
 const CSS = `
@@ -277,8 +346,10 @@ export function renderSessions(s, mergeToilRatio, windowDays = 7) {
  * Render the whole page.
  *
  * @param {any} snapshot
+ * @param {any} sessions
+ * @param {{date: string, from: number, to: number} | null} definitionBreak
  */
-export function renderDashboard(snapshot, sessions = null) {
+export function renderDashboard(snapshot, sessions = null, definitionBreak = null) {
   const w = (d) => snapshot.windows?.[d]
   const day = w(1)
   const base = w(90)
@@ -293,12 +364,40 @@ export function renderDashboard(snapshot, sessions = null) {
    */
   const e = (days) => w(days)?.estate ?? {}
 
+  /**
+   * The reference line, and it must not contain the reading (#835).
+   *
+   * `windows.prior` is the long window with the rate window cut out of it, so
+   * the two share no merge. Before it existed the page compared 7d against 90d,
+   * which on 2026-07-29 meant comparing 616 merges against a set that included
+   * those same 616 — half its total. That is why every baseline always looked
+   * so close: it was substantially the same data.
+   *
+   * Snapshots collected before the split have no `prior`, so they fall back to
+   * 90d and say so, with the overlap stated rather than left to be discovered.
+   */
+  const prior = w('prior')
+  const baseDays = prior?.days ?? 90
+  const baseLabel = prior ? `prior ${baseDays}d` : '90d'
+  const b = (key) => (prior ? (prior.estate ?? {})[key] : e(90)[key])
+  const overlapShare =
+    prior || !e(90).merges || !e(7).merges ? null : Math.round((e(7).merges / e(90).merges) * 1000) / 10
+
+  /** Green wait normalised by the volume that produced it — see GREEN_WAIT_WARN_MINUTES. */
+  const perMerge = (hours, merges) =>
+    hours === null || hours === undefined || !merges ? null : Math.round((hours * 60 * 10) / merges) / 10
+  const greenPerMerge = perMerge(e(7).contentionHours, e(7).merges)
+  const greenPerMergeBaseline = perMerge(b('contentionHours'), b('merges'))
+
   // #768: the headline is capability built ANYWHERE, not features in the
   // proving ground. `?? productFeatureShare` keeps snapshots written before the
   // rename rendering — they are the historical series, and a page that reports
   // `unmeasured` for last week's data is worse than one that shows it.
   const capShare = (d) => e(d).capabilityShare ?? e(d).productFeatureShare
   const featureShare = capShare(7)
+  const capBaseline = prior
+    ? ((prior.estate ?? {}).capabilityShare ?? (prior.estate ?? {}).productFeatureShare)
+    : capShare(90)
   /**
    * A pre-#768 snapshot still renders (above), but it must not be *graded*:
    * `CAPABILITY_FLOOR` is derived from the new denominator, and applying it to
@@ -379,12 +478,23 @@ export function renderDashboard(snapshot, sessions = null) {
     </div>
   </div>
 
+  ${
+    definitionBreak
+      ? `<div class="stale">Series break at <strong>${esc(definitionBreak.date)}</strong> — the metric definitions changed (snapshot schema ${esc(String(definitionBreak.from))} → ${esc(String(definitionBreak.to))}). Every figure on this page is computed by today's collector and is internally consistent, but the committed snapshots <em>before</em> that date are on the old definitions. Reading the series across the break compares different metrics. The first one, on 2026-07-29, moved the capability share 4.4% → 33% overnight with nothing about the work changing.</div>`
+      : ''
+  }
+  ${
+    overlapShare !== null
+      ? `<div class="stale">This snapshot predates the independent baseline, so "90d" below still contains the 7-day reading it is being compared with — <strong>${overlapShare}%</strong> of the baseline's merges are the same merges. Treat the closeness as arithmetic, not agreement.</div>`
+      : ''
+  }
+
   <div class="headline">
     <p class="q">Capability built — merges that shipped something, rolling 7 days</p>
     <div class="v num">${fmt(featureShare, '%')}</div>
     <div class="sub">
       <span class="pill ${featureGrade}">${featureGrade}</span>
-      &nbsp;floor ${CAPABILITY_FLOOR}% · 90-day baseline ${fmt(capShare(90), '%')} · last 24h ${fmt(capShare(1), '%')}
+      &nbsp;floor ${CAPABILITY_FLOOR}% · ${esc(baseLabel)} baseline ${fmt(capBaseline, '%')} · last 24h ${fmt(capShare(1), '%')}
       ${bySide.platform ? `· Biffo ${fmt(bySide.platform.share, '%')} · Tabsii ${fmt(bySide.product.share, '%')}` : ''}
       ${legacyShare ? '<br />pre-#768 snapshot — this is the retired <code>productFeatureShare</code> on a different denominator, so it is shown but not graded' : ''}
     </div>
@@ -394,20 +504,20 @@ export function renderDashboard(snapshot, sessions = null) {
     ${tile(
       'Toil ratio · 7d',
       fmt(e(7).toilRatio, '%'),
-      `rework + toil · budget ${TOIL_BUDGET}% · baseline ${fmt(e(90).toilRatio, '%')}`,
+      `rework + toil · budget ${TOIL_BUDGET}% · ${esc(baseLabel)} ${fmt(b('toilRatio'), '%')}`,
       grade(e(7).toilRatio, { warn: 40, crit: TOIL_BUDGET }),
     )}
     ${tile(
       'Platform vs product · 7d',
       `${fmt(e(7).platformShare, '%')} / ${fmt(e(7).productShare, '%')}`,
-      `merges in biffo-* vs tabsii-* · baseline ${fmt(e(90).platformShare, '%')} / ${fmt(e(90).productShare, '%')}`,
+      `merges in biffo-* vs tabsii-* · ${esc(baseLabel)} ${fmt(b('platformShare'), '%')} / ${fmt(b('productShare'), '%')}`,
       grade(e(7).productShare, { warn: 40, crit: 25, higherIsBetter: true }),
     )}
     ${tile(
-      'Green-but-unmerged · 7d',
-      fmt(e(7).contentionHours, 'h'),
-      `correct work that could not land · baseline ${fmt(e(90).contentionHours, 'h')} over 90d`,
-      grade(e(7).contentionHours, { warn: 8, crit: 20 }),
+      'Green wait per merge · 7d',
+      fmt(greenPerMerge, ' min'),
+      `correct work that could not land · ${fmt(e(7).contentionHours, 'h')} across ${fmt(e(7).merges)} merges · ${esc(baseLabel)} ${fmt(greenPerMergeBaseline, ' min')}`,
+      grade(greenPerMerge, { warn: GREEN_WAIT_WARN_MINUTES, crit: GREEN_WAIT_WARN_MINUTES * 2 }),
     )}
     ${tile(
       'Merges · 24h',
@@ -427,7 +537,7 @@ export function renderDashboard(snapshot, sessions = null) {
   <h2>Wall-clock vs the merge proxy — is the headline believable?</h2>
   ${renderSessions(sessions, e(7).toilRatio, 7)}
 
-  <h2>By repository — 90-day baseline, with last 24h merges</h2>
+  <h2>By repository — 90-day profile, with last 24h merges</h2>
   <div class="scroll">
     <table>
       <thead>
@@ -447,7 +557,8 @@ export function renderDashboard(snapshot, sessions = null) {
       <li><strong>&mdash; means unmeasured, never zero.</strong> A repo with no CI, or no local clone, shows a dash. It is excluded from every aggregate rather than contributing a flattering zero.</li>
       <li><strong>Read rates from 7d, not 24h.</strong> At ~5 merges/day a daily percentile is noise. The 24h column carries counts; rates and percentiles come from the weekly roll.</li>
       <li><strong>Rework lag: higher is better.</strong> A fix correcting code written an hour ago is a guess that shipped; one correcting last week's code is ordinary defect discovery.</li>
-      <li><strong>Green wait</strong> is time a PR was green and still could not land — the up-to-date race, not runner queueing. Runner pickup is ~0.</li>
+      <li><strong>Green wait is per merge, not per week.</strong> Time a PR was green and still could not land — the up-to-date race, not runner queueing (pickup is ~0). Divided by the merges that produced it, because a week-vs-quarter total says whatever the volume says: the same 2026-07-29 reading was "3× better" as a total and "4× worse" per day.</li>
+      <li><strong>The baseline excludes the reading.</strong> "${esc(baseLabel)}" is the long window with the last 7 days cut out, so a tile and its reference share no merge. A lookback baseline contains the week it is compared with and will always look close to it.</li>
       <li><strong>The capability floor is derived, not chosen.</strong> ${CAPABILITY_FLOOR}% is what the toil budget leaves after ${SUPPORT_ALLOWANCE}% of measured docs, quality and unclassifiable merges. It moves when those move — and a threshold inherited across a change of definition grades nothing.</li>
     </ul>
   </div>
@@ -469,7 +580,10 @@ function main() {
   const snapshot = JSON.parse(readFileSync(file, 'utf8'))
   const sessions = summariseSessions(readSessions(sessionLog))
   mkdirSync(dirname(out), { recursive: true })
-  writeFileSync(out, renderDashboard(snapshot, sessions.sessions ? sessions : null))
+  writeFileSync(
+    out,
+    renderDashboard(snapshot, sessions.sessions ? sessions : null, definitionBreak(dir)),
+  )
   process.stderr.write(`rendered ${out} from ${file}\n`)
 }
 

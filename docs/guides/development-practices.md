@@ -43,6 +43,10 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | The gate ran a **fixed check list tuned against `biffo-template`**, so it was repeatedly **stricter than the repo's CI**: terraform over `infra/` where CI checks only `modules/`; bandit over `-r services` where CI scans only template-owned paths (three B310s in *user-owned* `services/idea-scout/` — a push CI would have passed); bandit at all in plugin repos whose CI has no bandit step. **Patched three times before the cause was fixed** | **drift** · process | biffo-platform, biffo-plugin-idea-scout | biffo-template (`ci_has`, derived per repo) | **fixed** ([#861](https://github.com/keiranholloway/biffo-template/pull/861)) — no check can run that CI does not run |
 | — | The shared-file drift detector compared the template against each **local working copy**, so twelve entirely-current repos reported `DRIFTED` right after their sync PRs merged — the clones had not been pulled. Resolving through `origin/HEAD` then reported three more as missing everything, because it points at `main` in several clones and `main` is a stale release branch | **visibility** · fail-open | biffo-template | biffo-template | **fixed** ([#862](https://github.com/keiranholloway/biffo-template/pull/862)) — compares `origin/dev`; verified by checking a clone out three commits back |
 | — | The sync tool reported `PUSH REFUSED (run the gate there and look)` for **every** push failure. The first real cause was a plain non-fast-forward against a previous run's branch — **and the gate was green in that repo**. The diagnostic sent you to read a passing log | **visibility** | tabsii-crm | biffo-template | **fixed** — push output captured and classified: gate refusal / branch divergence / actual error |
+| — | `verify.sh` ran `pytest -q --no-cov`. **`--no-cov` is a `pytest-cov` flag**, and repos without that plugin — `biffo-plugin-ideation`, whose CI runs plain `uv run pytest -q` — reject it with `unrecognized arguments`, so **the gate refused a push CI would have passed**. [H5](../practices/experiments/H5-gate-residuals.md) pre-registered the recurrence of *"gate stricter than CI"* as a condition that **refutes H5**, and it recurred within hours of that page being written | **drift** · process | biffo-plugin-ideation, during estate rollout | biffo-template | **fixed** ([#872](https://github.com/keiranholloway/biffo-template/pull/872)) — the command now matches CI exactly |
+| — | **`verify.sh --list` disagreed with `verify.sh`.** `--list` skipped the pytest timing probe, so `tabsii-crm` ran `OK pytest(services/api) 2s` while `--list` reported pytest absent — and `gate-coverage.sh` reads `--list`. Fixing it forced an explicit choice with no cached measurement: guessing *fast* makes `--list` **claim** a check the gate may not run (fail-open); guessing *slow* under-reports one it does (visible, self-correcting) | **visibility** · fail-open | biffo-template | biffo-template | **fixed** ([#873](https://github.com/keiranholloway/biffo-template/pull/873)) — under-reporting kept, as the direction that cannot lie about coverage |
+| — | `pytest` was excluded from the gate by a blanket rule with a manual opt-in **nobody ever issued**. Measured: 51.2s / 57.4s / 85.6s in the template and instances, but **1.7–2.7s in every sibling**. The exclusion was correct for the three repos it was written against and wrong for the four it was applied to — so **the fastest suites in the estate were the ones not being run** | **drift** | tabsii-crm + 3 siblings | biffo-template | **fixed** ([#871](https://github.com/keiranholloway/biffo-template/pull/871)) — included wherever it measures under budget |
+| — | **Two findings nearly reported from tool output that was itself wrong.** A conventional-commit audit measured 12% violations in `tabsii-platform` using a regex that rejected `feat(db,api):` — commas are legal in a scope, so the tool was wrong and the repo was fine. Separately `biffo.sh check release-subject` printed `No base ref` and looked like a fail-open until its exit code was read: it exits **2**, loudly | **process** · visibility | biffo-template (measurement) | diagnostic practice | **corrected before shipping** — each disproved by checking the instrument before believing its output |
 | — | Auto-merge **does not update a head branch that falls behind** under `strict` protection. Armed, green, one commit behind, it simply waits — three PRs in one session merged only after a manual `gh pr update-branch` plus a full CI re-run | **process** | biffo-platform#84, biffo-template #742/#720 | biffo-template (merge queue, or relax `strict`) | **open** — pre-registered as H1's likely refutation, recorded before the review date |
 | [#591](https://github.com/keiranholloway/biffo-template/issues/591) | `pnpm audit`/`pip-audit` fail identically whether they found a vulnerability or couldn't parse the registry response — one flake reds every open PR | fail-open · process | biffo-template CI | biffo-template | **closed** ([#592](https://github.com/keiranholloway/biffo-template/pull/592), [#636](https://github.com/keiranholloway/biffo-template/pull/636)) |
 | [#644](https://github.com/keiranholloway/biffo-template/issues/644) | Sibling skeleton's lockfile shipped 4 high-severity advisories; it sits outside the pnpm workspace so no CI gate ever audited it | fail-open · visibility | biffo-template `_skeletons/` | biffo-template | **partly fixed** ([#645](https://github.com/keiranholloway/biffo-template/pull/645)) — 1 residual, no patched upstream release |
@@ -293,11 +297,11 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **193 rows as rendered on this page**. `evidence.jsonl` separately holds **211**, because a reworded row is stored as a new one and its predecessor is retained — see the duplication row. The split below is counted from the page, since that is the corpus a reader can actually see:
+`byFixRepo`, regenerated at **197 rows as rendered on this page**. `evidence.jsonl` separately holds **215**, because a reworded row is stored as a new one and its predecessor is retained — see the duplication row. The split below is counted from the page, since that is the corpus a reader can actually see:
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 97 of 193 (50%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the git-hook chain, the scaffolder itself |
+| **biffo-template** | 100 of 197 (51%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the git-hook chain, the scaffolder itself |
 | **tabsii-platform** | 17 of 193 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity **and its event-destination envelope** |
 | **biffo-plugin-idea-scout** | 9 of 193 | Adapter seam, research search capability, its own styling, release + publish workflows |
 | **biffo-platform** | 6 of 193 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
@@ -806,6 +810,28 @@ is three implementation plans, an assessment of three PRD requirements against a
 running system, three issues, and the feature itself. The toil is CI queue,
 deploy waits, and the recovery steps above.
 
+### Measured: pricing four gaps cost less than building one of them, 2026-07-29
+
+The counterpart to the entry below. That one measured a loop that cost three
+estate rollouts; this one measures what it cost to **not** build something.
+
+| Cost | Cause | Status |
+| --- | ---: | --- |
+| **~25 min to price four gaps** — CI durations, pytest timings across 7 repos, a commit-subject audit over 165 commits | H5 required a number per gap before any was built | **paid for itself immediately**: one of the four was worth zero and was declined |
+| **2 further template PRs after the build** (#872, #873) and **2 extra estate sync rounds** | `--no-cov` and the `--list` disagreement, both found *during rollout* rather than review | **fixed** — and this is the same loop as the entry below, now one round shorter because the rollout is scripted |
+| **~0 min** building `commit-msg` for six sibling repos | Measured 0 violations in 165 commits | **declined** — the cheapest possible outcome, and only available because it was measured first |
+
+**Separate the symptom from the loop.** The two follow-up PRs look like two
+mistakes. They are one: *a gate assumption that holds in the template and not
+elsewhere*, expressing itself in a new place each time it is distributed. It has
+now cost five template PRs across the day. The structural fix already landed
+(`ci_has` derives checks from each repo's CI); what remains is that **the first
+place any of these is exercised outside `biffo-template` is a live rollout**,
+which is why every one of them was found there rather than in review.
+
+The number worth carrying: **pricing the work took ~25 minutes and removed a
+build entirely.** Cheaper than the smallest of the three that survived.
+
 ### Measured: verifying in one environment cost three estate rollouts, 2026-07-29
 
 **The loop, not the symptom.** Eight scoreboard rows came out of this session
@@ -954,6 +980,38 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**Pricing four gaps before building any of them, and declining one.** H5's
+capture named four residual gaps. Rather than building all four, each was
+measured first — and `commit-msg` in siblings turned out to be worth **nothing**:
+**0 non-conventional subjects in 165 commits** across six repos with no hook at
+all. Building it would have looked like diligence. The register now says that
+**declining a fix is a result**, with the number and a re-open trigger, so the
+next person to notice the gap does not re-propose it and throw the measurement
+away.
+
+The same exercise made `pytest` the obvious first build rather than the last:
+**2.5s per push against a 14 min CI round trip is break-even at one catch per
+336 pushes**, against an observed rate of roughly one per 165. That is a decision
+someone can disagree with, which is the point of writing it as arithmetic.
+
+**Pre-registering the way a fix would most likely be made meaningless, then
+building against it.** H5 said in advance that gap 1's version stamp was the
+likeliest thing to render useless — *"generate it from the receiving repo rather
+than the template and it will always match, reporting perfect health forever"*.
+That is exactly the shape of every instrument defect found earlier the same day.
+So the stamp reads `$TEMPLATE_ROOT`, never the receiving worktree, and there is a
+test asserting the git call targets the template and not `$wt`. **Naming the
+failure mode in advance turned it from a thing to notice into a thing to test.**
+
+**Checking the instrument before believing its output — twice, and both were the
+instrument.** A conventional-commit audit reported 12% violations in
+`tabsii-platform`; the regex rejected `feat(db,api):`, and commas are legal in a
+scope. `biffo.sh check release-subject` printed `No base ref` and read like a
+fail-open until its exit code was checked: it exits **2**, loudly. Both would
+have become scoreboard rows asserting defects that do not exist. The habit that
+caught them is cheap: **when a measurement surprises you, suspect the ruler
+first.**
 
 **Adding a missing symbol on its own, so the tests failed for the right
 reason.** Four tests referencing a not-yet-existing constant failed with
@@ -1922,6 +1980,29 @@ trusting a tree is in AGENTS.md §1 precisely for this, and it is cheap.
 
 ## What needs more thought
 
+**The `pytest` fast/slow verdict is cached and never invalidated.**
+`.pytest-duration` is written on the first run and read forever after. A suite
+that grows past the 15s budget keeps its `fast` verdict and stays in the gate;
+one that was slow when first measured stays excluded even after it speeds up.
+The cache decides **whether a check runs at all**, and nothing expires it — a
+staleness problem in the mechanism built to fix a staleness problem. A max age,
+or re-measuring when the suite's file count changes, would close it.
+
+**The template version stamp is printed but never asserted.** `.biffo-shared-version`
+records which template a repo's gate came from, and `verify.sh` prints it — but
+nothing compares it to anything. A repo two versions behind still merges, and the
+stamp is decoration until CI (or the gate itself) fails on a mismatch. It closes
+the *visibility* half of H5 gap 1 and leaves the *enforcement* half open, which
+should be said plainly rather than counted as done.
+
+**`--list` under-reports on a fresh clone until the first real run.** With no
+cached measurement it assumes `slow` and omits `pytest`. That is the deliberate,
+safe direction — it can never claim a check that is not running — but it means
+`gate-coverage.sh` reads slightly low in a just-cloned repo, and the number
+silently improves after someone pushes once. Worth stating wherever that number
+is quoted.
+
+
 **Nothing makes a test double agree with the service it stands for.** The
 `FakeCore` row is not a mistake review would catch: the fake was consistent,
 readable and wrong, and the route it tested was written from the same wrong
@@ -2729,6 +2810,10 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `biffo-verify` | **worked — §8's ROI framing changed what got built** | Pricing the four residual gaps before building any of them killed one outright (0 violations in 165 commits) and reordered the rest. The skill's insistence on *numbers, not adjectives* is what made "decline this" a defensible answer rather than laziness. |
+| `biffo-verify` | **worked — §2, again, and again it was the rollout that found it** | The `--no-cov` defect was invisible in the template and appeared the first time the gate ran in a repo whose pytest setup differed. Second time in one day that "reproduce by the reporter's route" meant "run it somewhere the assumption does not hold". |
+| `biffo-workflow` | **worked — 6 PRs, no lost commits, one caught refusal** | Unpiped `PUSH EXIT` surfaced the gate legitimately refusing a push mid-rollout. Its §1 deps step remains the difference between the gate running and erroring. |
+| `biffo-workflow` | **partial — commit bodies are shell-interpolated** | A backtick in a `-m` message silently ate a code snippet (`_out=$(cmd); _rc=$?` became blank), and a `"` -quoted `gh pr create --body` interpolated half a PR description into shell errors. The skill shows `-m "..."` throughout and never warns that message bodies containing backticks or `$(` need a heredoc or `-F`. Cost two amends. |
 | `new-plugin-feature` | **worked, and the research step was the whole value** | Steps 3–4 turned a plausible issue sketch into a different and better design: the issue proposed reading a title from client state, research found the server endpoint already had it. Also caught that the plan's own slug-collision check was broken — `gh search issues` returned unparseable output for a label that definitely exists, so the "no collision" answer was meaningless until re-run by listing labels per repo. |
 | `build-plugin-feature` | **worked — the review-the-diff step is what earned it** | The skill insists the orchestrating session read the combined diff rather than the sub-agent's summary, "because a subagent reporting tests pass is not the same as the change being correct". That is precisely what happened: implementation correct, one test vacuous, caught before assembly. Without that step a fake test ships green. |
 | `build-plugin-feature` | **partial — Step 3.6's local preview could not run as written, and the alternative it does not mention was available** | The step assumes a local preview is the way a human sees the UI, and documents fallbacks for when the backend cannot run locally. For this plugin none of them work. What it does not consider is looking at the *deployed* instance in a real browser — which was possible, and is what eventually validated the feature and found #83. |

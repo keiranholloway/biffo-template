@@ -293,19 +293,19 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **189 rows as rendered on this page**. `evidence.jsonl` separately holds **207**, because a reworded row is stored as a new one and its predecessor is retained — see the duplication row. The split below is counted from the page, since that is the corpus a reader can actually see:
+`byFixRepo`, regenerated at **191 rows as rendered on this page**. `evidence.jsonl` separately holds **209**, because a reworded row is stored as a new one and its predecessor is retained — see the duplication row. The split below is counted from the page, since that is the corpus a reader can actually see:
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 96 of 189 (51%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the git-hook chain, the scaffolder itself |
-| **tabsii-platform** | 17 of 189 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity **and its event-destination envelope** |
-| **biffo-plugin-idea-scout** | 8 of 189 | Adapter seam, research search capability, its own styling, release + publish workflows |
-| **biffo-platform** | 5 of 189 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 189 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-plugin-ideation** | 12 of 189 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **tabsii-crm** | 5 of 189 | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", **a proxy returning the wrong response shape, and a panel shipped with no CSS** |
-| **tabsii-marketplace** | 1 of 189 | `python-jose` removal; the credential-dependent build |
-| **biffo-runners** | 1 of 189 | Runner fleet configuration |
+| **biffo-template** | 97 of 191 (51%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the git-hook chain, the scaffolder itself |
+| **tabsii-platform** | 17 of 191 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity **and its event-destination envelope** |
+| **biffo-plugin-idea-scout** | 8 of 191 | Adapter seam, research search capability, its own styling, release + publish workflows |
+| **biffo-platform** | 5 of 191 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 191 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-ideation** | 13 of 191 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **tabsii-crm** | 5 of 191 | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", **a proxy returning the wrong response shape, and a panel shipped with no CSS** |
+| **tabsii-marketplace** | 1 of 191 | `python-jose` removal; the credential-dependent build |
+| **biffo-runners** | 1 of 191 | Runner fleet configuration |
 
 **The shape did not change, and that is the finding.** Seven new rows moved
 `biffo-template` from 86/159 to 90/166 — **54% either way**. Four sessions of
@@ -318,7 +318,7 @@ weeks, and it is a *recurrence* of a pattern already logged against
 first instance was recorded `unfiled` and never generalised. Two repos, same
 defect, and the corpus predicted it without anyone reading the prediction.
 
-**`biffo-template` takes 96 of 189 — 51%, and this capture is not evidence
+**`biffo-template` takes 97 of 191 — 51%, and this capture is not evidence
 about the estate.** All ten new rows are findings about the measurement
 apparatus itself, filed by auditing the dataset rather than by doing product
 work, so they inflate the template's share by construction. Read the ratio from
@@ -571,6 +571,8 @@ effort log exists to make visible, and this session logged it that way.
 | — | **154 of 155 scoreboard rows carry no cost, so the corpus can be counted but not ranked.** §8 requires "what it cost in wall-clock time"; one row has ever recorded it. A ten-minute fix and one that ate an afternoon are the same size in the dataset, which makes "what should we restructure?" — the question the scoreboard exists to answer — unanswerable from it. **Checked before blaming the extractor: only 5 rows state a duration in any form, so this is a capture failure, not a parsing one** | **visibility** | `docs/practices/evidence.jsonl` | biffo-template — the capture step, wherever it lands | unfiled |
 | — | **Both recoveries from earlier data loss silently corrupted the page.** #762 ("restore three sessions deleted by a stale-base merge") and #777 ("restore 93 lines #774 deleted") each re-inserted a repo-tally row into the *cost* table, where a 3-column row is structurally valid and therefore invisible — they sat there through every subsequent edit and every review of this page. Restoring deleted content is treated as self-evidently safe and is the one operation here with no verification step at all | **drift** | `docs/guides/development-practices.md` — found by grepping for a stale count | biffo-template — the restore practice, and whatever checks table shape | unfiled |
 | — | **`parseCost` takes the first match of the word "cost" and gives up, so a row that discusses cost before stating its figure loses the figure silently.** `"no cost, so the corpus … this cost 25m"` extracts `null`; `"cost 25m"` alone extracts 25. It also requires that exact keyword, so every row phrased `"~40 min round trip"` or `"ate an afternoon"` is invisible to it. Small today — it drops 5 rows — but it fails **in the direction of the discipline**: the more carefully a row explains what something cost, the likelier its number is discarded | **fail-open** | `scripts/practices-evidence.mjs` `parseCost` | biffo-template — `scripts/practices-evidence.mjs` | unfiled |
+| — | **A severity estimate read off the code was wrong by roughly 8x, in the direction that argues for not doing the work.** Filing a UI defect I wrote that it *"self-corrects within a second"* and used that to classify it minor. Watching the deployed app, the window is **5–8 seconds** — still pending at a 3-second screenshot, resolved only after another five, because the plugin-host Lambda is cold. The error is not random: **reading code tells you the sequence of operations and nothing about how long each takes in the environment it runs in**, so a duration inferred that way omits every source of latency and is systematically optimistic. A founder staring at a false "you have no runs" for eight seconds is a materially different product than one seeing it for one | **visibility** | `biffo-plugin-ideation` #83, corrected on the issue after deploying | biffo-plugin-ideation #84 | fixed |
+| — | **Installing dependencies "in the worktree" is not one action once a repo keeps its JS in subdirectories.** `pnpm install` at the worktree root leaves `web-admin/node_modules` absent, and the now-fixed pre-push gate fails there with `tsc: not found` and `vitest: not found` — a failure that surfaces two steps from its cause, as a rejected push. The corpus already holds *"§2's dependency install is load-bearing"*; this is the same rule with a new edge, because the number of places needing an install is a property of the repo's layout rather than of the workflow step that tells you to do it | **process** | `biffo-plugin-ideation`, push rejected | biffo-template — the workflow step needs to say per-package | unfiled |
 | — | **RECURRENCE: a check was declared impossible without establishing that it was.** Asked to verify a UI feature, I told the operator twice that no one could look at it in a browser and built the case carefully — no local Core, SigV4 to a live API, no committed env config. All true, and all irrelevant: Chrome automation was available the whole time, and the operator had to ask for it. The corpus already holds *"a cleanup was declared impossible after asking only one of the two available questions"*. Condition: **a capability that must be loaded before use is indistinguishable, when reasoning about feasibility, from one that does not exist** — so the reasoning runs over a tool list that is smaller than the real one, and the conclusion is confidently wrong | **process** | this session, twice in consecutive turns | biffo-template — feasibility claims need a capability check, not an argument | unfiled |
 | — | **An assertion that names a value the test never supplies cannot fail, and reads as coverage.** A generated test for "renders no title when none is given" asserted `queryAllByText(/My Awesome Idea/)` was empty — a string supplied only by a *different* test. Proven vacuous by mutating the component to always render the element: the test still passed. The replacement asserts the element's absence and fails under the same mutation with `expected <header …(1)></header> to be null`. Distinct from the corpus's existing "test encodes its own premise" row: that one asserts something true of the implementation, this one asserts something true of *nothing at all*. **Reading the test did not reveal it — mutating the code did** | **fail-open** | `biffo-plugin-ideation` #81, caught in review before merge | biffo-plugin-ideation #81 | fixed |
 | — | **A UI can model "loaded" and "failed" and still have no way to say "not yet asked".** #72 gave the session sidebar a representation for *"I failed to find out"*, closing a defect that had produced two wrong diagnoses. It still asserts "No past runs yet" between mount and the first fetch resolving, because `sessions` starts `[]` and `sessionsFailed` starts `false` — indistinguishable from a completed empty load. Three states exist in reality (unknown, empty, failed); the UI models two. Self-corrects in about a second, so far less costly than #72's version — but the *same missing distinction*, found in the code that had just been fixed for its sibling | **visibility** | `biffo-plugin-ideation` `web/src/components/Sidebar.tsx` | biffo-plugin-ideation #83 | open |
@@ -950,6 +952,32 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**The scoreboard produced a fix, and it is measurable.** Yesterday I recorded
+that a plugin repo's pre-push gate printed `javascript n/a - no package.json in
+this repo` and passed a 100%-TypeScript change with no JS verification. Within
+hours another session read that row and fixed the gate — `scripts/verify.sh`
+now enumerates every directory holding a package this repo owns, and its comment
+cites the capture by number:
+
+> *"The gate used to check the repo root and nothing else. In the ten repos with
+> no root package.json — every plugin, every sibling, both runner repos — it
+> printed `javascript n/a` and then `verify passed`, on repos whose entire
+> frontend is JS."*
+
+**And it immediately caught the person who reported it.** My next push to that
+repo was rejected because I had installed `web/` and not `web-admin/`. Under the
+previous gate that push passes green. This corpus mostly records things going
+wrong; this is a recorded instance of it working, start to finish, inside a day.
+
+**Going back to correct a severity estimate after seeing the real thing.** The
+issue said "self-corrects within a second" and that claim had already done its
+job — it was the argument for treating the defect as minor. Measuring 5–8
+seconds on the deployed app made the original classification wrong, so the issue
+now says so. An estimate that has already been used to make a decision is worth
+correcting even after the work is done, because the next person reads the
+estimate, not the decision.
+
 
 **Proving a guard is load-bearing by removing it, three times, before believing
 any of them.** `0006`'s three subtlest decisions were each verified by breaking

@@ -276,21 +276,21 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **162 rows** (never typed by hand, see *Adding a row*):
+`byFixRepo`, regenerated at **159 rows** (1 more than the page renders — see the divergence row below; the gap is now reported rather than silent):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 88 of 162 (54%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 15 of 162 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
-| **biffo-plugin-idea-scout** | 8 of 162 | Adapter seam, research search capability, its own styling, release + publish workflows |
-| **biffo-platform** | 7 of 162 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 162 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **tabsii-marketplace** | 2 of 162 | `python-jose` removal; the credential-dependent build |
-| **tabsii-crm** | 2 of 162 | Its E2E harness, and a repo setting that diverged |
-| **biffo-plugin-ideation** | 4 of 162 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **biffo-runners** | 1 of 162 | Runner fleet docs + fail-fast; **its whole source was uncommitted until today** |
+| **biffo-template** | 86 of 159 (54%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
+| **tabsii-platform** | 15 of 159 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
+| **biffo-plugin-idea-scout** | 8 of 159 | Adapter seam, research search capability, its own styling, release + publish workflows |
+| **biffo-platform** | 7 of 159 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 159 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **tabsii-marketplace** | 2 of 159 | `python-jose` removal; the credential-dependent build |
+| **tabsii-crm** | 2 of 159 | Its E2E harness, and a repo setting that diverged |
+| **biffo-plugin-ideation** | 4 of 159 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **biffo-runners** | 1 of 159 | Runner fleet docs + fail-fast; **its whole source was uncommitted until today** |
 
-**`biffo-template` takes 88 of 161 — 55%, and this capture is not evidence
+**`biffo-template` takes 86 of 159 — 54%, and this capture is not evidence
 about the estate.** All ten new rows are findings about the measurement
 apparatus itself, filed by auditing the dataset rather than by doing product
 work, so they inflate the template's share by construction. Read the ratio from
@@ -543,7 +543,7 @@ effort log exists to make visible, and this session logged it that way.
 | — | **154 of 155 scoreboard rows carry no cost, so the corpus can be counted but not ranked.** §8 requires "what it cost in wall-clock time"; one row has ever recorded it. A ten-minute fix and one that ate an afternoon are the same size in the dataset, which makes "what should we restructure?" — the question the scoreboard exists to answer — unanswerable from it. **Checked before blaming the extractor: only 5 rows state a duration in any form, so this is a capture failure, not a parsing one** | **visibility** | `docs/practices/evidence.jsonl` | biffo-template — the capture step, wherever it lands | unfiled |
 | — | **Both recoveries from earlier data loss silently corrupted the page.** #762 ("restore three sessions deleted by a stale-base merge") and #777 ("restore 93 lines #774 deleted") each re-inserted a repo-tally row into the *cost* table, where a 3-column row is structurally valid and therefore invisible — they sat there through every subsequent edit and every review of this page. Restoring deleted content is treated as self-evidently safe and is the one operation here with no verification step at all | **drift** | `docs/guides/development-practices.md` — found by grepping for a stale count | biffo-template — the restore practice, and whatever checks table shape | unfiled |
 | — | **`parseCost` takes the first match of the word "cost" and gives up, so a row that discusses cost before stating its figure loses the figure silently.** `"no cost, so the corpus … this cost 25m"` extracts `null`; `"cost 25m"` alone extracts 25. It also requires that exact keyword, so every row phrased `"~40 min round trip"` or `"ate an afternoon"` is invisible to it. Small today — it drops 5 rows — but it fails **in the direction of the discipline**: the more carefully a row explains what something cost, the likelier its number is discarded | **fail-open** | `scripts/practices-evidence.mjs` `parseCost` | biffo-template — `scripts/practices-evidence.mjs` | unfiled |
-| — | **The dataset and the page disagree: `evidence.jsonl` carries 155 rows, the scoreboard renders 154.** `mergeExtracted` retains rows by identity across a re-extract (the mechanism from #774 that lets a row survive rewording), which also means a row that *leaves* the page stays in the data. Every headline figure is therefore computed over a corpus a reader of the page cannot fully see, and the divergence is silent — no count anywhere reports the two numbers side by side | **drift** | `docs/practices/evidence.jsonl` vs the scoreboard | biffo-template — `scripts/practices-evidence.mjs` | unfiled |
+| — | **Rewording a scoreboard row silently duplicates it in the dataset.** Row identity is derived from the row's own text, and `mergeExtracted` keeps orphans, so an edited row is stored as a *new* row while the pre-edit version survives — every correction inflates the corpus. I did it three times in one session correcting my own figures, publishing a headline of 161 against a page rendering 157. **The retention is deliberate and load-bearing**: dropping orphans previously deleted every stored row a stale branch's markdown did not mention, and that fired for real. So this is a genuine trade-off between silent duplication and silent deletion, not a bug with an obvious side — and nothing currently reports either number against the other | **drift** | `scripts/practices-evidence.mjs` `mergeExtracted` / `rowKeys` | biffo-template — needs a decision, not a patch | unfiled |
 | — | **51 of 155 rows have no date, so a third of the corpus cannot be time-sliced.** "Is this class getting better or worse?" is unanswerable for those rows, and they are silently excluded from any windowed view rather than reported as missing | **visibility** | `docs/practices/evidence.jsonl` | biffo-template — the capture step | unfiled |
 | — | **The effort log cannot be sliced by repo: 10 of 26 entries — 1,200m, 36% of one day's logged minutes — name no repo.** The dashboard's per-repo platform/product split is inferred from commit types and repo names, and the recorded entries exist to falsify that inference. Entries naming no repo cannot confirm or refute it, so a third of the ground truth is inert against the thing it was collected for | **visibility** | `~/.practices-sessions.jsonl` | biffo-template — `scripts/practices-session.mjs` | unfiled |
 | — | **Three repos merged work with no effort entry at all** — `biffo-plugins-registry` (4 PRs), `biffo-platform-app` (1), `tabsii-intake` (1). Not proof of unlogged effort: a repo can take a merge carried from elsewhere. But nothing distinguishes "no effort spent here" from "effort spent and not logged", so the zero cannot be read either way | **visibility** | estate-wide, measured across 145 merges in one day | biffo-template — the capture step | unfiled |

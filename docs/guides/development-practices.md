@@ -309,9 +309,21 @@ now stated): count **every scoreboard row**, filed or not — an unfiled row is
 still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
+**Generated, not typed** — `node scripts/practices-evidence.mjs --report`, `byFixRepo`. Regenerated 2026-07-29 at **248 corpus rows** (the page renders 168 of them; the corpus retains superseded rewordings, so both numbers are given rather than one being quietly preferred):
+> **This table said 99 rows and 68 for biffo-template when it was regenerated.** The corpus held 248 and 126 — stale by a factor of 2.5, on the one number this page tells you to act on, in the section headed *"Generated, not typed"*. Three sessions edited it today (200 → 99 → 248) because it is transcribed by hand from a generated report, and concurrent sessions cannot converge on a hand-copied number. **Do not read this table without re-running the command.** A generator that emits the markdown directly is the real fix and does not exist yet.
+| Repo | Fixes landing here | Notes |
+| --- | --- | --- |
+| **biffo-template** | 126 of 248 (51%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
+| **tabsii-platform** | 25 of 248 (10%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
+| **biffo-plugin-ideation** | 14 of 248 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **tabsii-crm** | 13 of 248 | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
+| **biffo-plugin-idea-scout** | 13 of 248 | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
+| **biffo-platform** | 10 of 248 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
+| **tabsii-intake** | 5 of 248 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **tabsii-marketplace** | 2 of 248 | `python-jose` removal; the credential-dependent build |
+| **biffo-runners** | 1 of 248 | Runner fleet docs + fail-fast |
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
 `byFixRepo`, regenerated at **221 rows as rendered on this page**. `evidence.jsonl` separately holds **248** — a reworded row is stored as a new one and its predecessor retained, see the duplication row. The split below is counted from the page:
-
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
 | **biffo-template** | 107 of 221 (48%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, design tokens, the practices tooling itself |
@@ -1128,6 +1140,34 @@ not for removing it.
 
 ## What went well — practices that earned their keep
 
+**Verifying an issue's claims before building from them — three of five were
+stale or wrong.** #643 listed five families of instance forks. Checked against
+today's code rather than the issue text: family 5's "make the role name a
+variable" **already was one, added before the issue was filed**, and its second
+half is impossible (HCL resource labels are not interpolatable). Family 2's
+"plain backport" framing was wrong — the real gap is a 5-line discovery walk.
+One file listed as forked is **byte-identical**. Building family 5 as written
+would have produced a variable that already existed plus a change HCL cannot
+express.
+**Deviating from a proposed fix on security grounds, with a test that proves the
+difference.** #889 specified short-circuiting on `permission_code` and
+returning. That would leave a declared `required_role` **silently ignored** —
+the exact failure `extra="forbid"` prevents, two lines up in the same file. The
+axes are now AND, and `test_both_axes_must_hold_rather_than_the_code_winning`
+fails under the proposed shape. The same issue said to add the branch "after the
+`is_platform_admin` short-circuit"; there isn't one in either guard, and an
+admin bypass was not invented to match the text.
+**Two exhaustive assertions caught a new field on the authorization surface.**
+`test_full_block_round_trips_through_json` and `TestSerialize::test_serialize_shape`
+both compare the serialised permission block **completely**, and both failed the
+moment `permission_code` appeared. They were updated with a note explaining why
+they are exhaustive — deliberately **not** loosened to a subset check, which
+would have deleted the guard that had just done its job.
+**Measuring before acting on a request.** Asked to close open PRs because they
+"keep recalculating", the measurement said otherwise: three of six consumed
+**zero** runs — a PR does not re-run unless something pushes to it. The real
+compute went to 957 workflow runs driven by merge volume. Closing them would
+have saved nothing and the actual driver would have gone unnamed.
 **Reconciling an aggregate against the rows it aggregates, in production.** The
 cost summary could have been "green tests, looks right" — instead the
 `claude-opus-4-8` row was checked arithmetically against live data: mean
@@ -1136,26 +1176,22 @@ with unpriced runs, so it is the only one that could distinguish the two
 denominators, and getting it backwards would make a model look *cheaper the more
 of its runs failed to record a cost* — precisely inverted for the comparison the
 feature exists to support.
-
 **Mutation-testing two guards rather than trusting a subagent's report.** The
 `model: null` case (reverting it fails with `assert '' is None`) and the
 mean-cost denominator (changing it to `cost.runs` fails). Both passed on report;
 only the mutation proves they defend anything.
-
 **A subagent deviated from my brief and was right to.** I told it to subclass
 `BiffoBaseSchema` like the neighbouring schema; that base carries
 `id`/`tenant_id`/`created_at`/`updated_at`, which a per-model aggregate row has
 none of. It used plain `BaseModel` and flagged the deviation. The brief was
 wrong and the report said so — which only works because the prompt asked for
 deviations to be surfaced rather than absorbed.
-
 **Fixing the skill the moment its assumption was proven false.** `Step 3.6` of
 `build-plugin-feature` asserted this session has no browser and should print a
 URL and stop. It has one. The step now says to do the click-through, records why
 the old wording was wrong, and generalises it: *a deferred capability is
 indistinguishable from an absent one when you are reasoning about what is
 possible.*
-
 
 **Reverting on evidence instead of tuning toward a hope.** The pitch change was
 a reasonable idea, cheaply built, and the measurement said it was worse on both
@@ -2427,6 +2463,32 @@ design.
 
 ## What needs more thought
 
+**Nothing generates the "where the work lands" table, and it drifted 2.5×.** It
+is headed *"Generated, not typed"* and warns that hand-typed counts go stale —
+then read 99 rows against a corpus of 248. Three sessions rewrote it in one day
+(200 → 99 → 248) because the figures are transcribed by hand from a generated
+report. Concurrent sessions cannot converge on a hand-copied number. A generator
+emitting the markdown block is ~20 lines and does not exist.
+
+**Resolving an append-only corpus conflict is done by ad-hoc regex each time,
+and has now failed twice.** Today's failure was an **empty HEAD side**, which the
+resolver's `(.*?)` could not match, so it reported "0 conflicts resolved" and the
+markers were committed. Both corpora conflict on almost every concurrent PR;
+this deserves one reviewed script, not a fresh regex per session.
+
+**No documented way to land a branch checked out in someone else's worktree.**
+Two stale docs PRs needed their conflicts resolved, and AGENTS.md §1 forbids
+touching a worktree you did not create — which also blocks checking the branch
+out anywhere else. The workaround was a throwaway clone. That works, and nothing
+says so.
+
+**Nobody measures runner cost per merge.** The estate ran **957 workflow runs**
+today; `biffo-template` alone burned ~9.4 hours of runner time, and every merge
+to `dev` costs a second full CI run on top of the PR's. The operator felt this
+before any dashboard showed it. The practices collector counts merges, not the
+compute they cause.
+
+
 **A headline that cannot fail is measuring the wrong thing — including here.**
 Every gate around cross-run dedup was green through two shipped versions that
 did not work, because the gates assert the list is assembled and delivered, and
@@ -3346,6 +3408,11 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `biffo-verify` | **worked — §1 was the entire value, three times** | Establishing current state before building overturned three of #643's five families, showed #715's named repos were already protected by hand (moving the issue from "fix these" to "nothing re-checks"), and showed #782 and #758 were already fixed. Four issues that would otherwise have been *built*. |
+| `biffo-verify` | **worked — §3 gave the exact isolation** | On #889, reverting only the guard while keeping the model field produced `Failed: DID NOT RAISE HTTPException` on precisely the two guard tests. Reverting both gave 7 failures. That is what distinguishes "I wrote a test" from "this test defends the branch I added". |
+| `biffo-verify` | **worked — §6 applied to my own new audit** | `protection-audit.sh` was fail-open on its first run, reporting `ok` for three unprotected branches because `gh` prints 404 bodies to stdout. Caught by reading every line, which is what §6 asks for. |
+| `biffo-workflow` | **worked — ~8 PRs, no lost commits** | Unpiped `PUSH EXIT` and the pre-push gate both fired on real problems. |
+| Subagents (2 build, 2 scope) | **worked — and both scopers contradicted their own briefs** | Given read-only scoping briefs, both came back disputing the issues they were sent to plan: one found #643 family 5 false on both halves, the other found the issue's candidate list quantitatively wrong (lazy imports ceiling at ~0.25s against precompilation's ~2.5s). Briefing them to *verify first* rather than *plan* is what produced that. |
 | `biffo-verify` | **worked — §7 is what made the revert possible** | Both dedup PRs carried an explicit "Verification not claimed: whether this reduces repeats is unknown until deployed and the comparison re-run". That sentence is why the measurement happened at all, and why a negative result was a planned outcome rather than an embarrassment. Under-claiming cost nothing and made the revert a decision rather than a retreat. |
 | `biffo-verify` | **worked — §4, on a revert rather than a feature** | Confirmed in the deployed Lambda that pitches were gone, the cap was back to 50 and the prompt was restored. A revert is exactly the change nobody verifies, because it is "just putting things back". |
 | `biffo-workflow` | **worked** | Four PRs across two repos in this loop, each rebased once for BEHIND, all landed by auto-merge with worktrees reaped. |

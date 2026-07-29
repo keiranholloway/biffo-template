@@ -1,0 +1,211 @@
+# Standard — local gates
+
+**Status:** adopted 2026-07-29
+**Applies to:** every repo in the estate — template, instances, sibling apps, plugin repos
+**Measured by:** [H4](../experiments/H4-shift-left-gates.md), `scripts/hook-audit.sh`
+
+---
+
+## The rule
+
+> **Every check a repo's CI runs, that is deterministic, offline, and needs no
+> credentials, must also run locally before the push — and when it cannot run,
+> it must fail loudly rather than skip.**
+
+Three properties, and all three have to hold. A gate that is missing, a gate
+that is present but never executes, and a gate that skips quietly when its
+tooling is absent are three different defects with the same symptom: the failure
+is discovered in the pipeline.
+
+The rule is deliberately **derived, not decreed**. The list of checks is not
+maintained by hand in this document — it is read out of each repo's own
+`.github/workflows/ci.yml`. A standard that has to be manually kept in step with
+CI is a standard that is out of step with CI.
+
+## Why — the measurement that motivated it
+
+Over the 30 days to **2026-07-29**, across the twelve repos in the estate that
+run CI:
+
+| | |
+| --- | --- |
+| CI runs | 4,748 |
+| failed runs | 373 |
+| **failing steps that were locally catchable** | **211 of 342 — 62%** |
+
+By kind:
+
+| count | failing step | local cost |
+| ---: | --- | --- |
+| 49 | Test | 16s |
+| 38 + 15 | Format check | 6s |
+| 20 | Type check | 4s |
+| 16 | Lint | 3s |
+| 12 | Terraform fmt check | 0.2s |
+| 11 | **Core ownership guard** | already a commit hook |
+| 7 | pyright | 7s |
+
+Nearly two thirds of everything CI caught, it caught *second*. Each costs a full
+CI cycle to discover and another to confirm the fix, plus a re-entry into the
+merge race.
+
+The eleven **Core ownership guard** failures are the sharpest evidence, because
+that check is *already wired as a `commit-msg` hook*. It was configured, present
+in the tree, reviewed — and discovered in the pipeline eleven times, because the
+hook was not running (see [Arming](#2-arming--the-hook-must-actually-execute)).
+
+Concentration matters for expectations: 200 of the 211 are in the three instance
+repos (`biffo-template` 112, `tabsii-platform` 64, `biffo-platform` 24). The
+sibling and plugin repos have far fewer failures, and a larger share of theirs
+are network or runner flakes this standard cannot touch.
+
+## 1. What each hook runs
+
+Three hooks, three jobs, ordered by how cheap they are and how early they can
+speak.
+
+### `pre-commit` — per-file, auto-fixing, sub-second
+
+Runs `lint-staged` over **staged files only**. Every entry must *fix* rather
+than merely report: at this point the correction is free, and a hook that fails
+on something it could have fixed is friction with no benefit.
+
+Minimum coverage — the file types the repo's CI format-checks:
+
+| glob | action |
+| --- | --- |
+| `*.{ts,tsx,js,jsx,mjs,cjs}` | `eslint --fix`, `prettier --write` |
+| `*.{json,md,yaml,yml,css}` | `prettier --write` |
+| `*.py` | `ruff check --fix`, `ruff format` |
+| `*.tf` | `terraform fmt` |
+
+**The globs must cover everything CI checks.** A file type CI format-checks but
+`lint-staged` does not touch is a guaranteed round trip, and it is invisible
+until it happens.
+
+### `commit-msg` — the message and the ownership boundary
+
+- `commitlint --edit "$1"` — Conventional Commits, which the release derives the
+  version bump from (ADR-0006).
+- `sh scripts/biffo.sh check ownership --staged "$1"` — refuses a commit editing
+  template-owned paths in an instance.
+
+Both are cheap, and both are checks CI repeats. The eleven ownership-guard
+failures above are what this hook not running looks like.
+
+### `pre-push` — whole-project, ~40s
+
+Runs `scripts/verify.sh`: the repo's full local-capable CI check set, in one
+command, **reporting every failure rather than stopping at the first**. Stopping
+early recreates the round trip in miniature — you fix one thing, push, and
+discover the next.
+
+The set is per-repo and derived from its `ci.yml`. Across the estate it is
+essentially uniform:
+
+| check | template | instance | sibling | plugin |
+| --- | :-: | :-: | :-: | :-: |
+| `pnpm run lint` | ● | ● | ● | ● |
+| `pnpm run typecheck` | ● | ● | ● | ● |
+| `pnpm run test` | ● | ● | ● | ● |
+| `uv run ruff check .` | ● | ● | ● | ● |
+| `uv run ruff format --check .` | ● | ● | ● | ● |
+| `uv run pyright` | ● | ● | ● | ● |
+| `pnpm run format:check` | ● | ● | ○ | ○ |
+| `terraform fmt -check -recursive` | ● | ● | ● | — |
+| `biffo.sh check plugin-terraform` / `plugin-collisions` | ● | ● | — | — |
+| `pnpm run build` | — | — | ● | ● |
+
+● = in that repo's CI, so required in its gate. ○ = **not currently in that
+repo's CI either** — the sibling and plugin skeletons never gained
+`format:check`, which is a gap in CI, not in the gate. Fixing it belongs
+upstream in the skeletons.
+
+### What is deliberately excluded
+
+Every exclusion needs a written reason, because "it was slow" and "we forgot"
+look identical six weeks later. Exclusions live in
+`cli/src/lib/verify-parity.test.ts` and are enforced: a check in `ci.yml` that
+is neither in the gate nor in the exclusion list **fails the test**.
+
+Current exclusions:
+
+| check | reason |
+| --- | --- |
+| `uv run pytest` | 56s — more than the rest of the gate combined, and it failed once in 30 days in the template. Keep in CI. |
+| portal / app `build` | a full Next build |
+| dependency audits, `pip-audit`, `pnpm audit` | network — advisory-database lookups |
+| gitleaks | scans history, not the working tree |
+| `check release-subject`, `check ownership` (CI form) | evaluate a PR that does not exist at push time |
+
+`pytest` being excluded is a judgement, not a principle, and it is the one most
+likely to be wrong. It is per-repo: a sibling whose suite runs in four seconds
+should include it. The exclusion list is the place to argue that.
+
+## 2. Arming — the hook must actually execute
+
+**A configured hook that does not run is worse than no hook, because it is
+assumed to be protecting you.** This is the failure that motivated the standard
+as much as the coverage gap did.
+
+The chain that broke it, verified 2026-07-29:
+
+- `core.hooksPath` was `.husky/_` — a **relative** path, resolved against *each
+  worktree's* root.
+- Only `.husky/pre-commit`, `pre-push`, `commit-msg` were tracked. `.husky/_/` —
+  the directory git actually executes — is gitignored.
+- `.husky/_/` is created **solely** by `prepare: husky` on `pnpm install`.
+- A fresh worktree therefore had no `.husky/_`, and git skipped every hook with
+  no warning, no error, and no output.
+
+`AGENTS.md` §1 *mandates* a fresh worktree per unit of work, so the workflow the
+project requires was the workflow that disarmed its own gates. Measured across
+the estate at adoption with `scripts/hook-audit.sh --estate ~/code`: **7 of 37
+working trees armed — 18%**, with 5 `DEAD` and 25 never configured.
+
+### Requirements
+
+1. **Hooks are tracked files.** They live in `.githooks/`, are committed, and
+   are executable with a shebang. A tracked file exists the instant
+   `git worktree add` completes.
+2. **`prepare` sets `core.hooksPath` to that directory** and prints that it did.
+3. **Failure is loud.** A hook whose tooling is missing must exit non-zero. It
+   is correct for a hook to fail with `Command "lint-staged" not found` — that
+   is a repo telling you to install. It is never correct for it to skip.
+4. **Arming is audited, not assumed.** `scripts/hook-audit.sh` reports every
+   working tree as `ARMED`, `DEAD` or `NO-HOOKS` and **exits non-zero on any
+   `DEAD`**, because `DEAD` is the state that lies to you.
+
+### The one escape hatch
+
+`BIFFO_SKIP_VERIFY=1 git push`, for when you mean it. Deliberately an explicit
+environment variable rather than `--no-verify`: it leaves a decision in the shell
+history, and it skips only the pre-push gate rather than silently skipping every
+hook. Its usage rate is a counter-metric in H4 — a gate everyone bypasses has
+failed, and that has to be visible rather than inferred.
+
+## 3. Verifying a repo complies
+
+```bash
+sh scripts/hook-audit.sh          # is every working tree armed?
+pnpm run verify                   # does the gate pass?
+pnpm --filter @biffo/cli test -- verify-parity   # does the gate match CI?
+```
+
+Three questions, three commands: *does it run*, *does it pass*, *does it cover
+what CI covers*. The third is the one that rots without a test, which is why it
+is a test.
+
+## Distribution
+
+`.githooks/*`, `scripts/verify.sh` and `scripts/hook-audit.sh` are template-owned
+exact files in `core-manifest.json`, so `biffo core upgrade` carries them to
+instances. Sibling and plugin repos are separate repos an upgrade never reaches;
+they get the standard by vendoring it into `_skeletons/sibling-template/` and
+`_skeletons/plugin-template/` (every newly scaffolded repo) plus a one-time
+copy-in for the existing ones — the same split every user-owned-repo artefact
+uses.
+
+The hooks directory itself is **not** owned. Owning it would make an upgrade
+propose deleting a hook an instance legitimately added — the #279 part-1 trap.
+Each wired hook is an exact-file entry.

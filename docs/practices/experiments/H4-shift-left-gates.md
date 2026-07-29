@@ -250,14 +250,14 @@ predicted to move near-immediately and did.
 
 | | baseline (07-29 am) | after rollout (07-29 pm) |
 | --- | ---: | ---: |
-| working trees | 37 | 51 |
-| **armed** | **7 (18%)** | **49 (96%)** |
+| working trees | 37 | 36 |
+| **armed** | **7 (18%)** | **36 (100%)** |
 | **`DEAD`** | **5** | **0** |
-| `NO-HOOKS` | 25 | 2 |
+| `NO-HOOKS` | 25 | **0** |
 | audit exit code | 1 | **0** |
 
-Fourteen of fifteen repos are fully compliant. The tree count rose because the
-rollout created worktrees; the **share** is the metric, as pre-registered.
+**All fifteen repos are fully compliant.** The tree count moves as worktrees are
+created and reaped; the **share** is the metric, as pre-registered.
 
 `DEAD` reaching zero is the part that matters most. That is the state where a
 repo claims protection it does not have, and it is the state this whole
@@ -284,19 +284,44 @@ worktree (`.git` is a file), so it would have scored the fix as a failure; and
 *repo* requires, which made the parity test pass locally and fail on a CI runner
 with no `uv`. Both were found by the tools disagreeing with each other.
 
-### The one gap, and why it is not closed
+### The last gap closed — and the wrong reason I first gave for it
 
-`tabsii-app` (2 trees) is the only repo not at 100%. Its PR is green on every
-check except `Dependency audit`, which reports **14 vulnerabilities, 8 high** —
-pre-existing, and untouched by a change that adds only hook scripts.
+**Final: 36 of 36 working trees armed. 100%, zero `DEAD`, zero unconfigured,
+audit exit 0. All fifteen repos.**
 
-The cheap fix was tried and is not cheap: `pnpm update next --latest` resolves to
-**Next 16**, a major bump with real breaking-change risk, and constraining to
-`next@^15.5.21` clears one advisory of eight. Remediating the rest is a decision
-about major version bumps that belongs to the repo's owner, not to a hooks
-rollout, so the PR is left open with both options documented on it.
+`tabsii-app` was the last holdout, and my first account of why was wrong. I
+reported it as needing **Next 16** — a major bump with breaking-change risk,
+and therefore a decision for the repo's owner rather than part of a hooks
+rollout. That conclusion came from running `pnpm update next --latest`, which of
+course resolves to the newest major, instead of reading the patched range each
+advisory actually names.
 
-Counted honestly against the metric rather than excluded: **96%, not 100%.**
+Read properly, all six high advisories are **patch-level**:
+
+| package | advisories | patched in | note |
+| --- | ---: | --- | --- |
+| `next` | 3 | **>=15.5.21** | already inside the existing `^15.1.3` range |
+| `postcss` | 2 | >=8.5.18 | transitive |
+| `brace-expansion` | 1 | >=5.0.8 | transitive |
+
+The transitive two became `pnpm.overrides` — the pattern `biffo-template`
+already uses for `postcss` — rather than direct dependencies, since they are not
+that repo's to own. Afterwards `pnpm audit --audit-level=high` reports **no
+known vulnerabilities**, and lint, typecheck, test and build all pass.
+
+Two things worth keeping from that, because they cost the goal an hour:
+
+1. **`--latest` is not "the fix".** An advisory names the version that patches
+   it. Reaching for the newest release instead converts a patch bump into a
+   major migration and makes a cheap fix look expensive.
+2. **"Blocked, and it belongs to someone else" is a claim that needs the same
+   evidence as any other.** I had checked that the failure was pre-existing and
+   unrelated — both true — and stopped there, without checking whether it was
+   *hard*. It was not. The correct escalation was six patch versions, not a
+   decision.
+
+The security position also improved as a side effect: six high advisories fixed
+in a repo whose CI had not run since 2026-07-22 and so had never reported them.
 
 ## Cost and reversibility
 

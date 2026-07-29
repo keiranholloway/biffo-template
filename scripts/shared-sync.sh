@@ -82,10 +82,30 @@ applies() {
 diff_files() {
   d="$1"
   out=""
+  # Compare against the REPO's integration branch, not the local working copy.
+  #
+  # The first version read "$d/$f" straight off disk, so a clone that had not
+  # been pulled reported DRIFTED for twelve repos that were entirely current --
+  # right after their sync PRs merged. The question is "is this repository
+  # current", not "is my laptop current", and a drift detector that fires on a
+  # stale checkout is one you learn to ignore.
+  git -C "$d" fetch origin --quiet 2>/dev/null
+  # `dev` first, per AGENTS.md section 2: it is the integration branch in every
+  # Biffo repo. origin/HEAD is NOT a substitute -- it points at `main` in
+  # several clones, and `main` is a stale release branch that legitimately does
+  # not carry these files, so resolving through it reported three repos as
+  # missing everything.
+  if git -C "$d" rev-parse --verify --quiet origin/dev >/dev/null 2>&1; then
+    base=dev
+  else
+    base=$(git -C "$d" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+    [ -n "$base" ] || base=$(git -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  fi
   for f in $FILES; do
-    if [ ! -f "$d/$f" ]; then
+    remote=$(git -C "$d" show "origin/$base:$f" 2>/dev/null)
+    if [ -z "$remote" ]; then
       out="$out $f(missing)"
-    elif ! cmp -s "$TEMPLATE_ROOT/$f" "$d/$f"; then
+    elif [ "$remote" != "$(cat "$TEMPLATE_ROOT/$f")" ]; then
       out="$out $f"
     fi
   done
@@ -186,6 +206,10 @@ for d in "$ESTATE"/*/; do
   d="${d%/}"
   label=$(basename "$d")
   [ -e "$d/.git" ] || continue
+  # The template is the source, not a target. It matched only because it carries
+  # scripts/verify.sh, and comparing it to itself through origin/<base> reported
+  # it as missing every file whenever its own dev was ahead of the checkout.
+  [ "$d" = "$TEMPLATE_ROOT" ] && continue
   [ -n "$ONLY" ] && [ "$label" != "$ONLY" ] && continue
   applies "$d" || continue
   delta=$(diff_files "$d")

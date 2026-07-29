@@ -55,6 +55,7 @@ from ..agent_runs import (
     reap_stale_runs,
     run_reference_payload,
 )
+from ..chat_agents import get_dynamic_chat_agent
 from ..config import settings
 from ..database import get_db
 from ..events import emit_event
@@ -93,12 +94,59 @@ async def request_agent_run(
     referenced component was since deleted, or a required variable is unsupplied
     (ADR-0015 §6). The run is aborted rather than created with a broken or
     half-substituted prompt, the same fail-loud posture as the depth ceiling.
+
+    Also refuses with 422 when the snapshot has no ``instructions`` and the
+    agent is not found in the registry (ADR-0017 seam #1 extension, biffo-template#910)
+    — a missing agent must fail loudly, never silently creating a run with an empty
+    prompt.
+
+    **Precedence for instructions:** snapshot value if present and non-empty → else
+    the registry row's ``system_prompt`` → else HTTP 422. This precedence means
+    every existing workflow keeps working unchanged: supplying instructions inline
+    still wins, and omitting them triggers registry resolution.
+
+    **Precedence for model:** snapshot value if present and non-empty → else the
+    registry row's ``model`` → else ``settings.agent_default_model``. Model
+    resolution never raises — a missing model is always filled from the default.
     """
     # The result contract for a write-back run is Core's to state, generated from
     # the registered target rather than accepted from the caller (ADR-0027 §6) —
     # so the model is required to return typed columns, and is never offered a
     # field outside the ceiling. A snapshot with no write-back is untouched.
     snapshot = apply_writeback_output_tool(body.definition_snapshot)
+
+    # Resolve instructions and model from the registry when absent (#910). The
+    # registry is consulted whenever *either* is missing, not only when the prompt
+    # is: an admin editing an agent's model must change what runs even for a
+    # workflow that still names its instructions inline. Resolving only on a
+    # missing prompt is what made the model field editable-but-inert.
+    snapshot = dict(snapshot)
+    if not snapshot.get("instructions") or not snapshot.get("model"):
+        agent = await get_dynamic_chat_agent(
+            db, tenant_id=principal.tenant_id, agent_key=body.agent_name
+        )
+        if agent is None and not snapshot.get("instructions"):
+            # No prompt anywhere. Fail loudly rather than create a run with an
+            # empty one: the runtime would refuse it later having already been
+            # dispatched, and a run that dies mid-flight has spent money.
+            logger.warning(
+                "Agent run creation aborted: agent not found in registry (#910)",
+                extra={"agent": body.agent_name},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Agent '{body.agent_name}' not found in registry",
+            )
+        if agent is not None:
+            if not snapshot.get("instructions"):
+                snapshot["instructions"] = agent.system_prompt
+            if not snapshot.get("model"):
+                snapshot["model"] = agent.model
+
+    # A missing model is never fatal — unlike a missing prompt there is a sane
+    # estate-wide answer, and this is the single place it is written down.
+    if not snapshot.get("model"):
+        snapshot["model"] = settings.agent_default_model
 
     try:
         run, created = await create_run(

@@ -132,17 +132,35 @@ app.include_router(build_owner_data_router(), prefix="/api/v1")
 # so /api/v1/internal/agent-chat/<key> resolves a plugin's install-vetted agent the
 # same way the in-code prompt assistant is registered. Empty in the base deployment.
 register_plugin_chat_agents()
-# Generic CRUD for opt-in core tables (ADR-0004): core TenantScopedModel
-# subclasses declaring __crud_permissions__ are served under /api/v1/data/
-# <table>. Empty in the base deployment (no core table opts in yet).
-app.include_router(build_core_crud_router(), prefix="/api/v1")
 # Instance product-domain routers (ADR-0022): an instance's own product code
 # lives in the user-owned services/api/src/api/domains/<name>/ carve-out inside
 # this template-owned core API. Each domain keeps its native paths (no
 # /domains/<name> namespacing), so a relocated domain serves the same routes it
 # did before — the contract to siblings is unchanged. Empty in the base
 # deployment (no product domain yet); see api.routing.domain_router.
+#
+# THIS MUST STAY ABOVE build_core_crud_router() — the order is load-bearing,
+# not cosmetic (#668). Building this router is what *imports* each
+# api.domains.<name> package, and that import is what puts the domain's models
+# on TenantScopedModel.__subclasses__(); build_core_crud_router() below walks
+# exactly that subclass tree via _iter_core_crud_models() (permissions.py), so
+# it can only serve models already imported by the time it runs. With these two
+# the other way round, every /api/v1/data/<table> route a relocated domain
+# backs silently disappeared — 21 of them in tabsii-platform#207, with a green
+# suite and a green CI, because nothing failed and nothing warned.
+#
+# Mounting domains first is safe only while no domain claims a (path, method)
+# pair generic CRUD also claims: a domain hand-writing POST /data/brands
+# coexists with generic CRUD's GET /data/brands purely because Starlette keeps
+# looking past a *method*-mismatched route. Both that ordering and that
+# non-collision are asserted in tests/test_main_router_ordering.py.
 app.include_router(build_domain_router(), prefix="/api/v1")
+# Generic CRUD for opt-in core tables (ADR-0004): core TenantScopedModel
+# subclasses declaring __crud_permissions__ are served under /api/v1/data/
+# <table>. Empty in the base deployment (no core table opts in yet). Runs after
+# the domain router above so it sees an instance's domain models too — see the
+# comment there before reordering.
+app.include_router(build_core_crud_router(), prefix="/api/v1")
 
 handler = Mangum(app, lifespan="off")
 

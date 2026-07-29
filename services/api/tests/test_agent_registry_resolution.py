@@ -1,0 +1,458 @@
+"""Tests for agent-run creation with registry resolution (biffo-template#910).
+
+When an orchestration workflow's agent action has no ``instructions``, Core
+resolves them from the plugin_chat_agents registry by agent_name.
+"""
+
+import asyncio
+from collections.abc import AsyncGenerator, Generator
+
+import pytest
+from api.config import settings
+from api.database import get_db
+from api.middleware.auth import AuthenticatedUser, require_auth
+from api.models.agent_run import AgentRun  # noqa: F401 — registers the table
+from api.models.base import Base
+from api.models.plugin_chat_agent import PluginChatAgent
+from api.routers import internal_agents
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
+
+TENANT = "default"
+
+
+@pytest.fixture
+def app() -> Generator[tuple[FastAPI, async_sessionmaker]]:
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+
+    async def _create() -> None:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    asyncio.run(_create())
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def override_get_db() -> AsyncGenerator[AsyncSession]:
+        async with session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    def fake_service_principal():
+        from api.middleware.service_auth import ServicePrincipal
+
+        return ServicePrincipal(
+            tenant_id=TENANT,
+            principal_arn="arn:aws:iam::123456789012:role/test-principal",
+        )
+
+    fastapi = FastAPI()
+    fastapi.include_router(internal_agents.router, prefix="/api/v1")
+    fastapi.dependency_overrides[get_db] = override_get_db
+    fastapi.dependency_overrides[require_auth] = lambda: AuthenticatedUser(
+        sub="test", email="test@example.com", username="test", tenant_id=TENANT, roles=["admin"]
+    )
+    from api.middleware.service_auth import require_service_principal
+
+    fastapi.dependency_overrides[require_service_principal] = fake_service_principal
+
+    yield fastapi, session_factory
+
+    asyncio.run(engine.dispose())
+
+
+@pytest.fixture
+def client(app) -> TestClient:
+    fastapi, _ = app
+    return TestClient(fastapi)
+
+
+async def _seed_agent(session: AsyncSession, **over) -> PluginChatAgent:
+    """Seed a plugin chat agent for testing registry resolution."""
+    fields = dict(
+        tenant_id=TENANT,
+        plugin_name="test-plugin",
+        agent_key="demo-enricher",
+        agent_name="demo-enricher",
+        role="agent",
+        system_prompt="You are a helpful demo enrichment assistant.",
+        model="anthropic/claude-opus-4-8",
+        required_group="default",
+        active=True,
+    )
+    fields.update(over)
+    agent = PluginChatAgent(**fields)
+    session.add(agent)
+    await session.flush()
+    return agent
+
+
+def test_create_request_omitting_instructions_resolves_from_registry(app, client):
+    """When instructions are missing, resolve them from plugin_chat_agents."""
+    fastapi, session_factory = app
+
+    async def seed_and_post():
+        async with session_factory() as session:
+            await _seed_agent(session)
+            await session.commit()
+
+    asyncio.run(seed_and_post())
+
+    resp = client.post(
+        "/api/v1/internal/agent-runs",
+        json={
+            "agent_name": "demo-enricher",
+            "definition_snapshot": {"model": "anthropic/claude-opus-4-8"},
+            "input_payload": {"demo_request_id": "d1"},
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # The resolved prompt text should be in the stored snapshot
+    assert (
+        body["definition_snapshot"]["instructions"]
+        == "You are a helpful demo enrichment assistant."
+    )
+    assert body["agent_name"] == "demo-enricher"
+
+
+def test_create_request_with_instructions_keeps_them_precedence(app, client):
+    """When instructions are in the config, they take precedence over registry."""
+    fastapi, session_factory = app
+
+    async def seed_and_post():
+        async with session_factory() as session:
+            await _seed_agent(session)
+            await session.commit()
+
+    asyncio.run(seed_and_post())
+
+    resp = client.post(
+        "/api/v1/internal/agent-runs",
+        json={
+            "agent_name": "demo-enricher",
+            "definition_snapshot": {
+                "instructions": "Custom inline instructions.",
+                "model": "anthropic/claude-opus-4-8",
+            },
+            "input_payload": {"demo_request_id": "d1"},
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # The custom instructions should be preserved, not overwritten
+    assert body["definition_snapshot"]["instructions"] == "Custom inline instructions."
+
+
+def test_model_resolves_from_registry_when_snapshot_has_none(app, client):
+    """A missing model resolves from the registry — even with instructions inline.
+
+    The seeded model is deliberately **not** ``settings.agent_default_model``.
+    Seeding the default here would make the assertion pass whether the value came
+    from the registry or from the fallback, which is exactly how an editable but
+    inert model field survives its own test.
+    """
+    fastapi, session_factory = app
+
+    registry_model = "anthropic/claude-opus-4-8"
+    assert registry_model != settings.agent_default_model
+
+    async def seed_and_post():
+        async with session_factory() as session:
+            await _seed_agent(session, model=registry_model)
+            await session.commit()
+
+    asyncio.run(seed_and_post())
+
+    resp = client.post(
+        "/api/v1/internal/agent-runs",
+        json={
+            "agent_name": "demo-enricher",
+            # Instructions supplied inline: the registry must still be consulted
+            # for the model, which is the case that used to fall through to the
+            # default without ever reading the row.
+            "definition_snapshot": {
+                "instructions": "Do the task.",
+            },
+            "input_payload": {},
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["definition_snapshot"]["model"] == registry_model
+    # The inline prompt still wins over the registry's.
+    assert body["definition_snapshot"]["instructions"] == "Do the task."
+
+
+def test_model_stays_when_snapshot_has_one(app, client):
+    """When model is in the snapshot, leave it alone."""
+    fastapi, session_factory = app
+
+    async def seed_and_post():
+        async with session_factory() as session:
+            await _seed_agent(session, model="moonshotai/kimi-k3")
+            await session.commit()
+
+    asyncio.run(seed_and_post())
+
+    resp = client.post(
+        "/api/v1/internal/agent-runs",
+        json={
+            "agent_name": "demo-enricher",
+            "definition_snapshot": {
+                "instructions": "Do the task.",
+                "model": "anthropic/claude-opus-4-8",
+            },
+            "input_payload": {},
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # The explicit model should be preserved
+    assert body["definition_snapshot"]["model"] == "anthropic/claude-opus-4-8"
+
+
+def test_no_active_registry_row_returns_422(app, client):
+    """Missing or inactive registry row should return 422."""
+    resp = client.post(
+        "/api/v1/internal/agent-runs",
+        json={
+            "agent_name": "nonexistent-agent",
+            "definition_snapshot": {},
+            "input_payload": {},
+        },
+    )
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "nonexistent-agent" in detail
+
+
+def test_tenant_scoping_prevents_cross_tenant_resolution(app, client):
+    """A registry row in another tenant should not be resolved."""
+    fastapi, session_factory = app
+
+    async def seed_and_post():
+        async with session_factory() as session:
+            # Seed agent for a different tenant
+            await _seed_agent(session, tenant_id="other-tenant")
+            await session.commit()
+
+    asyncio.run(seed_and_post())
+
+    resp = client.post(
+        "/api/v1/internal/agent-runs",
+        json={
+            "agent_name": "demo-enricher",
+            "definition_snapshot": {},
+            "input_payload": {},
+        },
+    )
+
+    # Should be 422 because the agent doesn't exist in the caller's tenant
+    assert resp.status_code == 422
+
+
+def test_default_model_when_no_registry_and_instructions_inline(app, client):
+    """When no model and no registry row, but instructions inline, use agent_default_model."""
+    fastapi, session_factory = app
+
+    resp = client.post(
+        "/api/v1/internal/agent-runs",
+        json={
+            "agent_name": "nonexistent-agent",
+            "definition_snapshot": {
+                "instructions": "Do the task inline.",
+            },
+            "input_payload": {},
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # The model should be filled from the default — read from settings rather than
+    # restated, so this test cannot drift from the value it is asserting about.
+    assert body["definition_snapshot"]["model"] == settings.agent_default_model
+    # Instructions should be preserved
+    assert body["definition_snapshot"]["instructions"] == "Do the task inline."
+
+
+def test_run_records_prompt_version_id_when_resolved_from_registry(app, client):
+    """When an agent is resolved from the registry, the run records the row's id.
+
+    This allows an admin to answer "which prompt version produced this run?"
+    """
+    fastapi, session_factory = app
+
+    async def seed_and_post():
+        async with session_factory() as session:
+            agent = await _seed_agent(session)
+            await session.commit()
+            return agent.id
+
+    agent_id = asyncio.run(seed_and_post())
+
+    resp = client.post(
+        "/api/v1/internal/agent-runs",
+        json={
+            "agent_name": "demo-enricher",
+            "definition_snapshot": {"model": "anthropic/claude-opus-4-8"},
+            "input_payload": {"demo_request_id": "d1"},
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # The run should record the registry row's id as prompt_version_id
+    assert body["prompt_version_id"] == agent_id
+
+
+def test_run_records_no_prompt_version_id_for_inline_instructions(app, client):
+    """When instructions are supplied inline (not from registry), prompt_version_id is None."""
+    resp = client.post(
+        "/api/v1/internal/agent-runs",
+        json={
+            "agent_name": "any-agent",
+            "definition_snapshot": {
+                "instructions": "Custom inline instructions.",
+            },
+            "input_payload": {},
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # No registry row was consulted, so no version id
+    assert body["prompt_version_id"] is None
+
+
+def test_run_records_prompt_version_generation_tracking(app, client):
+    """Successive runs after edits record different generations to track which prompt produced each.
+
+    The generation number increments each time the agent is edited, so:
+    - Run before edits: generation=1 (with original prompt)
+    - After 1st edit: history[version=1] stores original prompt, live row is generation 2
+    - Run after 1st edit: generation=2 (with new prompt)
+    - After 2nd edit: history[version=2] stores previous prompt, live row is generation 3
+    - Run after 2nd edit: generation=3 (with newest prompt)
+
+    To retrieve what generation G ran with: read history[version=G] if exists, else live row.
+    """
+    import sqlalchemy as sa
+    from api.models.plugin_chat_agent import PluginChatAgent
+    from api.models.plugin_chat_agent_history import PluginChatAgentHistory
+    from sqlalchemy import select
+
+    fastapi, session_factory = app
+
+    async def seed_agent_and_create_run_1():
+        async with session_factory() as session:
+            agent = await _seed_agent(
+                session,
+                system_prompt="Original prompt version 1",
+            )
+            await session.commit()
+            return agent
+
+    agent = asyncio.run(seed_agent_and_create_run_1())
+
+    # Run 1: before any edits, should have generation=1, original prompt
+    resp1 = client.post(
+        "/api/v1/internal/agent-runs",
+        json={
+            "agent_name": "demo-enricher",
+            "definition_snapshot": {"model": "anthropic/claude-opus-4-8"},
+            "input_payload": {"demo_request_id": "d1"},
+        },
+    )
+    assert resp1.status_code == 201, resp1.text
+    run1 = resp1.json()
+    assert run1["prompt_version"] == 1
+    assert "Original prompt version 1" in run1["definition_snapshot"]["instructions"]
+
+    # Edit the agent: update prompt to version 2
+    async def edit_agent_prompt():
+        async with session_factory() as session:
+            # Manually simulate what the update route does: create history row, then update live row
+
+            agent_row = await session.scalar(
+                select(PluginChatAgent).where(
+                    PluginChatAgent.id == agent.id,
+                )
+            )
+            assert agent_row is not None
+
+            # Count history rows to compute next version
+            history_count = await session.scalar(
+                select(sa.func.count())
+                .select_from(PluginChatAgentHistory)
+                .where(
+                    PluginChatAgentHistory.plugin_chat_agent_id == agent.id,
+                    PluginChatAgentHistory.tenant_id == TENANT,
+                )
+            )
+            next_version = (history_count or 0) + 1
+
+            # Store history row with previous values
+            history = PluginChatAgentHistory(
+                tenant_id=TENANT,
+                plugin_chat_agent_id=agent_row.id,
+                plugin_name=agent_row.plugin_name,
+                agent_key=agent_row.agent_key,
+                version=next_version,
+                agent_name=agent_row.agent_name,
+                role=agent_row.role,
+                system_prompt=agent_row.system_prompt,  # Previous value
+                model=agent_row.model,
+                required_group=agent_row.required_group,
+                active=agent_row.active,
+                max_history_messages=agent_row.max_history_messages,
+                max_output_tokens=agent_row.max_output_tokens,
+                timeout_seconds=agent_row.timeout_seconds,
+                changed_by="test@example.com",
+            )
+            session.add(history)
+
+            # Update the live row
+            agent_row.system_prompt = "Updated prompt version 2"
+            await session.commit()
+
+    asyncio.run(edit_agent_prompt())
+
+    # Run 2: after 1st edit, should have generation=2, new prompt
+    resp2 = client.post(
+        "/api/v1/internal/agent-runs",
+        json={
+            "agent_name": "demo-enricher",
+            "definition_snapshot": {"model": "anthropic/claude-opus-4-8"},
+            "input_payload": {"demo_request_id": "d2"},
+        },
+    )
+    assert resp2.status_code == 201, resp2.text
+    run2 = resp2.json()
+    assert run2["prompt_version"] == 2, (
+        f"Run after edit should have generation 2, got {run2.get('prompt_version')}"
+    )
+    assert "Updated prompt version 2" in run2["definition_snapshot"]["instructions"]
+
+    # Verify that run1's prompt was the original and run2's was the new one
+    # This proves each run captured the right version
+    assert "Original prompt version 1" in run1["definition_snapshot"]["instructions"], (
+        "Run 1 should have original prompt"
+    )
+    assert "Updated prompt version 2" in run2["definition_snapshot"]["instructions"], (
+        "Run 2 should have updated prompt"
+    )

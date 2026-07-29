@@ -101,6 +101,25 @@ class AgentRun(TenantScopedModel):
     # database, not a race, decides who wins.
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # The PluginChatAgent row id and generation number that produced this run.
+    # Together they identify a specific version of the agent's prompt (ADR-0017
+    # seam #1 extension M2). Nullable because runs created before this column,
+    # and runs whose instructions came inline rather than from the registry,
+    # genuinely have no version.
+    #
+    # Generation is a monotonic counter per agent. To see what generation N ran
+    # with: read history[version=N] if it exists (stores previous values before
+    # the N-th edit), else read the live row (current generation N's values, not
+    # yet edited). This works because history stores the **previous** values, so
+    # the timeline is complete: each history row plus all later rows plus the
+    # live row gives the full audit trail.
+    #
+    # Initially (before any edits): generation = 1, live row unchanged.
+    # After 1st edit: history[version=1] created with old values, live row updated, generation = 2.
+    # After 2nd edit: history[version=2] created with old values, live row updated, generation = 3.
+    prompt_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    prompt_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # The orchestration WorkflowRun that created this run, when there was one.
     # Nullable because a future synchronous invocation has no workflow run (§6.1).
     workflow_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

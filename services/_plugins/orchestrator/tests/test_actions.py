@@ -553,9 +553,9 @@ async def test_snapshot_fills_catalog_defaults_for_absent_fields():
     )
 
     snapshot = core.agent_run_posts()[0]["definition_snapshot"]
-    # The catalog default is a deliberately low-cost model (#414) — assert the
-    # exact slug so a future silent switch back to an expensive default is caught.
-    assert snapshot["model"] == "moonshotai/kimi-k3"
+    # The orchestrator fills in max_turns, but NOT model — model is resolved by Core
+    # (biffo-template#910: single source of truth for defaults).
+    assert "model" not in snapshot
     assert snapshot["max_turns"] == 1
 
 
@@ -614,13 +614,12 @@ async def test_depth_ceiling_refusal_surfaces_as_an_action_error():
         )
 
 
-async def test_agent_action_requires_name_and_instructions():
+async def test_agent_action_requires_agent_name():
+    # agent_name is still required; instructions are now optional (biffo-template#910)
     core = FakeCore([])
 
     with pytest.raises(ActionError, match="missing required key"):
         await request_agent_run({"instructions": "x"}, {}, core_client=core.client())
-    with pytest.raises(ActionError, match="missing required key"):
-        await request_agent_run({"agent_name": "a"}, {}, core_client=core.client())
 
 
 def test_every_catalog_action_type_has_a_handler():

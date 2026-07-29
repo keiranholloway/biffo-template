@@ -28,6 +28,8 @@ const runRecord: AgentRunResponse = {
   created_at: '2026-07-20T09:30:00Z',
   updated_at: '2026-07-20T09:30:05Z',
   workflow_run_id: null,
+  dry_run: false,
+  idempotency_key: null,
   agent_name: 'demo-enricher',
   status: 'completed',
   run_as_kind: 'system',
@@ -59,6 +61,8 @@ const runRecord: AgentRunResponse = {
   cost_usd: 0.0123,
   started_at: '2026-07-20T09:30:00.000Z',
   completed_at: '2026-07-20T09:30:01.400Z',
+  prompt_version_id: null,
+  prompt_version: null,
 }
 
 function searchParamsFrom(query: string): URLSearchParams {
@@ -139,5 +143,38 @@ describe('AgentRunDetailClient', () => {
     useSearchParamsMock.mockReturnValue(searchParamsFrom(''))
     render(<AgentRunDetailClient />)
     expect(await screen.findByText('No run selected.')).toBeInTheDocument()
+  })
+
+  it('shows the prompt_version generation number when present', async () => {
+    useSearchParamsMock.mockReturnValue(searchParamsFrom('run=run-123'))
+    const recordWithVersion: AgentRunResponse = {
+      ...runRecord,
+      prompt_version_id: 'agent-id-123',
+      prompt_version: 3,
+    }
+    fetchAgentRun.mockResolvedValue(recordWithVersion)
+
+    render(<AgentRunDetailClient />)
+    await screen.findByRole('heading', { name: 'demo-enricher' })
+
+    // The stat should show the prompt generation number
+    expect(screen.getByText('Prompt version')).toBeInTheDocument()
+    expect(screen.getByText('3')).toBeInTheDocument()
+  })
+
+  it('does not show prompt_version stat when null', async () => {
+    useSearchParamsMock.mockReturnValue(searchParamsFrom('run=run-123'))
+    const recordWithoutVersion: AgentRunResponse = {
+      ...runRecord,
+      prompt_version_id: null,
+      prompt_version: null,
+    }
+    fetchAgentRun.mockResolvedValue(recordWithoutVersion)
+
+    render(<AgentRunDetailClient />)
+    await screen.findByRole('heading', { name: 'demo-enricher' })
+
+    // The stat should not appear
+    expect(screen.queryByText('Prompt version')).not.toBeInTheDocument()
   })
 })

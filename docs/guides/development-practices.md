@@ -318,21 +318,21 @@ each, so the column sums exceed the row count.
 | **tabsii-crm** | 5 of 200 | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent" |
 | **tabsii-marketplace** | 1 of 200 | `python-jose` removal; the credential-dependent build |
 | **biffo-runners** | 1 of 200 | Runner fleet configuration |
-`byFixRepo`, regenerated at **220 rows** on 2026-07-29:
+`byFixRepo`, regenerated at **224 rows** on 2026-07-29:
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 117 of 220 (53%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, the git-hook chain, the scaffolder |
-| **tabsii-platform** | 21 of 220 | RLS lane, SES identity + envelope, the run-outcome seam, the enrolment write policy |
-| **biffo-plugin-ideation** | 13 of 220 | A UI rendering a 500 as an empty state; publish workflow; dead manifest block |
-| **biffo-plugin-idea-scout** | 11 of 220 | Adapter seam, research search, styling, release workflows |
-| **biffo-platform** | 9 of 220 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-crm** | 9 of 220 | E2E harness, repo settings, the activity timeline's empty state, **three cadence-surface defects a browser found** |
-| **tabsii-intake** | 5 of 220 | CI generation, branch-protection contexts, `python-jose` removal |
-| **tabsii-marketplace** | 2 of 220 | `python-jose` removal; credential-dependent build |
-| **biffo-runners** | 1 of 220 | Runner fleet configuration |
+| **biffo-template** | 120 of 224 (54%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, the git-hook chain, the scaffolder |
+| **tabsii-platform** | 21 of 224 | RLS lane, SES identity + envelope, the run-outcome seam, the enrolment write policy |
+| **biffo-plugin-ideation** | 13 of 224 | A UI rendering a 500 as an empty state; publish workflow; dead manifest block |
+| **biffo-plugin-idea-scout** | 11 of 224 | Adapter seam, research search, styling, release workflows |
+| **biffo-platform** | 9 of 224 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-crm** | 9 of 224 | E2E harness, repo settings, the activity timeline's empty state, **three cadence-surface defects a browser found** |
+| **tabsii-intake** | 5 of 224 | CI generation, branch-protection contexts, `python-jose` removal |
+| **tabsii-marketplace** | 2 of 224 | `python-jose` removal; credential-dependent build |
+| **biffo-runners** | 1 of 224 | Runner fleet configuration |
 
-**The shape held again.** 220 rows, `biffo-template` at 53% — it was 54% at 159
+**The shape held again.** 224 rows, `biffo-template` at 54% — it was 54% at 159
 rows and 54% at 166. Four sessions of unrelated work have not moved where fixes
 land: **more than half belong upstream, in the repo none of them surfaced in.**
 

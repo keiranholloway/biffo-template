@@ -141,6 +141,11 @@ audit_json() {
   audit_json arming "sh scripts/hook-audit.sh --estate '$ESTATE'" '^[0-9]+ working trees'
   printf ','
   audit_json drift "sh scripts/shared-sync.sh --check --estate '$ESTATE'" 'current, .* drifted'
+  printf ','
+  # Fourth audit (#715). Branch protection drifted for ~3 weeks across three
+  # repos -- including the live core platform -- because a scaffold-time 403 is
+  # skipped permanently and nothing ever re-asks. This is the re-asking.
+  audit_json protection "sh scripts/protection-audit.sh --estate '$ESTATE'" 'branches checked'
   printf ']}\n'
 } > "$AUDITS"
 

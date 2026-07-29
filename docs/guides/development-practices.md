@@ -310,19 +310,19 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **99 rows** (never typed by hand, see *Adding a row*):
+`byFixRepo`, regenerated at **221 rows as rendered on this page**. `evidence.jsonl` separately holds **248** — a reworded row is stored as a new one and its predecessor retained, see the duplication row. The split below is counted from the page:
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 68 of 99 (69%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, design tokens, the practices tooling itself |
-| **tabsii-platform** | 8 of 99 | Divergence ratchet, repo settings, the RLS lane, raw-SQL portability, SES identity and bounce capture |
-| **biffo-platform** | 5 of 99 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
-| **tabsii-intake** | 5 of 99 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-plugin-idea-scout** | 4 of 99 | Adapter seam, research search capability, its own stylesheet |
-| **tabsii-marketplace** | 2 of 99 | `python-jose` removal; the credential-dependent build |
-| **tabsii-crm** | 1 of 99 | The missing sibling proxy for a core route its own frontend called |
-| **biffo-plugin-ideation** | 1 of 99 | A UI rendering a 500 as an empty state |
-| **biffo-runners** | 1 of 99 | Runner fleet docs + fail-fast |
+| **biffo-template** | 107 of 221 (48%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, design tokens, the practices tooling itself |
+| **tabsii-platform** | 21 of 220 | Divergence ratchet, repo settings, the RLS lane, raw-SQL portability, SES identity and bounce capture |
+| **biffo-platform** | 7 of 220 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
+| **tabsii-intake** | 5 of 220 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-idea-scout** | 12 of 220 | Adapter seam, research search capability, its own stylesheet |
+| **tabsii-marketplace** | 1 of 220 | `python-jose` removal; the credential-dependent build |
+| **tabsii-crm** | 9 of 220 | The missing sibling proxy for a core route its own frontend called |
+| **biffo-plugin-ideation** | 14 of 220 | A UI rendering a 500 as an empty state |
+| **biffo-runners** | 1 of 220 | Runner fleet docs + fail-fast |
 
 **The drift downward continued, and a new repo appeared.** `biffo-template` takes
 **68 of 99** — 69%, against 70% at 94 rows, 82% at 65 and 86% at both 57 and 50.
@@ -391,7 +391,7 @@ weeks, and it is a *recurrence* of a pattern already logged against
 first instance was recorded `unfiled` and never generalised. Two repos, same
 defect, and the corpus predicted it without anyone reading the prediction.
 
-**`biffo-template` takes 102 of 210 — 49%, and this capture is not evidence
+**`biffo-template` takes 107 of 221 — 48%, and this capture is not evidence
 about the estate.** All ten new rows are findings about the measurement
 apparatus itself, filed by auditing the dataset rather than by doing product
 work, so they inflate the template's share by construction. Read the ratio from
@@ -674,6 +674,12 @@ cycle for test-only changes.
 | — | **154 of 155 scoreboard rows carry no cost, so the corpus can be counted but not ranked.** §8 requires "what it cost in wall-clock time"; one row has ever recorded it. A ten-minute fix and one that ate an afternoon are the same size in the dataset, which makes "what should we restructure?" — the question the scoreboard exists to answer — unanswerable from it. **Checked before blaming the extractor: only 5 rows state a duration in any form, so this is a capture failure, not a parsing one** | **visibility** | `docs/practices/evidence.jsonl` | biffo-template — the capture step, wherever it lands | unfiled |
 | — | **Both recoveries from earlier data loss silently corrupted the page.** #762 ("restore three sessions deleted by a stale-base merge") and #777 ("restore 93 lines #774 deleted") each re-inserted a repo-tally row into the *cost* table, where a 3-column row is structurally valid and therefore invisible — they sat there through every subsequent edit and every review of this page. Restoring deleted content is treated as self-evidently safe and is the one operation here with no verification step at all | **drift** | `docs/guides/development-practices.md` — found by grepping for a stale count | biffo-template — the restore practice, and whatever checks table shape | unfiled |
 | — | **`parseCost` takes the first match of the word "cost" and gives up, so a row that discusses cost before stating its figure loses the figure silently.** `"no cost, so the corpus … this cost 25m"` extracts `null`; `"cost 25m"` alone extracts 25. It also requires that exact keyword, so every row phrased `"~40 min round trip"` or `"ate an afternoon"` is invisible to it. Small today — it drops 5 rows — but it fails **in the direction of the discipline**: the more carefully a row explains what something cost, the likelier its number is discarded | **fail-open** | `scripts/practices-evidence.mjs` `parseCost` | biffo-template — `scripts/practices-evidence.mjs` | unfiled |
+| — | **The number this page exists to produce is present three times, with three different values, and nothing reconciles them.** `docs/guides/development-practices.md` carries three `byFixRepo` tally blocks — at the time of writing saying **220**, **210** and **236** rows, with `biffo-template` at 48%, 49% and 53%. Each was written by a different session updating "the" tally and matching only the first or nearest block. I found it only because a deletions audit showed my own edit had replaced a block still reading **99 rows**, four months of drift stale, that I had not known existed. The skill's own guidance says *"a stale count is worse than none, because it will be quoted"* — this is that, tripled, on the section that answers *where should we invest*. **Left in place rather than resolved**: choosing which of three is canonical is a call for the review, and deleting two other sessions' blocks is how this page lost content twice before | **drift** | `docs/guides/development-practices.md` | needs one tally with one owner, or a generated block | unfiled |
+| — | **A curated list shipped as the safe choice was wrong for half its consumers, and it replaced free text that at least forced deliberate entry.** Seeding the ideation model catalog, I loaded five models straight from the seed script without checking that web search travels with the model id — OpenRouter's `:online` suffix, chosen precisely *because* the tool-based alternative could be silently half-configured. Two of the four agents that read this catalog (idea-scout research, ideation analyst) do not work without it, and none of the five entries carried it. The picker shows every entry to every agent with nothing marking which will disable search, and the failure is the documented expensive one: no findings, run fails, four paid model calls. **Caught by the operator reading the list, not by me writing it or by any test.** Condition: **replacing free entry with a curated picker moves the correctness burden from the person typing to the person curating, and nothing checks the curator** | **fail-open** | `biffo-plugin-ideation` model catalog, seeded for #91 | biffo-plugin-ideation #92 — needs a `web_capable` flag, not better labels | open |
+| — | **Two issues were filed on wrong premises in one session, both by grepping a single file and generalising to the feature.** #89 said "the model catalog governs nothing" — the picker already existed in `web-admin/src/components/`, which I never opened after checking the table and the request path. #888 said the run detail page "shows no cost at all — zero references" — it showed cost at `agent-run-detail-client.tsx:235`; I grepped `[slug]/page.tsx`, got zero, and never noticed the page delegates to a client component. **Both times the real defect was better than the filed one** (an empty catalog; a duplicated money formatter), so the work was not wasted — but the issues were wrong, and an issue is read by whoever picks it up. Condition: **a zero-hit grep over one file is evidence about that file, and gets written up as evidence about the feature** | **process** | `biffo-plugin-ideation` #89, `biffo-template` #888 | both closed with corrections on the issues | fixed |
+| — | **An instance carried a known-fixed defect for two minor versions, and the fix arrived as a side effect of unrelated work.** `biffo-platform`'s `main.py` had `build_core_crud_router()` above `build_domain_router()` — the #668 defect, where building the domain router is what *imports* domain packages and registers their models, so reversed, every `/api/v1/data/<table>` route a relocated domain backs vanishes **silently, with a green suite and green CI**. The template fixed it; the instance did not receive it until a `core upgrade` was run for a different feature entirely, where it surfaced as a merge conflict. Nothing forces or reports the gap: an instance can sit on a fixed defect indefinitely and the only signal is somebody happening to upgrade | **drift** | `biffo-platform` `services/api/src/api/main.py` | biffo-platform#120, guarded by the template's `test_main_router_ordering.py` | fixed |
+| — | **The extractor silently drops a scoreboard row whose text contains an unescaped pipe — and the row it ate was the one about piped commands.** A row is parsed by splitting on `\|`, so a literal pipe in the prose produces 7 cells where 6 are expected and `extractRows` skips it. No error, no warning: the row renders on the page and is absent from `evidence.jsonl`, so every headline computed from the dataset is short by one and the page and the dataset disagree in the *opposite* direction from the known duplication defect. Found only because I counted rows added (2) against rows written (3) | **fail-open** | `scripts/practices-evidence.mjs` `extractRows` | biffo-template — needs to warn on a cell-count mismatch, not skip | unfiled |
+| — | **RECURRENCE, third instance in one day, one hour after writing the row about it: a piped git command reports the pipe's status.** `git commit … <<EOF ... EOF \| tail -2; echo $?` printed `0` while commitlint rejected the message (`merge:` is not an allowed type) and the merge stayed uncommitted. Caught only because `git log origin/dev..HEAD` showed zero commits ahead. The corpus already holds this condition twice and I had authored the second entry ninety minutes earlier. **Frequency is now the finding**: three instances in a day, by an author who knows the rule, is not an attention problem — it is a rule with no mechanism, and every instance arrived while filtering output for a legitimate reason (a dependabot banner, hook noise) | **process** | this session, third time | biffo-template — the reminder approach is falsified | unfiled |
 | — | **The obvious fix for a measured failure made it measurably worse, on both axes, and was only caught because the same measurement was repeated.** Title-only dedup produced 4 candidates, 1 genuinely new. Briefing the pitches as well — more information, better targeted, cheap in tokens — produced **2 candidates, 0 new**, and reused a prior product name verbatim that the weaker version had avoided. Two is half the documented floor of five, so it was a product regression independent of how novelty is scored. Hypothesis, not conclusion: **describing what to avoid in detail may anchor a model on it rather than steer it away.** Reverted rather than tuned | **visibility** | `biffo-plugin-idea-scout` #56, reverted by #58 | biffo-plugin-idea-scout — reverted; direction moved upstream to sourcing | fixed |
 | — | **Two features were built, merged, resynced across two repos and deployed before anyone asked whether they worked — and neither did.** Each attempt cost a plugin PR, an instance resync PR, a deploy and an artifact verification: **three full laps for a net-zero outcome**, plus a fourth to revert. Every gate was green throughout and every gate was honest; they assert plumbing, and the requirement was behavioural. The condition is not "we forgot to test" — **there was no cheap test to forget.** The acceptance test that settles it (run twice with identical inputs, count same-idea-different-name) costs a real agent run and a human judgement, so nothing in the pipeline will ever run it | **process** | `biffo-plugin-idea-scout` #49, twice | needs a budgeted behavioural check, not another gate | unfiled |
 | — | **A feature shipped, deployed, passed every test, and does not do the thing it was built for — measured only because someone asked for the measurement.** Cross-run dedup briefs the agents with titles the founder has already seen. Four runs on dev with identical inputs: **3 of 4 candidates were near-duplicates of prior ones**, one of them the same idea with the words reordered (`Compliance-Evidence Autopilot for Fintechs on AWS/GCP` → `PCI Autopilot — continuous compliance evidence for fintech teams on AWS`). The tests were all honest: they assert the list reaches synthesis, which it does. **Nothing in the suite could have been written to assert that a model obeys an instruction**, so the gap between "the mechanism works" and "the feature works" was invisible to every gate | **fail-open** | `biffo-plugin-idea-scout` #49, reopened on evidence | biffo-plugin-idea-scout #49 — needs semantic matching, not string matching | open |
@@ -1121,6 +1127,35 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**Reconciling an aggregate against the rows it aggregates, in production.** The
+cost summary could have been "green tests, looks right" — instead the
+`claude-opus-4-8` row was checked arithmetically against live data: mean
+$0.1549 is $3.5637 ÷ **23 priced runs**, not ÷ 25 ($0.1425). That is the one row
+with unpriced runs, so it is the only one that could distinguish the two
+denominators, and getting it backwards would make a model look *cheaper the more
+of its runs failed to record a cost* — precisely inverted for the comparison the
+feature exists to support.
+
+**Mutation-testing two guards rather than trusting a subagent's report.** The
+`model: null` case (reverting it fails with `assert '' is None`) and the
+mean-cost denominator (changing it to `cost.runs` fails). Both passed on report;
+only the mutation proves they defend anything.
+
+**A subagent deviated from my brief and was right to.** I told it to subclass
+`BiffoBaseSchema` like the neighbouring schema; that base carries
+`id`/`tenant_id`/`created_at`/`updated_at`, which a per-model aggregate row has
+none of. It used plain `BaseModel` and flagged the deviation. The brief was
+wrong and the report said so — which only works because the prompt asked for
+deviations to be surfaced rather than absorbed.
+
+**Fixing the skill the moment its assumption was proven false.** `Step 3.6` of
+`build-plugin-feature` asserted this session has no browser and should print a
+URL and stop. It has one. The step now says to do the click-through, records why
+the old wording was wrong, and generalises it: *a deferred capability is
+indistinguishable from an absent one when you are reasoning about what is
+possible.*
+
 
 **Reverting on evidence instead of tuning toward a hope.** The pitch change was
 a reasonable idea, cheaply built, and the measurement said it was worse on both

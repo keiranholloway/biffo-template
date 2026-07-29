@@ -309,245 +309,91 @@ now stated): count **every scoreboard row**, filed or not — an unfiled row is
 still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
-**Generated, not typed** — `node scripts/practices-evidence.mjs --report`, `byFixRepo`. Regenerated 2026-07-29 at **248 corpus rows** (the page renders 168 of them; the corpus retains superseded rewordings, so both numbers are given rather than one being quietly preferred):
-> **This table said 99 rows and 68 for biffo-template when it was regenerated.** The corpus held 248 and 126 — stale by a factor of 2.5, on the one number this page tells you to act on, in the section headed *"Generated, not typed"*. Three sessions edited it today (200 → 99 → 248) because it is transcribed by hand from a generated report, and concurrent sessions cannot converge on a hand-copied number. **Do not read this table without re-running the command.** A generator that emits the markdown directly is the real fix and does not exist yet.
-| Repo | Fixes landing here | Notes |
-| --- | --- | --- |
-| **biffo-template** | 126 of 248 (51%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
-| **tabsii-platform** | 25 of 248 (10%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
-| **biffo-plugin-ideation** | 14 of 248 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **tabsii-crm** | 13 of 248 | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
-| **biffo-plugin-idea-scout** | 13 of 248 | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
-| **biffo-platform** | 10 of 248 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
-| **tabsii-intake** | 5 of 248 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **tabsii-marketplace** | 2 of 248 | `python-jose` removal; the credential-dependent build |
-| **biffo-runners** | 1 of 248 | Runner fleet docs + fail-fast |
-**Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **221 rows as rendered on this page**. `evidence.jsonl` separately holds **248** — a reworded row is stored as a new one and its predecessor retained, see the duplication row. The split below is counted from the page:
-| Repo | Fixes landing here | Notes |
-| --- | --- | --- |
-| **biffo-template** | 107 of 221 (48%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, design tokens, the practices tooling itself |
-| **tabsii-platform** | 21 of 220 | Divergence ratchet, repo settings, the RLS lane, raw-SQL portability, SES identity and bounce capture |
-| **biffo-platform** | 7 of 220 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
-| **tabsii-intake** | 5 of 220 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-plugin-idea-scout** | 12 of 220 | Adapter seam, research search capability, its own stylesheet |
-| **tabsii-marketplace** | 1 of 220 | `python-jose` removal; the credential-dependent build |
-| **tabsii-crm** | 9 of 220 | The missing sibling proxy for a core route its own frontend called |
-| **biffo-plugin-ideation** | 14 of 220 | A UI rendering a 500 as an empty state |
-| **biffo-runners** | 1 of 220 | Runner fleet docs + fail-fast |
+**Generated, not typed — and now actually generated.** The block below is
+written by `node scripts/practices-evidence.mjs --write` and asserted against
+`evidence.jsonl` by `practices-evidence.test.mjs`. Do not edit inside the
+markers; re-run the command.
 
-**The drift downward continued, and a new repo appeared.** `biffo-template` takes
-**68 of 99** — 69%, against 70% at 94 rows, 82% at 65 and 86% at both 57 and 50.
-`tabsii-crm` enters the table for the first time, and `tabsii-platform` has gone
-6 → 8 in a single session.
+> **It took four contradictory copies to earn that.** On 2026-07-29 this section
+> carried **four** tables quoting **99**, **210**, **236** and **248** rows, with
+> prose variously claiming 48%, 51%, 53%, 54%, 69% and 88% — under a heading
+> reading *"Generated, not typed"*. It was neither. `--report` printed JSON and a
+> human transcribed it, so every concurrent session appended its own copy rather
+> than converging, and none could win a merge. The dataset merged cleanly
+> throughout, because it is append-only. **The transcription step was the whole
+> defect**, and the fix was to delete it, not to recount more carefully — which
+> the page had already resolved to do three times, in prose, without effect.
 
-Both movements have the same cause and it is not sampling: satellite repos are
-starting to carry defects that are genuinely *theirs* — a sibling that failed to
-proxy a route its own frontend called, raw SQL that only worked because of the
-database underneath it, an untracked sending identity. Those could not have been
-fixed upstream. The number to watch is whether template's share keeps falling as
-instances grow their own surface area, because that is the point at which "fix it
-in the template" stops being the default answer.
-`byFixRepo`, regenerated at **210 rows as rendered on this page**. `evidence.jsonl` separately holds **238** — a reworded row is stored as a new one and its predecessor retained, see the duplication row. The split below is counted from the page:
+<!-- BEGIN generated: fix-repo-tally -->
 
-> **Two sessions collided on this table on 2026-07-29** and git could not merge it: both had edited the same hand-maintained totals from the same base (193), one adding 4 rows and one adding 3. Neither side was wrong and neither could simply win — the resolution is the sum of both deltas, which is the exact staleness this section's own warning describes. `evidence.jsonl` merged cleanly because it is append-only; the prose totals did not because they are transcribed. Prefer `node scripts/practices-evidence.mjs --report` over any number typed here.
+_Generated by `node scripts/practices-evidence.mjs --write` from **257** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `practices-evidence.test.mjs` fails when this block does not match the dataset._
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 102 of 210 (49%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the git-hook chain, the scaffolder itself |
-| **tabsii-platform** | 17 of 200 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity and its event-destination envelope |
-| **biffo-plugin-ideation** | 13 of 200 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **biffo-plugin-idea-scout** | 11 of 200 | Adapter seam, research search capability, its own styling, release + publish workflows |
-| **biffo-platform** | 6 of 200 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 200 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **tabsii-crm** | 5 of 200 | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent" |
-| **tabsii-marketplace** | 1 of 200 | `python-jose` removal; the credential-dependent build |
-| **biffo-runners** | 1 of 200 | Runner fleet configuration |
-`byFixRepo`, regenerated at **236 rows** on 2026-07-29:
+| **biffo-template** | 133 of 257 (52%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
+| **tabsii-platform** | 25 of 257 (10%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
+| **biffo-plugin-ideation** | 14 of 257 (5%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **tabsii-crm** | 13 of 257 (5%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
+| **biffo-plugin-idea-scout** | 12 of 257 (5%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
+| **biffo-platform** | 10 of 257 (4%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
+| **tabsii-intake** | 5 of 257 (2%) | CI generation, branch-protection contexts, the `python-jose` removal |
+| **tabsii-marketplace** | 2 of 257 (1%) | `python-jose` removal; the credential-dependent build |
+| **biffo-runners** | 1 of 257 (0%) | Runner fleet docs + fail-fast |
 
-| Repo | Fixes landing here | Notes |
-| --- | --- | --- |
-| **biffo-template** | 124 of 236 (53%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, the git-hook chain, the scaffolder, **the audit hardening the skeletons never received** |
-| **tabsii-platform** | 23 of 236 | RLS lane, SES identity + envelope, the run-outcome seam, the enrolment write policy |
-| **biffo-plugin-ideation** | 13 of 236 | A UI rendering a 500 as an empty state; publish workflow; dead manifest block |
-| **tabsii-crm** | 12 of 236 | E2E harness, repo settings, the activity timeline's empty state, **three cadence-surface defects a browser found** |
-| **biffo-plugin-idea-scout** | 11 of 236 | Adapter seam, research search, styling, release workflows |
-| **biffo-platform** | 9 of 236 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 236 | CI generation, branch-protection contexts, `python-jose` removal |
-| **tabsii-marketplace** | 2 of 236 | `python-jose` removal; credential-dependent build |
-| **biffo-runners** | 1 of 236 | Runner fleet configuration |
+<!-- END generated: fix-repo-tally -->
 
-**The shape held again.** 236 rows, `biffo-template` at 53% — it was 54% at 159,
-166 and 224 rows. Five sessions of unrelated work have not moved where fixes
-land: **more than half belong upstream, in the repo none of them surfaced in.**
+### What the shape means
 
-**#743 is that sentence in its purest form.** The defect surfaced as "every
-satellite reds on a registry hiccup" — a symptom of six siblings and two plugin
-repos — and the entire fix landed in `biffo-template`, in a directory
-(`_skeletons/`) that runs in no environment at all. Nothing was wrong in any of
-the eight repos that suffered it, which is exactly why nothing in any of them
-could have found it.
+**More than half of all fixes land in `biffo-template` — the repo almost none of
+them surfaced in.** That ratio has been stable across every recount since the
+corpus passed 100 rows, through sessions of entirely unrelated work. It is the
+most durable finding on this page, and it is a statement about what Biffo *is*
+rather than a defect: the template is the product, and the satellites are where
+its defects become visible.
 
-**`tabsii-crm` tripled (3 → 9) in one session, and every new row came from a
-browser, not a suite.** That is the first time a single repo's count has moved
-because of *how* it was checked rather than how much was built there.
+Read that way, two consequences matter more than the percentage:
 
-**The shape did not change, and that is the finding.** Seven new rows moved
-`biffo-template` from 86/159 to 90/166 — **54% either way**. Four sessions of
-unrelated work have not shifted where fixes land: more than half still belong
-upstream, in the repo none of them surfaced in.
-
-**One movement worth naming:** `tabsii-crm` gained a row for the first time in
-weeks, and it is a *recurrence* of a pattern already logged against
-`biffo-plugin-ideation` — a UI rendering a failure as an empty collection. The
-first instance was recorded `unfiled` and never generalised. Two repos, same
-defect, and the corpus predicted it without anyone reading the prediction.
-
-**`biffo-template` takes 107 of 221 — 48%, and this capture is not evidence
-about the estate.** All ten new rows are findings about the measurement
-apparatus itself, filed by auditing the dataset rather than by doing product
-work, so they inflate the template's share by construction. Read the ratio from
-the previous capture, not this one.
-
-The series: 86% at 50 and 57 rows,
-82% at 65, 70% at 94, 66% at 102, 63% at 109, 60% at 116 and 122, 58% at 126, 132
-and 134, 57% at 138, 56% at 139. The absolute template count did **not** move
-across this capture (78 → 78) while five rows landed elsewhere — the first capture where the template
-absorbed none of the new work. One capture is not a trend, but it is the first
-evidence that the settling described above may be a genuine plateau rather than a
-slower slide.
-
-**All four new rows are `visibility`, and three of them are the same shape: a
-system reporting health it did not have.** A test proving its own premise, an
-aggregate metric read as attribution, a push carrying nothing while its gate went
-green, and infrastructure correctly wired but never invoked. None was caught by a
-gate; all four were caught by looking at the deployed thing. That is an argument
-for cheap observability of *what actually ran*, not for more gates — the gates
-were all green.
-
-**All four went to `biffo-plugin-idea-scout`, which jumps 4 → 7 and overtakes
-both `biffo-platform` and `tabsii-intake` to third.** This is the first capture
-where a *plugin* repo absorbed a whole session's findings, and the rows are not
-symptoms surfacing there — they are defects the plugin **owns**: its own admin
-UI, its own asset base path, its own transport seam, its own closed-but-undone
-milestone. The satellite story so far has been instances carrying capability;
-this is the same move one layer further out.
-
-`tabsii-platform` is now 13 of 126 and owns the two newest: its RLS lane and its
-SES identity. Read with `tabsii-crm`'s first appearance last capture, the shape
-continues to move from "instances surface what the template must fix" toward
-"instances carry capability the template does not offer".
-
-**`tabsii-crm`'s first appearance still stands, and matters more than the
-percentage.** Every earlier satellite row was a *symptom* surfacing where someone
-hit it; `tabsii-crm`'s two are the repo **owning** something — an E2E harness it
-maintains and a repo setting only it can decide. With `tabsii-platform` up from 3
-to 12 (its RLS lane, the tests on it, and now its two extra DB engines), the shape
-keeps moving from "instances surface what the template must fix" toward
-"instances carry capability the template does not offer".
-
-**`visibility` is now the largest class at 38 of 126**, and it keeps growing
-fastest. The sub-shape named last capture — *a measurement that is confidently
-wrong, rather than a truth that is hidden* — has now recurred **six times**: a
-paginated `length(events)` (57x undercount), a retention ceiling read as a data
-description, a sub-agent's figures repeated unmeasured, a purge script reporting
-"0 kept" for a group with 16 live streams, a stale `core.version` reading 114
-minor versions behind, and a published version bump attributed to the wrong PR.
-
-Six instances is no longer a sub-shape, it is the dominant failure mode on this
-page, and every one produced a **plausible non-empty answer that was acted on**.
-The existing rule (*absence of evidence is not evidence*) covers empty results
-and none of these. `surfacedNotFixedHere` is **75 of 126**.
-
-**The SQL-echo rows are the older pattern reasserting itself:** the exposure was
-found in `biffo-platform` (and independently live in `tabsii-platform`) and could
-only be fixed in `services/api/` upstream — the instance's own ownership guard
-said so and refused the patch, which is the guard working exactly as designed on
-a security fix.
-
-> **This block was wrong on `dev` until 2026-07-28**, and the way it was wrong is
-> the lesson: it simultaneously read "at **65 rows**", a table of "of **89**",
-> and prose saying "**53 of 65**" — three different totals in one section, from
-> two sessions each hand-editing part of it. Regenerate the whole block from
-> `--report` in one go; never update a number in place.
-
-This is no longer "instances surface what the
-template must fix"; it is closer to a statement about what Biffo *is*. The
-template is the product, and the satellites are where its defects become
-visible. Read that way the number is not alarming, but it does mean **satellite
-repos are the test environment and should be resourced as one** — nobody is
-going to fix a template defect from inside a plugin.
-
-**The headline claim on this page was "the zero has held". It has not, and the
-previous count was stale in both directions.** The table said 44 rows when the
-scoreboard held 47 before this session added 3; the filed count (27) had not
-moved while unfiled rows grew from 17 to 23. Two plugin repos now carry a fix
-each, so **`biffo-plugin-ideation` is 1 of 50, not 0 of 44**.
-
-This is the third time a number quoted in prose on this page has gone stale
-without anyone noticing — the same drift the page warns about twice, once about
-its own headline. The lesson is not "recount more carefully"; it is that a
-hand-maintained count next to a hand-maintained table will always drift. These
-figures should be generated by `scripts/practices-evidence.mjs --report` and
-pasted, never typed.
-
-**What has *not* changed is the shape**: **88% of fixes still land in
-`biffo-template`**, and the two plugin rows are both *surface* defects (an error
-rendered as empty state, a missing build artifact) rather than the platform
-defects that block downstream work. The zero was always a stronger claim than the
-evidence needed — "defects are reported wherever someone runs into them and
-overwhelmingly fixed upstream" survives intact without it.
-
-The original case remains the clearest illustration: a user hit
-`Failed to load catalog: Unexpected token '<'` in the Ideation admin UI, and it
-was two platform defects stacked — a routing collision (#652) producing a 404,
-and a CDN rule (#647) disguising that 404 as a successful HTML response. The
-plugin was correct throughout.
-
-Two consequences worth internalising:
-
-- **Bug reports are attributed to where they are seen, not where they live.** Time
-  spent hardening plugins or instances would not have prevented these.
-- **A downstream repo can be blocked by a defect it cannot fix.** #652 has no
+- **Bug reports are attributed to where they are seen, not where they live.**
+  Time spent hardening plugins or instances would not have prevented most of
+  these. The clearest case remains `Failed to load catalog: Unexpected token '<'`
+  in the Ideation admin UI — two stacked platform defects, a routing collision
+  (#652) producing a 404 and a CDN rule (#647) disguising it as a successful HTML
+  response. The plugin was correct throughout.
+- **A downstream repo can be blocked by a defect it cannot fix.** #652 had no
   workaround inside `biffo-plugin-ideation`; #671/#664 blocked *every* instance's
-  guards from a broken npm credential. Platform defects are throughput blockers
-  for everything downstream, and should be priced accordingly.
+  guards from one broken npm credential. Platform defects are throughput blockers
+  for everything downstream and should be priced accordingly.
 
-**What changed with this recount:** the rows landing in `tabsii-platform` are
-mostly *scaffolding to detect the next defect*, not product fixes. Several rows
-come from a single afternoon's E2E of one feature, and they share one **root
-cause** (Core's `String(36)` id space meeting an instance's `UUID`s) rather than
-being distinct symptoms. That is the first time the page shows a repeated root
-cause, and it argues for a different investment than "fix more bugs": the
-template needs a way to exercise an instance's column types.
+**So satellite repos are the test environment, and should be resourced as one.**
+Nobody is going to fix a template defect from inside a plugin. ADR-0022's
+discovery order, the ownership guard's coverage, the event registry's field
+metadata and migration 0010's `public.users` assumption were all green in
+`biffo-template` and all broke on first real instance use. An instance is the
+template's integration test, and currently the only one.
 
-**What the larger sample added:** instance repos are not just where defects
-*appear*, they are where the template's untested seams get exercised for the
-first time. ADR-0022's discovery order, the ownership guard's coverage, the event
-registry's field metadata and migration 0010's `public.users` assumption were all
-green in `biffo-template` and all broke on first real instance use. An instance is
-the template's integration test, and currently the only one.
+**The counter-movement is real and worth watching.** Satellites increasingly
+carry defects that are genuinely *theirs* — a sibling failing to proxy a route
+its own frontend called, raw SQL that only worked because of the database
+underneath it, an untracked SES sending identity, a plugin's own admin UI and
+asset base path. Those could not have been fixed upstream. The number to watch is
+whether the template's share keeps falling as instances grow their own surface
+area, because that is the point at which "fix it in the template" stops being the
+default answer.
+
+**Two caveats on reading any single recount.** Captures whose rows are findings
+about the *measurement apparatus* inflate the template's share by construction —
+the apparatus lives here. And `tabsii-crm`'s jump in one session came from *how*
+it was checked (a browser, not a suite) rather than from how much was built
+there. Neither is evidence about the estate.
 
 ### How wide one feature reaches
 
-> **Reconciled 2026-07-28.** This note previously recorded that the counts did
-> not agree — table 54, extractor 53, prose 65 — and asked whoever fixed it to
-> reconcile the extractor against the table *before* pasting any generated
-> figure. Done: the extractor split on every `|`, including markdown-escaped
-> `\|`, which silently dropped exactly one row (the `js-dependency-audit.sh` row
-> quotes `echo "$out" \| jq`). It now splits on unescaped pipes only, and
-> **65 extracted = 65 in the table**.
->
-> The per-repo table above is now pasted from `--report`'s `byFixRepo` rather
-> than typed, which is what the paragraph above it promised and nothing
-> previously delivered.
->
-> The general lesson stands and is worth keeping after the specific defect is
-> gone: **a generator that under-reports without saying so is worse than a hand
+> **A generator that under-reports without saying so is worse than a hand
 > count**, because it carries the authority of having been computed. The
-> extractor discarded that row via a bare `continue` — no warning, no count of
-> skipped lines. It now cannot drop a row for *this* reason, but it would still
-> be silent about any other, and that is the residual gap.
+> extractor once split on every `|` including markdown-escaped `\|`, silently
+> dropping exactly one row via a bare `continue` — no warning, no count of
+> skipped lines. That specific defect is fixed and guarded, but the residual gap
+> stands: it would still be silent about any *other* reason it dropped a row.
 
 
 ## Where the cycles go
@@ -557,6 +403,42 @@ different question and often the more actionable one: a defect fixed in ten
 minutes and a defect that ate an afternoon get one row each up there.
 
 Measured on the 2026-07-27 session, which shipped one bug fix end to end.
+
+### The transcription step, priced (2026-07-29)
+
+**~35 min, and it had already been "fixed" three times in prose.** The
+"Where the work actually lands" section carried **four** tables quoting 99, 210,
+236 and 248 rows. Three separate sessions had written a warning into it — *"do
+not read this table without re-running the command"*, *"regenerate the whole
+block in one go; never update a number in place"*, *"these figures should be
+generated and pasted, never typed"* — and the fourth session still typed one,
+because pasting is a manual step and manual steps do not survive concurrency.
+
+**Structural, not carelessness.** `evidence.jsonl` merged cleanly through every
+one of those collisions because it is append-only; the prose totals could not,
+because two sessions editing the same hand-maintained number from the same base
+have no correct merge. The cost was not the 35 minutes to fix it — it was that
+the page's single most-quoted number was wrong by a factor of 2.5 for an unknown
+period, in the section headed *"Generated, not typed"*.
+
+**The fix was to delete the step, not to do it better.** `--write` splices the
+block and a test fails when it drifts. Three prose warnings achieved nothing in
+several weeks; one assertion closes it. **Any instruction of the form "remember
+to regenerate X" is a defect report against the tooling.**
+
+### The estate rollout that never happened (2026-07-29)
+
+**~25 min to find and fix, 1+ day of exposure.** #883 added two hardened
+dependency-audit scripts to `shared-files.json` and fixed both skeletons — and
+never ran `shared-sync.sh`. AGENTS.md §9 states in bold that adding a file to the
+shared set is not done until `--check` is clean. **12 of 13 satellites were
+missing them**, which is every existing repo: the skeleton fix reaches only repos
+created afterwards, which is precisely the "that is not a mechanism" failure
+`shared-sync.sh` was built to end. The mechanism existed, was documented, and was
+not invoked — so the distribution defect recurred *through* its own fix.
+
+Found by running the four estate audits, not by review. The audits are the only
+reason the exposure was one day rather than indefinite.
 
 ### The headline: ~10 hours, no working feature
 
@@ -3419,6 +3301,8 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **worked — §8's ROI framing changed what got built** | Pricing the four residual gaps before building any of them killed one outright (0 violations in 165 commits) and reordered the rest. The skill's insistence on *numbers, not adjectives* is what made "decline this" a defensible answer rather than laziness. |
 | `biffo-verify` | **worked — §2, again, and again it was the rollout that found it** | The `--no-cov` defect was invisible in the template and appeared the first time the gate ran in a repo whose pytest setup differed. Second time in one day that "reproduce by the reporter's route" meant "run it somewhere the assumption does not hold". |
 | `biffo-workflow` | **worked — 6 PRs, no lost commits, one caught refusal** | Unpiped `PUSH EXIT` surfaced the gate legitimately refusing a push mid-rollout. Its §1 deps step remains the difference between the gate running and erroring. |
+| `biffo-workflow` | **partial — step 7's `--auto` default is unavailable in two thirds of the estate** | The skill asserts "all five active Biffo repos now have `allow_auto_merge=true`", and warns that `--auto` degrades to an immediate merge when it is false. Measured across 13 satellites: **9 were false**. The assertion was true of the five repos it was written about and was never re-checked as the estate grew. Its own "confirm rather than assume" line is what caught it — the check was in the skill and paid for itself. |
+| `biffo-verify` | **worked — §8's "check that your headline number can fail"** | Applied to this page's own tally: four contradictory copies of one table, none of which could fail anything. The section's fix was to delete the transcription step, not to recount. |
 | `biffo-workflow` | **partial — commit bodies are shell-interpolated** | A backtick in a `-m` message silently ate a code snippet (`_out=$(cmd); _rc=$?` became blank), and a `"` -quoted `gh pr create --body` interpolated half a PR description into shell errors. The skill shows `-m "..."` throughout and never warns that message bodies containing backticks or `$(` need a heredoc or `-F`. Cost two amends. |
 | `biffo-sib-build` | **worked** | Its "When to stop and ask" step is what caught M3's unbuildable design — the plan specified a filter that could not match, and the skill's instruction to redraft rather than improvise turned a silent-inert feature into an approved correction. That step earned the whole skill |
 | `biffo-sib-build` | **partial** | Nothing in it sequences the plan's own E2E before the last milestone merges. Five milestones landed green; the browser then found four defects in an hour. The skill should require the testing plan's end-to-end check as a gate on the FINAL PR, not as an afterthought |

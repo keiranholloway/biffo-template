@@ -1905,3 +1905,88 @@ describe('estate headline is capability, not the proving ground (#768)', () => {
     expect(out.tabsiiCapabilityShare).toBeNull()
   })
 })
+
+// @ts-expect-error -- plain .mjs, same arrangement as above.
+import {
+  tallyMarkdown,
+  spliceTally,
+  TALLY_BEGIN,
+  TALLY_END,
+  REPO_NOTES,
+} from '../../../scripts/practices-evidence.mjs'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
+/**
+ * The repo root, resolved from this file rather than from `process.cwd()`.
+ *
+ * vitest runs with cwd at `cli/`, so a relative `docs/...` would silently read
+ * nothing and the assertions below would pass against an empty string — a
+ * fail-open in the very guard written to close one.
+ */
+const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url))
+const readRepo = (p: string) => readFileSync(join(REPO_ROOT, p), 'utf8')
+
+describe('fix-repo tally is generated, not transcribed', () => {
+  const rows = readRepo('docs/practices/evidence.jsonl')
+    .split('\n')
+    .filter((l) => l.trim())
+    .map((l) => JSON.parse(l))
+
+  it('reads a non-empty dataset', () => {
+    // Guards the guard: every assertion below is vacuously true against [].
+    expect(rows.length).toBeGreaterThan(100)
+  })
+
+  it('matches what is committed in the page', () => {
+    const page = readRepo('docs/guides/development-practices.md')
+    const start = page.indexOf(TALLY_BEGIN)
+    const end = page.indexOf(TALLY_END)
+    expect(start, `${TALLY_BEGIN} missing from the page`).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+
+    const committed = page.slice(start, end + TALLY_END.length)
+    expect(
+      committed,
+      'The fix-repo tally is stale. Run `node scripts/practices-evidence.mjs --write`.\n' +
+        'This block is generated from evidence.jsonl — do not edit it by hand.\n' +
+        'If --write does not settle it, suspect prettier: the page is covered by\n' +
+        '`format:check`, so a generator emitting non-prettier-stable markdown makes\n' +
+        '`pnpm run format` and `--write` fight, and this message blames the wrong one.',
+    ).toBe(tallyMarkdown(rows))
+  })
+
+  it('appears exactly once — a second copy is the failure this replaced', () => {
+    const page = readRepo('docs/guides/development-practices.md')
+    expect(page.split(TALLY_BEGIN).length - 1).toBe(1)
+    expect(page.split(TALLY_END).length - 1).toBe(1)
+  })
+
+  it('quotes one denominator, on every row', () => {
+    const block = tallyMarkdown(rows)
+    const denominators = new Set([...block.matchAll(/\d+ of (\d+)/g)].map((m) => m[1]))
+    // The four hand-typed copies quoted 99, 210, 236 and 248 simultaneously.
+    expect([...denominators]).toEqual([String(rows.length)])
+  })
+
+  it('names every repo it counts', () => {
+    // A repo with no note still gets a row; this catches the reverse — a note
+    // for a repo the tally no longer knows about, which reads as coverage.
+    const block = tallyMarkdown(rows)
+    for (const repo of Object.keys(REPO_NOTES)) {
+      expect(block, `${repo} has a note but no row`).toContain(`**${repo}**`)
+    }
+  })
+
+  it('refuses to append when the markers are missing', () => {
+    // Appending a second table silently is exactly how the page grew four.
+    expect(() => spliceTally('# a page with no markers\n', 'block')).toThrow(/markers not found/)
+  })
+
+  it('replaces the block rather than duplicating it', () => {
+    const page = `before\n${TALLY_BEGIN}\nold\n${TALLY_END}\nafter`
+    const out = spliceTally(page, `${TALLY_BEGIN}\nnew\n${TALLY_END}`)
+    expect(out).toBe(`before\n${TALLY_BEGIN}\nnew\n${TALLY_END}\nafter`)
+    expect(out).not.toContain('old')
+  })
+})

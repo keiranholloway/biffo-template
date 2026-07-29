@@ -168,7 +168,28 @@ working trees armed — 18%**, with 5 `DEAD` and 25 never configured.
 1. **Hooks are tracked files.** They live in `.githooks/`, are committed, and
    are executable with a shebang. A tracked file exists the instant
    `git worktree add` completes.
-2. **`prepare` sets `core.hooksPath` to that directory** and prints that it did.
+2. **`prepare` installs dispatchers into the repository's shared hooks
+   directory** (`scripts/install-hooks.sh`) and prints that it did. Each
+   dispatcher execs the running worktree's `.githooks/<name>`.
+
+   **Not `core.hooksPath`.** That was the first fix and it does not reach far
+   enough: `core.hooksPath` is a *relative* path resolved per worktree but
+   stored in the *shared* config, so setting it disarms every worktree checked
+   out on a branch that predates `.githooks/` — and `AGENTS.md` §1 forbids
+   rebasing a worktree you did not create, so those cannot be brought forward.
+
+   Git's default is better than the override. With `core.hooksPath` unset, a
+   linked worktree runs the **common** `.git/hooks`. Verified 2026-07-29: a
+   dispatcher installed once in the main checkout fired in a pre-existing linked
+   worktree *and* in one created afterwards, blocking the commit in both, with
+   the hook's working directory set to the worktree. One install per clone arms
+   every worktree that clone will ever have — which took `biffo-template` from
+   6 armed of 10 to **10 of 10**, without touching a single branch.
+
+   A dispatcher with no `.githooks/<name>` to run **warns on stderr and exits
+   0**. That branch has no repo-defined hooks, which is the state it was already
+   in; blocking every commit there would invent a gate it never had and break
+   other agents mid-flight. But it never does it quietly.
 3. **Failure is loud.** A hook whose tooling is missing must exit non-zero. It
    is correct for a hook to fail with `Command "lint-staged" not found` — that
    is a repo telling you to install. It is never correct for it to skip.

@@ -58,10 +58,17 @@ report() {
   hp=$(git -C "$tree" config core.hooksPath 2>/dev/null)
 
   if [ -z "$hp" ]; then
-    # Default .git/hooks. Git ships .sample files there that never execute, so
-    # counting the directory as armed would be exactly the false comfort this
-    # script exists to remove.
-    real=$(ls "$tree/.git/hooks" 2>/dev/null | grep -vc '\.sample$' || true)
+    # The default hooks directory is in the **common** git dir, which linked
+    # worktrees share. Reading "$tree/.git/hooks" is wrong for exactly the trees
+    # this audit exists to check: in a linked worktree `.git` is a *file*
+    # containing a gitdir pointer, so that path does not exist and every armed
+    # worktree was about to be reported NO-HOOKS. Ask git where it actually is.
+    #
+    # Git ships .sample files there that never execute, so counting the
+    # directory as armed merely for being non-empty would be exactly the false
+    # comfort this script exists to remove.
+    common=$(git -C "$tree" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+    real=$(ls "${common:-$tree/.git}/hooks" 2>/dev/null | grep -vc '\.sample$' || true)
     if [ "${real:-0}" -gt 0 ]; then
       armed=$((armed + 1))
       [ -n "$QUIET" ] || printf '%-56s %-14s \033[32mARMED\033[0m    %s\n' "$label" "(default)" "$real hook(s) in .git/hooks"

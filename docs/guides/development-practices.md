@@ -215,6 +215,8 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **The same defect twice in one feature — an assumed payload shape — cost hours in one place and one log line in the other, and the only difference was whether the no-op branch said anything.** Both read a field that was not there and both then *chose not to act*. The run-outcome observer's miss ended in a bare `return`: no row, no error, no log, for its entire existence — found only by opening a deployed page, noticing an empty timeline, bisecting with an adjacent write path, and reading a real stored event off the API (tabsii-platform#301). The SES consumer's miss ended in `logger.info("Ignoring SES notification of type %s", kind)` — so its **first ever invocation** printed `type None` and named its own defect (tabsii-platform#305). Same class, same author, same week; discovery cost differing by orders of magnitude. **A silent early-return at an integration boundary is an unobservable failure mode**, and it is precisely the branch that fires when a shape assumption is wrong — so "I decided not to act" must say what it decided and on what. `type None` was still not enough to act on either: the fix logs the notification's **keys**, because naming the absent field tells you nothing about what actually arrived | **visibility** | tabsii-platform | practice — every no-op branch at a boundary logs its input's shape, not just its verdict | **fixed** — both paths now log; rule stated |
 | — | **A hand-written test double returned the shape the code *emits* instead of the shape it *receives*, so 17 tests pinned a contract that did not exist.** `FakeCore.get` returned `{"items": [...]}` for `/api/v1/data/lead_source_costs`; the core's generic-CRUD list returns a **bare array**. The proxy route was declared `-> dict`, so FastAPI's *response* validation rejected the real payload and every load of the Analytics panel 500'd — while the Python suite, the JS suite, Playwright E2E and CI in two repos were all green. `CoreApiClient.get` is annotated `-> dict` but returns whatever `.json()` produced, so the annotation actively pointed the wrong way, and `rollups.py` **three files away** already had the correct `cast(list[dict], …)` + wrap. The panel's six calls run under `Promise.all`, so one rejection blanked all five other reports and the banner named none of them. Condition: **a double whose shape is written from the author's expectation rather than from the real service teaches the test the author's error** — the fixture encoded the exact assumption it existed to check | **fail-open** · drift | tabsii-crm (deployed page, first click-through) | tabsii-crm [#124](https://github.com/tabsii-com/tabsii-crm/pull/124) | **fixed** — the fake now returns a bare array and is typed `dict \| list`; three tests fail against the old route |
 | — | **CSS class names are strings, so a panel written against classes that do not exist passes every gate and renders as bare HTML.** `AnalyticsPanel.tsx` used `.card`, `.data-table`, `.filter-bar`, `.error-text`, `.stat-row` — none of which exist in `tabsii-crm`, whose convention is a prefixed block per feature in `globals.css` (`.ov-*`, `.access-*`, `.discovery-*`) — and shipped with **no CSS of its own**. eslint, `tsc`, 164 unit tests, Playwright and a production build were all green, because nothing that runs locally resolves a class name against a stylesheet. The visible result was an unstyled page whose speed stat read `Median time to first contact0m5 of 17 leads contacted`. Same family as the Vite `base` row above — a string that only means something in a browser | **visibility** | tabsii-crm (deployed page) | tabsii-crm [#125](https://github.com/tabsii-com/tabsii-crm/pull/125) | **fixed** — `.analytics-*` block on the existing precedent. **The general case is open**: nothing warns that a className matches no rule in the bundle |
+| — | **A repo hardened a gate for itself and went on shipping the unhardened version into every repo it generates, for as long as the hardening existed.** Both `_skeletons/*/.github/workflows/ci.yml` ran `pnpm audit --audit-level=high` and `uv run pip-audit` inline — the exact commands [#591](https://github.com/keiranholloway/biffo-template/issues/591) was filed about — while this repo's own CI had called the hardened wrappers since #592, and #636/#717/#721 kept improving them. Six siblings and two plugin repos were born reddening a required check on any npm/PyPI blip. **The distribution channel is the actual finding.** #743 proposed moving the audits into `biffo check` on the grounds that copying them into every satellite "drifts with nothing to detect it" — correct when it was written, and no longer true: `shared-files.json` + `scripts/shared-sync.sh` landed the same week, so a verbatim copy *plus* a drift check is now the cheaper answer and needs no npm round-trip in CI. The issue also says neither skeleton has a `scripts/` directory; both had one by the time it was read. **A design argument decays as fast as the constraint it rests on** — re-derive the option table before implementing an issue's recommendation | **drift** | biffo-template `_skeletons/` | biffo-template `_skeletons/`, `scripts/`, `shared-files.json` | **fixed** ([#743](https://github.com/keiranholloway/biffo-template/issues/743)) — plus a `hardened-dependency-audit` skeleton rule and a shared-files↔skeleton parity test, both watched failing first. cost ~1h 20m |
+| — | **Both dependency-audit scripts reported INCONCLUSIVE — and misdiagnosed a healthy registry — on every invocation when `jq` was absent, while exiting 0.** Found by stubbing `pnpm` to return a real, parseable, *clean* audit payload on a PATH without `jq`: the gate printed `the registry returned a non-JSON/error response` three times and passed. `jq` is the parser the entire finding-vs-hiccup distinction rests on, so without it the retry-and-warn path — written to stop the gate failing open — *is* the fail-open, and it names the wrong culprit while doing it. Exactly the shape of the dash-`echo` defect #717 fixed in the same file, one dependency further out. A missing `jq` is deterministic, not transient, so it now exits 1 loudly | **fail-open** | biffo-template `scripts/{js,py}-dependency-audit.sh` | same, and every satellite via `shared-files.json` | **fixed** ([#743](https://github.com/keiranholloway/biffo-template/issues/743)) — `command -v jq` guard, before any audit runs |
 
 ### What the classes say
 
@@ -318,23 +320,30 @@ each, so the column sums exceed the row count.
 | **tabsii-crm** | 5 of 200 | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent" |
 | **tabsii-marketplace** | 1 of 200 | `python-jose` removal; the credential-dependent build |
 | **biffo-runners** | 1 of 200 | Runner fleet configuration |
-`byFixRepo`, regenerated at **224 rows** on 2026-07-29:
+`byFixRepo`, regenerated at **236 rows** on 2026-07-29:
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 120 of 224 (54%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, the git-hook chain, the scaffolder |
-| **tabsii-platform** | 21 of 224 | RLS lane, SES identity + envelope, the run-outcome seam, the enrolment write policy |
-| **biffo-plugin-ideation** | 13 of 224 | A UI rendering a 500 as an empty state; publish workflow; dead manifest block |
-| **biffo-plugin-idea-scout** | 11 of 224 | Adapter seam, research search, styling, release workflows |
-| **biffo-platform** | 9 of 224 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-crm** | 9 of 224 | E2E harness, repo settings, the activity timeline's empty state, **three cadence-surface defects a browser found** |
-| **tabsii-intake** | 5 of 224 | CI generation, branch-protection contexts, `python-jose` removal |
-| **tabsii-marketplace** | 2 of 224 | `python-jose` removal; credential-dependent build |
-| **biffo-runners** | 1 of 224 | Runner fleet configuration |
+| **biffo-template** | 124 of 236 (53%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, the git-hook chain, the scaffolder, **the audit hardening the skeletons never received** |
+| **tabsii-platform** | 23 of 236 | RLS lane, SES identity + envelope, the run-outcome seam, the enrolment write policy |
+| **biffo-plugin-ideation** | 13 of 236 | A UI rendering a 500 as an empty state; publish workflow; dead manifest block |
+| **tabsii-crm** | 12 of 236 | E2E harness, repo settings, the activity timeline's empty state, **three cadence-surface defects a browser found** |
+| **biffo-plugin-idea-scout** | 11 of 236 | Adapter seam, research search, styling, release workflows |
+| **biffo-platform** | 9 of 236 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 236 | CI generation, branch-protection contexts, `python-jose` removal |
+| **tabsii-marketplace** | 2 of 236 | `python-jose` removal; credential-dependent build |
+| **biffo-runners** | 1 of 236 | Runner fleet configuration |
 
-**The shape held again.** 224 rows, `biffo-template` at 54% — it was 54% at 159
-rows and 54% at 166. Four sessions of unrelated work have not moved where fixes
+**The shape held again.** 236 rows, `biffo-template` at 53% — it was 54% at 159,
+166 and 224 rows. Five sessions of unrelated work have not moved where fixes
 land: **more than half belong upstream, in the repo none of them surfaced in.**
+
+**#743 is that sentence in its purest form.** The defect surfaced as "every
+satellite reds on a registry hiccup" — a symptom of six siblings and two plugin
+repos — and the entire fix landed in `biffo-template`, in a directory
+(`_skeletons/`) that runs in no environment at all. Nothing was wrong in any of
+the eight repos that suffered it, which is exactly why nothing in any of them
+could have found it.
 
 **`tabsii-crm` tripled (3 → 9) in one session, and every new row came from a
 browser, not a suite.** That is the first time a single repo's count has moved
@@ -2087,7 +2096,35 @@ bug in Core that did not exist.
 afterwards pinned the commit, and the next one correctly waited eleven more
 minutes rather than reporting a green that belonged to something else.
 
+**Stubbing the tool instead of reading the script — including the path where
+everything is healthy.** biffo-verify §6 says to exercise *every* path, not just
+the broken one. Three of the four stubs (garbage response, real advisory, clean
+response) told me what I already expected. The fourth — a **clean, parseable**
+audit payload on a PATH with no `jq` — found a second, unrelated fail-open that
+had survived #591, #592, #636, #717 and #721 in the very file those issues
+hardened, and that no amount of reading the script would have surfaced, because
+the code looks correct: it *does* retry, it *does* warn, it *does* distinguish.
+It just cannot, without its parser.
+
+**Re-deriving an issue's recommendation instead of implementing it.** #743
+argued for exposing the audits through `biffo check` because copying them into
+satellites would drift undetected, and noted that neither skeleton had a
+`scripts/` directory. Both premises were true when written and false three days
+later — `shared-files.json`, `shared-sync.sh` and skeleton `scripts/` all
+landed in between. Checking the premises cost two minutes and changed the
+design.
+
 ## What needs more thought
+
+**Distributing a script does not change the workflow that calls it.**
+`shared-files.json` gets the hardened audits into the six siblings and two
+plugin repos, but each of those repos' `ci.yml` still runs the raw command until
+someone edits it — and `ci.yml` is legitimately repo-owned, so no mechanism can
+carry that edit. The scripts arrive; the defect stays until eight one-line PRs
+are written by hand. That is the same "vendor it plus a one-time manual copy-in"
+non-mechanism `shared-sync.sh` was built to replace, displaced one file over.
+The general question is open: **what distributes a change to a file every repo
+must own but only differs in by a path?**
 
 **The `pytest` fast/slow verdict is cached and never invalidated.**
 `.pytest-duration` is written on the first run and read forever after. A suite
@@ -2958,6 +2995,8 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-sib-build` | **worked** | Its "When to stop and ask" step is what caught M3's unbuildable design — the plan specified a filter that could not match, and the skill's instruction to redraft rather than improvise turned a silent-inert feature into an approved correction. That step earned the whole skill |
 | `biffo-sib-build` | **partial** | Nothing in it sequences the plan's own E2E before the last milestone merges. Five milestones landed green; the browser then found four defects in an hour. The skill should require the testing plan's end-to-end check as a gate on the FINAL PR, not as an afterthought |
 | `biffo-verify` | **worked** | §3 (prove the test fails) ran on every fix this session and caught two silent bugs inside one PR. §4 (verify the deployed artifact) caught a watcher reporting the wrong commit's deploy, which would otherwise have produced a fabricated defect report |
+| `biffo-verify` | **worked — §6's "exercise _every_ path" is what paid** | On #743 the three stubs I expected to matter (garbage response, real advisory, clean response) confirmed what was already known. The fourth — clean payload, no `jq` on PATH — found a fail-open that had survived five issues in the file those issues hardened. §1 also killed the issue's own recommendation in two minutes: both premises it rested on had expired |
+| `biffo-workflow` | **worked** | Unpiped `PUSH EXIT`, worktree with both `pnpm install` and `uv sync`, `hook-audit.sh` ARMED before any commit. The `-F`/`--body-file` warning in §3 was load-bearing: the commit body and PR body for #743 are almost entirely backticked command names |
 | `biffo-workflow` | **partial** | The `--delete-branch`-with-a-live-worktree trap hit **four more times**; the caveat sits after the command it invalidates. Separately: the masked-push trap it documents was walked into once (`| tail` reported exit 0 on a failed push) and caught only by re-running with the status visible |
 | `claude-in-chrome` | **worked** | Found all four post-merge defects. Two viewport rescales mid-session caused coordinate drift and one mis-click; using `find` refs instead of coordinates was reliable and should be the default advice in the skill |
 | `new-plugin-feature` | **worked, and the research step was the whole value** | Steps 3–4 turned a plausible issue sketch into a different and better design: the issue proposed reading a title from client state, research found the server endpoint already had it. Also caught that the plan's own slug-collision check was broken — `gh search issues` returned unparseable output for a label that definitely exists, so the "no collision" answer was meaningless until re-run by listing labels per repo. |

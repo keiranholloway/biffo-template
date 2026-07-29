@@ -53,6 +53,8 @@ export interface AgentRunResponse {
   created_at: string | null
   updated_at: string | null
   workflow_run_id: string | null
+  dry_run: boolean
+  idempotency_key: string | null
   agent_name: string
   status: string
   run_as_kind: string
@@ -70,6 +72,7 @@ export interface AgentRunResponse {
   cost_usd: number | null
   started_at: string | null
   completed_at: string | null
+  prompt_version_id: string | null
 }
 
 /** Server-side filters the list endpoint accepts. */

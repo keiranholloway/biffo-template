@@ -101,6 +101,13 @@ class AgentRun(TenantScopedModel):
     # database, not a race, decides who wins.
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # The PluginChatAgent row id that produced this run, when the agent was
+    # resolved from the registry. Nullable because runs created before this column,
+    # and runs whose instructions came inline rather than from the registry,
+    # genuinely have no version. Used to answer "which prompt version produced
+    # this run?" (ADR-0017 seam #1 extension M2).
+    prompt_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
     # The orchestration WorkflowRun that created this run, when there was one.
     # Nullable because a future synchronous invocation has no workflow run (§6.1).
     workflow_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

@@ -121,6 +121,7 @@ async def request_agent_run(
     # workflow that still names its instructions inline. Resolving only on a
     # missing prompt is what made the model field editable-but-inert.
     snapshot = dict(snapshot)
+    prompt_version_id: str | None = None
     if not snapshot.get("instructions") or not snapshot.get("model"):
         agent = await get_dynamic_chat_agent(
             db, tenant_id=principal.tenant_id, agent_key=body.agent_name
@@ -142,6 +143,8 @@ async def request_agent_run(
                 snapshot["instructions"] = agent.system_prompt
             if not snapshot.get("model"):
                 snapshot["model"] = agent.model
+            # Record which registry row (prompt version) produced this run.
+            prompt_version_id = agent.id
 
     # A missing model is never fatal — unlike a missing prompt there is a sane
     # estate-wide answer, and this is the single place it is written down.
@@ -161,6 +164,7 @@ async def request_agent_run(
             workflow_run_id=body.workflow_run_id,
             thread_id=body.thread_id,
             idempotency_key=body.idempotency_key,
+            prompt_version_id=prompt_version_id,
         )
     except DepthLimitExceededError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

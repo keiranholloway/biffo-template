@@ -70,6 +70,10 @@ class AgentRunResponse(BiffoBaseSchema):
     # cannot tell which chain a run belongs to when the key is the only thing
     # naming it. Defaulted so a caller reading an older response shape parses.
     idempotency_key: str | None = None
+    # The PluginChatAgent row id that produced this run, when resolved from the
+    # registry. Null for runs created before this field or whose instructions
+    # came inline rather than from the registry. Defaulted for backward compat.
+    prompt_version_id: str | None = None
     agent_name: str
     status: str
     run_as_kind: str

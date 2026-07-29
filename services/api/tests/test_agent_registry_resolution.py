@@ -288,3 +288,52 @@ def test_default_model_when_no_registry_and_instructions_inline(app, client):
     assert body["definition_snapshot"]["model"] == settings.agent_default_model
     # Instructions should be preserved
     assert body["definition_snapshot"]["instructions"] == "Do the task inline."
+
+
+def test_run_records_prompt_version_id_when_resolved_from_registry(app, client):
+    """When an agent is resolved from the registry, the run records the row's id.
+
+    This allows an admin to answer "which prompt version produced this run?"
+    """
+    fastapi, session_factory = app
+
+    async def seed_and_post():
+        async with session_factory() as session:
+            agent = await _seed_agent(session)
+            await session.commit()
+            return agent.id
+
+    agent_id = asyncio.run(seed_and_post())
+
+    resp = client.post(
+        "/api/v1/internal/agent-runs",
+        json={
+            "agent_name": "demo-enricher",
+            "definition_snapshot": {"model": "anthropic/claude-opus-4-8"},
+            "input_payload": {"demo_request_id": "d1"},
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # The run should record the registry row's id as prompt_version_id
+    assert body["prompt_version_id"] == agent_id
+
+
+def test_run_records_no_prompt_version_id_for_inline_instructions(app, client):
+    """When instructions are supplied inline (not from registry), prompt_version_id is None."""
+    resp = client.post(
+        "/api/v1/internal/agent-runs",
+        json={
+            "agent_name": "any-agent",
+            "definition_snapshot": {
+                "instructions": "Custom inline instructions.",
+            },
+            "input_payload": {},
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # No registry row was consulted, so no version id
+    assert body["prompt_version_id"] is None

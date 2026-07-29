@@ -2,25 +2,30 @@ import { describe, expect, it } from 'vitest'
 
 import { pruneForeignCognitoCredentials } from './cognito-hygiene'
 
-/** A minimal Storage over a plain object — enough for Object.keys + removeItem. */
+/**
+ * A minimal Storage over a Map — enough for the length/key/removeItem trio the
+ * implementation uses. Backed by a Map rather than a plain object so the fake
+ * needs no dynamic `delete` (banned by @typescript-eslint/no-dynamic-delete,
+ * which `next build`'s lint enforces and a bare `pnpm run lint` does not).
+ */
 function fakeStorage(entries: Record<string, string>): Storage {
-  const map = { ...entries }
+  const map = new Map(Object.entries(entries))
   return {
     get length() {
-      return Object.keys(map).length
+      return map.size
     },
     clear: () => {
-      for (const k of Object.keys(map)) delete map[k]
+      map.clear()
     },
-    getItem: (k: string) => map[k] ?? null,
-    key: (i: number) => Object.keys(map)[i] ?? null,
+    getItem: (k: string) => map.get(k) ?? null,
+    key: (i: number) => [...map.keys()][i] ?? null,
     removeItem: (k: string) => {
-      delete map[k]
+      map.delete(k)
     },
     setItem: (k: string, v: string) => {
-      map[k] = v
+      map.set(k, v)
     },
-  } as unknown as Storage
+  }
 }
 
 const LIVE = '1ccelkl84t2o4euir3op3nco5j'
@@ -84,7 +89,7 @@ describe('pruneForeignCognitoCredentials', () => {
     const entries: Record<string, string> = {
       [`CognitoIdentityServiceProvider.${LIVE}.LastAuthUser`]: 'keep',
     }
-    for (let i = 0; i < 12; i++) entries[`CognitoIdentityServiceProvider.dead.k${i}`] = 'x'
+    for (let i = 0; i < 12; i++) entries[`CognitoIdentityServiceProvider.dead.k${String(i)}`] = 'x'
     const storage = fakeStorage(entries)
 
     expect(pruneForeignCognitoCredentials(LIVE, storage)).toHaveLength(12)

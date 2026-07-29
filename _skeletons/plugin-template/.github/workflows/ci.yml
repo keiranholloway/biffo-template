@@ -148,4 +148,14 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-groups
-      - run: uv run pip-audit
+      # Fails on a real advisory, but treats an unreachable PyPI/OSV as
+      # INCONCLUSIVE rather than reddening a required check for an
+      # infrastructure hiccup (#591, #743). The raw `uv run pip-audit` this
+      # replaces exits non-zero identically whether it found a vulnerability or
+      # simply could not reach the advisory database.
+      #
+      # The script is byte-identical to biffo-template's copy and to every other
+      # satellite's, distributed by that repo's shared-sync.sh. Do not edit it
+      # here; edit it upstream.
+      - name: Dependency audit
+        run: sh scripts/py-dependency-audit.sh

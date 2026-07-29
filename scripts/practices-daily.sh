@@ -192,7 +192,30 @@ git -c commit.gpgsign=false commit --no-verify -q -m "chore(practices): snapshot
 # --force-with-lease because the reset above rewrites this branch every run.
 # `--force-with-lease` rather than `--force`: if someone else has pushed to the
 # branch, fail loudly instead of discarding their commit silently.
-git push origin "$BRANCH" --force-with-lease --quiet
+#
+# --no-verify matches the commit above, and for the same reason -- but it became
+# REQUIRED rather than merely consistent on 2026-07-29, and the way it broke is
+# the point.
+#
+# Arming the git hooks across the estate that day moved them from husky's
+# `core.hooksPath = .husky/_` to the shared `.git/hooks`, which every linked
+# worktree inherits. This worktree is long-lived, created by cron, and never
+# receives `pnpm install` -- so the newly-live pre-push gate ran `turbo`,
+# `prettier` and `pyright` against a missing `node_modules`, failed six checks,
+# and git rejected the push. Under `set -e` that killed the job at its last step:
+# every audit had run, the dashboard had rendered, and the snapshot reached
+# nothing.
+#
+# So the job that MEASURES whether hooks are armed was silently broken by arming
+# them, and would have reported no snapshot every morning until someone noticed
+# the series had stopped. The gate was not wrong -- it is irrelevant here: this
+# branch carries generated JSON and HTML, is deliberately never auto-merged, and
+# is reviewed as a whole when it is merged by hand.
+#
+# The exit status is still checked (`set -e` is live and this is not piped), so
+# a genuine push failure -- a lease violation, no network, bad credentials --
+# still fails the job loudly. --no-verify skips the local gate, not the result.
+git push origin "$BRANCH" --force-with-lease --no-verify --quiet
 echo "practices-daily: pushed snapshot $(date -u +%F)"
 
 # Nudge, if the ground truth is going stale. Every headline figure on the page is

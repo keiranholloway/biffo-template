@@ -122,6 +122,30 @@ class PermissionRule(BaseModel):
 
     ``extra="forbid"`` so a typo'd key (e.g. ``role`` for ``required_role``)
     fails loudly rather than being silently ignored on a security surface.
+
+    ``permission_code`` is a **second axis**, in the same spirit as
+    ``allowed_principals``: a DB-held permission code rather than a Cognito
+    group. The template already resolves these per request everywhere else —
+    ``AuthenticatedUser.permissions`` (middleware/auth.py),
+    ``IdentityProvider.resolve_permissions`` (ADR-0012), write-back
+    (``WriteBackTarget.permission_code``) and orchestration all honour them, and
+    ADR-0025 attributes the permission set to ADR-0004 by name. The generic CRUD
+    layer was the only subsystem that could not see them, so an instance whose
+    authorization is DB-held had to **fork this file and dependencies.py** —
+    which is the fork ADR-0004 exists to prevent (#889).
+
+    The field must live here rather than being added by an instance because
+    ``extra="forbid"`` above is correct and stays: an instance cannot extend a
+    forbidden-extras model from outside, and loosening it to let them would
+    trade a real guard for an extension point.
+
+    **The two axes are AND, not either/or.** If both are set, both must hold.
+    The issue proposed short-circuiting on ``permission_code`` and returning,
+    which would make a declared ``required_role`` *silently ignored* — the exact
+    failure ``extra="forbid"`` exists to prevent, two lines up. AND is also
+    sufficient for the DB-held case, because an empty ``required_role`` already
+    authorises any authenticated caller, so a rule setting only
+    ``permission_code`` behaves exactly as that instance needs.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -133,6 +157,15 @@ class PermissionRule(BaseModel):
     required_role: list[str] = Field(
         default_factory=list,
         description="Any-of role allow-list; empty means any authenticated caller.",
+    )
+    permission_code: str = Field(
+        default="",
+        description=(
+            "ADR-0004 second authorization axis: a DB-held permission code the "
+            "caller must hold, resolved per request through the ADR-0012 "
+            "identity seam into AuthenticatedUser.permissions. Empty by "
+            "default, which preserves role-only authorization exactly."
+        ),
     )
     allowed_principals: list[str] = Field(
         default_factory=list,

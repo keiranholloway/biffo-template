@@ -112,9 +112,19 @@ def require_crud_permission(
       A table/operation that isn't exposed must be indistinguishable from one
       that doesn't exist (ADR-0004 §4), so this deliberately mirrors the
       handler's own "row not found" 404 rather than returning 403.
+    - ``permission_code`` set and absent from the caller's ``permissions`` -> 403.
+      The ADR-0004 second axis (#889): a DB-held permission code, resolved per
+      request through the ADR-0012 identity seam. Empty by default, so this
+      branch is inert unless a table declares one.
     - ``required_role`` non-empty and disjoint from the caller's roles -> 403.
       The operation is exposed; the caller simply lacks the role. An empty
       ``required_role`` authorises any authenticated caller.
+
+    The two axes are **AND**: if a rule sets both, both must hold. Returning
+    early on ``permission_code`` would leave a declared ``required_role``
+    silently ignored, which is the failure ``extra="forbid"`` on the model
+    exists to prevent. AND still serves the DB-held case, because an empty
+    ``required_role`` already authorises any authenticated caller.
 
     Tenant scoping is applied separately and unconditionally by the handler
     (require_plugin_tenant_context), independent of this guard — it is never a
@@ -129,6 +139,11 @@ def require_crud_permission(
         rule = lookup_permission(table, operation, registry=registry)
         if rule is None or not rule.allowed:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        if rule.permission_code and rule.permission_code not in caller.permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to perform this action",
+            )
         if rule.required_role and not set(rule.required_role).intersection(caller.roles):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -175,6 +190,11 @@ def require_principal_crud_permission(
         rule = lookup_permission(table, operation, registry=registry)
         if rule is None or not rule.allowed:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        if rule.permission_code and rule.permission_code not in principal.user.permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to perform this action",
+            )
         if rule.required_role and not set(rule.required_role).intersection(principal.user.roles):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

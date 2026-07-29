@@ -27,3 +27,20 @@ export function formatCost(cost: number | null): string {
   if (cost == null) return '—'
   return `$${cost.toFixed(4)}`
 }
+
+/**
+ * Calculate and format the mean cost per priced run.
+ * Mean is computed ONLY over priced runs (runs with cost_usd != null),
+ * not over all runs. This matters: if 10 runs cost $1 total but 5 are
+ * unpriced, the mean is $0.20 per priced run, not $0.10 per run overall.
+ * Using all runs would make cheaper models appear cheaper than they are.
+ *
+ * @param totalCost - total cost across all priced runs (may be null)
+ * @param pricedRunCount - number of runs with a cost (not null); computed by caller as (total runs - unpriced_runs)
+ * @returns formatted mean cost or '—' if no priced runs
+ */
+export function formatMeanCost(totalCost: number | null, pricedRunCount: number): string {
+  if (totalCost == null || pricedRunCount === 0) return '—'
+  const mean = totalCost / pricedRunCount
+  return `$${mean.toFixed(4)}`
+}

@@ -48,6 +48,11 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | `pytest` was excluded from the gate by a blanket rule with a manual opt-in **nobody ever issued**. Measured: 51.2s / 57.4s / 85.6s in the template and instances, but **1.7–2.7s in every sibling**. The exclusion was correct for the three repos it was written against and wrong for the four it was applied to — so **the fastest suites in the estate were the ones not being run** | **drift** | tabsii-crm + 3 siblings | biffo-template | **fixed** ([#871](https://github.com/keiranholloway/biffo-template/pull/871)) — included wherever it measures under budget |
 | — | **Two findings nearly reported from tool output that was itself wrong.** A conventional-commit audit measured 12% violations in `tabsii-platform` using a regex that rejected `feat(db,api):` — commas are legal in a scope, so the tool was wrong and the repo was fine. Separately `biffo.sh check release-subject` printed `No base ref` and looked like a fail-open until its exit code was read: it exits **2**, loudly | **process** · visibility | biffo-template (measurement) | diagnostic practice | **corrected before shipping** — each disproved by checking the instrument before believing its output |
 | — | Auto-merge **does not update a head branch that falls behind** under `strict` protection. Armed, green, one commit behind, it simply waits — three PRs in one session merged only after a manual `gh pr update-branch` plus a full CI re-run | **process** | biffo-platform#84, biffo-template #742/#720 | biffo-template (merge queue, or relax `strict`) | **open** — pre-registered as H1's likely refutation, recorded before the review date |
+| [#749](https://github.com/keiranholloway/biffo-template/issues/749) | The workflow builder's **"Test workflow" gate omits the write-back contract entirely** — `start_dry_run` builds its own snapshot from four keys, so `apply_writeback_output_tool` never fires and the model is never given the generated submit tool. It answers in prose, and the builder renders that run-metadata envelope under a heading reading **"Would write"**. A passing test is what *unlocks* enabling the workflow, so the one gate an author sees before going live proves nothing about the only thing that could silently write nothing | **fail-open** · visibility | tabsii-platform (dev, authoring a real write-back) | biffo-template `services/api/` + `apps/portal/` | **open** — filed with the reproduction; `cost 25m` to find, and it made M4 unverifiable by any route except a real stage move |
+| — | A frontend PR pointed two call sites at a **new core route the sibling never proxied**. The CRM never calls core directly (ADR-0002/ADR-0007), so every stage move returned `{"detail":"Not Found"}` on dev while both repos' suites stayed green — the component tests mock the api client, so they assert the URL *asked for* and cannot assert that anything answers | **boundary** | tabsii-crm [#113](https://github.com/tabsii-com/tabsii-crm/pull/113) | tabsii-crm [#114](https://github.com/tabsii-com/tabsii-crm/pull/114) | **fixed** — `cost 20m`; the follow-up test pins the forwarded core path too, because proxying a domain route to the generic CRUD address would return 200 and emit the *wrong event*, which nothing would report |
+| — | A shared test fixture **added its target to the registry instead of replacing it**, and cleared the whole registry on teardown. Every assertion naming the catalog's contents exactly (`== ["leads"]`) therefore held only while the instance registered exactly one target — the day tabsii registered a second, the module failed there while passing upstream. The teardown was the mirror image, discarding the instance's real registrations for every later test in the process | **fail-open** · drift | tabsii-platform (registering a 2nd write-back target) | biffo-template [#766](https://github.com/keiranholloway/biffo-template/pull/766) | **fixed** — `cost 35m` including one blocked instance PR; the isolating pattern was already written eight lines above, with a comment explaining exactly this failure |
+| — | Hand-written raw SQL **relied on PostgreSQL's leniency in four separate ways** — untyped UUID binds (matched only because PG coerces `uuid = 'text'`), an untyped `Decimal`, timestamps assumed to return as `datetime`, and an id left to a column default. None was broken in production; all four are "works because of the database underneath", and all four failed the moment the same statements ran on SQLite | **drift** | tabsii-platform [#273](https://github.com/tabsii-com/tabsii-platform/pull/273) | tabsii-platform | **fixed** — `cost 30m`; found only because the tests were written against a real session rather than a fake that answers queries in order |
+| [tabsii-platform#282](https://github.com/tabsii-com/tabsii-platform/issues/282) | **A single verified recipient masked a whole class of failure.** SES on dev is sandboxed, so it rejects any recipient that is not a verified identity — and exactly one existed, a hand-verified address. Every email workflow built over five milestones happened to be addressed to *that* mailbox, so all of them passed. The first workflow addressed to `{email}` — the candidate, which is what a welcome email is for — failed with `MessageRejected`. The sending identity the whole comms story depends on existed only as a console action, in no repo | **fail-open** · visibility | tabsii-platform (dev, a user's own workflow) | tabsii-platform [#280](https://github.com/tabsii-com/tabsii-platform/pull/280) + [#281](https://github.com/tabsii-com/tabsii-platform/pull/281) | **partly fixed** — `cost 20m` to diagnose; domain identity, DKIM and bounce/complaint capture now in Terraform, but leaving the sandbox needs an AWS support request and two steps Terraform cannot perform (publish DNS it does not control, click a confirmation link) |
 | [#591](https://github.com/keiranholloway/biffo-template/issues/591) | `pnpm audit`/`pip-audit` fail identically whether they found a vulnerability or couldn't parse the registry response — one flake reds every open PR | fail-open · process | biffo-template CI | biffo-template | **closed** ([#592](https://github.com/keiranholloway/biffo-template/pull/592), [#636](https://github.com/keiranholloway/biffo-template/pull/636)) |
 | [#644](https://github.com/keiranholloway/biffo-template/issues/644) | Sibling skeleton's lockfile shipped 4 high-severity advisories; it sits outside the pnpm workspace so no CI gate ever audited it | fail-open · visibility | biffo-template `_skeletons/` | biffo-template | **partly fixed** ([#645](https://github.com/keiranholloway/biffo-template/pull/645)) — 1 residual, no patched upstream release |
 | [#621](https://github.com/keiranholloway/biffo-template/issues/621) | `is_active` deactivation gate (#150) enforced on the bearer path, silently absent on the forwarded path — a suspended user's token kept working via plugins | **drift** | biffo-template `services/api` | biffo-template | step 1 **merged** ([#655](https://github.com/keiranholloway/biffo-template/pull/655)), step 2 **merged** ([#659](https://github.com/keiranholloway/biffo-template/pull/659)), step 3 open |
@@ -305,6 +310,32 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
+`byFixRepo`, regenerated at **99 rows** (never typed by hand, see *Adding a row*):
+
+| Repo | Fixes landing here | Notes |
+| --- | --- | --- |
+| **biffo-template** | 68 of 99 (69%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, design tokens, the practices tooling itself |
+| **tabsii-platform** | 8 of 99 | Divergence ratchet, repo settings, the RLS lane, raw-SQL portability, SES identity and bounce capture |
+| **biffo-platform** | 5 of 99 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
+| **tabsii-intake** | 5 of 99 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-idea-scout** | 4 of 99 | Adapter seam, research search capability, its own stylesheet |
+| **tabsii-marketplace** | 2 of 99 | `python-jose` removal; the credential-dependent build |
+| **tabsii-crm** | 1 of 99 | The missing sibling proxy for a core route its own frontend called |
+| **biffo-plugin-ideation** | 1 of 99 | A UI rendering a 500 as an empty state |
+| **biffo-runners** | 1 of 99 | Runner fleet docs + fail-fast |
+
+**The drift downward continued, and a new repo appeared.** `biffo-template` takes
+**68 of 99** — 69%, against 70% at 94 rows, 82% at 65 and 86% at both 57 and 50.
+`tabsii-crm` enters the table for the first time, and `tabsii-platform` has gone
+6 → 8 in a single session.
+
+Both movements have the same cause and it is not sampling: satellite repos are
+starting to carry defects that are genuinely *theirs* — a sibling that failed to
+proxy a route its own frontend called, raw SQL that only worked because of the
+database underneath it, an untracked sending identity. Those could not have been
+fixed upstream. The number to watch is whether template's share keeps falling as
+instances grow their own surface area, because that is the point at which "fix it
+in the template" stops being the default answer.
 `byFixRepo`, regenerated at **210 rows as rendered on this page**. `evidence.jsonl` separately holds **238** — a reworded row is stored as a new one and its predecessor retained, see the duplication row. The split below is counted from the page:
 
 > **Two sessions collided on this table on 2026-07-29** and git could not merge it: both had edited the same hand-maintained totals from the same base (193), one adding 4 rows and one adding 3. Neither side was wrong and neither could simply win — the resolution is the sum of both deltas, which is the exact staleness this section's own warning describes. `evidence.jsonl` merged cleanly because it is append-only; the prose totals did not because they are transcribed. Prefer `node scripts/practices-evidence.mjs --report` over any number typed here.
@@ -607,6 +638,35 @@ effort log exists to make visible, and this session logged it that way.
 | **10 × `update-branch` + full CI re-run, in one session** | The same loop as the rows above, now counted properly across three repos: #747 once, #750 twice, #754 once (*the PR carrying H1's verdict that this happens*), #270 five times, #89 once. Each costs a full CI cycle (~2.5 min template, 6–8 min tabsii). **Nine of the ten were in repos with `strict: true`; zero occurred on `biffo-template` after `strict` came off.** That split is the whole reason the fix is a setting and not more diligence | **partly fixed** — `strict: false` on `biffo-template` only, as experiment H3 (review 2026-08-11). The other repos keep it deliberately: `tabsii-crm` is the comparator, and changing everything at once would destroy the only baseline |
 | **~45 min proving a planned fix was impossible** | H1 named a merge queue as its preferred next move. Enabling it took a prerequisite PR (#752, teaching CI to report on `merge_group`), a ruleset attempt, four API probes to isolate the failure, and finally a look at the branch-protection UI — to conclude GitHub does not offer merge queues on this account at all | **not waste, but not free.** The 422 message is a bare `Invalid rule 'merge_queue':` with an empty reason, so nothing short of probing distinguishes "bad payload" from "unavailable feature". Recorded in H2 so the next person spends zero minutes on it |
 | **1 hand-resolved rebase conflict inside one sprint** | #747 and #748 were sequential fixes to the *same two functions* in `core-migrations.ts`. Merging the first made the second `DIRTY`, needing a manual three-way resolution of both the code and the doc section they had each appended to | **structural, and cheap to avoid** — the two issues were known to touch the same file before either started. Sequencing them as one PR, or explicitly stacking them, would have cost nothing. Splitting by *issue* rather than by *file* is what created it |
+### Auto-merge is armed and still loses the race — a seventh data point
+
+`tabsii-platform` has `allow_auto_merge = true` and every PR this session was
+queued with `--auto`. **Seven hand-rebases were still required** across five PRs
+(#268 ×2, #269 ×2, #271, #273, #278): each merge to `dev` put the open ones
+`BEHIND` under `strict` protection, and auto-merge waited rather than updating
+the head branch. `cost ~45m` of pure re-cycling, all of it waiting on CI runs
+that only existed because something *else* merged.
+
+This is not a new finding — the scoreboard already carries it as open — but it is
+the first time it was observed on a repo where auto-merge was correctly
+configured throughout, which removes the remaining "it was just misconfigured"
+explanation. **Structural, not careless.** The fix is a merge queue or relaxing
+`strict`; nothing an agent does per-PR will win it.
+
+### Cross-repo distribution is the other loop, and it is *correct*
+
+Two upstream round trips, back to back: `from_payload` (template → publish →
+`biffo core upgrade` → instance), then a fixture fix that had to take the same
+path because the instance's suite could not go green without it. **`cost ~50m`
+of waiting**, six hops each.
+
+Worth separating from the merge-race cost, because this one is the ownership
+boundary working as designed. The alternative — patching the template's own test
+inside the instance — was available, would have unblocked in two minutes, and
+would have forked a template test in one repo while leaving the defect for every
+other instance. The loop is the price of the boundary, not a defect in it. What
+would genuinely shorten it is publishing a core version without a full release
+cycle for test-only changes.
 | **3 `BEHIND` + full-CI cycles on a one-file docstring change** | #274 changed a migration docstring and nothing else. `dev` was absorbing merges from several concurrent sessions faster than a CI cycle completes, so the branch was invalidated three times before it could land. Making `RLS (real Postgres)` required — done earlier the same hour — lengthened that cycle by the lane's cold start and measurably widened the window | **structural, and the cost landed on the very next PR.** The right trade (the lane had caught two real defects by then), but the bill is immediate and falls on every PR including ones touching no Python |
 | **2 self-inflicted wait loops that reported false states** | One exited while every check was still `QUEUED` and printed "not merged"; another fired `update-branch` mid-run, which can cancel checks about to pass. Neither caused a wrong action — the merge decision is GitHub's — but both produced a readout that looked like a failure and had to be walked back | **fixed** in-session: the loop now breaks on exactly four terminal states (merged / a genuinely failing check / `BEHIND` **and settled** / keep waiting). Same class as the `gh pr checks --json` row above: **a poll you have not verified against a known state is indistinguishable from the thing it is polling** |
 | **~15 min re-deriving a conclusion the repo already held** | #207's blocker was diagnosed from scratch — read the four files, rule out the sibling destinations, identify the missing carve-out. `biffo.divergence.json`'s own entry for `nav.tsx` already said it: *"Product code with nowhere legitimate to go … there is no portal equivalent of ADR-0022's `domains/` carve-out, so #207 cannot relocate it."* A previous session had reached the answer and written it where it belonged | **avoidable** — the declaration file is a first-class record of *why*, not just *what*, and nothing in the §1 checklist points at it. Worth reading `biffo.divergence.json` reasons before investigating any ownership-boundary question |
@@ -2134,6 +2194,30 @@ the cost of confirming was seconds.
 
 **Asking "did it actually publish?" rather than "is it configured?".** Registering the trusted publisher was necessary and looked like the last step; the package would still never have published again. Only checking for an actual run — three tags, zero runs — found that the trigger could not fire. A configuration screenshot is not a release.
 
+**§1 stopped a whole file being written twice.** The task was "add Postgres RLS
+coverage for the new tables". Checking current state first found
+[#277](https://github.com/tabsii-com/tabsii-platform/pull/277) had landed a
+non-superuser RLS harness hours earlier — the exact provisioning, DSN-rewriting
+and guard-the-guard machinery about to be built from scratch, including two
+hard-won details (`render_as_string(hide_password=False)`, and granting
+`user_role_assignments.read` so the boundary is the variable) that would each
+have cost a CI cycle to rediscover. `saved ~40m`, and the new file reuses the
+harness with attribution rather than competing with it.
+
+**Verifying by the user's route caught what both suites missed.** `lead.stage_changed`
+had unit tests, a green CI run and a successful deploy. Moving a lead in the
+deployed CRM returned `{"detail":"Not Found"}` — the sibling proxy was missing.
+No amount of test-suite green would have surfaced it, because the component tests
+mock the client and the platform tests never involve the sibling. AGENTS.md §4's
+"a passing unit test is not evidence" is the whole finding, and it cost 20 minutes
+rather than a user reporting it.
+
+**Testing against a real session rather than a fake found four latent defects.**
+Writing M5's tests against an in-memory database — instead of a fake answering
+queries in order — surfaced untyped UUID binds, an untyped `Decimal`, timestamps
+assumed to be `datetime`, and an id left to a column default. A fake would have
+asserted the endpoint's *shape* and proved nothing about the SQL. The rule that
+generalises: when an endpoint's behaviour **is** its query, a fake tests the test.
 **The core-ownership guard did exactly what it exists for, on a security fix.** A sub-agent went to patch the SQL-echo exposure in `biffo-platform` and was stopped: `services/api/` is template-owned. The instinct on a security fix is to route around a guard — the guard was right, the patch belonged upstream, and landing it in the instance would have produced a fix that the next `biffo core upgrade` silently reverted while everyone believed it was closed. The agent stopped, posted the full patch on the issue, and said it was blocked rather than improvising.
 
 **Writing the test to observe the leak, not to assert the flag.** The obvious test for "echo is off" reads `engine.echo` — and would pass against a build where the flag no longer controlled anything. The test that earned its place executes a statement carrying a secret and reads what the `sqlalchemy.engine.Engine` logger actually emitted; without the fix it fails with `assert 'founder-pro...never-appear' not in "BEGIN (impl...,)"`, which is the exposure itself, reproduced. It also takes `hide_parameters` from the shipped engine rather than hard-coding `True`, so it cannot pass by testing SQLAlchemy instead of Biffo.
@@ -3198,6 +3282,29 @@ found four defects in under an hour after five milestones had merged green. Ever
 one would have been cheaper at M5's start than at its end. Nothing in
 `biffo-sib-build` sequences the plan's E2E before the final PR merges.
 
+**A feature's safety argument outran its test coverage by five milestones.**
+ADR-0027's case for agent write-back is that the write runs on the author's RLS
+session, so PostgreSQL re-evaluates their authority. Two targets, four merged
+PRs and a live agent-written row later, **nothing had ever exercised those
+policies** — the SQLite suite has no RLS, and the one Postgres lane ran as the
+schema owner, which carries `BYPASSRLS`. The claim was load-bearing in three
+docstrings and was true only by inspection of a SQL file. What is missing is a
+rule that a *security* argument names the test that demonstrates it, at the time
+it is written.
+
+**The builder gates enabling on a test that cannot exercise the feature.** #749
+is filed, but the shape is worth naming separately: a required gate that runs a
+*different* code path from the thing it gates is worse than no gate, because it
+converts "unverified" into "verified" in the author's mind. The dry run omits
+`writeback` and `tools` from its snapshot, so precisely the two configurations
+with side effects are the two it cannot test.
+
+**Nothing checks that a sibling proxies the core routes its frontend calls.**
+The 404 above was found by hand. Both repos were internally consistent; the
+defect existed only in the gap between them, and no gate looks at that gap. A
+generated check — every `/api/v1/...` string in the sibling's frontend resolves
+to a route in the sibling's own OpenAPI — would have caught it in CI.
+
 ## Skills used
 
 Skills cannot be iterated on impressions. Every invocation, with an honest outcome.
@@ -3355,6 +3462,13 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `claude-in-chrome` | **worked — it was the entire verification** | Four PRs, green CI in two repos including Playwright, and the deployed feature 100% broken. One page load found a 500; a second found an unstyled panel. It also produced *positive* evidence no test could: moving one lead made the funnel read `Qualified 1` while time-in-stage held `New 0` — the synthesised-vs-observed asymmetry demonstrated on live data. Caveat on my own use: I read the funnel from a **zoomed screenshot** and inferred `Discovery Day = 6` as "5 pre-existing + mine" from the board's counts rather than querying, so that decomposition is inference, not measurement. |
 | `biffo-verify` | **worked — §4, and it killed a wrong theory in one query** | The panel's `Internal Server Error` had an obvious and wrong explanation (bad deploy / stale bundle). §4 said read the deployed artefact: CloudWatch returned the exact `ResponseValidationError` with `'input': []`, the file and the line. §5 applies too — the browser showed a generic banner because six calls run under `Promise.all` and the rejected one is not named. Neither would have come from reading the source. |
 | `biffo-verify` | **partial — §8 applied as a closing sweep again, and again only by prompt** | The section says record the row when the failure happens; both defects were found, fixed, merged and deployed before anything was written here, and the write-up happened because the operator asked. That is the **third consecutive session** logging that §8 fired late, and the previous two recorded the same cause. A section that keeps diagnosing its own non-use and does not change is evidence the *trigger* is wrong: §8 needs to fire on "a defect was found", not on "the session is ending". |
+
+| `biffo-sib-build` | **partial** | Step 0 requires the plan committed at `docs/implementation/<feature>/README.md`; ours existed only in the planning scratchpad, so the first unit of work was landing the doc — correct, but the skill reads as though that is always already true. Step 2's per-milestone loop worked well across five milestones. Its single-repo scope (`gh repo view` on the CWD) is unstated and mattered: this plan spanned four repos, and the CRM/intake halves needed their own runs. |
+| `biffo-workflow` | **worked** | Twelve PRs across four repos, every worktree reaped. Step 4's honest-push discipline mattered once when a rebase needed `--force-with-lease` and re-verification; Step 7's `allow_auto_merge` pre-check mattered twice — `tabsii-crm` and `tabsii-intake` both have it **false**, so `--auto` would have merged immediately rather than queueing, exactly the trap the step warns about. Both were merged by hand after checks went green. |
+| `biffo-verify` | **worked** | §1 alone saved ~40 minutes by finding [#277](https://github.com/tabsii-com/tabsii-platform/pull/277) had already built the non-superuser RLS harness this session was about to rebuild. §7 kept two PR bodies honest about what a green check did and did not prove. |
+| `biffo-verify` | **partial** | §3 ("prove the test fails without the fix") could not be applied to the new RLS tests: doing so would mean shipping a commit that disables row-level security, and there is no local PostgreSQL (no Docker daemon) to do it against. The guard-the-guard tests are the structural substitute, but the step has no guidance for "the fix is a database policy" — where reverting it is not a local edit. Worth a sentence. |
+| `claude-in-chrome` | **worked** | The only thing that verified any of this. Five milestones were confirmed by the route a user takes — including the 404 that both test suites reported green, and the agent-written score row appearing on the right lead. A skill-free session would have shipped M1 broken. |
+| `biffo-workflow` | **should have been invoked for the plan doc** | The implementation plan was written straight into the planning scratchpad and only landed in-repo when `biffo-sib-build` refused to proceed without it. Nothing was lost, but the plan is a repo artefact from the moment it is agreed, and treating it as one unit of work from the start would have been cleaner. |
 
 ## Adding a row
 

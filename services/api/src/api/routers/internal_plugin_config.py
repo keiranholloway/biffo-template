@@ -144,6 +144,14 @@ async def seed_config(
         already_exists = definition.agent_key in existing_keys
 
         if not already_exists:
+            # Claim the key immediately, so a request that repeats an agent_key
+            # inserts it once rather than twice. Two inserts would violate the
+            # unique constraint and surface as an opaque IntegrityError at flush
+            # — during a plugin's cold start, which is the worst place to debug
+            # one. A repeated key is caller error; failing it deterministically
+            # as "created once, already existed after that" is more useful than
+            # a 500.
+            existing_keys.add(definition.agent_key)
             # Insert only if it doesn't exist.
             agent = PluginChatAgent(
                 tenant_id=principal.tenant_id,

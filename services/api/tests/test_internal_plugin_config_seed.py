@@ -629,3 +629,38 @@ def test_no_principal_is_401():
 
     assert resp.status_code == 401, resp.text
     asyncio.run(engine.dispose())
+
+
+def test_seeding_a_repeated_agent_key_inserts_it_once():
+    """A request repeating an agent_key inserts one row, not two.
+
+    Without a guard both copies are added and the unique constraint surfaces as
+    an opaque IntegrityError at flush — during a plugin's cold start, which is
+    the worst place to debug one. A repeated key is caller error, but it must
+    fail as data, not as a 500.
+    """
+    principal = ServicePrincipal(
+        principal_arn="arn:aws:sts::123456789012:assumed-role/proj-dev-plugin-ideation-role/session"
+    )
+    app, session_factory, engine = _build_app(principal=principal)
+    client = TestClient(app)
+
+    definition = {
+        "agent_key": "repeated-key",
+        "agent_name": "Repeated",
+        "role": "repeated-role",
+        "system_prompt": "Do the thing.",
+        "model": "claude-3-sonnet",
+        "required_group": "founder",
+    }
+
+    resp = client.post(
+        "/api/v1/internal/plugins/me/config/seed",
+        json=[definition, definition],
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert [r["created"] for r in resp.json()] == [True, False]
+    assert asyncio.run(_get_row_count(session_factory, agent_key="repeated-key")) == 1
+
+    asyncio.run(engine.dispose())

@@ -343,13 +343,58 @@ export function renderSessions(s, mergeToilRatio, windowDays = 7) {
 }
 
 /**
+ * The three estate audits, rendered at the top because they are the only things
+ * on this page that can be *wrong* rather than merely unflattering.
+ *
+ * Everything else here is inferred from commit metadata and describes what
+ * happened. These describe whether the machinery that is supposed to be
+ * protecting the estate is actually running — and each one exits non-zero when
+ * it is not. Until #865 all three were invoked by hand, which is how a local
+ * gate reporting `verify passed` while checking nothing survived across eight
+ * repos: nobody ran the check, and the check did not exist, because the metric
+ * that did exist (arming) was green.
+ *
+ * `null` renders as a distinct "not collected" state rather than as passing. A
+ * missing audit and a clean audit must never look the same — that is the
+ * failure this whole section exists to report on.
+ *
+ * @param {{collectedAt: string, audits: Array<{name: string, ok: boolean, exit: number, summary: string}>}|null} a
+ */
+export function renderAudits(a) {
+  const LABELS = {
+    coverage: ['Gate coverage', 'does each repo&rsquo;s gate mirror that repo&rsquo;s CI?'],
+    arming: ['Hook arming', 'will the hook actually fire?'],
+    drift: ['Shared files', 'is every repo on the current gate?'],
+  }
+  if (!a || !Array.isArray(a.audits) || a.audits.length === 0) {
+    return `<div class="unvalidated"><strong>Estate audits not collected.</strong>
+      Nothing checked whether the gates are running. That is not the same as
+      them being fine — it is the state that preceded eight repos reporting
+      <code>verify passed</code> on work they never checked.</div>`
+  }
+  const cards = a.audits
+    .map((r) => {
+      const [label, question] = LABELS[r.name] ?? [r.name, '']
+      const cls = r.ok ? 'good' : 'critical'
+      return `<div class="tile ${cls}">
+        <div class="label">${esc(label)}</div>
+        <div class="value num" style="font-size:15px">${esc(r.summary)}</div>
+        <div class="note">${question} &middot; exit ${esc(String(r.exit))}</div>
+      </div>`
+    })
+    .join('')
+  return `<h2>Is the machinery running?</h2>
+    <div class="grid">${cards}</div>`
+}
+
+/**
  * Render the whole page.
  *
  * @param {any} snapshot
  * @param {any} sessions
  * @param {{date: string, from: number, to: number} | null} definitionBreak
  */
-export function renderDashboard(snapshot, sessions = null, definitionBreak = null) {
+export function renderDashboard(snapshot, sessions = null, definitionBreak = null, audits = null) {
   const w = (d) => snapshot.windows?.[d]
   const day = w(1)
   const base = w(90)
@@ -489,6 +534,8 @@ export function renderDashboard(snapshot, sessions = null, definitionBreak = nul
       : ''
   }
 
+  ${renderAudits(audits)}
+
   <div class="headline">
     <p class="q">Capability built — merges that shipped something, rolling 7 days</p>
     <div class="v num">${fmt(featureShare, '%')}</div>
@@ -566,6 +613,17 @@ export function renderDashboard(snapshot, sessions = null, definitionBreak = nul
 `
 }
 
+/** The audits written by practices-daily.sh, or null when it has not run. */
+function readAudits(dir) {
+  try {
+    return JSON.parse(readFileSync(join(dir, 'estate-audits.json'), 'utf8'))
+  } catch {
+    // Deliberately null, not {}: renderAudits states plainly that nothing was
+    // checked, which is a different claim from everything being fine.
+    return null
+  }
+}
+
 function main() {
   const argv = process.argv.slice(2)
   let out = 'docs/practices/dashboard.html'
@@ -582,7 +640,7 @@ function main() {
   mkdirSync(dirname(out), { recursive: true })
   writeFileSync(
     out,
-    renderDashboard(snapshot, sessions.sessions ? sessions : null, definitionBreak(dir)),
+    renderDashboard(snapshot, sessions.sessions ? sessions : null, definitionBreak(dir), readAudits(dir)),
   )
   process.stderr.write(`rendered ${out} from ${file}\n`)
 }

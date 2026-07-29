@@ -146,6 +146,13 @@ audit_json() {
   # repos -- including the live core platform -- because a scaffold-time 403 is
   # skipped permanently and nothing ever re-asks. This is the re-asking.
   audit_json protection "sh scripts/protection-audit.sh --estate '$ESTATE'" 'branches checked'
+  printf ','
+  # Fifth audit (#884). `drift` above answers "did the file land"; this answers
+  # "does anything call it". They went to zero and 7-of-13 respectively on the
+  # same morning: eleven repos merged the shared audit scripts and every one
+  # carried on running the raw command, so the distribution was complete and
+  # the outcome had not moved. A proxy reported as the outcome, again.
+  audit_json wiring "sh scripts/ci-wiring-audit.sh --estate '$ESTATE'" 'calls the shared scripts|still run the raw command'
   printf ']}\n'
 } > "$AUDITS"
 

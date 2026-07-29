@@ -12,5 +12,10 @@
     "scripts/js-dependency-audit.sh",
     "scripts/py-dependency-audit.sh"
   ],
-  "appliesTo": ["biffo.sibling.json", "biffo.plugin.json"]
+  "appliesTo": ["biffo.sibling.json", "biffo.plugin.json"],
+  "supersedes": {
+    "scripts/js-dependency-audit.sh": ["pnpm audit"],
+    "scripts/py-dependency-audit.sh": ["pip-audit"]
+  },
+  "supersedesNote": "Raw commands each shared script replaces, checked by scripts/ci-wiring-audit.sh. shared-sync.sh gets the script INTO a repo; nothing made the repo call it, and on 2026-07-29 eleven repos merged the scripts and every one carried on running the raw command -- drift went to zero and the outcome did not move (#884). ci.yml cannot be a one-way overwrite because the path depends on that step's working-directory, so the mechanism is an assertion rather than a copy: you cannot write the line for the repo, but you can refuse to let it forget. Add a pair here whenever a shared script supersedes a command repos invoke directly; the check only fires in repos that actually hold the script, so a repo shared-sync has not reached yet is reported once, by shared-sync, rather than twice."
 }

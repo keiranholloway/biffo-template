@@ -77,11 +77,31 @@ for d in "$ESTATE"/*/; do
   case " $seen_slugs " in *" $slug "*) continue ;; esac
   seen_slugs="$seen_slugs $slug"
 
-  # The integration branch is `dev` in every Biffo repo (AGENTS.md section 2).
-  # Deployable repos also carry `main` as production; a repo without one simply
-  # skips it rather than counting as a failure.
+  # WHICH branches must be protected is derived from the repo's own shape, not a
+  # list somebody maintains:
+  #
+  #   dev   the integration branch in every Biffo repo (AGENTS.md section 2).
+  #         Required wherever it exists.
+  #   main  PRODUCTION, and only in a DEPLOYABLE repo -- instances and sibling
+  #         apps, identified by having a deploy workflow. In a non-deployable
+  #         repo (runner fleets, a docs repo, a published package) `main` is just
+  #         the default branch of something that never deploys, and demanding
+  #         protection there buys nothing.
+  #
+  # This matters more than it looks. An audit that fails every single day on a
+  # condition everyone has accepted is an audit people learn to scroll past --
+  # and then it is worth nothing on the day it reports something real. Four
+  # repos here have zero deploy workflows AND no `dev` branch; flagging them
+  # daily forever would have trained exactly that reflex.
+  deployable=no
+  ls "$d/.github/workflows/" 2>/dev/null | grep -q "deploy" && deployable=yes
+
   for br in dev main; do
     git -C "$d" rev-parse --verify --quiet "origin/$br" >/dev/null 2>&1 || continue
+    if [ "$br" = "main" ] && [ "$deployable" = "no" ]; then
+      printf '  \033[90m--           %-38s %-6s not deployable, main not required\033[0m\n' "$slug" "$br"
+      continue
+    fi
     checked=$((checked + 1))
     # Capture the EXIT STATUS, and validate the value is a number before
     # believing it.

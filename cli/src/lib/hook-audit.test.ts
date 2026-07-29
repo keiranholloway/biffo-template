@@ -126,6 +126,29 @@ describe('protection-audit', () => {
     expect(script).toContain('Refusing to report health that was not observed')
   })
 
+  /**
+   * `main` is production, and only in a repo that deploys. Demanding protection
+   * on the default branch of a runner fleet or a docs repo buys nothing — and an
+   * audit that fails every day on a condition everyone has accepted is one
+   * people learn to scroll past, which makes it worth nothing on the day it
+   * reports something real.
+   *
+   * Derived from the repo's own shape (does it have a deploy workflow?), not a
+   * skip list somebody has to maintain and will forget to prune.
+   */
+  it('requires main only where the repo actually deploys', () => {
+    expect(script).toContain('deployable=no')
+    expect(script).toMatch(/grep -q "deploy"/)
+    expect(script).toContain('not deployable, main not required')
+  })
+
+  it('still requires dev wherever it exists', () => {
+    // The integration branch is dev in every Biffo repo (AGENTS.md §2); nothing
+    // exempts it, so the deployability test must not be able to skip it.
+    const devSkip = /\[ "\$br" = "dev" \].*deployable/.test(script)
+    expect(devSkip, 'dev must never be exempted by deployability').toBe(false)
+  })
+
   it('counts a protected branch with zero required checks as a failure', () => {
     // Protected-but-requiring-nothing reads as protected in the GitHub UI and
     // gates nothing at all.

@@ -348,7 +348,14 @@ describe('the pytest fast/slow cache', () => {
     // verdict that can never be corrected.
     // Exactly two call sites — root package and nested — because one of them
     // missing keeps a verdict that can never be corrected.
-    expect(verify.match(/pytest_record "/g)?.length).toBe(2)
+    //
+    // Counted over CODE lines only. The first version matched the whole file and
+    // was broken by a COMMENT that mentioned the call — the same "a text match
+    // can be satisfied by a comment" flaw already fixed in this file today, and
+    // reintroduced three hours later in an assertion written to catch it.
+    const codeLines = verify.split('\n').filter((l) => !/^\s*#/.test(l))
+    const calls = codeLines.filter((l) => l.includes('pytest_record "')).length
+    expect(calls).toBe(2)
     expect(verify).toContain('LAST_CHECK_SECONDS')
   })
 
@@ -370,5 +377,39 @@ describe('the pytest fast/slow cache', () => {
     expect(ignore, 'the in-tree ignore entry should be gone, not load-bearing').not.toContain(
       '.pytest-duration',
     )
+  })
+})
+
+describe('--list is not truncated by an unset variable', () => {
+  /**
+   * `run_check` returns early in `--list` mode, so anything it would have set is
+   * undefined by the time the caller reads it. `pytest_record "$d"
+   * "$LAST_CHECK_SECONDS"` did exactly that, and `set -u` killed the script
+   * silently, mid-list (#879).
+   *
+   * The damage was entirely downstream and looked like something else:
+   * `gate-coverage.sh` reads `--list`, so a truncated list reads as MISSING
+   * COVERAGE. tabsii-geo dropped from 8/8 to 4/8 — and only in repos where a
+   * pytest measurement already existed, i.e. only after the gate had run there
+   * once. A defect that appears on second use is the hardest kind to attribute.
+   */
+  it('defines LAST_CHECK_SECONDS before any early return can skip it', () => {
+    const verify = readFileSync(join(repoRoot, 'scripts/verify.sh'), 'utf8')
+    const declared = verify.indexOf('LAST_CHECK_SECONDS=""')
+    const runCheck = verify.indexOf('run_check() {')
+    expect(declared, 'LAST_CHECK_SECONDS must be declared').toBeGreaterThan(-1)
+    // Declared at file scope, above run_check — not inside it, past the early return.
+    expect(declared).toBeLessThan(runCheck)
+  })
+
+  it('lists every applicable check, not just the ones before pytest', () => {
+    // The regression in one assertion: the truncated list stopped after the
+    // Python block, so terraform and every JS check vanished.
+    const out = execFileSync('sh', [join(repoRoot, 'scripts/verify.sh'), '--list'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    })
+    expect(out).toContain('terraform fmt')
+    expect(out).toContain('pnpm run test')
   })
 })

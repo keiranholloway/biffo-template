@@ -73,6 +73,16 @@ LIST=""
 FAILED=""
 PASSED=""
 SKIPPED=""
+# Defined up here, not inside run_check. `run_check` returns EARLY in --list
+# mode, before it would set this -- so `pytest_record "$d" "$LAST_CHECK_SECONDS"`
+# read an unset variable and `set -u` killed the script silently, mid-list.
+#
+# The damage was invisible and downstream: gate-coverage.sh reads --list, so a
+# truncated list looked like MISSING COVERAGE. tabsii-geo dropped from 8/8 to
+# 4/8 -- and only in repos where a pytest measurement already existed, i.e. only
+# after the gate had run there once. A defect that appears on second use is the
+# hardest kind to attribute.
+LAST_CHECK_SECONDS=""
 
 # pytest is included where the suite is FAST ENOUGH TO PAY, measured rather than
 # opted into (#869, H5 gap 4).
@@ -284,7 +294,6 @@ run_check() {
     return 0
   fi
   start=$(date +%s)
-  LAST_CHECK_SECONDS=""
   if "$@" >"/tmp/biffo-verify.$$" 2>&1; then
     PASSED="$PASSED $name"
     LAST_CHECK_SECONDS=$(($(date +%s) - start))

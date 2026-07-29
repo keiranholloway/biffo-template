@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -18,7 +19,24 @@ import { join } from 'node:path'
  */
 const repoRoot = join(import.meta.dirname, '..', '..', '..')
 const ci = readFileSync(join(repoRoot, '.github/workflows/ci.yml'), 'utf8')
-const verify = readFileSync(join(repoRoot, 'scripts/verify.sh'), 'utf8')
+
+/**
+ * What the gate ACTUALLY runs here, not what its source text contains.
+ *
+ * The first version of this test grepped `verify.sh` for each CI command. That
+ * passed for a hand-written list and broke the moment the gate started
+ * assembling its checks at runtime from what the repo has — which is what makes
+ * one file work in the template, instances, siblings and plugins. Worse, a
+ * text match can be satisfied by a comment: the test could have gone on passing
+ * while the gate ran nothing at all.
+ */
+const gateRuns = execFileSync('sh', [join(repoRoot, 'scripts/verify.sh'), '--list'], {
+  cwd: repoRoot,
+  encoding: 'utf8',
+})
+  .split('\n')
+  .map((l) => l.trim())
+  .filter(Boolean)
 
 /**
  * CI steps that are deliberately NOT in the pre-push gate. Every entry needs a
@@ -53,6 +71,13 @@ function ciCheckCommands(): string[] {
 }
 
 describe('verify.sh mirrors CI', () => {
+  it('actually runs something — a gate that lists nothing would pass vacuously', () => {
+    // The negative control. Without this, an exception or an empty --list makes
+    // every assertion below trivially true, which is the fail-open shape the
+    // whole practices programme exists to remove.
+    expect(gateRuns.length).toBeGreaterThan(5)
+  })
+
   it('finds the CI check commands to compare against', () => {
     // A parser that silently matches nothing would make every assertion below
     // vacuously true — the exact fail-open shape the practices work exists to
@@ -63,8 +88,7 @@ describe('verify.sh mirrors CI', () => {
   it('runs every CI check that is not explicitly excluded', () => {
     const missing = ciCheckCommands().filter((cmd) => {
       if (cmd in EXCLUDED) return false
-      // The gate invokes the same command; `check <name>` prefixes it.
-      return !verify.includes(cmd)
+      return !gateRuns.includes(cmd)
     })
     expect(missing).toEqual([])
   })

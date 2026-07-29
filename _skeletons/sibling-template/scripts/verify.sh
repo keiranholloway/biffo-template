@@ -48,20 +48,10 @@
 #
 # Usage:
 #   sh scripts/verify.sh          # everything applicable to this repo
-#   sh scripts/verify.sh --list   # print the checks it WOULD run, and stop
 #   pnpm run verify               # same
 #   BIFFO_SKIP_VERIFY=1 git push  # escape hatch, for when you mean it
-#
-# `--list` exists so parity with CI can be tested against what this script
-# actually does, rather than against its source text. The checks are assembled
-# at runtime from what the repo has, so grepping the file for `pnpm run lint`
-# proves nothing -- and a parity test that can be satisfied by a comment is not
-# a parity test.
 
 set -u
-
-LIST=""
-[ "${1:-}" = "--list" ] && LIST=1
 
 FAILED=""
 PASSED=""
@@ -77,10 +67,6 @@ have_script() {
 run_check() {
   name="$1"
   shift
-  if [ -n "$LIST" ]; then
-    echo "$*"
-    return 0
-  fi
   start=$(date +%s)
   if "$@" >"/tmp/biffo-verify.$$" 2>&1; then
     PASSED="$PASSED $name"
@@ -94,12 +80,11 @@ run_check() {
 }
 
 skip() {
-  [ -n "$LIST" ] && return 0
   SKIPPED="$SKIPPED $1"
   printf '  \033[90m--   %-16s n/a - %s\033[0m\n' "$1" "$2"
 }
 
-[ -n "$LIST" ] || printf '\nverify - the checks CI runs, before the push\n\n'
+printf '\nverify - the checks CI runs, before the push\n\n'
 
 # Python first: ruff is near-instant, so the cheapest feedback on the largest
 # single class of failure comes back immediately.
@@ -166,8 +151,6 @@ if [ -f package.json ]; then
 else
   skip javascript "no package.json in this repo"
 fi
-
-[ -n "$LIST" ] && exit 0
 
 printf '\n'
 if [ -n "$FAILED" ]; then

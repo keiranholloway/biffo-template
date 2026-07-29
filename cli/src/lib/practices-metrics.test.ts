@@ -44,6 +44,7 @@ import {
   CAPABILITY_CRITICAL,
   GREEN_WAIT_WARN_MINUTES,
   definitionBreak,
+  renderAudits,
 } from '../../../scripts/practices-dashboard.mjs'
 // @ts-expect-error -- plain .mjs, same arrangement as above.
 import {
@@ -1092,6 +1093,46 @@ describe('renderDashboard — independent baseline and normalised contention', (
       },
     }
     expect(renderDashboard(congested) as string).toContain('tile critical')
+  })
+})
+
+describe('renderAudits', () => {
+  /**
+   * These are the only figures on the page that can be *wrong* rather than
+   * merely unflattering, and until #865 all three were run by hand. That is how
+   * a local gate reporting `verify passed` while checking nothing survived
+   * across eight repos: nobody ran the check, and the check did not exist,
+   * because the metric that did exist — arming — was green.
+   */
+  it('renders a failing audit as critical, not as a number to read past', () => {
+    const html = renderAudits({
+      collectedAt: 'x',
+      audits: [{ name: 'coverage', ok: false, exit: 1, summary: 'six repos at 1/8' }],
+    }) as string
+    expect(html).toContain('tile critical')
+    expect(html).toContain('six repos at 1/8')
+    expect(html).toContain('exit 1')
+  })
+
+  it('renders a passing audit as good', () => {
+    const html = renderAudits({
+      collectedAt: 'x',
+      audits: [{ name: 'arming', ok: true, exit: 0, summary: '36 armed, 0 dead' }],
+    }) as string
+    expect(html).toContain('tile good')
+  })
+
+  /**
+   * The load-bearing case. "Not collected" and "collected and clean" must never
+   * look the same — that conflation is the exact failure this section reports
+   * on, and rendering nothing would reproduce it one level up.
+   */
+  it('says nothing was checked, rather than showing a clean page', () => {
+    for (const empty of [null, { collectedAt: 'x', audits: [] }]) {
+      const html = renderAudits(empty) as string
+      expect(html).toContain('not collected')
+      expect(html).not.toContain('tile good')
+    }
   })
 })
 

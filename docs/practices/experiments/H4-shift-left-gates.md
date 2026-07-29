@@ -134,6 +134,54 @@ failures will always reach CI: the gate is skippable, `pytest` is excluded by
 design, and a check can pass locally and fail on a runner for environment
 reasons. A prediction of zero would be refuted by the tool working as intended.
 
+### Amendment — 2026-07-29, before the gate merged anywhere
+
+**A second, independent prediction: this should move H3's metric, and H3's
+intervention should turn out not to have been the cause.**
+
+Added because the operator challenged H3 directly — *"I am doubtful relaxing
+`strict` has done much. It was us treating the symptom not the root cause"* —
+and that is a claim the data can settle rather than a matter of taste. Recorded
+before the gate lands, so the test is not fitted to the answer.
+
+The argument. `racedShare` counts PRs that sat green over ten minutes **and were
+repushed**. It is arithmetically a function of *how many times you push*.
+`strict` controlled only whether a stale branch was **blocked**; it never
+controlled the repush that kept the PR in flight long enough to go stale. So if
+repush volume is the driver, removing `strict` should do roughly nothing — and
+[H3](./H3-relax-strict.md) has done roughly nothing:
+
+| `biffo-template` | prior 83d | 7d to 2026-07-29 | H3 target |
+| --- | ---: | ---: | ---: |
+| `racedShare` | 16.7% | **13.8%** | <3% |
+| `repushRate` | 45% | 39.2% | <25% |
+| `landedFirstPushRate` | 55% | 60.8% | — |
+| `ciFailureRate` | 11.6% | 10% | — |
+
+Three points of movement against a prediction of thirteen. Meanwhile **4 in 10
+PRs still need a second push**, while CI failure is only 10% — so most repushes
+are not even CI catching something, and 62% of what CI does catch is locally
+catchable.
+
+**Prediction:** with `strict` unchanged (still `false`, still only on
+`biffo-template`), the gate alone moves:
+
+- **`repushRate` below 25%** from 39.2% — the driver
+- **`landedFirstPushRate` above 80%** from 60.8%
+- **`racedShare` below 8%** from 13.8% — H3's own falsification threshold,
+  reached by a different intervention
+
+**If those move and `strict` did not change, repush volume was the cause of the
+race and H3 was treating a symptom.** If `repushRate` falls and `racedShare`
+does not follow it, the race has a third cause and neither H3 nor H4 has found
+it — which is worth more than either being right.
+
+This amendment obeys the same rule as H3's: **it only adds ways to refute, never
+removes one.** Every original condition stands. It also gives H4 a way to fail
+that has nothing to do with its primary metric — the gate could close the CI-
+failure gap completely and still leave repush untouched, in which case the local
+gate is a good thing that does not explain the merge race.
+
 ## Counter-metric — the entire risk of this change
 
 The gate costs ~40 seconds on every push. The risk is not that it fails to
@@ -170,6 +218,11 @@ gate duration p50 > 120s.
 **Also refuted** if `DEAD` working trees are still non-zero at review. The whole
 argument for a tracked hooks directory is that it cannot be dead; if it can, the
 mechanism is wrong and the coverage work rests on nothing.
+
+**The amendment's prediction is scored separately** and cannot refute H4 on its
+own: `repushRate` staying above 25% means the race has a cause neither
+experiment identified, not that the local gate failed at what it was built for.
+Recorded this way so a null result there is reported rather than absorbed.
 
 **Inconclusive** if fewer than 100 CI runs fail estate-wide in the window — too
 few failing steps to classify.

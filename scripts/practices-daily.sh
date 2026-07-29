@@ -90,6 +90,66 @@ git rebase -X theirs origin/dev --quiet || {
 }
 
 node scripts/practices-metrics.mjs --windows 1,7,90 --out "$DATA_DIR"
+
+# The three estate audits (#867).
+#
+# All three exit non-zero on a real problem and, until now, all three were run
+# by hand. That is exactly how the gate blind spot survived: `verify passed` on
+# eight repos that checked nothing they were written in, for as long as nobody
+# thought to look. A check nobody runs is indistinguishable from one that does
+# not exist -- the same finding this scoreboard already records about the
+# orphan-worktree rule.
+#
+#   gate-coverage  does each repo's gate mirror THAT repo's CI?   <- the headline
+#   hook-audit     will the hook actually fire?                   <- prerequisite
+#   shared-sync    is every repo on the current shared files?     <- prerequisite
+#
+# `set -e` is live here, so each is guarded and its exit code captured rather
+# than allowed to kill the run. A failing audit must REPORT, not abort: the
+# whole point is a number on the page every morning, and a cron job that dies on
+# the first red would take the dashboard down with it -- fail-open's mirror
+# image, and just as useless.
+ESTATE="${PRACTICES_ESTATE:-$HOME/code}"
+AUDITS="$DATA_DIR/estate-audits.json"
+
+audit_json() {
+  _name="$1"; _cmd="$2"
+  # `cmd; rc=$?` does NOT survive `set -e` -- the assignment carries the failing
+  # status and the script dies before the next line. Verified: the guarded form
+  # is the only one that reaches the report. Getting this wrong would have taken
+  # the dashboard down on the first red audit, which is fail-open's mirror image
+  # and just as useless: the morning a gate breaks is the morning the page that
+  # would tell you goes missing.
+  _out=$(sh -c "$_cmd" 2>&1) && _rc=0 || _rc=$?
+  # Strip ANSI: this lands in JSON and on a web page, and escape codes there are
+  # noise that hides the number.
+  _clean=$(printf '%s' "$_out" | sed 's/\x1b\[[0-9;]*m//g')
+  _summary=$(printf '%s' "$_clean" | grep -E "$3" | tail -1 | sed 's/^ *//;s/ *$//')
+  node -e '
+    const [name, rc, summary] = process.argv.slice(1)
+    process.stdout.write(JSON.stringify({ name, ok: rc === "0", exit: Number(rc), summary }))
+  ' "$_name" "$_rc" "${_summary:-no summary line}"
+}
+
+{
+  printf '{"collectedAt":"%s","audits":[' "$(date -u +%FT%TZ)"
+  audit_json coverage "sh scripts/gate-coverage.sh --estate '$ESTATE'" 'covers its own CI|do not cover'
+  printf ','
+  # Anchored: hook-audit prints both "N working trees - ..." and a "DEAD working
+  # trees:" header, and an unanchored match took the header, so a failing audit
+  # reported a heading instead of the count.
+  audit_json arming "sh scripts/hook-audit.sh --estate '$ESTATE'" '^[0-9]+ working trees'
+  printf ','
+  audit_json drift "sh scripts/shared-sync.sh --check --estate '$ESTATE'" 'current, .* drifted'
+  printf ']}\n'
+} > "$AUDITS"
+
+echo "practices-daily: estate audits ->"
+node -e '
+  const a = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))
+  for (const r of a.audits) console.log(`  ${r.ok ? "OK  " : "FAIL"} ${r.name.padEnd(9)} ${r.summary}`)
+' "$AUDITS"
+
 node scripts/practices-dashboard.mjs --out "$PAGE" --data "$DATA_DIR"
 
 # A stable path outside the worktree, so the page can be bookmarked once and
@@ -99,6 +159,20 @@ node scripts/practices-dashboard.mjs --out "$PAGE" --data "$DATA_DIR"
 STABLE="${PRACTICES_PAGE:-$HOME/practices-dashboard.html}"
 cp "$PAGE" "$STABLE"
 echo "practices-daily: page at file://$STABLE"
+
+# A failing audit is a nudge, not a silent row in a JSON file. Same channel the
+# stale-effort-log nudge already uses.
+FAILING=$(node -e '
+  const a = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))
+  const bad = a.audits.filter((r) => !r.ok)
+  if (bad.length) process.stdout.write(bad.map((r) => `${r.name}: ${r.summary}`).join(" | "))
+' "$AUDITS")
+if [ -n "$FAILING" ]; then
+  echo "practices-daily: ESTATE AUDIT FAILING - $FAILING" >&2
+  if command -v notify-send >/dev/null 2>&1 && [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    notify-send -u critical "Estate audit failing" "$FAILING" >/dev/null 2>&1 || true
+  fi
+fi
 
 if git diff --quiet -- "$DATA_DIR" "$PAGE" docs/practices/sessions.jsonl; then
   echo "practices-daily: no change"

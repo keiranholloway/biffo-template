@@ -122,3 +122,32 @@ describe('install-hooks', () => {
     expect(hook).toContain('exit 0')
   })
 })
+
+/**
+ * H5 gap 1: the version stamp must be read from the TEMPLATE, never from the
+ * repo receiving it.
+ *
+ * H5 pre-registered this as the most likely way to make the whole thing
+ * meaningless — a stamp generated from the receiving side always matches itself
+ * and reports perfect health forever, which is the shape of every instrument
+ * defect found on 2026-07-29. So it is tested adversarially rather than trusted.
+ */
+describe('shared-sync version stamp', () => {
+  it('reads the version from the template, not from the target', () => {
+    const sync = readFileSync(join(scripts, 'shared-sync.sh'), 'utf8')
+    const line = sync.split('\n').find((l) => l.includes('describe --tags') && l.includes('core-v'))
+    expect(line, 'no version-stamp line found').toBeDefined()
+    // The distinguishing detail: the git call targets $TEMPLATE_ROOT. If it
+    // ever reads $wt, the stamp becomes a repo comparing itself to itself.
+    expect(line).toContain('$TEMPLATE_ROOT')
+    expect(line).not.toContain('"$wt"')
+  })
+
+  it('writes the stamp into the target, and the gate prints it', () => {
+    const sync = readFileSync(join(scripts, 'shared-sync.sh'), 'utf8')
+    expect(sync).toContain('.biffo-shared-version')
+    const verify = readFileSync(join(scripts, 'verify.sh'), 'utf8')
+    expect(verify).toContain('.biffo-shared-version')
+    expect(verify).toContain('template ')
+  })
+})

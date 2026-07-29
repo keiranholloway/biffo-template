@@ -74,7 +74,49 @@ FAILED=""
 PASSED=""
 SKIPPED=""
 
+# pytest is included where the suite is FAST ENOUGH TO PAY, measured rather than
+# opted into (#869, H5 gap 4).
+#
+# The old rule was a blanket exclusion with a manual opt-in nobody ever issued,
+# so the fastest suites in the estate were the ones not being run:
+#
+#   tabsii-marketplace 1.7s   tabsii-geo 2.1s   tabsii-intake 2.5s   tabsii-crm 2.7s
+#   biffo-template 51.2s      biffo-platform 57.4s   tabsii-platform 85.6s
+#
+# The exclusion was right for the three repos it was written against and wrong
+# for the four it was applied to. The arithmetic: ~2.5s on every push against a
+# ~14 min sibling CI round trip to discover and confirm a Python test failure --
+# break-even at one catch per 336 pushes, against an observed rate of roughly
+# one per 165.
+#
+# BIFFO_VERIFY_PYTEST overrides in BOTH directions: 1 forces it in, 0 forces it
+# out. An override that only forces on would leave no way to escape a suite that
+# has quietly grown past the threshold.
+PYTEST_BUDGET_SECONDS="${BIFFO_VERIFY_PYTEST_BUDGET:-15}"
 PYTEST="${BIFFO_VERIFY_PYTEST:-}"
+
+# Cached per directory, because timing the suite to decide whether to run the
+# suite would cost exactly what it is trying to save. The cache lives with the
+# repo, not in $HOME, so it cannot leak a fast verdict from one repo to another.
+pytest_is_fast() {
+  _d="$1"
+  _cache="$_d/.pytest-duration"
+  if [ -f "$_cache" ]; then
+    _secs=$(cat "$_cache" 2>/dev/null)
+  else
+    # First run in a repo: time it once, then decide from then on. A timeout
+    # means "too slow", which is the correct verdict rather than a hang.
+    _start=$(date +%s)
+    if [ "$_d" = "." ]; then
+      timeout "$((PYTEST_BUDGET_SECONDS * 4))" uv run pytest -q --no-cov >/dev/null 2>&1 || true
+    else
+      timeout "$((PYTEST_BUDGET_SECONDS * 4))" uv run --directory "$_d" pytest -q --no-cov >/dev/null 2>&1 || true
+    fi
+    _secs=$(($(date +%s) - _start))
+    echo "$_secs" > "$_cache" 2>/dev/null || true
+  fi
+  [ "${_secs:-9999}" -le "$PYTEST_BUDGET_SECONDS" ]
+}
 
 # Does THIS repo's CI run a check of this kind?
 #
@@ -200,7 +242,14 @@ skip() {
   printf '  \033[90m--   %-16s n/a - %s\033[0m\n' "$1" "$2"
 }
 
-[ -n "$LIST" ] || printf '\nverify - the checks CI runs, before the push\n\n'
+if [ -z "$LIST" ]; then
+  # State which template this gate came from. A gate two versions old is the
+  # condition that let tabsii-crm print `verify passed` on a 700-line change
+  # while running one check, and nothing in the repo said so (#869, H5 gap 1).
+  _stamp=""
+  [ -f .biffo-shared-version ] && _stamp=" (template $(cat .biffo-shared-version))"
+  printf '\nverify - the checks CI runs, before the push%s\n\n' "$_stamp"
+fi
 
 # Python first: ruff is near-instant, so the cheapest feedback on the largest
 # single class of failure comes back immediately.
@@ -232,20 +281,24 @@ if [ -n "$PY_DIRS" ]; then
         [ -z "$bandit_paths" ] && [ -d src ] && bandit_paths="src"
         # shellcheck disable=SC2086
         [ -n "$bandit_paths" ] && ci_has "bandit" && run_check "bandit$suffix" uv run bandit -r $bandit_paths -ll -q
-        if [ -n "$PYTEST" ]; then
-          run_check "pytest$suffix" uv run pytest -q
+        if [ "$PYTEST" = "0" ]; then
+          skip "pytest$suffix" "excluded by BIFFO_VERIFY_PYTEST=0"
+        elif [ -n "$PYTEST" ] || { [ -z "$LIST" ] && pytest_is_fast "."; }; then
+          ci_has "pytest" && run_check "pytest$suffix" uv run pytest -q --no-cov
         else
-          skip "pytest$suffix" "excluded - set BIFFO_VERIFY_PYTEST=1 where the suite is fast"
+          skip "pytest$suffix" "suite is slower than ${PYTEST_BUDGET_SECONDS}s - CI keeps it"
         fi
       else
         ci_has "ruff check" && run_check "ruff-check$suffix" uv run --directory "$d" ruff check .
         ci_has "ruff format" && run_check "ruff-format$suffix" uv run --directory "$d" ruff format --check .
         ci_has "pyright" && run_check "pyright$suffix" uv run --directory "$d" pyright
         ci_has "bandit" && run_check "bandit$suffix" uv run --directory "$d" bandit -r src -ll -q
-        if [ -n "$PYTEST" ]; then
-          run_check "pytest$suffix" uv run --directory "$d" pytest -q
+        if [ "$PYTEST" = "0" ]; then
+          skip "pytest$suffix" "excluded by BIFFO_VERIFY_PYTEST=0"
+        elif [ -n "$PYTEST" ] || { [ -z "$LIST" ] && pytest_is_fast "$d"; }; then
+          ci_has "pytest" && run_check "pytest$suffix" uv run --directory "$d" pytest -q --no-cov
         else
-          skip "pytest$suffix" "excluded - set BIFFO_VERIFY_PYTEST=1 where the suite is fast"
+          skip "pytest$suffix" "suite is slower than ${PYTEST_BUDGET_SECONDS}s - CI keeps it"
         fi
       fi
     done

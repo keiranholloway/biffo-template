@@ -43,30 +43,58 @@ const gateRuns = execFileSync('sh', [join(repoRoot, 'scripts/verify.sh'), '--lis
  * CI steps that are deliberately NOT in the pre-push gate. Every entry needs a
  * reason, because "it was slow" and "we forgot" look identical six weeks later.
  */
-const EXCLUDED: Record<string, string> = {
-  'pnpm install --frozen-lockfile': 'dependency install, not a check',
-  'uv sync --all-groups': 'dependency install, not a check',
-  'uv run pytest --cov --cov-report=xml || [ $? -eq 5 ]':
-    '56s — longer than the whole rest of the gate, and it failed once in the 30 days to 2026-07-29. CI keeps it.',
-  'pnpm --filter @biffo/portal build': 'a full Next build; far too slow for every push',
-  'sh scripts/js-dependency-audit.sh': 'network — advisory database lookup',
-  'sh scripts/py-dependency-audit.sh': 'network — advisory database lookup',
-  'sh scripts/biffo.sh check release-subject':
-    'validates the PR title, which does not exist at push time',
-  'sh scripts/biffo.sh check ownership':
-    'the CI form diffs against the PR base branch, which does not exist at push time — but the check is NOT skipped locally: the commit-msg hook runs `check ownership --staged`, earlier and per-commit',
-  // bandit is NOT excluded any more (#855). The rationale here used to say
-  // "writes a report artefact CI uploads; the finding gate is the upload step,
-  // not the run" — which is false. `bandit -ll` exits non-zero on findings and
-  // it is the RUN step that fails: tabsii-platform PR #313 job 90502765804,
-  // `SAST (Bandit)` → `##[error]Process completed with exit code 1`, on a change
-  // whose local verify had passed. It is ~2s, offline, and reads the working
-  // tree — it meets every inclusion criterion verify.sh states for itself.
-  //
-  // The lesson generalises to the rest of this list: an exclusion must describe
-  // what the CI step DOES, checked against a real run, not what it was assumed
-  // to do. This one was written from intent and was wrong for a fortnight.
-}
+/**
+ * Why a CI check is not in the local gate.
+ *
+ * ## Prose was not enough (#869, H5 gap 3)
+ *
+ * These were free-text sentences, and **one of eight was false for a
+ * fortnight**: `bandit`'s reason claimed "the finding gate is the upload step,
+ * not the run" when `bandit -ll` exits non-zero on findings and it is the run
+ * step that fails. It cost an observed CI round trip (~17 min at instance
+ * prices) and nothing could have caught it, because a sentence is not checkable.
+ *
+ * Each exclusion now carries a **kind**, and the kind is asserted mechanically:
+ *
+ *   network  - needs a registry or advisory database; cannot run offline
+ *   pr-time  - evaluates a pull request that does not exist at push time
+ *   history  - scans git history rather than the working tree
+ *   slow     - too slow for a push gate, and must state a MEASURED duration
+ *
+ * `slow` is the one that rots, so it is the one that must carry a number: an
+ * adjective ages silently while a measurement can be re-taken and disagreed
+ * with. `pytest` is no longer here at all — it is included wherever it is
+ * measurably fast (H5 gap 4).
+ */
+const EXCLUDED: Record<string, { kind: 'network' | 'pr-time' | 'history' | 'slow'; why: string }> =
+  {
+    'pnpm install --frozen-lockfile': { kind: 'network', why: 'dependency install, not a check' },
+    'uv sync --all-groups': { kind: 'network', why: 'dependency install, not a check' },
+    'pnpm --filter @biffo/portal build': {
+      kind: 'slow',
+      why: 'a full Next build; measured >60s in this repo, against a ~20s whole-gate budget',
+    },
+    'sh scripts/js-dependency-audit.sh': {
+      kind: 'network',
+      why: 'queries the npm advisory database',
+    },
+    'sh scripts/py-dependency-audit.sh': {
+      kind: 'network',
+      why: 'queries the PyPI advisory database',
+    },
+    'sh scripts/biffo.sh check release-subject': {
+      kind: 'pr-time',
+      why: 'validates the PR title, which does not exist at push time; exits 2 rather than passing when it cannot run',
+    },
+    'sh scripts/biffo.sh check ownership': {
+      kind: 'pr-time',
+      why: 'the CI form diffs against the PR base branch — but the check is NOT skipped locally: the commit-msg hook runs it with --staged, earlier and per-commit',
+    },
+    'uv run pytest --cov --cov-report=xml || [ $? -eq 5 ]': {
+      kind: 'slow',
+      why: 'measured 51.2s in this repo on 2026-07-29, against a 15s budget. Included automatically wherever it measures faster — 1.7-2.7s in every sibling',
+    },
+  }
 
 /** Commands in ci.yml that are checks rather than setup or reporting. */
 function ciCheckCommands(): string[] {
@@ -170,10 +198,31 @@ describe('verify.sh mirrors CI', () => {
     expect(stale).toEqual([])
   })
 
-  it('gives every exclusion a reason', () => {
-    for (const [cmd, reason] of Object.entries(EXCLUDED)) {
-      expect(reason.length, `${cmd} needs a real reason`).toBeGreaterThan(20)
+  /**
+   * A sentence cannot be checked, and one of these was false for a fortnight.
+   * The kind is asserted instead — and `slow`, the kind that ages, must carry a
+   * number so the claim can be re-measured and disagreed with.
+   */
+  it('justifies every exclusion mechanically, not in prose', () => {
+    const KINDS = ['network', 'pr-time', 'history', 'slow']
+    for (const [cmd, { kind, why }] of Object.entries(EXCLUDED)) {
+      expect(KINDS, `${cmd}`).toContain(kind)
+      expect(why.length, `${cmd} needs a real reason`).toBeGreaterThan(20)
+      if (kind === 'slow') {
+        // "too slow" is an adjective; "51.2s" is a claim someone can refute.
+        expect(why, `${cmd} is excluded as slow and must state a measured duration`).toMatch(
+          /\d+(\.\d+)?\s*(s|ms|min|seconds|minutes)/,
+        )
+      }
     }
+  })
+
+  it('does not excuse a check as slow without ever having timed it', () => {
+    const slow = Object.entries(EXCLUDED).filter(([, e]) => e.kind === 'slow')
+    // The failure mode this guards: adding `kind: 'slow'` to something nobody
+    // timed, which is exactly how the bandit rationale got in.
+    expect(slow.length).toBeGreaterThan(0)
+    for (const [, e] of slow) expect(e.why).toMatch(/measured|>\d/)
   })
 })
 

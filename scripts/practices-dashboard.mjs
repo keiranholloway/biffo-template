@@ -28,8 +28,50 @@ import { daysSince, readSessions, summariseSessions } from './practices-session.
 /** SRE practice caps toil at 50%. Above that, maintenance is eating delivery. */
 export const TOIL_BUDGET = 50
 
-/** Below this, product delivery is a rounding error on total activity. */
-export const PRODUCT_FEATURE_FLOOR = 20
+/**
+ * Merges that are neither capability nor toil: `docs`, `quality`, and subjects
+ * too unconventional to classify. Measured across the estate over the 90 days
+ * to 2026-07-29 — docs 10.0%, quality 5.0%, unconventional 7.1%, other 0.1%.
+ *
+ * It is deliberately the *whole* remainder rather than only the two kinds that
+ * are genuinely supporting work, because the 7.1% unclassifiable share cannot
+ * be argued either way. That makes this an upper bound on non-capability
+ * support, and therefore `CAPABILITY_FLOOR` a lower bound — the generous
+ * direction. Classify those merges and the floor should rise.
+ */
+export const SUPPORT_ALLOWANCE = 22
+
+/**
+ * The capability floor, **derived rather than picked**.
+ *
+ * Toil is budgeted at 50% and support costs another ~22%, so ~28% of merges is
+ * what is left for building anything. Sustained readings below that mean the
+ * budget is not being met, whatever the toil tile says on its own.
+ *
+ * ## Why this constant had to be re-derived (#831)
+ *
+ * It replaces `PRODUCT_FEATURE_FLOOR = 20`, which was set for the pre-#768
+ * headline: `tabsii-*` delivery as a share of everything, a number that ran at
+ * 3–6%. Against that metric a floor of 20 was permanently unreachable and the
+ * pill was permanently `critical`. #768 changed the numerator to capability
+ * built *anywhere* and the readings jumped to 33–35% — but the threshold came
+ * along unchanged, so the same pill became permanently `good`, ~15 points clear
+ * in every window. A grade that cannot change is decoration, and it read as
+ * corroboration on the very first day of the new definition.
+ *
+ * The lesson generalises past this constant: **a threshold belongs to a
+ * definition.** Redefining a metric and keeping its thresholds silently
+ * re-grades history.
+ */
+export const CAPABILITY_FLOOR = 100 - TOIL_BUDGET - SUPPORT_ALLOWANCE
+
+/**
+ * Below this, capability is a rounding error on total activity — fewer than one
+ * merge in five built anything. This is the old `PRODUCT_FEATURE_FLOOR` value,
+ * kept because that reading was always the right *description* of "barely
+ * shipping"; only the denominator it was applied to was wrong.
+ */
+export const CAPABILITY_CRITICAL = 20
 
 /**
  * Grade a value against a budget, for the severity stripe on a tile.
@@ -180,10 +222,27 @@ td.mid{color:var(--warn)}
  * that can *falsify* it — and when no sessions have been recorded it says so
  * plainly rather than leaving the headline looking corroborated.
  *
- * @param {{sessions: number, hours: number, delivery: number|null, platform: number|null, toil: number|null}|null} s
+ * ## Compare like with like (#831)
+ *
+ * The window this is compared against is load-bearing, and it was wrong. The
+ * page passed the **90-day** toil ratio, so a two-day, 86-hour effort log was
+ * being checked against a quarter of merge history. On 2026-07-29 that produced
+ * "proxy agrees within 9.8 points" — from wall-clock 33.1% against the 90-day
+ * 42.9%. Against the **7-day** 44.2% the same log gives 11.1 points, which
+ * trips this function's own threshold and reads "treat the headline with
+ * suspicion". Same evidence, opposite verdict, chosen by the window.
+ *
+ * 7d is the right one on the page's own three-column rule: rates are read from
+ * the weekly roll and 90d is the *baseline an experiment has to move*, not the
+ * current reading. It is also the closest window to how far back an effort log
+ * ever reaches. A falsification test that quietly picks the comparison most
+ * likely to agree is not a test, so the window is now named in the output.
+ *
+ * @param {{sessions: number, hours: number, days?: number, delivery: number|null, platform: number|null, toil: number|null}|null} s
  * @param {number|null} mergeToilRatio
+ * @param {number} windowDays window `mergeToilRatio` was computed over
  */
-export function renderSessions(s, mergeToilRatio) {
+export function renderSessions(s, mergeToilRatio, windowDays = 7) {
   if (!s || !s.sessions) {
     return `<div class="unvalidated">
       <strong>No sessions recorded.</strong> Every figure above is inferred from merge
@@ -202,10 +261,14 @@ export function renderSessions(s, mergeToilRatio) {
       : Math.abs(gap) <= 10
         ? `proxy agrees within ${Math.abs(gap)} points`
         : `proxy is off by ${gap > 0 ? '+' : ''}${gap} points — treat the headline with suspicion`
+  // The log's own span, so a short log checked against a longer window is
+  // visible rather than implied. Two days of effort against a seven-day roll is
+  // still a partial sample; it just is not the quarter-long mismatch it was.
+  const span = s.days ? ` over <strong class="num">${s.days}</strong> days` : ''
   return `<div class="sessions">
-    <div><span class="k">recorded</span> <strong class="num">${s.tasks ?? s.sessions}</strong> tasks · <strong class="num">${s.hours}h</strong></div>
+    <div><span class="k">recorded</span> <strong class="num">${s.tasks ?? s.sessions}</strong> tasks · <strong class="num">${s.hours}h</strong>${span}</div>
     <div><span class="k">wall-clock</span> delivery <strong class="num">${fmt(s.delivery, '%')}</strong> · platform <strong class="num">${fmt(s.platform, '%')}</strong> · toil <strong class="num">${fmt(s.toil, '%')}</strong></div>
-    <div><span class="k">merge proxy</span> toil <strong class="num">${fmt(mergeToilRatio, '%')}</strong> — ${esc(verdict)}</div>
+    <div><span class="k">merge proxy</span> toil <strong class="num">${fmt(mergeToilRatio, '%')}</strong> over ${esc(String(windowDays))}d — ${esc(verdict)}</div>
     ${stale ? `<div class="stale">Last recorded <strong>${age} days ago</strong> — a calibration that stopped is not calibration; the working pattern it validated has moved on.</div>` : ''}
   </div>`
 }
@@ -236,11 +299,21 @@ export function renderDashboard(snapshot, sessions = null) {
   // `unmeasured` for last week's data is worse than one that shows it.
   const capShare = (d) => e(d).capabilityShare ?? e(d).productFeatureShare
   const featureShare = capShare(7)
-  const featureGrade = grade(featureShare, {
-    warn: PRODUCT_FEATURE_FLOOR,
-    crit: PRODUCT_FEATURE_FLOOR / 2,
-    higherIsBetter: true,
-  })
+  /**
+   * A pre-#768 snapshot still renders (above), but it must not be *graded*:
+   * `CAPABILITY_FLOOR` is derived from the new denominator, and applying it to
+   * an old-definition reading would stamp `critical` on a 4% that was never
+   * measuring the same thing. Grading it would be the same error as leaving the
+   * old threshold on the new metric, run backwards.
+   */
+  const legacyShare = e(7).capabilityShare === undefined && featureShare !== undefined
+  const featureGrade = legacyShare
+    ? 'unknown'
+    : grade(featureShare, {
+        warn: CAPABILITY_FLOOR,
+        crit: CAPABILITY_CRITICAL,
+        higherIsBetter: true,
+      })
   const bySide = e(7).capabilityBySide ?? {}
 
   const tile = (label, value, note, g) => `
@@ -311,8 +384,9 @@ export function renderDashboard(snapshot, sessions = null) {
     <div class="v num">${fmt(featureShare, '%')}</div>
     <div class="sub">
       <span class="pill ${featureGrade}">${featureGrade}</span>
-      &nbsp;90-day baseline ${fmt(capShare(90), '%')} · last 24h ${fmt(capShare(1), '%')}
+      &nbsp;floor ${CAPABILITY_FLOOR}% · 90-day baseline ${fmt(capShare(90), '%')} · last 24h ${fmt(capShare(1), '%')}
       ${bySide.platform ? `· Biffo ${fmt(bySide.platform.share, '%')} · Tabsii ${fmt(bySide.product.share, '%')}` : ''}
+      ${legacyShare ? '<br />pre-#768 snapshot — this is the retired <code>productFeatureShare</code> on a different denominator, so it is shown but not graded' : ''}
     </div>
   </div>
 
@@ -351,7 +425,7 @@ export function renderDashboard(snapshot, sessions = null) {
   </div>
 
   <h2>Wall-clock vs the merge proxy — is the headline believable?</h2>
-  ${renderSessions(sessions, e(90).toilRatio)}
+  ${renderSessions(sessions, e(7).toilRatio, 7)}
 
   <h2>By repository — 90-day baseline, with last 24h merges</h2>
   <div class="scroll">
@@ -374,6 +448,7 @@ export function renderDashboard(snapshot, sessions = null) {
       <li><strong>Read rates from 7d, not 24h.</strong> At ~5 merges/day a daily percentile is noise. The 24h column carries counts; rates and percentiles come from the weekly roll.</li>
       <li><strong>Rework lag: higher is better.</strong> A fix correcting code written an hour ago is a guess that shipped; one correcting last week's code is ordinary defect discovery.</li>
       <li><strong>Green wait</strong> is time a PR was green and still could not land — the up-to-date race, not runner queueing. Runner pickup is ~0.</li>
+      <li><strong>The capability floor is derived, not chosen.</strong> ${CAPABILITY_FLOOR}% is what the toil budget leaves after ${SUPPORT_ALLOWANCE}% of measured docs, quality and unclassifiable merges. It moves when those move — and a threshold inherited across a change of definition grades nothing.</li>
     </ul>
   </div>
 </div>

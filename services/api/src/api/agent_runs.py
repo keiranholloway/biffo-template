@@ -213,7 +213,7 @@ async def aggregate_run_costs(
     since: datetime,
     until: datetime,
     agent_name: str | None = None,
-) -> list[dict[str, str | int | float]]:
+) -> list[dict[str, str | int | float | None]]:
     """Per-model cost aggregation for a time range, tenant-scoped (ADR-0001).
 
     Groups runs by the model field (extracted from ``definition_snapshot``) and
@@ -229,15 +229,24 @@ async def aggregate_run_costs(
     - ``total_output_tokens`` (int): Sum of output_tokens.
     - ``unpriced_runs`` (int): Count of runs with NULL cost_usd.
 
-    ## Implementation note
+    ## Implementation notes
 
-    ``model`` is not a column; it lives inside ``definition_snapshot`` JSON and
-    must be lifted out in Python. This approach (b) fetches rows and groups in
-    Python rather than attempting cross-dialect JSON extraction, because:
+    **Unpriced runs:** Runs with NULL ``cost_usd`` are counted in
+    ``unpriced_runs`` and excluded from ``total_cost_usd``, so a caller can see
+    how much of the time range is unpriced and correct for missing data.
 
-    - Simple and provably correct on both SQLite and Postgres.
-    - This is an admin analytics view, not a hot path.
-    - The call is bounded by date range and optional agent filter.
+    **Model extraction:** ``model`` is not a column; it lives inside
+    ``definition_snapshot`` JSON and must be lifted out in Python. This approach
+    (b) fetches rows and groups in Python rather than attempting cross-dialect
+    JSON extraction, because it is simple, provably correct on both SQLite and
+    Postgres, and this is an admin analytics view (not a hot path).
+
+    **Unbounded within a time range:** The query loads all matching runs into
+    memory and groups them in Python. There is no LIMIT cap. This is acceptable
+    because (a) it is admin-only, (b) scoped to a single tenant, and (c)
+    filtered by date range (default 30 days); at current scale this is safe.
+    If a tenant's run volume makes it slow, revisit and either add a cap or
+    paginate.
     """
     stmt = (
         select(AgentRun)
@@ -263,7 +272,7 @@ async def aggregate_run_costs(
     runs = list((await db.scalars(stmt)).all())
 
     # Group by model, lifting model out of definition_snapshot.
-    groups: dict[str | None, dict[str, str | int | float]] = {}
+    groups: dict[str | None, dict[str, str | int | float | None]] = {}
     for run in runs:
         model = run.definition_snapshot.get("model") if run.definition_snapshot else None
         # Normalize: model must be a string or None, never any other type
@@ -272,7 +281,7 @@ async def aggregate_run_costs(
 
         if model not in groups:
             groups[model] = {
-                "model": model or "",
+                "model": model,
                 "runs": 0,
                 "total_cost_usd": 0.0,
                 "total_input_tokens": 0,

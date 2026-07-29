@@ -583,3 +583,51 @@ def test_costs_respects_tenant_isolation(app, client: TestClient):
     rows = client.get(f"{_BASE}/costs", params={"since": since_iso, "until": until_iso}).json()
     assert len(rows) == 1
     assert rows[0]["runs"] == 1
+
+
+def test_costs_run_with_no_model_reports_none(app, client: TestClient):
+    """A run with no model in definition_snapshot reports model as None."""
+    _, session_factory = app
+
+    async def _seed_no_model(offset: int) -> str:
+        async with session_factory() as session:
+            # Snapshot with no model key
+            snapshot_no_model = {
+                "instructions": "Test instruction.",
+                "tools": [],
+                "read_scope": [],
+                "max_turns": 1,
+            }
+            run, _ = await create_run(
+                session,
+                tenant_id="default",
+                agent_name="test-agent",
+                definition_snapshot=snapshot_no_model,
+                input_payload={},
+                max_depth=8,
+            )
+            run.created_at = _T0 + timedelta(seconds=offset)
+            await session.flush()
+            await complete_run(
+                session,
+                tenant_id="default",
+                run_id=run.id,
+                status="completed",
+                messages=_MESSAGES,
+                result={},
+                input_tokens=100,
+                output_tokens=50,
+                cost_usd=0.01,
+            )
+            await session.commit()
+            return run.id
+
+    asyncio.run(_seed_no_model(0))
+
+    since_iso = (_T0 - timedelta(days=1)).isoformat()
+    until_iso = (_T0 + timedelta(days=1)).isoformat()
+    rows = client.get(f"{_BASE}/costs", params={"since": since_iso, "until": until_iso}).json()
+
+    assert len(rows) == 1
+    assert rows[0]["model"] is None  # Should be None, not ""
+    assert rows[0]["runs"] == 1

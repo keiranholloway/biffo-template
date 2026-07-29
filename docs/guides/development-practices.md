@@ -48,6 +48,13 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | [#689](https://github.com/keiranholloway/biffo-template/issues/689) | `core diff` reports instance-authored files as `removed` — a false data-loss signal that `core upgrade` does not act on. Halted a deploy, produced an incorrect issue, and prompted a workaround hunt, all for something that would not happen | **visibility** | biffo-platform upgrade | biffo-template `cli/` | **open** |
 | — | Two plugin admin URLs both answered `200 text/html`, so they were read as the same failure. They were opposites: one carried `x-cache: Miss` and `<title>Ideation Engine — Admin</title>` (working), the other `server: AmazonS3` + `x-cache: Error` (a 404 the CDN rewrote). The proposed fix would have reverted #635 and broken admin access for every admin | **visibility** | biffo-template [#713](https://github.com/keiranholloway/biffo-template/issues/713) | biffo-plugin-idea-scout (missing `web-admin/dist`) | **corrected** — cost ~25m and one wrong issue |
 | — | An admin panel rendered a **500 as "No catalog entries yet."** The screenshot looked like a working feature with no data; only `read_network_requests` showed the status. A UI that renders a failed fetch as an empty collection makes a broken feature indistinguishable from an idle one | **visibility** | biffo-platform (Ideation admin) | biffo-plugin-ideation (surface fetch failures) | **unfiled** |
+| — | **git skips ALL hooks silently when `core.hooksPath` points at a directory that does not exist.** husky sets it to the generated, gitignored `.husky/_`, which no fresh worktree has — so every worktree made by the documented workflow ran with pre-push `pyright`, `lint-staged` **and** the core-ownership guard dead, no warning. One PR cost **1h43m and five CI runs** for three type errors a local `pyright` catches in seconds | **fail-open** · visibility | tabsii-platform (worktrees) | biffo-template `.githooks/` | **fixed** ([#843](https://github.com/keiranholloway/biffo-template/pull/843)) — hooks tracked, present without an install |
+| [#844](https://github.com/keiranholloway/biffo-template/pull/844) | `RunOutcome.trigger_payload` unwrapped `trigger_event["payload"]` and fell back to `{}`. Nothing writes that envelope — `dispatch_event` stores the event **flat** and the engine reads it flat — so it returned `{}` for **every real run since the seam shipped**. The module docstring's worked example taught the broken call, eleven lines below a sentence describing `trigger_event` as "the whole triggering payload" | **drift** · visibility | tabsii-platform (observer wrote nothing) | biffo-template `services/api` | **fixed** — flat by default, envelope still unwrapped if genuinely present |
+| [tabsii-platform#302](https://github.com/tabsii-com/tabsii-platform/issues/302) | A configuration set with a bounce event destination was **never attached to the identity mail is actually sent as**. Bounces reached account-level `AWS/SES` metrics (which need no configuration set) while the SNS destination saw nothing — the consumer Lambda had **no CloudWatch log group at all**, having never once been invoked. Shipped, green, inert | **boundary** · visibility | tabsii-platform (dev SES) | tabsii-platform `infra/` | **fixed** (#304) |
+| — | **SES publishes two different envelopes.** A configuration-set event destination names the type `eventType` and spells the rendering failure `RenderingFailure`; a classic identity notification topic uses `notificationType` and `Rendering Failure`. The handler read one, so its **first ever real invocation** resolved to `None` and dropped the bounce it existed to handle. Same assumed-payload-shape class as the `trigger_payload` row, in the same feature, four hours apart | **drift** · visibility | tabsii-platform (SES consumer) | tabsii-platform `infra/` | **fixed** (#305) |
+| [tabsii-crm#118](https://github.com/tabsii-com/tabsii-crm/issues/118) | **RECURRENCE of the row directly above this block**, in a different repo. A lead's Activity timeline inferred `"Nothing sent or logged yet."` from an empty array — and the array is empty in **three** situations: in flight, genuinely empty, and **failed**, because `.catch(() => undefined)` swallowed the error into the same `[]`. So a 403 or 500 told the reader a candidate had never been contacted. The earlier instance was logged **unfiled** and never generalised, so it came back | **visibility** · drift | tabsii-crm (lead drawer) | tabsii-crm `apps/frontend` | **fixed** ([#119](https://github.com/tabsii-com/tabsii-crm/pull/119)) |
+| — | **Merging the upgrade that ships tracked `.githooks/` does not arm them.** `core.hooksPath` is per-clone config set by `prepare`, so an existing clone keeps pointing at the old generated dir until someone runs `pnpm install` once. The merge reads as *done* while the guard stays inert — the same shape as the defect it fixes. Verified: a fresh worktree off the merged `dev` still reported `hooksPath=.husky/_` with `.husky/_` absent | **fail-open** · process | tabsii-platform (post-upgrade check) | biffo-template (upgrade notes / `prepare`) | **unfiled** |
+| [#374](https://github.com/keiranholloway/biffo-template/issues/374) | The issue **described the worktree-hooks gap in its own body** — *"hooks do not run in a fresh clone… easy to hit when working in a throwaway clone or a worktree"* — called it *"arguably the larger issue"*, proposed two fixes, shipped only the pre-push hook, and closed. The named-but-unfixed half cost **1h43m five days later**. A closed issue is not evidence its stated findings were addressed | **process** | biffo-template#374 | biffo-template (issue hygiene) | **fixed** late ([#843](https://github.com/keiranholloway/biffo-template/pull/843)) |
 | — | `scripts/js-dependency-audit.sh` ran under dash, whose `echo` interprets backslash escapes. Advisory payloads contain them, so `echo "$out" \| jq` mangled the JSON and every run reported INCONCLUSIVE — the gate green while scanning nothing, inside the very fix (#591) that exists to stop it failing open | **fail-open** | biffo-template CI | biffo-template `scripts/` | **fixed** ([#717](https://github.com/keiranholloway/biffo-template/pull/717)) |
 | — | A cut `core-v*` tag is not an available artifact: the tag existed at 0.136.0 while npm still served 0.135.0. Upgrading in that window carries a *partial* fix that deploys green and still fails | visibility · process | biffo-template release chain | biffo-template CI | **unfiled** — caught before it bit |
 | [#671](https://github.com/keiranholloway/biffo-template/issues/671) | `scripts/biffo.sh` execs `npx @biffo/cli@$(biffo.core.json .version)`, so an unpublished core version reds **every guard on every instance**. npm publish has been failing (E404 on PUT) since 0.131.0 — the upgrade PR's own version bump is what breaks its guards, so it can never go green | **boundary** · visibility | tabsii-platform [#241](https://github.com/tabsii-com/tabsii-platform/pull/241) | biffo-template (npm token + `publish-cli.yml`) | publishing **fixed** ([#669](https://github.com/keiranholloway/biffo-template/pull/669), npm now at 0.133.3); the coupling itself still **open** ([#667](https://github.com/keiranholloway/biffo-template/issues/667)) |
@@ -276,19 +283,30 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **159 rows** (1 more than the page renders — see the divergence row below; the gap is now reported rather than silent):
+`byFixRepo`, regenerated at **166 rows** on 2026-07-29 (was 159):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 86 of 159 (54%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 15 of 159 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
-| **biffo-plugin-idea-scout** | 8 of 159 | Adapter seam, research search capability, its own styling, release + publish workflows |
-| **biffo-platform** | 7 of 159 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 159 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **tabsii-marketplace** | 2 of 159 | `python-jose` removal; the credential-dependent build |
-| **tabsii-crm** | 2 of 159 | Its E2E harness, and a repo setting that diverged |
-| **biffo-plugin-ideation** | 4 of 159 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **biffo-runners** | 1 of 159 | Runner fleet docs + fail-fast; **its whole source was uncommitted until today** |
+| **biffo-template** | 90 of 166 (54%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the git-hook chain, the scaffolder itself |
+| **tabsii-platform** | 17 of 166 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity **and its event-destination envelope** |
+| **biffo-plugin-idea-scout** | 8 of 166 | Adapter seam, research search capability, its own styling, release + publish workflows |
+| **biffo-platform** | 7 of 166 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 166 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-ideation** | 4 of 166 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **tabsii-crm** | 3 of 166 | Its E2E harness, a repo setting that diverged, **and a timeline rendering a failed fetch as "nothing sent"** |
+| **tabsii-marketplace** | 2 of 166 | `python-jose` removal; the credential-dependent build |
+| **biffo-runners** | 1 of 166 | Runner fleet configuration |
+
+**The shape did not change, and that is the finding.** Seven new rows moved
+`biffo-template` from 86/159 to 90/166 — **54% either way**. Four sessions of
+unrelated work have not shifted where fixes land: more than half still belong
+upstream, in the repo none of them surfaced in.
+
+**One movement worth naming:** `tabsii-crm` gained a row for the first time in
+weeks, and it is a *recurrence* of a pattern already logged against
+`biffo-plugin-ideation` — a UI rendering a failure as an empty collection. The
+first instance was recorded `unfiled` and never generalised. Two repos, same
+defect, and the corpus predicted it without anyone reading the prediction.
 
 **`biffo-template` takes 86 of 159 — 54%, and this capture is not evidence
 about the estate.** All ten new rows are findings about the measurement
@@ -759,6 +777,58 @@ were added: **330 min — delivery 180, platform 45, toil 105.** The delivery ha
 is three implementation plans, an assessment of three PRD requirements against a
 running system, three issues, and the feature itself. The toil is CI queue,
 deploy waits, and the recovery steps above.
+
+### Measured: the CI tax is per-job cold start, not contention, 2026-07-29
+
+Prompted by *"this doesn't feel like a substantially complex change, but it took
+5 hours and is still undelivered"* about `0007-lead-activity`. Measured from the
+commit, PR and workflow record rather than recalled.
+
+**Elapsed: 8h25m** (12:27→20:52 UTC, 2026-07-28), not 5. Of that, the happy path
+— plan through M5 — was **4h34m**. The remaining **3h51m, 46%,** was chasing
+three defects, and the feature still was not verified when the session ended.
+
+| Where the time went | |
+| --- | --- |
+| Blocking CI, PR open→merge | ~208 min across 10 PRs |
+| Deploys after merge | 93 min app + 26 min infra |
+| Two investigations (#301, #302) | 46 min + 105 min |
+| One PR's CI churn (#300) | 103 min for three `pyright` errors, five runs |
+| Total workflow runs in the window | **110 runs, 660 min of run wall-clock** |
+
+**The counter-intuitive part, and the reason to record it.** Across 197 jobs:
+**727 min queued vs 511 min executing — 59% queue.** The obvious reading is
+runner saturation and the obvious fix is more runners. Both are wrong:
+
+- the fleet was **idle 60% of the window** (299 of 505 min with zero jobs running)
+- peak concurrency was 10, but it sat at ≤4 for almost all of it
+- queue time was **flat across every job type** — 2.9–4.6 min regardless of load
+
+Flat queue under an idle fleet is not contention; it is a **fixed ~3–4 min
+cold start per job** on ephemeral runners. Several jobs cost far more to start
+than to run: `RLS (real Postgres)` 3.8m queue / 1.2m exec, `Secret Scan` 2.9m /
+1.1m, `Tag core version` 3.7m / **0.1m**.
+
+**And trimming still would not help.** A PR run is ~3.5m cold start + ~5.2m for
+the longest job ≈ 9m, because the five jobs run in *parallel*. Consolidating them
+into one job means one cold start but serialised work: 3.5 + 14.9 ≈ **18m —
+worse**. Eliminating cold start entirely takes a PR run 9m→~6m and a deploy
+12m→~7m: about **1h10m of the 8h25m, ~14%**, and it is the hardest 14% to fix.
+
+So the pipeline was **not** the thing to attack, despite being the largest single
+line item. The ranking that came out of the measurement:
+
+1. **Defect prevention** — 2h31m of pure investigation plus three extra
+   round-trips, and two of the three defects die to *logging one real payload
+   before writing the consumer*. Biggest bucket, cheapest fix.
+2. **The `pyright` round-trip** — 103 min on one PR, fixed by a local gate.
+   Root cause turned out to be hooks silently skipped in worktrees, not
+   forgetfulness.
+3. **Cold start** — ~1h10m, smallest and hardest.
+
+**The general lesson is about the measurement, not the pipeline:** "59% of time
+is queue" and "the fleet is saturated" sound like the same statement and are not.
+Time-at-concurrency distinguished them in one query, and it inverted the fix.
 
 ### The self-estimate was 45% low, and the cause was the unit
 
@@ -1326,6 +1396,35 @@ logged what it was ignoring announced its own bug on first run; the one that
 returned silently took a deployed page, a bisect and an API read to find. Nothing
 about the code quality differed. The observable one was cheap because it said
 what it did.
+
+**Verifying by the route a person actually uses found a defect four API checks
+missed.** `0007` M4 was confirmed at every layer — SES config, Lambda logs, Core
+and BFF both returning the row `failed` with its reason. All green. Opening the
+lead in the browser then showed **"Nothing sent or logged yet."**, because the
+timeline could not distinguish loading from failed from empty (tabsii-crm#118).
+The API was right and the product was still lying to its user. The plan had
+demanded a browser check in writing; doing it is what earned this.
+
+**Reading the producer settled a shape three sources disagreed about.** Before
+changing `trigger_payload`, the question "is `trigger_event` flat or wrapped?"
+was answered by reading the two ends — `dispatch_event` storing it, and
+`orchestrator/plugin.py:284` reading it straight back into `format_map`. That
+last one is decisive: `{email}` recipient templating *works in production*, which
+is only possible if the fields are flat. Cost ~5 min, and it replaced tabsii's
+local patch as evidence with the actual contract.
+
+**Proving the test fails first caught a worthless test twice.** For both
+tabsii-crm#119 and biffo-template#844 the new tests were run against the *old*
+code before the fix landed. In #844 the contract test failed with the bug itself
+— `{}` where the producer had stored `{'email': …, 'lead_id': …}`. Without that
+step the #844 tests would have been the same self-confirming fixtures that let
+the original defect through.
+
+**Catching my own stale checkout before reporting from it.** A residual defect
+was nearly reported in the SES handler — `_reason()` still reading
+`notificationType` — from a primary checkout **two commits behind `dev`**. The
+deployed code was already correct. `git rev-list --count HEAD..origin/dev` before
+trusting a tree is in AGENTS.md §1 precisely for this, and it is cheap.
 
 ## What needs more thought
 
@@ -2012,12 +2111,44 @@ Reading the rule did not prevent it, which suggests the fix is not more emphasis
 but a mechanism: a negative search is only evidence once the same query has been
 shown to match something. Nothing in the tooling makes that cheap or habitual.
 
+**Sibling repos have no git hooks at all, and `core upgrade` cannot reach them.**
+tabsii-crm has no root `package.json`, no husky, and `core.hooksPath` unset —
+zero local gates, so nothing catches a type error before CI. `.githooks/` is
+template-owned, which distributes to *instances* but not to sibling or plugin
+repos, and those need the skeleton change plus a manual copy-in. The repos with
+the least gating are the ones the mechanism cannot serve.
+
+**A fixture hand-written beside the code it tests is worse than no test.** Three
+of this session's defects had passing tests built from the same assumption as the
+implementation, so the tests confirmed the belief rather than the contract —
+`trigger_payload` (ten tests), the SES envelope, and the timeline's empty state.
+The countermeasure used here was a test that builds no fixture at all: dispatch a
+real event, read it back from the database, hand the *stored* value to the
+consumer. Nothing encodes that as a rule yet, and the class keeps recurring.
+
+**tabsii-crm enforces no JS formatting, and running the obvious command is
+destructive.** There is no prettier config and CI checks format only for Python
+(`ruff format --check`). A routine `npx prettier --write` therefore reformatted
+~700 lines to prettier's defaults against a single-quote/no-semicolon codebase.
+Recoverable, but the trap is live for anyone who runs the tool the repo ships.
+
+**A number in prose about repo settings went stale the same way the scoreboard's
+headline did.** `biffo-workflow` states all five active Biffo repos have
+`allow_auto_merge=true`. tabsii-crm reports `false` — `gh pr merge --auto` there
+fails outright rather than degrading, so it was caught, but the skill's own
+warning is what caught it, not the claim.
+
 ## Skills used
 
 Skills cannot be iterated on impressions. Every invocation, with an honest outcome.
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `biffo-verify` | **worked** | §1 ("the work may already exist") is what caught the duplicate: `/analytics/speed` did not exist when checked, but another session built it *during* this one. Checking again before merging turned a conflicting PR into a closed one. §3 (prove the test fails first) ran twice and earned it twice |
+| `biffo-workflow` | **worked** | Four PRs across three repos, no footguns hit that the skill did not warn about. Its `allow_auto_merge` check fired for real on tabsii-crm (`false`), where `--auto` errors outright rather than degrading — the warning was accurate and the repo list in the skill was not |
+| `biffo-workflow` | **partial** | The `--delete-branch` + worktree ordering trap hit **three times in one session**. The skill documents it (§7, "remove the worktree first"), but the note sits after the merge command it invalidates, so the command is copied before the caveat is read. The remote branch also survives the failed delete and needs a separate `git push origin --delete`, which the skill does not mention |
+| `claude-in-chrome` | **worked** | Found tabsii-crm#118, which four API-level checks had missed. Also produced a false alarm — a screenshot taken before the fetch resolved read as a defect — corrected by isolating the BFF and Core responses rather than re-screenshotting |
+| **not used, should have been** | — | No skill covers *"a change is ready in the template — distribute it"*. `biffo core upgrade` was run from memory plus the mechanics note, and hit two undocumented snags (a detached-HEAD refusal, and the npx CLI failing to resolve its own packaged template root, needing `--template-repo`). That is skill-shaped and currently isn't one |
 | `claude-in-chrome` | **worked** | The only thing that could close #652. `curl` returned clean `401` JSON at every stage; the failure was visible only in an authenticated session, and then only in the *network* panel — the rendered page showed "No catalog entries yet" over an HTTP 500. Without it the issue would have been closed on a screenshot. |
 | `biffo-verify` | **worked** | §3 caught the vacuous drift guard (above). §1 turned #722 into a close-with-evidence and stopped #652 being reimplemented. |
 | `biffo-verify` | **partial** | §8's "Skills used" and repo tally were done at the *end* of a long session, from memory, and the class counts were typed rather than regenerated — producing wrong numbers that the tool then corrected. The section warns about exactly this two paragraphs earlier. The step should say: run `--report` and paste, never type. |

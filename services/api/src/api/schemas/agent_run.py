@@ -115,6 +115,23 @@ class AgentRunSummary(BiffoBaseSchema):
     completed_at: datetime | None = None
 
 
+class AgentRunCostAggregate(BaseModel):
+    """Per-model cost aggregation for an admin cost analysis view.
+
+    Groups runs by model, summing costs and token counts. Runs with NULL
+    cost_usd are counted separately in ``unpriced_runs`` and excluded from
+    ``total_cost_usd``, so a caller can see how much of the time range is
+    unpriced and correct for missing data when reporting.
+    """
+
+    model: str | None = None
+    runs: int
+    total_cost_usd: float
+    total_input_tokens: int
+    total_output_tokens: int
+    unpriced_runs: int
+
+
 class CompleteAgentRunRequest(BaseModel):
     """The runtime's terminal report for one run.
 

@@ -4,6 +4,7 @@ import {
   type ICognitoUserPoolData,
 } from 'amazon-cognito-identity-js'
 
+import { pruneForeignCognitoCredentials } from './cognito-hygiene'
 import { resolveCoreIdentity } from './identity'
 
 // ---------------------------------------------------------------------------
@@ -59,6 +60,12 @@ async function getUserPool(): Promise<CognitoUserPool | null> {
 
   const identity = await resolveCoreIdentity()
   if (!identity) return null
+
+  // Once per page load, and only with a resolved client id: drop credentials
+  // left behind by pools this deployment no longer uses (biffo-template#834).
+  // Cheap, and it keeps the shared origin from accumulating dead tokens for
+  // every pool the portal has ever pointed at.
+  pruneForeignCognitoCredentials(identity.clientId)
 
   const poolData: ICognitoUserPoolData = {
     UserPoolId: identity.userPoolId,

@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 // @ts-expect-error -- plain .mjs so the collector runs on bare node from a
 // scheduled workflow that installs nothing. Imported here so the logic has one
 // home rather than a TypeScript copy that can drift from it — same arrangement
@@ -29,6 +32,7 @@ import {
   classifyMergeSide,
   classifyWork,
   filterToWindow,
+  priorWindow,
 } from '../../../scripts/practices-metrics.mjs'
 // @ts-expect-error -- plain .mjs, same arrangement as above.
 import {
@@ -36,6 +40,11 @@ import {
   fmt,
   renderDashboard,
   renderSessions,
+  CAPABILITY_FLOOR,
+  CAPABILITY_CRITICAL,
+  GREEN_WAIT_WARN_MINUTES,
+  definitionBreak,
+  renderAudits,
 } from '../../../scripts/practices-dashboard.mjs'
 // @ts-expect-error -- plain .mjs, same arrangement as above.
 import {
@@ -629,6 +638,63 @@ describe('filterToWindow', () => {
     const w = filterToWindow({ ...data, rework: null }, '2026-07-20T00:00:00Z')
     expect(w.rework).toBeNull()
   })
+
+  /**
+   * The upper bound is what makes a baseline that does not contain the reading
+   * it is compared against — the whole point of #835.
+   */
+  it('excludes everything at or after the upper bound', () => {
+    const w = filterToWindow(data, '2026-01-01T00:00:00Z', '2026-07-20T00:00:00Z')
+    expect(w.prs).toHaveLength(1)
+    expect(w.prs[0].headRefName).toBe('a')
+    expect(w.runs).toHaveLength(1)
+    expect(w.rework.commits).toHaveLength(1)
+    expect(w.rework.fixes).toHaveLength(1)
+  })
+
+  it('splits the data into two disjoint halves that partition the whole', () => {
+    const cut = '2026-07-20T00:00:00Z'
+    const before = filterToWindow(data, '2026-01-01T00:00:00Z', cut)
+    const after = filterToWindow(data, cut)
+    expect(before.prs.length + after.prs.length).toBe(data.prs.length)
+    expect(before.prs.map((p: { headRefName: string }) => p.headRefName)).not.toContain(
+      after.prs[0].headRefName,
+    )
+  })
+})
+
+describe('priorWindow', () => {
+  const now = Date.parse('2026-07-29T00:00:00Z')
+
+  it('is the equal-length period immediately before the rate window', () => {
+    const p = priorWindow([1, 7, 90], now)
+    // Last week, against this week — matched in length, sharing no merge.
+    expect(p.days).toBe(7)
+    expect(p.since).toBe('2026-07-15T00:00:00.000Z')
+    expect(p.until).toBe('2026-07-22T00:00:00.000Z')
+  })
+
+  /**
+   * The baseline must be the same LENGTH as the reading, not merely disjoint
+   * from it. 90d-minus-7d was independent but compared a week to a quarter, so
+   * the reference was dominated by whichever regime prevailed over 83 days —
+   * the green-wait units mismatch, one level up.
+   */
+  it('does not stretch to whatever is left of the long window', () => {
+    expect(priorWindow([1, 7, 90], now).days).toBe(7)
+    expect(priorWindow([1, 7, 30], now).days).toBe(7)
+    // The long window only supplies context; it never sets the baseline length.
+    expect(priorWindow([1, 7, 90], now)).toEqual(priorWindow([1, 7, 30], now))
+  })
+
+  it('needs a rate window to derive one', () => {
+    expect(priorWindow([7], now)).toBeNull()
+    expect(priorWindow([], now)).toBeNull()
+  })
+
+  it('takes the two longest windows, whatever order they are given in', () => {
+    expect(priorWindow([90, 1, 7], now)).toEqual(priorWindow([1, 7, 90], now))
+  })
 })
 
 describe('classifyMergeSide', () => {
@@ -853,6 +919,293 @@ describe('renderDashboard', () => {
     const html = renderDashboard(bare)
     expect(html).toContain('—')
   })
+
+  /**
+   * A pre-#768 snapshot carries `productFeatureShare` on the old, much smaller
+   * denominator. It still renders — it is the historical series — but grading
+   * it against a floor derived from the new definition would stamp `critical`
+   * on a number that was never measuring the same thing.
+   */
+  it('shows a pre-#768 reading but refuses to grade it', () => {
+    const html = renderDashboard(snapshot)
+    expect(html).toContain('>4%<')
+    expect(html).toContain('pill unknown')
+    expect(html).toContain('not graded')
+  })
+})
+
+/**
+ * The two defects this suite was written for, both found by reading the
+ * 2026-07-29 page rather than the code (#831). Fixtures use that day's real
+ * figures so the assertions are anchored to an observed failure.
+ */
+describe('renderDashboard — grading the capability headline', () => {
+  const capSnapshot = (capability7: number) => ({
+    collectedAt: '2026-07-29T03:35:00.000Z',
+    windowDays: [1, 7, 90],
+    windows: {
+      1: { estate: { merges: 145, capabilityShare: 33.1, toilRatio: 38.6 }, repos: {} },
+      7: {
+        estate: {
+          merges: 616,
+          capabilityShare: capability7,
+          toilRatio: 44.2,
+          platformShare: 81,
+          productShare: 19,
+          contentionHours: 91.8,
+        },
+        repos: {},
+      },
+      90: {
+        estate: { merges: 1232, capabilityShare: 35, toilRatio: 42.9, contentionHours: 278.2 },
+        repos: {},
+      },
+    },
+  })
+
+  it('derives the floor from the toil budget and the measured support share', () => {
+    expect(CAPABILITY_FLOOR).toBe(28)
+    expect(CAPABILITY_CRITICAL).toBe(20)
+  })
+
+  /**
+   * The regression. Under the inherited `PRODUCT_FEATURE_FLOOR` of 20 every one
+   * of these readings graded `good`, including the two that are plainly not —
+   * a pill ~15 points clear of its threshold in every window cannot move, and
+   * an unmovable grade is decoration.
+   */
+  it('grades a reading that clears the floor, and one that does not', () => {
+    expect(renderDashboard(capSnapshot(33)) as string).toContain('pill good')
+    // 24% would have been `good` against the old floor of 20.
+    expect(renderDashboard(capSnapshot(24)) as string).toContain('pill warning')
+    expect(renderDashboard(capSnapshot(15)) as string).toContain('pill critical')
+  })
+
+  it('states the floor, so the grade can be checked against it', () => {
+    expect(renderDashboard(capSnapshot(33)) as string).toContain('floor 28%')
+  })
+})
+
+describe('renderDashboard — independent baseline and normalised contention', () => {
+  /** 2026-07-29 as collected, plus the `prior` window the collector now emits. */
+  const base = {
+    collectedAt: '2026-07-29T03:35:00.000Z',
+    windowDays: [1, 7, 90],
+    windows: {
+      1: { estate: { merges: 145, capabilityShare: 33.1, toilRatio: 38.6 }, repos: {} },
+      7: {
+        estate: {
+          merges: 616,
+          capabilityShare: 33,
+          toilRatio: 44.2,
+          platformShare: 81,
+          productShare: 19,
+          contentionHours: 91.8,
+        },
+        repos: {},
+      },
+      90: {
+        estate: {
+          merges: 1232,
+          capabilityShare: 35,
+          toilRatio: 42.9,
+          platformShare: 66.6,
+          productShare: 33.4,
+          contentionHours: 278.2,
+        },
+        repos: {},
+      },
+    },
+  }
+  const withPrior = {
+    ...base,
+    windows: {
+      ...base.windows,
+      prior: {
+        days: 83,
+        since: '2026-04-30T03:35:00.000Z',
+        until: '2026-07-22T03:35:00.000Z',
+        estate: {
+          merges: 616,
+          capabilityShare: 37,
+          toilRatio: 41.6,
+          platformShare: 52.2,
+          productShare: 47.8,
+          contentionHours: 186.4,
+        },
+        repos: {},
+      },
+    },
+  }
+
+  it('compares against the prior window, not the lookback that contains the week', () => {
+    const html = renderDashboard(withPrior) as string
+    expect(html).toContain('prior 83d baseline 37%')
+    expect(html).toContain('prior 83d 41.6%')
+    expect(html).toContain('prior 83d 52.2% / 47.8%')
+    // The contaminated 90-day figures must not be presented as the reference.
+    expect(html).not.toContain('baseline 35%')
+    expect(html).not.toContain('90-day baseline')
+  })
+
+  /**
+   * Snapshots collected before the split have no `prior`. Falling back to 90d
+   * is right — a page of dashes would be worse — but the overlap has to be
+   * stated, because it is the reason the numbers look so agreeable.
+   */
+  it('discloses the overlap when it has to fall back to the lookback', () => {
+    const html = renderDashboard(base) as string
+    expect(html).toContain("50%</strong> of the baseline's merges are the same merges")
+  })
+
+  it('does not cry overlap once an independent baseline exists', () => {
+    expect(renderDashboard(withPrior) as string).not.toContain('the same merges')
+  })
+
+  /**
+   * The tile showed 91.8h against 278.2h — a week against a quarter, which read
+   * as a comfortable win. Per day it inverted to 4× worse. Per merge the volume
+   * cancels: 8.9 min against 18.2 min, and the tile finally answers "how long
+   * does a PR of mine sit green?".
+   */
+  it('normalises green wait by the merges that produced it', () => {
+    const html = renderDashboard(withPrior) as string
+    expect(html).toContain('Green wait per merge')
+    expect(html).toContain('8.9 min')
+    expect(html).toContain('18.2 min')
+    // The raw hours stay, as context rather than as the comparison.
+    expect(html).toContain('91.8h across 616 merges')
+  })
+
+  it('grades green wait against the ten-minute line, not a weekly total', () => {
+    expect(GREEN_WAIT_WARN_MINUTES).toBe(10)
+    // 91.8h over 616 merges is 8.9 min — under the line, where the old tile
+    // graded the same reading `critical` on 91.8 > 20 "hours".
+    expect(renderDashboard(withPrior) as string).toContain('tile good')
+    const congested = {
+      ...withPrior,
+      windows: {
+        ...withPrior.windows,
+        7: {
+          ...withPrior.windows[7],
+          estate: { ...withPrior.windows[7].estate, contentionHours: 300 },
+        },
+      },
+    }
+    expect(renderDashboard(congested) as string).toContain('tile critical')
+  })
+})
+
+describe('renderAudits', () => {
+  /**
+   * These are the only figures on the page that can be *wrong* rather than
+   * merely unflattering, and until #865 all three were run by hand. That is how
+   * a local gate reporting `verify passed` while checking nothing survived
+   * across eight repos: nobody ran the check, and the check did not exist,
+   * because the metric that did exist — arming — was green.
+   */
+  it('renders a failing audit as critical, not as a number to read past', () => {
+    const html = renderAudits({
+      collectedAt: 'x',
+      audits: [{ name: 'coverage', ok: false, exit: 1, summary: 'six repos at 1/8' }],
+    }) as string
+    expect(html).toContain('tile critical')
+    expect(html).toContain('six repos at 1/8')
+    expect(html).toContain('exit 1')
+  })
+
+  it('renders a passing audit as good', () => {
+    const html = renderAudits({
+      collectedAt: 'x',
+      audits: [{ name: 'arming', ok: true, exit: 0, summary: '36 armed, 0 dead' }],
+    }) as string
+    expect(html).toContain('tile good')
+  })
+
+  /**
+   * The load-bearing case. "Not collected" and "collected and clean" must never
+   * look the same — that conflation is the exact failure this section reports
+   * on, and rendering nothing would reproduce it one level up.
+   */
+  it('says nothing was checked, rather than showing a clean page', () => {
+    for (const empty of [null, { collectedAt: 'x', audits: [] }]) {
+      const html = renderAudits(empty) as string
+      expect(html).toContain('not collected')
+      expect(html).not.toContain('tile good')
+    }
+  })
+})
+
+describe('definitionBreak', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'practices-break-'))
+  const write = (date: string, schema: number) =>
+    writeFileSync(join(dir, `${date}.json`), JSON.stringify({ schema, windows: {} }))
+
+  it('finds the date the definitions changed', () => {
+    write('2026-07-27', 1)
+    write('2026-07-28', 1)
+    write('2026-07-29', 2)
+    expect(definitionBreak(dir)).toEqual({ date: '2026-07-29', from: 1, to: 2 })
+  })
+
+  it('reports nothing when the series is continuous', () => {
+    const clean = mkdtempSync(join(tmpdir(), 'practices-clean-'))
+    writeFileSync(join(clean, '2026-07-28.json'), JSON.stringify({ schema: 2 }))
+    writeFileSync(join(clean, '2026-07-29.json'), JSON.stringify({ schema: 2 }))
+    expect(definitionBreak(clean)).toBeNull()
+    expect(definitionBreak(mkdtempSync(join(tmpdir(), 'practices-empty-')))).toBeNull()
+  })
+
+  it('marks the break on the page, naming what it means', () => {
+    const html = renderDashboard(
+      { collectedAt: 'x', windowDays: [7], windows: { 7: { estate: {}, repos: {} } } },
+      null,
+      { date: '2026-07-29', from: 1, to: 2 },
+    ) as string
+    expect(html).toContain('Series break at')
+    expect(html).toContain('2026-07-29')
+    expect(html).toContain('schema 1 → 2')
+  })
+})
+
+describe('renderDashboard — corroboration window', () => {
+  /**
+   * 2026-07-29 as collected: an effort log of 34 tasks over 2 days, 33.1% of
+   * wall-clock on toil, against a merge proxy of 44.2% (7d) and 42.9% (90d).
+   */
+  const snapshot = {
+    collectedAt: '2026-07-29T03:35:00.000Z',
+    windowDays: [1, 7, 90],
+    windows: {
+      1: { estate: { merges: 145, capabilityShare: 33.1, toilRatio: 38.6 }, repos: {} },
+      7: { estate: { merges: 616, capabilityShare: 33, toilRatio: 44.2 }, repos: {} },
+      90: { estate: { merges: 1232, capabilityShare: 35, toilRatio: 42.9 }, repos: {} },
+    },
+  }
+  const sessions = {
+    sessions: 34,
+    tasks: 34,
+    days: 2,
+    hours: 86,
+    delivery: 16.1,
+    platform: 50.8,
+    toil: 33.1,
+    lastDate: '2026-07-29',
+  }
+
+  /**
+   * Fails against the page as it stood: it passed `e(90).toilRatio`, so the gap
+   * was 9.8 points and the panel read "proxy agrees within 9.8 points" — the
+   * only falsification test on the page, resolved in favour of the page by the
+   * choice of window.
+   */
+  it('checks the log against the 7-day proxy, not the 90-day baseline', () => {
+    const html = renderDashboard(snapshot, sessions) as string
+    expect(html).toContain('44.2%')
+    expect(html).toContain('proxy is off by -11.1 points')
+    expect(html).toContain('treat the headline with suspicion')
+    expect(html).not.toContain('agrees within 9.8 points')
+  })
 })
 
 describe('buildEntry', () => {
@@ -970,6 +1323,20 @@ describe('renderSessions', () => {
       null,
     )
     expect(html).toContain('not comparable yet')
+  })
+
+  /**
+   * The verdict is only readable if the window it was reached over is stated —
+   * a comparison whose window is implicit is the one that got picked wrongly.
+   */
+  it('names the window it compared against, and the span of the log', () => {
+    const html = renderSessions(
+      { sessions: 34, tasks: 34, days: 2, hours: 86, delivery: 16.1, platform: 50.8, toil: 33.1 },
+      44.2,
+      7,
+    )
+    expect(html).toContain('over 7d')
+    expect(html).toContain('over <strong class="num">2</strong> days')
   })
 })
 

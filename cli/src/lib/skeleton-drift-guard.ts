@@ -63,6 +63,32 @@ export interface SkeletonViolation {
 const isWorkflow = (rel: string): boolean =>
   rel.startsWith('.github/workflows/') && (rel.endsWith('.yml') || rel.endsWith('.yaml'))
 
+/**
+ * Lines a workflow actually executes, with YAML comments removed.
+ *
+ * The rules below look for the *text* of a defective command rather than
+ * parsing YAML, so the prose explaining why a command was replaced would
+ * otherwise be flagged as the command itself — and the fix for #743 documents
+ * exactly what it replaced, on the line above the replacement. A guard that
+ * reddens on its own rationale gets deleted rather than obeyed.
+ */
+const executableLines = (contents: string): string[] =>
+  contents.split('\n').filter((line) => !/^\s*#/.test(line))
+
+/**
+ * Audit invocations that cannot distinguish "found a vulnerability" from
+ * "could not reach the registry". Both exit non-zero, identically.
+ *
+ * Matched on the raw command name, which the hardened wrappers deliberately do
+ * not contain: `js-dependency-audit.sh` and `py-dependency-audit.sh` call
+ * `pnpm audit --json` / `pip-audit -f json` *inside* the script, where the
+ * output is parsed before anything is concluded from the exit code.
+ */
+const UNHARDENED_AUDITS: { pattern: RegExp; replacement: string }[] = [
+  { pattern: /\b(pnpm|npm|yarn)\s+audit\b/, replacement: 'sh scripts/js-dependency-audit.sh' },
+  { pattern: /\bpip-audit\b/, replacement: 'sh scripts/py-dependency-audit.sh' },
+]
+
 export const SKELETON_RULES: SkeletonRule[] = [
   {
     id: 'runner-label',
@@ -92,6 +118,36 @@ export const SKELETON_RULES: SkeletonRule[] = [
       /^\s*(-\s*)?uses:\s*gitleaks\/gitleaks-action/m.test(contents)
         ? 'uses gitleaks/gitleaks-action; install the free CLI directly, as the root ci.yml does'
         : null,
+  },
+  {
+    id: 'hardened-dependency-audit',
+    rationale:
+      'A raw `pnpm audit --audit-level=high` or `uv run pip-audit` exits non-zero identically ' +
+      "whether it found a vulnerability or simply could not parse the registry's response, so " +
+      'one npm/PyPI hiccup reds a required check on every open PR at once — for an ' +
+      'infrastructure blip with nothing to do with the code (#591). This repo hardened its own ' +
+      'audits in #592/#636/#717/#721 and went on shipping the raw commands into every generated ' +
+      'repo for months, so six siblings and two plugin repos were born with the original defect ' +
+      '(#743). The wrappers parse the output first: they fail only on a genuine finding, retry a ' +
+      'transient error, and report INCONCLUSIVE loudly rather than passing or failing blind.',
+    appliesTo: isWorkflow,
+    check: (_rel, contents) => {
+      const offenders = executableLines(contents).filter((line) =>
+        UNHARDENED_AUDITS.some((a) => a.pattern.test(line)),
+      )
+      if (offenders.length === 0) return null
+      const wanted = [
+        ...new Set(
+          UNHARDENED_AUDITS.filter((a) => offenders.some((line) => a.pattern.test(line))).map(
+            (a) => a.replacement,
+          ),
+        ),
+      ]
+      return (
+        `${offenders.length} step(s) run an unhardened dependency audit directly: ` +
+        `${offenders.map((l) => l.trim()).join(' | ')}. Call ${wanted.join(' / ')} instead.`
+      )
+    },
   },
 ]
 

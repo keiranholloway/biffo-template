@@ -228,3 +228,35 @@ upgrade` will not carry these. Distribute via a **manual PR copy-in** to the
 
 When in doubt about a path, check `core-manifest.json` before choosing the
 mechanism.
+
+### Sibling and plugin repos: `scripts/shared-sync.sh`
+
+`biffo core upgrade` reaches **instances only** — they carry `biffo.core.json`
+and a `core-manifest.json`. Sibling apps and plugin repos are separate
+repositories with neither, and the channel to them used to be "vendor it into
+the skeleton, plus a one-time manual copy-in for existing ones".
+
+**That is not a mechanism.** The skeleton only helps repos created afterwards,
+and nothing ever prompts the copy-in. It cost this estate twice:
+
+- `AGENTS.md` drifted 68 lines behind in tabsii, missing the very workflow
+  guardrails the template had already written (#559).
+- Eight repos ran a local gate two versions old. `tabsii-crm` checked **one**
+  thing in eight on a 700-line change and printed `verify passed` (#855).
+
+Files every sibling and plugin must hold verbatim are listed in
+`shared-files.json` and distributed by `scripts/shared-sync.sh`:
+
+```bash
+sh scripts/shared-sync.sh --check --estate ~/code   # report drift, exit 1 if any
+sh scripts/shared-sync.sh --estate ~/code           # open a PR per drifted repo
+```
+
+It is a **one-way overwrite**, not a merge, so only add a file whose copy should
+be identical everywhere — anything a repo is expected to customise belongs in
+the instance manifest's three-way merge instead. Instances are deliberately out
+of scope: two mechanisms writing the same paths would fight, and the
+core-ownership guard would refuse the commit anyway.
+
+**Adding a file to the shared set is not done until `--check` is clean**, the
+same way a template-owned change is not done until the upgrade PRs merge.

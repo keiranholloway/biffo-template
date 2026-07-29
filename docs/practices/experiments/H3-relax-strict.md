@@ -5,7 +5,7 @@
 **Amended:** 2026-07-28 — counter-metric extended to cover silent content loss,
 which the original could not see. Adds a way to refute; removes none. See
 [Amendment](#amendment--2026-07-28-hours-after-pre-registration).
-**Review on:** 2026-08-11 (14 days)
+**Review on:** 2026-08-04 (**7 days** — cut from 14 on 2026-07-29, #850)
 
 > Written and committed before the intervention, like [H1](./H1-merge-race.md)
 > and [H2](./H2-merge-queue.md). A prediction written afterwards is a
@@ -146,7 +146,7 @@ avoid.
 
 ## Falsification
 
-**Refuted if `racedShare` is still above 8% on 2026-08-11** with at least 50
+**Refuted if `racedShare` is still above 8% on 2026-08-04** with at least 50
 merged PRs in the window.
 
 **Also refuted, independently of `racedShare`,** if `integration.failures` > 2 or
@@ -244,9 +244,40 @@ had worked.
 - **The comparators are not controls.** Different repos, different workloads,
   different merge rates.
 
+## Interim observation — 2026-07-29, day 1
+
+Still not a result; the review date stands. Recorded because it points the same
+way day 0 did, and because a second inconvenient reading is exactly the one that
+gets dropped.
+
+| `biffo-template` | baseline (2026-07-28) | prior 83d | 7d to 2026-07-29 | target |
+| --- | ---: | ---: | ---: | ---: |
+| **`racedShare`** | 16.0% | 16.7% | **13.8%** | **<3%** |
+| `repushRate` | 43.6% | 45% | 39.2% | <25% |
+| `ciFailureRate` | 12.7% | 11.6% | 10% | — |
+
+Three points of movement against a prediction of thirteen, and the `prior 83d`
+column — a window sharing no merge with the reading — confirms the baseline was
+not a fluke.
+
+**A competing explanation now exists and is pre-registered.**
+[H4](./H4-shift-left-gates.md#amendment--2026-07-29-before-the-gate-merged-anywhere)
+argues the race is driven by **repush volume**, not by `strict`: `racedShare`
+counts PRs green over ten minutes *and repushed*, and `strict` never controlled
+the repush. It predicts that a local pre-push gate moves `racedShare` below 8%
+**with `strict` unchanged**.
+
+If that happens, H3 is not merely refuted — it was measuring someone else's
+mechanism. The operator called this before the data did, on 2026-07-29: *"it was
+us treating the symptom not the root cause."*
+
+Note the consequence for H3's rollback rule: if H4's amendment confirms, turning
+`strict` back on is the *default* action for a refuted H3, and it should be done
+rather than quietly skipped because the race improved for another reason.
+
 ## Result
 
-_To be completed on 2026-08-11. Verdict: `confirmed` / `refuted` /
+_To be completed on 2026-08-04. Verdict: `confirmed` / `refuted` /
 `inconclusive` / `abandoned`. A refuted hypothesis gets the change rolled back,
 not quietly kept because it felt better — and the counter-metric can refute it on
 its own, whatever the primary metric says._

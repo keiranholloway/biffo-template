@@ -28,8 +28,76 @@ import { daysSince, readSessions, summariseSessions } from './practices-session.
 /** SRE practice caps toil at 50%. Above that, maintenance is eating delivery. */
 export const TOIL_BUDGET = 50
 
-/** Below this, product delivery is a rounding error on total activity. */
-export const PRODUCT_FEATURE_FLOOR = 20
+/**
+ * Merges that are neither capability nor toil: `docs`, `quality`, and subjects
+ * too unconventional to classify. Measured across the estate over the 90 days
+ * to 2026-07-29 — docs 10.0%, quality 5.0%, unconventional 7.1%, other 0.1%.
+ *
+ * It is deliberately the *whole* remainder rather than only the two kinds that
+ * are genuinely supporting work, because the 7.1% unclassifiable share cannot
+ * be argued either way. That makes this an upper bound on non-capability
+ * support, and therefore `CAPABILITY_FLOOR` a lower bound — the generous
+ * direction. Classify those merges and the floor should rise.
+ */
+export const SUPPORT_ALLOWANCE = 22
+
+/**
+ * The capability floor, **derived rather than picked**.
+ *
+ * Toil is budgeted at 50% and support costs another ~22%, so ~28% of merges is
+ * what is left for building anything. Sustained readings below that mean the
+ * budget is not being met, whatever the toil tile says on its own.
+ *
+ * ## Why this constant had to be re-derived (#831)
+ *
+ * It replaces `PRODUCT_FEATURE_FLOOR = 20`, which was set for the pre-#768
+ * headline: `tabsii-*` delivery as a share of everything, a number that ran at
+ * 3–6%. Against that metric a floor of 20 was permanently unreachable and the
+ * pill was permanently `critical`. #768 changed the numerator to capability
+ * built *anywhere* and the readings jumped to 33–35% — but the threshold came
+ * along unchanged, so the same pill became permanently `good`, ~15 points clear
+ * in every window. A grade that cannot change is decoration, and it read as
+ * corroboration on the very first day of the new definition.
+ *
+ * The lesson generalises past this constant: **a threshold belongs to a
+ * definition.** Redefining a metric and keeping its thresholds silently
+ * re-grades history.
+ */
+export const CAPABILITY_FLOOR = 100 - TOIL_BUDGET - SUPPORT_ALLOWANCE
+
+/**
+ * Below this, capability is a rounding error on total activity — fewer than one
+ * merge in five built anything. This is the old `PRODUCT_FEATURE_FLOOR` value,
+ * kept because that reading was always the right *description* of "barely
+ * shipping"; only the denominator it was applied to was wrong.
+ */
+export const CAPABILITY_CRITICAL = 20
+
+/**
+ * Green wait above this many minutes **per merge** is a contention problem
+ * rather than ordinary settling.
+ *
+ * Ten minutes is not invented for this tile: it is the line the merge-race
+ * analysis already used — 13.2% of merged PRs were "green for over ten minutes
+ * *and* had to be repushed", the figure that motivated auto-merge and then H3.
+ * Crit is two of those.
+ *
+ * ## Why per merge (#835)
+ *
+ * The tile used to show the 7-day **total** against the 90-day **total**:
+ * 91.8h vs 278.2h on 2026-07-29, which reads as comfortably better and is not a
+ * comparison at all — a week against a quarter. Per day it inverts to 13.1h
+ * against 3.1h, four times worse. Both numbers are real and they disagree,
+ * because both are dominated by volume: that week ran 88 merges/day against a
+ * 90-day average of 13.7.
+ *
+ * Per merge the volume cancels and the tile answers the question a reader
+ * actually has — *how long does a PR of mine sit green?* — at 8.9 min against
+ * a 13.6 min baseline. Contention per PR was improving while the totals said
+ * it was collapsing. A metric that flips sign under a defensible change of
+ * denominator was measuring the denominator.
+ */
+export const GREEN_WAIT_WARN_MINUTES = 10
 
 /**
  * Grade a value against a budget, for the severity stripe on a tile.
@@ -74,6 +142,49 @@ export function latestSnapshotFile(dir) {
     .sort()
   if (files.length === 0) throw new Error(`no snapshots in ${dir}`)
   return join(dir, files[files.length - 1])
+}
+
+/**
+ * Find the most recent date at which the metric definitions changed (#835).
+ *
+ * The committed snapshots are a version-controlled series, and the page invites
+ * reading them as one — "90-day baseline", "last 24h". But `schema` bumps when
+ * a field's *meaning* changes, and on 2026-07-29 it went 1 → 2 for the #768
+ * re-cut of capability. Across that boundary the series is not a series: the
+ * 7-day capability share reads 4.4% on 07-28 and 33% on 07-29, a 7.5× jump
+ * caused entirely by a change of denominator. Nothing marked it, and the day
+ * after the change the number was read as a result.
+ *
+ * The break is detected from the data itself rather than a hardcoded date, so
+ * the next redefinition announces itself without anyone remembering to.
+ *
+ * Returns `null` when every snapshot agrees — including a directory of one.
+ *
+ * @param {string} dir
+ * @returns {{date: string, from: number, to: number} | null}
+ */
+export function definitionBreak(dir) {
+  const files = readdirSync(dir)
+    .filter((f) => /^\d{4}-\d{2}-\d{2}\.json$/.test(f))
+    .sort()
+  let previous = null
+  let found = null
+  for (const file of files) {
+    let schema
+    try {
+      schema = JSON.parse(readFileSync(join(dir, file), 'utf8')).schema ?? 1
+    } catch {
+      // A snapshot that cannot be read cannot be compared. Skipping it is right:
+      // reporting a break here would be a claim about definitions drawn from a
+      // parse error.
+      continue
+    }
+    if (previous !== null && schema !== previous) {
+      found = { date: file.slice(0, 10), from: previous, to: schema }
+    }
+    previous = schema
+  }
+  return found
 }
 
 const CSS = `
@@ -180,10 +291,27 @@ td.mid{color:var(--warn)}
  * that can *falsify* it — and when no sessions have been recorded it says so
  * plainly rather than leaving the headline looking corroborated.
  *
- * @param {{sessions: number, hours: number, delivery: number|null, platform: number|null, toil: number|null}|null} s
+ * ## Compare like with like (#831)
+ *
+ * The window this is compared against is load-bearing, and it was wrong. The
+ * page passed the **90-day** toil ratio, so a two-day, 86-hour effort log was
+ * being checked against a quarter of merge history. On 2026-07-29 that produced
+ * "proxy agrees within 9.8 points" — from wall-clock 33.1% against the 90-day
+ * 42.9%. Against the **7-day** 44.2% the same log gives 11.1 points, which
+ * trips this function's own threshold and reads "treat the headline with
+ * suspicion". Same evidence, opposite verdict, chosen by the window.
+ *
+ * 7d is the right one on the page's own three-column rule: rates are read from
+ * the weekly roll and 90d is the *baseline an experiment has to move*, not the
+ * current reading. It is also the closest window to how far back an effort log
+ * ever reaches. A falsification test that quietly picks the comparison most
+ * likely to agree is not a test, so the window is now named in the output.
+ *
+ * @param {{sessions: number, hours: number, days?: number, delivery: number|null, platform: number|null, toil: number|null}|null} s
  * @param {number|null} mergeToilRatio
+ * @param {number} windowDays window `mergeToilRatio` was computed over
  */
-export function renderSessions(s, mergeToilRatio) {
+export function renderSessions(s, mergeToilRatio, windowDays = 7) {
   if (!s || !s.sessions) {
     return `<div class="unvalidated">
       <strong>No sessions recorded.</strong> Every figure above is inferred from merge
@@ -202,20 +330,72 @@ export function renderSessions(s, mergeToilRatio) {
       : Math.abs(gap) <= 10
         ? `proxy agrees within ${Math.abs(gap)} points`
         : `proxy is off by ${gap > 0 ? '+' : ''}${gap} points — treat the headline with suspicion`
+  // The log's own span, so a short log checked against a longer window is
+  // visible rather than implied. Two days of effort against a seven-day roll is
+  // still a partial sample; it just is not the quarter-long mismatch it was.
+  const span = s.days ? ` over <strong class="num">${s.days}</strong> days` : ''
   return `<div class="sessions">
-    <div><span class="k">recorded</span> <strong class="num">${s.tasks ?? s.sessions}</strong> tasks · <strong class="num">${s.hours}h</strong></div>
+    <div><span class="k">recorded</span> <strong class="num">${s.tasks ?? s.sessions}</strong> tasks · <strong class="num">${s.hours}h</strong>${span}</div>
     <div><span class="k">wall-clock</span> delivery <strong class="num">${fmt(s.delivery, '%')}</strong> · platform <strong class="num">${fmt(s.platform, '%')}</strong> · toil <strong class="num">${fmt(s.toil, '%')}</strong></div>
-    <div><span class="k">merge proxy</span> toil <strong class="num">${fmt(mergeToilRatio, '%')}</strong> — ${esc(verdict)}</div>
+    <div><span class="k">merge proxy</span> toil <strong class="num">${fmt(mergeToilRatio, '%')}</strong> over ${esc(String(windowDays))}d — ${esc(verdict)}</div>
     ${stale ? `<div class="stale">Last recorded <strong>${age} days ago</strong> — a calibration that stopped is not calibration; the working pattern it validated has moved on.</div>` : ''}
   </div>`
+}
+
+/**
+ * The three estate audits, rendered at the top because they are the only things
+ * on this page that can be *wrong* rather than merely unflattering.
+ *
+ * Everything else here is inferred from commit metadata and describes what
+ * happened. These describe whether the machinery that is supposed to be
+ * protecting the estate is actually running — and each one exits non-zero when
+ * it is not. Until #865 all three were invoked by hand, which is how a local
+ * gate reporting `verify passed` while checking nothing survived across eight
+ * repos: nobody ran the check, and the check did not exist, because the metric
+ * that did exist (arming) was green.
+ *
+ * `null` renders as a distinct "not collected" state rather than as passing. A
+ * missing audit and a clean audit must never look the same — that is the
+ * failure this whole section exists to report on.
+ *
+ * @param {{collectedAt: string, audits: Array<{name: string, ok: boolean, exit: number, summary: string}>}|null} a
+ */
+export function renderAudits(a) {
+  const LABELS = {
+    coverage: ['Gate coverage', 'does each repo&rsquo;s gate mirror that repo&rsquo;s CI?'],
+    arming: ['Hook arming', 'will the hook actually fire?'],
+    drift: ['Shared files', 'is every repo on the current gate?'],
+    protection: ['Branch protection', 'is every integration branch actually gated?'],
+  }
+  if (!a || !Array.isArray(a.audits) || a.audits.length === 0) {
+    return `<div class="unvalidated"><strong>Estate audits not collected.</strong>
+      Nothing checked whether the gates are running. That is not the same as
+      them being fine — it is the state that preceded eight repos reporting
+      <code>verify passed</code> on work they never checked.</div>`
+  }
+  const cards = a.audits
+    .map((r) => {
+      const [label, question] = LABELS[r.name] ?? [r.name, '']
+      const cls = r.ok ? 'good' : 'critical'
+      return `<div class="tile ${cls}">
+        <div class="label">${esc(label)}</div>
+        <div class="value num" style="font-size:15px">${esc(r.summary)}</div>
+        <div class="note">${question} &middot; exit ${esc(String(r.exit))}</div>
+      </div>`
+    })
+    .join('')
+  return `<h2>Is the machinery running?</h2>
+    <div class="grid">${cards}</div>`
 }
 
 /**
  * Render the whole page.
  *
  * @param {any} snapshot
+ * @param {any} sessions
+ * @param {{date: string, from: number, to: number} | null} definitionBreak
  */
-export function renderDashboard(snapshot, sessions = null) {
+export function renderDashboard(snapshot, sessions = null, definitionBreak = null, audits = null) {
   const w = (d) => snapshot.windows?.[d]
   const day = w(1)
   const base = w(90)
@@ -230,17 +410,55 @@ export function renderDashboard(snapshot, sessions = null) {
    */
   const e = (days) => w(days)?.estate ?? {}
 
+  /**
+   * The reference line, and it must not contain the reading (#835).
+   *
+   * `windows.prior` is the long window with the rate window cut out of it, so
+   * the two share no merge. Before it existed the page compared 7d against 90d,
+   * which on 2026-07-29 meant comparing 616 merges against a set that included
+   * those same 616 — half its total. That is why every baseline always looked
+   * so close: it was substantially the same data.
+   *
+   * Snapshots collected before the split have no `prior`, so they fall back to
+   * 90d and say so, with the overlap stated rather than left to be discovered.
+   */
+  const prior = w('prior')
+  const baseDays = prior?.days ?? 90
+  const baseLabel = prior ? `prior ${baseDays}d` : '90d'
+  const b = (key) => (prior ? (prior.estate ?? {})[key] : e(90)[key])
+  const overlapShare =
+    prior || !e(90).merges || !e(7).merges ? null : Math.round((e(7).merges / e(90).merges) * 1000) / 10
+
+  /** Green wait normalised by the volume that produced it — see GREEN_WAIT_WARN_MINUTES. */
+  const perMerge = (hours, merges) =>
+    hours === null || hours === undefined || !merges ? null : Math.round((hours * 60 * 10) / merges) / 10
+  const greenPerMerge = perMerge(e(7).contentionHours, e(7).merges)
+  const greenPerMergeBaseline = perMerge(b('contentionHours'), b('merges'))
+
   // #768: the headline is capability built ANYWHERE, not features in the
   // proving ground. `?? productFeatureShare` keeps snapshots written before the
   // rename rendering — they are the historical series, and a page that reports
   // `unmeasured` for last week's data is worse than one that shows it.
   const capShare = (d) => e(d).capabilityShare ?? e(d).productFeatureShare
   const featureShare = capShare(7)
-  const featureGrade = grade(featureShare, {
-    warn: PRODUCT_FEATURE_FLOOR,
-    crit: PRODUCT_FEATURE_FLOOR / 2,
-    higherIsBetter: true,
-  })
+  const capBaseline = prior
+    ? ((prior.estate ?? {}).capabilityShare ?? (prior.estate ?? {}).productFeatureShare)
+    : capShare(90)
+  /**
+   * A pre-#768 snapshot still renders (above), but it must not be *graded*:
+   * `CAPABILITY_FLOOR` is derived from the new denominator, and applying it to
+   * an old-definition reading would stamp `critical` on a 4% that was never
+   * measuring the same thing. Grading it would be the same error as leaving the
+   * old threshold on the new metric, run backwards.
+   */
+  const legacyShare = e(7).capabilityShare === undefined && featureShare !== undefined
+  const featureGrade = legacyShare
+    ? 'unknown'
+    : grade(featureShare, {
+        warn: CAPABILITY_FLOOR,
+        crit: CAPABILITY_CRITICAL,
+        higherIsBetter: true,
+      })
   const bySide = e(7).capabilityBySide ?? {}
 
   const tile = (label, value, note, g) => `
@@ -306,13 +524,27 @@ export function renderDashboard(snapshot, sessions = null) {
     </div>
   </div>
 
+  ${
+    definitionBreak
+      ? `<div class="stale">Series break at <strong>${esc(definitionBreak.date)}</strong> — the metric definitions changed (snapshot schema ${esc(String(definitionBreak.from))} → ${esc(String(definitionBreak.to))}). Every figure on this page is computed by today's collector and is internally consistent, but the committed snapshots <em>before</em> that date are on the old definitions. Reading the series across the break compares different metrics. The first one, on 2026-07-29, moved the capability share 4.4% → 33% overnight with nothing about the work changing.</div>`
+      : ''
+  }
+  ${
+    overlapShare !== null
+      ? `<div class="stale">This snapshot predates the independent baseline, so "90d" below still contains the 7-day reading it is being compared with — <strong>${overlapShare}%</strong> of the baseline's merges are the same merges. Treat the closeness as arithmetic, not agreement.</div>`
+      : ''
+  }
+
+  ${renderAudits(audits)}
+
   <div class="headline">
     <p class="q">Capability built — merges that shipped something, rolling 7 days</p>
     <div class="v num">${fmt(featureShare, '%')}</div>
     <div class="sub">
       <span class="pill ${featureGrade}">${featureGrade}</span>
-      &nbsp;90-day baseline ${fmt(capShare(90), '%')} · last 24h ${fmt(capShare(1), '%')}
+      &nbsp;floor ${CAPABILITY_FLOOR}% · ${esc(baseLabel)} baseline ${fmt(capBaseline, '%')} · last 24h ${fmt(capShare(1), '%')}
       ${bySide.platform ? `· Biffo ${fmt(bySide.platform.share, '%')} · Tabsii ${fmt(bySide.product.share, '%')}` : ''}
+      ${legacyShare ? '<br />pre-#768 snapshot — this is the retired <code>productFeatureShare</code> on a different denominator, so it is shown but not graded' : ''}
     </div>
   </div>
 
@@ -320,20 +552,20 @@ export function renderDashboard(snapshot, sessions = null) {
     ${tile(
       'Toil ratio · 7d',
       fmt(e(7).toilRatio, '%'),
-      `rework + toil · budget ${TOIL_BUDGET}% · baseline ${fmt(e(90).toilRatio, '%')}`,
+      `rework + toil · budget ${TOIL_BUDGET}% · ${esc(baseLabel)} ${fmt(b('toilRatio'), '%')}`,
       grade(e(7).toilRatio, { warn: 40, crit: TOIL_BUDGET }),
     )}
     ${tile(
       'Platform vs product · 7d',
       `${fmt(e(7).platformShare, '%')} / ${fmt(e(7).productShare, '%')}`,
-      `merges in biffo-* vs tabsii-* · baseline ${fmt(e(90).platformShare, '%')} / ${fmt(e(90).productShare, '%')}`,
+      `merges in biffo-* vs tabsii-* · ${esc(baseLabel)} ${fmt(b('platformShare'), '%')} / ${fmt(b('productShare'), '%')}`,
       grade(e(7).productShare, { warn: 40, crit: 25, higherIsBetter: true }),
     )}
     ${tile(
-      'Green-but-unmerged · 7d',
-      fmt(e(7).contentionHours, 'h'),
-      `correct work that could not land · baseline ${fmt(e(90).contentionHours, 'h')} over 90d`,
-      grade(e(7).contentionHours, { warn: 8, crit: 20 }),
+      'Green wait per merge · 7d',
+      fmt(greenPerMerge, ' min'),
+      `correct work that could not land · ${fmt(e(7).contentionHours, 'h')} across ${fmt(e(7).merges)} merges · ${esc(baseLabel)} ${fmt(greenPerMergeBaseline, ' min')}`,
+      grade(greenPerMerge, { warn: GREEN_WAIT_WARN_MINUTES, crit: GREEN_WAIT_WARN_MINUTES * 2 }),
     )}
     ${tile(
       'Merges · 24h',
@@ -351,9 +583,9 @@ export function renderDashboard(snapshot, sessions = null) {
   </div>
 
   <h2>Wall-clock vs the merge proxy — is the headline believable?</h2>
-  ${renderSessions(sessions, e(90).toilRatio)}
+  ${renderSessions(sessions, e(7).toilRatio, 7)}
 
-  <h2>By repository — 90-day baseline, with last 24h merges</h2>
+  <h2>By repository — 90-day profile, with last 24h merges</h2>
   <div class="scroll">
     <table>
       <thead>
@@ -373,11 +605,24 @@ export function renderDashboard(snapshot, sessions = null) {
       <li><strong>&mdash; means unmeasured, never zero.</strong> A repo with no CI, or no local clone, shows a dash. It is excluded from every aggregate rather than contributing a flattering zero.</li>
       <li><strong>Read rates from 7d, not 24h.</strong> At ~5 merges/day a daily percentile is noise. The 24h column carries counts; rates and percentiles come from the weekly roll.</li>
       <li><strong>Rework lag: higher is better.</strong> A fix correcting code written an hour ago is a guess that shipped; one correcting last week's code is ordinary defect discovery.</li>
-      <li><strong>Green wait</strong> is time a PR was green and still could not land — the up-to-date race, not runner queueing. Runner pickup is ~0.</li>
+      <li><strong>Green wait is per merge, not per week.</strong> Time a PR was green and still could not land — the up-to-date race, not runner queueing (pickup is ~0). Divided by the merges that produced it, because a week-vs-quarter total says whatever the volume says: the same 2026-07-29 reading was "3× better" as a total and "4× worse" per day.</li>
+      <li><strong>The baseline excludes the reading.</strong> "${esc(baseLabel)}" is the long window with the last 7 days cut out, so a tile and its reference share no merge. A lookback baseline contains the week it is compared with and will always look close to it.</li>
+      <li><strong>The capability floor is derived, not chosen.</strong> ${CAPABILITY_FLOOR}% is what the toil budget leaves after ${SUPPORT_ALLOWANCE}% of measured docs, quality and unclassifiable merges. It moves when those move — and a threshold inherited across a change of definition grades nothing.</li>
     </ul>
   </div>
 </div>
 `
+}
+
+/** The audits written by practices-daily.sh, or null when it has not run. */
+function readAudits(dir) {
+  try {
+    return JSON.parse(readFileSync(join(dir, 'estate-audits.json'), 'utf8'))
+  } catch {
+    // Deliberately null, not {}: renderAudits states plainly that nothing was
+    // checked, which is a different claim from everything being fine.
+    return null
+  }
 }
 
 function main() {
@@ -394,7 +639,10 @@ function main() {
   const snapshot = JSON.parse(readFileSync(file, 'utf8'))
   const sessions = summariseSessions(readSessions(sessionLog))
   mkdirSync(dirname(out), { recursive: true })
-  writeFileSync(out, renderDashboard(snapshot, sessions.sessions ? sessions : null))
+  writeFileSync(
+    out,
+    renderDashboard(snapshot, sessions.sessions ? sessions : null, definitionBreak(dir), readAudits(dir)),
+  )
   process.stderr.write(`rendered ${out} from ${file}\n`)
 }
 

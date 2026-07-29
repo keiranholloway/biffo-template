@@ -21,6 +21,15 @@ and writes whatever its own schema calls for::
 
     register_run_outcome_observer(_record_activity)
 
+**``trigger_event`` is stored flat, and this example depends on that.** The
+fields an event carries sit at the top level — ``lead_id``, ``email`` — because
+that is what ``dispatch_event`` writes and what the engine reads back
+(``orchestrator/plugin.py`` hands ``trigger_event`` straight to the action
+renderer, which is why ``{email}`` recipient templating resolves at all). The
+first version of ``trigger_payload`` unwrapped a ``payload`` key instead, which
+the production path never produces, so it returned ``{}`` for every real run and
+the example above silently recorded nothing. See its docstring.
+
 Deliberately mirrors ``writeback_targets.register_writeback_target``: the
 template owns the mechanism, the instance owns the meaning. The alternative —
 an opt-in flag on each action config — was rejected because it makes the record
@@ -56,9 +65,8 @@ logger = Logger(child=True)
 class RunOutcome:
     """What an observer is told about a finished run.
 
-    ``trigger_payload`` is the ``payload`` of the event that caused the run —
-    the part an instance's own event contract defines, already unwrapped from
-    the ``BiffoEvent`` envelope so an observer never has to know that shape.
+    ``trigger_payload`` is the fields of the event that caused the run — the
+    part an instance's own event contract defines.
     """
 
     run: WorkflowRun
@@ -71,9 +79,29 @@ class RunOutcome:
 
     @property
     def trigger_payload(self) -> dict[str, Any]:
-        """The triggering event's payload, or ``{}`` when it carries none."""
+        """The triggering event's fields, however the run happens to store them.
+
+        **Normally this is ``trigger_event`` itself.** ``dispatch_event`` writes
+        the event dict straight onto the run, and the engine reads it straight
+        back out (``orchestrator/plugin.py`` passes ``trigger_event`` to the
+        action renderer, which ``format_map``s ``{email}`` and friends off the
+        top level). So the fields live flat, and nothing in this system emits a
+        ``payload`` envelope.
+
+        This originally returned ``trigger_event["payload"]`` or ``{}``, which
+        meant it returned ``{}`` for **every real run** — a silent empty that
+        looks exactly like an event carrying nothing. The first instance to
+        build on this seam recorded nothing at all for its whole existence and
+        the failure surfaced only after a deployed page and a bisect
+        (tabsii-platform#301). The unit tests agreed with the code because their
+        fixture was hand-written from the same assumption.
+
+        An envelope is still unwrapped if one is ever genuinely present, so an
+        instance that does post ``{"payload": {...}}`` keeps working — but the
+        flat case is the one that happens.
+        """
         payload = self.trigger_event.get("payload")
-        return payload if isinstance(payload, dict) else {}
+        return payload if isinstance(payload, dict) else self.trigger_event
 
     @property
     def succeeded(self) -> bool:

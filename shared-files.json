@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "note": "Files the template distributes to repos that `biffo core upgrade` cannot reach. Instances carry biffo.core.json and a core-manifest.json, so they are upgraded by the CLI's three-way merge. Sibling apps (biffo.sibling.json) and plugin repos (biffo.plugin.json) are SEPARATE REPOSITORIES with neither, and until 2026-07-29 the only documented channel to them was 'vendor into the skeleton, plus a one-time manual copy-in for existing ones'. That is not a mechanism, it is a hope: the skeleton only helps repos created afterwards, and nothing ever prompts the copy-in. It is how AGENTS.md drifted 68 lines behind in tabsii (#559), and how eight repos ended up running a local gate two versions old that checked one thing in eight (#855). scripts/shared-sync.sh reads this list, reports drift with --check, and opens a PR per repo without it. Add a file here only if every sibling and plugin should have the template's copy verbatim -- this is a one-way overwrite, not a merge, so nothing a repo is expected to customise belongs in it. Scope is any repo carrying one of `appliesTo`'s markers OR any repo that already holds scripts/verify.sh: the runner repos have neither marker but did receive the gate, and distributing a file once then losing track of it recreates the drift this exists to end. scripts/shared-sync.sh additionally writes .biffo-shared-version into each target -- the template core version the files came from, read from the TEMPLATE and never from the target, so it cannot report perfect health by comparing a repo to itself. The two dependency-audit scripts were added for #743: this repo hardened its own audits in #591/#592/#636/#717/#721 and both skeletons kept shipping the raw `pnpm audit --audit-level=high` / `uv run pip-audit`, so every satellite was born reddening a required check on any registry hiccup. They qualify as verbatim content because they take their target from the CI job's working directory rather than from a repo layout -- one byte-identical file is correct in this repo's root, in a sibling's apps/frontend and services/api, and in a plugin repo's root alike. js-dependency-audit.sh lands in Python-only plugin repos too and is simply never invoked there; that is the price of a one-way overwrite with no per-repo conditionals, and it is cheaper than the conditionals.",
+  "files": [
+    ".githooks/commit-msg",
+    ".githooks/pre-commit",
+    ".githooks/pre-push",
+    "scripts/verify.sh",
+    "scripts/install-hooks.sh",
+    "scripts/hook-audit.sh",
+    "scripts/gate-coverage.sh",
+    "scripts/js-dependency-audit.sh",
+    "scripts/py-dependency-audit.sh"
+  ],
+  "appliesTo": ["biffo.sibling.json", "biffo.plugin.json"]
+}

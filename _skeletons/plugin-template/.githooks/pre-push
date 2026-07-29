@@ -1,0 +1,28 @@
+#!/usr/bin/env sh
+# Run the checks CI runs, before paying for the round trip that would find them.
+#
+# Over the 30 days to 2026-07-29 the estate had 373 failed CI runs, 211 of 342
+# failing steps locally catchable. scripts/verify.sh documents the breakdown and
+# what it deliberately leaves out.
+#
+# Skip in CI. This is a *local* guard; CI runs each check in its own job with its
+# own reporting. CI jobs that push (notably the core-v* tag workflow) have no
+# `uv` on PATH, so firing here made tag pushes fail with `uv: not found` (code
+# 127) and blocked releases. GitHub Actions and every mainstream CI set $CI.
+[ -n "${CI:-}" ] && exit 0
+
+# Escape hatch, deliberately explicit rather than a flag on git. `--no-verify`
+# would skip this too, but it also skips every other hook silently; this leaves a
+# decision in the shell history. Its usage rate is an H4 counter-metric.
+if [ -n "${BIFFO_SKIP_VERIFY:-}" ]; then
+  echo "pre-push: verify skipped (BIFFO_SKIP_VERIFY set) — CI will run it anyway." >&2
+  exit 0
+fi
+
+root=$(git rev-parse --show-toplevel) || exit 0
+cd "$root" || exit 0
+if [ ! -f scripts/verify.sh ]; then
+  echo "pre-push: no scripts/verify.sh — NO checks ran (see local-gates.md)" >&2
+  exit 0
+fi
+exec sh scripts/verify.sh

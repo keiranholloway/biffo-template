@@ -812,6 +812,87 @@ def test_catalog_includes_declared_crud_events(client: TestClient, monkeypatch):
     assert "demo.requested" in by_dt
 
 
+def test_a_model_can_decline_to_be_offered_as_a_crud_trigger(client: TestClient, monkeypatch):
+    """``__trigger_exclude__`` withholds a table's ops from the picker.
+
+    A table whose meaningful changes have purpose-built events wants authors on
+    those, not on a raw ``updated`` that fires on every edit.
+    """
+    from api.models.plugin_table import PermissionRule, TablePermissions
+
+    registry = {
+        "widgets": TablePermissions(
+            create=PermissionRule(allowed=True),
+            update=PermissionRule(allowed=True),
+            delete=PermissionRule(allowed=True),
+        )
+    }
+    monkeypatch.setattr("api.routers.orchestration.get_permissions_registry", lambda **_: registry)
+    # Unknown names alongside real ones: builder metadata must not raise on a typo.
+    monkeypatch.setattr(
+        "api.routers.orchestration.trigger_excluded_ops",
+        lambda table: frozenset({"update", "delete"}) if table == "widgets" else frozenset(),
+    )
+
+    by_dt = {t["detail_type"]: t for t in client.get(f"{_BASE}/catalog").json()["triggers"]}
+
+    assert "widgets.updated" not in by_dt
+    assert "widgets.deleted" not in by_dt
+    # The op that did not opt out is untouched.
+    assert by_dt["widgets.created"]["origin"] == "declared"
+
+
+def test_declining_a_trigger_does_not_stop_the_event(monkeypatch):
+    """The exclusion hides a trigger; it must never silence the bus.
+
+    ``is_declared`` is what the compliance gate consults, and any existing
+    subscriber still depends on the event arriving. Removing it from the picker
+    and removing it from the bus are different changes, and only the first is
+    intended here.
+    """
+    from api.events.emit import is_declared
+    from api.events.event_fields import trigger_excluded_ops
+    from api.models.plugin_table import PermissionRule, TablePermissions
+
+    registry = {"widgets": TablePermissions(update=PermissionRule(allowed=True))}
+    # is_declared resolves the registry lazily from api.permissions.
+    monkeypatch.setattr("api.permissions.get_permissions_registry", lambda **_: registry)
+
+    class _Excluded:
+        __tablename__ = "widgets"
+        __trigger_exclude__ = ("update",)
+
+    monkeypatch.setattr("api.events.event_fields._model_for_table", lambda _t: _Excluded)
+
+    assert trigger_excluded_ops("widgets") == frozenset({"update"})
+    assert is_declared("biffo.core", "widgets.updated") is True
+
+
+def test_trigger_exclude_ignores_unknown_operations(monkeypatch):
+    """A typo in a ClassVar must not take down the catalog."""
+    from api.events.event_fields import trigger_excluded_ops
+
+    class _Typo:
+        __tablename__ = "widgets"
+        __trigger_exclude__ = ("updated", "destroy")  # neither is a CRUD op name
+
+    monkeypatch.setattr("api.events.event_fields._model_for_table", lambda _t: _Typo)
+    assert trigger_excluded_ops("widgets") == frozenset()
+
+
+def test_trigger_exclude_absent_by_default(monkeypatch):
+    from api.events.event_fields import trigger_excluded_ops
+
+    class _Plain:
+        __tablename__ = "widgets"
+
+    monkeypatch.setattr("api.events.event_fields._model_for_table", lambda _t: _Plain)
+    assert trigger_excluded_ops("widgets") == frozenset()
+    # An unlocatable model is not an error either.
+    monkeypatch.setattr("api.events.event_fields._model_for_table", lambda _t: None)
+    assert trigger_excluded_ops("no_such_table") == frozenset()
+
+
 # --- trigger-aware "Only when…" field metadata (#505) ------------------------
 
 
@@ -1592,7 +1673,7 @@ def test_agent_delivery_survives_in_definition_snapshot():
             await conn.run_sync(Base.metadata.create_all)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         async with session_factory() as session:
-            run = await create_run(
+            run, _ = await create_run(
                 session,
                 tenant_id="default",
                 agent_name="a",

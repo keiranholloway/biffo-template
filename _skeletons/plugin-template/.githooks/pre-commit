@@ -1,0 +1,21 @@
+#!/usr/bin/env sh
+# Per-file, auto-fixing, sub-second. See docs/practices/standards/local-gates.md
+#
+# Defensive by design: these three hooks are dropped verbatim into every repo in
+# the estate, and they differ in what they have. A hook that fails because the
+# repo has no lint-staged config would block all work there, which is how a
+# safety measure gets ripped out. Absent tooling is reported, never fatal;
+# tooling that IS present and fails is fatal.
+root=$(git rev-parse --show-toplevel) || exit 0
+cd "$root" || exit 0
+
+if [ ! -f package.json ]; then
+  echo "pre-commit: no package.json — nothing staged-file-level to run" >&2
+  exit 0
+fi
+if ! node -e "const p=require('./package.json');process.exit(p['lint-staged']||p.config?.['lint-staged']?0:1)" 2>/dev/null \
+   && [ ! -f .lintstagedrc ] && [ ! -f .lintstagedrc.json ] && [ ! -f lint-staged.config.js ]; then
+  echo "pre-commit: no lint-staged config — skipping (see local-gates.md)" >&2
+  exit 0
+fi
+exec pnpm exec lint-staged

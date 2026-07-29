@@ -4,6 +4,7 @@ import {
   CognitoUserPool,
   type CognitoUserSession,
 } from 'amazon-cognito-identity-js'
+import { pruneForeignCognitoCredentials } from './cognito-hygiene'
 import { resolveCoreIdentity } from './identity'
 
 // The pool is built LAZILY and ASYNCHRONOUSLY, from the identity resolved at
@@ -21,11 +22,15 @@ import { resolveCoreIdentity } from './identity'
 let poolPromise: Promise<CognitoUserPool | null> | null = null
 
 function getUserPool(): Promise<CognitoUserPool | null> {
-  poolPromise ??= resolveCoreIdentity().then((id) =>
-    id.userPoolId && id.clientId
-      ? new CognitoUserPool({ UserPoolId: id.userPoolId, ClientId: id.clientId })
-      : null,
-  )
+  poolPromise ??= resolveCoreIdentity().then((id) => {
+    if (!id.userPoolId || !id.clientId) return null
+    // Once per page load, and only with a resolved client id: drop credentials
+    // left behind by pools this deployment no longer uses (#834). Ordered
+    // before the pool is constructed so nothing can read a stale key in
+    // between, though nothing does today — see cognito-hygiene.ts.
+    pruneForeignCognitoCredentials(id.clientId)
+    return new CognitoUserPool({ UserPoolId: id.userPoolId, ClientId: id.clientId })
+  })
   return poolPromise
 }
 

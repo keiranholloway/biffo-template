@@ -317,7 +317,10 @@ async def bootstrap_app_role_async() -> dict:
             f"BIFFO_APP_ROLE_NAME {settings.app_role_name!r}"
         )
 
-    engine = create_async_engine(master_url)
+    # This engine runs `CREATE ROLE … PASSWORD`, so a failing statement here
+    # would put the app role's generated password in a StatementError traceback.
+    # The most important of the four (#85).
+    engine = create_async_engine(master_url, hide_parameters=True)
     try:
         async with engine.connect() as conn:
             raw = await conn.get_raw_connection()

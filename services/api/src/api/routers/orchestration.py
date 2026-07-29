@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..dependencies import ADMIN_GROUP, require_admin
 from ..events import emit_event
-from ..events.event_fields import fields_for_crud_table
+from ..events.event_fields import fields_for_crud_table, trigger_excluded_ops
 from ..events.registry import (
     WORKFLOW_DEFINITION_CREATED,
     WORKFLOW_DEFINITION_DELETED,
@@ -214,12 +214,18 @@ async def get_catalog(
     # CRUD layer exposes (declared implicitly by __crud_permissions__). Every such
     # mutation emits (ADR-0002), so each is a valid trigger even before it fires.
     for table, block in get_permissions_registry().items():
+        # A model may decline to be *offered* as a trigger (``__trigger_exclude__``)
+        # when a purpose-built event describes the same change better — e.g. a
+        # stage move, rather than an `updated` that fires on every edit. The event
+        # itself is untouched and still reaches its subscribers; only the picker
+        # changes.
+        excluded_ops = trigger_excluded_ops(table)
         for op, verb in (
             ("create", "created"),
             ("update", "updated"),
             ("delete", "deleted"),
         ):
-            if not getattr(block, op).allowed:
+            if not getattr(block, op).allowed or op in excluded_ops:
                 continue
             key = ("biffo.core", f"{table}.{verb}")
             if key in seen:

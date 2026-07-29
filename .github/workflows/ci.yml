@@ -135,6 +135,18 @@ jobs:
         run: sh scripts/biffo.sh check ownership
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
+      # The practices corpus is append-only and several sessions write to it at
+      # once. It lost content three times in 24h — every time via a rewrite that
+      # merged with no conflict, every time found by a human noticing a count had
+      # gone down. Nothing failed. This is the thing that fails.
+      #
+      # Bare node, no install needed, so it does not depend on the step above.
+      # Silent in an instance, which has no corpus.
+      - name: Practices corpus is append-only
+        if: ${{ github.event_name == 'pull_request' && !cancelled() }}
+        run: node scripts/practices-monotonic.mjs
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
 
   js:
     name: JS (lint, types, test, audit)

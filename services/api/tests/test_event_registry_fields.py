@@ -24,6 +24,7 @@ from api.events.registry import (
     AGENT_RUN_COMPLETED,
     AGENT_RUN_REQUESTED,
     DEMO_REQUESTED,
+    LEAD_CAPTURED,
     AgentRunEventPayload,
     EventType,
     WorkflowDefinitionEventPayload,
@@ -77,6 +78,25 @@ def test_demo_requested_derives_its_full_payload():
         "email",
         "company",
     }
+
+
+def test_lead_captured_carries_the_fields_a_first_touch_needs():
+    """A first-touch message has to be addressed, and consent has to be gateable.
+
+    Both are payload questions, not action questions: an email action templates
+    its "To" from the trigger payload, and a ``trigger_filter`` matches over
+    payload keys. Before these fields travelled, the trigger was pickable,
+    configurable and silently undeliverable.
+    """
+    fields = {f.name: f for f in LEAD_CAPTURED.payload_fields()}
+
+    for addressing in ("email", "first_name", "last_name", "phone"):
+        assert addressing in fields, f"lead.captured cannot be addressed by {addressing}"
+
+    # Optional[bool] must survive the annotation mapping as a boolean, or the
+    # "Only when… consent is true" condition renders as free text.
+    assert fields["consent_to_contact"].type == "boolean"
+    assert fields["email"].type == "string"
 
 
 def test_agent_run_payload_model_matches_the_real_reference_payload():

@@ -147,12 +147,32 @@ class DemoRequestedPayload(BaseModel):
 
 
 class LeadCapturedPayload(BaseModel):
+    """Carries who the candidate is, not just which row they are.
+
+    The ids alone are unusable for the thing this event exists to trigger: a
+    first-touch message has to be *addressed*, and an author templating
+    ``{email}`` into an email action's "To" field can only reach fields that
+    travel on the payload. Without them the trigger is pickable, configurable
+    and silently undeliverable — the friendliest label in the builder attached
+    to the one payload that cannot address anybody.
+
+    ``consent_to_contact`` travels for the same reason in reverse: a
+    ``trigger_filter`` is an all-of match over payload keys, so consent can only
+    gate an automation if it is one of them.
+    """
+
     lead_id: str
     brand_id: str
     brand_slug: str
     pipeline_stage_id: str
     source: str
     status: str
+    first_name: str | None = None
+    last_name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    consent_to_contact: bool | None = None
+    consent_at: str | None = None
 
 
 class UserCreatedPayload(BaseModel):

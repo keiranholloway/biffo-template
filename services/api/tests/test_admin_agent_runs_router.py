@@ -112,7 +112,7 @@ async def _seed(
     have deterministic, distinct timestamps.
     """
     async with session_factory() as session:
-        run = await create_run(
+        run, _ = await create_run(
             session,
             tenant_id=tenant_id,
             agent_name=agent_name,
@@ -280,3 +280,354 @@ def test_a_run_in_another_tenant_is_404_on_detail(app, client: TestClient):
 
     # The caller is tenant "default"; the run belongs to "other".
     assert client.get(f"{_BASE}/{other_run}").status_code == 404
+
+
+# ── Cost aggregation ────────────────────────────────────────────────────────
+
+
+def test_costs_groups_by_model(app, client: TestClient):
+    """Grouping by model across several runs with different models."""
+    _, session_factory = app
+    # Seed runs with two different models
+    snapshot_sonnet = {
+        "instructions": "Enrich the demo request.",
+        "model": "anthropic/claude-sonnet-4",
+        "tools": ["web_search"],
+        "read_scope": [],
+        "max_turns": 6,
+    }
+    snapshot_opus = {
+        "instructions": "Enrich the demo request.",
+        "model": "anthropic/claude-opus",
+        "tools": ["web_search"],
+        "read_scope": [],
+        "max_turns": 6,
+    }
+
+    async def _seed_with_model(
+        snapshot: dict,
+        created_offset: int,
+        cost: float,
+        input_tok: int,
+        output_tok: int,
+    ) -> str:
+        async with session_factory() as session:
+            run, _ = await create_run(
+                session,
+                tenant_id="default",
+                agent_name="demo-enricher",
+                definition_snapshot=snapshot,
+                input_payload={},
+                max_depth=8,
+            )
+            run.created_at = _T0 + timedelta(seconds=created_offset)
+            await session.flush()
+            await complete_run(
+                session,
+                tenant_id="default",
+                run_id=run.id,
+                status="completed",
+                messages=_MESSAGES,
+                result={},
+                input_tokens=input_tok,
+                output_tokens=output_tok,
+                cost_usd=cost,
+            )
+            await session.commit()
+            return run.id
+
+    asyncio.run(_seed_with_model(snapshot_sonnet, 0, 0.01, 100, 50))
+    asyncio.run(_seed_with_model(snapshot_sonnet, 1, 0.015, 150, 75))
+    asyncio.run(_seed_with_model(snapshot_opus, 2, 0.03, 200, 100))
+
+    # Query with explicit date range covering _T0 +/- 1 day
+    since_iso = (_T0 - timedelta(days=1)).isoformat()
+    until_iso = (_T0 + timedelta(days=1)).isoformat()
+    rows = client.get(f"{_BASE}/costs", params={"since": since_iso, "until": until_iso}).json()
+    # Should have 2 groups
+    assert len(rows) == 2
+
+    # Find each group
+    sonnet = next(r for r in rows if r["model"] == "anthropic/claude-sonnet-4")
+    opus = next(r for r in rows if r["model"] == "anthropic/claude-opus")
+
+    assert sonnet["runs"] == 2
+    assert sonnet["total_cost_usd"] == pytest.approx(0.025)
+    assert sonnet["total_input_tokens"] == 250
+    assert sonnet["total_output_tokens"] == 125
+    assert sonnet["unpriced_runs"] == 0
+
+    assert opus["runs"] == 1
+    assert opus["total_cost_usd"] == pytest.approx(0.03)
+    assert opus["total_input_tokens"] == 200
+    assert opus["total_output_tokens"] == 100
+    assert opus["unpriced_runs"] == 0
+
+
+def test_costs_counts_unpriced_runs_separately(app, client: TestClient):
+    """Runs with NULL cost_usd are counted in unpriced_runs and excluded from total_cost_usd."""
+    _, session_factory = app
+
+    async def _seed_unpriced(offset: int) -> str:
+        async with session_factory() as session:
+            run, _ = await create_run(
+                session,
+                tenant_id="default",
+                agent_name="demo-enricher",
+                definition_snapshot=_SNAPSHOT,
+                input_payload={},
+                max_depth=8,
+            )
+            run.created_at = _T0 + timedelta(seconds=offset)
+            await session.flush()
+            # Complete without cost_usd (None)
+            await complete_run(
+                session,
+                tenant_id="default",
+                run_id=run.id,
+                status="completed",
+                messages=_MESSAGES,
+                result={},
+                input_tokens=100,
+                output_tokens=50,
+                cost_usd=None,
+            )
+            await session.commit()
+            return run.id
+
+    async def _seed_priced(offset: int) -> str:
+        async with session_factory() as session:
+            run, _ = await create_run(
+                session,
+                tenant_id="default",
+                agent_name="demo-enricher",
+                definition_snapshot=_SNAPSHOT,
+                input_payload={},
+                max_depth=8,
+            )
+            run.created_at = _T0 + timedelta(seconds=offset)
+            await session.flush()
+            await complete_run(
+                session,
+                tenant_id="default",
+                run_id=run.id,
+                status="completed",
+                messages=_MESSAGES,
+                result={},
+                input_tokens=200,
+                output_tokens=100,
+                cost_usd=0.05,
+            )
+            await session.commit()
+            return run.id
+
+    asyncio.run(_seed_unpriced(0))
+    asyncio.run(_seed_unpriced(1))
+    asyncio.run(_seed_priced(2))
+
+    since_iso = (_T0 - timedelta(days=1)).isoformat()
+    until_iso = (_T0 + timedelta(days=1)).isoformat()
+    rows = client.get(f"{_BASE}/costs", params={"since": since_iso, "until": until_iso}).json()
+    assert len(rows) == 1
+    row = rows[0]
+
+    # Total runs: 3 (2 unpriced + 1 priced)
+    assert row["runs"] == 3
+    # Only the priced run's cost should count
+    assert row["total_cost_usd"] == pytest.approx(0.05)
+    # Total input tokens: 100 + 100 + 200 = 400
+    assert row["total_input_tokens"] == 400
+    # Total output tokens: 50 + 50 + 100 = 200
+    assert row["total_output_tokens"] == 200
+    # Unpriced runs: 2
+    assert row["unpriced_runs"] == 2
+
+
+def test_costs_respects_date_range(app, client: TestClient):
+    """Date-range boundaries are inclusive or exclusive as stated."""
+    _, session_factory = app
+
+    async def _seed_at_time(dt: datetime) -> str:
+        async with session_factory() as session:
+            run, _ = await create_run(
+                session,
+                tenant_id="default",
+                agent_name="demo-enricher",
+                definition_snapshot=_SNAPSHOT,
+                input_payload={},
+                max_depth=8,
+            )
+            run.created_at = dt
+            await session.flush()
+            await complete_run(
+                session,
+                tenant_id="default",
+                run_id=run.id,
+                status="completed",
+                messages=_MESSAGES,
+                result={},
+                input_tokens=100,
+                output_tokens=50,
+                cost_usd=0.01,
+            )
+            await session.commit()
+            return run.id
+
+    # Create runs on specific dates
+    t0 = datetime(2026, 7, 20, 12, 0, 0, tzinfo=UTC)
+    t1 = datetime(2026, 7, 25, 12, 0, 0, tzinfo=UTC)
+    t2 = datetime(2026, 7, 29, 12, 0, 0, tzinfo=UTC)
+
+    asyncio.run(_seed_at_time(t0))
+    asyncio.run(_seed_at_time(t1))
+    asyncio.run(_seed_at_time(t2))
+
+    # Query with range covering only middle and latest
+    since_iso = t1.isoformat()
+    until_iso = t2.isoformat()
+    rows = client.get(f"{_BASE}/costs", params={"since": since_iso, "until": until_iso}).json()
+
+    # Should be inclusive on both ends
+    assert len(rows) == 1
+    assert rows[0]["runs"] == 2  # t1 and t2
+
+
+def test_costs_filters_by_agent_name(app, client: TestClient):
+    """Optional agent_name filters results."""
+    _, session_factory = app
+
+    async def _seed_agent(agent_name: str, offset: int) -> str:
+        async with session_factory() as session:
+            run, _ = await create_run(
+                session,
+                tenant_id="default",
+                agent_name=agent_name,
+                definition_snapshot=_SNAPSHOT,
+                input_payload={},
+                max_depth=8,
+            )
+            run.created_at = _T0 + timedelta(seconds=offset)
+            await session.flush()
+            await complete_run(
+                session,
+                tenant_id="default",
+                run_id=run.id,
+                status="completed",
+                messages=_MESSAGES,
+                result={},
+                input_tokens=100,
+                output_tokens=50,
+                cost_usd=0.01,
+            )
+            await session.commit()
+            return run.id
+
+    asyncio.run(_seed_agent("agent-a", 0))
+    asyncio.run(_seed_agent("agent-a", 1))
+    asyncio.run(_seed_agent("agent-b", 2))
+
+    since_iso = (_T0 - timedelta(days=1)).isoformat()
+    until_iso = (_T0 + timedelta(days=1)).isoformat()
+
+    # All agents
+    all_rows = client.get(f"{_BASE}/costs", params={"since": since_iso, "until": until_iso}).json()
+    assert len(all_rows) == 1  # Same model
+    assert all_rows[0]["runs"] == 3
+
+    # Filter by agent
+    agent_a = client.get(
+        f"{_BASE}/costs",
+        params={"agent_name": "agent-a", "since": since_iso, "until": until_iso},
+    ).json()
+    assert len(agent_a) == 1
+    assert agent_a[0]["runs"] == 2
+
+    agent_b = client.get(
+        f"{_BASE}/costs",
+        params={"agent_name": "agent-b", "since": since_iso, "until": until_iso},
+    ).json()
+    assert len(agent_b) == 1
+    assert agent_b[0]["runs"] == 1
+
+
+def test_costs_empty_range_returns_empty_list(app, client: TestClient):
+    """Empty range returns an empty list, not an error."""
+    _, session_factory = app
+    asyncio.run(_seed(session_factory))
+
+    # Query a far-future range where no runs exist
+    since_iso = datetime(2099, 1, 1, tzinfo=UTC).isoformat()
+    until_iso = datetime(2099, 12, 31, tzinfo=UTC).isoformat()
+    rows = client.get(f"{_BASE}/costs", params={"since": since_iso, "until": until_iso}).json()
+    assert rows == []
+
+
+def test_costs_requires_admin(app, client: TestClient):
+    """Route is admin-gated."""
+    _, session_factory = app
+    asyncio.run(_seed(session_factory))
+    fastapi, _ = app
+    fastapi.dependency_overrides[require_auth] = lambda: _caller(roles=["user"])
+    assert client.get(f"{_BASE}/costs").status_code == 403
+
+
+def test_costs_respects_tenant_isolation(app, client: TestClient):
+    """Seed a run under a second tenant and assert it does not appear (ADR-0001)."""
+    _, session_factory = app
+    asyncio.run(_seed(session_factory, tenant_id="default"))
+    asyncio.run(_seed(session_factory, tenant_id="other"))
+
+    # Caller is in "default" tenant; should only see their own run
+    since_iso = (_T0 - timedelta(days=1)).isoformat()
+    until_iso = (_T0 + timedelta(days=1)).isoformat()
+    rows = client.get(f"{_BASE}/costs", params={"since": since_iso, "until": until_iso}).json()
+    assert len(rows) == 1
+    assert rows[0]["runs"] == 1
+
+
+def test_costs_run_with_no_model_reports_none(app, client: TestClient):
+    """A run with no model in definition_snapshot reports model as None."""
+    _, session_factory = app
+
+    async def _seed_no_model(offset: int) -> str:
+        async with session_factory() as session:
+            # Snapshot with no model key
+            snapshot_no_model = {
+                "instructions": "Test instruction.",
+                "tools": [],
+                "read_scope": [],
+                "max_turns": 1,
+            }
+            run, _ = await create_run(
+                session,
+                tenant_id="default",
+                agent_name="test-agent",
+                definition_snapshot=snapshot_no_model,
+                input_payload={},
+                max_depth=8,
+            )
+            run.created_at = _T0 + timedelta(seconds=offset)
+            await session.flush()
+            await complete_run(
+                session,
+                tenant_id="default",
+                run_id=run.id,
+                status="completed",
+                messages=_MESSAGES,
+                result={},
+                input_tokens=100,
+                output_tokens=50,
+                cost_usd=0.01,
+            )
+            await session.commit()
+            return run.id
+
+    asyncio.run(_seed_no_model(0))
+
+    since_iso = (_T0 - timedelta(days=1)).isoformat()
+    until_iso = (_T0 + timedelta(days=1)).isoformat()
+    rows = client.get(f"{_BASE}/costs", params={"since": since_iso, "until": until_iso}).json()
+
+    assert len(rows) == 1
+    assert rows[0]["model"] is None  # Should be None, not ""
+    assert rows[0]["runs"] == 1

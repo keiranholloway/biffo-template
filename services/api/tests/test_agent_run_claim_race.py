@@ -50,7 +50,7 @@ async def session_factory(tmp_path: Path) -> AsyncGenerator[async_sessionmaker[A
 
 async def _new_pending_run(factory: async_sessionmaker[AsyncSession]) -> str:
     async with factory() as session:
-        run = await create_run(
+        run, _ = await create_run(
             session,
             tenant_id=TENANT,
             agent_name="demo-enricher",

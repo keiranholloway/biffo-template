@@ -17,9 +17,10 @@ user. Four steps matching the run lifecycle, plus a scheduled sweep:
 4. ``POST /agent-runs/{id}/complete`` — the terminal report, emitting
    ``agent.run.completed`` for failures as well as successes so a subscriber can
    distinguish "failed" from "still running".
-5. ``POST /agent-runs/reap`` — scheduled sweep that fails runs a dead runtime
-   left in ``running``, emitting the same completion event so whatever was
-   waiting on them is released (§5, issue #402).
+5. ``POST /agent-runs/reap`` — scheduled sweep that fails runs which can no
+   longer progress: those a dead runtime left in ``running``, and those nothing
+   ever claimed, still in ``pending``. Both emit the same completion event so
+   whatever was waiting on them is released (§5, issue #402, idea-scout#27).
 6. ``GET /agent-runs?causation_id=`` — the runs of one chain, as summaries. How a
    fan-in discovers the siblings of the run that just completed and decides
    whether the rest are done (§8, issue #656).
@@ -38,7 +39,7 @@ principal no write surface beyond finishing its own run.
 from __future__ import annotations
 
 from aws_lambda_powertools import Logger
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..agent_runs import (
@@ -78,6 +79,7 @@ router = APIRouter(prefix="/internal/agent-runs", tags=["internal:agents"])
 @router.post("", response_model=AgentRunResponse, status_code=status.HTTP_201_CREATED)
 async def request_agent_run(
     body: CreateAgentRunRequest,
+    response: Response,
     principal: ServicePrincipal = Depends(require_service_principal),
     db: AsyncSession = Depends(get_db),
 ) -> AgentRunResponse:
@@ -99,7 +101,7 @@ async def request_agent_run(
     snapshot = apply_writeback_output_tool(body.definition_snapshot)
 
     try:
-        run = await create_run(
+        run, created = await create_run(
             db,
             tenant_id=principal.tenant_id,
             agent_name=body.agent_name,
@@ -110,6 +112,7 @@ async def request_agent_run(
             max_depth=settings.agent_max_run_depth,
             workflow_run_id=body.workflow_run_id,
             thread_id=body.thread_id,
+            idempotency_key=body.idempotency_key,
         )
     except DepthLimitExceededError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -121,6 +124,19 @@ async def request_agent_run(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
+
+    if not created:
+        # The key matched a run someone else created. Announcing it again would
+        # dispatch the same work twice — which `claim_run` would survive (§5),
+        # but only by paying for a second invocation to discover it lost. The
+        # first caller's emit is what carries this run to the runtime.
+        #
+        # The risk this accepts: if that first emit was itself lost, nothing
+        # re-announces the run. That is bounded rather than unbounded — the
+        # reaper now fails never-claimed runs (idea-scout#27), so it surfaces
+        # within `agent_run_unclaimed_after_seconds` instead of hanging.
+        response.status_code = status.HTTP_200_OK
+        return AgentRunResponse.model_validate(run)
 
     emit_event(db, AGENT_RUN_REQUESTED, run_reference_payload(run), tenant_id=principal.tenant_id)
     return AgentRunResponse.model_validate(run)
@@ -305,7 +321,12 @@ async def reap_stale_agent_runs(
     principal: ServicePrincipal = Depends(require_service_principal),
     db: AsyncSession = Depends(get_db),
 ) -> list[AgentRunResponse]:
-    """Fail runs a dead runtime left in ``running``, and announce each one.
+    """Fail runs that can no longer progress, and announce each one.
+
+    Two shapes: a run a dead runtime left in ``running``, and a run **nothing
+    ever claimed**, still sitting in ``pending``. The second was invisible to
+    this sweep until idea-scout#27 — which meant the runs that had most
+    definitely been abandoned were the only ones it could not reap.
 
     Called on a schedule, so it must be safe to call when there is nothing to do
     — and it is: with nothing stale it reaps nothing and emits nothing.
@@ -325,6 +346,7 @@ async def reap_stale_agent_runs(
         db,
         tenant_id=principal.tenant_id,
         stale_after_seconds=settings.agent_run_stale_after_seconds,
+        unclaimed_after_seconds=settings.agent_run_unclaimed_after_seconds,
     )
     for run in reaped:
         if run.dry_run:

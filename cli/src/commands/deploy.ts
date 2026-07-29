@@ -255,9 +255,29 @@ export async function reportOidcHint(
  * Mirrors `readInstanceCoreVersion` (the local-filesystem reader) but sources
  * the bytes from GitHub at a specific ref, so `biffo deploy` can compare the
  * version on the branch it dispatches from against the branch it deploys.
- * Prefers the upgrade record (`biffo.core.json`) and falls back to the inherited
- * `core.version`. Returns null when neither is present or parseable at that ref
- * — a missing/garbled version must never fabricate a mismatch.
+ *
+ * `biffo.core.json` is the authority. The inherited `core.version` is consulted
+ * **only when that record is absent** — never when it is present and unreadable
+ * (#788).
+ *
+ * ## Why a malformed record must not fall back
+ *
+ * `core.version` is a fossil. It was written once at `biffo init` and never
+ * maintained; the template stopped shipping it entirely at #423. In
+ * `biffo-platform` it still reads `0.41.17` against a real version of `0.155.0`
+ * — **114 minor versions wrong**, in a top-level file whose entire content is a
+ * version number, with nothing about it signalling that it is dead. It has
+ * already misled a reader who had the code in front of them.
+ *
+ * Falling back to it on a *malformed* record turns a bug that should be loud
+ * into a plausible wrong answer: the caller compares two versions and warns
+ * about a mismatch that is an artefact of reading a fossil. A garbled record is
+ * a defect to surface, not a cue to trust something older. So a present record
+ * that cannot be read yields `null` — which the caller already treats as "cannot
+ * compare", the behaviour this docstring always claimed.
+ *
+ * Returns null when the version cannot be established at that ref — a
+ * missing/garbled version must never fabricate a mismatch.
  *
  * Exported for testing.
  */
@@ -276,8 +296,12 @@ export async function readRemoteCoreVersion(
         return parsed.version
       }
     } catch {
-      /* malformed record — fall through to the inherited core.version */
+      /* fall through to the null below — see the header on why NOT to the fossil */
     }
+    // The record exists and could not be read. That is a defect worth
+    // surfacing, not a reason to believe a file nobody has maintained since
+    // `biffo init` (#788).
+    return null
   }
   const inherited = await github.getFileContent(org, repo, CORE_VERSION_FILE, ref)
   if (inherited) {

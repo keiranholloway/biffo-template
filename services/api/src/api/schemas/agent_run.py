@@ -35,6 +35,11 @@ class CreateAgentRunRequest(BaseModel):
     depth: int = Field(default=0, ge=0)
     workflow_run_id: str | None = Field(default=None, max_length=36)
     thread_id: str | None = Field(default=None, max_length=36)
+    # Opt-in create-or-get (#661). A caller reached by at-least-once delivery
+    # that can name this work deterministically passes a key; a second create
+    # with the same key returns the first run and 200 instead of a second run,
+    # a second invoice, and a discarded result.
+    idempotency_key: str | None = Field(default=None, max_length=255)
 
 
 class ThreadMessagesResponse(BaseModel):
@@ -57,6 +62,14 @@ class AgentRunResponse(BiffoBaseSchema):
     # look identical once terminal. Defaulted so a caller reading an older
     # response shape still parses.
     dry_run: bool = False
+    # Exposed for the same reason as `dry_run` above: without it the mechanism
+    # that prevents duplicate runs (#661) is invisible to the people who would
+    # need it. A duplicate that was correctly collapsed and a run that simply
+    # never had a twin look identical in every admin view, so an operator
+    # investigating a double-bill cannot tell whether the guard engaged, and
+    # cannot tell which chain a run belongs to when the key is the only thing
+    # naming it. Defaulted so a caller reading an older response shape parses.
+    idempotency_key: str | None = None
     agent_name: str
     status: str
     run_as_kind: str
@@ -100,6 +113,23 @@ class AgentRunSummary(BiffoBaseSchema):
     cost_usd: float | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
+
+
+class AgentRunCostAggregate(BaseModel):
+    """Per-model cost aggregation for an admin cost analysis view.
+
+    Groups runs by model, summing costs and token counts. Runs with NULL
+    cost_usd are counted separately in ``unpriced_runs`` and excluded from
+    ``total_cost_usd``, so a caller can see how much of the time range is
+    unpriced and correct for missing data when reporting.
+    """
+
+    model: str | None = None
+    runs: int
+    total_cost_usd: float
+    total_input_tokens: int
+    total_output_tokens: int
+    unpriced_runs: int
 
 
 class CompleteAgentRunRequest(BaseModel):

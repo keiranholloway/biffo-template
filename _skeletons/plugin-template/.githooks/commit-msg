@@ -1,0 +1,21 @@
+#!/usr/bin/env sh
+# Conventional Commits, and the core-ownership boundary.
+# See docs/practices/standards/local-gates.md
+root=$(git rev-parse --show-toplevel) || exit 0
+cd "$root" || exit 0
+
+# commitlint only where it is configured. The release derives its version bump
+# from the squash-merge subject (ADR-0006), so this matters most in repos that
+# cut releases -- but a repo without the config must not be blocked by it.
+if [ -f commitlint.config.js ] || [ -f commitlint.config.mjs ] || [ -f .commitlintrc.json ]; then
+  pnpm exec commitlint --edit "$1" || exit 1
+else
+  echo "commit-msg: no commitlint config — subject not checked (see local-gates.md)" >&2
+fi
+
+# Refuse commits that edit template-owned paths (#370). Inert in the template
+# and absent in sibling/plugin repos, which own all of their own paths.
+# CI runs the same check, which --no-verify cannot skip.
+if [ -f scripts/biffo.sh ]; then
+  sh scripts/biffo.sh check ownership --staged "$1" || exit 1
+fi

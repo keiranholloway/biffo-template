@@ -1,9 +1,18 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import chalk from 'chalk'
 import { Command } from 'commander'
 import { GitAdapter } from '../adapters/git/index.js'
+import { GitHubAdapter } from '../adapters/source-control/github/index.js'
+import { resolveGithubToken } from '../lib/credentials.js'
+import {
+  addSource,
+  manifestUrlFor,
+  serialiseSources,
+  type SourcesFile,
+} from '../lib/registry-sources.js'
+import { workflowCheckContexts } from '../lib/workflow-check-contexts.js'
 import { INSTANCE_CORE_FILE } from '../lib/core-version.js'
 import { log } from '../lib/logger.js'
 import { pluginDir, type PluginChannel } from '../lib/plugin-locations.js'
@@ -19,6 +28,19 @@ export const pluginCreateCommand = new Command('create')
     'Scaffold into the template-owned services/_plugins/ carve-out. Only valid in the biffo-template repo itself — see notes.',
   )
   .option(
+    '--standalone',
+    'Scaffold a standalone plugin repo (ADR-0003 section 2) into ./biffo-plugin-<name>/ instead of into this checkout, keeping its own CI/CD workflows',
+  )
+  .option(
+    '--org <org>',
+    'With --standalone, also create the GitHub repo under this org (or user), push, and protect dev',
+  )
+  .option(
+    '--runner-label <label>',
+    'With --org, the RUNNER_LABEL the new repo\u2019s CI should run on (defaults to mirroring this checkout\u2019s)',
+  )
+  .option('--no-register', 'With --org, skip adding the plugin to the registry\u2019s sources.json')
+  .option(
     '--skeleton <path>',
     'Path to the plugin skeleton (defaults to _skeletons/plugin-template)',
   )
@@ -30,6 +52,10 @@ export const pluginCreateCommand = new Command('create')
       name: string,
       options: {
         firstParty?: boolean
+        standalone?: boolean
+        org?: string
+        runnerLabel?: string
+        register?: boolean
         skeleton?: string
         dryRun?: boolean
         commit?: boolean
@@ -42,12 +68,20 @@ export const pluginCreateCommand = new Command('create')
           name,
           {
             firstParty: options.firstParty ?? false,
+            standalone: options.standalone ?? false,
+            ...(options.org ? { org: options.org } : {}),
+            ...(options.runnerLabel ? { runnerLabel: options.runnerLabel } : {}),
+            register: options.register !== false,
             ...(options.skeleton ? { skeletonRoot: resolve(options.skeleton) } : {}),
             dryRun: options.dryRun ?? false,
             commit: options.commit !== false,
             cwd,
           },
-          { git: new GitAdapter() },
+          {
+            git: new GitAdapter(),
+            makeGitHub: (token: string) => new GitHubAdapter(token),
+            resolveToken: resolveGithubToken,
+          },
         )
       } catch (err) {
         log.error((err as Error).message)
@@ -58,10 +92,40 @@ export const pluginCreateCommand = new Command('create')
 
 export interface PluginCreateDeps {
   git: GitAdapter
+  /**
+   * Only needed for `--standalone --org`. Injected rather than constructed
+   * inline so the remote path is unit-testable without a GitHub token, and so
+   * a purely local scaffold never resolves credentials it does not use.
+   */
+  makeGitHub?: (token: string) => StandaloneGitHub
+  resolveToken?: () => Promise<string>
+}
+
+/** The slice of GitHubAdapter the standalone remote path needs. */
+export interface StandaloneGitHub {
+  createEmptyRepo(org: string, repo: string, description?: string): Promise<string>
+  setDefaultBranch(org: string, repo: string, branch: string): Promise<void>
+  protectSingleBranch(
+    org: string,
+    repo: string,
+    branch: string,
+    statusChecks: string[],
+  ): Promise<void>
+  setRepoVariable(org: string, repo: string, name: string, value: string): Promise<void>
+  getRepoVariable(org: string, repo: string, name: string): Promise<string | undefined>
+  repoRunnerCount(org: string, repo: string): Promise<number | null>
 }
 
 export interface PluginCreateOptions {
   firstParty: boolean
+  /** Scaffold the standalone-repo authoring shape rather than into this checkout (#803). */
+  standalone: boolean
+  /** With `standalone`, the GitHub org (or user) to create the repo under (#803). */
+  org?: string
+  /** With `org`, the RUNNER_LABEL to set on the new repo. Mirrored when omitted. */
+  runnerLabel?: string
+  /** With `org`, add the plugin to the registry's sources.json (default true). */
+  register?: boolean
   skeletonRoot?: string
   dryRun: boolean
   commit: boolean
@@ -96,6 +160,18 @@ export async function runPluginCreate(
   deps: PluginCreateDeps,
 ): Promise<void> {
   const names = deriveNames(name)
+
+  if (options.standalone) {
+    if (options.firstParty) {
+      throw new Error(
+        '--standalone and --first-party are opposites: --first-party authors a plugin *inside* ' +
+          'the template at services/_plugins/, while --standalone authors one in its own ' +
+          'repository (ADR-0003 section 2). Pick one.',
+      )
+    }
+    await runStandaloneCreate(names, options, deps)
+    return
+  }
 
   const isInstance = existsSync(join(options.cwd, INSTANCE_CORE_FILE))
   if (options.firstParty && isInstance) {
@@ -187,6 +263,391 @@ export async function runPluginCreate(
   }
 
   printNextSteps(names, relDir, channel)
+}
+
+/**
+ * Scaffold the *authoring* shape: a standalone plugin repository (ADR-0003
+ * section 2).
+ *
+ * ## Why this exists
+ *
+ * ADR-0003 makes standalone repos the designed model — goal 1 is "allow plugins
+ * to live in separate repositories, maintaining independent lifecycles and
+ * versioning", section 2 specifies a per-plugin repo whose standardised layout
+ * includes `.github/workflows/` for an independent CI/CD pipeline, and
+ * `biffo plugin install` consumes a plugin by cloning the registry entry's
+ * `repo` URL. Yet until #803 no command emitted that shape: `plugin create`
+ * only ever scaffolded *in-tree*, dropping exactly the standalone-only files.
+ *
+ * The consequence was that the skeleton's own workflows were maintained and
+ * delivered by nothing, and every real plugin repo was assembled by hand — the
+ * same class of silent drift as #243 and #325, where the template maintains a
+ * path with no distribution channel.
+ *
+ * ## What it deliberately does not do
+ *
+ * It does not create the GitHub repository. That needs branch protection scoped
+ * to `dev` alone — a plugin repo is non-deployable and has no staging/main
+ * (AGENTS.md section 2) — whereas `configureBranchProtection` protects all three
+ * for a deployable instance. Automating it correctly is its own change; the
+ * next steps below print the exact commands meanwhile.
+ */
+async function runStandaloneCreate(
+  names: ReturnType<typeof deriveNames>,
+  options: PluginCreateOptions,
+  deps: PluginCreateDeps,
+): Promise<void> {
+  // `names.dist` is already the biffo-plugin-<slug> convention every existing
+  // plugin repo follows, so the directory matches the repo it becomes.
+  const destDir = join(options.cwd, names.dist)
+
+  if (existsSync(destDir)) {
+    throw new Error(`${names.dist}/ already exists. Choose a different name, or remove it first.`)
+  }
+
+  const skeletonRoot = resolveSkeletonRoot(options)
+
+  if (options.dryRun) {
+    console.log(chalk.bold('\n  Dry run — no changes will be made\n'))
+    console.log(`  Plugin:          ${names.slug}`)
+    console.log('  Channel:         standalone repo')
+    console.log(`  Would scaffold:  ${names.dist}/`)
+    console.log(`  From skeleton:   ${skeletonRoot}`)
+    console.log(`  Python package:  ${names.pkg}   (dist: ${names.dist})`)
+    console.log('  Would git init:  yes, on branch dev, with an initial commit\n')
+    return
+  }
+
+  const { files } = scaffoldPlugin(skeletonRoot, destDir, names, { layout: 'standalone' })
+  restorePackagedDotfiles(destDir)
+  log.success(`Scaffolded ${String(files.length)} file(s) into ${names.dist}/`)
+
+  const manifest = validateManifest(
+    JSON.parse(readFileSync(join(destDir, 'biffo.plugin.json'), 'utf8')),
+  )
+  if (manifest.name !== names.slug) {
+    throw new Error(
+      `Scaffolded manifest declares name '${manifest.name}', expected '${names.slug}'. ` +
+        `The skeleton's manifest name may have diverged from 'example-plugin'.`,
+    )
+  }
+  log.success(
+    `Manifest valid — ${String(manifest.tables.length)} table(s), ${String(manifest.api_routes.length)} route(s)`,
+  )
+
+  if (options.commit) {
+    // A NEW repo in destDir — never a commit into whatever checkout the user
+    // happened to run this from, which is what the in-tree path does.
+    await deps.git.init(destDir)
+    await deps.git.add(destDir, ['.'])
+    await deps.git.commit(destDir, `feat: scaffold ${names.slug} plugin`)
+    log.success(`Initialised a git repo on dev with an initial commit`)
+  }
+
+  if (options.org !== undefined && options.org !== '') {
+    if (!options.commit) {
+      throw new Error(
+        '--org needs a commit to push. Drop --no-commit, or create the repo yourself using the ' +
+          'steps printed by a --no-commit run.',
+      )
+    }
+    await createAndPushStandaloneRepo(options.org, names, destDir, options, deps)
+    return
+  }
+
+  printStandaloneNextSteps(names, minorOf(manifest.version))
+}
+
+/**
+ * Create the GitHub repo for a freshly scaffolded standalone plugin, push it,
+ * and protect `dev` (#803).
+ *
+ * ## Why not `configureBranchProtection`
+ *
+ * That path is for **deployable** repos: it protects `dev`, `staging` and
+ * `main` with the core workflow's job names. A plugin repo is non-deployable
+ * and has `dev` only (AGENTS.md §2), and its checks are its own CI's job names.
+ * Reusing it would wait two minutes each for two branches that will never
+ * exist, then require checks that are never reported — protection that reads as
+ * configured while blocking every PR for ever.
+ *
+ * The required contexts are read from the workflow **the scaffold just wrote**,
+ * so they cannot drift from the CI they gate. If they cannot be determined the
+ * repo is still created and pushed, and protection is skipped loudly — a
+ * half-made repo is worse than an unprotected one, and the next steps say what
+ * to run.
+ */
+async function createAndPushStandaloneRepo(
+  org: string,
+  names: ReturnType<typeof deriveNames>,
+  destDir: string,
+  options: PluginCreateOptions,
+  deps: PluginCreateDeps,
+): Promise<void> {
+  if (deps.makeGitHub === undefined || deps.resolveToken === undefined) {
+    throw new Error('No GitHub adapter available — cannot create a repository.')
+  }
+
+  const token = await deps.resolveToken()
+  const github = deps.makeGitHub(token)
+
+  const cloneUrl = await github.createEmptyRepo(org, names.dist, `${names.slug} — a Biffo plugin`)
+
+  // BEFORE the push, deliberately. The push is what triggers the first CI run,
+  // and `runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}` is resolved from
+  // whatever the variable is at that moment. Setting it afterwards is a race
+  // that is only ever won by the API call being faster than GitHub's dispatcher
+  // — and losing it sends the first run to hosted runners, which is the exact
+  // billing failure this exists to prevent.
+  await propagateRunnerLabel(org, names.dist, options, deps, github)
+
+  await deps.git.addRemote(destDir, 'origin', cloneUrl)
+  await deps.git.push(destDir, 'dev', { token })
+  log.success(`Pushed dev to ${org}/${names.dist}`)
+
+  await github.setDefaultBranch(org, names.dist, 'dev')
+
+  const ciPath = join(destDir, '.github', 'workflows', 'ci.yml')
+  const contexts = existsSync(ciPath) ? workflowCheckContexts(readFileSync(ciPath, 'utf8')) : []
+
+  if (contexts.length === 0) {
+    log.warn(
+      `Could not determine required status checks from ${ciPath} — skipping branch protection. ` +
+        'Configure it manually on dev once you know the CI job names.',
+    )
+  } else {
+    await github.protectSingleBranch(org, names.dist, 'dev', contexts)
+  }
+
+  if (options.register !== false) {
+    await registerInRegistrySources(names, cloneUrl, token, deps)
+  }
+
+  printStandaloneRemoteNextSteps(names, org)
+}
+
+/** The registry repo whose sources.json drives the credential-free sync. */
+const REGISTRY_REPO = 'https://github.com/keiranholloway/biffo-plugins-registry'
+
+/**
+ * Add the new plugin to the registry's `sources.json`.
+ *
+ * Without this a new plugin repo is in neither of the registry's two paths: the
+ * push path needs a REGISTRY_PUBLISH_TOKEN it does not have, and the pull path
+ * only re-derives plugins already listed in sources.json. It would simply never
+ * appear in the store until somebody remembered — which is the exact failure
+ * that left `plugins.json` empty for months while real plugins ran in
+ * production.
+ *
+ * No stored credential is involved: this runs with the operator's own auth,
+ * which the command already holds because it just used it to create the repo.
+ *
+ * Best-effort and loud. By this point the plugin repo exists, is pushed and is
+ * protected; failing here would strand all of that over a registry entry that
+ * can be added in one commit.
+ */
+async function registerInRegistrySources(
+  names: ReturnType<typeof deriveNames>,
+  cloneUrl: string,
+  token: string,
+  deps: PluginCreateDeps,
+): Promise<void> {
+  let dir: string | undefined
+  try {
+    dir = await deps.git.cloneForEditing(REGISTRY_REPO, 'biffo-registry', token)
+    const path = join(dir, 'sources.json')
+    const file = JSON.parse(readFileSync(path, 'utf8')) as SourcesFile
+
+    const next = addSource(file, {
+      name: names.slug,
+      repo: cloneUrl.replace(/\.git$/, ''),
+      manifest: manifestUrlFor(cloneUrl),
+      tags: [],
+    })
+
+    if (next === null) {
+      log.info(`${names.slug} is already listed in the registry's sources.json`)
+      return
+    }
+
+    writeFileSync(path, serialiseSources(next))
+    await deps.git.add(dir, ['sources.json'])
+    await deps.git.commit(dir, `feat(registry): track ${names.slug} in sources.json`)
+    await deps.git.push(dir, 'main', { token })
+    log.success(`Registered ${names.slug} in the plugin registry's sources.json`)
+  } catch (err: unknown) {
+    log.warn(
+      `Could not add ${names.slug} to the registry's sources.json: ${(err as Error).message}. ` +
+        `Until it is listed there (or REGISTRY_PUBLISH_TOKEN is set on the new repo), the plugin ` +
+        `will not appear in the portal's plugin store.`,
+    )
+  } finally {
+    if (dir !== undefined) deps.git.cleanup(dir)
+  }
+}
+
+/**
+ * Give the new repo a runner to run on (#803 follow-up).
+ *
+ * ## Why this is not optional
+ *
+ * The skeleton's workflows run on `${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}`.
+ * A brand-new repo has no such variable, so it falls back to GitHub-hosted
+ * runners — and where the account's hosted-Actions minutes are exhausted, every
+ * job fails before it starts:
+ *
+ *     The job was not started because recent account payments have failed
+ *     or your spending limit needs to be increased
+ *
+ * On its own that is merely broken CI. Combined with the branch protection this
+ * command has just configured, it is worse: protection requires those exact
+ * jobs, so **every PR on the new repo is blocked for ever** by checks that can
+ * never report. Observed end to end on a real repo before this was added.
+ *
+ * `sibling create` already solves the same problem the same way
+ * (`sibling-create.ts`, "Mirror the core project's RUNNER_LABEL"). The value is
+ * fleet-specific — `biffo` and `tabsii` are both in use — so it is read from the
+ * checkout this command runs in rather than hardcoded, and `--runner-label`
+ * overrides.
+ *
+ * Best-effort, and loud when it cannot: a repo that exists with an unset label
+ * is fixable in one command, whereas aborting here would strand a repo that has
+ * already been created and pushed.
+ */
+async function propagateRunnerLabel(
+  org: string,
+  repo: string,
+  options: PluginCreateOptions,
+  deps: PluginCreateDeps,
+  github: StandaloneGitHub,
+): Promise<void> {
+  try {
+    let label = options.runnerLabel?.trim()
+
+    if (!label) {
+      const source = await currentRepoSlug(options.cwd, deps)
+      if (source) {
+        label = (await github.getRepoVariable(source.org, source.repo, 'RUNNER_LABEL'))?.trim()
+      }
+    }
+
+    if (!label) {
+      log.warn(
+        `No RUNNER_LABEL set on ${org}/${repo} — its CI will use GitHub-hosted runners. ` +
+          `If this account routes CI to a self-hosted fleet, every job will fail before it ` +
+          `starts, and the branch protection just configured will block every PR on checks ` +
+          `that never report. Fix with: gh variable set RUNNER_LABEL --repo ${org}/${repo}`,
+      )
+      return
+    }
+
+    await github.setRepoVariable(org, repo, 'RUNNER_LABEL', label)
+    log.success(`RUNNER_LABEL=${label} set on ${org}/${repo}`)
+
+    // Pointing at a fleet is not the same as being able to reach it. Until the
+    // fleet's GitHub App is granted access to this repo it sees no runners, and
+    // every job queues for ever with NO error (biffo-runners#2) — which, under
+    // the branch protection this command applies, blocks every PR just as
+    // surely as the billing wall did. Observed on a real new repo: 0 runners
+    // here, 3 on an established repo in the same fleet.
+    const runners = await github.repoRunnerCount(org, repo)
+    if (runners === 0) {
+      log.warn(
+        `${org}/${repo} points at the '${label}' runner fleet but can see 0 runners. ` +
+          `Jobs will queue indefinitely with no error until the fleet's GitHub App is granted ` +
+          `access to this repo (biffo-runners#2) — and the branch protection just applied will ` +
+          `block every PR until then.`,
+      )
+    }
+  } catch (err: unknown) {
+    log.warn(
+      `Could not set RUNNER_LABEL on ${org}/${repo}: ${(err as Error).message}. ` +
+        `Set it manually if this account uses self-hosted runners.`,
+    )
+  }
+}
+
+/** `owner/repo` of the checkout this command is running in, if it has one. */
+async function currentRepoSlug(
+  cwd: string,
+  deps: PluginCreateDeps,
+): Promise<{ org: string; repo: string } | null> {
+  try {
+    const url = await deps.git.getRemoteUrl(cwd, 'origin')
+    const match = /[:/]([^/:]+)\/([^/]+?)(?:\.git)?$/.exec(url.trim())
+    if (match?.[1] === undefined || match[2] === undefined) return null
+    return { org: match[1], repo: match[2] }
+  } catch {
+    return null
+  }
+}
+
+function printStandaloneRemoteNextSteps(names: ReturnType<typeof deriveNames>, org: string): void {
+  console.log(chalk.bold('\n  Standalone plugin repo created!\n'))
+  console.log(`  https://github.com/${org}/${names.dist}  (dev, protected)\n`)
+  console.log('  Next:')
+  console.log(chalk.dim(`    1. cd ${names.dist} && edit biffo.plugin.json`))
+  console.log(
+    chalk.dim('    2. Add it to the registry so it appears in the plugin store — either set'),
+  )
+  console.log(
+    chalk.dim(
+      '       REGISTRY_PUBLISH_TOKEN on the repo, or add it to the registry\u2019s sources.json',
+    ),
+  )
+  console.log(
+    chalk.dim(`    3. Consumers install it with: biffo plugin install ${names.slug}@<minor>\n`),
+  )
+}
+
+/**
+ * The `<major>.<minor>` a consumer pins with `biffo plugin install <name>@<minor>`
+ * (ADR-0003 goal 4 — minor-version pinning, so upgrades stay deliberate). Read
+ * from the scaffolded manifest rather than hardcoded, so bumping the skeleton's
+ * version does not leave this printing a stale number.
+ */
+function minorOf(version: string): string {
+  const match = /^(\d+)\.(\d+)/.exec(version)
+  return match ? `${match[1]}.${match[2]}` : version
+}
+
+function printStandaloneNextSteps(names: ReturnType<typeof deriveNames>, minor: string): void {
+  console.log(chalk.bold('\n  Standalone plugin repo scaffolded!\n'))
+  console.log(`  ${names.dist}/ is a complete plugin repository: manifest, example table and`)
+  console.log('  routes, terraform/ module, and its own CI, release and registry workflows.\n')
+  console.log('  Next:')
+  console.log(chalk.dim(`    1. cd ${names.dist} && edit biffo.plugin.json`))
+  console.log(
+    chalk.dim('    2. Create the repo — plugin repos are dev-only (AGENTS.md section 2):'),
+  )
+  console.log(chalk.dim(`         gh repo create <org>/${names.dist} --private --source=. --push`))
+  console.log(
+    chalk.dim('         gh api -X PATCH repos/<org>/' + names.dist + ' -f default_branch=dev'),
+  )
+  console.log(chalk.dim('    3. Publish it to the registry so it appears in the plugin store:'))
+  console.log(chalk.dim('         see .github/workflows/publish-registry.yml in the new repo'))
+  console.log(
+    chalk.dim(`    4. Consumers install it with: biffo plugin install ${names.slug}@${minor}\n`),
+  )
+}
+
+/**
+ * Resolve the skeleton the same way the in-tree path does — see that call
+ * site's comment for why the upward walk and the cwd fallback both exist.
+ */
+function resolveSkeletonRoot(options: PluginCreateOptions): string {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const skeletonRoot =
+    options.skeletonRoot ??
+    findSkeletonRoot(here, 'plugin-template') ??
+    join(options.cwd, '_skeletons', 'plugin-template')
+  if (!existsSync(skeletonRoot)) {
+    throw new Error(
+      `Could not find the plugin skeleton (_skeletons/plugin-template/). ` +
+        `Pass --skeleton <path> to point at it explicitly.`,
+    )
+  }
+  return skeletonRoot
 }
 
 function printDryRun(

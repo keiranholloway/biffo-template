@@ -138,7 +138,7 @@ async def test_a_plain_string_prompt_round_trips_unchanged(db_session):
 
 async def test_create_run_freezes_the_resolved_prompt_into_the_snapshot(db_session):
     await _seed(db_session)
-    run = await agent_runs.create_run(
+    run, _ = await agent_runs.create_run(
         db_session,
         tenant_id=TENANT,
         agent_name="demo-enricher",
@@ -226,7 +226,7 @@ async def test_runtime_event_data_never_fills_a_variable(db_session):
         variables=[{"name": "region", "required": True, "default": "UK"}],
     )
 
-    run = await agent_runs.create_run(
+    run, _ = await agent_runs.create_run(
         db_session,
         tenant_id=TENANT,
         agent_name="scorer",

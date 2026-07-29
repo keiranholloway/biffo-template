@@ -119,7 +119,12 @@ def _connect_args_for(search_path: str) -> dict[str, object]:
 
 engine = create_async_engine(
     resolve_app_database_url(),
-    echo=settings.environment == "dev",
+    # Both arguments are load-bearing — see the `sql_echo` comment in config.py.
+    # `echo` is off unless someone explicitly sets BIFFO_SQL_ECHO (no Biffo
+    # environment does), and `hide_parameters` keeps the values out of the log
+    # even then — and out of StatementError messages regardless.
+    echo=settings.sql_echo,
+    hide_parameters=True,
     poolclass=NullPool,
     connect_args=_connect_args_for(settings.db_search_path),
 )

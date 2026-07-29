@@ -617,6 +617,86 @@ export class GitHubAdapter {
     log.success('Branch protection configured on dev, staging, and main')
   }
 
+  /**
+   * Protect a single branch with caller-supplied required checks (#803).
+   *
+   * `configureBranchProtection` above exists for **deployable** repos and
+   * protects `dev`, `staging` and `main` with `DEFAULT_STATUS_CHECKS` — the
+   * core workflow's job names. Neither is right for a plugin repo:
+   *
+   * - A plugin repo is **non-deployable** and has `dev` only (AGENTS.md §2).
+   *   Reusing the deployable path would demand two branches it should not have,
+   *   and `waitForBranch` would hang on them for two minutes each before
+   *   failing.
+   * - Its checks are its own CI's job names (`Lint`, `Type Check`, `Test`, …),
+   *   not the core workflow's. Requiring a context that is never reported
+   *   blocks every PR for ever, on a branch whose CI is entirely green.
+   *
+   * `statusChecks` must be non-empty. Protection that requires nothing is worse
+   * than none: it reads as configured while gating on nothing, so callers that
+   * could not determine the contexts must not silently land here.
+   */
+  async protectSingleBranch(
+    org: string,
+    repo: string,
+    branch: string,
+    statusChecks: string[],
+    protectionIntervalMs = 3_000,
+  ): Promise<void> {
+    if (statusChecks.length === 0) {
+      throw new Error(
+        `Refusing to protect ${org}/${repo}@${branch} with no required status checks — ` +
+          `that reads as protected while gating on nothing. Determine the workflow's job ` +
+          `contexts first.`,
+      )
+    }
+
+    log.info(`Waiting for ${branch} branch to be ready...`)
+    await this.waitForBranch(org, repo, branch)
+    log.info(`Configuring branch protection on ${branch}...`)
+
+    const params = {
+      owner: org,
+      repo,
+      branch,
+      required_status_checks: { strict: true, contexts: statusChecks },
+      enforce_admins: false,
+      required_pull_request_reviews: {
+        required_approving_review_count: 0,
+        dismiss_stale_reviews: false,
+      },
+      restrictions: null,
+      required_linear_history: true,
+      allow_force_pushes: false,
+      allow_deletions: false,
+    }
+
+    const deadline = Date.now() + 30_000
+    while (true) {
+      try {
+        await this.octokit.repos.updateBranchProtection(params)
+        break
+      } catch (err: unknown) {
+        const status = (err as { status?: number }).status
+        if (status === 403) {
+          // Same plan limitation the deployable path documents: private org
+          // repos need Team/Enterprise for branch protection. Skipping is safe
+          // and retrying would hit the identical 403.
+          log.warn(`Branch protection unavailable for ${org}/${repo}: ${(err as Error).message}`)
+          log.warn('  Add it later via GitHub once the plan allows it, or make the repo public.')
+          return
+        }
+        if (status !== 404 || Date.now() >= deadline) throw err
+        log.info('Branch protection endpoint not yet ready, retrying...')
+        await new Promise((resolve) => setTimeout(resolve, protectionIntervalMs))
+      }
+    }
+
+    log.success(
+      `Branch protection configured on ${branch} (${statusChecks.length} required check(s))`,
+    )
+  }
+
   async createEnvironments(config: ProvisioningConfig): Promise<void> {
     const { org, repo } = (
       config.source_control as { provider: 'github'; config: { org: string; repo: string } }
@@ -709,6 +789,35 @@ export class GitHubAdapter {
         return null
       }
       throw err
+    }
+  }
+
+  /**
+   * How many self-hosted runners this repo can actually see (#803, biffo-runners#2).
+   *
+   * Setting `RUNNER_LABEL` points a repo's jobs at a self-hosted fleet. It does
+   * not grant the fleet's GitHub App access to that repo — and until someone
+   * does, the repo sees **zero** runners and every job queues for ever with no
+   * error at all. Measured on a freshly created plugin repo: 0 runners, while an
+   * established one in the same fleet saw 3.
+   *
+   * Queuing for ever and failing at the billing wall look completely different
+   * in the UI and are the same outcome under branch protection: nothing can
+   * merge. Callers use this to say so at create time rather than leaving it to
+   * be discovered on the first PR.
+   *
+   * Returns `null` when the count cannot be read (permissions, API error) —
+   * distinct from `0`, which is a real and actionable answer.
+   */
+  async repoRunnerCount(org: string, repo: string): Promise<number | null> {
+    try {
+      const { data } = await this.octokit.actions.listSelfHostedRunnersForRepo({
+        owner: org,
+        repo,
+      })
+      return data.total_count
+    } catch {
+      return null
     }
   }
 

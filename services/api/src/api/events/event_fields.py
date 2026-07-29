@@ -70,6 +70,36 @@ def _model_for_table(table: str) -> type[Any] | None:
     return None
 
 
+#: Operations a ``<table>.<op>`` trigger can be offered for.
+_CRUD_OPS = frozenset({"create", "update", "delete"})
+
+
+def trigger_excluded_ops(table: str) -> frozenset[str]:
+    """Which ``<table>.<op>`` triggers this model declines to be offered as.
+
+    Read from an optional ``__trigger_exclude__`` ClassVar — a tuple of
+    operation names (``"create"``/``"update"``/``"delete"``) — mirroring how
+    ``__event_exclude__`` lets a model withhold columns.
+
+    **This hides a trigger from the builder. It does not stop the event.** The
+    row-level event still emits (ADR-0002) and still reaches every subscriber;
+    all that changes is whether an author is offered it as a starting point.
+    That distinction is the whole point: a table whose meaningful transitions
+    have a purpose-built event (a stage move, a capture) wants authors on that
+    event, not on a raw ``updated`` that fires on every edit — but the raw event
+    may already have consumers, and breaking them would be a different and much
+    worse change.
+
+    Unknown operation names are ignored rather than raising: this is builder
+    metadata, and a typo in a ClassVar must not take down the catalog.
+    """
+    model = _model_for_table(table)
+    if model is None:
+        return frozenset()
+    declared = getattr(model, "__trigger_exclude__", ()) or ()
+    return frozenset(declared) & _CRUD_OPS
+
+
 def fields_for_crud_table(table: str) -> list[EventField]:
     """The :class:`EventField`s a ``<table>.<op>`` CRUD event exposes (#505).
 

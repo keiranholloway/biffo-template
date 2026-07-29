@@ -18,9 +18,12 @@ The lifecycle is three steps, mirroring the orchestration engine's shape:
    the run to exactly one terminal state. A run already in a terminal state is
    refused, so a retried completion cannot rewrite a finished run.
 
-And one step outside the happy path: ``reap_stale_runs`` fails runs a dead
-runtime left in ``running``, so a subscriber waiting on ``agent.run.completed``
-is released rather than waiting for ever (§5).
+And one step outside the happy path: ``reap_stale_runs`` fails runs that can no
+longer progress — both those a dead runtime left in ``running`` and those
+**nothing ever claimed**, still sitting in ``pending`` — so a subscriber waiting
+on ``agent.run.completed`` is released rather than waiting for ever (§5). The
+second shape was missing until idea-scout#27, which meant a run that was never
+picked up was invisible to the sweep built to catch abandoned work.
 
 Emission is **not** done here: the routers call ``emit_event`` so the event is
 buffered on the session and published by ``get_db`` only after the transaction
@@ -32,7 +35,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, and_, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
@@ -119,7 +123,8 @@ async def create_run(
     run_as_kind: str = "system",
     run_as_user_id: str | None = None,
     dry_run: bool = False,
-) -> AgentRun:
+    idempotency_key: str | None = None,
+) -> tuple[AgentRun, bool]:
     """Record a requested run in ``pending``, refusing anything past the ceiling.
 
     The prompt library resolves here (ADR-0015 §3/§4): the snapshot's ordered
@@ -135,6 +140,21 @@ async def create_run(
     a preview that took a different path would not be previewing anything. It is
     read once, by the completion endpoint, to decide whether to announce the run
     on the bus.
+
+    ``idempotency_key`` makes this create-or-**get**. Agent-run creation is
+    reached from at-least-once event delivery, and `agent_fan_in`'s guard against
+    firing twice is a check-then-act — two sibling completions landing within
+    milliseconds both see no follow-on and both create one (#661). A caller that
+    can name the work deterministically passes a key, and the database decides
+    who wins instead of a race.
+
+    The insert runs inside a SAVEPOINT, the same shape as
+    ``orchestration._claim_run``: a duplicate rolls back only the insert, not the
+    caller's transaction, and the run already there is fetched and returned.
+
+    Returns ``(run, created)``. ``created`` is False when an existing run was
+    returned — the caller needs it, because announcing ``agent.run.requested``
+    for a run it did not create would dispatch the same work twice.
 
     Raises:
         DepthLimitExceededError: when ``depth`` is greater than ``max_depth``.
@@ -163,10 +183,129 @@ async def create_run(
         messages=[],
         workflow_run_id=workflow_run_id,
         dry_run=dry_run,
+        idempotency_key=idempotency_key,
     )
-    db.add(run)
-    await db.flush()
-    return run
+
+    if idempotency_key is None:
+        db.add(run)
+        await db.flush()
+        return run, True
+
+    try:
+        async with db.begin_nested():
+            db.add(run)
+            await db.flush()
+    except IntegrityError:
+        existing = await db.scalars(
+            select(AgentRun).where(
+                AgentRun.tenant_id == tenant_id,
+                AgentRun.idempotency_key == idempotency_key,
+            )
+        )
+        return existing.one(), False
+    return run, True
+
+
+async def aggregate_run_costs(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    since: datetime,
+    until: datetime,
+    agent_name: str | None = None,
+) -> list[dict[str, str | int | float | None]]:
+    """Per-model cost aggregation for a time range, tenant-scoped (ADR-0001).
+
+    Groups runs by the model field (extracted from ``definition_snapshot``) and
+    sums costs and token counts. Runs with NULL ``cost_usd`` are counted in
+    ``unpriced_runs`` and excluded from ``total_cost_usd``, so the caller can
+    see how much of the range is unpriced and correct for missing data.
+
+    Returns one dict per distinct model with keys:
+    - ``model`` (str | None): The model name, or None if not set in the snapshot.
+    - ``runs`` (int): Total runs for this model.
+    - ``total_cost_usd`` (float): Sum of cost_usd, excluding NULLs.
+    - ``total_input_tokens`` (int): Sum of input_tokens.
+    - ``total_output_tokens`` (int): Sum of output_tokens.
+    - ``unpriced_runs`` (int): Count of runs with NULL cost_usd.
+
+    ## Implementation notes
+
+    **Unpriced runs:** Runs with NULL ``cost_usd`` are counted in
+    ``unpriced_runs`` and excluded from ``total_cost_usd``, so a caller can see
+    how much of the time range is unpriced and correct for missing data.
+
+    **Model extraction:** ``model`` is not a column; it lives inside
+    ``definition_snapshot`` JSON and must be lifted out in Python. This approach
+    (b) fetches rows and groups in Python rather than attempting cross-dialect
+    JSON extraction, because it is simple, provably correct on both SQLite and
+    Postgres, and this is an admin analytics view (not a hot path).
+
+    **Unbounded within a time range:** The query loads all matching runs into
+    memory and groups them in Python. There is no LIMIT cap. This is acceptable
+    because (a) it is admin-only, (b) scoped to a single tenant, and (c)
+    filtered by date range (default 30 days); at current scale this is safe.
+    If a tenant's run volume makes it slow, revisit and either add a cap or
+    paginate.
+    """
+    stmt = (
+        select(AgentRun)
+        .options(
+            load_only(
+                AgentRun.definition_snapshot,
+                AgentRun.agent_name,
+                AgentRun.input_tokens,
+                AgentRun.output_tokens,
+                AgentRun.cost_usd,
+                AgentRun.created_at,
+            )
+        )
+        .where(
+            AgentRun.tenant_id == tenant_id,
+            AgentRun.created_at >= since,
+            AgentRun.created_at <= until,
+        )
+    )
+    if agent_name is not None:
+        stmt = stmt.where(AgentRun.agent_name == agent_name)
+
+    runs = list((await db.scalars(stmt)).all())
+
+    # Group by model, lifting model out of definition_snapshot.
+    groups: dict[str | None, dict[str, str | int | float | None]] = {}
+    for run in runs:
+        model = run.definition_snapshot.get("model") if run.definition_snapshot else None
+        # Normalize: model must be a string or None, never any other type
+        if not isinstance(model, str):
+            model = None
+
+        if model not in groups:
+            groups[model] = {
+                "model": model,
+                "runs": 0,
+                "total_cost_usd": 0.0,
+                "total_input_tokens": 0,
+                "total_output_tokens": 0,
+                "unpriced_runs": 0,
+            }
+
+        groups[model]["runs"] = cast(int, groups[model]["runs"]) + 1
+        if run.cost_usd is not None:
+            total_cost = cast(float, groups[model]["total_cost_usd"]) + run.cost_usd
+            groups[model]["total_cost_usd"] = total_cost
+        else:
+            groups[model]["unpriced_runs"] = cast(int, groups[model]["unpriced_runs"]) + 1
+
+        if run.input_tokens is not None:
+            groups[model]["total_input_tokens"] = (
+                cast(int, groups[model]["total_input_tokens"]) + run.input_tokens
+            )
+        if run.output_tokens is not None:
+            groups[model]["total_output_tokens"] = (
+                cast(int, groups[model]["total_output_tokens"]) + run.output_tokens
+            )
+
+    return list(groups.values())
 
 
 async def list_runs(
@@ -344,42 +483,79 @@ REAPED_ERROR = (
     "claimed it is presumed dead (ADR-0014 §5)."
 )
 
+UNCLAIMED_ERROR = (
+    "Reaped: the run was requested but never claimed by a runtime. The "
+    "`agent.run.requested` event is presumed undelivered (ADR-0014 §5)."
+)
+
 
 async def reap_stale_runs(
     db: AsyncSession,
     *,
     tenant_id: str,
     stale_after_seconds: int,
+    unclaimed_after_seconds: int | None = None,
     now: datetime | None = None,
 ) -> list[AgentRun]:
-    """Fail runs stuck in ``running`` past *stale_after_seconds*, returning them.
+    """Fail runs that can no longer make progress, returning them.
 
-    A run reaches ``running`` only by being claimed, so one still there long
-    after any invocation could have finished is a runtime that died holding it.
-    The model work is already paid for and Core holds no result, so the run
-    never terminates — and anything waiting on ``agent.run.completed`` waits for
-    ever, because §5's whole point is telling "failed" from "still running".
-    This makes that a definite "failed".
+    Two kinds of abandonment, which look nothing alike and strand a caller
+    identically:
+
+    ``running`` past *stale_after_seconds* — a run reaches ``running`` only by
+    being claimed, so one still there long after any invocation could have
+    finished is a runtime that died holding it. The model work is already paid
+    for and Core holds no result.
+
+    ``pending`` past *unclaimed_after_seconds* — the run was requested and
+    **nothing ever picked it up**, because the ``agent.run.requested`` event was
+    never delivered or its handler never ran. Aged from ``created_at``, since a
+    run that was never claimed has no ``started_at`` to measure from. This was
+    the gap in idea-scout#27: the sweep looked only at ``running``, so a run
+    that never left ``pending`` was invisible to it — the *most* abandoned runs
+    were the only ones it could not see. One survived ~17 sweeps over 255
+    minutes while still presenting to the founder as "Running".
+
+    Either way, §5's whole point is telling "failed" from "still running"; a
+    stranded run says neither, and anything waiting on ``agent.run.completed``
+    waits for ever. This makes it a definite "failed".
 
     Each run is flipped by its **own** conditional UPDATE, the same shape as
-    ``claim_run``: a reap that raced a real completion matches zero rows and is
-    skipped, so a late-arriving result is never overwritten. Whichever lands
-    first wins, and the other becomes a no-op — which is what makes calling this
-    on a schedule safe.
+    ``claim_run``: a reap that raced a real completion — or, for a pending run,
+    raced the claim itself — matches zero rows and is skipped, so a late arrival
+    is never overwritten. Whichever lands first wins, and the other becomes a
+    no-op, which is what makes calling this on a schedule safe.
+
+    *unclaimed_after_seconds* defaults to *stale_after_seconds* so an existing
+    caller keeps working, but the two are configured separately: they are
+    bounded by different things (a Lambda invocation cap versus event-delivery
+    latency), and collapsing them would let one be moved by a change meant for
+    the other.
 
     ``now`` is injectable so a test can age a run without sleeping.
     """
     moment = now or datetime.now(UTC)
     cutoff = moment - timedelta(seconds=stale_after_seconds)
+    unclaimed_cutoff = moment - timedelta(
+        seconds=stale_after_seconds if unclaimed_after_seconds is None else unclaimed_after_seconds
+    )
 
     candidates = list(
         (
             await db.scalars(
                 select(AgentRun).where(
                     AgentRun.tenant_id == tenant_id,
-                    AgentRun.status == "running",
-                    AgentRun.started_at.is_not(None),
-                    AgentRun.started_at < cutoff,
+                    or_(
+                        and_(
+                            AgentRun.status == "running",
+                            AgentRun.started_at.is_not(None),
+                            AgentRun.started_at < cutoff,
+                        ),
+                        and_(
+                            AgentRun.status == "pending",
+                            AgentRun.created_at < unclaimed_cutoff,
+                        ),
+                    ),
                 )
             )
         ).all()
@@ -387,6 +563,11 @@ async def reap_stale_runs(
 
     reaped: list[AgentRun] = []
     for candidate in candidates:
+        # Which state it was found in decides both the re-check and the message.
+        # A pending run must not be failed with "the runtime that claimed it is
+        # presumed dead" — nothing claimed it, and that wording would send the
+        # next person looking at the runtime instead of at event delivery.
+        was_running = candidate.status == "running"
         result = cast(
             CursorResult[Any],
             await db.execute(
@@ -395,10 +576,15 @@ async def reap_stale_runs(
                     AgentRun.tenant_id == tenant_id,
                     AgentRun.id == candidate.id,
                     # Re-checked, because the SELECT above is a snapshot: the
-                    # runtime may have completed the run in between.
-                    AgentRun.status == "running",
+                    # runtime may have completed — or, for a pending run,
+                    # claimed — it in between.
+                    AgentRun.status == ("running" if was_running else "pending"),
                 )
-                .values(status="failed", error=REAPED_ERROR, completed_at=moment)
+                .values(
+                    status="failed",
+                    error=REAPED_ERROR if was_running else UNCLAIMED_ERROR,
+                    completed_at=moment,
+                )
             ),
         )
         if result.rowcount == 0:

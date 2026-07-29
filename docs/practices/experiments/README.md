@@ -2,6 +2,15 @@
 
 The register. One row per hypothesis, and the honest outcome of each.
 
+**Review windows are 7 days.** Set 2026-07-29 (#850), replacing a mix of 14 and
+30. This estate merged 616 PRs in seven days; a 30-day loop offers four chances
+a year to learn something, and its reference window is mostly history. Checked
+before adopting: the last 7 days carry 144 failed CI runs and 199 failing steps
+estate-wide, and the headline metric reads 66% on 7 days against 62% on 30 — so
+the shorter window keeps the signal and costs no comparability. Baselines are
+the **equal-length period immediately before** the reading: last week against
+this week, matched in length and sharing no data.
+
 Three rules, all of which exist because the alternative is self-congratulation:
 
 1. **Pre-register before intervening.** The prediction — metric, direction,
@@ -14,7 +23,27 @@ Three rules, all of which exist because the alternative is self-congratulation:
 
 | # | Hypothesis | Metric | Status | Pre-registered | Review |
 | --- | --- | --- | --- | --- | --- |
-| [H1](H1-merge-race.md) | The merge race is unwinnable by hand; auto-merge removes it | `racedShare` 13.2% → <5% | **running** | 2026-07-27 | 2026-08-10 |
+| [H1](H1-merge-race.md) | The merge race is unwinnable by hand; auto-merge removes it | `racedShare` 13.2% → <5% | `abandoned` | 2026-07-27 | superseded by H3 |
+| [H2](H2-merge-queue.md) | A merge queue removes the race without relaxing `strict` | — | `abandoned` | 2026-07-28 | never ran — GitHub offers no merge queue on this account |
+| [H3](H3-relax-strict.md) | Relaxing `strict` removes the race without breaking `dev` | `racedShare` 16.0% → <3% | **running** | 2026-07-28 | 2026-08-04 |
+| [H4](H4-shift-left-gates.md) | A local gate that actually runs removes most of what CI catches | **gate coverage 45% → 100% on day 0**; locally-catchable share of failing CI steps 66% (7d) → <20% | **running** | 2026-07-29 | 2026-08-05 |
+| [H5](H5-gate-residuals.md) | Of H4's four residual gaps, three pay and one does not | gate coverage stays 100%; pytest in 4 fast siblings; 0 prose-only exclusions; **gap 2 declined at 0/165** | **running** | 2026-07-29 | 2026-08-05 |
+
+> H2 and H3 were pre-registered on 2026-07-28 and never added here, so for a day
+> this register listed one of three live experiments. An index that is not
+> maintained is not a register — it is a claim that nothing else was tried.
+> Adding a row is part of pre-registering, not a follow-up.
+
+### Declining a fix is a result
+
+H5 prices four gaps and **declines one of them on the evidence** — `commit-msg`
+is inert in six repos and those six have **0 non-conventional subjects in 165
+commits**. Building it would have looked like diligence and bought nothing.
+
+A declined fix belongs in the register with its number and its re-open trigger,
+for the same reason a refuted hypothesis does: the next person to notice the gap
+will otherwise re-propose it, and the measurement that settled it will have been
+thrown away.
 
 ## Open, not yet pre-registered
 

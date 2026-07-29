@@ -24,15 +24,17 @@ another tenant is a 404, never visible.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...agent_runs import get_run, list_runs
+from ...agent_runs import aggregate_run_costs, get_run, list_runs
 from ...database import get_db
 from ...dependencies import require_admin
 from ...middleware.auth import AuthenticatedUser
 from ...models.agent_run import AGENT_RUN_STATUSES, AgentRun
-from ...schemas.agent_run import AgentRunResponse, AgentRunSummary
+from ...schemas.agent_run import AgentRunCostAggregate, AgentRunResponse, AgentRunSummary
 
 router = APIRouter(prefix="/admin/agent-runs", tags=["admin"])
 
@@ -92,6 +94,38 @@ async def list_agent_runs(
         offset=offset,
     )
     return [_summary(run) for run in runs]
+
+
+@router.get("/costs", response_model=list[AgentRunCostAggregate])
+async def aggregate_agent_run_costs(
+    agent_name: str | None = Query(None, description="Only runs of this agent."),
+    since: datetime | None = Query(None, description="Start of time range (inclusive, ISO 8601)."),
+    until: datetime | None = Query(None, description="End of time range (inclusive, ISO 8601)."),
+    caller: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> list[AgentRunCostAggregate]:
+    """Per-model cost aggregation for a time range, tenant-scoped (ADR-0001).
+
+    Groups runs by model (extracted from definition_snapshot) and sums costs
+    and token counts. Runs with NULL cost_usd are counted separately in
+    ``unpriced_runs`` and excluded from ``total_cost_usd``, so the caller can
+    see how much of the range is unpriced and correct for missing data.
+
+    Default time range is the last 30 days if omitted. An optional ``agent_name``
+    filters to runs of that agent.
+    """
+    now = datetime.now(UTC)
+    range_start = since or (now - timedelta(days=30))
+    range_end = until or now
+
+    results = await aggregate_run_costs(
+        db,
+        tenant_id=caller.tenant_id,
+        since=range_start,
+        until=range_end,
+        agent_name=agent_name,
+    )
+    return [AgentRunCostAggregate.model_validate(r) for r in results]
 
 
 @router.get("/{run_id}", response_model=AgentRunResponse)

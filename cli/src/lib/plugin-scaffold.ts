@@ -29,6 +29,12 @@ import { dirname, join } from 'node:path'
 /**
  * Top-level skeleton entries that belong to a *standalone plugin repo* and have
  * no meaning in a monorepo. Each is dropped with a reason, not silently.
+ *
+ * They are dropped for the `in-tree` layout only. ADR-0003 §2 specifies that a
+ * plugin lives in its own repository "with a standardised layout" that includes
+ * `.github/workflows/` — an independent CI/CD pipeline — so the `standalone`
+ * layout keeps them. Before #803 nothing emitted that layout, which left these
+ * files maintained in the skeleton and delivered by nothing (#803).
  */
 export const STANDALONE_ONLY_ENTRIES: Record<string, string> = {
   '.github':
@@ -123,9 +129,24 @@ export interface ScaffoldResult {
   skipped: Array<{ entry: string; reason: string }>
 }
 
+/** Which shape of plugin the scaffold is producing. */
+export type PluginLayout = 'in-tree' | 'standalone'
+
+export interface ScaffoldOptions {
+  /**
+   * `in-tree` (default) writes the shape a monorepo consumes, dropping the
+   * standalone-repo-only entries. `standalone` writes the authoring shape from
+   * ADR-0003 §2 — its own repository, with its own CI/CD — and keeps them.
+   */
+  layout?: PluginLayout
+}
+
 /**
  * Copy `skeletonRoot` into `destDir`, renaming the example plugin to `names`
- * throughout (paths and contents) and dropping standalone-repo-only files.
+ * throughout (paths and contents).
+ *
+ * For the default `in-tree` layout, standalone-repo-only entries are dropped
+ * (see `STANDALONE_ONLY_ENTRIES`); for `standalone` they are kept.
  *
  * Throws rather than half-writing if the skeleton is missing `terraform/` —
  * see this module's header for why that directory is load-bearing.
@@ -134,7 +155,9 @@ export function scaffoldPlugin(
   skeletonRoot: string,
   destDir: string,
   names: ScaffoldNames,
+  options: ScaffoldOptions = {},
 ): ScaffoldResult {
+  const layout: PluginLayout = options.layout ?? 'in-tree'
   if (!existsSync(skeletonRoot)) {
     throw new Error(`Plugin skeleton not found at ${skeletonRoot}`)
   }
@@ -154,8 +177,9 @@ export function scaffoldPlugin(
       a.name.localeCompare(b.name),
     )) {
       if (NEVER_COPY.has(entry.name)) continue
-      // Standalone-repo-only entries are only meaningful at the skeleton root.
-      if (relDir === '' && entry.name in STANDALONE_ONLY_ENTRIES) {
+      // Standalone-repo-only entries are only meaningful at the skeleton root,
+      // and only dropped when the destination is a monorepo.
+      if (layout === 'in-tree' && relDir === '' && entry.name in STANDALONE_ONLY_ENTRIES) {
         skipped.push({ entry: entry.name, reason: STANDALONE_ONLY_ENTRIES[entry.name]! })
         continue
       }

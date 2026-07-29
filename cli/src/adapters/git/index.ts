@@ -11,6 +11,11 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execa } from 'execa'
+import {
+  BRANCH_REF_FORMAT,
+  parseBranchRefs,
+  type BranchRef,
+} from '../../lib/upgrade-branch-reaper.js'
 
 export class GitAdapter {
   /** True if `cwd` is inside a git working tree. */
@@ -151,6 +156,116 @@ export class GitAdapter {
   async getRemoteUrl(cwd: string, remote = 'origin'): Promise<string> {
     const { stdout } = await execa('git', ['remote', 'get-url', remote], { cwd })
     return stdout.trim()
+  }
+
+  /**
+   * Prunes remote-tracking refs whose remote branch is gone, so `upstream:track`
+   * reports `[gone]` for a merged-and-deleted branch (#758).
+   *
+   * `fetch()` above deliberately does NOT prune: it exists to make the currency
+   * check compare against reality, and pruning is a side effect no caller of it
+   * asked for. Reaping genuinely needs it — without a prune, a branch whose
+   * remote copy was deleted last month still looks alive — so it is a separate,
+   * equally best-effort call.
+   */
+  async fetchPrune(cwd: string, remote = 'origin'): Promise<void> {
+    await execa('git', ['fetch', '--quiet', '--prune', remote], { cwd, reject: false })
+  }
+
+  /**
+   * Is `cwd` the primary checkout, rather than a linked worktree?
+   *
+   * The distinction decides whether being off the integration branch is a
+   * defect or the mandated state: AGENTS.md §1 requires all work to happen in a
+   * worktree on its own branch, while §2 requires the primary to stay on `dev`.
+   * Reporting the former as a problem is a false positive in the one place
+   * everybody works.
+   *
+   * A linked worktree's git dir points inside `.git/worktrees/<name>`, while the
+   * common dir is the shared `.git`. They are equal only in the primary.
+   */
+  async isPrimaryWorktree(cwd: string): Promise<boolean> {
+    const opts = { cwd, reject: false } as const
+    const [dir, common] = await Promise.all([
+      execa('git', ['rev-parse', '--absolute-git-dir'], opts),
+      execa('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], opts),
+    ])
+    // Assume primary when it cannot be determined: the checks this gates are
+    // the strict ones, and inventing a false positive is the failure to avoid.
+    if (dir.exitCode !== 0 || common.exitCode !== 0) return true
+    return dir.stdout.trim() === common.stdout.trim()
+  }
+
+  /**
+   * Worktrees other than the primary, with the branch each is on (#797).
+   *
+   * `--porcelain` rather than the human format: the latter's alignment and
+   * annotations vary, and this has to survive paths with spaces.
+   */
+  async listWorktrees(cwd: string): Promise<Array<{ path: string; branch: string }>> {
+    const { stdout, exitCode } = await execa('git', ['worktree', 'list', '--porcelain'], {
+      cwd,
+      reject: false,
+    })
+    if (exitCode !== 0) return []
+
+    const out: Array<{ path: string; branch: string }> = []
+    let path = ''
+    for (const line of stdout.split('\n')) {
+      if (line.startsWith('worktree ')) path = line.slice('worktree '.length)
+      else if (line.startsWith('branch ')) {
+        const branch = line.slice('branch '.length).replace('refs/heads/', '')
+        // The first entry is the primary checkout, which `doctor` reports on
+        // separately — including it here would double-count it.
+        if (out.length > 0 || path !== cwd) out.push({ path, branch })
+      }
+    }
+    return out.filter((w) => w.path !== cwd)
+  }
+
+  /** How many commits `branch` is behind `base`; null when it cannot be measured. */
+  async countBehind(cwd: string, branch: string, base: string): Promise<number | null> {
+    const { stdout, exitCode } = await execa('git', ['rev-list', '--count', `${branch}..${base}`], {
+      cwd,
+      reject: false,
+    })
+    if (exitCode !== 0) return null
+    const n = Number.parseInt(stdout.trim(), 10)
+    return Number.isNaN(n) ? null : n
+  }
+
+  /** A file's contents at a ref, or null when it is absent there. */
+  async showFileAtRef(cwd: string, ref: string, path: string): Promise<string | null> {
+    const { stdout, exitCode } = await execa('git', ['show', `${ref}:${path}`], {
+      cwd,
+      reject: false,
+    })
+    return exitCode === 0 ? stdout : null
+  }
+
+  /** Every local branch with its upstream and tracking state (#758). */
+  async listBranchRefs(cwd: string): Promise<BranchRef[]> {
+    const { stdout, exitCode } = await execa(
+      'git',
+      ['for-each-ref', `--format=${BRANCH_REF_FORMAT}`, 'refs/heads'],
+      { cwd, reject: false },
+    )
+    if (exitCode !== 0) return []
+    return parseBranchRefs(stdout)
+  }
+
+  /**
+   * Force-deletes a local branch, returning whether it went.
+   *
+   * `-D` rather than `-d` because these branches are squash-merged: their tips
+   * are never ancestors of the base, so `-d` refuses every one of them. That is
+   * precisely why nobody ever cleaned them up by hand. The safety that `-d`
+   * would have provided is supplied instead by the caller, which only ever
+   * passes branches whose upstream git reports as gone.
+   */
+  async deleteBranch(cwd: string, branch: string): Promise<boolean> {
+    const { exitCode } = await execa('git', ['branch', '-D', branch], { cwd, reject: false })
+    return exitCode === 0
   }
 
   /** Create and switch to a new branch. Fails if it already exists. */

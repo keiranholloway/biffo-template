@@ -99,6 +99,66 @@ describe('no-gitleaks-action rule', () => {
   })
 })
 
+describe('hardened-dependency-audit rule', () => {
+  /**
+   * #591/#743: the raw command exits non-zero identically whether it found a
+   * vulnerability or could not parse the registry's response, so an npm blip
+   * reds a required check on every open PR at once. Both skeletons shipped it
+   * for months after this repo hardened its own.
+   */
+  it('flags the raw pnpm audit both skeletons shipped', () => {
+    workflow(
+      'ci.yml',
+      "jobs:\n  js:\n    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}\n    steps:\n      - name: Dependency audit\n        run: pnpm audit --audit-level=high\n",
+    )
+    const v = auditSkeleton(root, 'test-skeleton')
+    expect(v).toHaveLength(1)
+    expect(v[0]!.rule).toBe('hardened-dependency-audit')
+    expect(v[0]!.detail).toContain('js-dependency-audit.sh')
+  })
+
+  it('flags the raw pip-audit both skeletons shipped', () => {
+    workflow(
+      'ci.yml',
+      "jobs:\n  py:\n    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}\n    steps:\n      - run: uv run pip-audit\n",
+    )
+    const v = auditSkeleton(root, 'test-skeleton')
+    expect(v).toHaveLength(1)
+    expect(v[0]!.detail).toContain('py-dependency-audit.sh')
+  })
+
+  it('accepts the hardened wrappers, including from a nested working-directory', () => {
+    workflow(
+      'ci.yml',
+      "jobs:\n  js:\n    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}\n    steps:\n      - run: sh ../../scripts/js-dependency-audit.sh\n      - run: sh scripts/py-dependency-audit.sh\n",
+    )
+    expect(auditSkeleton(root, 'test-skeleton')).toEqual([])
+  })
+
+  /**
+   * The replacement documents what it replaced on the line above it. A guard
+   * that reddens on its own rationale gets deleted rather than obeyed.
+   */
+  it('does not flag a comment explaining which command was replaced', () => {
+    workflow(
+      'ci.yml',
+      "jobs:\n  js:\n    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}\n    steps:\n      # Replaces the raw `pnpm audit --audit-level=high` / `uv run pip-audit`,\n      # which cannot tell a finding from a registry error (#591).\n      - run: sh scripts/js-dependency-audit.sh\n",
+    )
+    expect(auditSkeleton(root, 'test-skeleton')).toEqual([])
+  })
+
+  it('counts every offending step, not just the first', () => {
+    workflow(
+      'ci.yml',
+      "jobs:\n  a:\n    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}\n    steps:\n      - run: pnpm audit --audit-level=high\n      - run: uv run pip-audit\n",
+    )
+    const v = auditSkeleton(root, 'test-skeleton')
+    expect(v[0]!.detail).toContain('2 step(s)')
+    expect(v[0]!.detail).toContain('js-dependency-audit.sh')
+    expect(v[0]!.detail).toContain('py-dependency-audit.sh')
+  })
+})
+
 describe('scope', () => {
   it('ignores files outside .github/workflows', () => {
     mkdirSync(join(root, 'docs'), { recursive: true })

@@ -43,7 +43,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** Snapshot schema version. Bump when a field's meaning changes, never when one is added. */
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 /** Default observation window. 90 days is long enough to survive a quiet fortnight. */
 export const DEFAULT_WINDOW_DAYS = 90
@@ -104,6 +104,150 @@ export const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out', 'startup_fai
  * instantly" are different claims and only one is good news.
  */
 export const DEPLOY_WORKFLOW = 'Deploy Application'
+
+/** Marker `biffo core upgrade` writes into its PR body (#767). */
+export const CARRIED_PRS_MARKER = 'biffo:carries-template-prs:'
+
+/**
+ * Branch prefix `biffo core upgrade` always creates. Mirrors
+ * `UPGRADE_BRANCH_PREFIX` in `cli/src/lib/core-upgrade.ts`.
+ */
+export const UPGRADE_BRANCH_PREFIX = 'biffo/core-upgrade-'
+
+/**
+ * Is this PR actually an upgrade, rather than one that merely *mentions* the
+ * marker?
+ *
+ * Not paranoia — this fired on the first real run. `biffo-template` reported an
+ * upgrade PR carrying four template PRs, which is impossible: the template does
+ * not upgrade itself. The parser had matched the marker inside PR #772's own
+ * body, where it appears as **documentation of the format**. A PR describing the
+ * mechanism was counted as one emitting it.
+ *
+ * The branch name is the discriminator because the CLI controls it absolutely:
+ * `upgradeBranchName()` is the only thing that opens these PRs. Body text is
+ * written by whoever is describing the feature.
+ *
+ * @param {Record<string, any>} pr
+ */
+export function isUpgradePr(pr) {
+  return typeof pr.headRefName === 'string' && pr.headRefName.startsWith(UPGRADE_BRANCH_PREFIX)
+}
+
+/**
+ * Template PR numbers an instance's upgrade PR carries (#767).
+ *
+ * Returns `[]` for any body without the marker, which is every PR except an
+ * upgrade — and every upgrade opened before the marker shipped. That is a
+ * *coverage* fact, not an error: the metric simply has nothing to say about
+ * those, and says nothing rather than guessing.
+ *
+ * @param {string | null | undefined} body
+ */
+export function parseCarriedPrs(body) {
+  if (typeof body !== 'string') return []
+  const match = new RegExp(`${CARRIED_PRS_MARKER}([0-9,]+)`).exec(body)
+  if (!match?.[1]) return []
+  const numbers = match[1]
+    .split(',')
+    .map((n) => Number(n.trim()))
+    .filter((n) => Number.isInteger(n) && n > 0)
+  return [...new Set(numbers)].sort((a, b) => a - b)
+}
+
+/**
+ * Template PR number → the issue keys it closed.
+ *
+ * @param {string} templateSlug
+ * @param {Array<Record<string, any>>} templatePrs
+ * @returns {Map<number, string[]>}
+ */
+export function indexClosingIssues(templateSlug, templatePrs) {
+  /** @type {Map<number, string[]>} */
+  const index = new Map()
+  for (const pr of templatePrs) {
+    const keys = (pr.closingIssuesReferences ?? [])
+      .map((ref) => {
+        const owner = ref.repository?.owner?.login
+        const name = ref.repository?.name
+        return owner && name ? `${owner}/${name}#${ref.number}` : null
+      })
+      .filter((key) => key !== null)
+    if (keys.length > 0) index.set(pr.number, keys)
+  }
+  return index
+}
+
+/**
+ * Time from a **template** issue being opened to it running in an instance —
+ * the whole six-hop distribution, measured rather than described (#767).
+ *
+ * A template feature is not usable when its template PR merges. It becomes
+ * usable when an instance deploys it, five hops later: tag → npm publish →
+ * `core upgrade` → instance PR → deploy. `development-practices.md` prices that
+ * at "~40 min minimum" and once at three full release cycles for one feature,
+ * but only ever from anecdote, because nothing recorded which issues an upgrade
+ * carried. The marker does; this reads it.
+ *
+ * `carriedWithoutIssue` is reported deliberately. The first marker ever emitted
+ * carried twelve template PRs and **none of them closed an issue** — every one
+ * used `Refs #N`, correctly, because the issues were not finished. That is the
+ * binding constraint on this metric and it must be visible, not inferred from a
+ * small `measured`.
+ *
+ * @param {Array<Record<string, any>>} instancePrs merged, with `body`
+ * @param {Map<number, string[]>} closingIssues template PR → issue keys
+ * @param {Map<string, string>} issueOpenedAt issue key → ISO createdAt
+ * @param {Array<{startedAt: number, finishedAt: number}>} deploys instance deploys
+ */
+export function crossRepoTimeToFeature(instancePrs, closingIssues, issueOpenedAt, deploys) {
+  const hours = []
+  let upgradePrs = 0
+  let carriedPrs = 0
+  let carriedWithoutIssue = 0
+  let awaitingDeploy = 0
+  for (const pr of instancePrs) {
+    // Branch name first: a PR that merely documents the marker is not an
+    // upgrade, and counting one as such is how the template reported carrying
+    // its own PRs on the first real run.
+    if (!isUpgradePr(pr)) continue
+    const carried = parseCarriedPrs(pr.body)
+    if (carried.length === 0) continue
+    upgradePrs += 1
+    carriedPrs += carried.length
+    // One deploy carries every issue in the upgrade, so it is resolved once
+    // rather than per issue.
+    const ranAt = firstDeployAfter(deploys, pr.mergedAt)
+    for (const number of carried) {
+      const keys = closingIssues.get(number)
+      if (!keys || keys.length === 0) {
+        carriedWithoutIssue += 1
+        continue
+      }
+      for (const key of keys) {
+        const openedAt = issueOpenedAt.get(key)
+        if (!openedAt) continue
+        if (ranAt === null) {
+          awaitingDeploy += 1
+          continue
+        }
+        const delta = ranAt - Date.parse(openedAt)
+        if (!Number.isFinite(delta) || delta < 0) continue
+        hours.push(delta / 3_600_000)
+      }
+    }
+  }
+  return {
+    upgradePrs,
+    carriedPrs,
+    carriedWithoutIssue,
+    awaitingDeploy,
+    measured: hours.length,
+    hoursP50: round1(percentile(hours, 50)),
+    hoursP90: round1(percentile(hours, 90)),
+    hoursMax: hours.length ? round1(Math.max(...hours)) : null,
+  }
+}
 
 /** Conclusions that mean the gate never evaluated the change. Never counted as a pass. */
 export const INCONCLUSIVE_CONCLUSIONS = new Set(['skipped', 'neutral', 'stale', null])
@@ -252,19 +396,33 @@ export function summariseWorkMix(commits, repoSide) {
  * worse — the three windows could then disagree because they were taken at
  * different moments.
  *
+ * `until` is what makes a **non-overlapping** baseline possible (#835). The 90d
+ * window contains the 7d window, so on 2026-07-29 exactly half the "90-day
+ * baseline" — 616 of 1232 merges — *was* the week being compared against it.
+ * A reference line that moves with the thing it is measuring cannot tell you
+ * the thing moved.
+ *
  * @param {{prs: Array<any>, runs: Array<any>, defaultBranch: string, rework: {fixes: Array<any>, commits: Array<any>} | null}} data
  * @param {string} since ISO timestamp
+ * @param {string | null} until ISO timestamp, exclusive; open-ended when null
  */
-export function filterToWindow(data, since) {
+export function filterToWindow(data, since, until = null) {
   const from = Date.parse(since)
+  const to = until === null ? Infinity : Date.parse(until)
   return {
     defaultBranch: data.defaultBranch,
-    prs: data.prs.filter((pr) => pr.mergedAt && Date.parse(pr.mergedAt) >= from),
-    runs: data.runs.filter((run) => Date.parse(run.created_at) >= from),
+    prs: data.prs.filter(
+      (pr) => pr.mergedAt && Date.parse(pr.mergedAt) >= from && Date.parse(pr.mergedAt) < to,
+    ),
+    runs: data.runs.filter(
+      (run) => Date.parse(run.created_at) >= from && Date.parse(run.created_at) < to,
+    ),
     rework: data.rework
       ? {
-          fixes: data.rework.fixes.filter((fix) => fix.at >= from),
-          commits: data.rework.commits.filter((commit) => commit.at >= from),
+          fixes: data.rework.fixes.filter((fix) => fix.at >= from && fix.at < to),
+          commits: data.rework.commits.filter(
+            (commit) => commit.at >= from && commit.at < to,
+          ),
         }
       : null,
     // Deliberately NOT filtered by the window. An issue opened long before the
@@ -272,6 +430,56 @@ export function filterToWindow(data, since) {
     // windowing it away would discard the worst results and flatter the median.
     // The window applies to the *merge*, which is the event being measured.
     issues: data.issues ?? [],
+  }
+}
+
+/**
+ * Work out the **independent baseline** window from the configured lookbacks.
+ *
+ * Every window here is a lookback from now, so the long one contains the short
+ * one and "7d vs the 90d baseline" is partly a comparison of the week with
+ * itself. On 2026-07-29 the overlap was total enough to make the baseline
+ * useless as a reference: 616 of the 1232 merges in the 90-day window — exactly
+ * half — had happened in the 7 days being compared against it. Merge rate that
+ * week was 88/day against the 90-day average of 13.7/day, so the "baseline" was
+ * dominated by the very regime it was supposed to give perspective on. A
+ * baseline that moves with the reading always looks reassuringly close to it.
+ *
+ * The fix is a span, not a lookback: **the equal-length period immediately
+ * before the rate window**. Last week, against this week.
+ *
+ * ## Why equal-length, and why it changed (#850)
+ *
+ * The first version cut the rate window out of the long one — 90d minus 7d, an
+ * 83-day baseline. Independent, but not *matched*: a 7-day reading against an
+ * 83-day average compares a week to a quarter, and the quarter is dominated by
+ * whatever regime happened to prevail in it. That is the same units mismatch
+ * the green-wait tile had, one level up.
+ *
+ * Equal length also makes the feedback loop short, which is the point: this
+ * estate merged 616 PRs in seven days. A 30- or 90-day reference is not a
+ * reference for a codebase moving that fast, it is history. Confirmed before
+ * changing it — the last 7 days carry 144 failed CI runs and 199 failing steps
+ * estate-wide, ample to classify, and the locally-catchable share reads 66% on
+ * 7 days against 62% on 30, so the shorter window costs no comparability.
+ *
+ * Returns `null` when there is no second window to derive a rate from.
+ *
+ * @param {number[]} windowDays
+ * @returns {{ since: string, until: string, days: number } | null}
+ */
+export function priorWindow(windowDays, now = Date.now()) {
+  const sorted = [...new Set(windowDays)].sort((a, b) => a - b)
+  if (sorted.length < 2) return null
+  // The rate window is the one the dashboard reads percentages from — the
+  // largest window that is not the long-term context window.
+  const rate = sorted[sorted.length - 2]
+  return {
+    // [2×rate ago, rate ago) — the same span, immediately before, sharing no
+    // merge with the reading it anchors.
+    since: new Date(now - 2 * rate * 864e5).toISOString(),
+    until: new Date(now - rate * 864e5).toISOString(),
+    days: rate,
   }
 }
 
@@ -845,7 +1053,7 @@ export function summariseRework(fixes, merges) {
  * @param {{slug: string, role: string}} repo
  * @param {{prs: Array<Record<string, any>>, runs: Array<Record<string, any>>, defaultBranch: string, rework: {fixes: Array<{at: number, correctedAt: number | null}>, merges: number} | null}} data
  */
-export function summariseRepo(repo, data, issueOpenedAt = new Map()) {
+export function summariseRepo(repo, data, issueOpenedAt = new Map(), templateClosingIssues = new Map()) {
   const { prs, runs, defaultBranch, rework } = data
   const runsByBranch = indexRunsByBranch(runs)
   const merged = prs.filter((pr) => pr.mergedAt)
@@ -870,7 +1078,17 @@ export function summariseRepo(repo, data, issueOpenedAt = new Map()) {
     // How long from wanting a capability to having it (#767). Stop A only:
     // issue opened → closing PR merged. Stop B (running in an instance) needs
     // the template→instance hop to be machine-readable first.
-    timeToFeature: timeToFeature(merged, issueOpenedAt, successfulDeploys(runs, defaultBranch)),
+    timeToFeature: {
+      ...timeToFeature(merged, issueOpenedAt, successfulDeploys(runs, defaultBranch)),
+      // Template issue opened -> running here. Empty for the template itself and
+      // for any repo that takes no core upgrades.
+      crossRepo: crossRepoTimeToFeature(
+        merged,
+        templateClosingIssues,
+        issueOpenedAt,
+        successfulDeploys(runs, defaultBranch),
+      ),
+    },
     // Consistency — two metrics, never one. See prChurn().
     ciFailureRate: rate(measured.filter((c) => c.ciFailed).length, measured.length),
     revisionsP50: percentile(
@@ -917,13 +1135,26 @@ export function summariseRepo(repo, data, issueOpenedAt = new Map()) {
 /**
  * Roll every repo up into the estate-level view the daily page leads with.
  *
- * The question this answers is the one that decides where effort goes: **are we
- * building the product or maintaining the machine?** Biffo is the platform
- * Tabsii runs on, so `biffo-*` merges are investment in the machine and
- * `tabsii-*` merges are product delivery.
+ * The question this answers is the one that decides where effort goes: **how
+ * much of what we do is building a capability at all?**
  *
- * `productFeatureShare` is the headline. On the first 90-day measurement it was
- * **14.4%** — roughly one merge in seven was a feature in the thing being sold.
+ * ## Why the headline changed (#768)
+ *
+ * This used to lead with `productFeatureShare` — delivery merges in `tabsii-*`
+ * as a share of everything — on the framing that "Biffo is the machine, Tabsii
+ * is the product". **The north star set on 2026-07-27 inverts that: Biffo is
+ * the fundable product and Tabsii is the proving ground that exercises it.**
+ *
+ * Under the old label the same 152 merges read **5.9%**, and it was quoted as
+ * "we are barely shipping features". Re-cut on the Biffo/Tabsii axis the answer
+ * is **35.5% capability** — Biffo 29.6%, Tabsii 5.9%. Same day, same merges,
+ * **6× difference**, purely from which repo family is called "the product". The
+ * arithmetic was never wrong; the denominator was the wrong product.
+ *
+ * That number had already been identified as measuring the wrong thing the day
+ * before and stayed on the dashboard, so it was read as a headline again. The
+ * old figure survives as `tabsiiCapabilityShare`, which is what it always was —
+ * a legitimate number about the proving ground.
  *
  * Caveat carried in the output rather than left to memory: **merges are not
  * time.** A one-line `chore:` and a week-long `feat:` count the same. This is a
@@ -939,7 +1170,9 @@ export function summariseEstate(repos) {
       platformShare: null,
       productShare: null,
       toilRatio: null,
-      productFeatureShare: null,
+      capabilityShare: null,
+      capabilityBySide: {},
+      tabsiiCapabilityShare: null,
       contentionHours: null,
       bySide: {},
       note: 'merges are a proxy for effort, not a measure of time',
@@ -952,6 +1185,11 @@ export function summariseEstate(repos) {
   const product = sum((r) => r.workMix.sideCounts.product)
   const toil = sum((r) => r.workMix.counts.toil)
   const rework = sum((r) => r.workMix.counts.rework)
+  // Capability = a merge that built something, wherever it landed. Split by
+  // family, because "which product" is the question the old headline got wrong.
+  const capability = sum((r) => r.workMix.counts.delivery)
+  const tabsiiCapability = sum((r) => r.workMix.productDelivery)
+  const biffoCapability = capability - tabsiiCapability
 
   /**
    * Per-side rollup. A repo contributes to *both* sides when its merges do —
@@ -978,9 +1216,16 @@ export function summariseEstate(repos) {
     productShare: rate(product, merges),
     // SRE framing: toil + rework is effort that added no product value.
     toilRatio: rate(toil + rework, merges),
-    // The headline. Features shipped in the product, as a share of ALL merges —
-    // now excluding core upgrades that land in a product repo.
-    productFeatureShare: rate(sum((r) => r.workMix.productDelivery), merges),
+    // The headline: capability built anywhere, as a share of all merges.
+    capabilityShare: rate(capability, merges),
+    capabilityBySide: {
+      // Biffo is the fundable product; Tabsii is the proving ground.
+      platform: { merges: biffoCapability, share: rate(biffoCapability, merges) },
+      product: { merges: tabsiiCapability, share: rate(tabsiiCapability, merges) },
+    },
+    // Formerly `productFeatureShare`, renamed rather than dropped: it is a real
+    // number about the proving ground, and only its label was wrong (#768).
+    tabsiiCapabilityShare: rate(tabsiiCapability, merges),
     contentionHours: round1(sum((r) => r.contention?.greenButUnmergedHours ?? 0)),
     bySide,
     note: 'merges are a proxy for effort, not a measure of time',
@@ -1086,7 +1331,8 @@ function fetchPrs(slug, since) {
     // extra: it rides along on a fetch that already happens. The alternative —
     // one timeline API call per closed issue — is O(issues) requests for the
     // same answer.
-    'number,title,createdAt,mergedAt,headRefName,baseRefName,closingIssuesReferences',
+    // `body` carries the core-upgrade marker (#767). Same request, one more field.
+    'number,title,createdAt,mergedAt,headRefName,baseRefName,closingIssuesReferences,body',
   ])
   return prs.filter((pr) => pr.mergedAt >= since)
 }
@@ -1210,6 +1456,15 @@ function main() {
     }
   }
 
+  // Template PR -> the issues it closed, built once. An instance upgrade PR
+  // names template PR numbers; this is what turns those into issues, and hence
+  // into a start time.
+  const templateRepo = REPOS.find((r) => r.role === 'template')
+  const templateClosingIssues = indexClosingIssues(
+    templateRepo?.slug ?? '',
+    raw[templateRepo?.slug ?? '']?.prs ?? [],
+  )
+
   /** @type {Record<string, any>} */
   const windows = {}
   for (const days of args.windows) {
@@ -1218,10 +1473,31 @@ function main() {
     const repos = {}
     for (const repo of targets) {
       repos[repo.slug] = raw[repo.slug]
-        ? summariseRepo(repo, filterToWindow(raw[repo.slug], since), issueOpenedAt)
+        ? summariseRepo(repo, filterToWindow(raw[repo.slug], since), issueOpenedAt, templateClosingIssues)
         : { error: 'unmeasured' }
     }
     windows[days] = { since, repos, estate: summariseEstate(repos) }
+  }
+
+  // The independent baseline (#835): the long window with the rate window cut
+  // out of it, so "vs baseline" compares two disjoint sets of merges. Keyed by
+  // name rather than a day count because it is a *span*, not a lookback, and
+  // reading it as one would put its start date 83 days ago instead of 90.
+  const prior = priorWindow(args.windows)
+  if (prior) {
+    /** @type {Record<string, any>} */
+    const repos = {}
+    for (const repo of targets) {
+      repos[repo.slug] = raw[repo.slug]
+        ? summariseRepo(
+            repo,
+            filterToWindow(raw[repo.slug], prior.since, prior.until),
+            issueOpenedAt,
+            templateClosingIssues,
+          )
+        : { error: 'unmeasured' }
+    }
+    windows.prior = { ...prior, repos, estate: summariseEstate(repos) }
   }
 
   const snapshot = {

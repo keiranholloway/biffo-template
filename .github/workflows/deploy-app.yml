@@ -598,8 +598,24 @@ jobs:
             # by this same Lambda, read from services/<name>/web-admin/dist via
             # BIFFO_PLUGINS_ROOT -- build it here (same pnpm shape as the
             # plugin-frontend step below) and copy the output in. Skipped if the
-            # plugin declares no admin_ingress or has no web-admin/ directory.
-            if jq -e '.admin_ingress' "$manifest" >/dev/null 2>&1 && [ -d "$plugin_dir/web-admin" ]; then
+            # plugin declares no admin_ingress.
+            #
+            # Declaring admin_ingress WITHOUT a web-admin/ is a misconfiguration,
+            # not a variant to tolerate. This condition used to be a single
+            # `&&`, so that combination skipped the build silently and the
+            # deploy reported success -- the plugin then 404'd on GET /admin/,
+            # and a CDN rule rewrote that 404 into the marketing portal's HTML,
+            # so the visible symptom was an admin URL apparently serving an
+            # unauthenticated page (biffo-plugin-idea-scout#22; #647 for the
+            # rewrite). Nothing anywhere reported that the UI had not been built.
+            #
+            # Same fail-open shape as the audit gates in #591/#644: the step
+            # could not do its job and passed anyway.
+            if jq -e '.admin_ingress' "$manifest" >/dev/null 2>&1; then
+              if [ ! -d "$plugin_dir/web-admin" ]; then
+                echo "::error file=$manifest::Plugin '$name' declares admin_ingress but has no web-admin/ directory. The admin UI cannot be built, so GET /admin/ would 404 at runtime. Either add web-admin/ or remove admin_ingress from the manifest."
+                exit 1
+              fi
               (
                 cd "$plugin_dir/web-admin"
                 pnpm install --ignore-workspace --frozen-lockfile
@@ -1215,8 +1231,24 @@ jobs:
             # by this same Lambda, read from services/<name>/web-admin/dist via
             # BIFFO_PLUGINS_ROOT -- build it here (same pnpm shape as the
             # plugin-frontend step below) and copy the output in. Skipped if the
-            # plugin declares no admin_ingress or has no web-admin/ directory.
-            if jq -e '.admin_ingress' "$manifest" >/dev/null 2>&1 && [ -d "$plugin_dir/web-admin" ]; then
+            # plugin declares no admin_ingress.
+            #
+            # Declaring admin_ingress WITHOUT a web-admin/ is a misconfiguration,
+            # not a variant to tolerate. This condition used to be a single
+            # `&&`, so that combination skipped the build silently and the
+            # deploy reported success -- the plugin then 404'd on GET /admin/,
+            # and a CDN rule rewrote that 404 into the marketing portal's HTML,
+            # so the visible symptom was an admin URL apparently serving an
+            # unauthenticated page (biffo-plugin-idea-scout#22; #647 for the
+            # rewrite). Nothing anywhere reported that the UI had not been built.
+            #
+            # Same fail-open shape as the audit gates in #591/#644: the step
+            # could not do its job and passed anyway.
+            if jq -e '.admin_ingress' "$manifest" >/dev/null 2>&1; then
+              if [ ! -d "$plugin_dir/web-admin" ]; then
+                echo "::error file=$manifest::Plugin '$name' declares admin_ingress but has no web-admin/ directory. The admin UI cannot be built, so GET /admin/ would 404 at runtime. Either add web-admin/ or remove admin_ingress from the manifest."
+                exit 1
+              fi
               (
                 cd "$plugin_dir/web-admin"
                 pnpm install --ignore-workspace --frozen-lockfile
@@ -1844,8 +1876,24 @@ jobs:
             # by this same Lambda, read from services/<name>/web-admin/dist via
             # BIFFO_PLUGINS_ROOT -- build it here (same pnpm shape as the
             # plugin-frontend step below) and copy the output in. Skipped if the
-            # plugin declares no admin_ingress or has no web-admin/ directory.
-            if jq -e '.admin_ingress' "$manifest" >/dev/null 2>&1 && [ -d "$plugin_dir/web-admin" ]; then
+            # plugin declares no admin_ingress.
+            #
+            # Declaring admin_ingress WITHOUT a web-admin/ is a misconfiguration,
+            # not a variant to tolerate. This condition used to be a single
+            # `&&`, so that combination skipped the build silently and the
+            # deploy reported success -- the plugin then 404'd on GET /admin/,
+            # and a CDN rule rewrote that 404 into the marketing portal's HTML,
+            # so the visible symptom was an admin URL apparently serving an
+            # unauthenticated page (biffo-plugin-idea-scout#22; #647 for the
+            # rewrite). Nothing anywhere reported that the UI had not been built.
+            #
+            # Same fail-open shape as the audit gates in #591/#644: the step
+            # could not do its job and passed anyway.
+            if jq -e '.admin_ingress' "$manifest" >/dev/null 2>&1; then
+              if [ ! -d "$plugin_dir/web-admin" ]; then
+                echo "::error file=$manifest::Plugin '$name' declares admin_ingress but has no web-admin/ directory. The admin UI cannot be built, so GET /admin/ would 404 at runtime. Either add web-admin/ or remove admin_ingress from the manifest."
+                exit 1
+              fi
               (
                 cd "$plugin_dir/web-admin"
                 pnpm install --ignore-workspace --frozen-lockfile

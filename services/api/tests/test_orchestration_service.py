@@ -13,6 +13,7 @@ from api.models.orchestration import (  # noqa: F401 — registers tables on Bas
     WorkflowDefinition,
     WorkflowRun,
 )
+from api.run_observers import RunOutcome
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -229,6 +230,102 @@ async def test_record_result_updates_run_and_writes_log(db_session):
     assert log.response == {"message_id": "ses-123"}
 
 
+async def test_record_result_notifies_observers_with_the_triggering_payload(db_session):
+    """The seam an instance builds its domain record on (run_observers.py).
+
+    Asserted from the real service call rather than the registry in isolation,
+    because the thing being promised is that ``trigger_event`` is still in hand
+    at outcome time — that is what lets an observer say which record the send
+    concerned.
+    """
+    from api.run_observers import (
+        clear_run_outcome_observers,
+        register_run_outcome_observer,
+    )
+
+    seen: list[dict] = []
+    clear_run_outcome_observers()
+    register_run_outcome_observer(
+        lambda ctx, db: seen.append(
+            {
+                "lead_id": ctx.trigger_payload.get("lead_id"),
+                "action_type": ctx.action_type,
+                "succeeded": ctx.succeeded,
+                "same_session": db is db_session,
+            }
+        )
+    )
+    try:
+        await _make_definition(db_session)
+        [claimed] = await svc.dispatch_event(
+            db_session,
+            tenant_id="default",
+            source="biffo.core",
+            detail_type="demo.requested",
+            idempotency_key="demo-observed",
+            event={"payload": {"lead_id": "lead-42"}},
+        )
+
+        await svc.record_result(
+            db_session,
+            tenant_id="default",
+            run_id=claimed.run_id,
+            action_type="email",
+            status="succeeded",
+            response={"message_id": "ses-9"},
+        )
+    finally:
+        clear_run_outcome_observers()
+
+    assert seen == [
+        {
+            "lead_id": "lead-42",
+            "action_type": "email",
+            "succeeded": True,
+            "same_session": True,
+        }
+    ]
+
+
+async def test_record_result_survives_a_broken_observer(db_session):
+    """A bookkeeping fault must not turn a delivered message into a 500."""
+    from api.run_observers import (
+        clear_run_outcome_observers,
+        register_run_outcome_observer,
+    )
+
+    clear_run_outcome_observers()
+
+    @register_run_outcome_observer
+    def _boom(ctx, db):
+        raise RuntimeError("observer is broken")
+
+    try:
+        await _make_definition(db_session)
+        [claimed] = await svc.dispatch_event(
+            db_session,
+            tenant_id="default",
+            source="biffo.core",
+            detail_type="demo.requested",
+            idempotency_key="demo-broken-observer",
+            event={},
+        )
+
+        run = await svc.record_result(
+            db_session,
+            tenant_id="default",
+            run_id=claimed.run_id,
+            action_type="email",
+            status="succeeded",
+        )
+    finally:
+        clear_run_outcome_observers()
+
+    assert run is not None
+    assert run.status == "succeeded"
+    assert await _count(db_session, ActionLog) == 1
+
+
 async def test_record_result_unknown_run_returns_none(db_session):
     run = await svc.record_result(
         db_session,
@@ -241,3 +338,40 @@ async def test_record_result_unknown_run_returns_none(db_session):
 
     assert run is None
     assert await _count(db_session, ActionLog) == 0
+
+
+async def test_run_outcome_reads_the_payload_the_producer_actually_stored(db_session):
+    """The contract between dispatch_event and the observer seam, in one test.
+
+    This exists because both sides were unit-tested in isolation and still
+    disagreed: ``RunOutcome.trigger_payload`` unwrapped a ``payload`` key that
+    ``dispatch_event`` never writes, so it returned ``{}`` for every real run
+    while ten tests on either side passed (tabsii-platform#301). Neither suite
+    could catch it, because each built its own fixture from the same assumption.
+
+    So this one does not construct a ``trigger_event`` at all — it dispatches an
+    event, reads the run back out of the database, and hands the stored value to
+    the consumer. If the two ever drift again, this fails.
+    """
+    await _make_definition(db_session)
+    await svc.dispatch_event(
+        db_session,
+        tenant_id="default",
+        source="biffo.core",
+        detail_type="demo.requested",
+        idempotency_key="demo-1",
+        event={"lead_id": "lead-1", "email": "a@example.com"},
+    )
+
+    stored = (await db_session.execute(select(WorkflowRun))).scalars().one()
+    outcome = RunOutcome(
+        run=stored,
+        action_type="email",
+        status="succeeded",
+        trigger_event=stored.trigger_event,
+        request=None,
+        response=None,
+        error=None,
+    )
+
+    assert outcome.trigger_payload == {"lead_id": "lead-1", "email": "a@example.com"}

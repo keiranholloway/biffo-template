@@ -81,3 +81,28 @@ class PluginChatAgentHistoryResponse(BiffoBaseSchema):
     timeout_seconds: float
     changed_by: str
     created_at: datetime
+
+
+class SeedPluginChatAgentRequest(BaseModel):
+    """A single role definition for seeding.
+
+    Reuses the fields from CreatePluginChatAgentRequest.
+    """
+
+    agent_key: str = Field(pattern=r"^[a-z][a-z0-9-]*$")
+    agent_name: str = Field(min_length=1, max_length=200)
+    role: str = Field(min_length=1, max_length=50)
+    system_prompt: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    required_group: str = Field(min_length=1)
+    active: bool = Field(default=True)
+    max_history_messages: int = Field(default=40, gt=0)
+    max_output_tokens: int = Field(default=1024, gt=0)
+    timeout_seconds: float = Field(default=20.0, gt=0)
+
+
+class SeedPluginChatAgentResponse(BaseModel):
+    """Result of seeding one role — indicates whether it was created or already existed."""
+
+    role: str
+    created: bool

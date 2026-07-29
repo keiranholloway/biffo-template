@@ -1909,9 +1909,12 @@ describe('estate headline is capability, not the proving ground (#768)', () => {
 // @ts-expect-error -- plain .mjs, same arrangement as above.
 import {
   tallyMarkdown,
+  classMarkdown,
   spliceTally,
   TALLY_BEGIN,
   TALLY_END,
+  CLASS_BEGIN,
+  CLASS_END,
   REPO_NOTES,
 } from '../../../scripts/practices-evidence.mjs'
 import { readFileSync } from 'node:fs'
@@ -1988,5 +1991,66 @@ describe('fix-repo tally is generated, not transcribed', () => {
     const out = spliceTally(page, `${TALLY_BEGIN}\nnew\n${TALLY_END}`)
     expect(out).toBe(`before\n${TALLY_BEGIN}\nnew\n${TALLY_END}\nafter`)
     expect(out).not.toContain('old')
+  })
+})
+
+describe('class tally is generated, not transcribed', () => {
+  const rows = readRepo('docs/practices/evidence.jsonl')
+    .split('\n')
+    .filter((l) => l.trim())
+    .map((l) => JSON.parse(l))
+
+  it('matches what is committed in the page', () => {
+    const page = readRepo('docs/guides/development-practices.md')
+    const start = page.indexOf(CLASS_BEGIN)
+    const end = page.indexOf(CLASS_END)
+    expect(start, `${CLASS_BEGIN} missing from the page`).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    expect(
+      page.slice(start, end + CLASS_END.length),
+      'The class tally is stale. Run `node scripts/practices-evidence.mjs --write`.',
+    ).toBe(classMarkdown(rows))
+  })
+
+  it('appears exactly once', () => {
+    const page = readRepo('docs/guides/development-practices.md')
+    expect(page.split(CLASS_BEGIN).length - 1).toBe(1)
+  })
+
+  it('is ordered by count, because the ranking is the finding', () => {
+    // The committed table ranked boundary above process; the data has it the
+    // other way. A tally fixed to the CLASSES order would have hidden that.
+    const counts = [...classMarkdown(rows).matchAll(/^\| \*?\*?([a-z-]+)\*?\*? \| (\d+) \|/gm)].map(
+      (m) => Number(m[2]),
+    )
+    expect(counts.length).toBe(5)
+    expect([...counts].sort((a, b) => b - a)).toEqual(counts)
+  })
+
+  it('counts every classified row exactly once', () => {
+    // Guards against a class silently vanishing from CLASSES: the block's own
+    // total must equal the number of rows carrying a known class.
+    const known = rows.filter((r) =>
+      ['fail-open', 'boundary', 'drift', 'visibility', 'process'].includes(r.class),
+    )
+    const block = classMarkdown(rows)
+    const total = Number(/\*\*(\d+)\*\* classified rows/.exec(block)![1])
+    expect(total).toBe(known.length)
+  })
+
+  it('--write splices both blocks, never one', () => {
+    // Splicing them in separate runs is how a page gets one current table and
+    // one stale one -- which is the failure being fixed, one table over.
+    const page = readRepo('docs/guides/development-practices.md')
+    expect(page).toContain(TALLY_BEGIN)
+    expect(page).toContain(CLASS_BEGIN)
+    expect(page.slice(page.indexOf(TALLY_BEGIN))).toContain(tallyMarkdown(rows))
+    expect(page.slice(page.indexOf(CLASS_BEGIN))).toContain(classMarkdown(rows))
+  })
+
+  it('refuses to append when its own markers are missing', () => {
+    expect(() => spliceTally('# no markers\n', 'b', CLASS_BEGIN, CLASS_END)).toThrow(
+      /markers not found/,
+    )
   })
 })

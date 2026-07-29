@@ -222,35 +222,51 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **CSS class names are strings, so a panel written against classes that do not exist passes every gate and renders as bare HTML.** `AnalyticsPanel.tsx` used `.card`, `.data-table`, `.filter-bar`, `.error-text`, `.stat-row` — none of which exist in `tabsii-crm`, whose convention is a prefixed block per feature in `globals.css` (`.ov-*`, `.access-*`, `.discovery-*`) — and shipped with **no CSS of its own**. eslint, `tsc`, 164 unit tests, Playwright and a production build were all green, because nothing that runs locally resolves a class name against a stylesheet. The visible result was an unstyled page whose speed stat read `Median time to first contact0m5 of 17 leads contacted`. Same family as the Vite `base` row above — a string that only means something in a browser | **visibility** | tabsii-crm (deployed page) | tabsii-crm [#125](https://github.com/tabsii-com/tabsii-crm/pull/125) | **fixed** — `.analytics-*` block on the existing precedent. **The general case is open**: nothing warns that a className matches no rule in the bundle |
 | — | **A repo hardened a gate for itself and went on shipping the unhardened version into every repo it generates, for as long as the hardening existed.** Both `_skeletons/*/.github/workflows/ci.yml` ran `pnpm audit --audit-level=high` and `uv run pip-audit` inline — the exact commands [#591](https://github.com/keiranholloway/biffo-template/issues/591) was filed about — while this repo's own CI had called the hardened wrappers since #592, and #636/#717/#721 kept improving them. Six siblings and two plugin repos were born reddening a required check on any npm/PyPI blip. **The distribution channel is the actual finding.** #743 proposed moving the audits into `biffo check` on the grounds that copying them into every satellite "drifts with nothing to detect it" — correct when it was written, and no longer true: `shared-files.json` + `scripts/shared-sync.sh` landed the same week, so a verbatim copy *plus* a drift check is now the cheaper answer and needs no npm round-trip in CI. The issue also says neither skeleton has a `scripts/` directory; both had one by the time it was read. **A design argument decays as fast as the constraint it rests on** — re-derive the option table before implementing an issue's recommendation | **drift** | biffo-template `_skeletons/` | biffo-template `_skeletons/`, `scripts/`, `shared-files.json` | **fixed** ([#743](https://github.com/keiranholloway/biffo-template/issues/743)) — plus a `hardened-dependency-audit` skeleton rule and a shared-files↔skeleton parity test, both watched failing first. cost ~1h 20m |
 | — | **Both dependency-audit scripts reported INCONCLUSIVE — and misdiagnosed a healthy registry — on every invocation when `jq` was absent, while exiting 0.** Found by stubbing `pnpm` to return a real, parseable, *clean* audit payload on a PATH without `jq`: the gate printed `the registry returned a non-JSON/error response` three times and passed. `jq` is the parser the entire finding-vs-hiccup distinction rests on, so without it the retry-and-warn path — written to stop the gate failing open — *is* the fail-open, and it names the wrong culprit while doing it. Exactly the shape of the dash-`echo` defect #717 fixed in the same file, one dependency further out. A missing `jq` is deterministic, not transient, so it now exits 1 loudly | **fail-open** | biffo-template `scripts/{js,py}-dependency-audit.sh` | same, and every satellite via `shared-files.json` | **fixed** ([#743](https://github.com/keiranholloway/biffo-template/issues/743)) — `command -v jq` guard, before any audit runs |
+| [#883](https://github.com/keiranholloway/biffo-template/issues/883) | **A file was added to the shared set, both skeletons were fixed, and `shared-sync.sh` was never run** — so 12 of 13 satellites went without the hardened dependency audits it was added for. The skeleton only reaches repos created *afterwards*, which is precisely the "vendor it and hope" failure `shared-sync.sh` exists to end; the distribution defect recurred **through its own fix**. AGENTS.md §9 states in bold that adding a file to the shared set is not done until `--check` is clean. Found by running the estate audits, not by review | **drift** · process | biffo-template `shared-files.json` | 12 satellite repos | **fixed** (11 merged, 1 blocked on an unrelated red `dev`) |
+| [#714](https://github.com/keiranholloway/biffo-template/issues/714) | **The `--auto` fix was applied by hand to five repos and nothing re-asked, so the next nine were born `false`.** #714 recorded the condition and fixed the five repos that existed; measured 2026-07-29 across 13 satellites, **9 had `allow_auto_merge=false`** — the documented default in `biffo-workflow` step 7 was unavailable in two thirds of the estate, and its assertion that "all five active Biffo repos" have it was true when written and never re-checked. Same shape as [#715](https://github.com/keiranholloway/biffo-template/issues/715): branch protection has an audit that re-asks; this setting has none | **drift** · fail-open | estate-wide sync rollout | 9 repo settings | **partly fixed** — settings corrected, but nothing re-checks them (no audit) |
+| [#902](https://github.com/keiranholloway/biffo-template/pull/902) | **Arming the git hooks silently broke the cron job that measures whether hooks are armed.** Moving off husky's `core.hooksPath` into the shared `.git/hooks` means every *linked worktree* inherits them — including `practices-daily`'s, which is created by cron and never given `pnpm install`. The gate failed six checks against a missing `node_modules`, git rejected the push, and under `set -e` the job died at its last step: every audit ran, the dashboard rendered, and the snapshot reached nothing. It would have reported nothing each morning until a human noticed the series had stopped | **visibility** · drift | biffo-template `scripts/practices-daily.sh` | biffo-template `scripts/practices-daily.sh` | **fixed** ([#902](https://github.com/keiranholloway/biffo-template/pull/902)) |
 
 ### What the classes say
 
-> Counted from `docs/practices/evidence.jsonl`, not asserted. Regenerate with
-> `node scripts/practices-evidence.mjs --report`. **116 rows** — the extractor's
-> count still **equals the table's count**, now across a merge that had to be
-> reconciled by hand. See below.
+> Generated from `docs/practices/evidence.jsonl` by
+> `node scripts/practices-evidence.mjs --write`, and asserted against it by test.
+> Do not edit inside the markers.
+>
+> **This table was stale by a factor of 2.2 until 2026-07-29**, and it had
+> inverted a conclusion: it read 116 rows against a dataset of 258, and ranked
+> `boundary` above `process` where the data has process well ahead. The column's
+> whole purpose is that a recurring shape is a design problem — so a wrong
+> *ranking* is the one error that matters here, and it is the error a
+> hand-maintained count produces.
 
-| Primary class | Rows |
-| --- | --- |
-| **visibility** | 35 |
-| drift | 25 |
-| fail-open | 23 |
-| boundary | 18 |
-| process | 15 |
+<!-- BEGIN generated: class-tally -->
 
-**The extractor and the table now reconcile, and the cause was findable all
+_Generated by `node scripts/practices-evidence.mjs --write`. **258** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
+
+| Primary class | Rows | Share |
+| --- | --- | --- |
+| **visibility** | 76 | 29% |
+| drift | 60 | 23% |
+| fail-open | 59 | 23% |
+| process | 39 | 15% |
+| boundary | 24 | 9% |
+
+<!-- END generated: class-tally -->
+
+**The extractor once dropped rows in silence, and the cause was findable all
 along.** This page twice recorded that `--extract` "silently drops a row it
-cannot parse" (53 vs 54) and asked someone to reconcile the two before pasting
-any generated figure. Exactly one row triggered it: the `js-dependency-audit.sh`
-row quotes a shell pipeline as `echo "$out" \| jq`, and the parser split on
-**every** `|` including the markdown-escaped one — producing 7 columns, landing
-`class` on the tail of the condition, failing the class parse, and `continue`-ing
-without a word. Splitting on unescaped pipes only fixes it: **65 rows extracted,
-65 rows in the table.** Every figure below is now pasted from `--report`.
+cannot parse" and asked someone to reconcile the counts before pasting any
+generated figure. Exactly one row triggered it: the `js-dependency-audit.sh` row
+quotes a shell pipeline as `echo "$out" \| jq`, and the parser split on **every**
+`|` including the markdown-escaped one — producing 7 columns, landing `class` on
+the tail of the condition, failing the class parse, and `continue`-ing without a
+word. Splitting on unescaped pipes only fixes it. The residual gap stands: it
+would still be silent about any *other* reason it dropped a row.
 
 **This page previously said "fail-open is the dominant shape — three of the five
 filed issues".** That was true of a five-row sample and was never revised as the
-sample grew thirteenfold. Counted across all 65 rows, fail-open is *fourth*. The
+sample grew. Counted across the whole corpus, fail-open is *third*, behind
+visibility and drift. The
 error is instructive and is the reason the rows are now a dataset: **a narrative
 appended to by hand drifts from the evidence above it, silently, and reads
 exactly as confidently while doing so.**
@@ -267,8 +283,8 @@ what it does when it cannot run, and make "inconclusive" a distinct, visible
 outcome from "passed".** A gate that cannot report its own inconclusiveness is
 just one more thing that cannot say what it did.
 
-**What the dataset cannot yet tell us.** Of 57 rows, **1** carries a cost figure
-and **33** carry a date — all of them in a single month, 2026-07. So rows can be
+**What the dataset cannot yet tell us.** Cost figures remain sparse and dates
+cluster in a single month, 2026-07. So rows can be
 ranked by *frequency* but not yet by *cost*, and there is no longitudinal trend
 to read. Recording wall-clock on every new row is what unlocks the ranking this
 page exists to support (§ Adding a row).

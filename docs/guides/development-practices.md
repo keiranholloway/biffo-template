@@ -203,6 +203,8 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **A plugin repo ships a deploy workflow that cannot run, and the instance has a different mechanism that supersedes it.** A sub-agent correctly concluded the ideation frontend needed `deploy-frontend.yml` with `frontend_bucket_name` and a distribution id — reading the **plugin repo's** workflow. That workflow's `workflow_dispatch` path falls back to `secrets.PLUGIN_OIDC_ROLE_ARN`, **which does not exist in that repo**, so a dispatch dies at the credentials step. The instance's `deploy-app.yml` already builds `services/<name>/web/` and syncs it to `<prefix>-plugin-<name>-web`. Two mechanisms for one job, one of them dead, and nothing marks which is live | **boundary** · drift | biffo-plugin-ideation `deploy-frontend.yml` | undecided — delete the dead one, or wire its secret | **unfiled** — the deploy went via the instance; the duplicate remains |
 | — | **A test fake conflated two states, and the conflation only surfaced when production learned to tell them apart.** `FakeAgentRun.fail()` left `started_at` unset, so a run that was claimed-and-errored was indistinguishable from one nothing ever picked up. That was invisible while the service treated both as "failed" — and became a failing test the moment it stopped. The related shape: `AgentRunView` carried neither `error` nor `started_at`, so the plugin was **structurally incapable** of telling a founder the truth, and the misleading copy was a consequence of the model, not of the wording | **drift** | biffo-plugin-idea-scout tests | biffo-plugin-idea-scout [#41](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/41) | **fixed** — the fake models both shapes; the existing test that broke was right to break |
 | — | **The same defect twice in one feature — an assumed payload shape — cost hours in one place and one log line in the other, and the only difference was whether the no-op branch said anything.** Both read a field that was not there and both then *chose not to act*. The run-outcome observer's miss ended in a bare `return`: no row, no error, no log, for its entire existence — found only by opening a deployed page, noticing an empty timeline, bisecting with an adjacent write path, and reading a real stored event off the API (tabsii-platform#301). The SES consumer's miss ended in `logger.info("Ignoring SES notification of type %s", kind)` — so its **first ever invocation** printed `type None` and named its own defect (tabsii-platform#305). Same class, same author, same week; discovery cost differing by orders of magnitude. **A silent early-return at an integration boundary is an unobservable failure mode**, and it is precisely the branch that fires when a shape assumption is wrong — so "I decided not to act" must say what it decided and on what. `type None` was still not enough to act on either: the fix logs the notification's **keys**, because naming the absent field tells you nothing about what actually arrived | **visibility** | tabsii-platform | practice — every no-op branch at a boundary logs its input's shape, not just its verdict | **fixed** — both paths now log; rule stated |
+| — | **A hand-written test double returned the shape the code *emits* instead of the shape it *receives*, so 17 tests pinned a contract that did not exist.** `FakeCore.get` returned `{"items": [...]}` for `/api/v1/data/lead_source_costs`; the core's generic-CRUD list returns a **bare array**. The proxy route was declared `-> dict`, so FastAPI's *response* validation rejected the real payload and every load of the Analytics panel 500'd — while the Python suite, the JS suite, Playwright E2E and CI in two repos were all green. `CoreApiClient.get` is annotated `-> dict` but returns whatever `.json()` produced, so the annotation actively pointed the wrong way, and `rollups.py` **three files away** already had the correct `cast(list[dict], …)` + wrap. The panel's six calls run under `Promise.all`, so one rejection blanked all five other reports and the banner named none of them. Condition: **a double whose shape is written from the author's expectation rather than from the real service teaches the test the author's error** — the fixture encoded the exact assumption it existed to check | **fail-open** · drift | tabsii-crm (deployed page, first click-through) | tabsii-crm [#124](https://github.com/tabsii-com/tabsii-crm/pull/124) | **fixed** — the fake now returns a bare array and is typed `dict \| list`; three tests fail against the old route |
+| — | **CSS class names are strings, so a panel written against classes that do not exist passes every gate and renders as bare HTML.** `AnalyticsPanel.tsx` used `.card`, `.data-table`, `.filter-bar`, `.error-text`, `.stat-row` — none of which exist in `tabsii-crm`, whose convention is a prefixed block per feature in `globals.css` (`.ov-*`, `.access-*`, `.discovery-*`) — and shipped with **no CSS of its own**. eslint, `tsc`, 164 unit tests, Playwright and a production build were all green, because nothing that runs locally resolves a class name against a stylesheet. The visible result was an unstyled page whose speed stat read `Median time to first contact0m5 of 17 leads contacted`. Same family as the Vite `base` row above — a string that only means something in a browser | **visibility** | tabsii-crm (deployed page) | tabsii-crm [#125](https://github.com/tabsii-com/tabsii-crm/pull/125) | **fixed** — `.analytics-*` block on the existing precedent. **The general case is open**: nothing warns that a className matches no rule in the bundle |
 
 ### What the classes say
 
@@ -291,19 +293,19 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **187 rows as rendered on this page**. `evidence.jsonl` separately holds **203**, because a reworded row is stored as a new one and its predecessor is retained — see the duplication row. The split below is counted from the page, since that is the corpus a reader can actually see:
+`byFixRepo`, regenerated at **189 rows as rendered on this page**. `evidence.jsonl` separately holds **207**, because a reworded row is stored as a new one and its predecessor is retained — see the duplication row. The split below is counted from the page, since that is the corpus a reader can actually see:
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 96 of 187 (51%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the git-hook chain, the scaffolder itself |
-| **tabsii-platform** | 17 of 187 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity **and its event-destination envelope** |
-| **biffo-plugin-idea-scout** | 8 of 187 | Adapter seam, research search capability, its own styling, release + publish workflows |
-| **biffo-platform** | 5 of 187 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 187 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-plugin-ideation** | 12 of 187 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **tabsii-crm** | 3 of 187 | Its E2E harness, a repo setting that diverged, **and a timeline rendering a failed fetch as "nothing sent"** |
-| **tabsii-marketplace** | 1 of 187 | `python-jose` removal; the credential-dependent build |
-| **biffo-runners** | 1 of 187 | Runner fleet configuration |
+| **biffo-template** | 96 of 189 (51%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the git-hook chain, the scaffolder itself |
+| **tabsii-platform** | 17 of 189 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity **and its event-destination envelope** |
+| **biffo-plugin-idea-scout** | 8 of 189 | Adapter seam, research search capability, its own styling, release + publish workflows |
+| **biffo-platform** | 5 of 189 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 189 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-ideation** | 12 of 189 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **tabsii-crm** | 5 of 189 | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", **a proxy returning the wrong response shape, and a panel shipped with no CSS** |
+| **tabsii-marketplace** | 1 of 189 | `python-jose` removal; the credential-dependent build |
+| **biffo-runners** | 1 of 189 | Runner fleet configuration |
 
 **The shape did not change, and that is the finding.** Seven new rows moved
 `biffo-template` from 86/159 to 90/166 — **54% either way**. Four sessions of
@@ -316,7 +318,7 @@ weeks, and it is a *recurrence* of a pattern already logged against
 first instance was recorded `unfiled` and never generalised. Two repos, same
 defect, and the corpus predicted it without anyone reading the prediction.
 
-**`biffo-template` takes 96 of 187 — 51%, and this capture is not evidence
+**`biffo-template` takes 96 of 189 — 51%, and this capture is not evidence
 about the estate.** All ten new rows are findings about the measurement
 apparatus itself, filed by auditing the dataset rather than by doing product
 work, so they inflate the template's share by construction. Read the ratio from
@@ -878,6 +880,40 @@ line item. The ranking that came out of the measurement:
 is queue" and "the fleet is saturated" sound like the same statement and are not.
 Time-at-concurrency distinguished them in one query, and it inverted the fix.
 
+### Measured: four green PRs shipped a dead feature, 2026-07-29
+
+`0006-pipeline-analytics`, M1→M4, four PRs across two repos. Every one merged
+with **full green CI in both repos** — including a Playwright E2E lane — and the
+deployed feature **did not work at all**. The first click-through found a 500 on
+every page load; the second found the panel rendering as unstyled HTML.
+
+| | |
+| --- | --- |
+| Build → all four milestones merged | ~4h |
+| Click-through and the two fixes it forced | ~50m |
+| Defects found by tests + CI (2 repos, 5 lanes) | **0** |
+| Defects found by opening the page | **2, both blocking** |
+
+**Both defects share a shape worth naming: they are invisible to any check that
+does not render.** A response-shape mismatch lives between two services that
+tests replace with a double; a class name lives between a component and a
+stylesheet nothing local resolves. Neither is exotic, and no amount of additional
+unit testing would have caught either — the styling fix's own tests were green
+*before* the fix, because they assert numbers and wording, not paint.
+
+**What it says about where to invest.** The estate treats E2E as the expensive
+tier and unit tests as the cheap one. On this evidence the ranking for a
+*user-facing* change is inverted: one authenticated page load per feature, after
+deploy, would have caught both in under two minutes. The skill already says this
+(`biffo-sib-build` step 2.6, "confirm the deployed behavior directly"); it was
+not followed per-milestone, and the two defects survived three further merges.
+
+**Not measured, and it matters:** no attempt was made to catch these earlier
+cheaply. A test asserting the *real* core response shape (a recorded fixture
+rather than a hand-written fake) and a lint rule for unresolvable class names
+would both be cheap; neither was tried, so "only a click-through could have found
+these" is asserted, not demonstrated.
+
 ### The self-estimate was 45% low, and the cause was the unit
 
 The session was logged at **180 minutes**. The operator corrected it to 5–6
@@ -914,6 +950,37 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**Proving a guard is load-bearing by removing it, three times, before believing
+any of them.** `0006`'s three subtlest decisions were each verified by breaking
+them rather than by reasoning about them. Rebuilt as `SECURITY INVOKER`, the
+history trigger failed with `new row violates row-level security policy` — which
+means every stage move on dev would have broken, not merely that a test was
+weaker. With the trigger's value comparison stripped, a non-move wrote a spurious
+row (`assert 2 == 1`). With the cost index's `coalesce` removed, two
+contradictory January figures inserted cleanly (`DID NOT RAISE`). Each is a
+defect that would otherwise have shipped silently.
+
+**A test that passed against a deliberately broken query, caught by mutating the
+implementation rather than re-reading the test.** `test_time_in_stage_excludes_synthesised_rows`
+was green both with and without the exclusion it was named after. The fixture
+gave the backfilled lead a synthesised row and *nothing after it*, so it produced
+no span either way and the test could never have failed. The fix was a fixture
+change — a backfilled lead that later *moves* — and the strengthened version
+asserts the **aggregate** as well as the count, because counting alone still
+passes if the span is counted but excluded from the average. It was written
+deliberately as an exclusion test, by an author who knew the contract, and it
+read correctly.
+
+**Checking whether a suspicious local failure was real before acting on it.**
+Deleting merged branches was blocked by the pre-push gate reporting eight `tsc`
+errors — `Cannot find module 'recharts'`, plus `UnitMap` prop mismatches in two
+files I had never touched. The tempting readings were "my change broke something"
+and "the gate is noise, skip it". `pnpm install` in the primary checkout made all
+eight vanish: every one was stale-dependency noise from a checkout not synced
+since the dependency was added. The gate was right to block, and one command
+distinguished a regression from an artefact.
+
 
 **Mutation testing to decide whether a test is real.** A generated test looked
 plausible and passed. Changing the component to always render the element it
@@ -1808,6 +1875,28 @@ deployed code was already correct. `git rev-list --count HEAD..origin/dev` befor
 trusting a tree is in AGENTS.md §1 precisely for this, and it is cheap.
 
 ## What needs more thought
+
+**Nothing makes a test double agree with the service it stands for.** The
+`FakeCore` row is not a mistake review would catch: the fake was consistent,
+readable and wrong, and the route it tested was written from the same wrong
+belief — so the two agreed and the suite was green. Every hand-written double in
+this estate has that exposure and the number of them is growing. The obvious
+answers each cost something real (recorded fixtures go stale; contract tests need
+a running service; generating doubles from OpenAPI needs the schema to be
+accurate, which is the same assumption one level up). What is clear is that
+**"the fake matches what the service actually returns" is not a property anything
+currently tests**, and the failure mode is silent green.
+
+**`--delete-branch` is optional on a command that is otherwise complete, and the
+omission has no symptom.** `gh pr merge --squash` succeeds and leaves the branch;
+AGENTS.md §5 gives the flag and nothing enforces it. `tabsii-platform` has
+repo-level auto-delete so it self-corrects; `tabsii-crm` does not, and had
+accumulated **21 fully-merged branches** from earlier sessions plus 3 from this
+one. Nobody noticed because a stale branch is pure entropy until a `git branch -a`
+gets confusing. The per-repo setting is the real fix and it is unset on at least
+one repo — a `biffo check` for "auto-delete-on-merge is enabled" would find the
+rest.
+
 
 **Nothing distinguishes a capability that is unavailable from one that is merely
 unloaded.** Reasoning about whether a check was possible, I enumerated what I
@@ -2715,6 +2804,11 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 
 | `biffo-verify` | **partial** | §1–§7 worked well mid-task; **§8 did not, and the skill's shape is why.** Its "When to use" framing is debugging-shaped ("is this actually fixed?", "why is this failing?"), so it reads as something you invoke *once, about an incident* — and §8 then runs as a closing sweep over whatever is still in working memory. Five rows were captured that way and three were missed, all from earlier in the session; the operator had to ask before they were found. §8 already contains the fix in its own words for the effort log ("run it when you finish the task", "one entry per unit of work") but states it only there. **The step should say plainly: write the scoreboard row when the failure happens, not at the end** — and the trigger list should include "a failure just cost you 30 minutes", which is a mid-task event, not a session-end one. |
+| `biffo-sib-build` | **partial — step 2.6 is the one that mattered and the one I skipped** | Steps 1–5 worked cleanly for four milestones across two repos. Step 2.6 says *"a green CI run is not sufficient evidence a deployed feature actually works… confirm the deployed behavior directly"*. I verified the deploy **succeeded** (workflow conclusion, plus the `ddl-import` payload showing modules 048/049 in `applied` with `ok: true`) and read that as satisfying the step. It does not: the artefact deployed and the feature was dead. Two blocking defects then survived three further merges. The wording is correct; what it lacks is a concrete bar — *"load the page as a user"* rather than *"confirm the deployed behavior"*, which a diligent reader can satisfy with logs. |
+| `biffo-sib-build` | **partial — no notion of a plan that has gone stale** | The plan's decision 3 shipped speed-to-lead as a proxy "because `lead_activities` was never built". It had been built the day before by `0007` — which step 0 (read the plan) cannot notice, and step 2 explicitly says not to re-litigate approved scope. Surfacing it to the operator was right and the skill did not prompt it. Worth a line: *check the plan's stated preconditions still hold* — plans age fastest exactly where they say "X does not exist yet". |
+| `claude-in-chrome` | **worked — it was the entire verification** | Four PRs, green CI in two repos including Playwright, and the deployed feature 100% broken. One page load found a 500; a second found an unstyled panel. It also produced *positive* evidence no test could: moving one lead made the funnel read `Qualified 1` while time-in-stage held `New 0` — the synthesised-vs-observed asymmetry demonstrated on live data. Caveat on my own use: I read the funnel from a **zoomed screenshot** and inferred `Discovery Day = 6` as "5 pre-existing + mine" from the board's counts rather than querying, so that decomposition is inference, not measurement. |
+| `biffo-verify` | **worked — §4, and it killed a wrong theory in one query** | The panel's `Internal Server Error` had an obvious and wrong explanation (bad deploy / stale bundle). §4 said read the deployed artefact: CloudWatch returned the exact `ResponseValidationError` with `'input': []`, the file and the line. §5 applies too — the browser showed a generic banner because six calls run under `Promise.all` and the rejected one is not named. Neither would have come from reading the source. |
+| `biffo-verify` | **partial — §8 applied as a closing sweep again, and again only by prompt** | The section says record the row when the failure happens; both defects were found, fixed, merged and deployed before anything was written here, and the write-up happened because the operator asked. That is the **third consecutive session** logging that §8 fired late, and the previous two recorded the same cause. A section that keeps diagnosing its own non-use and does not change is evidence the *trigger* is wrong: §8 needs to fire on "a defect was found", not on "the session is ending". |
 
 ## Adding a row
 

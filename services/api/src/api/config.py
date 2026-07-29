@@ -102,6 +102,13 @@ class Settings(BaseSettings):
     # permits two further generations of agent-triggered-by-agent.
     agent_max_run_depth: int = 2
 
+    # Agentic workers — default model for agent runs (ADR-0017, biffo-template#910).
+    # When an orchestration workflow's agent action provides no model, and the
+    # agent is not found in the registry (or the registry row has no model), this
+    # is the fallback. A single source of truth for the default model, ensuring
+    # that no duplicate defaults drift apart as the codebase changes.
+    agent_default_model: str = "moonshotai/kimi-k3"
+
     # Prompt assistant (ADR-0016, buffered amendment) — the synchronous chat spine.
     #
     # Core fronts the turn through its existing API Gateway + Cognito auth, then

@@ -413,7 +413,6 @@ _AGENT_RUNS_PATH = "/api/v1/internal/agent-runs"
 # the priciest one. These two sites must stay in step (#364 tracks the drift
 # hazard of duplicating the default across the package boundary).
 AGENT_CONFIG_DEFAULTS: dict[str, Any] = {
-    "model": "moonshotai/kimi-k3",
     "max_turns": 1,
 }
 
@@ -455,13 +454,18 @@ async def request_agent_run(
     orchestrator's Lambda has a 60-second timeout, so a turn loop could not run
     here even if the architecture allowed it.
 
-    ``config`` keys: ``agent_name`` and ``instructions`` (required), ``model``
-    and ``max_turns`` (defaulted from the catalog). The whole resolved config
-    travels as ``definition_snapshot`` — the run's record of what it ran, which
-    nothing can backfill once the definition is edited (§10).
+    ``config`` keys: ``agent_name`` (required), ``instructions`` (optional —
+    resolved from the plugin registry if absent), ``model`` and ``max_turns``
+    (defaulted from the catalog). The whole resolved config travels as
+    ``definition_snapshot`` — the run's record of what it ran, which nothing can
+    backfill once the definition is edited (§10).
+
+    **Precedence:** if the config carries ``instructions``, the config wins. Every
+    existing workflow then keeps working exactly as it does today, and omitting
+    the key is the explicit opt-in to registry resolution.
     """
     agent_name = _require(config, "agent", "agent_name")
-    _require(config, "agent", "instructions")
+    # instructions is now optional — omitting it triggers registry resolution in Core
 
     snapshot: dict[str, Any] = {
         **AGENT_CONFIG_DEFAULTS,
@@ -594,9 +598,13 @@ async def fan_in_agent_runs(
     - otherwise fetches each expected run in full and starts ``agent_name`` with
       their outputs in ``input_payload``.
 
-    ``config`` keys: ``expect_agents`` and ``agent_name`` and ``instructions``
-    (required), ``model`` and ``max_turns`` (defaulted from the catalog, like the
-    plain ``agent`` action).
+    ``config`` keys: ``expect_agents`` and ``agent_name`` (required), ``instructions``
+    (optional — resolved from the plugin registry if absent), ``model`` and ``max_turns``
+    (defaulted from the catalog, like the plain ``agent`` action).
+
+    **Precedence:** if the config carries ``instructions``, the config wins. Every
+    existing workflow then keeps working exactly as it does today, and omitting
+    the key is the explicit opt-in to registry resolution.
 
     **A failed sibling is still terminal.** The join proceeds and simply carries
     no output for it, because a workflow that fans out to redundant angles wants
@@ -618,7 +626,7 @@ async def fan_in_agent_runs(
     """
     expected = _expected_agents(config)
     agent_name = _require(config, "agent_fan_in", "agent_name")
-    _require(config, "agent_fan_in", "instructions")
+    # instructions is now optional — omitting it triggers registry resolution in Core
 
     causation_id, depth = _agent_chain(payload)
     if causation_id is None:

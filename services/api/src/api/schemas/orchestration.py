@@ -378,11 +378,12 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
             # string case still validates because a string is one inline part.
             # References are resolved to a final string Core-side at run-creation
             # (§4), so the runtime still reads a plain string from the snapshot.
+            # Optional as of biffo-template#910: omitting it triggers registry resolution.
             {
                 "name": "instructions",
                 "label": "Instructions",
                 "type": "textarea",
-                "required": True,
+                "required": False,
                 "parts": True,
             },
             # Optional acceptance criteria, folded into the system prompt after the
@@ -507,7 +508,7 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 "name": "instructions",
                 "label": "Instructions",
                 "type": "textarea",
-                "required": True,
+                "required": False,
                 "parts": True,
             },
             {

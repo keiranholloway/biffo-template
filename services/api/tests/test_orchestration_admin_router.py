@@ -1068,7 +1068,10 @@ def test_catalog_offers_the_agent_action_with_its_m1_fields(client: TestClient):
     # delivery, which is today's behaviour.
     assert fields["delivery"]["type"] == "delivery"
     assert fields["delivery"]["required"] is False
-    assert fields["agent_name"]["required"] and fields["instructions"]["required"]
+    assert fields["agent_name"]["required"]
+    # instructions is now optional (biffo-template#910): omitting it triggers registry
+    # resolution at run-creation time. agent_name is still required.
+    assert fields["instructions"]["required"] is False
     # goals is an OPTIONAL textarea — a simple agent must be definable without it,
     # and its teaching label is the only affordance today (no catalog placeholder).
     assert fields["goals"]["type"] == "textarea"
@@ -1099,12 +1102,14 @@ def test_create_agent_workflow(client: TestClient):
     assert resp.json()["action_type"] == "agent"
 
 
-def test_agent_workflow_requires_instructions(client: TestClient):
+def test_agent_workflow_instructions_are_optional(client: TestClient):
+    # Instructions are now optional at the workflow level (biffo-template#910) —
+    # omitting them triggers registry resolution at run-creation time.
     resp = client.post(
         _BASE,
         json=_valid_body(action_type="agent", action_config={"agent_name": "demo-enricher"}),
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 201
 
 
 def test_agent_workflow_omitting_model_resolves_to_the_low_cost_default():

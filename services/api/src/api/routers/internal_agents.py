@@ -55,6 +55,7 @@ from ..agent_runs import (
     reap_stale_runs,
     run_reference_payload,
 )
+from ..chat_agents import get_dynamic_chat_agent
 from ..config import settings
 from ..database import get_db
 from ..events import emit_event
@@ -93,12 +94,53 @@ async def request_agent_run(
     referenced component was since deleted, or a required variable is unsupplied
     (ADR-0015 §6). The run is aborted rather than created with a broken or
     half-substituted prompt, the same fail-loud posture as the depth ceiling.
+
+    Also refuses with 422 when the snapshot has no ``instructions`` and the
+    agent is not found in the registry (ADR-0017 seam #1 extension, biffo-template#910)
+    — a missing agent must fail loudly, never silently creating a run with an empty
+    prompt.
+
+    **Precedence for instructions:** snapshot value if present and non-empty → else
+    the registry row's ``system_prompt`` → else HTTP 422. This precedence means
+    every existing workflow keeps working unchanged: supplying instructions inline
+    still wins, and omitting them triggers registry resolution.
+
+    **Precedence for model:** snapshot value if present and non-empty → else the
+    registry row's ``model`` → else ``settings.agent_default_model``. Model
+    resolution never raises — a missing model is always filled from the default.
     """
     # The result contract for a write-back run is Core's to state, generated from
     # the registered target rather than accepted from the caller (ADR-0027 §6) —
     # so the model is required to return typed columns, and is never offered a
     # field outside the ceiling. A snapshot with no write-back is untouched.
     snapshot = apply_writeback_output_tool(body.definition_snapshot)
+
+    # Resolve instructions and model from the registry when absent (biffo-template#910).
+    # Only look up the agent if instructions are missing (model resolution is optional).
+    if not snapshot.get("instructions"):
+        agent = await get_dynamic_chat_agent(
+            db, tenant_id=principal.tenant_id, agent_key=body.agent_name
+        )
+        if agent is None:
+            # Instructions are missing and the agent is not in the registry, fail loudly
+            # (an agent run must never be created with an empty or half-resolved prompt)
+            logger.warning(
+                "Agent run creation aborted: agent not found in registry (biffo-template#910)",
+                extra={"agent": body.agent_name},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Agent '{body.agent_name}' not found in registry",
+            )
+        # Resolve instructions from the registry
+        snapshot["instructions"] = agent.system_prompt
+        # Also resolve model from the registry if not already set
+        if not snapshot.get("model"):
+            snapshot["model"] = agent.model
+
+    # Ensure model is always set: from snapshot, or from the default
+    if not snapshot.get("model"):
+        snapshot["model"] = settings.agent_default_model
 
     try:
         run, created = await create_run(

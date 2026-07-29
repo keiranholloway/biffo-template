@@ -283,19 +283,19 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **183 rows** (the dataset also retains rows no longer on the page — see the duplication row; both numbers are reported so neither can drift unnoticed):
+`byFixRepo`, regenerated at **187 rows** (the dataset also retains rows no longer on the page — see the duplication row; both numbers are reported so neither can drift unnoticed):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 96 of 183 (52%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the git-hook chain, the scaffolder itself |
-| **tabsii-platform** | 19 of 183 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity **and its event-destination envelope** |
-| **biffo-plugin-idea-scout** | 8 of 183 | Adapter seam, research search capability, its own styling, release + publish workflows |
-| **biffo-platform** | 8 of 183 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 183 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-plugin-ideation** | 10 of 183 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **tabsii-crm** | 4 of 183 | Its E2E harness, a repo setting that diverged, **and a timeline rendering a failed fetch as "nothing sent"** |
-| **tabsii-marketplace** | 2 of 183 | `python-jose` removal; the credential-dependent build |
-| **biffo-runners** | 1 of 183 | Runner fleet configuration |
+| **biffo-template** | 98 of 187 (52%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the git-hook chain, the scaffolder itself |
+| **tabsii-platform** | 19 of 187 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity **and its event-destination envelope** |
+| **biffo-plugin-idea-scout** | 8 of 187 | Adapter seam, research search capability, its own styling, release + publish workflows |
+| **biffo-platform** | 8 of 187 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 187 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-plugin-ideation** | 10 of 187 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **tabsii-crm** | 6 of 187 | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", **a proxy returning the wrong response shape, and a panel shipped with no CSS** |
+| **tabsii-marketplace** | 2 of 187 | `python-jose` removal; the credential-dependent build |
+| **biffo-runners** | 1 of 187 | Runner fleet configuration |
 
 **The shape did not change, and that is the finding.** Seven new rows moved
 `biffo-template` from 86/159 to 90/166 — **54% either way**. Four sessions of
@@ -568,7 +568,11 @@ effort log exists to make visible, and this session logged it that way.
 | — | **A gate can pass while structurally unable to observe the thing it guards.** `test_costs_no_core_round_trip` enforced that `/effective-config` made no call to Core. The property wanted was "cannot fail when Core is cold"; what it encoded was "must not look" — and a route that must not look cannot be correct about anything stored. Condition: **a test asserts the absence of a mechanism as a proxy for a guarantee that mechanism could still have provided** | **fail-open** | `biffo-plugin-ideation` tests | biffo-plugin-ideation #74 | fixed |
 | — | **Two panels answered the same question from different sources and only one consulted the authority.** The Chat Agents tab read stored rows and labelled them honestly; the Model Catalog tab's "Models in use" block reported built-in constants as though they were in use. Same page, same session, opposite answers — and the constant it reported could never affect a request, so this was not stale configuration but a **display fiction**. `effective_config`'s own docstring asserted a fallback that did not exist | **drift** | `biffo-plugin-ideation` `web-admin/` | biffo-plugin-ideation #74 | fixed |
 | — | **Authentication runs before routing, so from outside a deployment a plugin that does not exist is indistinguishable from a live one.** Verifying an install, `/api/v1/plugins/idea-scout/build-types` returned 401 — and so did `/api/v1/plugins/does-not-exist-xyz/foo`. Four 401s read as confirmation until a deliberately-absent control was added. Nothing externally observable answers "is this plugin mounted?", which is the exact question every install verification asks | **visibility** | `biffo-platform` API Gateway / plugin host | biffo-platform — needs a discriminating signal | unfiled |
-| — | **A pre-push gate reported `verify passed` on a change written entirely in a language it never checked.** In a plugin repo it printed `javascript n/a - no package.json in this repo` — true of the repo *root*, while the change was 100% TypeScript under `web-admin/`. The same gate in an instance, which has a root `package.json`, ran lint, typecheck, formatcheck and test on the same kind of change. Condition: **a gate detects applicability from a marker at the repo root, in repos whose code deliberately does not live there** — so the language most plugin changes are written in is the one least verified, in green | **fail-open** | `biffo-plugin-ideation` pre-push gate | biffo-template — the shared verify script | unfiled |
+| — | **A pre-push gate reported `verify passed` on a change written entirely in a language it never checked.** In a plugin repo it printed `javascript n/a - no package.json in this repo` — true of the repo *root*, while the change was 100% TypeScript under `web-admin/`. The same gate in an instance, which has a root `package.json`, ran lint, typecheck, formatcheck and test on the same kind of change. Condition: **a gate detects applicability from a marker at the repo root, in repos whose code deliberately does not live there** — so the language most plugin changes are written in is the one least verified, in green | **fail-open** | `biffo-plugin-ideation` pre-push gate | biffo-template — the shared verify script | **fixed** ([#853](https://github.com/keiranholloway/biffo-template/pull/853) `js_dirs()`, [#855](https://github.com/keiranholloway/biffo-template/issues/855) distribution) — see the recurrence below for what the first fix missed |
+| — | **RECURRENCE, and the fix was half-applied: the same root-marker defect was fixed for JavaScript and left in place for Python.** `tabsii-crm` ran **one check in eight** on a ~700-line TS+Python change and printed `verify passed`; the only thing that executed was `terraform-fmt`. Two distinct causes, and the second is the interesting one. (1) The `js_dirs()` fix existed upstream but had never reached the siblings — `biffo core upgrade` reaches *instances* only, and nothing carried it to repos with neither `biffo.core.json` nor a manifest. (2) The Python block was **still** `if [ -f pyproject.toml ]` at the root, with no `py_dirs()` equivalent, so even a freshly-scaffolded sibling skipped ruff, format and pyright entirely. The original row's own rationale — *"every plugin, every sibling, both runner repos"* — applies verbatim to Python and was fixed for one language only. Condition: **a fix written against one instance of a general defect gets scoped to that instance, and the generalisation in its own justification is not re-read when it lands** | **fail-open** · drift | tabsii-crm (2026-07-29) | biffo-template — `py_dirs()` + `scripts/shared-sync.sh` for the distribution channel | **fixed** — verified by the next push, which ran `ruff-check(services/api)`, `bandit(services/api)`, `lint/typecheck/test(apps/frontend)` |
+| — | **A security gate was excluded from the pre-push gate on a rationale that was factually wrong, and the exclusion list is hand-written prose nothing checks.** `verify-parity.test.ts` excluded Bandit with *"writes a report artefact CI uploads; the finding gate is the upload step, not the run"*. `bandit -ll` **exits 1 on findings**, and it is the run step that fails — CI proved it on tabsii-platform#313 (`SAST (Bandit)` → `##[error]Process completed with exit code 1`) after `verify passed` locally. The parity test does its job: it forces every CI check to be either present or explicitly excluded. What nothing checks is whether the **stated reason for an exclusion is true**, and a wrong reason reads exactly like a considered one. Bandit runs in ~2s, offline, over the working tree — it met every inclusion criterion the script states for itself | **fail-open** · drift | tabsii-platform [#313](https://github.com/tabsii-com/tabsii-platform/pull/313) | biffo-template — `verify.sh` + the exclusion rationale | **fixed** — Bandit now runs in the gate; **the general case is open**: the other four exclusion rationales have not been re-checked against what those steps actually do |
+| — | **A hand-written test double returned the shape the code *emits* instead of the shape it *receives*, so 17 tests pinned a contract that did not exist.** `FakeCore.get` returned `{"items": [...]}` for `/api/v1/data/lead_source_costs`; the core's generic-CRUD list returns a **bare array**. The proxy route was declared `-> dict`, so FastAPI's *response* validation rejected the real payload and every load of the Analytics panel 500'd — while the suite, the JS suite, Playwright E2E and CI in two repos were all green. `CoreApiClient.get` is annotated `-> dict` but returns whatever `.json()` produced, so the annotation actively pointed the wrong way, and `rollups.py` **three files away** already had the correct `cast(list[dict], …)` + wrap. The panel's six calls run under `Promise.all`, so one rejection blanked all five other reports and the banner named none of them. Condition: **a double whose shape is written from the author's expectation rather than from the real service teaches the test the author's error** — the fixture encoded the exact assumption it existed to check | **fail-open** · drift | tabsii-crm (deployed page, first click-through) | tabsii-crm [#124](https://github.com/tabsii-com/tabsii-crm/pull/124) | **fixed** — the fake now returns a bare array and is typed `dict \| list`; three tests fail against the old route |
+| — | **CSS class names are strings, so a panel written against classes that do not exist passes every gate and renders as bare HTML.** `AnalyticsPanel.tsx` used `.card`, `.data-table`, `.filter-bar`, `.error-text`, `.stat-row` — none of which exist in `tabsii-crm`, whose convention is a prefixed block per feature in `globals.css` (`.ov-*`, `.access-*`, `.discovery-*`) — and shipped with **no CSS of its own**. eslint, `tsc`, 164 unit tests, Playwright and a production build were all green, because nothing that runs locally resolves a class name against a stylesheet. The visible result was an unstyled page whose speed stat read `Median time to first contact0m5 of 17 leads contacted`. Same family as the Vite `base` row above — a string that only means something in a browser | **visibility** | tabsii-crm (deployed page) | tabsii-crm [#125](https://github.com/tabsii-com/tabsii-crm/pull/125) | **fixed** — `.analytics-*` block on the existing precedent. **The general case is open**: nothing warns that a className matches no rule in the bundle |
 | — | **RECURRENCE of a condition this project has written down twice and warns about in AGENTS.md §6: a piped `git push` reports the pipe's status, so a failed push prints success.** I ran `git push -q ... 2>&1 \| grep -v vulnerabilit \| tail -1; echo "push: $?"` and got `push: 0` while the push had failed and the commit had never been made — `lint-staged` was missing because I skipped the worktree's `pnpm install`. It surfaced only because `gh pr create` refused for want of a remote branch. The rule was quoted earlier in the same session by the same author. Condition: **a safety rule that depends on remembering not to pipe will be violated by anyone filtering noisy output** — and both times, the noise being filtered was unrelated (a dependabot banner) | **process** | `biffo-platform` — my own command | biffo-template — the rule needs a mechanism, not a reminder | unfiled |
 | — | **RECURRENCE, and a new shape: complete-but-open reached the parent.** Three more instances in one day — an epic, a milestone, and a delivered API issue. The epic's own checklist had **all nine boxes unticked against eight closed milestones**, so it asserted "nothing delivered" throughout a completed v1. Nothing ticks a parent when a child closes and nothing compares the two, so the tracker's summary view degrades in exactly the direction that hides finished work. Previously recorded at the leaf; this is the first at the roll-up that people actually read | **visibility** | `biffo-plugin-idea-scout` #1, `biffo-platform` #75, `biffo-plugin-ideation` #20 | wherever issue hygiene is automated | unfiled |
 | — | **Rewording a scoreboard row silently duplicates it in the dataset.** Row identity is derived from the row's own text, and `mergeExtracted` keeps orphans, so an edited row is stored as a *new* row while the pre-edit version survives — every correction inflates the corpus. I did it three times in one session correcting my own figures, publishing a headline of 161 against a page rendering 157. **The retention is deliberate and load-bearing**: dropping orphans previously deleted every stored row a stale branch's markdown did not mention, and that fired for real. So this is a genuine trade-off between silent duplication and silent deletion, not a bug with an obvious side — and nothing currently reports either number against the other | **drift** | `scripts/practices-evidence.mjs` `mergeExtracted` / `rowKeys` | biffo-template — needs a decision, not a patch | unfiled |
@@ -840,6 +844,47 @@ line item. The ranking that came out of the measurement:
 is queue" and "the fleet is saturated" sound like the same statement and are not.
 Time-at-concurrency distinguished them in one query, and it inverted the fix.
 
+### Measured: four green PRs shipped a dead feature, 2026-07-29
+
+`0006-pipeline-analytics`, M1→M4, four PRs across two repos. Every one merged
+with **full green CI in both repos** — including a Playwright E2E lane — and the
+deployed feature **did not work at all**. The first click-through found a 500 on
+every page load; the second found the panel rendering as unstyled HTML.
+
+| | |
+| --- | --- |
+| Build → all four milestones merged | ~4h |
+| Click-through and the two fixes it forced | ~50m |
+| Defects found by tests + CI (2 repos, 5 lanes) | **0** |
+| Defects found by opening the page | **2, both blocking** |
+
+**The cost of the click-through was ~50 minutes and it was the only thing that
+worked.** That is the whole entry: this page has argued "green is not evidence"
+for 180-odd rows, and this is the cleanest controlled instance of it yet —
+identical change, two verification methods, one found everything and the other
+found nothing.
+
+**Both defects share a shape worth naming: they are invisible to any check that
+does not render.** A response-shape mismatch lives between two services that
+tests replace with a double; a class name lives between a component and a
+stylesheet that nothing local resolves. Neither is exotic, and no amount of
+additional unit testing would have caught either — the second fix's own tests
+were green *before* the fix, because they assert numbers and wording, not paint.
+
+**What it says about where to invest.** The estate already treats E2E as the
+expensive tier and unit tests as the cheap one. On this evidence the ranking for
+a *user-facing* change is inverted: one authenticated page load per feature,
+after deploy, would have caught both in under two minutes. The skill already
+says this (`biffo-sib-build` step 2.6, "confirm the deployed behavior directly");
+it was not followed per-milestone, and the two defects sat undiscovered through
+three subsequent merges because of it.
+
+**Not measured, and it matters:** no attempt was made to catch these earlier
+cheaply. A test that asserts the *real* core response shape (a recorded
+fixture rather than a hand-written fake) and a lint rule for unresolvable class
+names would both be cheap; neither was tried, so "only a click-through could
+have found these" is asserted, not demonstrated.
+
 ### The self-estimate was 45% low, and the cause was the unit
 
 The session was logged at **180 minutes**. The operator corrected it to 5–6
@@ -876,6 +921,36 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**Proving the guard is load-bearing by removing it, three times, before
+believing any of them.** `0006`'s three subtlest decisions were each verified by
+breaking them rather than by reasoning about them. Rebuilt as `SECURITY INVOKER`,
+the trigger failed with `new row violates row-level security policy` — which
+means every stage move on dev would have broken, not merely that a test was
+weaker. With the trigger's value comparison stripped, a non-move wrote a spurious
+history row (`assert 2 == 1`). With the cost index's `coalesce` removed, two
+contradictory January figures inserted cleanly (`DID NOT RAISE`). None of the
+three was a hypothetical: each is a defect that would have shipped silently.
+
+**A test that passed against a deliberately broken query, caught by mutating the
+implementation rather than reading the test.** `test_time_in_stage_excludes_
+synthesised_rows` was green both with and without the exclusion. The fixture gave
+the backfilled lead a synthesised row and *nothing after it* — so it produced no
+span either way, and the test could never have failed. The fix was a fixture
+change (a backfilled lead that later moves), and the strengthened version now
+asserts the **aggregate** as well as the count, because counting alone would
+still pass if the span were counted but excluded from the average. Worth noting
+what did **not** catch it: it was written deliberately as an exclusion test, by
+an author who knew the contract, and it read correctly.
+
+**Checking whether a suspicious local failure was real before acting on it.**
+Deleting merged branches was blocked by the pre-push gate reporting eight
+`tsc` errors — `Cannot find module 'recharts'`, plus `UnitMap` prop mismatches in
+two files I had never touched. The tempting readings were "my change broke
+something" and "the gate is noise, skip it". Running `pnpm install` in the
+primary checkout made all eight vanish: every one was stale-dependency noise from
+a checkout that had not been synced since the dependency was added. The gate was
+right to block, and one command distinguished a real regression from an artefact.
 
 **Building the source locally and matching the emitted hash against the deployed
 artifact.** Verifying an admin-panel fix was live, every usual check failed to
@@ -1467,6 +1542,37 @@ deployed code was already correct. `git rev-list --count HEAD..origin/dev` befor
 trusting a tree is in AGENTS.md §1 precisely for this, and it is cheap.
 
 ## What needs more thought
+
+**Nothing makes a test double agree with the service it stands for.** The
+`FakeCore` row above is not a mistake anyone would catch by review: the fake was
+consistent, readable, and wrong, and the route it tested was written from the
+same wrong belief — so the two agreed and the suite was green. Every hand-written
+double in this estate has the same exposure, and the number of them is growing.
+The obvious answers each have a real cost (recorded fixtures go stale; contract
+tests need a running service; generating doubles from OpenAPI needs the schema to
+be accurate, which is the same assumption one level up). What is clear is that
+**"the fake matches what I expect the service to return" is not a property
+anything currently tests**, and the failure mode is silent green.
+
+**The piped-`$?` rule was broken twice more in one session, by an author who had
+already written it up.** The row above calls the reminder approach falsified;
+this session is the next data point, and it is worse than the last one, because
+the second violation happened *after* I had corrected the first one aloud. Both
+times the pipe existed to trim noisy output — `| tail -1`, `| tail -3` — which is
+the same trigger the previous instance identified. Three sessions, one rule, one
+trigger. The mechanism is missing, not the knowledge, and a shell wrapper or an
+alias that refuses to pipe `git push` is probably cheaper than any further
+documentation.
+
+**`--delete-branch` is optional on a command that is otherwise complete, and the
+omission is invisible until someone counts.** `gh pr merge --squash` succeeds
+and leaves the branch; AGENTS.md §5 gives the flag but nothing enforces it.
+`tabsii-platform` has repo-level auto-delete so it self-corrects; `tabsii-crm`
+does not, and had accumulated **21 fully-merged branches** from previous
+sessions plus 3 from this one. Nobody noticed because a stale branch has no
+symptom — it is pure entropy until a `git branch -a` gets confusing. The
+per-repo setting is the actual fix and it is unset on at least one repo; a
+`biffo check` for "auto-delete-on-merge is enabled" would surface the rest.
 
 **A safety rule enforced by memory was broken by its own author in the session
 that quoted it.** AGENTS.md §6 forbids piping `git push`, because the pipe's
@@ -2228,6 +2334,11 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `claude-in-chrome` | **worked** | The only thing that reproduced the reported bug. `curl` returned clean `401` JSON and looked healthy — the HTML only appears on an *authenticated* request, because 401 passes the CDN untouched while 403/404 are rewritten. An unauthenticated check would have concluded "works fine" and #647 would still be unfound. |
 | `biffo-verify` | **partial** | §1 caught that the planned #621 step 3 would have collapsed ADR-0014 §7's two-axis authorization boundary — a real save. But it was **not applied to its own author's output**: `core diff`'s `removed (5)` was reported to the user as fact without the dry run that disproves it in seconds. The step exists and was skipped. |
 | `claude-in-chrome` | **worked** | The only thing that could close #652. `curl` returned clean `401` JSON at every stage; the failure was visible only in an authenticated session, and then only in the *network* panel — the rendered page showed "No catalog entries yet" over an HTTP 500. Without it the issue would have been closed on a screenshot. |
+| `biffo-sib-build` | **partial — step 2.6 is the one that mattered and the one I skipped** | Steps 1–5 worked cleanly for four milestones across two repos. Step 2.6 says *"a green CI run is not sufficient evidence a deployed feature actually works… confirm the deployed behavior directly"*. I verified the deploy **succeeded** (workflow conclusion, and the `ddl-import` payload showing modules 048/049 in `applied` with `ok: true`) and read that as satisfying the step. It does not: the artefact deployed and the feature was dead. Two blocking defects then survived three further merges. The step's wording is correct; what it lacks is a concrete bar — "load the page as a user" rather than "confirm the deployed behavior", which a diligent reader can satisfy with logs. |
+| `biffo-sib-build` | **partial — it has no notion of a plan that has gone stale** | The plan's decision 3 shipped speed-to-lead as a proxy "because `lead_activities` was never built". It had been built the day before by `0007`, which the skill's own step 0 (read the plan) cannot notice, and step 2 explicitly says not to re-litigate approved scope. Surfacing it to the operator was the right call and the skill did not prompt it. Worth a line: *check the plan's stated preconditions still hold before building on them* — plans age fastest exactly where they say "X does not exist yet". |
+| `claude-in-chrome` | **worked — it was the entire verification** | Four PRs, green CI in two repos including Playwright, and the deployed feature was 100% broken. One page load found a 500; a second found an unstyled panel. It also produced the *positive* evidence no test could: moving one lead made the funnel read `Qualified 1` while time-in-stage held `New 0` — the synthesised-vs-observed asymmetry, demonstrated on live data rather than fixtures. One caveat on my own use: I read the funnel from a **zoomed screenshot** and inferred `Discovery Day = 6` as "5 pre-existing + mine" from the board's counts rather than querying, so that decomposition is inference, not measurement. |
+| `biffo-verify` | **worked — §4 and §5, and §4 is what stopped a wrong theory** | The panel's `Internal Server Error` had an obvious and wrong explanation (bad deploy / stale bundle). §4 said read the deployed artefact: CloudWatch gave the exact `ResponseValidationError` with `'input': []` and the file and line, in one query. §5's *read past the masking layer* applies too — the browser showed a generic banner because six calls run under `Promise.all` and the rejected one is not named. Neither would have come from reading the source. |
+| `biffo-verify` | **partial — §8 again applied as a closing sweep, and again by prompt** | The section says record the row when the failure happens; both defects were found, fixed, merged and deployed before anything was written here, and the write-up only happened because the operator asked for it explicitly. This is the *third* consecutive session logging that §8 fired late, and the previous two both recorded the same cause. A section that keeps diagnosing its own non-use and does not change is evidence the trigger is wrong, not the author — §8 needs to fire on "a defect was found", not on "the session is ending". |
 | `biffo-verify` | **worked** | §3 caught the vacuous drift guard (above). §1 turned #722 into a close-with-evidence and stopped #652 being reimplemented. |
 | `biffo-verify` | **partial** | §8's "Skills used" and repo tally were done at the *end* of a long session, from memory, and the class counts were typed rather than regenerated — producing wrong numbers that the tool then corrected. The section warns about exactly this two paragraphs earlier. The step should say: run `--report` and paste, never type. |
 | `biffo-add-service` | **failed** (as found) | Described Steps 7–8 as manual work that `biffo deploy` had automated 3.5 weeks earlier (#337), the Step 1 pre-flight as missing when it exists (#151/#306), and the concurrency guard as unmerged (#145). Following it would have caused ~40 min of already-automated work and could have conflicted with what the tool writes. Corrected, and renamed to match intent. |

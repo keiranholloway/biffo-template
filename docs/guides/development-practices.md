@@ -275,27 +275,25 @@ still work that has to land somewhere. A row naming two repos counts once for
 each, so the column sums exceed the row count.
 
 **Generated, not typed** — `node scripts/practices-evidence.mjs --report`,
-`byFixRepo`, regenerated at **150 rows** (never typed by hand, see *Adding a row*):
+`byFixRepo`, regenerated at **161 rows** (never typed by hand, see *Adding a row*):
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 79 of 150 (53%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
-| **tabsii-platform** | 15 of 150 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
-| **biffo-plugin-idea-scout** | 8 of 150 | Adapter seam, research search capability, its own styling, release + publish workflows |
-| **biffo-platform** | 7 of 150 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
-| **tabsii-intake** | 5 of 150 | CI generation, branch-protection contexts, the `python-jose` removal |
-| **tabsii-marketplace** | 2 of 150 | `python-jose` removal; the credential-dependent build |
-| **tabsii-crm** | 2 of 150 | Its E2E harness, and a repo setting that diverged |
-| **biffo-plugin-ideation** | 4 of 150 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **biffo-runners** | 1 of 150 | Runner fleet docs + fail-fast; **its whole source was uncommitted until today** |
+| **biffo-template** | 88 of 161 (55%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, the scaffolder itself |
+| **tabsii-platform** | 15 of 161 | Divergence ratchet, repo settings, the RLS lane and its tests, the invite payload, the SES identity |
+| **biffo-plugin-idea-scout** | 8 of 161 | Adapter seam, research search capability, its own styling, release + publish workflows |
+| **biffo-platform** | 7 of 161 | Instantiated infra — API Gateway routes, CDN, vendored-plugin resync |
+| **tabsii-intake** | 5 of 161 | CI generation, branch-protection contexts, the `python-jose` removal |
+| **tabsii-marketplace** | 2 of 161 | `python-jose` removal; the credential-dependent build |
+| **tabsii-crm** | 2 of 161 | Its E2E harness, and a repo setting that diverged |
+| **biffo-plugin-ideation** | 4 of 161 | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **biffo-runners** | 1 of 161 | Runner fleet docs + fail-fast; **its whole source was uncommitted until today** |
 
-**`biffo-template` takes 78 of 147 — 53%, and its absolute count did not move
-at all this capture (78 → 78).** All five new rows landed on satellites:
-`biffo-plugin-idea-scout` 7 → 8, `biffo-platform` 6 → 7, `biffo-plugin-ideation`
-3 → 4. That is the second consecutive capture where the template absorbed none
-of a session's findings, which is now worth saying out loud rather than
-attributing to noise — though note both captures came from work deliberately
-aimed at the satellites, so the sampling is not neutral.
+**`biffo-template` takes 88 of 161 — 55%, and this capture is not evidence
+about the estate.** All ten new rows are findings about the measurement
+apparatus itself, filed by auditing the dataset rather than by doing product
+work, so they inflate the template's share by construction. Read the ratio from
+the previous capture, not this one.
 
 The series: 86% at 50 and 57 rows,
 82% at 65, 70% at 94, 66% at 102, 63% at 109, 60% at 116 and 122, 58% at 126, 132
@@ -514,8 +512,6 @@ effort log exists to make visible, and this session logged it that way.
 | **2 wasted hook cycles** | `commitlint` (footer >100 chars) and the ownership guard both reject **after** `lint-staged` has run ruff+prettier over the staged set. A rejected commit costs the whole hook cycle, and neither constraint is discoverable before tripping it | **open** — cheap fix: validate the message first, or document both limits in AGENTS.md §3 |
 | **2 false 'no checks' reads** | `gh pr checks --watch` run immediately after `gh pr create` returns *no checks reported* and exits 1, because it races GitHub registering the runs. Indistinguishable from the genuine "GitHub created no run" case AGENTS.md §6 warns about, which is the one you must not paper over | **open** — needs a settle delay, or a way to tell the two apart |
 
-| **biffo-template** | 79 of 150 (53%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, design tokens, the practices tooling itself |
-| **biffo-template** | 79 of 150 (53%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema |
 | **8 repos audited by hand before a tool existed** | Establishing which branches were protected meant a `gh api` loop per repo per branch, because nothing reported settings drift. That audit *is* the finding: it took writing `biffo check branch-protection` ([#718](https://github.com/keiranholloway/biffo-template/pull/718)) to make it a one-liner — and the guard then immediately caught an incomplete fix the hand audit had missed | **fixed** — guard shipped; not yet scheduled anywhere |
 | **One wrong conclusion from re-running the wrong workflow** | Testing "does intake's old CI fail today?" I re-ran the newest successful `dev` run — which was **Deploy**, not CI — and it passed, appearing to disprove the hypothesis. Redone against an actual `ci.yml` run it failed, confirming it. A run id is not self-describing; filter by workflow, not by branch and conclusion | **process** — cost one wrong belief, caught by checking the job names |
 | **2 dependency-alignment rounds on one repo** | Mirroring another sibling's known-good versions cleared 8 of 13 advisories; the last 5 were transitives with no direct upgrade path (`postcss`, `sharp`, `brace-expansion`) and needed the same repo's `pnpm.overrides` copied across too. The fix existed and was found twice, by hand, because **nothing shares a remediation between siblings** | **open** — the overrides live in two package.json files with no common source |
@@ -543,6 +539,14 @@ effort log exists to make visible, and this session logged it that way.
 | **2 self-inflicted wait loops that reported false states** | One exited while every check was still `QUEUED` and printed "not merged"; another fired `update-branch` mid-run, which can cancel checks about to pass. Neither caused a wrong action — the merge decision is GitHub's — but both produced a readout that looked like a failure and had to be walked back | **fixed** in-session: the loop now breaks on exactly four terminal states (merged / a genuinely failing check / `BEHIND` **and settled** / keep waiting). Same class as the `gh pr checks --json` row above: **a poll you have not verified against a known state is indistinguishable from the thing it is polling** |
 | **~15 min re-deriving a conclusion the repo already held** | #207's blocker was diagnosed from scratch — read the four files, rule out the sibling destinations, identify the missing carve-out. `biffo.divergence.json`'s own entry for `nav.tsx` already said it: *"Product code with nowhere legitimate to go … there is no portal equivalent of ADR-0022's `domains/` carve-out, so #207 cannot relocate it."* A previous session had reached the answer and written it where it belonged | **avoidable** — the declaration file is a first-class record of *why*, not just *what*, and nothing in the §1 checklist points at it. Worth reading `biffo.divergence.json` reasons before investigating any ownership-boundary question |
 | **4 defects on one E2E file, found and fixed in ~20 min — the first measurement of what the docker fix is worth** | Building the signed-in harness surfaced four separate bugs: the board fixture is `{columns:[…]}` not `{stages,leads}` (a bare "client-side exception" naming no fixture), `Units` matching both the nav item and its collapse toggle, a created unit named "York Road" colliding with its own address "12 York Road", and shared fixture state across parallel workers. Each was a full local run of ~19s | **avoided cost, quantified.** The same four in the morning's regime — no local Postgres *or* browser — would have been **four CI round trips at 5–9 min each**, most of it spot-fleet queueing. The `sg docker` correction paid for itself within one task |
+| — | **154 of 155 scoreboard rows carry no cost, so the corpus can be counted but not ranked.** §8 requires "what it cost in wall-clock time"; one row has ever recorded it. A ten-minute fix and one that ate an afternoon are the same size in the dataset, which makes "what should we restructure?" — the question the scoreboard exists to answer — unanswerable from it. **Checked before blaming the extractor: only 5 rows state a duration in any form, so this is a capture failure, not a parsing one** | **visibility** | `docs/practices/evidence.jsonl` | biffo-template — the capture step, wherever it lands | unfiled |
+| — | **Both recoveries from earlier data loss silently corrupted the page.** #762 ("restore three sessions deleted by a stale-base merge") and #777 ("restore 93 lines #774 deleted") each re-inserted a repo-tally row into the *cost* table, where a 3-column row is structurally valid and therefore invisible — they sat there through every subsequent edit and every review of this page. Restoring deleted content is treated as self-evidently safe and is the one operation here with no verification step at all | **drift** | `docs/guides/development-practices.md` — found by grepping for a stale count | biffo-template — the restore practice, and whatever checks table shape | unfiled |
+| — | **`parseCost` takes the first match of the word "cost" and gives up, so a row that discusses cost before stating its figure loses the figure silently.** `"no cost, so the corpus … this cost 25m"` extracts `null`; `"cost 25m"` alone extracts 25. It also requires that exact keyword, so every row phrased `"~40 min round trip"` or `"ate an afternoon"` is invisible to it. Small today — it drops 5 rows — but it fails **in the direction of the discipline**: the more carefully a row explains what something cost, the likelier its number is discarded | **fail-open** | `scripts/practices-evidence.mjs` `parseCost` | biffo-template — `scripts/practices-evidence.mjs` | unfiled |
+| — | **The dataset and the page disagree: `evidence.jsonl` carries 155 rows, the scoreboard renders 154.** `mergeExtracted` retains rows by identity across a re-extract (the mechanism from #774 that lets a row survive rewording), which also means a row that *leaves* the page stays in the data. Every headline figure is therefore computed over a corpus a reader of the page cannot fully see, and the divergence is silent — no count anywhere reports the two numbers side by side | **drift** | `docs/practices/evidence.jsonl` vs the scoreboard | biffo-template — `scripts/practices-evidence.mjs` | unfiled |
+| — | **51 of 155 rows have no date, so a third of the corpus cannot be time-sliced.** "Is this class getting better or worse?" is unanswerable for those rows, and they are silently excluded from any windowed view rather than reported as missing | **visibility** | `docs/practices/evidence.jsonl` | biffo-template — the capture step | unfiled |
+| — | **The effort log cannot be sliced by repo: 10 of 26 entries — 1,200m, 36% of one day's logged minutes — name no repo.** The dashboard's per-repo platform/product split is inferred from commit types and repo names, and the recorded entries exist to falsify that inference. Entries naming no repo cannot confirm or refute it, so a third of the ground truth is inert against the thing it was collected for | **visibility** | `~/.practices-sessions.jsonl` | biffo-template — `scripts/practices-session.mjs` | unfiled |
+| — | **Three repos merged work with no effort entry at all** — `biffo-plugins-registry` (4 PRs), `biffo-platform-app` (1), `tabsii-intake` (1). Not proof of unlogged effort: a repo can take a merge carried from elsewhere. But nothing distinguishes "no effort spent here" from "effort spent and not logged", so the zero cannot be read either way | **visibility** | estate-wide, measured across 145 merges in one day | biffo-template — the capture step | unfiled |
+| — | **26 of 155 rows sit at status `unfiled`: recorded as findings with no issue raised and therefore no route to action.** They are counted in every headline the scoreboard produces, so the corpus reports a level of engagement the backlog does not carry | **process** | `docs/practices/evidence.jsonl` | wherever each row's fix belongs | unfiled |
 | **1 PR merged by hand because `--auto` is rejected, not queued** | `tabsii-crm` has `allow_auto_merge=false`, so the armed merge failed immediately and the wait-loop reported failure while the PR sat green and unmerged. Cheap this time because the loop was watched; the failure mode is a green PR nobody merges | **open** — see the scoreboard row; the setting is deliberately untouched pending the H3 comparator question |
 ### The six hops are the root cost
 

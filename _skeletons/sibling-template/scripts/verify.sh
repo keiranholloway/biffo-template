@@ -76,6 +76,31 @@ SKIPPED=""
 
 PYTEST="${BIFFO_VERIFY_PYTEST:-}"
 
+# Does THIS repo's CI run a check of this kind?
+#
+# ## Why every check is gated on this (#861)
+#
+# The standard has said "derived per repo from that repo's ci.yml, not decreed"
+# since it was written. The gate did not do that: it ran a fixed list, and the
+# list was tuned against biffo-template. Every consequence was the same shape,
+# three times in one afternoon:
+#
+#   - terraform-fmt over infra/ where CI checks only modules/
+#   - bandit over -r services where CI scans only template-owned paths
+#   - bandit at all in the plugin repos, whose CI has no bandit step and where
+#     the tool is not even installed
+#
+# A gate STRICTER than CI is not a safer gate. It blocks correct work, sends
+# people to read failures CI would never raise, and is exactly what drives
+# BIFFO_SKIP_VERIFY -- a counter-metric H4 pre-registered as refuting itself.
+#
+# With no ci.yml there is nothing to mirror, so everything applicable runs:
+# best-effort beats silence in a repo that has no pipeline to disagree with.
+ci_has() {
+  [ -f .github/workflows/ci.yml ] || return 0
+  grep -qE "$1" .github/workflows/ci.yml
+}
+
 have_script() {
   [ -f "$2/package.json" ] || return 1
   # grep rather than node: --list must work on a machine with no toolchain at
@@ -186,9 +211,9 @@ if [ -n "$PY_DIRS" ]; then
       suffix=""
       [ "$d" != "." ] && suffix="(${d#./})"
       if [ "$d" = "." ]; then
-        run_check "ruff-check$suffix" uv run ruff check .
-        run_check "ruff-format$suffix" uv run ruff format --check .
-        run_check "pyright$suffix" uv run pyright
+        ci_has "ruff check" && run_check "ruff-check$suffix" uv run ruff check .
+        ci_has "ruff format" && run_check "ruff-format$suffix" uv run ruff format --check .
+        ci_has "pyright" && run_check "pyright$suffix" uv run pyright
         # bandit is NOT excluded: it exits non-zero on findings and it is the
         # RUN step that fails in CI, not the artefact upload. See the exclusion
         # audit in verify-parity.test.ts (#855).
@@ -206,17 +231,17 @@ if [ -n "$PY_DIRS" ]; then
         [ -d services/_plugins ] && bandit_paths="$bandit_paths services/_plugins"
         [ -z "$bandit_paths" ] && [ -d src ] && bandit_paths="src"
         # shellcheck disable=SC2086
-        [ -n "$bandit_paths" ] && run_check "bandit$suffix" uv run bandit -r $bandit_paths -ll -q
+        [ -n "$bandit_paths" ] && ci_has "bandit" && run_check "bandit$suffix" uv run bandit -r $bandit_paths -ll -q
         if [ -n "$PYTEST" ]; then
           run_check "pytest$suffix" uv run pytest -q
         else
           skip "pytest$suffix" "excluded - set BIFFO_VERIFY_PYTEST=1 where the suite is fast"
         fi
       else
-        run_check "ruff-check$suffix" uv run --directory "$d" ruff check .
-        run_check "ruff-format$suffix" uv run --directory "$d" ruff format --check .
-        run_check "pyright$suffix" uv run --directory "$d" pyright
-        run_check "bandit$suffix" uv run --directory "$d" bandit -r src -ll -q
+        ci_has "ruff check" && run_check "ruff-check$suffix" uv run --directory "$d" ruff check .
+        ci_has "ruff format" && run_check "ruff-format$suffix" uv run --directory "$d" ruff format --check .
+        ci_has "pyright" && run_check "pyright$suffix" uv run --directory "$d" pyright
+        ci_has "bandit" && run_check "bandit$suffix" uv run --directory "$d" bandit -r src -ll -q
         if [ -n "$PYTEST" ]; then
           run_check "pytest$suffix" uv run --directory "$d" pytest -q
         else
@@ -245,7 +270,7 @@ if [ -n "$LIST" ] || command -v terraform >/dev/null 2>&1; then
   [ -f biffo.sibling.json ] && [ -d infra ] && tf_dirs="$tf_dirs infra/"
   if [ -n "$tf_dirs" ]; then
     # shellcheck disable=SC2086
-    run_check terraform-fmt terraform fmt -check -recursive $tf_dirs
+    ci_has "terraform fmt" && run_check terraform-fmt terraform fmt -check -recursive $tf_dirs
   else
     skip terraform-fmt "no terraform in this repo"
   fi

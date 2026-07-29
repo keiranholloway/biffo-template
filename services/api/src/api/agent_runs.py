@@ -206,6 +206,99 @@ async def create_run(
     return run, True
 
 
+async def aggregate_run_costs(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    since: datetime,
+    until: datetime,
+    agent_name: str | None = None,
+) -> list[dict[str, str | int | float]]:
+    """Per-model cost aggregation for a time range, tenant-scoped (ADR-0001).
+
+    Groups runs by the model field (extracted from ``definition_snapshot``) and
+    sums costs and token counts. Runs with NULL ``cost_usd`` are counted in
+    ``unpriced_runs`` and excluded from ``total_cost_usd``, so the caller can
+    see how much of the range is unpriced and correct for missing data.
+
+    Returns one dict per distinct model with keys:
+    - ``model`` (str | None): The model name, or None if not set in the snapshot.
+    - ``runs`` (int): Total runs for this model.
+    - ``total_cost_usd`` (float): Sum of cost_usd, excluding NULLs.
+    - ``total_input_tokens`` (int): Sum of input_tokens.
+    - ``total_output_tokens`` (int): Sum of output_tokens.
+    - ``unpriced_runs`` (int): Count of runs with NULL cost_usd.
+
+    ## Implementation note
+
+    ``model`` is not a column; it lives inside ``definition_snapshot`` JSON and
+    must be lifted out in Python. This approach (b) fetches rows and groups in
+    Python rather than attempting cross-dialect JSON extraction, because:
+
+    - Simple and provably correct on both SQLite and Postgres.
+    - This is an admin analytics view, not a hot path.
+    - The call is bounded by date range and optional agent filter.
+    """
+    stmt = (
+        select(AgentRun)
+        .options(
+            load_only(
+                AgentRun.definition_snapshot,
+                AgentRun.agent_name,
+                AgentRun.input_tokens,
+                AgentRun.output_tokens,
+                AgentRun.cost_usd,
+                AgentRun.created_at,
+            )
+        )
+        .where(
+            AgentRun.tenant_id == tenant_id,
+            AgentRun.created_at >= since,
+            AgentRun.created_at <= until,
+        )
+    )
+    if agent_name is not None:
+        stmt = stmt.where(AgentRun.agent_name == agent_name)
+
+    runs = list((await db.scalars(stmt)).all())
+
+    # Group by model, lifting model out of definition_snapshot.
+    groups: dict[str | None, dict[str, str | int | float]] = {}
+    for run in runs:
+        model = run.definition_snapshot.get("model") if run.definition_snapshot else None
+        # Normalize: model must be a string or None, never any other type
+        if not isinstance(model, str):
+            model = None
+
+        if model not in groups:
+            groups[model] = {
+                "model": model or "",
+                "runs": 0,
+                "total_cost_usd": 0.0,
+                "total_input_tokens": 0,
+                "total_output_tokens": 0,
+                "unpriced_runs": 0,
+            }
+
+        groups[model]["runs"] = cast(int, groups[model]["runs"]) + 1
+        if run.cost_usd is not None:
+            total_cost = cast(float, groups[model]["total_cost_usd"]) + run.cost_usd
+            groups[model]["total_cost_usd"] = total_cost
+        else:
+            groups[model]["unpriced_runs"] = cast(int, groups[model]["unpriced_runs"]) + 1
+
+        if run.input_tokens is not None:
+            groups[model]["total_input_tokens"] = (
+                cast(int, groups[model]["total_input_tokens"]) + run.input_tokens
+            )
+        if run.output_tokens is not None:
+            groups[model]["total_output_tokens"] = (
+                cast(int, groups[model]["total_output_tokens"]) + run.output_tokens
+            )
+
+    return list(groups.values())
+
+
 async def list_runs(
     db: AsyncSession,
     *,

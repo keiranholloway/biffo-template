@@ -244,6 +244,37 @@ had worked.
 - **The comparators are not controls.** Different repos, different workloads,
   different merge rates.
 
+## Interim observation — 2026-07-29, day 1
+
+Still not a result; the review date stands. Recorded because it points the same
+way day 0 did, and because a second inconvenient reading is exactly the one that
+gets dropped.
+
+| `biffo-template` | baseline (2026-07-28) | prior 83d | 7d to 2026-07-29 | target |
+| --- | ---: | ---: | ---: | ---: |
+| **`racedShare`** | 16.0% | 16.7% | **13.8%** | **<3%** |
+| `repushRate` | 43.6% | 45% | 39.2% | <25% |
+| `ciFailureRate` | 12.7% | 11.6% | 10% | — |
+
+Three points of movement against a prediction of thirteen, and the `prior 83d`
+column — a window sharing no merge with the reading — confirms the baseline was
+not a fluke.
+
+**A competing explanation now exists and is pre-registered.**
+[H4](./H4-shift-left-gates.md#amendment--2026-07-29-before-the-gate-merged-anywhere)
+argues the race is driven by **repush volume**, not by `strict`: `racedShare`
+counts PRs green over ten minutes *and repushed*, and `strict` never controlled
+the repush. It predicts that a local pre-push gate moves `racedShare` below 8%
+**with `strict` unchanged**.
+
+If that happens, H3 is not merely refuted — it was measuring someone else's
+mechanism. The operator called this before the data did, on 2026-07-29: *"it was
+us treating the symptom not the root cause."*
+
+Note the consequence for H3's rollback rule: if H4's amendment confirms, turning
+`strict` back on is the *default* action for a refuted H3, and it should be done
+rather than quietly skipped because the race improved for another reason.
+
 ## Result
 
 _To be completed on 2026-08-11. Verdict: `confirmed` / `refuted` /

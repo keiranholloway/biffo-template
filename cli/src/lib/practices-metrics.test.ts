@@ -665,19 +665,28 @@ describe('filterToWindow', () => {
 describe('priorWindow', () => {
   const now = Date.parse('2026-07-29T00:00:00Z')
 
-  it('spans the long window up to the start of the rate window', () => {
+  it('is the equal-length period immediately before the rate window', () => {
     const p = priorWindow([1, 7, 90], now)
-    expect(p.days).toBe(83)
-    expect(p.since).toBe('2026-04-30T00:00:00.000Z')
+    // Last week, against this week — matched in length, sharing no merge.
+    expect(p.days).toBe(7)
+    expect(p.since).toBe('2026-07-15T00:00:00.000Z')
     expect(p.until).toBe('2026-07-22T00:00:00.000Z')
   })
 
   /**
-   * A baseline shorter than the reading it anchors is a second reading with a
-   * worse sample, not a reference line.
+   * The baseline must be the same LENGTH as the reading, not merely disjoint
+   * from it. 90d-minus-7d was independent but compared a week to a quarter, so
+   * the reference was dominated by whichever regime prevailed over 83 days —
+   * the green-wait units mismatch, one level up.
    */
-  it('declines when the remainder would be shorter than the rate window', () => {
-    expect(priorWindow([7, 10], now)).toBeNull()
+  it('does not stretch to whatever is left of the long window', () => {
+    expect(priorWindow([1, 7, 90], now).days).toBe(7)
+    expect(priorWindow([1, 7, 30], now).days).toBe(7)
+    // The long window only supplies context; it never sets the baseline length.
+    expect(priorWindow([1, 7, 90], now)).toEqual(priorWindow([1, 7, 30], now))
+  })
+
+  it('needs a rate window to derive one', () => {
     expect(priorWindow([7], now)).toBeNull()
     expect(priorWindow([], now)).toBeNull()
   })

@@ -2,7 +2,10 @@
 
 **Status:** `running`
 **Pre-registered:** 2026-07-29, **before** the gate is merged anywhere
-**Review on:** 2026-08-28 (30 days — the same window length as the baseline)
+**Review on:** 2026-08-05 (**7 days** — the estate's standard review cadence)
+**Amended:** 2026-07-29 — review window cut from 30 days to 7 (#850). Baseline
+recomputed on the same window; the metric moved 62% → 66%, so nothing about the
+prediction is loosened. See [Amendment](#amendment--2026-07-29-review-cadence-cut-to-7-days).
 
 > Written and committed before the intervention, like [H1](./H1-merge-race.md),
 > [H2](./H2-merge-queue.md) and [H3](./H3-relax-strict.md). A prediction written
@@ -48,10 +51,34 @@ commands. If `pnpm run test` fails on a runner, it fails locally.
 
 ## Baseline — measured 2026-07-29, before any change
 
-30 days of GitHub Actions history, all twelve repos that run CI. Failed runs
-enumerated via the API; for each, every failing step of every failing job.
-Sampled at 40 failed runs per repo (only `biffo-template` and `tabsii-platform`
-exceed that).
+**7 days** of GitHub Actions history (the estate's review window since #850),
+all twelve repos that run CI. Failed runs enumerated via the API; for each,
+every failing step of every failing job.
+
+| repo | failing steps | locally catchable | share |
+| --- | ---: | ---: | ---: |
+| tabsii-com/tabsii-platform | 77 | 64 | 83% |
+| keiranholloway/biffo-template | 68 | 40 | 59% |
+| keiranholloway/biffo-platform | 35 | 24 | 69% |
+| keiranholloway/biffo-plugin-ideation | 6 | 3 | 50% |
+| keiranholloway/biffo-platform-app | 3 | 1 | 33% |
+| keiranholloway/biffo-plugin-idea-scout | 3 | 0 | 0% |
+| tabsii-com/tabsii-app | 2 | 0 | 0% |
+| tabsii-com/tabsii-intake | 2 | 0 | 0% |
+| tabsii-com/tabsii-crm | 1 | 0 | 0% |
+| tabsii-com/tabsii-geo | 1 | 0 | 0% |
+| tabsii-com/tabsii-marketplace | 1 | 0 | 0% |
+| **estate, 7 days** | **199** | **132** | **66%** |
+
+Run-level: **144 failed runs of 2,768** (5.2%). Top kinds: tests 47, format 26,
+lint 14, typecheck 13, **core ownership guard 11**, RLS tests 7.
+
+### The original 30-day baseline, kept for comparison
+
+The window changed on 2026-07-29; this is what the same method produced over 30
+days, and it is retained so the switch can be audited rather than taken on
+trust. The headline moved 62% → 66%, which is why the shorter window was judged
+to cost no comparability.
 
 | repo | failing steps | locally catchable | share |
 | --- | ---: | ---: | ---: |
@@ -116,13 +143,14 @@ with enough volume to read:
    by vendoring into the skeletons plus a one-time copy-in.
 
 Rollout order is template → instances → siblings/plugins, so a partial result is
-still interpretable: the three instance repos carry 200 of the 211.
+still interpretable: the three instance repos carry **128 of the 132** catchable
+failing steps in the 7-day baseline.
 
 ## Prediction
 
-By **2026-08-28**, over a 30-day window, measured identically to the baseline:
+By **2026-08-05**, over a **7-day** window, measured identically to the baseline:
 
-- **Locally-catchable share of failing CI steps below 20%**, from 62% — primary.
+- **Locally-catchable share of failing CI steps below 20%**, from **66%** — primary.
 - **Arming at 100%** of working trees that have hooks configured — i.e. **zero
   `DEAD`** — secondary. This one should be near-immediate; if it is not, the
   primary result is uninterpretable.
@@ -133,6 +161,36 @@ The primary target is 20% rather than 0% deliberately. Some locally-catchable
 failures will always reach CI: the gate is skippable, `pytest` is excluded by
 design, and a check can pass locally and fail on a runner for environment
 reasons. A prediction of zero would be refuted by the tool working as intended.
+
+### Amendment — 2026-07-29, review cadence cut to 7 days
+
+**Every review window in the register is now 7 days.** This estate merged 616
+PRs in seven days; a 30-day feedback loop means four opportunities a year to
+learn something, and a reference window that is mostly history.
+
+Verified before changing it rather than assumed, because a shorter window is
+only better if it still carries signal:
+
+| | 30-day baseline | **7-day baseline** |
+| --- | ---: | ---: |
+| failed CI runs, estate | 373 | **144** |
+| failing steps classified | 342 | **199** |
+| **locally catchable** | **62%** | **66%** |
+
+The metric barely moves between windows, so the switch costs no comparability —
+and 199 steps is ample to classify. The `inconclusive` floor is rescaled from
+100 failed runs to 40 with the window.
+
+**The prediction is unchanged and the target is not loosened.** The baseline it
+must beat went *up* (62% → 66%), so the same `<20%` target is now a slightly
+larger improvement to achieve. An amendment that moved a goalpost in the easy
+direction would be worthless.
+
+The related change in the collector: `priorWindow` now returns the **equal-length
+period immediately before** the rate window — last week against this week —
+rather than the long window minus the rate window. 90d-minus-7d was independent
+but not *matched*, and comparing a week to an 83-day average is the same units
+mismatch the green-wait tile had, one level up.
 
 ### Amendment — 2026-07-29, before the gate merged anywhere
 
@@ -208,7 +266,7 @@ tracks.
 
 ## Falsification
 
-**Refuted if the locally-catchable share is still above 40% on 2026-08-28** —
+**Refuted if the locally-catchable share is still above 40% on 2026-08-05** —
 i.e. the intervention closed less than a third of the gap.
 
 **Also refuted, independently of the primary metric,** if any of the three
@@ -224,8 +282,9 @@ own: `repushRate` staying above 25% means the race has a cause neither
 experiment identified, not that the local gate failed at what it was built for.
 Recorded this way so a null result there is reported rather than absorbed.
 
-**Inconclusive** if fewer than 100 CI runs fail estate-wide in the window — too
-few failing steps to classify.
+**Inconclusive** if fewer than 40 CI runs fail estate-wide in the window — too
+few failing steps to classify. Rescaled from 100-in-30-days with the window; the
+last 7 days carried **144**, so this is a floor rather than a live risk.
 
 **Most likely reason for refutation, stated in advance:** rollout does not
 finish. The three instance repos carry 95% of the catchable failures, and two of
@@ -337,7 +396,7 @@ refuted H4 costs only the time spent.
 
 - **n=1, no control group.** Interrupted time series against a pre-registered
   prediction, like H3. Weaker than a controlled trial; say so when reporting.
-- **H3 is running concurrently** on `biffo-template` until 2026-08-11 and
+- **H3 is running concurrently** on `biffo-template` until 2026-08-04 and
   changes merge behaviour on the same repo that carries the largest share of the
   baseline. The two are not separable in the 2026-08-28 reading.
 - **The baseline is sampled at 40 failed runs per repo.** Only

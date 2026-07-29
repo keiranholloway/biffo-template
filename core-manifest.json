@@ -31,6 +31,7 @@
     "pyproject.toml",
     "scripts/",
     "scripts/hook-audit.sh",
+    "scripts/install-hooks.sh",
     "scripts/verify.sh",
     "services/_plugin-host/",
     "services/_plugins/",

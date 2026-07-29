@@ -17,7 +17,7 @@
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yaml,yml,css}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yaml,yml,css}\"",
     "verify": "sh scripts/verify.sh",
-    "prepare": "git config core.hooksPath .githooks && echo 'hooks armed: .githooks (tracked — present in every worktree)'"
+    "prepare": "sh scripts/install-hooks.sh"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.6.1",

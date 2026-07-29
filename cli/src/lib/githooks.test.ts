@@ -45,11 +45,16 @@ describe('git hooks are armed without an install step', () => {
     expect(body.startsWith('#!')).toBe(true)
   })
 
-  it('points core.hooksPath at the tracked directory on install', () => {
+  it('installs shared dispatchers on prepare, rather than setting core.hooksPath', () => {
     const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'))
-    expect(pkg.scripts.prepare).toContain('core.hooksPath .githooks')
+    expect(pkg.scripts.prepare).toContain('install-hooks.sh')
+    // `core.hooksPath` was the #838 fix and it is deliberately NOT used any
+    // more: it is relative, resolved per worktree, and shared, so setting it
+    // disarms every worktree on a branch that predates `.githooks/` — the ones
+    // AGENTS.md §1 forbids rebasing. The shared `.git/hooks` reaches them.
+    expect(pkg.scripts.prepare).not.toContain('core.hooksPath')
     // husky's `prepare` is what created the gitignored runner directory. If it
-    // comes back, so does the bug.
+    // comes back, so does the original bug.
     expect(pkg.scripts.prepare).not.toContain('husky')
     expect(pkg.devDependencies?.husky).toBeUndefined()
   })

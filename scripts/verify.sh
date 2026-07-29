@@ -89,6 +89,13 @@ SKIPPED=""
 # break-even at one catch per 336 pushes, against an observed rate of roughly
 # one per 165.
 #
+# The command is plain `pytest -q`, matching CI. `--no-cov` looked like a free
+# speed-up and is a **pytest-cov flag**: repos without that plugin -- e.g.
+# biffo-plugin-ideation, whose CI runs `uv run pytest -q` -- reject it outright
+# with `unrecognized arguments`. That is the gate failing where CI passes, which
+# H5 pre-registered as a condition that refutes it, and it was caught during
+# rollout rather than by review.
+#
 # BIFFO_VERIFY_PYTEST overrides in BOTH directions: 1 forces it in, 0 forces it
 # out. An override that only forces on would leave no way to escape a suite that
 # has quietly grown past the threshold.
@@ -108,9 +115,9 @@ pytest_is_fast() {
     # means "too slow", which is the correct verdict rather than a hang.
     _start=$(date +%s)
     if [ "$_d" = "." ]; then
-      timeout "$((PYTEST_BUDGET_SECONDS * 4))" uv run pytest -q --no-cov >/dev/null 2>&1 || true
+      timeout "$((PYTEST_BUDGET_SECONDS * 4))" uv run pytest -q >/dev/null 2>&1 || true
     else
-      timeout "$((PYTEST_BUDGET_SECONDS * 4))" uv run --directory "$_d" pytest -q --no-cov >/dev/null 2>&1 || true
+      timeout "$((PYTEST_BUDGET_SECONDS * 4))" uv run --directory "$_d" pytest -q >/dev/null 2>&1 || true
     fi
     _secs=$(($(date +%s) - _start))
     echo "$_secs" > "$_cache" 2>/dev/null || true
@@ -284,7 +291,7 @@ if [ -n "$PY_DIRS" ]; then
         if [ "$PYTEST" = "0" ]; then
           skip "pytest$suffix" "excluded by BIFFO_VERIFY_PYTEST=0"
         elif [ -n "$PYTEST" ] || { [ -z "$LIST" ] && pytest_is_fast "."; }; then
-          ci_has "pytest" && run_check "pytest$suffix" uv run pytest -q --no-cov
+          ci_has "pytest" && run_check "pytest$suffix" uv run pytest -q
         else
           skip "pytest$suffix" "suite is slower than ${PYTEST_BUDGET_SECONDS}s - CI keeps it"
         fi
@@ -296,7 +303,7 @@ if [ -n "$PY_DIRS" ]; then
         if [ "$PYTEST" = "0" ]; then
           skip "pytest$suffix" "excluded by BIFFO_VERIFY_PYTEST=0"
         elif [ -n "$PYTEST" ] || { [ -z "$LIST" ] && pytest_is_fast "$d"; }; then
-          ci_has "pytest" && run_check "pytest$suffix" uv run --directory "$d" pytest -q --no-cov
+          ci_has "pytest" && run_check "pytest$suffix" uv run --directory "$d" pytest -q
         else
           skip "pytest$suffix" "suite is slower than ${PYTEST_BUDGET_SECONDS}s - CI keeps it"
         fi

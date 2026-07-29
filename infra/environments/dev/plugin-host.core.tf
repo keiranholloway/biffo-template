@@ -102,7 +102,7 @@ resource "aws_lambda_permission" "plugin_host_api_gateway" {
 # from its token check (mount.py's _is_public_admin_asset) — its JSON API
 # routes stay fully gated either way.
 resource "aws_apigatewayv2_route" "plugin_admin_shell_root" {
-  api_id             = module.api_gateway.api_id
+  api_id = module.api_gateway.api_id
   # No trailing slash: API Gateway v2 rejects a route_key with an empty final
   # path segment ("Part of the given route key path is empty", confirmed by a
   # real failed apply) -- there is no way to express the trailing-slash form

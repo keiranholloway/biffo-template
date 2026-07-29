@@ -114,6 +114,13 @@ sync_repo() {
   # Install the JS/Python deps the gate will now check, or its own pre-push
   # correctly refuses this push -- and reaching for BIFFO_SKIP_VERIFY to ship a
   # gate would be the counter-metric H4 pre-registered as refuting itself.
+  # The ROOT package too, not only the nested ones. The first version matched
+  # `--dir` paths only, so a repo whose package.json is at the root -- tabsii-map
+  # -- got no install and the gate refused the push with `tsc: not found`. It
+  # then reported GATE REFUSED, which was true and useless: the gate was right,
+  # the installer had skipped the one layout it could not see.
+  [ -f "$wt/package.json" ] && (cd "$wt" && pnpm install --frozen-lockfile >/dev/null 2>&1 || true)
+  [ -f "$wt/pyproject.toml" ] && (cd "$wt" && uv sync --all-groups >/dev/null 2>&1 || true)
   for p in $( (cd "$wt" && sh scripts/verify.sh --list 2>/dev/null) | grep -oE '\-\-dir(ectory)? \./[A-Za-z0-9_./-]+' | awk '{print $2}' | sort -u); do
     (cd "$wt/$p" 2>/dev/null && { pnpm install --frozen-lockfile >/dev/null 2>&1 ||
       pnpm install --frozen-lockfile --ignore-workspace >/dev/null 2>&1 ||

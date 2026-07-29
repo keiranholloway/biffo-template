@@ -125,6 +125,7 @@ async def create_run(
     dry_run: bool = False,
     idempotency_key: str | None = None,
     prompt_version_id: str | None = None,
+    prompt_version: int | None = None,
 ) -> tuple[AgentRun, bool]:
     """Record a requested run in ``pending``, refusing anything past the ceiling.
 
@@ -186,6 +187,7 @@ async def create_run(
         dry_run=dry_run,
         idempotency_key=idempotency_key,
         prompt_version_id=prompt_version_id,
+        prompt_version=prompt_version,
     )
 
     if idempotency_key is None:

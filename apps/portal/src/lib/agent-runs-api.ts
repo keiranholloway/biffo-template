@@ -73,6 +73,7 @@ export interface AgentRunResponse {
   started_at: string | null
   completed_at: string | null
   prompt_version_id: string | null
+  prompt_version: number | null
 }
 
 /** Server-side filters the list endpoint accepts. */

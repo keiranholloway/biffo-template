@@ -236,8 +236,8 @@ export function AgentRunDetailClient() {
         <Stat label="Depth" value={String(run.depth)} />
         <Stat label="Started" value={formatWhen(run.started_at)} />
         <Stat label="Completed" value={formatWhen(run.completed_at)} />
-        {run.prompt_version_id != null && (
-          <Stat label="Prompt version" value={run.prompt_version_id} />
+        {run.prompt_version != null && (
+          <Stat label="Prompt version" value={String(run.prompt_version)} />
         )}
       </div>
 

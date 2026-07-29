@@ -9,11 +9,17 @@ recording the previous values whenever an agent is updated so the full timeline
 can be reconstructed. Each edit gets a monotonic version number per agent,
 starting at 1, so admins have a stable label for each change.
 
-Simultaneously adds a nullable prompt_version_id column to agent_runs, so
-each run can record which PluginChatAgent row (prompt version) produced it
-when the agent was resolved from the registry. Null for runs created before
-this column or runs whose instructions came inline rather than from the
-registry (ADR-0017 seam #1 extension M2).
+Simultaneously adds nullable prompt_version_id and prompt_version columns to
+agent_runs, so each run can record which PluginChatAgent row produced it and
+which generation of that row (prompt version number). Together they identify
+a specific version of the agent's prompt. Null for runs created before this
+column or runs whose instructions came inline rather than from the registry
+(ADR-0017 seam #1 extension M2).
+
+Generation is a monotonic counter per agent: initially 1, then increments each
+time the agent is edited (history[version=N] stores values before the N-th edit).
+To see what generation G ran with: read history[version=G] if exists, else the
+live row (current generation G's values, not yet edited).
 """
 
 from collections.abc import Sequence
@@ -60,15 +66,20 @@ def upgrade() -> None:
     op.create_index("ix_plugin_chat_agent_history_tenant_id", "plugin_chat_agent_history", ["tenant_id"], unique=False)
     op.create_index("ix_plugin_chat_agent_history_plugin_chat_agent_id", "plugin_chat_agent_history", ["plugin_chat_agent_id"], unique=False)
 
-    # Add prompt_version_id to agent_runs
+    # Add prompt_version_id and prompt_version to agent_runs
     op.add_column(
         "agent_runs",
         sa.Column("prompt_version_id", sa.String(length=36), nullable=True),
     )
+    op.add_column(
+        "agent_runs",
+        sa.Column("prompt_version", sa.Integer(), nullable=True),
+    )
 
 
 def downgrade() -> None:
-    # Remove prompt_version_id from agent_runs
+    # Remove prompt_version and prompt_version_id from agent_runs
+    op.drop_column("agent_runs", "prompt_version")
     op.drop_column("agent_runs", "prompt_version_id")
 
     # Drop the plugin_chat_agent_history table

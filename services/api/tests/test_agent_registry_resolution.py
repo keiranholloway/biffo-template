@@ -337,3 +337,122 @@ def test_run_records_no_prompt_version_id_for_inline_instructions(app, client):
     body = resp.json()
     # No registry row was consulted, so no version id
     assert body["prompt_version_id"] is None
+
+
+def test_run_records_prompt_version_generation_tracking(app, client):
+    """Successive runs after edits record different generations to track which prompt produced each.
+
+    The generation number increments each time the agent is edited, so:
+    - Run before edits: generation=1 (with original prompt)
+    - After 1st edit: history[version=1] stores original prompt, live row is generation 2
+    - Run after 1st edit: generation=2 (with new prompt)
+    - After 2nd edit: history[version=2] stores previous prompt, live row is generation 3
+    - Run after 2nd edit: generation=3 (with newest prompt)
+
+    To retrieve what generation G ran with: read history[version=G] if exists, else live row.
+    """
+    import sqlalchemy as sa
+    from api.models.plugin_chat_agent import PluginChatAgent
+    from api.models.plugin_chat_agent_history import PluginChatAgentHistory
+    from sqlalchemy import select
+
+    fastapi, session_factory = app
+
+    async def seed_agent_and_create_run_1():
+        async with session_factory() as session:
+            agent = await _seed_agent(
+                session,
+                system_prompt="Original prompt version 1",
+            )
+            await session.commit()
+            return agent
+
+    agent = asyncio.run(seed_agent_and_create_run_1())
+
+    # Run 1: before any edits, should have generation=1, original prompt
+    resp1 = client.post(
+        "/api/v1/internal/agent-runs",
+        json={
+            "agent_name": "demo-enricher",
+            "definition_snapshot": {"model": "anthropic/claude-opus-4-8"},
+            "input_payload": {"demo_request_id": "d1"},
+        },
+    )
+    assert resp1.status_code == 201, resp1.text
+    run1 = resp1.json()
+    assert run1["prompt_version"] == 1
+    assert "Original prompt version 1" in run1["definition_snapshot"]["instructions"]
+
+    # Edit the agent: update prompt to version 2
+    async def edit_agent_prompt():
+        async with session_factory() as session:
+            # Manually simulate what the update route does: create history row, then update live row
+
+            agent_row = await session.scalar(
+                select(PluginChatAgent).where(
+                    PluginChatAgent.id == agent.id,
+                )
+            )
+            assert agent_row is not None
+
+            # Count history rows to compute next version
+            history_count = await session.scalar(
+                select(sa.func.count())
+                .select_from(PluginChatAgentHistory)
+                .where(
+                    PluginChatAgentHistory.plugin_chat_agent_id == agent.id,
+                    PluginChatAgentHistory.tenant_id == TENANT,
+                )
+            )
+            next_version = (history_count or 0) + 1
+
+            # Store history row with previous values
+            history = PluginChatAgentHistory(
+                tenant_id=TENANT,
+                plugin_chat_agent_id=agent_row.id,
+                plugin_name=agent_row.plugin_name,
+                agent_key=agent_row.agent_key,
+                version=next_version,
+                agent_name=agent_row.agent_name,
+                role=agent_row.role,
+                system_prompt=agent_row.system_prompt,  # Previous value
+                model=agent_row.model,
+                required_group=agent_row.required_group,
+                active=agent_row.active,
+                max_history_messages=agent_row.max_history_messages,
+                max_output_tokens=agent_row.max_output_tokens,
+                timeout_seconds=agent_row.timeout_seconds,
+                changed_by="test@example.com",
+            )
+            session.add(history)
+
+            # Update the live row
+            agent_row.system_prompt = "Updated prompt version 2"
+            await session.commit()
+
+    asyncio.run(edit_agent_prompt())
+
+    # Run 2: after 1st edit, should have generation=2, new prompt
+    resp2 = client.post(
+        "/api/v1/internal/agent-runs",
+        json={
+            "agent_name": "demo-enricher",
+            "definition_snapshot": {"model": "anthropic/claude-opus-4-8"},
+            "input_payload": {"demo_request_id": "d2"},
+        },
+    )
+    assert resp2.status_code == 201, resp2.text
+    run2 = resp2.json()
+    assert run2["prompt_version"] == 2, (
+        f"Run after edit should have generation 2, got {run2.get('prompt_version')}"
+    )
+    assert "Updated prompt version 2" in run2["definition_snapshot"]["instructions"]
+
+    # Verify that run1's prompt was the original and run2's was the new one
+    # This proves each run captured the right version
+    assert "Original prompt version 1" in run1["definition_snapshot"]["instructions"], (
+        "Run 1 should have original prompt"
+    )
+    assert "Updated prompt version 2" in run2["definition_snapshot"]["instructions"], (
+        "Run 2 should have updated prompt"
+    )

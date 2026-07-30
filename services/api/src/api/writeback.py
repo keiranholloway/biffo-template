@@ -35,6 +35,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .config import settings
 from .identity import get_identity_provider
 from .models.agent_run import AgentRun
 from .models.orchestration import ActionLog, WorkflowDefinition, WorkflowRun
@@ -52,10 +53,11 @@ logger = Logger()
 #: The action type recorded on the audit log for a write-back.
 WRITEBACK_ACTION = "writeback"
 
-#: How many consecutive denials before a definition disables itself. A workflow
-#: whose owner has left should stop trying, visibly, rather than generating a
-#: denial per event forever.
-MAX_CONSECUTIVE_DENIALS = 3
+#: Removed in favour of ``settings.writeback_max_consecutive_denials`` (#680).
+#:
+#: Read at call time rather than captured here at import: nothing outside this
+#: module imported the old constant, so there was no compatibility reason to keep
+#: a module attribute, and a call-time read is the one a test can monkeypatch.
 
 
 class WriteBackNotFoundError(Exception):
@@ -294,6 +296,9 @@ async def _deny(
     logger.warning("Write-back denied", extra={"agent_run_id": run_id, "reason": reason})
     await _record(db, tenant_id=tenant_id, run_id=run_id, status="failed", error=reason)
     if definition is not None:
+        # Read once per call, so the query's limit and the comparison below can
+        # never disagree — a re-read between them would be a silent off-by-one.
+        threshold = settings.writeback_max_consecutive_denials
         recent = await db.execute(
             select(ActionLog)
             .where(
@@ -301,10 +306,10 @@ async def _deny(
                 ActionLog.action_type == WRITEBACK_ACTION,
             )
             .order_by(ActionLog.created_at.desc())
-            .limit(MAX_CONSECUTIVE_DENIALS)
+            .limit(threshold)
         )
         rows = list(recent.scalars())
-        if len(rows) >= MAX_CONSECUTIVE_DENIALS and all(r.status == "failed" for r in rows):
+        if len(rows) >= threshold and all(r.status == "failed" for r in rows):
             definition.enabled = False
             await db.flush()
             logger.warning(

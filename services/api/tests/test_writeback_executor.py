@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 from api import writeback_targets as wb
+from api.config import settings
 from api.database import get_db
 from api.middleware.service_auth import ServicePrincipal, require_service_principal
 from api.models.agent_run import AgentRun
@@ -766,3 +767,55 @@ def test_a_create_whose_trigger_lacks_the_key_is_denied_by_name(app, client):
 
     # Nothing half-written.
     assert asyncio.run(_count()) == 0
+
+
+def test_the_auto_disable_threshold_comes_from_settings_not_a_literal(app, client, monkeypatch):
+    """The disable-after-N-denials threshold is configurable, and actually drives it (#680).
+
+    Before #680 the `3` was a module constant, and **nothing tested it at all** —
+    so "configurable" could have meant a setting that is read and ignored. This
+    asserts the behaviour changes with the setting rather than asserting the
+    setting exists.
+
+    Set to 1, so a single denial must disable the definition. Under the default of
+    3 it would stay enabled, which is what makes this a real test of the wiring
+    rather than of the default.
+    """
+    fastapi, factory = app
+    del fastapi
+    monkeypatch.setattr(settings, "writeback_max_consecutive_denials", 1)
+
+    # The template's default provider refuses, so this run is denied.
+    wb._provider = wb._default_provider  # noqa: SLF001
+    run_id = asyncio.run(_seed(factory))
+    assert _post(client, run_id).json()["status"] == "denied"
+
+    async def _enabled() -> bool:
+        async with factory() as session:
+            rows = list((await session.execute(select(WorkflowDefinition))).scalars())
+            assert len(rows) == 1, "fixture should seed exactly one definition"
+            return rows[0].enabled
+
+    assert asyncio.run(_enabled()) is False, (
+        "one denial with the threshold set to 1 should disable the definition; "
+        "it stayed enabled, so the setting is not driving the comparison"
+    )
+
+
+def test_the_default_threshold_does_not_disable_on_a_single_denial(app, client):
+    """The negative control for the test above.
+
+    Without this, setting the threshold to 1 and seeing `enabled is False` proves
+    nothing — a definition disabled after *every* denial would pass it too.
+    """
+    _, factory = app
+    wb._provider = wb._default_provider  # noqa: SLF001
+    run_id = asyncio.run(_seed(factory))
+    assert _post(client, run_id).json()["status"] == "denied"
+
+    async def _enabled() -> bool:
+        async with factory() as session:
+            rows = list((await session.execute(select(WorkflowDefinition))).scalars())
+            return rows[0].enabled
+
+    assert asyncio.run(_enabled()) is True

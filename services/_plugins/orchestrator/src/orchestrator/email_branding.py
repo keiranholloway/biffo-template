@@ -285,6 +285,4 @@ def _text_to_html_paragraphs(text: str) -> str:
             continue
         escaped = html.escape(block).replace("\n", "<br>")
         paragraphs.append(f'<p style="margin:0 0 16px 0;">{escaped}</p>')
-    if not paragraphs:
-        return '<p style="margin:0;">&nbsp;</p>'
     return "\n".join(paragraphs)

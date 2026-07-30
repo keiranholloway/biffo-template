@@ -156,6 +156,13 @@ def test_no_logo_falls_back_to_text_title_not_a_broken_image():
     assert "Acme" in html_doc
 
 
+def test_blank_company_name_and_no_logo_falls_back_to_placeholder():
+    branding = EmailBranding(company_name="", logo_url="")
+    html_doc = render_email_html(branding, subject="s", text_body="b")
+    assert "<img" not in html_doc
+    _assert_well_formed_html(html_doc)
+
+
 def test_viewport_meta_for_mobile_legibility():
     html_doc = render_email_html(EmailBranding(), subject="s", text_body="b")
     assert 'name="viewport"' in html_doc

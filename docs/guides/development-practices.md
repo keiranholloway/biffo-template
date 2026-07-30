@@ -225,6 +225,9 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | [#883](https://github.com/keiranholloway/biffo-template/issues/883) | **A file was added to the shared set, both skeletons were fixed, and `shared-sync.sh` was never run** — so 12 of 13 satellites went without the hardened dependency audits it was added for. The skeleton only reaches repos created *afterwards*, which is precisely the "vendor it and hope" failure `shared-sync.sh` exists to end; the distribution defect recurred **through its own fix**. AGENTS.md §9 states in bold that adding a file to the shared set is not done until `--check` is clean. Found by running the estate audits, not by review | **drift** · process | biffo-template `shared-files.json` | 12 satellite repos | **fixed** (11 merged, 1 blocked on an unrelated red `dev`) |
 | [#714](https://github.com/keiranholloway/biffo-template/issues/714) | **The `--auto` fix was applied by hand to five repos and nothing re-asked, so the next nine were born `false`.** #714 recorded the condition and fixed the five repos that existed; measured 2026-07-29 across 13 satellites, **9 had `allow_auto_merge=false`** — the documented default in `biffo-workflow` step 7 was unavailable in two thirds of the estate, and its assertion that "all five active Biffo repos" have it was true when written and never re-checked. Same shape as [#715](https://github.com/keiranholloway/biffo-template/issues/715): branch protection has an audit that re-asks; this setting has none | **drift** · fail-open | estate-wide sync rollout | 9 repo settings | **partly fixed** — settings corrected, but nothing re-checks them (no audit) |
 | [#902](https://github.com/keiranholloway/biffo-template/pull/902) | **Arming the git hooks silently broke the cron job that measures whether hooks are armed.** Moving off husky's `core.hooksPath` into the shared `.git/hooks` means every *linked worktree* inherits them — including `practices-daily`'s, which is created by cron and never given `pnpm install`. The gate failed six checks against a missing `node_modules`, git rejected the push, and under `set -e` the job died at its last step: every audit ran, the dashboard rendered, and the snapshot reached nothing. It would have reported nothing each morning until a human noticed the series had stopped | **visibility** · drift | biffo-template `scripts/practices-daily.sh` | biffo-template `scripts/practices-daily.sh` | **fixed** ([#902](https://github.com/keiranholloway/biffo-template/pull/902)) |
+| [tabsii-platform#291](https://github.com/tabsii-com/tabsii-platform/issues/291) | **An assignment outcome computed the reason a human would need and then discarded it before writing anything down.** `assignment.py`'s `_record_outcome` receives the resolved `territory_id` and includes it in the emitted `ASSIGNMENT_CHANGED` event, but the `INSERT INTO lead_assignment_history` never writes it — the table (module `056`) has no `territory_id` column at all — so a lead auto-assigned via a territory's owner rule has an owner and a reason code (`territory_rule`) but nothing anywhere records *which* territory matched. `LeadDrawer.tsx:829` reads `leads.territory_of_interest_id` for its "Territory" field, which is semantically the candidate's own explicit selection and is never written on this path, so the field renders `—` for the majority real-world case. Found only by injecting the session's own Cognito token into a live `fetch` against the real API and comparing the raw lead row to what the drawer showed — reading `assignment.py` alone would not have caught it, since the value genuinely flows through the function, it just never lands anywhere durable | **visibility** | tabsii-platform (live click-through, dev.tabsii.com/crm) | tabsii-platform [#360](https://github.com/tabsii-com/tabsii-platform/pull/360) + tabsii-crm [#143](https://github.com/tabsii-com/tabsii-crm/pull/143) | **fixed and verified live** — a fresh lead submitted through the real intake form with postcode `LS1 1AA` shows "Territory: Leeds Central" in the deployed CRM after the fix; the original bug-report lead stays `—` since nothing existed to backfill from |
+| [tabsii-crm#133](https://github.com/tabsii-com/tabsii-crm/issues/133) | **The same lexical-closing-keyword trap recurred through a third vector: PR body prose, independent of the commit.** tabsii-crm#141's description contained `## Scope note — this PR alone does not close #133` — the same `close #N`-inside-a-denial shape as the tabsii-platform#76 row above — and the issue closed at merge anyway. Confirmed directly this time: the actual squash-merge commit message did **not** contain the phrase (only `Refs #133`), so keeping a denial out of the commit is not sufficient — GitHub's linker reads the PR description text on its own, separately from whatever ends up in the commit. Caught by re-listing open issues per this page's own standing rule, and reopened before the (genuinely incomplete, pending a companion PR in another repo) fix was mistaken for done | **visibility** · process | tabsii-crm [#133](https://github.com/tabsii-com/tabsii-crm/issues/133) | practice — never write a closing keyword in prose, in the PR body **or** the commit | **caught before harm** — reopened same session, re-closed once the companion PR (tabsii-platform#354) actually merged |
+| — | **`practices-evidence.mjs`'s own ref-extractor silently misattributed cross-repo citations to this repo, and had already corrupted 79 stored dates before anyone noticed.** `extractRefs` resolved a bracket-wrapped number like `tabsii-platform [#360](https://github.com/tabsii-com/tabsii-platform/pull/360)` by looking only at the text immediately touching the `#` — nothing does, so it fell back to the bare-ref default, `keiranholloway/biffo-template`. `--enrich` then fetched *that* repo's real, unrelated issue #360 and wrote its creation date into a tabsii-platform row as if it were the row's own. Found while adding this session's two rows above, whose `fixesIn` cross-repo PR links tripped the same path; confirmed already live in the committed dataset — the tabsii-platform#76 row's stored date was quietly a biffo-template PR's date, off by 3 weeks. Re-running the fixed extractor against the full corpus found 79 rows carrying a date computed the same wrong way. Fixed by resolving a markdown link's **URL** first, ahead of any adjoining text, and by no longer letting a bare, unlinked `#N` default to this repo when the same number is already tied to a named repo elsewhere in the row | **fail-open** | biffo-template `scripts/practices-evidence.mjs` (this page's own tooling) | biffo-template `scripts/practices-evidence.mjs` | **fixed** — 79 corrupted dates re-enriched from the correct repo; a residual gap remains for a bare same-numbered mention inside quoted prose with no adjoining prefix at all, which still has no repo to resolve against |
 
 ### What the classes say
 
@@ -245,9 +248,9 @@ _Generated by `node scripts/practices-evidence.mjs --write`. **271** classified 
 
 | Primary class | Rows | Share |
 | --- | --- | --- |
-| **visibility** | 80 | 30% |
-| drift | 63 | 23% |
-| fail-open | 62 | 23% |
+| **visibility** | 81 | 30% |
+| fail-open | 63 | 23% |
+| drift | 61 | 23% |
 | process | 42 | 15% |
 | boundary | 24 | 9% |
 
@@ -347,10 +350,10 @@ _Generated by `node scripts/practices-evidence.mjs --write` from **271** rows in
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
 | **biffo-template** | 140 of 271 (52%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
-| **tabsii-platform** | 25 of 271 (9%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
+| **tabsii-platform** | 26 of 271 (10%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
+| **tabsii-crm** | 14 of 271 (5%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
 | **biffo-plugin-idea-scout** | 14 of 271 (5%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
 | **biffo-plugin-ideation** | 14 of 271 (5%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **tabsii-crm** | 13 of 271 (5%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
 | **biffo-platform** | 10 of 271 (4%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
 | **tabsii-intake** | 5 of 271 (2%) | CI generation, branch-protection contexts, the `python-jose` removal |
 | **tabsii-marketplace** | 2 of 271 (1%) | `python-jose` removal; the credential-dependent build |
@@ -1033,6 +1036,14 @@ itself only because someone said "that was more like five hours". Second, the
 fix is mechanical rather than exhortative: log each unit **when it completes**,
 not the session when it ends. Every one of the four missing entries was
 loggable at the moment its PR merged.
+
+### Measured: three background agents, the same idle-loop, and a hand-rolled monitor that replaced them (2026-07-30)
+
+Three subagents batch-working tabsii-platform/tabsii-crm/tabsii-runners issues in parallel each independently fell into the same pattern: end the turn saying "I'll wait for CI / the monitor to report", rather than polling. Nothing wakes a stopped subagent except a message from the orchestrating session — there is no such thing as "a monitor that reports to itself" — so each one **stayed stopped** until manually resumed, sometimes producing an *identical* "still waiting" report on the very next resume.
+
+Measured: at least 5 redirect cycles across two agents (platform, crm) before the orchestrating session gave up nudging and took over the remaining merges directly with its own polling loop. Each redirect cost a full subagent turn — 250k–400k tokens per the usage figures reported — for zero new work. The fix that actually worked was not a better instruction (explicit "poll with sleep, don't end your turn" was given and still didn't stick on the third occurrence) but **removing the dependency on the agent to babysit CI entirely** — the orchestrating session polled and merged the remaining PRs itself.
+
+**Structural, not a one-off**: identical shape in two independently-briefed agents in the same session, on the third distinct occurrence for one of them despite an explicit correction after the first two. A subagent has no mechanism to resume itself on an external event; treat "wait for X" as an instruction it structurally cannot follow, not one it forgot.
 
 ### What this is not
 
@@ -2401,6 +2412,10 @@ later — `shared-files.json`, `shared-sync.sh` and skeleton `scripts/` all
 landed in between. Checking the premises cost two minutes and changed the
 design.
 
+**Live API querying beat reading the source, again — because the source looked correct.** `assignment.py`'s `territory_id` genuinely flows from resolution into `_record_outcome`; a read-through would plausibly conclude it is used. Only comparing a real lead's raw `GET /leads/{id}` response against what `LeadDrawer.tsx` rendered — using the session's own Cognito token, `fetch`'d directly in the browser console — showed the value was computed and then dropped before anything durable. The gap was in what the function does with the value, not in whether it receives one.
+
+**Recognising an infeasible live-repro and falling back to the right verification instead of skipping it.** The "two territories match the same postcode" ambiguous path looked like it needed a live click-through, until checking `territory_settings.overlap_tolerance_sqm`'s default (10 sqm — a few square metres) showed two territories can't be drawn to overlap enough to share a postcode centroid without the DB trigger rejecting the draw. Rather than either forcing a doomed manual geometry exercise or shrugging the path off as "unverified", running the existing `test_assignment_resolution_pg.py` (which already documents bypassing the same trigger deliberately, in a single transaction, as the only honest way to construct the case) against a real Postgres/PostGIS container was the correct proof — and it passed.
+
 ## What needs more thought
 
 **Nothing catches a UI that fabricates the data it claims to display.** The
@@ -3367,6 +3382,8 @@ defect existed only in the gap between them, and no gate looks at that gap. A
 generated check — every `/api/v1/...` string in the sibling's frontend resolves
 to a route in the sibling's own OpenAPI — would have caught it in CI.
 
+**A brand's own creation isn't visible in the list that's supposed to show it, and nobody chased down why.** Creating a brand under a fresh tenant (`Keiran - Test Tenant`) returned success on the first `POST /brands` (confirmed indirectly: a same-name retry got `409 Conflict`), but "Brands at a glance" kept reading "No brands yet" after a hard reload. Worked around by testing against Demo Tenant's existing brands instead, since the actual task was territory verification, not this. Left open because it wasn't chased to a root cause — flagging so it isn't lost, not claiming it's understood.
+
 ## Skills used
 
 Skills cannot be iterated on impressions. Every invocation, with an honest outcome.
@@ -3541,6 +3558,8 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **partial** | §3 ("prove the test fails without the fix") could not be applied to the new RLS tests: doing so would mean shipping a commit that disables row-level security, and there is no local PostgreSQL (no Docker daemon) to do it against. The guard-the-guard tests are the structural substitute, but the step has no guidance for "the fix is a database policy" — where reverting it is not a local edit. Worth a sentence. |
 | `claude-in-chrome` | **worked** | The only thing that verified any of this. Five milestones were confirmed by the route a user takes — including the 404 that both test suites reported green, and the agent-written score row appearing on the right lead. A skill-free session would have shipped M1 broken. |
 | `biffo-workflow` | **should have been invoked for the plan doc** | The implementation plan was written straight into the planning scratchpad and only landed in-repo when `biffo-sib-build` refused to proceed without it. Nothing was lost, but the plan is a repo artefact from the moment it is agreed, and treating it as one unit of work from the start would have been cleaner. |
+| `biffo-verify` | **worked — applied retroactively, §4/§5 in spirit** | Comparing the deployed API response and rendered UI directly (not reading `assignment.py` in isolation) is what found the territory_id gap on tabsii-platform#291 — the source alone reads as correct, since the value does flow through the function. |
+| `biffo-workflow` | **partial — the recurring `dev`-staleness/auto-merge race hit again** | Same shape already on this page: ~9 PRs this session (tabsii-platform#348, #354, #355, #356 among them) needed a manual `--auto` re-arm after `gh pr merge` reported "not up to date with base branch". Reinforces the existing finding rather than adding a new one — worth downgrading from "known gap" to "expect this every time, script around it". |
 
 ## Adding a row
 

@@ -135,6 +135,49 @@ non-auth construction sites (tests, dependency overrides) keep working.
 > what makes such a bug survivable. At that point this amendment — and the
 > `get_admin_db` question with it — should be revisited, not before.
 
+> **Amended 2026-07-30 — a provider's home is `domains/<name>/`, not `identity/`.**
+> This ADR specified how a deployment implements and installs a provider but never
+> said **where the provider may live**, and the only pointer was
+> `identity/__init__.py`'s "in the API's startup path". Both gaps resolved to
+> template-owned files, so the seam that exists to stop a deployment forking Core
+> made it fork Core anyway:
+>
+> - tabsii-platform's provider sits at `identity/tabsii.py` — an instance-only file
+>   inside a template-owned tree. `biffo core upgrade` correctly never touches it,
+>   but the commit-time guard asks only whether a path is under a template-owned
+>   prefix, so editing it needs a per-commit `Core-Divergence` trailer.
+> - Installing it means three lines wedged into template-owned `main.py`.
+>
+> **A deployment's provider module belongs in `domains/<name>/`, and the
+> `set_identity_provider(...)` call belongs in that package's `__init__.py`.**
+> `domains/` is user-owned (`core-manifest.json`), so neither the guard nor an
+> upgrade has any claim on it. Nothing in the mechanism changed — this records
+> what was already possible and blesses it:
+>
+> - `build_domain_router()` imports every package under `domains/`, treating
+>   `routers` as optional, so a domain may register with a core registry and export
+>   no routes at all.
+> - It runs at module scope in `main.py` above `handler = Mangum(app,
+>   lifespan="off")`. With no lifespan there is no startup event, so **import time
+>   is the only registration window** — and it is a sufficient one.
+> - `identity_session` already dispatches through `get_identity_provider()` per
+>   request (point 5), so middleware imported before the domains still resolves
+>   against the installed provider.
+>
+> This is the same shape ADR-0022 applied to product-domain code, and the same
+> import-time registration `api.events.registry` documents for event types. It is
+> also what tabsii's own `domains/tabsii/__init__.py` already does for two other
+> core registries, and what its divergence register asked for.
+>
+> The ordering is now pinned by `test_identity_provider_registration.py`. It was
+> load-bearing and untested, which is precisely how #668 — the same
+> `build_domain_router()` call, moved one line — silently dropped 21 routes past a
+> green suite and a green CI.
+>
+> ADR-0002's constraint at *Compliance* is unaffected: `domains/` is inside
+> `services/api/`, so providers still live in the one service holding a database
+> client.
+
 ## Options Considered
 
 ### Option A — `IdentityProvider` seam (chosen)

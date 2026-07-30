@@ -49,3 +49,47 @@ routes it did as a native router. Nothing else changes.
 - DDL-imported schemas live under the (also user-owned) `db/imports/<name>/`.
 - A domain that fails to import raises at startup — a broken product domain
   should surface at deploy, not silently serve nothing.
+
+## Registering with a core seam (including your identity provider)
+
+`routers` is not the only thing a domain may export. Because discovery **imports**
+your package, its `__init__.py` is a user-owned place to register with any core
+registry — the same mechanism `api.events.registry` documents for event types:
+registration happens at import time, so a downstream repo registers *without
+editing a template-owned file*.
+
+The seam this matters most for is **identity**. If your deployment's users do not
+live in `public.users`, [ADR-0012](../../../../../docs/ADR/0012-identity-provider-seam.md)
+lets you implement `IdentityProvider` instead of forking the auth path — and the
+provider module belongs **here, in `domains/<name>/`**, not in the template-owned
+`identity/` package:
+
+```python
+# domains/<name>/identity.py
+class MyIdentityProvider:  # structural — do not subclass IdentityProvider
+    ...
+
+
+# domains/<name>/__init__.py
+from api.identity import set_identity_provider
+
+from .identity import MyIdentityProvider
+
+set_identity_provider(MyIdentityProvider())
+```
+
+**Why this is sufficient, and why it is the only window.** `main.py` builds its
+Lambda handler with `lifespan="off"`, so there is no startup event to hook —
+import time is the only opportunity. `build_domain_router()` runs at module scope
+above that handler, and importing your package is what runs the call, so the
+provider is installed before the first request is served. `identity_session`
+dispatches through `get_identity_provider()` per request rather than binding a
+session at import time, so middleware imported earlier still picks your provider
+up. This ordering is pinned by
+`services/api/tests/test_identity_provider_registration.py` — do not rely on it
+without that guard, because the last unpinned ordering in this file's mechanism
+(#668) silently dropped 21 routes with a green suite.
+
+Putting the provider in `identity/` instead is what this carve-out exists to
+avoid: that path is template-owned, so the commit-time guard blocks edits and
+every change needs a per-commit `Core-Divergence` trailer.

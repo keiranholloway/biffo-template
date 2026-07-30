@@ -18,6 +18,38 @@
 
 set -euo pipefail
 
+# Terminate the log deliberately, so a truncated run is distinguishable from a
+# complete one.
+#
+# `~/.practices-daily.log` is append-only across runs, and until now a run that
+# died in the middle looked exactly like one that finished: the last line was
+# whatever it happened to reach. A `set -e` abort printed nothing at all.
+#
+# That ambiguity is not hypothetical — it cost real time on 2026-07-30, when a run
+# piped into `head` took SIGPIPE and its truncated log was misread as evidence of
+# a bug in this script's exit status. The script was fine; the log could not say
+# so. A marker is the difference between "it finished" and "this is where I
+# stopped reading".
+#
+# An EXIT trap rather than an `echo` at the bottom: this fires on the early
+# `exit 0` (nothing to commit), on every `set -e` abort, and on any exit path
+# added later. A line at the bottom would cover only the one path that reaches it
+# — which is the same "guard that protects one caller, not the class" shape this
+# scoreboard keeps recording.
+#
+# Caveat worth stating: a SIGPIPE'd run is killed rather than exiting, so the trap
+# may not fire. Cron redirects to a file, not a pipe, so the real path is covered;
+# an interactive `| head` is not, and that is the case that caused the confusion.
+_finish() {
+  _rc=$?
+  if [ "$_rc" -eq 0 ]; then
+    echo "practices-daily: DONE $(date -u +%FT%TZ)"
+  else
+    echo "practices-daily: ABORTED rc=$_rc $(date -u +%FT%TZ)" >&2
+  fi
+}
+trap _finish EXIT
+
 # cron has no ssh-agent, and these keys are non-default names — so without this
 # every remote operation fails with "Permission denied (publickey)" at 07:30 and
 # the snapshot silently never reaches GitHub. Both keys are offered because the

@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "collectedAt": "2026-07-30T07:28:51.382Z",
+  "collectedAt": "2026-07-30T11:13:36.235Z",
   "windowDays": [
     1,
     7,
@@ -8,48 +8,48 @@
   ],
   "windows": {
     "1": {
-      "since": "2026-07-29T07:28:51.296Z",
+      "since": "2026-07-29T11:13:36.144Z",
       "repos": {
         "keiranholloway/biffo-template": {
           "role": "template",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 47,
+          "mergedPrs": 43,
           "workMix": {
-            "merges": 47,
-            "delivery": 25.5,
-            "rework": 36.2,
+            "merges": 43,
+            "delivery": 23.3,
+            "rework": 37.2,
             "toil": 0,
-            "quality": 0,
-            "docs": 38.3,
+            "quality": 7,
+            "docs": 32.6,
             "unconventional": 0,
-            "toilRatio": 36.2,
+            "toilRatio": 37.2,
             "counts": {
-              "delivery": 12,
-              "rework": 17,
+              "delivery": 10,
+              "rework": 16,
               "toil": 0,
-              "quality": 0,
-              "docs": 18,
+              "quality": 3,
+              "docs": 14,
               "unconventional": 0,
               "other": 0
             },
             "sideCounts": {
-              "platform": 47,
+              "platform": 43,
               "product": 0
             },
             "productDelivery": 0
           },
           "timeToFeature": {
-            "linked": 10,
+            "linked": 16,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 39,
-            "coverage": 21.3,
-            "hoursP50": 1.1,
-            "hoursP90": 40.7,
-            "hoursMax": 51.4,
+            "prsWithNoClosingIssue": 30,
+            "coverage": 37.2,
+            "hoursP50": 2.2,
+            "hoursP90": 71.5,
+            "hoursMax": 74.8,
             "running": {
               "measured": 0,
-              "awaitingDeploy": 10,
+              "awaitingDeploy": 16,
               "hoursP50": null,
               "hoursP90": null,
               "deployGapP50": null,
@@ -67,57 +67,59 @@
             }
           },
           "gates": {
-            "failingSteps": 6,
-            "locallyCatchable": 6,
+            "failingSteps": 9,
+            "locallyCatchable": 9,
             "notLocallyCatchable": 0,
             "unclassified": 0,
             "share": 100,
             "byKind": {
-              "test": 3,
+              "test": 6,
               "corpus-guard": 2,
               "terraform-validate": 1
             }
           },
-          "ciFailureRate": 4.3,
+          "ciFailureRate": 11.6,
           "revisionsP50": 0,
           "revisionsP90": 1,
-          "landedFirstPushRate": 82.6,
-          "cycleTimeP50Minutes": 2.6,
-          "cycleTimeP90Minutes": 15.5,
+          "landedFirstPushRate": 81.4,
+          "cycleTimeP50Minutes": 2.5,
+          "cycleTimeP90Minutes": 13.3,
           "rework": {
-            "merges": 47,
-            "fixMerges": 17,
-            "fixShare": 36.2,
-            "attributed": 14,
-            "medianHoursToRework": 0.7,
-            "p90HoursToRework": 50.1,
-            "correctedWithin1hShare": 57.1,
-            "correctedWithin24hShare": 85.7
+            "merges": 43,
+            "fixMerges": 16,
+            "fixShare": 37.2,
+            "attributed": 11,
+            "medianHoursToRework": 27,
+            "p90HoursToRework": 80.8,
+            "correctedWithin1hShare": 27.3,
+            "correctedWithin24hShare": 45.5
           },
           "contention": {
-            "greenButUnmergedHours": 0.9,
-            "greenToMergeP50Minutes": 0.1,
-            "greenToMergeP90Minutes": 6.6,
+            "greenButUnmergedHours": 0.6,
+            "greenToMergeP50Minutes": 0,
+            "greenToMergeP90Minutes": 0.4,
             "greenToMergeMaxMinutes": 13.6,
-            "repushRate": 17.4,
-            "racedShare": 2.2,
-            "prsMeasured": 46,
-            "prsWithGreen": 46
+            "repushRate": 18.6,
+            "racedShare": 2.3,
+            "prsMeasured": 43,
+            "prsWithGreen": 43
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 146,
+            "runs": 139,
             "failures": 1,
             "redMinutes": 44.4,
+            "redMinutesUncapped": 44.4,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 46,
-            "prsUnmeasured": 1,
-            "workflowRuns": 323,
+            "prsMeasured": 43,
+            "prsUnmeasured": 0,
+            "workflowRuns": 315,
             "reworkSource": "git-blame"
           }
         },
@@ -125,106 +127,110 @@
           "role": "instance",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 12,
+          "mergedPrs": 11,
           "workMix": {
-            "merges": 12,
-            "delivery": 16.7,
-            "rework": 50,
-            "toil": 33.3,
+            "merges": 11,
+            "delivery": 36.4,
+            "rework": 45.5,
+            "toil": 18.2,
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 83.3,
+            "toilRatio": 63.6,
             "counts": {
-              "delivery": 2,
-              "rework": 6,
-              "toil": 4,
+              "delivery": 4,
+              "rework": 5,
+              "toil": 2,
               "quality": 0,
               "docs": 0,
               "unconventional": 0,
               "other": 0
             },
             "sideCounts": {
-              "platform": 12,
+              "platform": 11,
               "product": 0
             },
             "productDelivery": 0
           },
           "timeToFeature": {
-            "linked": 4,
+            "linked": 2,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 8,
-            "coverage": 33.3,
+            "prsWithNoClosingIssue": 9,
+            "coverage": 18.2,
             "hoursP50": 1.1,
-            "hoursP90": 2.2,
-            "hoursMax": 2.2,
+            "hoursP90": 1.2,
+            "hoursMax": 1.2,
             "running": {
-              "measured": 4,
+              "measured": 2,
               "awaitingDeploy": 0,
               "hoursP50": 1.2,
-              "hoursP90": 2.3,
+              "hoursP90": 1.3,
               "deployGapP50": 0.1,
               "deployGapP90": 0.1
             },
             "crossRepo": {
-              "upgradePrs": 3,
-              "carriedPrs": 36,
-              "carriedWithoutIssue": 32,
+              "upgradePrs": 1,
+              "carriedPrs": 12,
+              "carriedWithoutIssue": 9,
               "awaitingDeploy": 0,
-              "measured": 5,
+              "measured": 4,
               "hoursP50": 2.6,
               "hoursP90": 6.3,
               "hoursMax": 6.3
             }
           },
           "gates": {
-            "failingSteps": 0,
-            "locallyCatchable": 0,
+            "failingSteps": 2,
+            "locallyCatchable": 2,
             "notLocallyCatchable": 0,
             "unclassified": 0,
-            "share": null,
-            "byKind": {}
+            "share": 100,
+            "byKind": {
+              "test": 2
+            }
           },
           "ciFailureRate": 0,
           "revisionsP50": 0,
           "revisionsP90": 0,
-          "landedFirstPushRate": 91.7,
-          "cycleTimeP50Minutes": 8.6,
-          "cycleTimeP90Minutes": 12.1,
+          "landedFirstPushRate": 100,
+          "cycleTimeP50Minutes": 8.9,
+          "cycleTimeP90Minutes": 11.4,
           "rework": {
-            "merges": 12,
-            "fixMerges": 6,
-            "fixShare": 50,
-            "attributed": 6,
-            "medianHoursToRework": 3.8,
-            "p90HoursToRework": 74.6,
-            "correctedWithin1hShare": 16.7,
-            "correctedWithin24hShare": 66.7
+            "merges": 11,
+            "fixMerges": 5,
+            "fixShare": 45.5,
+            "attributed": 5,
+            "medianHoursToRework": 16,
+            "p90HoursToRework": 48.3,
+            "correctedWithin1hShare": 20,
+            "correctedWithin24hShare": 80
           },
           "contention": {
-            "greenButUnmergedHours": 0.2,
-            "greenToMergeP50Minutes": 0,
-            "greenToMergeP90Minutes": 2,
-            "greenToMergeMaxMinutes": 7.6,
-            "repushRate": 8.3,
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": 0.1,
+            "greenToMergeP90Minutes": 0.5,
+            "greenToMergeMaxMinutes": 0.5,
+            "repushRate": 0,
             "racedShare": 0,
-            "prsMeasured": 12,
-            "prsWithGreen": 12
+            "prsMeasured": 11,
+            "prsWithGreen": 11
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 46,
+            "runs": 44,
             "failures": 1,
             "redMinutes": 36.7,
+            "redMinutesUncapped": 36.7,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 12,
+            "prsMeasured": 11,
             "prsUnmeasured": 0,
-            "workflowRuns": 72,
+            "workflowRuns": 70,
             "reworkSource": "git-blame"
           }
         },
@@ -232,9 +238,9 @@
           "role": "sibling",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 8,
+          "mergedPrs": 4,
           "workMix": {
-            "merges": 8,
+            "merges": 4,
             "delivery": 0,
             "rework": 0,
             "toil": 100,
@@ -245,14 +251,14 @@
             "counts": {
               "delivery": 0,
               "rework": 0,
-              "toil": 8,
+              "toil": 4,
               "quality": 0,
               "docs": 0,
               "unconventional": 0,
               "other": 0
             },
             "sideCounts": {
-              "platform": 8,
+              "platform": 4,
               "product": 0
             },
             "productDelivery": 0
@@ -260,7 +266,7 @@
           "timeToFeature": {
             "linked": 0,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 8,
+            "prsWithNoClosingIssue": 4,
             "coverage": 0,
             "hoursP50": null,
             "hoursP90": null,
@@ -293,13 +299,13 @@
             "byKind": {}
           },
           "ciFailureRate": 0,
-          "revisionsP50": 2,
-          "revisionsP90": 9,
-          "landedFirstPushRate": 25,
-          "cycleTimeP50Minutes": 6.2,
-          "cycleTimeP90Minutes": 25.7,
+          "revisionsP50": 0,
+          "revisionsP90": 2,
+          "landedFirstPushRate": 50,
+          "cycleTimeP50Minutes": 5.9,
+          "cycleTimeP90Minutes": 6.5,
           "rework": {
-            "merges": 8,
+            "merges": 4,
             "fixMerges": 0,
             "fixShare": 0,
             "attributed": 0,
@@ -309,29 +315,31 @@
             "correctedWithin24hShare": null
           },
           "contention": {
-            "greenButUnmergedHours": 0.7,
-            "greenToMergeP50Minutes": 0.2,
-            "greenToMergeP90Minutes": 19.9,
-            "greenToMergeMaxMinutes": 19.9,
-            "repushRate": 75,
-            "racedShare": 25,
-            "prsMeasured": 8,
-            "prsWithGreen": 8
+            "greenButUnmergedHours": 0,
+            "greenToMergeP50Minutes": 0,
+            "greenToMergeP90Minutes": 0.2,
+            "greenToMergeMaxMinutes": 0.2,
+            "repushRate": 50,
+            "racedShare": 0,
+            "prsMeasured": 4,
+            "prsWithGreen": 4
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 24,
+            "runs": 12,
             "failures": 1,
-            "redMinutes": 183.5,
+            "redMinutes": 62.5,
+            "redMinutesUncapped": 183.5,
+            "idleGapsCapped": 1,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 8,
+            "prsMeasured": 4,
             "prsUnmeasured": 0,
-            "workflowRuns": 46,
+            "workflowRuns": 20,
             "reworkSource": "git-blame"
           }
         },
@@ -339,42 +347,42 @@
           "role": "plugin",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 10,
+          "mergedPrs": 5,
           "workMix": {
-            "merges": 10,
+            "merges": 5,
             "delivery": 20,
-            "rework": 10,
-            "toil": 60,
-            "quality": 10,
+            "rework": 0,
+            "toil": 40,
+            "quality": 40,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 70,
+            "toilRatio": 40,
             "counts": {
-              "delivery": 2,
-              "rework": 1,
-              "toil": 6,
-              "quality": 1,
+              "delivery": 1,
+              "rework": 0,
+              "toil": 2,
+              "quality": 2,
               "docs": 0,
               "unconventional": 0,
               "other": 0
             },
             "sideCounts": {
-              "platform": 10,
+              "platform": 5,
               "product": 0
             },
             "productDelivery": 0
           },
           "timeToFeature": {
-            "linked": 4,
+            "linked": 2,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 6,
+            "prsWithNoClosingIssue": 3,
             "coverage": 40,
-            "hoursP50": 0.4,
+            "hoursP50": 0.1,
             "hoursP90": 11.9,
             "hoursMax": 11.9,
             "running": {
               "measured": 0,
-              "awaitingDeploy": 4,
+              "awaitingDeploy": 2,
               "hoursP50": null,
               "hoursP90": null,
               "deployGapP50": null,
@@ -392,55 +400,57 @@
             }
           },
           "gates": {
-            "failingSteps": 6,
-            "locallyCatchable": 6,
+            "failingSteps": 3,
+            "locallyCatchable": 3,
             "notLocallyCatchable": 0,
             "unclassified": 0,
             "share": 100,
             "byKind": {
-              "test": 6
+              "test": 3
             }
           },
-          "ciFailureRate": 60,
-          "revisionsP50": 2,
-          "revisionsP90": 6,
-          "landedFirstPushRate": 40,
+          "ciFailureRate": 40,
+          "revisionsP50": 0,
+          "revisionsP90": 3,
+          "landedFirstPushRate": 60,
           "cycleTimeP50Minutes": 5.3,
-          "cycleTimeP90Minutes": 25.1,
+          "cycleTimeP90Minutes": 1122.2,
           "rework": {
-            "merges": 10,
-            "fixMerges": 1,
-            "fixShare": 10,
-            "attributed": 1,
-            "medianHoursToRework": 4,
-            "p90HoursToRework": 4,
-            "correctedWithin1hShare": 0,
-            "correctedWithin24hShare": 100
+            "merges": 5,
+            "fixMerges": 0,
+            "fixShare": 0,
+            "attributed": 0,
+            "medianHoursToRework": null,
+            "p90HoursToRework": null,
+            "correctedWithin1hShare": null,
+            "correctedWithin24hShare": null
           },
           "contention": {
-            "greenButUnmergedHours": 0.4,
+            "greenButUnmergedHours": 0,
             "greenToMergeP50Minutes": 0.2,
-            "greenToMergeP90Minutes": 0.6,
-            "greenToMergeMaxMinutes": 20.5,
-            "repushRate": 60,
-            "racedShare": 10,
-            "prsMeasured": 10,
-            "prsWithGreen": 10
+            "greenToMergeP90Minutes": 0.5,
+            "greenToMergeMaxMinutes": 0.5,
+            "repushRate": 40,
+            "racedShare": 0,
+            "prsMeasured": 5,
+            "prsWithGreen": 5
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 10,
-            "failures": 4,
-            "redMinutes": 1268.3,
+            "runs": 5,
+            "failures": 1,
+            "redMinutes": 61.5,
+            "redMinutesUncapped": 1129.3,
+            "idleGapsCapped": 1,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 10,
+            "prsMeasured": 5,
             "prsUnmeasured": 0,
-            "workflowRuns": 23,
+            "workflowRuns": 12,
             "reworkSource": "git-blame"
           }
         },
@@ -448,42 +458,42 @@
           "role": "plugin",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 14,
+          "mergedPrs": 12,
           "workMix": {
-            "merges": 14,
-            "delivery": 28.6,
-            "rework": 7.1,
-            "toil": 57.1,
+            "merges": 12,
+            "delivery": 25,
+            "rework": 33.3,
+            "toil": 33.3,
             "quality": 0,
             "docs": 0,
-            "unconventional": 7.1,
-            "toilRatio": 64.3,
+            "unconventional": 8.3,
+            "toilRatio": 66.7,
             "counts": {
-              "delivery": 4,
-              "rework": 1,
-              "toil": 8,
+              "delivery": 3,
+              "rework": 4,
+              "toil": 4,
               "quality": 0,
               "docs": 0,
               "unconventional": 1,
               "other": 0
             },
             "sideCounts": {
-              "platform": 14,
+              "platform": 12,
               "product": 0
             },
             "productDelivery": 0
           },
           "timeToFeature": {
-            "linked": 5,
-            "unresolved": 1,
-            "prsWithNoClosingIssue": 10,
-            "coverage": 35.7,
+            "linked": 6,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 8,
+            "coverage": 50,
             "hoursP50": 1,
             "hoursP90": 3.8,
             "hoursMax": 3.8,
             "running": {
               "measured": 0,
-              "awaitingDeploy": 5,
+              "awaitingDeploy": 6,
               "hoursP50": null,
               "hoursP90": null,
               "deployGapP50": null,
@@ -509,45 +519,47 @@
             "byKind": {}
           },
           "ciFailureRate": 0,
-          "revisionsP50": 1,
-          "revisionsP90": 6,
-          "landedFirstPushRate": 35.7,
-          "cycleTimeP50Minutes": 5.6,
-          "cycleTimeP90Minutes": 14.6,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 66.7,
+          "cycleTimeP50Minutes": 5.2,
+          "cycleTimeP90Minutes": 9.5,
           "rework": {
-            "merges": 14,
-            "fixMerges": 1,
-            "fixShare": 7.1,
-            "attributed": 1,
-            "medianHoursToRework": 49.2,
+            "merges": 12,
+            "fixMerges": 4,
+            "fixShare": 33.3,
+            "attributed": 4,
+            "medianHoursToRework": 15.9,
             "p90HoursToRework": 49.2,
             "correctedWithin1hShare": 0,
-            "correctedWithin24hShare": 0
+            "correctedWithin24hShare": 75
           },
           "contention": {
-            "greenButUnmergedHours": 0.8,
-            "greenToMergeP50Minutes": 0.5,
-            "greenToMergeP90Minutes": 9.8,
-            "greenToMergeMaxMinutes": 20.8,
-            "repushRate": 64.3,
-            "racedShare": 7.1,
-            "prsMeasured": 14,
-            "prsWithGreen": 14
+            "greenButUnmergedHours": 0.2,
+            "greenToMergeP50Minutes": 0.2,
+            "greenToMergeP90Minutes": 4.4,
+            "greenToMergeMaxMinutes": 7.7,
+            "repushRate": 33.3,
+            "racedShare": 0,
+            "prsMeasured": 12,
+            "prsWithGreen": 12
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 15,
+            "runs": 13,
             "failures": 1,
             "redMinutes": 22,
+            "redMinutesUncapped": 22,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 14,
+            "prsMeasured": 12,
             "prsUnmeasured": 0,
-            "workflowRuns": 34,
+            "workflowRuns": 27,
             "reworkSource": "git-blame"
           }
         },
@@ -555,12 +567,12 @@
           "role": "infra",
           "side": "platform",
           "defaultBranch": "main",
-          "mergedPrs": 8,
+          "mergedPrs": 4,
           "workMix": {
-            "merges": 8,
+            "merges": 4,
             "delivery": 0,
-            "rework": 12.5,
-            "toil": 87.5,
+            "rework": 25,
+            "toil": 75,
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
@@ -568,14 +580,14 @@
             "counts": {
               "delivery": 0,
               "rework": 1,
-              "toil": 7,
+              "toil": 3,
               "quality": 0,
               "docs": 0,
               "unconventional": 0,
               "other": 0
             },
             "sideCounts": {
-              "platform": 8,
+              "platform": 4,
               "product": 0
             },
             "productDelivery": 0
@@ -583,7 +595,7 @@
           "timeToFeature": {
             "linked": 0,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 8,
+            "prsWithNoClosingIssue": 4,
             "coverage": 0,
             "hoursP50": null,
             "hoursP90": null,
@@ -619,12 +631,12 @@
           "revisionsP50": null,
           "revisionsP90": null,
           "landedFirstPushRate": null,
-          "cycleTimeP50Minutes": 10.6,
+          "cycleTimeP50Minutes": 10.2,
           "cycleTimeP90Minutes": 44.5,
           "rework": {
-            "merges": 8,
+            "merges": 4,
             "fixMerges": 1,
-            "fixShare": 12.5,
+            "fixShare": 25,
             "attributed": 0,
             "medianHoursToRework": null,
             "p90HoursToRework": null,
@@ -649,11 +661,13 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
             "prsMeasured": 0,
-            "prsUnmeasured": 8,
+            "prsUnmeasured": 4,
             "workflowRuns": 0,
             "reworkSource": "git-blame"
           }
@@ -664,54 +678,54 @@
           "defaultBranch": "dev",
           "mergedPrs": 33,
           "workMix": {
-            "merges": 34,
-            "delivery": 61.8,
-            "rework": 11.8,
-            "toil": 5.9,
-            "quality": 5.9,
-            "docs": 14.7,
+            "merges": 33,
+            "delivery": 51.5,
+            "rework": 33.3,
+            "toil": 3,
+            "quality": 6.1,
+            "docs": 6.1,
             "unconventional": 0,
-            "toilRatio": 17.6,
+            "toilRatio": 36.4,
             "counts": {
-              "delivery": 21,
-              "rework": 4,
-              "toil": 2,
+              "delivery": 17,
+              "rework": 11,
+              "toil": 1,
               "quality": 2,
-              "docs": 5,
+              "docs": 2,
               "unconventional": 0,
               "other": 0
             },
             "sideCounts": {
               "platform": 0,
-              "product": 34
+              "product": 33
             },
-            "productDelivery": 21
+            "productDelivery": 17
           },
           "timeToFeature": {
-            "linked": 4,
+            "linked": 5,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 29,
-            "coverage": 12.1,
-            "hoursP50": 1,
+            "prsWithNoClosingIssue": 28,
+            "coverage": 15.2,
+            "hoursP50": 1.6,
             "hoursP90": 17.6,
             "hoursMax": 17.6,
             "running": {
-              "measured": 4,
+              "measured": 5,
               "awaitingDeploy": 0,
-              "hoursP50": 1.2,
+              "hoursP50": 1.7,
               "hoursP90": 17.8,
               "deployGapP50": 0.2,
               "deployGapP90": 0.3
             },
             "crossRepo": {
-              "upgradePrs": 2,
-              "carriedPrs": 24,
-              "carriedWithoutIssue": 23,
+              "upgradePrs": 0,
+              "carriedPrs": 0,
+              "carriedWithoutIssue": 0,
               "awaitingDeploy": 0,
-              "measured": 1,
-              "hoursP50": 1.8,
-              "hoursP90": 1.8,
-              "hoursMax": 1.8
+              "measured": 0,
+              "hoursP50": null,
+              "hoursP90": null,
+              "hoursMax": null
             }
           },
           "gates": {
@@ -724,46 +738,48 @@
               "rls-test": 1
             }
           },
-          "ciFailureRate": 3.1,
-          "revisionsP50": 0,
-          "revisionsP90": 2,
-          "landedFirstPushRate": 50,
-          "cycleTimeP50Minutes": 14.3,
-          "cycleTimeP90Minutes": 68.3,
+          "ciFailureRate": 3,
+          "revisionsP50": 1,
+          "revisionsP90": 3,
+          "landedFirstPushRate": 36.4,
+          "cycleTimeP50Minutes": 27.6,
+          "cycleTimeP90Minutes": 78.8,
           "rework": {
-            "merges": 34,
-            "fixMerges": 4,
-            "fixShare": 11.8,
-            "attributed": 2,
+            "merges": 33,
+            "fixMerges": 11,
+            "fixShare": 33.3,
+            "attributed": 10,
             "medianHoursToRework": 17.6,
-            "p90HoursToRework": 489.5,
-            "correctedWithin1hShare": 0,
-            "correctedWithin24hShare": 50
+            "p90HoursToRework": 26.5,
+            "correctedWithin1hShare": 10,
+            "correctedWithin24hShare": 80
           },
           "contention": {
-            "greenButUnmergedHours": 12,
-            "greenToMergeP50Minutes": 10.4,
-            "greenToMergeP90Minutes": 48.7,
-            "greenToMergeMaxMinutes": 113.7,
-            "repushRate": 50,
-            "racedShare": 43.8,
-            "prsMeasured": 32,
-            "prsWithGreen": 32
+            "greenButUnmergedHours": 29.6,
+            "greenToMergeP50Minutes": 22.9,
+            "greenToMergeP90Minutes": 64.6,
+            "greenToMergeMaxMinutes": 905,
+            "repushRate": 63.6,
+            "racedShare": 57.6,
+            "prsMeasured": 33,
+            "prsWithGreen": 33
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 162,
+            "runs": 171,
             "failures": 1,
-            "redMinutes": 8.5,
+            "redMinutes": 11.9,
+            "redMinutesUncapped": 11.9,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 32,
-            "prsUnmeasured": 1,
-            "workflowRuns": 365,
+            "prsMeasured": 33,
+            "prsUnmeasured": 0,
+            "workflowRuns": 379,
             "reworkSource": "git-blame"
           }
         },
@@ -771,20 +787,20 @@
           "role": "sibling",
           "side": "product",
           "defaultBranch": "dev",
-          "mergedPrs": 18,
+          "mergedPrs": 9,
           "workMix": {
-            "merges": 18,
-            "delivery": 16.7,
-            "rework": 38.9,
-            "toil": 38.9,
-            "quality": 5.6,
+            "merges": 9,
+            "delivery": 22.2,
+            "rework": 33.3,
+            "toil": 33.3,
+            "quality": 11.1,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 77.8,
+            "toilRatio": 66.7,
             "counts": {
-              "delivery": 3,
-              "rework": 7,
-              "toil": 7,
+              "delivery": 2,
+              "rework": 3,
+              "toil": 3,
               "quality": 1,
               "docs": 0,
               "unconventional": 0,
@@ -792,21 +808,21 @@
             },
             "sideCounts": {
               "platform": 0,
-              "product": 18
+              "product": 9
             },
-            "productDelivery": 3
+            "productDelivery": 2
           },
           "timeToFeature": {
-            "linked": 2,
-            "unresolved": 1,
-            "prsWithNoClosingIssue": 15,
-            "coverage": 11.1,
-            "hoursP50": 14.9,
+            "linked": 3,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 6,
+            "coverage": 33.3,
+            "hoursP50": 19.8,
             "hoursP90": 571,
             "hoursMax": 571,
             "running": {
               "measured": 0,
-              "awaitingDeploy": 2,
+              "awaitingDeploy": 3,
               "hoursP50": null,
               "hoursP90": null,
               "deployGapP50": null,
@@ -833,44 +849,46 @@
           },
           "ciFailureRate": 0,
           "revisionsP50": 1,
-          "revisionsP90": 8,
+          "revisionsP90": 1,
           "landedFirstPushRate": 44.4,
           "cycleTimeP50Minutes": 11.8,
-          "cycleTimeP90Minutes": 24.6,
+          "cycleTimeP90Minutes": 27.8,
           "rework": {
-            "merges": 18,
-            "fixMerges": 7,
-            "fixShare": 38.9,
-            "attributed": 7,
-            "medianHoursToRework": 1,
+            "merges": 9,
+            "fixMerges": 3,
+            "fixShare": 33.3,
+            "attributed": 3,
+            "medianHoursToRework": 22,
             "p90HoursToRework": 609.4,
-            "correctedWithin1hShare": 57.1,
-            "correctedWithin24hShare": 85.7
+            "correctedWithin1hShare": 0,
+            "correctedWithin24hShare": 66.7
           },
           "contention": {
-            "greenButUnmergedHours": 1.4,
-            "greenToMergeP50Minutes": 3.4,
+            "greenButUnmergedHours": 0.6,
+            "greenToMergeP50Minutes": 0,
             "greenToMergeP90Minutes": 14.1,
-            "greenToMergeMaxMinutes": 15.3,
+            "greenToMergeMaxMinutes": 14.1,
             "repushRate": 55.6,
-            "racedShare": 27.8,
-            "prsMeasured": 18,
-            "prsWithGreen": 17
+            "racedShare": 22.2,
+            "prsMeasured": 9,
+            "prsWithGreen": 9
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 54,
+            "runs": 27,
             "failures": 0,
             "redMinutes": 0,
+            "redMinutesUncapped": 0,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 18,
+            "prsMeasured": 9,
             "prsUnmeasured": 0,
-            "workflowRuns": 110,
+            "workflowRuns": 53,
             "reworkSource": "git-blame"
           }
         },
@@ -878,20 +896,20 @@
           "role": "sibling",
           "side": "product",
           "defaultBranch": "dev",
-          "mergedPrs": 11,
+          "mergedPrs": 7,
           "workMix": {
-            "merges": 11,
-            "delivery": 27.3,
+            "merges": 7,
+            "delivery": 42.9,
             "rework": 0,
-            "toil": 72.7,
+            "toil": 57.1,
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 72.7,
+            "toilRatio": 57.1,
             "counts": {
               "delivery": 3,
               "rework": 0,
-              "toil": 8,
+              "toil": 4,
               "quality": 0,
               "docs": 0,
               "unconventional": 0,
@@ -899,14 +917,14 @@
             },
             "sideCounts": {
               "platform": 0,
-              "product": 11
+              "product": 7
             },
             "productDelivery": 3
           },
           "timeToFeature": {
             "linked": 0,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 11,
+            "prsWithNoClosingIssue": 7,
             "coverage": 0,
             "hoursP50": null,
             "hoursP90": null,
@@ -939,13 +957,13 @@
             "byKind": {}
           },
           "ciFailureRate": 0,
-          "revisionsP50": 2,
-          "revisionsP90": 8,
-          "landedFirstPushRate": 36.4,
-          "cycleTimeP50Minutes": 14.4,
-          "cycleTimeP90Minutes": 31.3,
+          "revisionsP50": 0,
+          "revisionsP90": 3,
+          "landedFirstPushRate": 57.1,
+          "cycleTimeP50Minutes": 11.2,
+          "cycleTimeP90Minutes": 49,
           "rework": {
-            "merges": 11,
+            "merges": 7,
             "fixMerges": 0,
             "fixShare": 0,
             "attributed": 0,
@@ -955,29 +973,31 @@
             "correctedWithin24hShare": null
           },
           "contention": {
-            "greenButUnmergedHours": 1.5,
+            "greenButUnmergedHours": 1,
             "greenToMergeP50Minutes": 2.3,
-            "greenToMergeP90Minutes": 19.2,
+            "greenToMergeP90Minutes": 41.3,
             "greenToMergeMaxMinutes": 41.3,
-            "repushRate": 63.6,
-            "racedShare": 9.1,
-            "prsMeasured": 11,
-            "prsWithGreen": 11
+            "repushRate": 42.9,
+            "racedShare": 0,
+            "prsMeasured": 7,
+            "prsWithGreen": 7
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 22,
+            "runs": 14,
             "failures": 0,
             "redMinutes": 0,
+            "redMinutesUncapped": 0,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 11,
+            "prsMeasured": 7,
             "prsUnmeasured": 0,
-            "workflowRuns": 37,
+            "workflowRuns": 22,
             "reworkSource": "git-blame"
           }
         },
@@ -985,9 +1005,9 @@
           "role": "package",
           "side": "product",
           "defaultBranch": "main",
-          "mergedPrs": 7,
+          "mergedPrs": 3,
           "workMix": {
-            "merges": 7,
+            "merges": 3,
             "delivery": 0,
             "rework": 0,
             "toil": 100,
@@ -998,7 +1018,7 @@
             "counts": {
               "delivery": 0,
               "rework": 0,
-              "toil": 7,
+              "toil": 3,
               "quality": 0,
               "docs": 0,
               "unconventional": 0,
@@ -1006,14 +1026,14 @@
             },
             "sideCounts": {
               "platform": 0,
-              "product": 7
+              "product": 3
             },
             "productDelivery": 0
           },
           "timeToFeature": {
             "linked": 0,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 7,
+            "prsWithNoClosingIssue": 3,
             "coverage": 0,
             "hoursP50": null,
             "hoursP90": null,
@@ -1050,9 +1070,9 @@
           "revisionsP90": null,
           "landedFirstPushRate": null,
           "cycleTimeP50Minutes": 9.3,
-          "cycleTimeP90Minutes": 17.5,
+          "cycleTimeP90Minutes": 11.3,
           "rework": {
-            "merges": 7,
+            "merges": 3,
             "fixMerges": 0,
             "fixShare": 0,
             "attributed": 0,
@@ -1079,11 +1099,13 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
             "prsMeasured": 0,
-            "prsUnmeasured": 7,
+            "prsUnmeasured": 3,
             "workflowRuns": 0,
             "reworkSource": "git-blame"
           }
@@ -1092,9 +1114,9 @@
           "role": "sibling",
           "side": "product",
           "defaultBranch": "dev",
-          "mergedPrs": 8,
+          "mergedPrs": 4,
           "workMix": {
-            "merges": 8,
+            "merges": 4,
             "delivery": 0,
             "rework": 0,
             "toil": 100,
@@ -1105,7 +1127,7 @@
             "counts": {
               "delivery": 0,
               "rework": 0,
-              "toil": 8,
+              "toil": 4,
               "quality": 0,
               "docs": 0,
               "unconventional": 0,
@@ -1113,14 +1135,14 @@
             },
             "sideCounts": {
               "platform": 0,
-              "product": 8
+              "product": 4
             },
             "productDelivery": 0
           },
           "timeToFeature": {
             "linked": 0,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 8,
+            "prsWithNoClosingIssue": 4,
             "coverage": 0,
             "hoursP50": null,
             "hoursP90": null,
@@ -1153,13 +1175,13 @@
             "byKind": {}
           },
           "ciFailureRate": 0,
-          "revisionsP50": 2,
-          "revisionsP90": 9,
-          "landedFirstPushRate": 25,
-          "cycleTimeP50Minutes": 16.9,
+          "revisionsP50": 0,
+          "revisionsP90": 2,
+          "landedFirstPushRate": 50,
+          "cycleTimeP50Minutes": 9.7,
           "cycleTimeP90Minutes": 29.5,
           "rework": {
-            "merges": 8,
+            "merges": 4,
             "fixMerges": 0,
             "fixShare": 0,
             "attributed": 0,
@@ -1169,29 +1191,31 @@
             "correctedWithin24hShare": null
           },
           "contention": {
-            "greenButUnmergedHours": 0.6,
-            "greenToMergeP50Minutes": 0.3,
-            "greenToMergeP90Minutes": 16.5,
-            "greenToMergeMaxMinutes": 16.5,
-            "repushRate": 75,
-            "racedShare": 25,
-            "prsMeasured": 8,
-            "prsWithGreen": 8
+            "greenButUnmergedHours": 0.1,
+            "greenToMergeP50Minutes": 0.1,
+            "greenToMergeP90Minutes": 3.5,
+            "greenToMergeMaxMinutes": 3.5,
+            "repushRate": 50,
+            "racedShare": 0,
+            "prsMeasured": 4,
+            "prsWithGreen": 4
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 24,
+            "runs": 12,
             "failures": 0,
             "redMinutes": 0,
+            "redMinutesUncapped": 0,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 8,
+            "prsMeasured": 4,
             "prsUnmeasured": 0,
-            "workflowRuns": 46,
+            "workflowRuns": 20,
             "reworkSource": "git-blame"
           }
         },
@@ -1199,9 +1223,9 @@
           "role": "sibling",
           "side": "product",
           "defaultBranch": "dev",
-          "mergedPrs": 8,
+          "mergedPrs": 4,
           "workMix": {
-            "merges": 8,
+            "merges": 4,
             "delivery": 0,
             "rework": 0,
             "toil": 100,
@@ -1212,7 +1236,7 @@
             "counts": {
               "delivery": 0,
               "rework": 0,
-              "toil": 8,
+              "toil": 4,
               "quality": 0,
               "docs": 0,
               "unconventional": 0,
@@ -1220,14 +1244,14 @@
             },
             "sideCounts": {
               "platform": 0,
-              "product": 8
+              "product": 4
             },
             "productDelivery": 0
           },
           "timeToFeature": {
             "linked": 0,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 8,
+            "prsWithNoClosingIssue": 4,
             "coverage": 0,
             "hoursP50": null,
             "hoursP90": null,
@@ -1260,13 +1284,13 @@
             "byKind": {}
           },
           "ciFailureRate": 0,
-          "revisionsP50": 2,
-          "revisionsP90": 9,
-          "landedFirstPushRate": 25,
-          "cycleTimeP50Minutes": 10.8,
+          "revisionsP50": 0,
+          "revisionsP90": 2,
+          "landedFirstPushRate": 50,
+          "cycleTimeP50Minutes": 9.1,
           "cycleTimeP90Minutes": 31.1,
           "rework": {
-            "merges": 8,
+            "merges": 4,
             "fixMerges": 0,
             "fixShare": 0,
             "attributed": 0,
@@ -1276,29 +1300,31 @@
             "correctedWithin24hShare": null
           },
           "contention": {
-            "greenButUnmergedHours": 0.6,
-            "greenToMergeP50Minutes": 0.6,
-            "greenToMergeP90Minutes": 16.8,
-            "greenToMergeMaxMinutes": 16.8,
-            "repushRate": 75,
-            "racedShare": 25,
-            "prsMeasured": 8,
-            "prsWithGreen": 8
+            "greenButUnmergedHours": 0.1,
+            "greenToMergeP50Minutes": 0.1,
+            "greenToMergeP90Minutes": 4.1,
+            "greenToMergeMaxMinutes": 4.1,
+            "repushRate": 50,
+            "racedShare": 0,
+            "prsMeasured": 4,
+            "prsWithGreen": 4
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 24,
+            "runs": 12,
             "failures": 1,
-            "redMinutes": 215.8,
+            "redMinutes": 89.8,
+            "redMinutesUncapped": 215.8,
+            "idleGapsCapped": 1,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 8,
+            "prsMeasured": 4,
             "prsUnmeasured": 0,
-            "workflowRuns": 46,
+            "workflowRuns": 20,
             "reworkSource": "git-blame"
           }
         },
@@ -1306,9 +1332,9 @@
           "role": "sibling",
           "side": "product",
           "defaultBranch": "dev",
-          "mergedPrs": 8,
+          "mergedPrs": 4,
           "workMix": {
-            "merges": 8,
+            "merges": 4,
             "delivery": 0,
             "rework": 0,
             "toil": 100,
@@ -1319,7 +1345,7 @@
             "counts": {
               "delivery": 0,
               "rework": 0,
-              "toil": 8,
+              "toil": 4,
               "quality": 0,
               "docs": 0,
               "unconventional": 0,
@@ -1327,14 +1353,14 @@
             },
             "sideCounts": {
               "platform": 0,
-              "product": 8
+              "product": 4
             },
             "productDelivery": 0
           },
           "timeToFeature": {
             "linked": 0,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 8,
+            "prsWithNoClosingIssue": 4,
             "coverage": 0,
             "hoursP50": null,
             "hoursP90": null,
@@ -1367,13 +1393,13 @@
             "byKind": {}
           },
           "ciFailureRate": 0,
-          "revisionsP50": 2,
-          "revisionsP90": 9,
-          "landedFirstPushRate": 25,
-          "cycleTimeP50Minutes": 14.2,
-          "cycleTimeP90Minutes": 24.9,
+          "revisionsP50": 0,
+          "revisionsP90": 2,
+          "landedFirstPushRate": 50,
+          "cycleTimeP50Minutes": 11.1,
+          "cycleTimeP90Minutes": 23.3,
           "rework": {
-            "merges": 8,
+            "merges": 4,
             "fixMerges": 0,
             "fixShare": 0,
             "attributed": 0,
@@ -1383,29 +1409,31 @@
             "correctedWithin24hShare": null
           },
           "contention": {
-            "greenButUnmergedHours": 0.5,
-            "greenToMergeP50Minutes": 0.2,
-            "greenToMergeP90Minutes": 19.1,
-            "greenToMergeMaxMinutes": 19.1,
-            "repushRate": 75,
-            "racedShare": 12.5,
-            "prsMeasured": 8,
-            "prsWithGreen": 8
+            "greenButUnmergedHours": 0.1,
+            "greenToMergeP50Minutes": 0.1,
+            "greenToMergeP90Minutes": 2.5,
+            "greenToMergeMaxMinutes": 2.5,
+            "repushRate": 50,
+            "racedShare": 0,
+            "prsMeasured": 4,
+            "prsWithGreen": 4
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 24,
+            "runs": 12,
             "failures": 0,
             "redMinutes": 0,
+            "redMinutesUncapped": 0,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 8,
+            "prsMeasured": 4,
             "prsUnmeasured": 0,
-            "workflowRuns": 46,
+            "workflowRuns": 20,
             "reworkSource": "git-blame"
           }
         },
@@ -1413,20 +1441,20 @@
           "role": "infra",
           "side": "product",
           "defaultBranch": "main",
-          "mergedPrs": 11,
+          "mergedPrs": 7,
           "workMix": {
-            "merges": 11,
-            "delivery": 18.2,
-            "rework": 18.2,
-            "toil": 63.6,
+            "merges": 7,
+            "delivery": 28.6,
+            "rework": 28.6,
+            "toil": 42.9,
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 81.8,
+            "toilRatio": 71.4,
             "counts": {
               "delivery": 2,
               "rework": 2,
-              "toil": 7,
+              "toil": 3,
               "quality": 0,
               "docs": 0,
               "unconventional": 0,
@@ -1434,15 +1462,15 @@
             },
             "sideCounts": {
               "platform": 0,
-              "product": 11
+              "product": 7
             },
             "productDelivery": 2
           },
           "timeToFeature": {
             "linked": 2,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 9,
-            "coverage": 18.2,
+            "prsWithNoClosingIssue": 5,
+            "coverage": 28.6,
             "hoursP50": 11.8,
             "hoursP90": 11.9,
             "hoursMax": 11.9,
@@ -1477,12 +1505,12 @@
           "revisionsP50": null,
           "revisionsP90": null,
           "landedFirstPushRate": null,
-          "cycleTimeP50Minutes": 9.1,
-          "cycleTimeP90Minutes": 18.7,
+          "cycleTimeP50Minutes": 1.1,
+          "cycleTimeP90Minutes": 44.8,
           "rework": {
-            "merges": 11,
+            "merges": 7,
             "fixMerges": 2,
-            "fixShare": 18.2,
+            "fixShare": 28.6,
             "attributed": 0,
             "medianHoursToRework": null,
             "p90HoursToRework": null,
@@ -1507,11 +1535,13 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
             "prsMeasured": 0,
-            "prsUnmeasured": 11,
+            "prsUnmeasured": 7,
             "workflowRuns": 0,
             "reworkSource": "git-blame"
           }
@@ -1520,9 +1550,9 @@
           "role": "design",
           "side": "product",
           "defaultBranch": "main",
-          "mergedPrs": 7,
+          "mergedPrs": 3,
           "workMix": {
-            "merges": 7,
+            "merges": 3,
             "delivery": 0,
             "rework": 0,
             "toil": 100,
@@ -1533,7 +1563,7 @@
             "counts": {
               "delivery": 0,
               "rework": 0,
-              "toil": 7,
+              "toil": 3,
               "quality": 0,
               "docs": 0,
               "unconventional": 0,
@@ -1541,14 +1571,14 @@
             },
             "sideCounts": {
               "platform": 0,
-              "product": 7
+              "product": 3
             },
             "productDelivery": 0
           },
           "timeToFeature": {
             "linked": 0,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 7,
+            "prsWithNoClosingIssue": 3,
             "coverage": 0,
             "hoursP50": null,
             "hoursP90": null,
@@ -1584,10 +1614,10 @@
           "revisionsP50": null,
           "revisionsP90": null,
           "landedFirstPushRate": null,
-          "cycleTimeP50Minutes": 11.9,
-          "cycleTimeP90Minutes": 18.1,
+          "cycleTimeP50Minutes": 9.8,
+          "cycleTimeP90Minutes": 11.9,
           "rework": {
-            "merges": 7,
+            "merges": 3,
             "fixMerges": 0,
             "fixShare": 0,
             "attributed": 0,
@@ -1614,53 +1644,55 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
             "prsMeasured": 0,
-            "prsUnmeasured": 7,
+            "prsUnmeasured": 3,
             "workflowRuns": 0,
             "reworkSource": "git-blame"
           }
         }
       },
       "estate": {
-        "merges": 211,
-        "platformShare": 46.9,
-        "productShare": 53.1,
-        "toilRatio": 63.5,
-        "capabilityShare": 23.2,
+        "merges": 153,
+        "platformShare": 51.6,
+        "productShare": 48.4,
+        "toilRatio": 56.2,
+        "capabilityShare": 27.5,
         "capabilityBySide": {
           "platform": {
-            "merges": 20,
-            "share": 9.5
+            "merges": 18,
+            "share": 11.8
           },
           "product": {
-            "merges": 29,
-            "share": 13.7
+            "merges": 24,
+            "share": 15.7
           }
         },
-        "tabsiiCapabilityShare": 13.7,
-        "contentionHours": 19.6,
+        "tabsiiCapabilityShare": 15.7,
+        "contentionHours": 32.3,
         "bySide": {
           "platform": {
-            "merges": 99,
-            "share": 46.9
+            "merges": 79,
+            "share": 51.6
           },
           "product": {
-            "merges": 112,
-            "share": 53.1
+            "merges": 74,
+            "share": 48.4
           }
         },
         "gates": {
           "repos": 15,
-          "failingSteps": 13,
-          "locallyCatchable": 13,
+          "failingSteps": 15,
+          "locallyCatchable": 15,
           "notLocallyCatchable": 0,
           "unclassified": 0,
           "share": 100,
           "byKind": {
-            "test": 9,
+            "test": 11,
             "corpus-guard": 2,
             "terraform-validate": 1,
             "rls-test": 1
@@ -1669,23 +1701,23 @@
         "note": "merges are a proxy for effort, not a measure of time"
       },
       "amplification": {
-        "totalMerges": 211,
-        "avoidableMerges": 70,
-        "avoidableShare": 33.2,
+        "totalMerges": 153,
+        "avoidableMerges": 22,
+        "avoidableShare": 14.4,
         "minRepos": 3,
         "top": [
           {
             "subject": "chore(shared): sync template-shared files",
             "repos": 12,
-            "merges": 82,
-            "rounds": 6.8,
-            "avoidableMerges": 70
+            "merges": 34,
+            "rounds": 2.8,
+            "avoidableMerges": 22
           }
         ]
       }
     },
     "7": {
-      "since": "2026-07-23T07:28:51.317Z",
+      "since": "2026-07-23T11:13:36.165Z",
       "repos": {
         "keiranholloway/biffo-template": {
           "role": "template",
@@ -1694,19 +1726,19 @@
           "mergedPrs": 330,
           "workMix": {
             "merges": 331,
-            "delivery": 36,
-            "rework": 27.2,
-            "toil": 4.8,
-            "quality": 4.2,
-            "docs": 27.8,
+            "delivery": 34.7,
+            "rework": 27.8,
+            "toil": 3.9,
+            "quality": 4.5,
+            "docs": 29,
             "unconventional": 0,
-            "toilRatio": 32,
+            "toilRatio": 31.7,
             "counts": {
-              "delivery": 119,
-              "rework": 90,
-              "toil": 16,
-              "quality": 14,
-              "docs": 92,
+              "delivery": 115,
+              "rework": 92,
+              "toil": 13,
+              "quality": 15,
+              "docs": 96,
               "unconventional": 0,
               "other": 0
             },
@@ -1717,16 +1749,16 @@
             "productDelivery": 0
           },
           "timeToFeature": {
-            "linked": 84,
+            "linked": 80,
             "unresolved": 1,
-            "prsWithNoClosingIssue": 251,
-            "coverage": 25.5,
-            "hoursP50": 3.4,
-            "hoursP90": 28.3,
-            "hoursMax": 51.4,
+            "prsWithNoClosingIssue": 255,
+            "coverage": 24.2,
+            "hoursP50": 3.2,
+            "hoursP90": 37.8,
+            "hoursMax": 74.8,
             "running": {
               "measured": 0,
-              "awaitingDeploy": 84,
+              "awaitingDeploy": 80,
               "hoursP50": null,
               "hoursP90": null,
               "deployGapP50": null,
@@ -1745,17 +1777,17 @@
           },
           "gates": {
             "failingSteps": 57,
-            "locallyCatchable": 36,
-            "notLocallyCatchable": 21,
+            "locallyCatchable": 38,
+            "notLocallyCatchable": 19,
             "unclassified": 0,
-            "share": 63.2,
+            "share": 66.7,
             "byKind": {
-              "test": 15,
+              "test": 17,
               "corpus-guard": 3,
               "terraform-validate": 3,
               "lint": 5,
               "build": 2,
-              "publish": 10,
+              "publish": 8,
               "format": 6,
               "release-subject": 2,
               "dependency-audit": 7,
@@ -1763,29 +1795,29 @@
               "gitleaks": 1
             }
           },
-          "ciFailureRate": 8.2,
+          "ciFailureRate": 8.8,
           "revisionsP50": 0,
           "revisionsP90": 2,
-          "landedFirstPushRate": 63.6,
+          "landedFirstPushRate": 65.5,
           "cycleTimeP50Minutes": 2.9,
           "cycleTimeP90Minutes": 25.1,
           "rework": {
             "merges": 331,
-            "fixMerges": 90,
-            "fixShare": 27.2,
-            "attributed": 76,
-            "medianHoursToRework": 5.3,
-            "p90HoursToRework": 521.7,
-            "correctedWithin1hShare": 28.9,
-            "correctedWithin24hShare": 65.8
+            "fixMerges": 92,
+            "fixShare": 27.8,
+            "attributed": 77,
+            "medianHoursToRework": 6.5,
+            "p90HoursToRework": 479.4,
+            "correctedWithin1hShare": 28.6,
+            "correctedWithin24hShare": 63.6
           },
           "contention": {
-            "greenButUnmergedHours": 68.7,
-            "greenToMergeP50Minutes": 0.4,
-            "greenToMergeP90Minutes": 16.4,
+            "greenButUnmergedHours": 67.3,
+            "greenToMergeP50Minutes": 0.3,
+            "greenToMergeP90Minutes": 15.8,
             "greenToMergeMaxMinutes": 1144.9,
-            "repushRate": 36.4,
-            "racedShare": 13.3,
+            "repushRate": 34.5,
+            "racedShare": 12.4,
             "prsMeasured": 330,
             "prsWithGreen": 329
           },
@@ -1796,15 +1828,17 @@
             ]
           },
           "integration": {
-            "runs": 780,
+            "runs": 833,
             "failures": 1,
             "redMinutes": 44.4,
+            "redMinutesUncapped": 44.4,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
             "prsMeasured": 330,
             "prsUnmeasured": 0,
-            "workflowRuns": 2533,
+            "workflowRuns": 2523,
             "reworkSource": "git-blame"
           }
         },
@@ -1812,27 +1846,27 @@
           "role": "instance",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 94,
+          "mergedPrs": 97,
           "workMix": {
-            "merges": 94,
-            "delivery": 22.3,
-            "rework": 28.7,
-            "toil": 40.4,
+            "merges": 97,
+            "delivery": 23.7,
+            "rework": 29.9,
+            "toil": 38.1,
             "quality": 0,
             "docs": 0,
-            "unconventional": 8.5,
-            "toilRatio": 69.1,
+            "unconventional": 8.2,
+            "toilRatio": 68,
             "counts": {
-              "delivery": 21,
-              "rework": 27,
-              "toil": 38,
+              "delivery": 23,
+              "rework": 29,
+              "toil": 37,
               "quality": 0,
               "docs": 0,
               "unconventional": 8,
               "other": 0
             },
             "sideCounts": {
-              "platform": 94,
+              "platform": 97,
               "product": 0
             },
             "productDelivery": 0
@@ -1840,8 +1874,8 @@
           "timeToFeature": {
             "linked": 8,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 86,
-            "coverage": 8.5,
+            "prsWithNoClosingIssue": 89,
+            "coverage": 8.2,
             "hoursP50": 1.1,
             "hoursP90": 2.6,
             "hoursMax": 2.6,
@@ -1865,13 +1899,13 @@
             }
           },
           "gates": {
-            "failingSteps": 19,
-            "locallyCatchable": 14,
+            "failingSteps": 21,
+            "locallyCatchable": 16,
             "notLocallyCatchable": 5,
             "unclassified": 0,
-            "share": 73.7,
+            "share": 76.2,
             "byKind": {
-              "test": 5,
+              "test": 7,
               "deploy": 5,
               "format": 4,
               "ownership": 2,
@@ -1880,46 +1914,48 @@
               "gitleaks": 1
             }
           },
-          "ciFailureRate": 7.4,
+          "ciFailureRate": 7.2,
           "revisionsP50": 0,
           "revisionsP90": 1,
-          "landedFirstPushRate": 73.4,
+          "landedFirstPushRate": 74.2,
           "cycleTimeP50Minutes": 8.5,
           "cycleTimeP90Minutes": 25.7,
           "rework": {
-            "merges": 94,
-            "fixMerges": 27,
-            "fixShare": 28.7,
-            "attributed": 25,
-            "medianHoursToRework": 5.9,
+            "merges": 97,
+            "fixMerges": 29,
+            "fixShare": 29.9,
+            "attributed": 27,
+            "medianHoursToRework": 6.5,
             "p90HoursToRework": 60.2,
-            "correctedWithin1hShare": 32,
-            "correctedWithin24hShare": 76
+            "correctedWithin1hShare": 29.6,
+            "correctedWithin24hShare": 77.8
           },
           "contention": {
             "greenButUnmergedHours": 7.6,
             "greenToMergeP50Minutes": 0.4,
             "greenToMergeP90Minutes": 7.6,
             "greenToMergeMaxMinutes": 171.7,
-            "repushRate": 26.6,
-            "racedShare": 4.3,
-            "prsMeasured": 94,
-            "prsWithGreen": 94
+            "repushRate": 25.8,
+            "racedShare": 4.1,
+            "prsMeasured": 97,
+            "prsWithGreen": 97
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 338,
+            "runs": 351,
             "failures": 8,
-            "redMinutes": 334.8,
+            "redMinutes": 198.2,
+            "redMinutesUncapped": 334.8,
+            "idleGapsCapped": 1,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 94,
+            "prsMeasured": 97,
             "prsUnmeasured": 0,
-            "workflowRuns": 568,
+            "workflowRuns": 591,
             "reworkSource": "git-blame"
           }
         },
@@ -1927,19 +1963,19 @@
           "role": "sibling",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 16,
+          "mergedPrs": 14,
           "workMix": {
-            "merges": 18,
-            "delivery": 38.9,
-            "rework": 16.7,
-            "toil": 44.4,
+            "merges": 16,
+            "delivery": 37.5,
+            "rework": 12.5,
+            "toil": 50,
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 61.1,
+            "toilRatio": 62.5,
             "counts": {
-              "delivery": 7,
-              "rework": 3,
+              "delivery": 6,
+              "rework": 2,
               "toil": 8,
               "quality": 0,
               "docs": 0,
@@ -1947,7 +1983,7 @@
               "other": 0
             },
             "sideCounts": {
-              "platform": 18,
+              "platform": 16,
               "product": 0
             },
             "productDelivery": 0
@@ -1955,8 +1991,8 @@
           "timeToFeature": {
             "linked": 1,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 15,
-            "coverage": 6.3,
+            "prsWithNoClosingIssue": 13,
+            "coverage": 7.1,
             "hoursP50": 7,
             "hoursP90": 7,
             "hoursMax": 7,
@@ -1980,56 +2016,58 @@
             }
           },
           "gates": {
-            "failingSteps": 3,
+            "failingSteps": 2,
             "locallyCatchable": 1,
-            "notLocallyCatchable": 2,
+            "notLocallyCatchable": 1,
             "unclassified": 0,
-            "share": 33.3,
+            "share": 50,
             "byKind": {
               "test": 1,
-              "dependency-audit": 2
+              "dependency-audit": 1
             }
           },
-          "ciFailureRate": 12.5,
+          "ciFailureRate": 7.1,
           "revisionsP50": 0,
           "revisionsP90": 7,
           "landedFirstPushRate": 50,
           "cycleTimeP50Minutes": 6.1,
-          "cycleTimeP90Minutes": 25.7,
+          "cycleTimeP90Minutes": 19.7,
           "rework": {
-            "merges": 18,
-            "fixMerges": 3,
-            "fixShare": 16.7,
-            "attributed": 3,
-            "medianHoursToRework": 47.7,
+            "merges": 16,
+            "fixMerges": 2,
+            "fixShare": 12.5,
+            "attributed": 2,
+            "medianHoursToRework": 4.1,
             "p90HoursToRework": 70.7,
             "correctedWithin1hShare": 0,
-            "correctedWithin24hShare": 33.3
+            "correctedWithin24hShare": 50
           },
           "contention": {
             "greenButUnmergedHours": 1.1,
-            "greenToMergeP50Minutes": 0.3,
+            "greenToMergeP50Minutes": 0.2,
             "greenToMergeP90Minutes": 18.5,
             "greenToMergeMaxMinutes": 19.9,
             "repushRate": 50,
-            "racedShare": 12.5,
-            "prsMeasured": 16,
-            "prsWithGreen": 16
+            "racedShare": 14.3,
+            "prsMeasured": 14,
+            "prsWithGreen": 14
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 54,
+            "runs": 48,
             "failures": 2,
-            "redMinutes": 342,
+            "redMinutes": 128.2,
+            "redMinutesUncapped": 342,
+            "idleGapsCapped": 2,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 16,
+            "prsMeasured": 14,
             "prsUnmeasured": 0,
-            "workflowRuns": 105,
+            "workflowRuns": 90,
             "reworkSource": "git-blame"
           }
         },
@@ -2037,27 +2075,27 @@
           "role": "plugin",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 56,
+          "mergedPrs": 57,
           "workMix": {
-            "merges": 57,
-            "delivery": 31.6,
-            "rework": 31.6,
-            "toil": 24.6,
-            "quality": 5.3,
+            "merges": 58,
+            "delivery": 31,
+            "rework": 31,
+            "toil": 24.1,
+            "quality": 6.9,
             "docs": 0,
-            "unconventional": 7,
-            "toilRatio": 56.1,
+            "unconventional": 6.9,
+            "toilRatio": 55.2,
             "counts": {
               "delivery": 18,
               "rework": 18,
               "toil": 14,
-              "quality": 3,
+              "quality": 4,
               "docs": 0,
               "unconventional": 4,
               "other": 0
             },
             "sideCounts": {
-              "platform": 57,
+              "platform": 58,
               "product": 0
             },
             "productDelivery": 0
@@ -2065,8 +2103,8 @@
           "timeToFeature": {
             "linked": 26,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 39,
-            "coverage": 46.4,
+            "prsWithNoClosingIssue": 40,
+            "coverage": 45.6,
             "hoursP50": 1.9,
             "hoursP90": 10.9,
             "hoursMax": 11.9,
@@ -2103,16 +2141,16 @@
               "terraform-fmt": 1
             }
           },
-          "ciFailureRate": 18.2,
+          "ciFailureRate": 17.9,
           "revisionsP50": 0,
           "revisionsP90": 2,
-          "landedFirstPushRate": 74.5,
+          "landedFirstPushRate": 75,
           "cycleTimeP50Minutes": 4.8,
           "cycleTimeP90Minutes": 21.3,
           "rework": {
-            "merges": 57,
+            "merges": 58,
             "fixMerges": 18,
-            "fixShare": 31.6,
+            "fixShare": 31,
             "attributed": 15,
             "medianHoursToRework": 7,
             "p90HoursToRework": 63.7,
@@ -2124,25 +2162,27 @@
             "greenToMergeP50Minutes": 0.4,
             "greenToMergeP90Minutes": 6.1,
             "greenToMergeMaxMinutes": 41.5,
-            "repushRate": 25.5,
-            "racedShare": 5.5,
-            "prsMeasured": 55,
-            "prsWithGreen": 52
+            "repushRate": 25,
+            "racedShare": 5.4,
+            "prsMeasured": 56,
+            "prsWithGreen": 53
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 42,
+            "runs": 43,
             "failures": 4,
-            "redMinutes": 1268.3,
+            "redMinutes": 200.5,
+            "redMinutesUncapped": 1268.3,
+            "idleGapsCapped": 1,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 55,
+            "prsMeasured": 56,
             "prsUnmeasured": 1,
-            "workflowRuns": 132,
+            "workflowRuns": 134,
             "reworkSource": "git-blame"
           }
         },
@@ -2150,19 +2190,19 @@
           "role": "plugin",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 42,
+          "mergedPrs": 45,
           "workMix": {
-            "merges": 44,
-            "delivery": 38.6,
-            "rework": 25,
-            "toil": 31.8,
-            "quality": 2.3,
+            "merges": 47,
+            "delivery": 36.2,
+            "rework": 29.8,
+            "toil": 29.8,
+            "quality": 2.1,
             "docs": 0,
-            "unconventional": 2.3,
-            "toilRatio": 56.8,
+            "unconventional": 2.1,
+            "toilRatio": 59.6,
             "counts": {
               "delivery": 17,
-              "rework": 11,
+              "rework": 14,
               "toil": 14,
               "quality": 1,
               "docs": 0,
@@ -2170,22 +2210,22 @@
               "other": 0
             },
             "sideCounts": {
-              "platform": 44,
+              "platform": 47,
               "product": 0
             },
             "productDelivery": 0
           },
           "timeToFeature": {
-            "linked": 16,
+            "linked": 17,
             "unresolved": 1,
-            "prsWithNoClosingIssue": 27,
-            "coverage": 38.1,
+            "prsWithNoClosingIssue": 29,
+            "coverage": 37.8,
             "hoursP50": 1,
             "hoursP90": 7.9,
             "hoursMax": 18.7,
             "running": {
               "measured": 0,
-              "awaitingDeploy": 16,
+              "awaitingDeploy": 17,
               "hoursP50": null,
               "hoursP90": null,
               "deployGapP50": null,
@@ -2216,43 +2256,45 @@
           "ciFailureRate": 0,
           "revisionsP50": 0,
           "revisionsP90": 2,
-          "landedFirstPushRate": 69,
+          "landedFirstPushRate": 71.1,
           "cycleTimeP50Minutes": 5,
           "cycleTimeP90Minutes": 9.7,
           "rework": {
-            "merges": 44,
-            "fixMerges": 11,
-            "fixShare": 25,
-            "attributed": 10,
-            "medianHoursToRework": 7.2,
+            "merges": 47,
+            "fixMerges": 14,
+            "fixShare": 29.8,
+            "attributed": 13,
+            "medianHoursToRework": 7.7,
             "p90HoursToRework": 32.1,
-            "correctedWithin1hShare": 20,
-            "correctedWithin24hShare": 70
+            "correctedWithin1hShare": 15.4,
+            "correctedWithin24hShare": 76.9
           },
           "contention": {
             "greenButUnmergedHours": 1.3,
-            "greenToMergeP50Minutes": 0.4,
-            "greenToMergeP90Minutes": 7.7,
+            "greenToMergeP50Minutes": 0.3,
+            "greenToMergeP90Minutes": 6.3,
             "greenToMergeMaxMinutes": 20.8,
-            "repushRate": 31,
-            "racedShare": 4.8,
-            "prsMeasured": 42,
-            "prsWithGreen": 37
+            "repushRate": 28.9,
+            "racedShare": 4.4,
+            "prsMeasured": 45,
+            "prsWithGreen": 40
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 48,
+            "runs": 51,
             "failures": 3,
             "redMinutes": 148.2,
+            "redMinutesUncapped": 148.2,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 42,
+            "prsMeasured": 45,
             "prsUnmeasured": 0,
-            "workflowRuns": 104,
+            "workflowRuns": 110,
             "reworkSource": "git-blame"
           }
         },
@@ -2354,6 +2396,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -2367,41 +2411,41 @@
           "role": "instance",
           "side": "product",
           "defaultBranch": "dev",
-          "mergedPrs": 115,
+          "mergedPrs": 125,
           "workMix": {
-            "merges": 120,
-            "delivery": 31.7,
-            "rework": 10,
-            "toil": 25,
-            "quality": 10,
-            "docs": 13.3,
-            "unconventional": 10,
-            "toilRatio": 35,
+            "merges": 129,
+            "delivery": 30.2,
+            "rework": 15.5,
+            "toil": 22.5,
+            "quality": 9.3,
+            "docs": 13.2,
+            "unconventional": 9.3,
+            "toilRatio": 38,
             "counts": {
-              "delivery": 38,
-              "rework": 12,
-              "toil": 30,
+              "delivery": 39,
+              "rework": 20,
+              "toil": 29,
               "quality": 12,
-              "docs": 16,
+              "docs": 17,
               "unconventional": 12,
               "other": 0
             },
             "sideCounts": {
-              "platform": 16,
-              "product": 104
+              "platform": 15,
+              "product": 114
             },
-            "productDelivery": 36
+            "productDelivery": 37
           },
           "timeToFeature": {
-            "linked": 13,
+            "linked": 15,
             "unresolved": 1,
-            "prsWithNoClosingIssue": 101,
-            "coverage": 11.3,
+            "prsWithNoClosingIssue": 109,
+            "coverage": 12,
             "hoursP50": 3.6,
             "hoursP90": 96.4,
             "hoursMax": 99.9,
             "running": {
-              "measured": 13,
+              "measured": 15,
               "awaitingDeploy": 0,
               "hoursP50": 4.5,
               "hoursP90": 96.6,
@@ -2440,46 +2484,48 @@
               "gitleaks": 2
             }
           },
-          "ciFailureRate": 11.3,
+          "ciFailureRate": 10.4,
           "revisionsP50": 0,
           "revisionsP90": 2,
-          "landedFirstPushRate": 60.9,
-          "cycleTimeP50Minutes": 11,
-          "cycleTimeP90Minutes": 44.3,
+          "landedFirstPushRate": 59.2,
+          "cycleTimeP50Minutes": 11.1,
+          "cycleTimeP90Minutes": 52.2,
           "rework": {
-            "merges": 120,
-            "fixMerges": 12,
-            "fixShare": 10,
-            "attributed": 9,
+            "merges": 129,
+            "fixMerges": 20,
+            "fixShare": 15.5,
+            "attributed": 17,
             "medianHoursToRework": 17.6,
-            "p90HoursToRework": 489.5,
-            "correctedWithin1hShare": 11.1,
-            "correctedWithin24hShare": 55.6
+            "p90HoursToRework": 196.6,
+            "correctedWithin1hShare": 11.8,
+            "correctedWithin24hShare": 70.6
           },
           "contention": {
-            "greenButUnmergedHours": 70.8,
-            "greenToMergeP50Minutes": 4.6,
-            "greenToMergeP90Minutes": 39,
+            "greenButUnmergedHours": 89.2,
+            "greenToMergeP50Minutes": 4.7,
+            "greenToMergeP90Minutes": 46.8,
             "greenToMergeMaxMinutes": 2800.2,
-            "repushRate": 39.1,
-            "racedShare": 24.3,
-            "prsMeasured": 115,
-            "prsWithGreen": 114
+            "repushRate": 40.8,
+            "racedShare": 27.2,
+            "prsMeasured": 125,
+            "prsWithGreen": 124
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 524,
+            "runs": 578,
             "failures": 4,
-            "redMinutes": 72.1,
+            "redMinutes": 75.5,
+            "redMinutesUncapped": 75.5,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 115,
+            "prsMeasured": 125,
             "prsUnmeasured": 0,
-            "workflowRuns": 1071,
+            "workflowRuns": 1166,
             "reworkSource": "git-blame"
           }
         },
@@ -2487,19 +2533,19 @@
           "role": "sibling",
           "side": "product",
           "defaultBranch": "dev",
-          "mergedPrs": 40,
+          "mergedPrs": 41,
           "workMix": {
-            "merges": 40,
-            "delivery": 42.5,
-            "rework": 32.5,
-            "toil": 17.5,
-            "quality": 7.5,
+            "merges": 41,
+            "delivery": 41.5,
+            "rework": 34.1,
+            "toil": 17.1,
+            "quality": 7.3,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 50,
+            "toilRatio": 51.2,
             "counts": {
               "delivery": 17,
-              "rework": 13,
+              "rework": 14,
               "toil": 7,
               "quality": 3,
               "docs": 0,
@@ -2508,21 +2554,21 @@
             },
             "sideCounts": {
               "platform": 0,
-              "product": 40
+              "product": 41
             },
             "productDelivery": 17
           },
           "timeToFeature": {
-            "linked": 4,
-            "unresolved": 1,
-            "prsWithNoClosingIssue": 35,
-            "coverage": 10,
-            "hoursP50": 1.2,
+            "linked": 5,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 36,
+            "coverage": 12.2,
+            "hoursP50": 14.9,
             "hoursP90": 571,
             "hoursMax": 571,
             "running": {
               "measured": 0,
-              "awaitingDeploy": 4,
+              "awaitingDeploy": 5,
               "hoursP50": null,
               "hoursP90": null,
               "deployGapP50": null,
@@ -2549,46 +2595,48 @@
               "dependency-audit": 1
             }
           },
-          "ciFailureRate": 2.5,
+          "ciFailureRate": 2.4,
           "revisionsP50": 0,
           "revisionsP90": 1,
-          "landedFirstPushRate": 72.5,
+          "landedFirstPushRate": 73.2,
           "cycleTimeP50Minutes": 9.5,
           "cycleTimeP90Minutes": 27.8,
           "rework": {
-            "merges": 40,
-            "fixMerges": 13,
-            "fixShare": 32.5,
-            "attributed": 12,
-            "medianHoursToRework": 1.1,
+            "merges": 41,
+            "fixMerges": 14,
+            "fixShare": 34.1,
+            "attributed": 13,
+            "medianHoursToRework": 1.8,
             "p90HoursToRework": 22,
-            "correctedWithin1hShare": 41.7,
-            "correctedWithin24hShare": 91.7
+            "correctedWithin1hShare": 38.5,
+            "correctedWithin24hShare": 92.3
           },
           "contention": {
             "greenButUnmergedHours": 5.3,
             "greenToMergeP50Minutes": 0.6,
-            "greenToMergeP90Minutes": 17.6,
+            "greenToMergeP90Minutes": 16.2,
             "greenToMergeMaxMinutes": 99.9,
-            "repushRate": 27.5,
-            "racedShare": 12.5,
-            "prsMeasured": 40,
-            "prsWithGreen": 39
+            "repushRate": 26.8,
+            "racedShare": 12.2,
+            "prsMeasured": 41,
+            "prsWithGreen": 40
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 120,
+            "runs": 123,
             "failures": 0,
             "redMinutes": 0,
+            "redMinutesUncapped": 0,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 40,
+            "prsMeasured": 41,
             "prsUnmeasured": 0,
-            "workflowRuns": 227,
+            "workflowRuns": 232,
             "reworkSource": "git-blame"
           }
         },
@@ -2692,6 +2740,8 @@
             "runs": 32,
             "failures": 0,
             "redMinutes": 0,
+            "redMinutesUncapped": 0,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
@@ -2799,6 +2849,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -2908,6 +2960,8 @@
             "runs": 42,
             "failures": 0,
             "redMinutes": 0,
+            "redMinutesUncapped": 0,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
@@ -3016,7 +3070,9 @@
           "integration": {
             "runs": 33,
             "failures": 1,
-            "redMinutes": 215.8,
+            "redMinutes": 89.8,
+            "redMinutesUncapped": 215.8,
+            "idleGapsCapped": 1,
             "unresolvedFailures": 0
           },
           "coverage": {
@@ -3126,6 +3182,8 @@
             "runs": 27,
             "failures": 0,
             "redMinutes": 0,
+            "redMinutesUncapped": 0,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
@@ -3233,6 +3291,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -3340,6 +3400,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -3351,50 +3413,50 @@
         }
       },
       "estate": {
-        "merges": 799,
-        "platformShare": 71.5,
-        "productShare": 28.5,
-        "toilRatio": 47.2,
-        "capabilityShare": 31.9,
+        "merges": 814,
+        "platformShare": 70.6,
+        "productShare": 29.4,
+        "toilRatio": 47.5,
+        "capabilityShare": 31.1,
         "capabilityBySide": {
           "platform": {
-            "merges": 187,
-            "share": 23.4
+            "merges": 184,
+            "share": 22.6
           },
           "product": {
-            "merges": 68,
+            "merges": 69,
             "share": 8.5
           }
         },
         "tabsiiCapabilityShare": 8.5,
-        "contentionHours": 162.3,
+        "contentionHours": 179.3,
         "bySide": {
           "platform": {
-            "merges": 571,
-            "share": 71.5
+            "merges": 575,
+            "share": 70.6
           },
           "product": {
-            "merges": 228,
-            "share": 28.5
+            "merges": 239,
+            "share": 29.4
           }
         },
         "gates": {
           "repos": 15,
-          "failingSteps": 153,
-          "locallyCatchable": 108,
-          "notLocallyCatchable": 45,
+          "failingSteps": 154,
+          "locallyCatchable": 112,
+          "notLocallyCatchable": 42,
           "unclassified": 0,
-          "share": 70.6,
+          "share": 72.7,
           "byKind": {
-            "test": 37,
+            "test": 41,
             "corpus-guard": 3,
             "terraform-validate": 4,
             "lint": 11,
             "build": 4,
-            "publish": 10,
+            "publish": 8,
             "format": 18,
             "release-subject": 4,
-            "dependency-audit": 15,
+            "dependency-audit": 14,
             "typecheck": 11,
             "gitleaks": 5,
             "deploy": 8,
@@ -3410,9 +3472,9 @@
         "note": "merges are a proxy for effort, not a measure of time"
       },
       "amplification": {
-        "totalMerges": 799,
+        "totalMerges": 814,
         "avoidableMerges": 70,
-        "avoidableShare": 8.8,
+        "avoidableShare": 8.6,
         "minRepos": 3,
         "top": [
           {
@@ -3426,48 +3488,48 @@
       }
     },
     "90": {
-      "since": "2026-05-01T07:28:51.341Z",
+      "since": "2026-05-01T11:13:36.197Z",
       "repos": {
         "keiranholloway/biffo-template": {
           "role": "template",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 616,
+          "mergedPrs": 632,
           "workMix": {
-            "merges": 684,
-            "delivery": 33.3,
-            "rework": 35.5,
-            "toil": 7.9,
-            "quality": 5.8,
-            "docs": 16.5,
+            "merges": 700,
+            "delivery": 32.9,
+            "rework": 35.7,
+            "toil": 7.7,
+            "quality": 6.1,
+            "docs": 16.7,
             "unconventional": 0.9,
             "toilRatio": 43.4,
             "counts": {
-              "delivery": 228,
-              "rework": 243,
+              "delivery": 230,
+              "rework": 250,
               "toil": 54,
-              "quality": 40,
-              "docs": 113,
+              "quality": 43,
+              "docs": 117,
               "unconventional": 6,
               "other": 0
             },
             "sideCounts": {
-              "platform": 684,
+              "platform": 700,
               "product": 0
             },
             "productDelivery": 0
           },
           "timeToFeature": {
-            "linked": 193,
+            "linked": 200,
             "unresolved": 1,
-            "prsWithNoClosingIssue": 435,
-            "coverage": 31.3,
-            "hoursP50": 3.1,
-            "hoursP90": 39.6,
+            "prsWithNoClosingIssue": 445,
+            "coverage": 31.6,
+            "hoursP50": 3.2,
+            "hoursP90": 40.7,
             "hoursMax": 354.6,
             "running": {
               "measured": 0,
-              "awaitingDeploy": 193,
+              "awaitingDeploy": 200,
               "hoursP50": null,
               "hoursP90": null,
               "deployGapP50": null,
@@ -3486,34 +3548,34 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
-            "coveredSince": "2026-07-16T07:21:32.829Z"
+            "reason": "window starts 2026-05-01T11:13:36.197Z but jobs were fetched only from 2026-07-16T11:05:36.464Z",
+            "coveredSince": "2026-07-16T11:05:36.464Z"
           },
-          "ciFailureRate": 12.2,
+          "ciFailureRate": 12.8,
           "revisionsP50": 0,
           "revisionsP90": 2,
-          "landedFirstPushRate": 67.3,
-          "cycleTimeP50Minutes": 3,
-          "cycleTimeP90Minutes": 30.6,
+          "landedFirstPushRate": 66.8,
+          "cycleTimeP50Minutes": 2.9,
+          "cycleTimeP90Minutes": 29.1,
           "rework": {
-            "merges": 684,
-            "fixMerges": 243,
-            "fixShare": 35.5,
-            "attributed": 215,
-            "medianHoursToRework": 2.1,
-            "p90HoursToRework": 119.1,
-            "correctedWithin1hShare": 40.5,
-            "correctedWithin24hShare": 75.8
+            "merges": 700,
+            "fixMerges": 250,
+            "fixShare": 35.7,
+            "attributed": 219,
+            "medianHoursToRework": 2.4,
+            "p90HoursToRework": 129.5,
+            "correctedWithin1hShare": 39.7,
+            "correctedWithin24hShare": 74.4
           },
           "contention": {
-            "greenButUnmergedHours": 128.5,
+            "greenButUnmergedHours": 124.7,
             "greenToMergeP50Minutes": 0.5,
-            "greenToMergeP90Minutes": 14.8,
+            "greenToMergeP90Minutes": 13.6,
             "greenToMergeMaxMinutes": 1144.9,
-            "repushRate": 32.7,
-            "racedShare": 10.2,
-            "prsMeasured": 547,
-            "prsWithGreen": 546
+            "repushRate": 33.2,
+            "racedShare": 10,
+            "prsMeasured": 539,
+            "prsWithGreen": 538
           },
           "flakes": {
             "pairs": 2,
@@ -3523,14 +3585,16 @@
             ]
           },
           "integration": {
-            "runs": 780,
+            "runs": 833,
             "failures": 1,
             "redMinutes": 44.4,
+            "redMinutesUncapped": 44.4,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 547,
-            "prsUnmeasured": 69,
+            "prsMeasured": 539,
+            "prsUnmeasured": 93,
             "workflowRuns": 4000,
             "reworkSource": "git-blame"
           }
@@ -3539,19 +3603,19 @@
           "role": "instance",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 105,
+          "mergedPrs": 109,
           "workMix": {
-            "merges": 107,
-            "delivery": 19.6,
-            "rework": 25.2,
-            "toil": 45.8,
+            "merges": 111,
+            "delivery": 20.7,
+            "rework": 26.1,
+            "toil": 44.1,
             "quality": 0,
             "docs": 0,
-            "unconventional": 9.3,
-            "toilRatio": 71,
+            "unconventional": 9,
+            "toilRatio": 70.3,
             "counts": {
-              "delivery": 21,
-              "rework": 27,
+              "delivery": 23,
+              "rework": 29,
               "toil": 49,
               "quality": 0,
               "docs": 0,
@@ -3559,7 +3623,7 @@
               "other": 0
             },
             "sideCounts": {
-              "platform": 107,
+              "platform": 111,
               "product": 0
             },
             "productDelivery": 0
@@ -3567,8 +3631,8 @@
           "timeToFeature": {
             "linked": 8,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 97,
-            "coverage": 7.6,
+            "prsWithNoClosingIssue": 101,
+            "coverage": 7.3,
             "hoursP50": 1.1,
             "hoursP90": 2.6,
             "hoursMax": 2.6,
@@ -3593,49 +3657,51 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
-            "coveredSince": "2026-07-16T07:21:32.829Z"
+            "reason": "window starts 2026-05-01T11:13:36.197Z but jobs were fetched only from 2026-07-16T11:05:36.464Z",
+            "coveredSince": "2026-07-16T11:05:36.464Z"
           },
-          "ciFailureRate": 8.6,
+          "ciFailureRate": 8.3,
           "revisionsP50": 0,
           "revisionsP90": 1,
-          "landedFirstPushRate": 74.3,
+          "landedFirstPushRate": 75.2,
           "cycleTimeP50Minutes": 8.5,
           "cycleTimeP90Minutes": 25.1,
           "rework": {
-            "merges": 107,
-            "fixMerges": 27,
-            "fixShare": 25.2,
-            "attributed": 25,
-            "medianHoursToRework": 5.9,
+            "merges": 111,
+            "fixMerges": 29,
+            "fixShare": 26.1,
+            "attributed": 27,
+            "medianHoursToRework": 6.5,
             "p90HoursToRework": 60.2,
-            "correctedWithin1hShare": 32,
-            "correctedWithin24hShare": 76
+            "correctedWithin1hShare": 29.6,
+            "correctedWithin24hShare": 77.8
           },
           "contention": {
             "greenButUnmergedHours": 8.5,
             "greenToMergeP50Minutes": 0.4,
             "greenToMergeP90Minutes": 8.7,
             "greenToMergeMaxMinutes": 171.7,
-            "repushRate": 25.7,
-            "racedShare": 3.8,
-            "prsMeasured": 105,
-            "prsWithGreen": 105
+            "repushRate": 24.8,
+            "racedShare": 3.7,
+            "prsMeasured": 109,
+            "prsWithGreen": 109
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 365,
+            "runs": 381,
             "failures": 9,
-            "redMinutes": 405.9,
+            "redMinutes": 269.3,
+            "redMinutesUncapped": 405.9,
+            "idleGapsCapped": 1,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 105,
+            "prsMeasured": 109,
             "prsUnmeasured": 0,
-            "workflowRuns": 639,
+            "workflowRuns": 667,
             "reworkSource": "git-blame"
           }
         },
@@ -3697,8 +3763,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
-            "coveredSince": "2026-07-16T07:21:32.829Z"
+            "reason": "window starts 2026-05-01T11:13:36.197Z but jobs were fetched only from 2026-07-16T11:05:36.464Z",
+            "coveredSince": "2026-07-16T11:05:36.464Z"
           },
           "ciFailureRate": 12.5,
           "revisionsP50": 0,
@@ -3733,7 +3799,9 @@
           "integration": {
             "runs": 57,
             "failures": 3,
-            "redMinutes": 3202.7,
+            "redMinutes": 189.4,
+            "redMinutesUncapped": 3202.7,
+            "idleGapsCapped": 3,
             "unresolvedFailures": 0
           },
           "coverage": {
@@ -3747,27 +3815,27 @@
           "role": "plugin",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 56,
+          "mergedPrs": 57,
           "workMix": {
-            "merges": 57,
-            "delivery": 31.6,
-            "rework": 31.6,
-            "toil": 24.6,
-            "quality": 5.3,
+            "merges": 58,
+            "delivery": 31,
+            "rework": 31,
+            "toil": 24.1,
+            "quality": 6.9,
             "docs": 0,
-            "unconventional": 7,
-            "toilRatio": 56.1,
+            "unconventional": 6.9,
+            "toilRatio": 55.2,
             "counts": {
               "delivery": 18,
               "rework": 18,
               "toil": 14,
-              "quality": 3,
+              "quality": 4,
               "docs": 0,
               "unconventional": 4,
               "other": 0
             },
             "sideCounts": {
-              "platform": 57,
+              "platform": 58,
               "product": 0
             },
             "productDelivery": 0
@@ -3775,8 +3843,8 @@
           "timeToFeature": {
             "linked": 26,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 39,
-            "coverage": 46.4,
+            "prsWithNoClosingIssue": 40,
+            "coverage": 45.6,
             "hoursP50": 1.9,
             "hoursP90": 10.9,
             "hoursMax": 11.9,
@@ -3801,19 +3869,19 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
-            "coveredSince": "2026-07-16T07:21:32.829Z"
+            "reason": "window starts 2026-05-01T11:13:36.197Z but jobs were fetched only from 2026-07-16T11:05:36.464Z",
+            "coveredSince": "2026-07-16T11:05:36.464Z"
           },
-          "ciFailureRate": 18.2,
+          "ciFailureRate": 17.9,
           "revisionsP50": 0,
           "revisionsP90": 2,
-          "landedFirstPushRate": 74.5,
+          "landedFirstPushRate": 75,
           "cycleTimeP50Minutes": 4.8,
           "cycleTimeP90Minutes": 21.3,
           "rework": {
-            "merges": 57,
+            "merges": 58,
             "fixMerges": 18,
-            "fixShare": 31.6,
+            "fixShare": 31,
             "attributed": 15,
             "medianHoursToRework": 7,
             "p90HoursToRework": 63.7,
@@ -3825,25 +3893,27 @@
             "greenToMergeP50Minutes": 0.4,
             "greenToMergeP90Minutes": 6.1,
             "greenToMergeMaxMinutes": 41.5,
-            "repushRate": 25.5,
-            "racedShare": 5.5,
-            "prsMeasured": 55,
-            "prsWithGreen": 52
+            "repushRate": 25,
+            "racedShare": 5.4,
+            "prsMeasured": 56,
+            "prsWithGreen": 53
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 42,
+            "runs": 43,
             "failures": 4,
-            "redMinutes": 1268.3,
+            "redMinutes": 200.5,
+            "redMinutesUncapped": 1268.3,
+            "idleGapsCapped": 1,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 55,
+            "prsMeasured": 56,
             "prsUnmeasured": 1,
-            "workflowRuns": 132,
+            "workflowRuns": 134,
             "reworkSource": "git-blame"
           }
         },
@@ -3851,19 +3921,19 @@
           "role": "plugin",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 42,
+          "mergedPrs": 45,
           "workMix": {
-            "merges": 44,
-            "delivery": 38.6,
-            "rework": 25,
-            "toil": 31.8,
-            "quality": 2.3,
+            "merges": 47,
+            "delivery": 36.2,
+            "rework": 29.8,
+            "toil": 29.8,
+            "quality": 2.1,
             "docs": 0,
-            "unconventional": 2.3,
-            "toilRatio": 56.8,
+            "unconventional": 2.1,
+            "toilRatio": 59.6,
             "counts": {
               "delivery": 17,
-              "rework": 11,
+              "rework": 14,
               "toil": 14,
               "quality": 1,
               "docs": 0,
@@ -3871,22 +3941,22 @@
               "other": 0
             },
             "sideCounts": {
-              "platform": 44,
+              "platform": 47,
               "product": 0
             },
             "productDelivery": 0
           },
           "timeToFeature": {
-            "linked": 16,
+            "linked": 17,
             "unresolved": 1,
-            "prsWithNoClosingIssue": 27,
-            "coverage": 38.1,
+            "prsWithNoClosingIssue": 29,
+            "coverage": 37.8,
             "hoursP50": 1,
             "hoursP90": 7.9,
             "hoursMax": 18.7,
             "running": {
               "measured": 0,
-              "awaitingDeploy": 16,
+              "awaitingDeploy": 17,
               "hoursP50": null,
               "hoursP90": null,
               "deployGapP50": null,
@@ -3905,49 +3975,51 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
-            "coveredSince": "2026-07-16T07:21:32.829Z"
+            "reason": "window starts 2026-05-01T11:13:36.197Z but jobs were fetched only from 2026-07-16T11:05:36.464Z",
+            "coveredSince": "2026-07-16T11:05:36.464Z"
           },
           "ciFailureRate": 0,
           "revisionsP50": 0,
           "revisionsP90": 2,
-          "landedFirstPushRate": 69,
+          "landedFirstPushRate": 71.1,
           "cycleTimeP50Minutes": 5,
           "cycleTimeP90Minutes": 9.7,
           "rework": {
-            "merges": 44,
-            "fixMerges": 11,
-            "fixShare": 25,
-            "attributed": 10,
-            "medianHoursToRework": 7.2,
+            "merges": 47,
+            "fixMerges": 14,
+            "fixShare": 29.8,
+            "attributed": 13,
+            "medianHoursToRework": 7.7,
             "p90HoursToRework": 32.1,
-            "correctedWithin1hShare": 20,
-            "correctedWithin24hShare": 70
+            "correctedWithin1hShare": 15.4,
+            "correctedWithin24hShare": 76.9
           },
           "contention": {
             "greenButUnmergedHours": 1.3,
-            "greenToMergeP50Minutes": 0.4,
-            "greenToMergeP90Minutes": 7.7,
+            "greenToMergeP50Minutes": 0.3,
+            "greenToMergeP90Minutes": 6.3,
             "greenToMergeMaxMinutes": 20.8,
-            "repushRate": 31,
-            "racedShare": 4.8,
-            "prsMeasured": 42,
-            "prsWithGreen": 37
+            "repushRate": 28.9,
+            "racedShare": 4.4,
+            "prsMeasured": 45,
+            "prsWithGreen": 40
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 48,
+            "runs": 51,
             "failures": 3,
             "redMinutes": 148.2,
+            "redMinutesUncapped": 148.2,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 42,
+            "prsMeasured": 45,
             "prsUnmeasured": 0,
-            "workflowRuns": 104,
+            "workflowRuns": 110,
             "reworkSource": "git-blame"
           }
         },
@@ -4009,8 +4081,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
-            "coveredSince": "2026-07-16T07:21:32.829Z"
+            "reason": "window starts 2026-05-01T11:13:36.197Z but jobs were fetched only from 2026-07-16T11:05:36.464Z",
+            "coveredSince": "2026-07-16T11:05:36.464Z"
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -4046,6 +4118,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -4059,41 +4133,41 @@
           "role": "instance",
           "side": "product",
           "defaultBranch": "dev",
-          "mergedPrs": 283,
+          "mergedPrs": 295,
           "workMix": {
-            "merges": 308,
-            "delivery": 31.8,
-            "rework": 17.5,
-            "toil": 21.8,
-            "quality": 5.2,
-            "docs": 8.1,
-            "unconventional": 15.3,
-            "toilRatio": 39.3,
+            "merges": 319,
+            "delivery": 31,
+            "rework": 19.4,
+            "toil": 21.3,
+            "quality": 5,
+            "docs": 8.2,
+            "unconventional": 14.7,
+            "toilRatio": 40.8,
             "counts": {
-              "delivery": 98,
-              "rework": 54,
-              "toil": 67,
+              "delivery": 99,
+              "rework": 62,
+              "toil": 68,
               "quality": 16,
-              "docs": 25,
+              "docs": 26,
               "unconventional": 47,
               "other": 1
             },
             "sideCounts": {
               "platform": 32,
-              "product": 276
+              "product": 287
             },
-            "productDelivery": 95
+            "productDelivery": 96
           },
           "timeToFeature": {
-            "linked": 26,
+            "linked": 28,
             "unresolved": 1,
-            "prsWithNoClosingIssue": 256,
-            "coverage": 9.2,
+            "prsWithNoClosingIssue": 266,
+            "coverage": 9.5,
             "hoursP50": 3.6,
             "hoursP90": 21.5,
             "hoursMax": 99.9,
             "running": {
-              "measured": 26,
+              "measured": 28,
               "awaitingDeploy": 0,
               "hoursP50": 4.5,
               "hoursP90": 21.7,
@@ -4113,49 +4187,51 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
-            "coveredSince": "2026-07-16T07:21:32.829Z"
+            "reason": "window starts 2026-05-01T11:13:36.197Z but jobs were fetched only from 2026-07-16T11:05:36.464Z",
+            "coveredSince": "2026-07-16T11:05:36.464Z"
           },
-          "ciFailureRate": 19.4,
+          "ciFailureRate": 18.6,
           "revisionsP50": 0,
           "revisionsP90": 1,
-          "landedFirstPushRate": 65.4,
+          "landedFirstPushRate": 64.7,
           "cycleTimeP50Minutes": 9.3,
-          "cycleTimeP90Minutes": 37.9,
+          "cycleTimeP90Minutes": 40.9,
           "rework": {
-            "merges": 308,
-            "fixMerges": 54,
-            "fixShare": 17.5,
-            "attributed": 39,
-            "medianHoursToRework": 1.5,
-            "p90HoursToRework": 196.6,
-            "correctedWithin1hShare": 41,
-            "correctedWithin24hShare": 84.6
+            "merges": 319,
+            "fixMerges": 62,
+            "fixShare": 19.4,
+            "attributed": 47,
+            "medianHoursToRework": 2.3,
+            "p90HoursToRework": 124.6,
+            "correctedWithin1hShare": 36.2,
+            "correctedWithin24hShare": 85.1
           },
           "contention": {
-            "greenButUnmergedHours": 126.3,
-            "greenToMergeP50Minutes": 1.6,
-            "greenToMergeP90Minutes": 27.7,
+            "greenButUnmergedHours": 145.1,
+            "greenToMergeP50Minutes": 2,
+            "greenToMergeP90Minutes": 30.6,
             "greenToMergeMaxMinutes": 2800.2,
-            "repushRate": 34.6,
-            "racedShare": 13.1,
-            "prsMeasured": 283,
-            "prsWithGreen": 275
+            "repushRate": 35.3,
+            "racedShare": 14.6,
+            "prsMeasured": 295,
+            "prsWithGreen": 287
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 896,
+            "runs": 955,
             "failures": 42,
-            "redMinutes": 2734.1,
+            "redMinutes": 1151.6,
+            "redMinutesUncapped": 2737.8,
+            "idleGapsCapped": 6,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 283,
+            "prsMeasured": 295,
             "prsUnmeasured": 0,
-            "workflowRuns": 1734,
+            "workflowRuns": 1836,
             "reworkSource": "git-blame"
           }
         },
@@ -4163,19 +4239,19 @@
           "role": "sibling",
           "side": "product",
           "defaultBranch": "dev",
-          "mergedPrs": 108,
+          "mergedPrs": 109,
           "workMix": {
-            "merges": 109,
-            "delivery": 56.9,
-            "rework": 17.4,
-            "toil": 11.9,
-            "quality": 3.7,
+            "merges": 110,
+            "delivery": 56.4,
+            "rework": 18.2,
+            "toil": 11.8,
+            "quality": 3.6,
             "docs": 7.3,
-            "unconventional": 2.8,
-            "toilRatio": 29.4,
+            "unconventional": 2.7,
+            "toilRatio": 30,
             "counts": {
               "delivery": 62,
-              "rework": 19,
+              "rework": 20,
               "toil": 13,
               "quality": 4,
               "docs": 8,
@@ -4184,21 +4260,21 @@
             },
             "sideCounts": {
               "platform": 0,
-              "product": 109
+              "product": 110
             },
             "productDelivery": 62
           },
           "timeToFeature": {
-            "linked": 16,
-            "unresolved": 1,
-            "prsWithNoClosingIssue": 91,
-            "coverage": 14.8,
-            "hoursP50": 1.8,
+            "linked": 17,
+            "unresolved": 0,
+            "prsWithNoClosingIssue": 92,
+            "coverage": 15.6,
+            "hoursP50": 1.9,
             "hoursP90": 21.3,
             "hoursMax": 571,
             "running": {
               "measured": 0,
-              "awaitingDeploy": 16,
+              "awaitingDeploy": 17,
               "hoursP50": null,
               "hoursP90": null,
               "deployGapP50": null,
@@ -4217,34 +4293,34 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
-            "coveredSince": "2026-07-16T07:21:32.829Z"
+            "reason": "window starts 2026-05-01T11:13:36.197Z but jobs were fetched only from 2026-07-16T11:05:36.464Z",
+            "coveredSince": "2026-07-16T11:05:36.464Z"
           },
-          "ciFailureRate": 10.2,
+          "ciFailureRate": 10.1,
           "revisionsP50": 0,
           "revisionsP90": 1,
-          "landedFirstPushRate": 84.3,
+          "landedFirstPushRate": 84.4,
           "cycleTimeP50Minutes": 6.4,
           "cycleTimeP90Minutes": 27.8,
           "rework": {
-            "merges": 109,
-            "fixMerges": 19,
-            "fixShare": 17.4,
-            "attributed": 15,
+            "merges": 110,
+            "fixMerges": 20,
+            "fixShare": 18.2,
+            "attributed": 16,
             "medianHoursToRework": 1.7,
             "p90HoursToRework": 24.5,
-            "correctedWithin1hShare": 33.3,
-            "correctedWithin24hShare": 86.7
+            "correctedWithin1hShare": 31.3,
+            "correctedWithin24hShare": 87.5
           },
           "contention": {
             "greenButUnmergedHours": 12.2,
             "greenToMergeP50Minutes": 0.5,
             "greenToMergeP90Minutes": 13.7,
             "greenToMergeMaxMinutes": 286.2,
-            "repushRate": 15.7,
+            "repushRate": 15.6,
             "racedShare": 4.6,
-            "prsMeasured": 108,
-            "prsWithGreen": 102
+            "prsMeasured": 109,
+            "prsWithGreen": 103
           },
           "flakes": {
             "pairs": 1,
@@ -4253,15 +4329,17 @@
             ]
           },
           "integration": {
-            "runs": 319,
+            "runs": 322,
             "failures": 8,
-            "redMinutes": 519.4,
+            "redMinutes": 259.2,
+            "redMinutesUncapped": 521.5,
+            "idleGapsCapped": 1,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 108,
+            "prsMeasured": 109,
             "prsUnmeasured": 0,
-            "workflowRuns": 591,
+            "workflowRuns": 596,
             "reworkSource": "git-blame"
           }
         },
@@ -4323,8 +4401,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
-            "coveredSince": "2026-07-16T07:21:32.829Z"
+            "reason": "window starts 2026-05-01T11:13:36.197Z but jobs were fetched only from 2026-07-16T11:05:36.464Z",
+            "coveredSince": "2026-07-16T11:05:36.464Z"
           },
           "ciFailureRate": 4.2,
           "revisionsP50": 0,
@@ -4359,7 +4437,9 @@
           "integration": {
             "runs": 50,
             "failures": 2,
-            "redMinutes": 95.2,
+            "redMinutes": 89.9,
+            "redMinutesUncapped": 95.2,
+            "idleGapsCapped": 1,
             "unresolvedFailures": 0
           },
           "coverage": {
@@ -4427,8 +4507,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
-            "coveredSince": "2026-07-16T07:21:32.829Z"
+            "reason": "window starts 2026-05-01T11:13:36.197Z but jobs were fetched only from 2026-07-16T11:05:36.464Z",
+            "coveredSince": "2026-07-16T11:05:36.464Z"
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -4464,6 +4544,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -4531,8 +4613,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
-            "coveredSince": "2026-07-16T07:21:32.829Z"
+            "reason": "window starts 2026-05-01T11:13:36.197Z but jobs were fetched only from 2026-07-16T11:05:36.464Z",
+            "coveredSince": "2026-07-16T11:05:36.464Z"
           },
           "ciFailureRate": 3.8,
           "revisionsP50": 0,
@@ -4568,6 +4650,8 @@
             "runs": 81,
             "failures": 2,
             "redMinutes": 97.2,
+            "redMinutesUncapped": 97.2,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
@@ -4635,8 +4719,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
-            "coveredSince": "2026-07-16T07:21:32.829Z"
+            "reason": "window starts 2026-05-01T11:13:36.197Z but jobs were fetched only from 2026-07-16T11:05:36.464Z",
+            "coveredSince": "2026-07-16T11:05:36.464Z"
           },
           "ciFailureRate": 11.1,
           "revisionsP50": 0,
@@ -4673,7 +4757,9 @@
           "integration": {
             "runs": 57,
             "failures": 2,
-            "redMinutes": 1778.5,
+            "redMinutes": 162,
+            "redMinutesUncapped": 1778.5,
+            "idleGapsCapped": 2,
             "unresolvedFailures": 0
           },
           "coverage": {
@@ -4741,8 +4827,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
-            "coveredSince": "2026-07-16T07:21:32.829Z"
+            "reason": "window starts 2026-05-01T11:13:36.197Z but jobs were fetched only from 2026-07-16T11:05:36.464Z",
+            "coveredSince": "2026-07-16T11:05:36.464Z"
           },
           "ciFailureRate": 18.2,
           "revisionsP50": 1,
@@ -4779,7 +4865,9 @@
           "integration": {
             "runs": 36,
             "failures": 3,
-            "redMinutes": 1151.5,
+            "redMinutes": 206.5,
+            "redMinutesUncapped": 1151.5,
+            "idleGapsCapped": 3,
             "unresolvedFailures": 0
           },
           "coverage": {
@@ -4847,8 +4935,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
-            "coveredSince": "2026-07-16T07:21:32.829Z"
+            "reason": "window starts 2026-05-01T11:13:36.197Z but jobs were fetched only from 2026-07-16T11:05:36.464Z",
+            "coveredSince": "2026-07-16T11:05:36.464Z"
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -4884,6 +4972,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -4951,8 +5041,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
-            "coveredSince": "2026-07-16T07:21:32.829Z"
+            "reason": "window starts 2026-05-01T11:13:36.197Z but jobs were fetched only from 2026-07-16T11:05:36.464Z",
+            "coveredSince": "2026-07-16T11:05:36.464Z"
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -4988,6 +5078,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -4999,31 +5091,31 @@
         }
       },
       "estate": {
-        "merges": 1495,
-        "platformShare": 63.8,
-        "productShare": 36.2,
-        "toilRatio": 45.7,
-        "capabilityShare": 33.4,
+        "merges": 1531,
+        "platformShare": 63.9,
+        "productShare": 36.1,
+        "toilRatio": 46,
+        "capabilityShare": 33,
         "capabilityBySide": {
           "platform": {
-            "merges": 298,
-            "share": 19.9
+            "merges": 302,
+            "share": 19.7
           },
           "product": {
-            "merges": 202,
-            "share": 13.5
+            "merges": 203,
+            "share": 13.3
           }
         },
-        "tabsiiCapabilityShare": 13.5,
-        "contentionHours": 302.2,
+        "tabsiiCapabilityShare": 13.3,
+        "contentionHours": 317.2,
         "bySide": {
           "platform": {
-            "merges": 954,
-            "share": 63.8
+            "merges": 978,
+            "share": 63.9
           },
           "product": {
-            "merges": 541,
-            "share": 36.2
+            "merges": 553,
+            "share": 36.1
           }
         },
         "gates": {
@@ -5037,9 +5129,9 @@
         "note": "merges are a proxy for effort, not a measure of time"
       },
       "amplification": {
-        "totalMerges": 1495,
+        "totalMerges": 1531,
         "avoidableMerges": 70,
-        "avoidableShare": 4.7,
+        "avoidableShare": 4.6,
         "minRepos": 3,
         "top": [
           {
@@ -5053,50 +5145,50 @@
       }
     },
     "prior": {
-      "since": "2026-07-16T07:21:32.829Z",
-      "until": "2026-07-23T07:21:32.829Z",
+      "since": "2026-07-16T11:05:36.464Z",
+      "until": "2026-07-23T11:05:36.464Z",
       "days": 7,
       "repos": {
         "keiranholloway/biffo-template": {
           "role": "template",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 131,
+          "mergedPrs": 147,
           "workMix": {
-            "merges": 131,
-            "delivery": 27.5,
-            "rework": 45.8,
-            "toil": 6.1,
-            "quality": 13,
-            "docs": 7.6,
+            "merges": 147,
+            "delivery": 28.6,
+            "rework": 44.2,
+            "toil": 7.5,
+            "quality": 12.9,
+            "docs": 6.8,
             "unconventional": 0,
-            "toilRatio": 51.9,
+            "toilRatio": 51.7,
             "counts": {
-              "delivery": 36,
-              "rework": 60,
-              "toil": 8,
-              "quality": 17,
+              "delivery": 42,
+              "rework": 65,
+              "toil": 11,
+              "quality": 19,
               "docs": 10,
               "unconventional": 0,
               "other": 0
             },
             "sideCounts": {
-              "platform": 131,
+              "platform": 147,
               "product": 0
             },
             "productDelivery": 0
           },
           "timeToFeature": {
-            "linked": 76,
+            "linked": 87,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 60,
-            "coverage": 58,
-            "hoursP50": 2.2,
-            "hoursP90": 302.5,
+            "prsWithNoClosingIssue": 66,
+            "coverage": 59.2,
+            "hoursP50": 3.6,
+            "hoursP90": 302,
             "hoursMax": 354.6,
             "running": {
               "measured": 0,
-              "awaitingDeploy": 76,
+              "awaitingDeploy": 87,
               "hoursP50": null,
               "hoursP90": null,
               "deployGapP50": null,
@@ -5114,49 +5206,49 @@
             }
           },
           "gates": {
-            "failingSteps": 46,
-            "locallyCatchable": 24,
-            "notLocallyCatchable": 11,
+            "failingSteps": 49,
+            "locallyCatchable": 25,
+            "notLocallyCatchable": 13,
             "unclassified": 11,
-            "share": 68.6,
+            "share": 65.8,
             "byKind": {
+              "publish": 10,
+              "test": 7,
               "format": 9,
               "typecheck": 2,
               "dependency-audit": 3,
-              "test": 6,
               "unclassified": 11,
               "terraform-validate": 1,
-              "publish": 8,
               "sast": 1,
               "gitleaks": 4,
               "lint": 1
             }
           },
-          "ciFailureRate": 18.3,
+          "ciFailureRate": 17,
           "revisionsP50": 0,
-          "revisionsP90": 1,
-          "landedFirstPushRate": 71.8,
-          "cycleTimeP50Minutes": 2.1,
-          "cycleTimeP90Minutes": 10.3,
+          "revisionsP90": 2,
+          "landedFirstPushRate": 68.7,
+          "cycleTimeP50Minutes": 2.2,
+          "cycleTimeP90Minutes": 13.5,
           "rework": {
-            "merges": 131,
-            "fixMerges": 60,
-            "fixShare": 45.8,
-            "attributed": 59,
+            "merges": 147,
+            "fixMerges": 65,
+            "fixShare": 44.2,
+            "attributed": 62,
             "medianHoursToRework": 0.4,
-            "p90HoursToRework": 6.1,
-            "correctedWithin1hShare": 71.2,
-            "correctedWithin24hShare": 93.2
+            "p90HoursToRework": 14.1,
+            "correctedWithin1hShare": 67.7,
+            "correctedWithin24hShare": 90.3
           },
           "contention": {
-            "greenButUnmergedHours": 36,
+            "greenButUnmergedHours": 37.4,
             "greenToMergeP50Minutes": 0.4,
-            "greenToMergeP90Minutes": 5.8,
+            "greenToMergeP90Minutes": 7.6,
             "greenToMergeMaxMinutes": 943,
-            "repushRate": 28.2,
-            "racedShare": 3.1,
-            "prsMeasured": 131,
-            "prsWithGreen": 131
+            "repushRate": 31.3,
+            "racedShare": 4.8,
+            "prsMeasured": 147,
+            "prsWithGreen": 147
           },
           "flakes": {
             "pairs": 1,
@@ -5168,12 +5260,14 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
-            "prsMeasured": 131,
+            "prsMeasured": 147,
             "prsUnmeasured": 0,
-            "workflowRuns": 935,
+            "workflowRuns": 1066,
             "reworkSource": "git-blame"
           }
         },
@@ -5181,27 +5275,27 @@
           "role": "instance",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 11,
+          "mergedPrs": 12,
           "workMix": {
-            "merges": 13,
+            "merges": 14,
             "delivery": 0,
             "rework": 0,
-            "toil": 84.6,
+            "toil": 85.7,
             "quality": 0,
             "docs": 0,
-            "unconventional": 15.4,
-            "toilRatio": 84.6,
+            "unconventional": 14.3,
+            "toilRatio": 85.7,
             "counts": {
               "delivery": 0,
               "rework": 0,
-              "toil": 11,
+              "toil": 12,
               "quality": 0,
               "docs": 0,
               "unconventional": 2,
               "other": 0
             },
             "sideCounts": {
-              "platform": 13,
+              "platform": 14,
               "product": 0
             },
             "productDelivery": 0
@@ -5209,7 +5303,7 @@
           "timeToFeature": {
             "linked": 0,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 11,
+            "prsWithNoClosingIssue": 12,
             "coverage": 0,
             "hoursP50": null,
             "hoursP90": null,
@@ -5251,14 +5345,14 @@
               "plugin-terraform": 1
             }
           },
-          "ciFailureRate": 18.2,
+          "ciFailureRate": 16.7,
           "revisionsP50": 0,
           "revisionsP90": 1,
-          "landedFirstPushRate": 81.8,
-          "cycleTimeP50Minutes": 6.9,
+          "landedFirstPushRate": 83.3,
+          "cycleTimeP50Minutes": 6.6,
           "cycleTimeP90Minutes": 20.9,
           "rework": {
-            "merges": 13,
+            "merges": 14,
             "fixMerges": 0,
             "fixShare": 0,
             "attributed": 0,
@@ -5269,28 +5363,30 @@
           },
           "contention": {
             "greenButUnmergedHours": 0.9,
-            "greenToMergeP50Minutes": 4.6,
+            "greenToMergeP50Minutes": 4.5,
             "greenToMergeP90Minutes": 8.7,
             "greenToMergeMaxMinutes": 18,
-            "repushRate": 18.2,
+            "repushRate": 16.7,
             "racedShare": 0,
-            "prsMeasured": 11,
-            "prsWithGreen": 11
+            "prsMeasured": 12,
+            "prsWithGreen": 12
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 27,
+            "runs": 30,
             "failures": 1,
             "redMinutes": 71.1,
+            "redMinutesUncapped": 71.1,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 11,
+            "prsMeasured": 12,
             "prsUnmeasured": 0,
-            "workflowRuns": 71,
+            "workflowRuns": 76,
             "reworkSource": "git-blame"
           }
         },
@@ -5298,19 +5394,19 @@
           "role": "sibling",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 0,
+          "mergedPrs": 2,
           "workMix": {
-            "merges": 1,
-            "delivery": 100,
-            "rework": 0,
+            "merges": 3,
+            "delivery": 66.7,
+            "rework": 33.3,
             "toil": 0,
             "quality": 0,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 0,
+            "toilRatio": 33.3,
             "counts": {
-              "delivery": 1,
-              "rework": 0,
+              "delivery": 2,
+              "rework": 1,
               "toil": 0,
               "quality": 0,
               "docs": 0,
@@ -5318,7 +5414,7 @@
               "other": 0
             },
             "sideCounts": {
-              "platform": 1,
+              "platform": 3,
               "product": 0
             },
             "productDelivery": 0
@@ -5326,8 +5422,8 @@
           "timeToFeature": {
             "linked": 0,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 0,
-            "coverage": null,
+            "prsWithNoClosingIssue": 2,
+            "coverage": 0,
             "hoursP50": null,
             "hoursP90": null,
             "hoursMax": null,
@@ -5351,55 +5447,57 @@
             }
           },
           "gates": {
-            "failingSteps": 3,
+            "failingSteps": 4,
             "locallyCatchable": 0,
-            "notLocallyCatchable": 3,
+            "notLocallyCatchable": 4,
             "unclassified": 0,
             "share": 0,
             "byKind": {
-              "dependency-audit": 3
+              "dependency-audit": 4
             }
           },
-          "ciFailureRate": null,
-          "revisionsP50": null,
-          "revisionsP90": null,
-          "landedFirstPushRate": null,
-          "cycleTimeP50Minutes": null,
-          "cycleTimeP90Minutes": null,
+          "ciFailureRate": 50,
+          "revisionsP50": 0,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 50,
+          "cycleTimeP50Minutes": 1.9,
+          "cycleTimeP90Minutes": 30.4,
           "rework": {
-            "merges": 1,
-            "fixMerges": 0,
-            "fixShare": 0,
-            "attributed": 0,
-            "medianHoursToRework": null,
-            "p90HoursToRework": null,
-            "correctedWithin1hShare": null,
-            "correctedWithin24hShare": null
+            "merges": 3,
+            "fixMerges": 1,
+            "fixShare": 33.3,
+            "attributed": 1,
+            "medianHoursToRework": 47.7,
+            "p90HoursToRework": 47.7,
+            "correctedWithin1hShare": 0,
+            "correctedWithin24hShare": 0
           },
           "contention": {
-            "greenButUnmergedHours": 0,
-            "greenToMergeP50Minutes": null,
-            "greenToMergeP90Minutes": null,
-            "greenToMergeMaxMinutes": null,
-            "repushRate": null,
-            "racedShare": null,
-            "prsMeasured": 0,
-            "prsWithGreen": 0
+            "greenButUnmergedHours": 0.1,
+            "greenToMergeP50Minutes": 0.6,
+            "greenToMergeP90Minutes": 3.8,
+            "greenToMergeMaxMinutes": 3.8,
+            "repushRate": 50,
+            "racedShare": 0,
+            "prsMeasured": 2,
+            "prsWithGreen": 2
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 3,
+            "runs": 9,
             "failures": 1,
-            "redMinutes": 0,
-            "unresolvedFailures": 1
+            "redMinutes": 61.2,
+            "redMinutesUncapped": 2860.7,
+            "idleGapsCapped": 1,
+            "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 0,
+            "prsMeasured": 2,
             "prsUnmeasured": 0,
-            "workflowRuns": 11,
+            "workflowRuns": 26,
             "reworkSource": "git-blame"
           }
         },
@@ -5501,6 +5599,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -5608,6 +5708,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -5715,6 +5817,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -5728,36 +5832,36 @@
           "role": "instance",
           "side": "product",
           "defaultBranch": "dev",
-          "mergedPrs": 36,
+          "mergedPrs": 39,
           "workMix": {
-            "merges": 36,
-            "delivery": 11.1,
-            "rework": 16.7,
-            "toil": 38.9,
-            "quality": 5.6,
-            "docs": 2.8,
-            "unconventional": 25,
-            "toilRatio": 55.6,
+            "merges": 39,
+            "delivery": 10.3,
+            "rework": 15.4,
+            "toil": 41,
+            "quality": 5.1,
+            "docs": 2.6,
+            "unconventional": 25.6,
+            "toilRatio": 56.4,
             "counts": {
               "delivery": 4,
               "rework": 6,
-              "toil": 14,
+              "toil": 16,
               "quality": 2,
               "docs": 1,
-              "unconventional": 9,
+              "unconventional": 10,
               "other": 0
             },
             "sideCounts": {
-              "platform": 5,
-              "product": 31
+              "platform": 7,
+              "product": 32
             },
             "productDelivery": 4
           },
           "timeToFeature": {
             "linked": 7,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 29,
-            "coverage": 19.4,
+            "prsWithNoClosingIssue": 32,
+            "coverage": 17.9,
             "hoursP50": 2.7,
             "hoursP90": 12.7,
             "hoursMax": 12.7,
@@ -5804,13 +5908,13 @@
           "ciFailureRate": 33.3,
           "revisionsP50": 0,
           "revisionsP90": 1,
-          "landedFirstPushRate": 69.4,
-          "cycleTimeP50Minutes": 11,
+          "landedFirstPushRate": 69.2,
+          "cycleTimeP50Minutes": 14.3,
           "cycleTimeP90Minutes": 59.1,
           "rework": {
-            "merges": 36,
+            "merges": 39,
             "fixMerges": 6,
-            "fixShare": 16.7,
+            "fixShare": 15.4,
             "attributed": 6,
             "medianHoursToRework": 19.3,
             "p90HoursToRework": 356.5,
@@ -5818,29 +5922,31 @@
             "correctedWithin24hShare": 66.7
           },
           "contention": {
-            "greenButUnmergedHours": 11.4,
+            "greenButUnmergedHours": 11.9,
             "greenToMergeP50Minutes": 0.5,
-            "greenToMergeP90Minutes": 17,
+            "greenToMergeP90Minutes": 18.5,
             "greenToMergeMaxMinutes": 538.5,
-            "repushRate": 30.6,
-            "racedShare": 8.3,
-            "prsMeasured": 36,
-            "prsWithGreen": 35
+            "repushRate": 30.8,
+            "racedShare": 7.7,
+            "prsMeasured": 39,
+            "prsWithGreen": 38
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 76,
+            "runs": 84,
             "failures": 5,
             "redMinutes": 121.6,
+            "redMinutesUncapped": 121.6,
+            "idleGapsCapped": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 36,
+            "prsMeasured": 39,
             "prsUnmeasured": 0,
-            "workflowRuns": 158,
+            "workflowRuns": 168,
             "reworkSource": "git-blame"
           }
         },
@@ -5942,6 +6048,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -6049,6 +6157,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -6156,6 +6266,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -6263,6 +6375,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -6370,6 +6484,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -6481,7 +6597,9 @@
           "integration": {
             "runs": 9,
             "failures": 3,
-            "redMinutes": 1151.5,
+            "redMinutes": 206.5,
+            "redMinutesUncapped": 1151.5,
+            "idleGapsCapped": 3,
             "unresolvedFailures": 0
           },
           "coverage": {
@@ -6589,6 +6707,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -6696,6 +6816,8 @@
             "runs": 0,
             "failures": null,
             "redMinutes": null,
+            "redMinutesUncapped": null,
+            "idleGapsCapped": null,
             "unresolvedFailures": null
           },
           "coverage": {
@@ -6707,48 +6829,48 @@
         }
       },
       "estate": {
-        "merges": 185,
-        "platformShare": 81.1,
-        "productShare": 18.9,
+        "merges": 207,
+        "platformShare": 82.6,
+        "productShare": 17.4,
         "toilRatio": 54.6,
-        "capabilityShare": 23.2,
+        "capabilityShare": 24.2,
         "capabilityBySide": {
           "platform": {
-            "merges": 37,
-            "share": 20
+            "merges": 44,
+            "share": 21.3
           },
           "product": {
             "merges": 6,
-            "share": 3.2
+            "share": 2.9
           }
         },
-        "tabsiiCapabilityShare": 3.2,
-        "contentionHours": 48.3,
+        "tabsiiCapabilityShare": 2.9,
+        "contentionHours": 50.3,
         "bySide": {
           "platform": {
-            "merges": 150,
-            "share": 81.1
+            "merges": 171,
+            "share": 82.6
           },
           "product": {
-            "merges": 35,
-            "share": 18.9
+            "merges": 36,
+            "share": 17.4
           }
         },
         "gates": {
           "repos": 15,
-          "failingSteps": 128,
-          "locallyCatchable": 78,
-          "notLocallyCatchable": 31,
+          "failingSteps": 132,
+          "locallyCatchable": 79,
+          "notLocallyCatchable": 34,
           "unclassified": 19,
-          "share": 71.6,
+          "share": 69.9,
           "byKind": {
+            "publish": 10,
+            "test": 26,
             "format": 21,
             "typecheck": 7,
-            "dependency-audit": 15,
-            "test": 25,
+            "dependency-audit": 16,
             "unclassified": 19,
             "terraform-validate": 3,
-            "publish": 8,
             "sast": 2,
             "gitleaks": 4,
             "lint": 8,

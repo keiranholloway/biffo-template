@@ -22,7 +22,12 @@
     },
     "test": {
       "dependsOn": ["^build"],
-      "inputs": ["$TURBO_DEFAULT$", ".env.test*"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".env.test*",
+        "$TURBO_ROOT$/docs/practices/evidence.jsonl",
+        "$TURBO_ROOT$/docs/guides/development-practices.md"
+      ],
       "outputs": ["coverage/**"]
     }
   }

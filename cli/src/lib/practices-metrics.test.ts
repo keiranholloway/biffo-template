@@ -38,6 +38,8 @@ import {
   gatesForWindow,
   aggregateGates,
   isTotalFetchFailure,
+  normaliseSubject,
+  summariseAmplification,
 } from '../../../scripts/practices-metrics.mjs'
 // @ts-expect-error -- plain .mjs, same arrangement as above.
 import {
@@ -2269,5 +2271,74 @@ describe('isTotalFetchFailure', () => {
     // `--repo <slug>` with a typo targets nothing. That deserves a different
     // message, not a claim that the credential broke.
     expect(isTotalFetchFailure(0, 0)).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Amplification and the morning standup (#918)
+// ---------------------------------------------------------------------------
+
+describe('normaliseSubject', () => {
+  it('collapses the same upstream change arriving in different repos', () => {
+    // These differ only by PR number, which is exactly what made them look like
+    // distinct work in the 2026-07-29 reading.
+    expect(normaliseSubject('chore(shared): sync template-shared files (#30)')).toBe(
+      normaliseSubject('chore(shared): sync template-shared files (#19)'),
+    )
+  })
+
+  it('does not collapse genuinely different subjects', () => {
+    expect(normaliseSubject('fix(api): a (#1)')).not.toBe(normaliseSubject('fix(api): b (#2)'))
+  })
+
+  it('leaves an issue reference that is not a trailing PR number alone', () => {
+    expect(normaliseSubject('fix: handle (#12) in the parser')).toContain('(#12)')
+  })
+})
+
+describe('summariseAmplification', () => {
+  // Modelled on the real shape: one subject, 7 rounds across 3 repos.
+  const sweep = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      subject: `chore(shared): sync template-shared files (#${i})`,
+    }))
+
+  it('counts rounds above the first as avoidable, not the whole sweep', () => {
+    const result = summariseAmplification({ a: sweep(7), b: sweep(7), c: sweep(7) })
+    expect(result.totalMerges).toBe(21)
+    // One round across three repos is the mechanism working: 3 merges are floor.
+    expect(result.avoidableMerges).toBe(18)
+    expect(result.top[0].rounds).toBe(7)
+    expect(result.top[0].repos).toBe(3)
+  })
+
+  it('ignores a subject that only ever hit one repo, however often', () => {
+    // Ten commits of the same message in one repo is not amplification, it is
+    // just repetition — and indicting it would make every fix-on-fix chain
+    // look like a distribution problem.
+    const result = summariseAmplification({ a: sweep(10) })
+    expect(result.avoidableMerges).toBe(0)
+    expect(result.top).toEqual([])
+  })
+
+  it('ignores a change that reached many repos exactly once — the mechanism working', () => {
+    const once = [{ subject: 'chore(shared): sync template-shared files (#1)' }]
+    const result = summariseAmplification({ a: once, b: once, c: once, d: once })
+    expect(result.avoidableMerges).toBe(0)
+  })
+
+  it('reports the avoidable share of everything that landed', () => {
+    const result = summariseAmplification({
+      a: [...sweep(4), { subject: 'feat: real work (#99)' }],
+      b: sweep(4),
+      c: sweep(4),
+    })
+    // 12 sweep merges across 3 repos => 9 avoidable, of 13 total.
+    expect(result.avoidableMerges).toBe(9)
+    expect(result.avoidableShare).toBe(69.2)
+  })
+
+  it('returns a null share when nothing landed at all', () => {
+    expect(summariseAmplification({}).avoidableShare).toBeNull()
   })
 })

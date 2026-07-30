@@ -1646,6 +1646,93 @@ function fetchFailingSteps(slug, runs, since) {
 }
 
 /**
+ * Strip a merge subject down to the *change* it carries (#918).
+ *
+ * `chore(shared): sync template-shared files (#30)` and `… (#19)` in another repo
+ * are the same upstream action arriving twice. The PR number is what makes them
+ * look distinct, so it goes; case and whitespace follow for the same reason.
+ *
+ * @param {string} subject
+ */
+export function normaliseSubject(subject) {
+  return String(subject ?? '')
+    .replace(/\s*\(#\d+\)\s*$/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+/**
+ * **Mechanism amplification**: one upstream action multiplied across the estate
+ * (#918).
+ *
+ * ## The measurement this exists to make possible
+ *
+ * On 2026-07-29, **81 of 226 merges — 35% of everything that landed** — were
+ * `chore(shared): sync template-shared files`: roughly seven rounds across twelve
+ * repos, six of the seven touching `scripts/verify.sh`. One gate being iterated
+ * upstream and redistributed to the whole estate after *every* iteration instead
+ * of once when it settled.
+ *
+ * Every existing metric reported that day as behaviour: toil 57.4% against 32%
+ * recorded, the platform/product split inverting to 54.5% product, small-repo
+ * repush rates of 66-77%. **None of them could show the cause**, because they are
+ * all shares and rates — and amplification is invisible to a share. It looks
+ * exactly like a busy day.
+ *
+ * ## `avoidableMerges` is the number, and why it is that number
+ *
+ * A change that must reach twelve repos costs twelve merges; that is the
+ * mechanism working. What is avoidable is the *rounds* — distributing seven times
+ * instead of once. So `avoidableMerges = merges - repos`: the floor is one round,
+ * and everything above it is a batching decision.
+ *
+ * It is deliberately not `merges`, which would indict distribution itself, nor
+ * `rounds`, which ignores how wide each round was.
+ *
+ * @param {Record<string, Array<{subject: string}>>} commitsByRepo repo slug → commits
+ * @param {number} minRepos ignore a subject that reached fewer repos than this
+ */
+export function summariseAmplification(commitsByRepo, minRepos = 3) {
+  /** @type {Map<string, {subject: string, repos: Set<string>, merges: number}>} */
+  const groups = new Map()
+  let totalMerges = 0
+  for (const [repo, commits] of Object.entries(commitsByRepo)) {
+    for (const commit of commits ?? []) {
+      totalMerges += 1
+      const key = normaliseSubject(commit.subject)
+      if (!key) continue
+      const group = groups.get(key) ?? { subject: key, repos: new Set(), merges: 0 }
+      group.repos.add(repo)
+      group.merges += 1
+      groups.set(key, group)
+    }
+  }
+
+  const amplified = [...groups.values()]
+    .filter((g) => g.repos.size >= minRepos && g.merges > g.repos.size)
+    .map((g) => ({
+      subject: g.subject,
+      repos: g.repos.size,
+      merges: g.merges,
+      // Rounds of distribution: how many times this reached the average repo.
+      rounds: round1(g.merges / g.repos.size),
+      avoidableMerges: g.merges - g.repos.size,
+    }))
+    .sort((a, b) => b.avoidableMerges - a.avoidableMerges)
+
+  const avoidableMerges = amplified.reduce((total, g) => total + g.avoidableMerges, 0)
+  return {
+    totalMerges,
+    avoidableMerges,
+    // The headline: what share of everything that landed did not need to.
+    avoidableShare: rate(avoidableMerges, totalMerges),
+    minRepos,
+    top: amplified.slice(0, 10),
+  }
+}
+
+/**
  * Would this snapshot contain any data at all?
  *
  * Every metric here degrades gracefully on purpose: an unreadable repo becomes
@@ -1805,7 +1892,21 @@ function main() {
         ? summariseRepo(repo, filterToWindow(raw[repo.slug], since), issueOpenedAt, templateClosingIssues)
         : { error: 'unmeasured' }
     }
-    windows[days] = { since, repos, estate: summariseEstate(repos) }
+    // Amplification is estate-level by nature — it is the *cross-repo* repeat of
+    // one subject — so it is computed here from every repo's commits rather than
+    // inside summariseRepo, which can only ever see one repo.
+    /** @type {Record<string, Array<{subject: string}>>} */
+    const commitsByRepo = {}
+    for (const repo of targets) {
+      const windowed = raw[repo.slug] ? filterToWindow(raw[repo.slug], since) : null
+      if (windowed?.rework) commitsByRepo[repo.slug] = windowed.rework.commits
+    }
+    windows[days] = {
+      since,
+      repos,
+      estate: summariseEstate(repos),
+      amplification: summariseAmplification(commitsByRepo),
+    }
   }
 
   // The independent baseline (#835): the long window with the rate window cut

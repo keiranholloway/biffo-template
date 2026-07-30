@@ -194,6 +194,40 @@ Take a backup first if the data matters. The destroyed resources are listed in t
 
 The guard is deliberately narrow — it ignores Lambdas, roles, security groups and everything else Terraform rebuilds from this repo. A guard that fired on every deploy would have its trailer added by reflex, and would then be protecting nothing.
 
+### A different Terraform label is not a different resource (#892)
+
+The inverse mistake to the one above, and it has cost this estate a forked module: assuming that **adopting the template's resource label would replace a live resource**.
+
+It does not. A Terraform *label* — the `app_credentials` in `resource "aws_secretsmanager_secret" "app_credentials"` — is a **state address**, not an AWS property. If the resource's actual attributes are unchanged, renaming the label is a state move, not a replacement: same ARN, same name, same contents, no downtime.
+
+So when an instance's label has diverged from the template's and the resource itself is identical, the fix is a `moved` block (Terraform ≥ 1.1) or `terraform state mv` — **not** keeping the divergence, and certainly not forking the module to preserve it:
+
+```hcl
+moved {
+  from = aws_secretsmanager_secret.db_app_credentials
+  to   = aws_secretsmanager_secret.app_credentials
+}
+```
+
+**Confirm it with `terraform plan` before applying.** The plan must show a move and no replacement. That check is the whole safeguard here, and it has not been run against a live credential — so treat the mechanism as documented rather than as proven on this estate, and read the plan rather than trusting this paragraph.
+
+Two comments in an instance encoded the belief that this would "destroy and recreate the live credential", one of them as a test assertion. If you find yourself preserving a divergence to protect a resource, check whether the resource's own attributes actually differ first.
+
+### Per-environment values are variables, not forks
+
+Related, same root cause. Before diverging a template-owned module to get a per-environment value, check whether the knob already exists.
+
+`app_db_user` in `modules/cloud/aws/database/variables.tf` is the **intended** per-environment knob for the Core API's least-privilege Postgres role, and has been since 0.127.0. Set it at the **user-owned** call site:
+
+```hcl
+module "database" {
+  # ...
+  app_db_user = "biffo_app_${local.environment}"
+}
+```
+
+An instance forked the module to add a `local.app_db_user` computing exactly that, and repointed `outputs.tf` at the local — three divergence declarations for something one call-site argument does. The variable validates the identifier shape, and `biffo:db-init` fails loudly if it disagrees with `BIFFO_APP_ROLE_NAME` on the Lambda, so the supported path is also the safer one.
+
 ## Breaking changes by version
 
 ### 0.54.0 — first-party plugin Terraform is referenced in place

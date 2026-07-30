@@ -1646,6 +1646,26 @@ function fetchFailingSteps(slug, runs, since) {
 }
 
 /**
+ * Would this snapshot contain any data at all?
+ *
+ * Every metric here degrades gracefully on purpose: an unreadable repo becomes
+ * `unmeasured` and leaves the aggregates rather than contributing a zero. That is
+ * correct for *one* repo and wrong for *all* of them. On 2026-07-30 a cron run
+ * whose credential had gone missing 401'd on all fifteen repos and still wrote a
+ * well-formed 9.5KB snapshot — `estate.merges: 0`, every repo `unmeasured` —
+ * which is indistinguishable at a glance from a quiet day.
+ *
+ * "Nothing could be measured" is not an observation, it is a broken job. Total
+ * failure is therefore fatal, while partial failure stays graceful.
+ *
+ * @param {number} failed repos whose fetch threw
+ * @param {number} attempted repos targeted
+ */
+export function isTotalFetchFailure(failed, attempted) {
+  return attempted > 0 && failed === attempted
+}
+
+/**
  * How far back the per-run jobs fetch walks, in days (#914).
  *
  * 14 = the 7-day window H4 and H5 are both defined on, plus the equal-length
@@ -1739,6 +1759,18 @@ function main() {
       raw[repo.slug] = null
       process.stderr.write('FAILED\n')
     }
+  }
+
+  // Refuse to write a snapshot with nothing in it (see isTotalFetchFailure).
+  // Placed before any aggregation so the failure is attributed to the fetch,
+  // where it happened, rather than surfacing later as a page full of dashes.
+  if (isTotalFetchFailure(failures.length, targets.length)) {
+    process.stderr.write(
+      `\nFATAL: all ${targets.length} repos failed to fetch — refusing to write an empty snapshot.\n` +
+        `The most likely cause is credentials: gh stores its token in the keyring, which cron cannot read.\n` +
+        `First failure: ${failures[0]?.error}\n`,
+    )
+    process.exit(1)
   }
 
   // One index across every collected repo, not per-repo: an instance PR routinely

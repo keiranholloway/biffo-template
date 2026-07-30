@@ -37,6 +37,7 @@ import {
   summariseGates,
   gatesForWindow,
   aggregateGates,
+  isTotalFetchFailure,
 } from '../../../scripts/practices-metrics.mjs'
 // @ts-expect-error -- plain .mjs, same arrangement as above.
 import {
@@ -2245,5 +2246,28 @@ describe('aggregateGates', () => {
 
   it('reports a null share when nothing was measured', () => {
     expect(aggregateGates({ blind: { gates: { error: 'unmeasured' } } }).share).toBeNull()
+  })
+})
+
+describe('isTotalFetchFailure', () => {
+  // The 2026-07-30 incident: all 15 repos 401'd because cron cannot read the
+  // keyring, and the collector still wrote a well-formed snapshot containing no
+  // data. Partial failure must stay graceful; total failure must not.
+  it('is fatal when every repo failed', () => {
+    expect(isTotalFetchFailure(15, 15)).toBe(true)
+  })
+
+  it('is not fatal when even one repo was read', () => {
+    expect(isTotalFetchFailure(14, 15)).toBe(false)
+  })
+
+  it('is not fatal when nothing failed', () => {
+    expect(isTotalFetchFailure(0, 15)).toBe(false)
+  })
+
+  it('does not fire on an empty target list, which is a no-op not a failure', () => {
+    // `--repo <slug>` with a typo targets nothing. That deserves a different
+    // message, not a claim that the credential broke.
+    expect(isTotalFetchFailure(0, 0)).toBe(false)
   })
 })

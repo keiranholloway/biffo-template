@@ -183,6 +183,11 @@ async function runSiblingCreateCommand(name: string, options: CommandOptions): P
 // ─── Exported for testing ────────────────────────────────────────────────────
 
 export interface SiblingCreateGit {
+  /**
+   * The committer identity git would use here — `user.name` / `user.email`,
+   * either resolved. `null` for a value git cannot resolve (#737).
+   */
+  configuredIdentity(cwd?: string): Promise<{ name: string | null; email: string | null }>
   init(cwd: string, initialBranch?: string): Promise<void>
   addRemote(cwd: string, name: string, url: string): Promise<void>
   add(cwd: string, paths: string[]): Promise<void>
@@ -235,6 +240,18 @@ export async function runSiblingCreate(
   const totalSteps = 8
   const { org, repo } = githubRepo(config)
   const pathPrefix = resolvePathPrefix(config)
+
+  // Before ANY step, and deliberately not inside one (#737).
+  //
+  // The scaffold commit happens at step 4, in a throwaway temp dir with no
+  // repo-local git config. Step 3 has by then already created the GitHub
+  // repository — so a missing `user.email` used to surface as git's own error
+  // after the repo existed, leaving an empty repo and a half-done scaffold.
+  //
+  // Checked here because a resumable session makes the late failure worse rather
+  // than better: `completedSteps` records the repo as created, so re-running skips
+  // straight back to the same failure.
+  assertGitIdentity(await git.configuredIdentity())
 
   // Step 1: Verify AWS credentials
   if (!session.completedSteps.includes('verify_credentials')) {
@@ -744,6 +761,37 @@ function readExistingSiblingOrigins(filePath: string): { sibling_origins?: Sibli
  * capability directly (rather than inferring from a version number that can
  * drift) and fail with an actionable message before writing anything.
  */
+/**
+ * Pre-flight (issue #737): `git commit` needs a committer identity, and the
+ * scaffold commits in a throwaway temp dir where no repo-local config exists.
+ *
+ * Without this the run fails at step 4 — **after** step 3 has already created the
+ * GitHub repository — with git's own message about setting `user.email`. The
+ * founder is then left with an empty repo, a half-finished scaffold, and an error
+ * that names neither. That sequence is the "onboarding tax" this issue is about:
+ * the cost is not the missing config, it is discovering it too late to be cheap.
+ *
+ * So it is checked before anything is created, and the message says what to run.
+ *
+ * @param identity what git resolves for the committer
+ */
+export function assertGitIdentity(identity: { name: string | null; email: string | null }): void {
+  const missing = [identity.name ? null : 'user.name', identity.email ? null : 'user.email'].filter(
+    (v): v is string => v !== null,
+  )
+  if (missing.length === 0) return
+  throw new Error(
+    `git has no ${missing.join(' or ')} configured, so the scaffold commit would fail ` +
+      `after the GitHub repository had already been created. Set it first:\n` +
+      missing
+        .map(
+          (k) =>
+            `  git config --global ${k} "${k === 'user.name' ? 'Your Name' : 'you@example.com'}"`,
+        )
+        .join('\n'),
+  )
+}
+
 export function assertCoreSupportsSiblingRouting(
   cloneDir: string,
   coreRepo: string,

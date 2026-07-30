@@ -7,6 +7,7 @@ import { SiblingConfigSchema } from '../config/sibling-schema.js'
 import type { SiblingSession } from '../lib/sibling-session.js'
 import {
   assertCoreSupportsSiblingRouting,
+  assertGitIdentity,
   assertPathPrefixIsAllowed,
   runSiblingCreate,
   writeSiblingTemplate,
@@ -121,6 +122,7 @@ afterEach(() => {
 
 function makeGitMock(): SiblingCreateGit & Record<string, ReturnType<typeof vi.fn>> {
   return {
+    configuredIdentity: vi.fn().mockResolvedValue({ name: 'A Dev', email: 'dev@example.com' }),
     init: vi.fn().mockResolvedValue(undefined),
     addRemote: vi.fn().mockResolvedValue(undefined),
     add: vi.fn().mockResolvedValue(undefined),
@@ -220,6 +222,35 @@ describe('runSiblingCreate', () => {
 
   afterEach(() => {
     rmSync(skeletonRoot, { recursive: true, force: true })
+  })
+
+  it('fails the git-identity pre-flight BEFORE creating the repository (#737)', async () => {
+    // This is the actual bug, and the only assertion that captures it. The commit
+    // happens at step 4; the repo is created at step 3. Checking the identity late
+    // still fails — it just fails after a repo exists, leaving an empty repo and a
+    // half-done scaffold that a resumed session walks straight back into.
+    const github = makeGithubMock()
+    const aws = makeAwsMock()
+    const coreAws = makeAwsMock()
+    const git = makeGitMock()
+    git.configuredIdentity.mockResolvedValue({ name: null, email: null })
+
+    await expect(
+      runSiblingCreate(
+        github as never,
+        aws as never,
+        coreAws as never,
+        git,
+        SIBLING_CONFIG,
+        makeSession(),
+        { coreConfig: CORE_CONFIG, skeletonRoot, githubToken: 'gh-token' },
+      ),
+    ).rejects.toThrow(/user\.name or user\.email/)
+
+    // The point of the fix: no side effects at all, not even the credential check.
+    expect(github.createEmptyRepo).not.toHaveBeenCalled()
+    expect(aws.verifyCredentials).not.toHaveBeenCalled()
+    expect(git.commit).not.toHaveBeenCalled()
   })
 
   it('runs all 8 steps in order on a fresh session', async () => {
@@ -958,5 +989,30 @@ describe('root sibling mode', () => {
     // The empty identity map is still populated, so the invariant that step 2
     // fills session.outputs.coreIdentity holds and step 7 sets no CORE_* vars.
     expect(session.outputs.coreIdentity).toEqual({})
+  })
+})
+
+describe('assertGitIdentity (#737)', () => {
+  it('accepts a fully configured identity', () => {
+    expect(() => assertGitIdentity({ name: 'A Dev', email: 'dev@example.com' })).not.toThrow()
+  })
+
+  it('names the missing key and the command that sets it', () => {
+    // The old failure was git's own message, arriving after the GitHub repo had
+    // been created. An error that does not say what to run is most of the tax.
+    expect(() => assertGitIdentity({ name: 'A Dev', email: null })).toThrow(
+      /user\.email[\s\S]*git config --global user\.email/,
+    )
+  })
+
+  it('reports both keys when both are missing, not just the first', () => {
+    const run = () => assertGitIdentity({ name: null, email: null })
+    expect(run).toThrow(/user\.name or user\.email/)
+    expect(run).toThrow(/git config --global user\.name/)
+    expect(run).toThrow(/git config --global user\.email/)
+  })
+
+  it('treats an empty string as unset — git resolves it to nothing usable', () => {
+    expect(() => assertGitIdentity({ name: '', email: 'dev@example.com' })).toThrow(/user\.name/)
   })
 })

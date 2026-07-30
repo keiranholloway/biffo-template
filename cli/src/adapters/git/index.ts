@@ -19,6 +19,30 @@ import {
 
 export class GitAdapter {
   /** True if `cwd` is inside a git working tree. */
+  /**
+   * The committer identity git would resolve here, or `null` per unresolved value
+   * (#737).
+   *
+   * `git config --get` exits 1 when a key is unset, which `execa` throws on — so a
+   * missing value is caught and reported as `null` rather than as an error. That
+   * distinction is the whole point: an unset identity is a condition the caller
+   * must act on, not a failure of this lookup.
+   *
+   * No `cwd` resolves against the process's own configuration, which is what the
+   * scaffold's throwaway temp dir inherits.
+   */
+  async configuredIdentity(cwd?: string): Promise<{ name: string | null; email: string | null }> {
+    const read = async (key: string): Promise<string | null> => {
+      try {
+        const { stdout } = await execa('git', ['config', '--get', key], cwd ? { cwd } : {})
+        return stdout.trim() || null
+      } catch {
+        return null
+      }
+    }
+    return { name: await read('user.name'), email: await read('user.email') }
+  }
+
   async isGitRepo(cwd: string): Promise<boolean> {
     try {
       await execa('git', ['rev-parse', '--is-inside-work-tree'], { cwd })

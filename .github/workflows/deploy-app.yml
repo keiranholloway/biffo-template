@@ -415,7 +415,42 @@ jobs:
             mkdir -p "package/db/imports/$import_name"
             cp "$import_dir"*.sql "package/db/imports/$import_name/" 2>/dev/null || true
           done
-          cd package && zip -r ../lambda.zip .
+          # Precompile the whole package to bytecode (#724).
+          #
+          # /var/task is READ-ONLY in Lambda, so the interpreter can never write a
+          # bytecode cache: every cold start recompiles all ~1,620 .py files from
+          # source. Measured on biffo-platform, that is ~60% of a ~4.0s init.
+          #
+          # --invalidation-mode unchecked-hash is LOAD-BEARING, not a tidy default.
+          # zip/unzip rewrites every mtime, and a timestamp-invalidated .pyc is then
+          # discarded as stale — giving today's behaviour back with a green build and
+          # nothing to see. Measured here with mtimes forced to 2030:
+          #
+          #     no .pyc          0.22-0.27s
+          #     timestamp .pyc   0.21-0.22s   <- no benefit whatsoever
+          #     unchecked-hash   0.12s
+          #
+          # Runs AFTER everything is assembled and after the __pycache__ trim above,
+          # or the trim would delete exactly what this produces.
+          python -m compileall -q --invalidation-mode unchecked-hash package
+          # Guard the size, because the trim above exists for a reason (#724).
+          #
+          # Bytecode adds ~56% to the zip (17.8 -> 27.8 MB measured on this
+          # template). update-function-code base64-encodes the body at ~1.33x
+          # against a ~70MB request cap, so the template lands at ~37MB with ~33MB
+          # spare — but an instance carrying heavy native deps has less. Failing here
+          # with the numbers beats update-function-code failing opaquely after the
+          # upload, which is the shape this comment block is already about.
+          zipped=$(cd package && zip -qr ../lambda.zip . && stat -c%s ../lambda.zip)
+          request_mb=$(awk -v b="$zipped" 'BEGIN{printf "%.1f", b*1.33/1048576}')
+          echo "Package: $(awk -v b="$zipped" 'BEGIN{printf "%.1f", b/1048576}')MB zipped, ~${request_mb}MB as a base64 request body"
+          if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
+            echo "::error::Lambda package is ~${request_mb}MB as a base64 request body, against a ~70MB cap." >&2
+            echo "Bytecode precompilation (#724) adds ~56%. Either drop a heavy dependency, or" >&2
+            echo "move this function to an S3-based update, or stop precompiling and accept the" >&2
+            echo "~2.5s cold start. Do not raise this threshold without measuring the real cap." >&2
+            exit 1
+          fi
           # --output text --query 'LastUpdateStatus' suppresses the CLI's default
           # output, which is the *entire* function configuration as JSON —
           # including Environment.Variables (the master DATABASE_URL and, since
@@ -1076,7 +1111,42 @@ jobs:
             mkdir -p "package/db/imports/$import_name"
             cp "$import_dir"*.sql "package/db/imports/$import_name/" 2>/dev/null || true
           done
-          cd package && zip -r ../lambda.zip .
+          # Precompile the whole package to bytecode (#724).
+          #
+          # /var/task is READ-ONLY in Lambda, so the interpreter can never write a
+          # bytecode cache: every cold start recompiles all ~1,620 .py files from
+          # source. Measured on biffo-platform, that is ~60% of a ~4.0s init.
+          #
+          # --invalidation-mode unchecked-hash is LOAD-BEARING, not a tidy default.
+          # zip/unzip rewrites every mtime, and a timestamp-invalidated .pyc is then
+          # discarded as stale — giving today's behaviour back with a green build and
+          # nothing to see. Measured here with mtimes forced to 2030:
+          #
+          #     no .pyc          0.22-0.27s
+          #     timestamp .pyc   0.21-0.22s   <- no benefit whatsoever
+          #     unchecked-hash   0.12s
+          #
+          # Runs AFTER everything is assembled and after the __pycache__ trim above,
+          # or the trim would delete exactly what this produces.
+          python -m compileall -q --invalidation-mode unchecked-hash package
+          # Guard the size, because the trim above exists for a reason (#724).
+          #
+          # Bytecode adds ~56% to the zip (17.8 -> 27.8 MB measured on this
+          # template). update-function-code base64-encodes the body at ~1.33x
+          # against a ~70MB request cap, so the template lands at ~37MB with ~33MB
+          # spare — but an instance carrying heavy native deps has less. Failing here
+          # with the numbers beats update-function-code failing opaquely after the
+          # upload, which is the shape this comment block is already about.
+          zipped=$(cd package && zip -qr ../lambda.zip . && stat -c%s ../lambda.zip)
+          request_mb=$(awk -v b="$zipped" 'BEGIN{printf "%.1f", b*1.33/1048576}')
+          echo "Package: $(awk -v b="$zipped" 'BEGIN{printf "%.1f", b/1048576}')MB zipped, ~${request_mb}MB as a base64 request body"
+          if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
+            echo "::error::Lambda package is ~${request_mb}MB as a base64 request body, against a ~70MB cap." >&2
+            echo "Bytecode precompilation (#724) adds ~56%. Either drop a heavy dependency, or" >&2
+            echo "move this function to an S3-based update, or stop precompiling and accept the" >&2
+            echo "~2.5s cold start. Do not raise this threshold without measuring the real cap." >&2
+            exit 1
+          fi
           # --output text --query 'LastUpdateStatus' suppresses the CLI's default
           # output, which is the *entire* function configuration as JSON —
           # including Environment.Variables (the master DATABASE_URL and, since
@@ -1749,7 +1819,42 @@ jobs:
             mkdir -p "package/db/imports/$import_name"
             cp "$import_dir"*.sql "package/db/imports/$import_name/" 2>/dev/null || true
           done
-          cd package && zip -r ../lambda.zip .
+          # Precompile the whole package to bytecode (#724).
+          #
+          # /var/task is READ-ONLY in Lambda, so the interpreter can never write a
+          # bytecode cache: every cold start recompiles all ~1,620 .py files from
+          # source. Measured on biffo-platform, that is ~60% of a ~4.0s init.
+          #
+          # --invalidation-mode unchecked-hash is LOAD-BEARING, not a tidy default.
+          # zip/unzip rewrites every mtime, and a timestamp-invalidated .pyc is then
+          # discarded as stale — giving today's behaviour back with a green build and
+          # nothing to see. Measured here with mtimes forced to 2030:
+          #
+          #     no .pyc          0.22-0.27s
+          #     timestamp .pyc   0.21-0.22s   <- no benefit whatsoever
+          #     unchecked-hash   0.12s
+          #
+          # Runs AFTER everything is assembled and after the __pycache__ trim above,
+          # or the trim would delete exactly what this produces.
+          python -m compileall -q --invalidation-mode unchecked-hash package
+          # Guard the size, because the trim above exists for a reason (#724).
+          #
+          # Bytecode adds ~56% to the zip (17.8 -> 27.8 MB measured on this
+          # template). update-function-code base64-encodes the body at ~1.33x
+          # against a ~70MB request cap, so the template lands at ~37MB with ~33MB
+          # spare — but an instance carrying heavy native deps has less. Failing here
+          # with the numbers beats update-function-code failing opaquely after the
+          # upload, which is the shape this comment block is already about.
+          zipped=$(cd package && zip -qr ../lambda.zip . && stat -c%s ../lambda.zip)
+          request_mb=$(awk -v b="$zipped" 'BEGIN{printf "%.1f", b*1.33/1048576}')
+          echo "Package: $(awk -v b="$zipped" 'BEGIN{printf "%.1f", b/1048576}')MB zipped, ~${request_mb}MB as a base64 request body"
+          if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
+            echo "::error::Lambda package is ~${request_mb}MB as a base64 request body, against a ~70MB cap." >&2
+            echo "Bytecode precompilation (#724) adds ~56%. Either drop a heavy dependency, or" >&2
+            echo "move this function to an S3-based update, or stop precompiling and accept the" >&2
+            echo "~2.5s cold start. Do not raise this threshold without measuring the real cap." >&2
+            exit 1
+          fi
           # --output text --query 'LastUpdateStatus' suppresses the CLI's default
           # output, which is the *entire* function configuration as JSON —
           # including Environment.Variables (the master DATABASE_URL and, since

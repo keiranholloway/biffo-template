@@ -66,6 +66,37 @@ def _restore_provider():
     set_identity_provider(original)
 
 
+class _ProfilesNotExercised:
+    """Satisfies the profile half of `IdentityProvider` for auth-path tests.
+
+    Test-only, and it raises rather than returning empties on purpose. The doubles
+    below exist to exercise the four authentication operations; a profile call
+    reaching one of them means the test under it drifted, and a silent `None`
+    would hide that. Do not copy this into a real provider — a deployment that
+    inherits stubs like these has a profile surface that type-checks and then
+    fails in production, which is exactly what making these members required is
+    meant to prevent.
+    """
+
+    async def list_profiles(self, db, tenant_id):
+        raise AssertionError("profile surface not exercised by this test")
+
+    async def get_profile_by_id(self, db, tenant_id, user_id):
+        raise AssertionError("profile surface not exercised by this test")
+
+    async def get_profile(self, db, subject):
+        raise AssertionError("profile surface not exercised by this test")
+
+    async def get_profiles(self, db, subjects):
+        raise AssertionError("profile surface not exercised by this test")
+
+    async def upsert_profile(self, db, *, subject, tenant_id, email, username, fields=None):
+        raise AssertionError("profile surface not exercised by this test")
+
+    async def set_active(self, db, subject, active):
+        raise AssertionError("profile surface not exercised by this test")
+
+
 @pytest.mark.skipif(
     find_spec("api.models.user") is None,
     reason="deployment has retired the Core users model (ADR-0012)",
@@ -121,7 +152,7 @@ class TestOverride:
     async def test_require_auth_uses_the_installed_provider(self):
         calls: list[str] = []
 
-        class RetiredUsersTableProvider:
+        class RetiredUsersTableProvider(_ProfilesNotExercised):
             """Sources identity from a business schema. Touches no Core table —
             note nothing here reads `public.users`."""
 
@@ -173,7 +204,7 @@ class TestThroughFastAPI:
 
         opened: list[str] = []
 
-        class SessionTrackingProvider:
+        class SessionTrackingProvider(_ProfilesNotExercised):
             def session(self) -> AsyncGenerator[AsyncSession]:
                 async def _gen():
                     opened.append("open")

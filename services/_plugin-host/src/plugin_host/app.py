@@ -99,5 +99,12 @@ def handler(event: dict, context: Any) -> Any:
     if _handler is None:
         from mangum import Mangum
 
+        # No `lifespan=` argument, so Mangum's default "auto" applies and the host's
+        # lifespan RUNS — that is load-bearing, not incidental. `build_host` hangs each
+        # mounted plugin's own startup off it, because Starlette's `Mount` never
+        # delivers the lifespan scope to a sub-app (#924). Passing lifespan="off" here
+        # (as `services/api` does) would silently stop every plugin self-seeding again.
+        # Note Mangum re-enters the lifespan cycle on every invocation, not just cold
+        # starts; `plugin_host.lifespan.PluginLifespans` latches startup accordingly.
         _handler = Mangum(build_plugin_host(), api_gateway_base_path=BASE_PATH)
     return _handler(event, context)

@@ -20,8 +20,9 @@ FastAPI, Cognito, or a real token. `app.py` binds the real Cognito authorizer.
 
 from __future__ import annotations
 
+import contextlib
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
@@ -32,6 +33,7 @@ from starlette.routing import Mount
 
 from .discover import DeclaredRoute
 from .forward import DeclaredRouteForwarder, forwarding_gate
+from .lifespan import PluginLifespans
 
 #: The plugin whose router is handling the current request. None outside a gated
 #: plugin request. Bound alongside the SDK's ``acting_as_plugin`` (which the
@@ -202,6 +204,41 @@ def _normalize_bare_admin_paths(app: Any, bare_paths: frozenset[str]) -> Callabl
     return normalized
 
 
+def _quarantine(app: Any, label: str, failures: dict[str, str]) -> Callable:
+    """Wrap a mount so it hard-fails once its plugin's startup has failed.
+
+    ``failures`` is read per request (not captured), because it is filled in during
+    the host's lifespan startup — after the routes are built. A quarantined plugin
+    returns 503 rather than serving a half-initialised app; only that plugin's mount
+    is affected. See :meth:`PluginLifespans.startup` for why the failure is contained
+    here rather than failing the whole host.
+
+    **The stored reason is deliberately NOT put in the response.** Starlette reports
+    a failed startup by sending the whole formatted traceback as the
+    ``lifespan.startup.failed`` message, so ``failures[label]`` holds absolute
+    filesystem paths, dependency versions, source lines, and whatever the exception
+    itself carried — a DSN with its password, for instance. Interpolating it into the
+    body leaked all of that to any caller that could reach the mount. The plugin
+    *name* is host-controlled and safe, so the 503 stays attributable ("which plugin
+    is down") without being disclosive ("and here is its stack"); the reason goes to
+    the host's logs only, via :meth:`PluginLifespans.startup`. Same rule as
+    :func:`plugin_host.forward.forwarding_gate`'s "never leak a stack trace to a
+    caller". Guarded by a test asserting the body carries no traceback.
+    """
+
+    async def guarded(scope: dict, receive: Callable, send: Callable) -> None:
+        if failures.get(label) is not None and scope["type"] == "http":
+            await _send_json(
+                send,
+                503,
+                {"detail": f"Plugin '{label}' failed to start. See the plugin host logs."},
+            )
+            return
+        await app(scope, receive, send)
+
+    return guarded
+
+
 def build_host(
     plugins: list[MountedPlugin],
     *,
@@ -214,27 +251,42 @@ def build_host(
     Starlette's ``Mount`` strips the ``/<name>`` prefix, so a plugin's routes stay
     clean (``/sessions``, …) with no per-plugin knowledge of where it is mounted —
     replacing ADR-0018's per-plugin Mangum ``api_gateway_base_path`` hack.
+
+    The host also owns a **lifespan** that runs each mounted plugin's own startup
+    handler, because ``Mount`` does not (#924) — see :mod:`plugin_host.lifespan`.
+    It runs before the first request is served, so a plugin's cold-start work
+    (self-seeding via Core's service-principal routes) has completed by then.
     """
     routes = []
     bare_admin_paths = set()
+    #: (mount label, app) for every app whose lifespan the host must run.
+    mounted: list[tuple[str, Any]] = []
+    #: Filled in place during lifespan startup; read per request by _quarantine.
+    failures: dict[str, str] = {}
     for p in plugins:
         # Admin app mount (if declared) — must come before user-facing mount so
         # /ideation/admin/* matches before /ideation/* (Starlette routes are
         # checked in order, and a Mount matches if the path starts with its prefix)
         if p.admin_app is not None and p.admin_required_group is not None:
+            admin_label = f"{p.name}/admin"
             routes.append(
                 Mount(
                     f"/{p.name}/admin",
-                    app=group_gate(
-                        p.admin_app,
-                        p.admin_required_group,
-                        p.name,
-                        authorize,
-                        is_public_path=_is_public_admin_asset,
+                    app=_quarantine(
+                        group_gate(
+                            p.admin_app,
+                            p.admin_required_group,
+                            p.name,
+                            authorize,
+                            is_public_path=_is_public_admin_asset,
+                        ),
+                        admin_label,
+                        failures,
                     ),
                 )
             )
             bare_admin_paths.add(f"/{p.name}/admin")
+            mounted.append((admin_label, p.admin_app))
         # User-facing app mount. When the plugin declares api_routes, the
         # forwarder wraps the gated app OUTSIDE the group gate: those routes are
         # authorised by their table's own permissions in Core (ADR-0004), and
@@ -248,8 +300,20 @@ def build_host(
                 DeclaredRouteForwarder(p.name, p.api_routes, send_to_core=send_to_core),
                 token_of=_founder_token,
             )
-        routes.append(Mount(f"/{p.name}", app=user_app))
-    host = Starlette(routes=routes)
+        routes.append(Mount(f"/{p.name}", app=_quarantine(user_app, p.name, failures)))
+        mounted.append((p.name, p.app))
+
+    lifespans = PluginLifespans(mounted, failures=failures)
+
+    @contextlib.asynccontextmanager
+    async def host_lifespan(_app: Any) -> AsyncIterator[None]:
+        # Mangum enters this before the request cycle, so every plugin's startup
+        # has run by the time the first request is served. `PluginLifespans` makes
+        # it a no-op on warm invocations (Mangum re-enters the cycle every time).
+        await lifespans.startup()
+        yield
+
+    host = Starlette(routes=routes, lifespan=host_lifespan)
     if not bare_admin_paths:
         return host
     return _normalize_bare_admin_paths(host, frozenset(bare_admin_paths))

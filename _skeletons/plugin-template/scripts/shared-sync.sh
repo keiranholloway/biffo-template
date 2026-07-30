@@ -67,7 +67,22 @@
 #   sh scripts/shared-sync.sh --estate ~/code --repo tabsii-crm
 #   sh scripts/shared-sync.sh --estate ~/code --no-rehearse  # ship unproven, loudly
 
-set -uo pipefail
+set -u
+# `pipefail` is not POSIX, and this file is documented and invoked as
+# `sh scripts/shared-sync.sh` -- including by scripts/practices-daily.sh.
+#
+# It carried a bare `set -uo pipefail` for as long as it only ever ran on the
+# workstation, whose /bin/sh is dash 0.5.12, a version that happens to accept
+# `-o pipefail`. The first time anything executed it elsewhere -- a test, on a
+# CI runner with an older sh -- it died at this line with
+# `set: Illegal option -o pipefail`, before parsing a single argument. Nothing
+# had noticed, because nothing had ever run it anywhere else.
+#
+# That is the third instance of this class in the corpus: the same one-version
+# difference in the same shell made js-dependency-audit.sh mangle every advisory
+# payload while exiting 0 (#883). Enable it where it exists, carry on where it
+# does not.
+(set -o pipefail) 2>/dev/null && set -o pipefail || true
 
 TEMPLATE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MANIFEST="$TEMPLATE_ROOT/shared-files.json"

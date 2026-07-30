@@ -255,6 +255,34 @@ describe('shared-sync rehearsal', () => {
     expect(run.ghCalls.filter((c) => c.startsWith('pr create'))).toEqual([])
   }, 120_000)
 
+  it('runs under a /bin/sh without pipefail, which is how it is invoked', () => {
+    // CI caught this the first time anything executed the script off the
+    // workstation. It opened `set -uo pipefail` under a `#!/usr/bin/env bash`
+    // shebang while every documented invocation — AGENTS.md section 9,
+    // docs/practices/standards/local-gates.md, scripts/practices-daily.sh — is
+    // `sh scripts/shared-sync.sh`. The workstation's dash is 0.5.12, which
+    // accepts `-o pipefail`; the runner's sh is older and exits at that line
+    // with `set: Illegal option -o pipefail` before parsing an argument.
+    //
+    // The behavioural half of this guard is every other test in this file: they
+    // invoke the real script through `sh`, so on a machine with a strict sh they
+    // all fail. That is exactly what happened, and it is also why they cannot be
+    // relied on alone — on a machine whose dash tolerates pipefail they stay
+    // green. Hence the textual assertion, which fails everywhere.
+    const src = readFileSync(join(root, scriptUnderTest), 'utf8')
+    const setLines = src.split('\n').filter((l) => /^\s*set\s+-/.test(l))
+    expect(setLines.length).toBeGreaterThan(0)
+    for (const line of setLines) {
+      expect(
+        line,
+        `${scriptUnderTest} is run as \`sh <script>\`; pipefail must be probed, not assumed`,
+      ).not.toMatch(/pipefail/)
+    }
+    expect(src, 'enable pipefail only where the shell has it').toMatch(
+      /\(set -o pipefail\) 2>\/dev\/null && set -o pipefail/,
+    )
+  })
+
   it('opens no PR in ANY repo when the candidate fails its gate in ONE', () => {
     const { run, satellites } = runSync([], { failingSatellite: true })
 

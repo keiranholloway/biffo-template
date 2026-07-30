@@ -41,7 +41,15 @@
 #     BIFFO_VERIFY_PYTEST=1 where the suite is fast.
 #   - app/portal build -- a full Next build.
 #   - dependency audits, pip-audit, pnpm audit -- network.
-#   - gitleaks -- scans history, not the working tree.
+#   - gitleaks HISTORY pass -- genuinely scans git history, which a pre-push gate
+#     cannot usefully anticipate.
+#
+# The gitleaks WORKING-TREE pass is no longer excluded (#897). The old reason
+# here read "gitleaks -- scans history, not the working tree", which was false:
+# ci.yml runs two passes, and the second is `gitleaks detect --no-git`, i.e.
+# exactly the working tree, which is what a pre-push gate is for. An exclusion
+# must describe what the CI step actually DOES -- the same defect as the bandit
+# exclusion that claimed "the finding gate is the upload step" (#855).
 #
 # cli/src/lib/verify-parity.test.ts fails if the template's CI grows a check
 # that is neither here nor in that written exclusion list.
@@ -418,6 +426,41 @@ if [ -f scripts/biffo.sh ]; then
   run_check plugin-names sh scripts/biffo.sh check plugin-collisions
 else
   skip biffo-guards "no scripts/biffo.sh in this repo"
+fi
+
+# The append-only corpus guard (#778). CI runs it in Release Guards, and it was
+# invisible to the parity test until #897 widened the harvester -- it is neither
+# `pnpm`, `uv`, `terraform` nor `sh scripts/`, so the guard whose property is
+# "every CI check is in the gate or explicitly excluded" could not see it at all.
+# Measured 0.06s here, which is cheaper than every other check in this file.
+if [ -f scripts/practices-monotonic.mjs ]; then
+  ci_has "practices-monotonic" && run_check corpus-append-only node scripts/practices-monotonic.mjs
+fi
+
+# gitleaks, WORKING-TREE pass only (#897). `--no-git` is what CI's second pass
+# runs, and it is the half a pre-push gate can meaningfully do.
+#
+# Not installed is reported, never assumed clean. A secret scanner that silently
+# does nothing and lets the gate print `verify passed` is the precise failure this
+# whole file exists to prevent, and it would be worse here than elsewhere: the
+# thing not being checked is credentials.
+if ci_has "gitleaks"; then
+  # The installation check gates EXECUTION only, never `--list`.
+  #
+  # `--list` reports what THIS REPO requires, deliberately independent of what the
+  # machine happens to have (see the --list contract at the top of this file), and
+  # verify-parity.test.ts reads `--list`. A first cut wrapped the whole branch in
+  # `command -v gitleaks`, which made the listed check set machine-dependent: on a
+  # machine without gitleaks the parity test then reported the gate as missing a
+  # check it does declare. The parity test caught it.
+  #
+  # `terraform-fmt` above has the same shape and is only unexposed because
+  # terraform happens to be installed here. Recorded, not fixed in this change.
+  if [ -n "$LIST" ] || command -v gitleaks >/dev/null 2>&1; then
+    run_check gitleaks gitleaks detect --no-git --redact --exit-code=2
+  else
+    skip gitleaks "gitleaks not installed - CI still runs both passes"
+  fi
 fi
 
 # JS, cheapest first; `test` last because it is slowest and the most likely to

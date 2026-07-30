@@ -96,14 +96,41 @@ const EXCLUDED: Record<string, { kind: 'network' | 'pr-time' | 'history' | 'slow
     },
   }
 
-/** Commands in ci.yml that are checks rather than setup or reporting. */
+/**
+ * Commands in ci.yml that are checks rather than setup or reporting.
+ *
+ * ## The prefix list is the guard's blind spot, so it is load-bearing (#897)
+ *
+ * This used to accept only `^(pnpm|uv|terraform|sh scripts/)`. Anything else was
+ * not "excluded" — it was **invisible**, appearing in neither `EXCLUDED` nor
+ * `missing`, so the property this whole file asserts ("every CI check is in the
+ * gate or explicitly excluded") silently did not hold for it.
+ *
+ * Measured against `ci.yml` on 2026-07-30: 20 of 26 `run:` commands were
+ * harvested. The three real checks that were not:
+ *
+ *   - `gitleaks detect --redact -v --exit-code=2 --log-opts=…`  (history pass)
+ *   - `gitleaks detect --no-git --redact -v --exit-code=2`      (working tree)
+ *   - `node scripts/practices-monotonic.mjs`                    (corpus guard)
+ *
+ * Note `uv run bandit …` was NOT among them — it starts with `uv`, so it has been
+ * visible all along. Worth stating because this codebase moves fast enough that
+ * bandit only entered the pre-commit checks a day earlier, and "bandit is
+ * invisible too" is a plausible-sounding claim that measurement refutes.
+ *
+ * `pnpm`/`uv`/`terraform`/`node` are the toolchains; `sh`/`bash` cover the repo's
+ * own scripts; `gitleaks` is named because a bare binary matches no other rule.
+ * A future CI step invoking some other bare binary will still be invisible — the
+ * residual is recorded rather than solved, and the anti-vacuity test below is what
+ * makes the next omission survivable.
+ */
 function ciCheckCommands(): string[] {
   const found = new Set<string>()
   for (const line of ci.split('\n')) {
     const m = line.match(/^\s*run:\s+(.*)$/)
     if (!m) continue
     const cmd = m[1].trim()
-    if (/^(pnpm|uv|terraform|sh scripts\/)/.test(cmd)) found.add(cmd)
+    if (/^(pnpm|uv|terraform|node|gitleaks|sh scripts\/|bash scripts\/)/.test(cmd)) found.add(cmd)
   }
   return [...found]
 }

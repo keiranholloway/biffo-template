@@ -85,3 +85,8 @@ htmlcov
 # AWS
 .aws-sam
 samconfig.toml
+
+# Generated at package time by deploy-app.yml (#648) — the core version baked into
+# a deployment. Never committed: a stale committed copy would report the wrong
+# version, which is the exact defect #648's original mechanism would have shipped.
+services/api/src/api/_core_version.py

@@ -1390,6 +1390,8 @@ export function summariseRepo(repo, data, issueOpenedAt = new Map(), templateClo
     // Correct work that could not land. Separate axis from churn — see
     // mergeContention() for why collapsing them points at the wrong fix.
     contention: mergeContention(prs, runsByBranch),
+    // Was anything read by a second pass before it landed?
+    review: reviewCoverage(merged),
     // Trust in the gates themselves.
     flakes: detectFlakes(runs),
     integration: integrationHealth(runs, defaultBranch),
@@ -1649,9 +1651,53 @@ function fetchPrs(slug, since) {
     // one timeline API call per closed issue — is O(issues) requests for the
     // same answer.
     // `body` carries the core-upgrade marker (#767). Same request, one more field.
-    'number,title,createdAt,mergedAt,headRefName,baseRefName,closingIssuesReferences,body',
+    // `reviews` rides along too (#952). Review coverage is otherwise unknowable:
+    // nothing anywhere records whether a merged change was read by a second
+    // pass, so "do we review?" had no answer but memory — and memory said yes
+    // while a session shipping ~20 PRs reviewed almost none of them.
+    'number,title,createdAt,mergedAt,headRefName,baseRefName,closingIssuesReferences,body,reviews',
   ])
   return prs.filter((pr) => pr.mergedAt >= since)
+}
+
+/**
+ * What share of merged PRs was read by anyone before it landed (#952).
+ *
+ * ## Why this exists
+ *
+ * Nothing in this estate recorded whether a change was reviewed, so "do we
+ * review?" could only be answered from memory — and memory was wrong. A single
+ * session shipped ~20 PRs, self-reviewed almost all of them, and two carried
+ * reasoning that was internally consistent and externally false: a model slug
+ * declared dead while the billing table showed 26 charged runs on it, and a
+ * startup hook built on a premise checked against the wrong repo. Neither is the
+ * kind of defect a test catches. Both are the kind a second reader catches.
+ *
+ * ## What counts
+ *
+ * A review event of any kind — APPROVED, CHANGES_REQUESTED or COMMENTED. The bar
+ * is deliberately "someone looked", not "someone approved": on a solo-operator
+ * estate an approval requirement would block every merge, and the thing worth
+ * measuring is whether a diff was read at all.
+ *
+ * ## What this deliberately does NOT claim
+ *
+ * That a review event means the diff was read carefully, or that its absence
+ * means nobody looked — an author reading their own combined diff (which
+ * `build-plugin-feature` step 3.5 requires, and which demonstrably works) leaves
+ * no trace here. So this measures a *recorded* second pass, and it is a floor
+ * rather than the truth. It can still fall, which is the property that matters:
+ * a metric that cannot get worse is not measuring anything.
+ */
+export function reviewCoverage(prs) {
+  const measured = prs.length
+  const reviewed = prs.filter((pr) => (pr.reviews ?? []).length > 0).length
+  return {
+    prsMeasured: measured,
+    reviewed,
+    unreviewed: measured - reviewed,
+    reviewedShare: rate(reviewed, measured),
+  }
 }
 
 /**

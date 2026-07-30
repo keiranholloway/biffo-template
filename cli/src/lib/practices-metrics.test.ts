@@ -40,6 +40,7 @@ import {
   isTotalFetchFailure,
   normaliseSubject,
   summariseAmplification,
+  reviewCoverage,
 } from '../../../scripts/practices-metrics.mjs'
 // @ts-expect-error -- plain .mjs, same arrangement as above.
 import {
@@ -2417,5 +2418,44 @@ describe('summariseAmplification', () => {
 
   it('returns a null share when nothing landed at all', () => {
     expect(summariseAmplification({}).avoidableShare).toBeNull()
+  })
+})
+
+describe('reviewCoverage (#952)', () => {
+  it('counts a PR as reviewed on any review event, not only an approval', () => {
+    // The bar is "someone looked", not "someone approved". On a solo-operator
+    // estate an approval requirement would block every merge, so requiring one
+    // would measure the policy rather than the practice.
+    const got = reviewCoverage([
+      { number: 1, reviews: [{ state: 'COMMENTED' }] },
+      { number: 2, reviews: [{ state: 'CHANGES_REQUESTED' }] },
+      { number: 3, reviews: [{ state: 'APPROVED' }] },
+      { number: 4, reviews: [] },
+    ])
+
+    expect(got.reviewed).toBe(3)
+    expect(got.unreviewed).toBe(1)
+    expect(got.reviewedShare).toBe(75)
+  })
+
+  it('can reach zero — a metric that cannot get worse measures nothing', () => {
+    // The property the practices page insists on: name the value that would make
+    // this bad, and check it is reachable. A day of unreviewed self-merges is
+    // exactly the condition this exists to make visible, and it reads 0.
+    const got = reviewCoverage([
+      { number: 1, reviews: [] },
+      { number: 2, reviews: [] },
+    ])
+
+    expect(got.reviewedShare).toBe(0)
+    expect(got.unreviewed).toBe(2)
+  })
+
+  it('treats a missing reviews field as unreviewed rather than crashing', () => {
+    // `gh` omits the key entirely on some responses; an undefined must not be
+    // read as "fine".
+    const got = reviewCoverage([{ number: 1 }])
+
+    expect(got.reviewedShare).toBe(0)
   })
 })

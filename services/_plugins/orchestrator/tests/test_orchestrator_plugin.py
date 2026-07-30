@@ -9,6 +9,7 @@ from typing import Any
 from biffo_plugin_sdk import BiffoEvent
 from orchestrator import plugin as plugin_module
 from orchestrator.actions import WhatsAppSettings
+from orchestrator.email_branding import EmailBranding
 from orchestrator.plugin import OrchestratorPlugin
 from orchestrator_fakes import (
     FakeCore,
@@ -89,6 +90,27 @@ async def test_process_event_executes_created_run():
     assert results[0]["response"] == {"message_id": "ses-message-1", "attempts": 1}
     # The event was posted with the explicit idempotency key from the payload.
     assert core.event_posts()[0]["idempotency_key"] == "d1"
+
+
+async def test_process_event_email_uses_configured_branding():
+    core = FakeCore([_email_run(created=True)])
+    ses = FakeSes()
+    branding = EmailBranding(company_name="Acme Co", subject_prefix="[Acme] ")
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=ses, branding=branding)
+
+    await plugin.process_event(_event())
+
+    call = ses.calls[0]
+    assert call["Message"]["Subject"]["Data"] == "[Acme] Demo from Acme"
+    assert "Acme Co" in call["Message"]["Body"]["Html"]["Data"]
+
+
+async def test_plugin_defaults_branding_when_not_passed():
+    core = FakeCore([_email_run(created=True)])
+    ses = FakeSes()
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=ses)
+
+    assert plugin._branding == EmailBranding()
 
 
 async def test_process_event_dispatches_google_chat_via_http():

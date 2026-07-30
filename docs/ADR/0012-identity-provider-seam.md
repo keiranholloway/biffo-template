@@ -178,6 +178,56 @@ non-auth construction sites (tests, dependency overrides) keep working.
 > `services/api/`, so providers still live in the one service holding a database
 > client.
 
+> **Amended 2026-07-30 — the protocol gains six profile operations.** This ADR's
+> own Cons section predicted this: *"The interface is inferred from exactly one
+> real implementation, so it will probably need revision when a second appears."*
+> It needed revision for a nearer reason — the Core's own profile surface was
+> never routed through it.
+>
+> `middleware/auth.py` honoured the seam. `routers/users.py`, `routers/auth.py`
+> and `routers/admin/users.py` did not: each imported the Core user model at
+> module scope and queried it directly, so the 0.123.0+ profile/organizations
+> feature reintroduced one layer *above* the seam the assumption this ADR removes.
+> A deployment using the seam could not take the feature, and — because the
+> imports were at module scope — could not import those routers at all, so its API
+> failed at startup over a class the request path never used.
+>
+> Added: `list_profiles`, `get_profile_by_id`, `get_profile`, `get_profiles`,
+> `upsert_profile`, `set_active`. **Required, not optional.** A `Protocol` with
+> optional halves makes "does this deployment support profiles?" answerable only
+> at runtime; required members make an unimplemented provider a type error at the
+> `set_identity_provider` call, which is where a deployment can still act on it.
+>
+> Three decisions inside that are load-bearing:
+>
+> - **Profiles cross the seam as a flat frozen `UserProfile`, not an ORM object.**
+>   `organization_name` arrives resolved, so the `Organization` relationship stays
+>   on the Core side — a provider over its own schema has no foreign key to supply
+>   it, and carrying the relationship would re-couple what this ADR separates. It
+>   also removes a fragility: `/auth/me` used to return a live, uncommitted ORM
+>   instance that FastAPI serialised *before* `get_db` committed.
+> - **`USER_CREATED` stays in the router.** `upsert_profile` returns a `created`
+>   flag rather than emitting, because `emit_event` buffers onto the request
+>   session and `get_db` publishes from it after commit — while `session()` exists
+>   precisely so a provider may run on its own RLS-bypass session. A provider
+>   emitting the event itself would buffer it onto a session nothing publishes,
+>   and it would vanish with no error.
+> - **Writes go through an explicit `WRITABLE_PROFILE_FIELDS` allow-list.** The
+>   admin PATCH path previously derived its writable set by subtraction — whatever
+>   was not one of three Cognito fields — and `setattr`'d the remainder onto the
+>   model unchecked. Behind a seam that would have handed a provider an untyped
+>   write path into its own store.
+>
+> Subject-keyed lookups deliberately take no `tenant_id`: `cognito_sub` is
+> globally unique, so a tenant predicate on them would be decoration. Only the
+> enumerating and id-keyed reads scope by tenant, which is what they did before.
+>
+> **Cost, accepted rather than hidden:** an existing out-of-tree provider fails
+> type-checking at its `set_identity_provider` call until it implements the six.
+> That is the intended signal. For tabsii-platform it is roughly one `text()`
+> query per method, and it lets that instance *delete* its `routers/auth.py` and
+> `routers/users.py` forks — so its total divergence goes down, not up.
+
 ## Options Considered
 
 ### Option A — `IdentityProvider` seam (chosen)

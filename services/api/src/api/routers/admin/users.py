@@ -13,9 +13,7 @@ from typing import NoReturn
 
 from aws_lambda_powertools import Logger
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from ...cognito import CognitoAdmin, CognitoAdminError
 from ...database import get_db
@@ -27,8 +25,8 @@ from ...events.registry import (
     USER_SUSPENDED,
     EventType,
 )
+from ...identity import UserProfile, get_identity_provider
 from ...middleware.auth import AuthenticatedUser
-from ...models.user import User
 from ...schemas.user import (
     AdminUserListResponse,
     AdminUserResponse,
@@ -74,15 +72,22 @@ def _reject_if_self(admin: AuthenticatedUser, target_sub: str, action: str) -> N
         )
 
 
-def _to_response(cog: CognitoAdmin, user: dict, profile: User | None = None) -> AdminUserResponse:
+def _to_response(
+    cog: CognitoAdmin, user: dict, profile: UserProfile | None = None
+) -> AdminUserResponse:
     """Attach the user's group memberships (a separate Cognito call) and the
-    DB-only profile fields (organization/job role/address), if a mirror row
-    exists yet, and shape it."""
+    store-only profile fields (organization/job role/address), if a mirror record
+    exists yet, and shape it.
+
+    `organization_name` arrives on the profile as a resolved string. It used to be
+    reached through an ORM relationship, which a provider over its own schema has
+    no foreign key to supply — so carrying it across the seam would have
+    re-coupled exactly what ADR-0012 separates."""
     groups = cog.list_groups_for_user(user["username"])
     return AdminUserResponse(
         groups=groups,
         organization_id=profile.organization_id if profile else None,
-        organization_name=(profile.organization.name if profile and profile.organization else None),
+        organization_name=profile.organization_name if profile else None,
         job_role=profile.job_role if profile else None,
         address_line1=profile.address_line1 if profile else None,
         address_line2=profile.address_line2 if profile else None,
@@ -94,30 +99,28 @@ def _to_response(cog: CognitoAdmin, user: dict, profile: User | None = None) -> 
     )
 
 
-async def _load_profile(db: AsyncSession, cognito_sub: str) -> User | None:
-    """Fetch the DB mirror row (with its organization eager-loaded) for one user."""
-    result = await db.execute(
-        select(User).options(selectinload(User.organization)).where(User.cognito_sub == cognito_sub)
-    )
-    return result.scalar_one_or_none()
+# The three helpers below are this module's whole data-access surface, and they now
+# go through the ADR-0012 provider instead of querying the Core user model. Kept as
+# named helpers rather than inlined so the ten endpoints calling them read
+# unchanged and the reasons recorded in their docstrings survive.
 
 
-async def _load_profiles(db: AsyncSession, cognito_subs: list[str]) -> dict[str, User]:
+async def _load_profile(db: AsyncSession, cognito_sub: str) -> UserProfile | None:
+    """Fetch the profile record for one user, or None if the store holds none."""
+    return await get_identity_provider().get_profile(db, cognito_sub)
+
+
+async def _load_profiles(db: AsyncSession, cognito_subs: list[str]) -> dict[str, UserProfile]:
     """Batch version of `_load_profile` for list endpoints — one query rather
     than one per user."""
-    subs = [s for s in cognito_subs if s]
-    if not subs:
-        return {}
-    result = await db.execute(
-        select(User).options(selectinload(User.organization)).where(User.cognito_sub.in_(subs))
-    )
-    return {u.cognito_sub: u for u in result.scalars().all()}
+    return await get_identity_provider().get_profiles(db, cognito_subs)
 
 
 async def _mirror_is_active(db: AsyncSession, cognito_sub: str, active: bool) -> None:
-    """Best-effort mirror of Cognito enabled-state onto the DB user row, if one
-    exists. A user provisioned but never logged in has no row yet — nothing to do."""
-    await db.execute(update(User).where(User.cognito_sub == cognito_sub).values(is_active=active))
+    """Best-effort mirror of Cognito enabled-state onto the profile record, if one
+    exists. A user provisioned but never logged in has none yet — nothing to do,
+    and that is success rather than a 404."""
+    await get_identity_provider().set_active(db, cognito_sub, active)
 
 
 def _emit_user_lifecycle(db: AsyncSession, event: EventType, user: dict, *, tenant_id: str) -> None:
@@ -166,23 +169,23 @@ async def create_user(
         )
     except CognitoAdminError as err:
         _raise_http(err)
-    profile = User(
-        cognito_sub=user["sub"],
+    profile, _ = await get_identity_provider().upsert_profile(
+        db,
+        subject=user["sub"],
+        tenant_id=admin.tenant_id,
         email=user["email"],
         username=user["username"],
-        tenant_id=admin.tenant_id,
-        organization_id=body.organization_id,
-        job_role=body.job_role,
-        address_line1=body.address_line1,
-        address_line2=body.address_line2,
-        city=body.city,
-        region=body.region,
-        postal_code=body.postal_code,
-        country=body.country,
+        fields={
+            "organization_id": body.organization_id,
+            "job_role": body.job_role,
+            "address_line1": body.address_line1,
+            "address_line2": body.address_line2,
+            "city": body.city,
+            "region": body.region,
+            "postal_code": body.postal_code,
+            "country": body.country,
+        },
     )
-    db.add(profile)
-    await db.flush()
-    profile = await _load_profile(db, user["sub"])
     return _to_response(cog, user, profile)
 
 
@@ -255,22 +258,23 @@ async def update_user(
         _raise_http(err)
 
     if profile_fields:
+        # One upsert instead of a load / branch / blind-setattr / flush. The
+        # insert-or-update decision belongs to whoever owns the store, and
+        # `profile_fields` is now validated against `WRITABLE_PROFILE_FIELDS`
+        # rather than being "everything that was not a Cognito field" applied with
+        # `setattr` — a key the request happened to carry can no longer be written
+        # straight onto the record.
+        profile, _ = await get_identity_provider().upsert_profile(
+            db,
+            subject=target["sub"],
+            tenant_id=admin.tenant_id,
+            email=target["email"],
+            username=target["username"],
+            fields=profile_fields,
+        )
+    else:
         profile = await _load_profile(db, target["sub"])
-        if profile is None:
-            profile = User(
-                cognito_sub=target["sub"],
-                email=target["email"],
-                username=target["username"],
-                tenant_id=admin.tenant_id,
-                **profile_fields,
-            )
-            db.add(profile)
-        else:
-            for field, value in profile_fields.items():
-                setattr(profile, field, value)
-        await db.flush()
 
-    profile = await _load_profile(db, target["sub"])
     return _to_response(cog, target, profile)
 
 

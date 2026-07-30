@@ -1,14 +1,13 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..events import emit_event
 from ..events.registry import USER_CREATED
+from ..identity import UserProfile, get_identity_provider
 from ..middleware.auth import AuthenticatedUser, require_auth
-from ..models.user import User
 from ..schemas.user import UserResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -18,53 +17,44 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 async def get_current_user(
     caller: AuthenticatedUser = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
-) -> User:
+) -> UserProfile:
     """
     Returns the authenticated user's profile.
 
-    On first call after login, creates the User record in the database
-    using the identity from the verified Cognito JWT (upsert pattern).
+    On first call after login, creates the record via the ADR-0012 identity
+    provider using the identity from the verified Cognito JWT (upsert pattern).
+    Which store that record lands in is the deployment's choice — this endpoint
+    no longer assumes the Core users table.
     """
-    result = await db.execute(
-        select(User).where(
-            User.cognito_sub == caller.sub,
-            User.tenant_id == caller.tenant_id,
-        )
+    profile, created = await get_identity_provider().upsert_profile(
+        db,
+        subject=caller.sub,
+        tenant_id=caller.tenant_id,
+        email=caller.email,
+        username=caller.username,
+        fields={"last_login_at": datetime.now(tz=UTC)},
     )
-    user = result.scalar_one_or_none()
 
-    if user is None:
-        user = User(
-            cognito_sub=caller.sub,
-            email=caller.email,
-            username=caller.username,
-            tenant_id=caller.tenant_id,
-            last_login_at=datetime.now(tz=UTC),
-        )
-        db.add(user)
-        # id/is_active are populated by ORM-level defaults and created_at/updated_at
-        # by server_default — none of them exist on the Python object until the
-        # insert is actually flushed. Without this, response_model=UserResponse
-        # fails validation on first login (id=None, created_at=None, ...) because
-        # get_db only commits after the response has already been serialized.
-        await db.flush()
-        await db.refresh(user)
+    if created:
         # A user record now exists in Core — announce it so orchestration workflows
         # can react. Buffered and published after the request commits (ADR-0002,
-        # #222), so a rolled-back login never emits. Fires once per user (only on
-        # the create branch), after flush so user.id exists.
+        # #222), so a rolled-back login never emits. Fires once per user.
+        #
+        # Emitted here rather than inside the provider on purpose: `emit_event`
+        # buffers onto this session's `info` and `get_db` publishes from it after
+        # commit, whereas a provider is free to run on its own RLS-bypass session.
+        # A provider that emitted this itself would buffer it onto a session
+        # nothing publishes, and the event would vanish silently.
         emit_event(
             db,
             USER_CREATED,
             {
-                "user_id": user.id,
-                "cognito_sub": user.cognito_sub,
-                "email": user.email,
-                "username": user.username,
+                "user_id": profile.id,
+                "cognito_sub": caller.sub,
+                "email": profile.email,
+                "username": profile.username,
             },
-            tenant_id=user.tenant_id,
+            tenant_id=profile.tenant_id,
         )
-    else:
-        user.last_login_at = datetime.now(tz=UTC)
 
-    return user
+    return profile

@@ -18,7 +18,7 @@ from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .base import IdentityProvider, ResolvedIdentity
+from .base import WRITABLE_PROFILE_FIELDS, IdentityProvider, ResolvedIdentity, UserProfile
 from .default import DefaultIdentityProvider
 
 _provider: IdentityProvider = DefaultIdentityProvider()
@@ -52,9 +52,11 @@ async def identity_session() -> AsyncGenerator[AsyncSession]:
 
 
 __all__ = [
+    "WRITABLE_PROFILE_FIELDS",
     "DefaultIdentityProvider",
     "IdentityProvider",
     "ResolvedIdentity",
+    "UserProfile",
     "get_identity_provider",
     "identity_session",
     "set_identity_provider",

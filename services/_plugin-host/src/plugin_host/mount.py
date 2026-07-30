@@ -209,15 +209,30 @@ def _quarantine(app: Any, label: str, failures: dict[str, str]) -> Callable:
 
     ``failures`` is read per request (not captured), because it is filled in during
     the host's lifespan startup — after the routes are built. A quarantined plugin
-    returns 503 with the reason rather than serving a half-initialised app; only
-    that plugin's mount is affected. See :meth:`PluginLifespans.startup` for why
-    the failure is contained here rather than failing the whole host.
+    returns 503 rather than serving a half-initialised app; only that plugin's mount
+    is affected. See :meth:`PluginLifespans.startup` for why the failure is contained
+    here rather than failing the whole host.
+
+    **The stored reason is deliberately NOT put in the response.** Starlette reports
+    a failed startup by sending the whole formatted traceback as the
+    ``lifespan.startup.failed`` message, so ``failures[label]`` holds absolute
+    filesystem paths, dependency versions, source lines, and whatever the exception
+    itself carried — a DSN with its password, for instance. Interpolating it into the
+    body leaked all of that to any caller that could reach the mount. The plugin
+    *name* is host-controlled and safe, so the 503 stays attributable ("which plugin
+    is down") without being disclosive ("and here is its stack"); the reason goes to
+    the host's logs only, via :meth:`PluginLifespans.startup`. Same rule as
+    :func:`plugin_host.forward.forwarding_gate`'s "never leak a stack trace to a
+    caller". Guarded by a test asserting the body carries no traceback.
     """
 
     async def guarded(scope: dict, receive: Callable, send: Callable) -> None:
-        reason = failures.get(label)
-        if reason is not None and scope["type"] == "http":
-            await _send_json(send, 503, {"detail": f"Plugin '{label}' failed to start: {reason}"})
+        if failures.get(label) is not None and scope["type"] == "http":
+            await _send_json(
+                send,
+                503,
+                {"detail": f"Plugin '{label}' failed to start. See the plugin host logs."},
+            )
             return
         await app(scope, receive, send)
 

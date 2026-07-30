@@ -263,8 +263,10 @@ def test_a_failing_plugin_is_quarantined_and_its_neighbours_keep_serving():
     # rows would surface on the founder's first run (#909 criterion 5).
     assert broken.status_code == 503
     assert broken.headers["content-type"] == "application/json"
-    assert "could not reach Core to seed" in broken.json()["detail"]
+    # Attributable — it names the failing plugin, which is host-controlled text.
     assert "broken" in broken.json()["detail"]
+    # ...but the reason itself stays in the logs, not the body. See the leak test.
+    assert "could not reach Core to seed" not in broken.json()["detail"]
     # ...and one plugin's bad boot does not black out the shared Lambda.
     assert healthy.status_code == 200
     assert healthy.json() == {"seeded": True}
@@ -308,8 +310,13 @@ def test_a_startup_that_raises_after_engaging_lifespan_is_quarantined():
     with TestClient(host) as client:
         r = client.get("/crashy/ping", headers=FOUNDER)
     assert r.status_code == 503, r.status_code
-    assert "db unreachable at cold start" in r.json()["detail"]
+    assert r.json()["detail"] == "Plugin 'crashy' failed to start. See the plugin host logs."
     assert log == []  # never served a request un-started
+
+    # The reason is preserved internally (for the ERROR log), just not in the body.
+    lifespans = PluginLifespans([("crashy", _raw_asgi([], engage=True, then_raise=True))])
+    asyncio.run(lifespans.startup())
+    assert "db unreachable at cold start" in lifespans.failures["crashy"]
 
 
 def test_an_app_that_raises_without_engaging_lifespan_is_treated_as_having_no_handler():
@@ -336,7 +343,11 @@ def test_an_app_that_engages_then_returns_without_completing_is_quarantined():
     with TestClient(host) as client:
         r = client.get("/silent/ping", headers=FOUNDER)
     assert r.status_code == 503
-    assert "without completing the lifespan handshake" in r.json()["detail"]
+    assert r.json()["detail"] == "Plugin 'silent' failed to start. See the plugin host logs."
+
+    lifespans = PluginLifespans([("silent", _raw_asgi([], engage=True, then_raise=False))])
+    asyncio.run(lifespans.startup())
+    assert "without completing the lifespan handshake" in lifespans.failures["silent"]
 
 
 def test_a_fastapi_startup_crash_still_reports_via_startup_failed():
@@ -347,6 +358,39 @@ def test_a_fastapi_startup_crash_still_reports_via_startup_failed():
     lifespans = PluginLifespans([("p", _seeding_plugin(log, "p", fail=True))])
     asyncio.run(lifespans.startup())
     assert "could not reach Core to seed" in lifespans.failures["p"]
+
+
+def test_the_503_body_leaks_no_traceback_while_the_log_keeps_the_full_reason(caplog):
+    """Starlette reports a failed startup by sending the entire formatted traceback
+    as the `lifespan.startup.failed` message, so `failures[label]` holds absolute
+    paths, dependency versions, source lines, and whatever the exception carried —
+    here a DSN password. None of that may reach an HTTP caller; all of it must reach
+    the operator's logs. Regression guard: the first cut of this quarantine
+    interpolated the reason straight into the response body."""
+    log: list[str] = []
+    secret_dsn = "postgresql://svc:hunter2@db.internal/scout"  # noqa: S105 — fixture
+
+    @contextlib.asynccontextmanager
+    async def leaky(_app: FastAPI) -> AsyncIterator[None]:
+        raise RuntimeError(f"could not reach Core: {secret_dsn}")
+        yield
+
+    app = FastAPI(lifespan=leaky)
+    host = build_host([MountedPlugin("scout", app, "founder")], authorize=_authorizer)
+
+    with caplog.at_level("ERROR", logger="plugin_host.lifespan"), TestClient(host) as client:
+        detail = client.get("/scout/ping", headers=FOUNDER).json()["detail"]
+
+    assert "Traceback" not in detail
+    assert "site-packages" not in detail
+    assert "hunter2" not in detail
+    assert secret_dsn not in detail
+    assert detail == "Plugin 'scout' failed to start. See the plugin host logs."
+
+    # ...and the operator loses nothing: the full reason is in the ERROR log.
+    assert "hunter2" in caplog.text
+    assert "scout" in caplog.text
+    assert log == []
 
 
 def test_a_failing_admin_ingress_quarantines_only_the_admin_mount():

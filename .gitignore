@@ -79,6 +79,7 @@ pnpm-debug.log*
 
 # Test coverage
 coverage
+coverage.json
 htmlcov
 .coverage
 

@@ -90,9 +90,13 @@ const EXCLUDED: Record<string, { kind: 'network' | 'pr-time' | 'history' | 'slow
       kind: 'pr-time',
       why: 'the CI form diffs against the PR base branch — but the check is NOT skipped locally: the commit-msg hook runs it with --staged, earlier and per-commit',
     },
-    'uv run pytest --cov --cov-report=xml || [ $? -eq 5 ]': {
+    'uv run pytest --cov --cov-report=xml --cov-report=json || [ $? -eq 5 ]': {
       kind: 'slow',
       why: 'measured 51.2s in this repo on 2026-07-29, against a 15s budget. Included automatically wherever it measures faster — 1.7-2.7s in every sibling',
+    },
+    'uv run python scripts/error_branch_coverage.py --check': {
+      kind: 'slow',
+      why: 'measured 0.19s itself — it is excluded for what it DEPENDS on, not its own cost: it reads coverage.json, produced only by the `pytest --cov` above, which is measured at 51.2s and excluded as slow for that reason. Including this in the push gate would mean paying that run locally',
     },
   }
 

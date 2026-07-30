@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "collectedAt": "2026-07-30T07:14:01.342Z",
+  "collectedAt": "2026-07-30T07:28:51.382Z",
   "windowDays": [
     1,
     7,
@@ -8,25 +8,25 @@
   ],
   "windows": {
     "1": {
-      "since": "2026-07-29T07:14:01.240Z",
+      "since": "2026-07-29T07:28:51.296Z",
       "repos": {
         "keiranholloway/biffo-template": {
           "role": "template",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 48,
+          "mergedPrs": 47,
           "workMix": {
-            "merges": 48,
-            "delivery": 25,
-            "rework": 37.5,
+            "merges": 47,
+            "delivery": 25.5,
+            "rework": 36.2,
             "toil": 0,
             "quality": 0,
-            "docs": 37.5,
+            "docs": 38.3,
             "unconventional": 0,
-            "toilRatio": 37.5,
+            "toilRatio": 36.2,
             "counts": {
               "delivery": 12,
-              "rework": 18,
+              "rework": 17,
               "toil": 0,
               "quality": 0,
               "docs": 18,
@@ -34,7 +34,7 @@
               "other": 0
             },
             "sideCounts": {
-              "platform": 48,
+              "platform": 47,
               "product": 0
             },
             "productDelivery": 0
@@ -42,8 +42,8 @@
           "timeToFeature": {
             "linked": 10,
             "unresolved": 0,
-            "prsWithNoClosingIssue": 40,
-            "coverage": 20.8,
+            "prsWithNoClosingIssue": 39,
+            "coverage": 21.3,
             "hoursP50": 1.1,
             "hoursP90": 40.7,
             "hoursMax": 51.4,
@@ -78,46 +78,46 @@
               "terraform-validate": 1
             }
           },
-          "ciFailureRate": 4.2,
+          "ciFailureRate": 4.3,
           "revisionsP50": 0,
           "revisionsP90": 1,
-          "landedFirstPushRate": 83.3,
+          "landedFirstPushRate": 82.6,
           "cycleTimeP50Minutes": 2.6,
           "cycleTimeP90Minutes": 15.5,
           "rework": {
-            "merges": 48,
-            "fixMerges": 18,
-            "fixShare": 37.5,
-            "attributed": 15,
+            "merges": 47,
+            "fixMerges": 17,
+            "fixShare": 36.2,
+            "attributed": 14,
             "medianHoursToRework": 0.7,
             "p90HoursToRework": 50.1,
-            "correctedWithin1hShare": 60,
-            "correctedWithin24hShare": 86.7
+            "correctedWithin1hShare": 57.1,
+            "correctedWithin24hShare": 85.7
           },
           "contention": {
             "greenButUnmergedHours": 0.9,
             "greenToMergeP50Minutes": 0.1,
             "greenToMergeP90Minutes": 6.6,
             "greenToMergeMaxMinutes": 13.6,
-            "repushRate": 16.7,
-            "racedShare": 2.1,
-            "prsMeasured": 48,
-            "prsWithGreen": 48
+            "repushRate": 17.4,
+            "racedShare": 2.2,
+            "prsMeasured": 46,
+            "prsWithGreen": 46
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 149,
+            "runs": 146,
             "failures": 1,
             "redMinutes": 44.4,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 48,
-            "prsUnmeasured": 0,
-            "workflowRuns": 332,
+            "prsMeasured": 46,
+            "prsUnmeasured": 1,
+            "workflowRuns": 323,
             "reworkSource": "git-blame"
           }
         },
@@ -331,7 +331,7 @@
           "coverage": {
             "prsMeasured": 8,
             "prsUnmeasured": 0,
-            "workflowRuns": 50,
+            "workflowRuns": 46,
             "reworkSource": "git-blame"
           }
         },
@@ -339,18 +339,18 @@
           "role": "plugin",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 9,
+          "mergedPrs": 10,
           "workMix": {
-            "merges": 9,
-            "delivery": 11.1,
-            "rework": 11.1,
-            "toil": 66.7,
-            "quality": 11.1,
+            "merges": 10,
+            "delivery": 20,
+            "rework": 10,
+            "toil": 60,
+            "quality": 10,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 77.8,
+            "toilRatio": 70,
             "counts": {
-              "delivery": 1,
+              "delivery": 2,
               "rework": 1,
               "toil": 6,
               "quality": 1,
@@ -359,22 +359,22 @@
               "other": 0
             },
             "sideCounts": {
-              "platform": 9,
+              "platform": 10,
               "product": 0
             },
             "productDelivery": 0
           },
           "timeToFeature": {
-            "linked": 3,
+            "linked": 4,
             "unresolved": 0,
             "prsWithNoClosingIssue": 6,
-            "coverage": 33.3,
+            "coverage": 40,
             "hoursP50": 0.4,
-            "hoursP90": 0.6,
-            "hoursMax": 0.6,
+            "hoursP90": 11.9,
+            "hoursMax": 11.9,
             "running": {
               "measured": 0,
-              "awaitingDeploy": 3,
+              "awaitingDeploy": 4,
               "hoursP50": null,
               "hoursP90": null,
               "deployGapP50": null,
@@ -401,16 +401,16 @@
               "test": 6
             }
           },
-          "ciFailureRate": 66.7,
-          "revisionsP50": 3,
-          "revisionsP90": 8,
-          "landedFirstPushRate": 33.3,
+          "ciFailureRate": 60,
+          "revisionsP50": 2,
+          "revisionsP90": 6,
+          "landedFirstPushRate": 40,
           "cycleTimeP50Minutes": 5.3,
-          "cycleTimeP90Minutes": 1122.2,
+          "cycleTimeP90Minutes": 25.1,
           "rework": {
-            "merges": 9,
+            "merges": 10,
             "fixMerges": 1,
-            "fixShare": 11.1,
+            "fixShare": 10,
             "attributed": 1,
             "medianHoursToRework": 4,
             "p90HoursToRework": 4,
@@ -420,27 +420,27 @@
           "contention": {
             "greenButUnmergedHours": 0.4,
             "greenToMergeP50Minutes": 0.2,
-            "greenToMergeP90Minutes": 20.5,
+            "greenToMergeP90Minutes": 0.6,
             "greenToMergeMaxMinutes": 20.5,
-            "repushRate": 66.7,
-            "racedShare": 11.1,
-            "prsMeasured": 9,
-            "prsWithGreen": 9
+            "repushRate": 60,
+            "racedShare": 10,
+            "prsMeasured": 10,
+            "prsWithGreen": 10
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 9,
+            "runs": 10,
             "failures": 4,
             "redMinutes": 1268.3,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 9,
+            "prsMeasured": 10,
             "prsUnmeasured": 0,
-            "workflowRuns": 24,
+            "workflowRuns": 23,
             "reworkSource": "git-blame"
           }
         },
@@ -547,7 +547,7 @@
           "coverage": {
             "prsMeasured": 14,
             "prsUnmeasured": 0,
-            "workflowRuns": 36,
+            "workflowRuns": 34,
             "reworkSource": "git-blame"
           }
         },
@@ -664,28 +664,28 @@
           "defaultBranch": "dev",
           "mergedPrs": 33,
           "workMix": {
-            "merges": 33,
-            "delivery": 60.6,
-            "rework": 9.1,
-            "toil": 6.1,
-            "quality": 6.1,
-            "docs": 18.2,
+            "merges": 34,
+            "delivery": 61.8,
+            "rework": 11.8,
+            "toil": 5.9,
+            "quality": 5.9,
+            "docs": 14.7,
             "unconventional": 0,
-            "toilRatio": 15.2,
+            "toilRatio": 17.6,
             "counts": {
-              "delivery": 20,
-              "rework": 3,
+              "delivery": 21,
+              "rework": 4,
               "toil": 2,
               "quality": 2,
-              "docs": 6,
+              "docs": 5,
               "unconventional": 0,
               "other": 0
             },
             "sideCounts": {
               "platform": 0,
-              "product": 33
+              "product": 34
             },
-            "productDelivery": 20
+            "productDelivery": 21
           },
           "timeToFeature": {
             "linked": 4,
@@ -727,13 +727,13 @@
           "ciFailureRate": 3.1,
           "revisionsP50": 0,
           "revisionsP90": 2,
-          "landedFirstPushRate": 53.1,
-          "cycleTimeP50Minutes": 18.3,
-          "cycleTimeP90Minutes": 78.8,
+          "landedFirstPushRate": 50,
+          "cycleTimeP50Minutes": 14.3,
+          "cycleTimeP90Minutes": 68.3,
           "rework": {
-            "merges": 33,
-            "fixMerges": 3,
-            "fixShare": 9.1,
+            "merges": 34,
+            "fixMerges": 4,
+            "fixShare": 11.8,
             "attributed": 2,
             "medianHoursToRework": 17.6,
             "p90HoursToRework": 489.5,
@@ -745,7 +745,7 @@
             "greenToMergeP50Minutes": 10.4,
             "greenToMergeP90Minutes": 48.7,
             "greenToMergeMaxMinutes": 113.7,
-            "repushRate": 46.9,
+            "repushRate": 50,
             "racedShare": 43.8,
             "prsMeasured": 32,
             "prsWithGreen": 32
@@ -755,7 +755,7 @@
             "shas": []
           },
           "integration": {
-            "runs": 161,
+            "runs": 162,
             "failures": 1,
             "redMinutes": 8.5,
             "unresolvedFailures": 0
@@ -763,7 +763,7 @@
           "coverage": {
             "prsMeasured": 32,
             "prsUnmeasured": 1,
-            "workflowRuns": 358,
+            "workflowRuns": 365,
             "reworkSource": "git-blame"
           }
         },
@@ -774,18 +774,18 @@
           "mergedPrs": 18,
           "workMix": {
             "merges": 18,
-            "delivery": 22.2,
+            "delivery": 16.7,
             "rework": 38.9,
             "toil": 38.9,
-            "quality": 0,
+            "quality": 5.6,
             "docs": 0,
             "unconventional": 0,
             "toilRatio": 77.8,
             "counts": {
-              "delivery": 4,
+              "delivery": 3,
               "rework": 7,
               "toil": 7,
-              "quality": 0,
+              "quality": 1,
               "docs": 0,
               "unconventional": 0,
               "other": 0
@@ -794,19 +794,19 @@
               "platform": 0,
               "product": 18
             },
-            "productDelivery": 4
+            "productDelivery": 3
           },
           "timeToFeature": {
-            "linked": 1,
+            "linked": 2,
             "unresolved": 1,
-            "prsWithNoClosingIssue": 16,
-            "coverage": 5.6,
+            "prsWithNoClosingIssue": 15,
+            "coverage": 11.1,
             "hoursP50": 14.9,
-            "hoursP90": 14.9,
-            "hoursMax": 14.9,
+            "hoursP90": 571,
+            "hoursMax": 571,
             "running": {
               "measured": 0,
-              "awaitingDeploy": 1,
+              "awaitingDeploy": 2,
               "hoursP50": null,
               "hoursP90": null,
               "deployGapP50": null,
@@ -832,11 +832,11 @@
             "byKind": {}
           },
           "ciFailureRate": 0,
-          "revisionsP50": 0,
+          "revisionsP50": 1,
           "revisionsP90": 8,
-          "landedFirstPushRate": 50,
-          "cycleTimeP50Minutes": 11.2,
-          "cycleTimeP90Minutes": 21,
+          "landedFirstPushRate": 44.4,
+          "cycleTimeP50Minutes": 11.8,
+          "cycleTimeP90Minutes": 24.6,
           "rework": {
             "merges": 18,
             "fixMerges": 7,
@@ -848,12 +848,12 @@
             "correctedWithin24hShare": 85.7
           },
           "contention": {
-            "greenButUnmergedHours": 1.2,
-            "greenToMergeP50Minutes": 0.6,
+            "greenButUnmergedHours": 1.4,
+            "greenToMergeP50Minutes": 3.4,
             "greenToMergeP90Minutes": 14.1,
             "greenToMergeMaxMinutes": 15.3,
-            "repushRate": 50,
-            "racedShare": 22.2,
+            "repushRate": 55.6,
+            "racedShare": 27.8,
             "prsMeasured": 18,
             "prsWithGreen": 17
           },
@@ -870,7 +870,7 @@
           "coverage": {
             "prsMeasured": 18,
             "prsUnmeasured": 0,
-            "workflowRuns": 116,
+            "workflowRuns": 110,
             "reworkSource": "git-blame"
           }
         },
@@ -977,7 +977,7 @@
           "coverage": {
             "prsMeasured": 11,
             "prsUnmeasured": 0,
-            "workflowRuns": 39,
+            "workflowRuns": 37,
             "reworkSource": "git-blame"
           }
         },
@@ -1191,7 +1191,7 @@
           "coverage": {
             "prsMeasured": 8,
             "prsUnmeasured": 0,
-            "workflowRuns": 50,
+            "workflowRuns": 46,
             "reworkSource": "git-blame"
           }
         },
@@ -1298,7 +1298,7 @@
           "coverage": {
             "prsMeasured": 8,
             "prsUnmeasured": 0,
-            "workflowRuns": 50,
+            "workflowRuns": 46,
             "reworkSource": "git-blame"
           }
         },
@@ -1405,7 +1405,7 @@
           "coverage": {
             "prsMeasured": 8,
             "prsUnmeasured": 0,
-            "workflowRuns": 50,
+            "workflowRuns": 46,
             "reworkSource": "git-blame"
           }
         },
@@ -1625,31 +1625,31 @@
         }
       },
       "estate": {
-        "merges": 210,
-        "platformShare": 47.1,
-        "productShare": 52.9,
-        "toilRatio": 63.8,
-        "capabilityShare": 22.9,
+        "merges": 211,
+        "platformShare": 46.9,
+        "productShare": 53.1,
+        "toilRatio": 63.5,
+        "capabilityShare": 23.2,
         "capabilityBySide": {
           "platform": {
-            "merges": 19,
-            "share": 9
+            "merges": 20,
+            "share": 9.5
           },
           "product": {
             "merges": 29,
-            "share": 13.8
+            "share": 13.7
           }
         },
-        "tabsiiCapabilityShare": 13.8,
-        "contentionHours": 19.4,
+        "tabsiiCapabilityShare": 13.7,
+        "contentionHours": 19.6,
         "bySide": {
           "platform": {
             "merges": 99,
-            "share": 47.1
+            "share": 46.9
           },
           "product": {
-            "merges": 111,
-            "share": 52.9
+            "merges": 112,
+            "share": 53.1
           }
         },
         "gates": {
@@ -1669,9 +1669,9 @@
         "note": "merges are a proxy for effort, not a measure of time"
       },
       "amplification": {
-        "totalMerges": 210,
+        "totalMerges": 211,
         "avoidableMerges": 70,
-        "avoidableShare": 33.3,
+        "avoidableShare": 33.2,
         "minRepos": 3,
         "top": [
           {
@@ -1685,7 +1685,7 @@
       }
     },
     "7": {
-      "since": "2026-07-23T07:14:01.282Z",
+      "since": "2026-07-23T07:28:51.317Z",
       "repos": {
         "keiranholloway/biffo-template": {
           "role": "template",
@@ -2037,18 +2037,18 @@
           "role": "plugin",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 55,
+          "mergedPrs": 56,
           "workMix": {
-            "merges": 56,
-            "delivery": 30.4,
-            "rework": 32.1,
-            "toil": 25,
-            "quality": 5.4,
+            "merges": 57,
+            "delivery": 31.6,
+            "rework": 31.6,
+            "toil": 24.6,
+            "quality": 5.3,
             "docs": 0,
-            "unconventional": 7.1,
-            "toilRatio": 57.1,
+            "unconventional": 7,
+            "toilRatio": 56.1,
             "counts": {
-              "delivery": 17,
+              "delivery": 18,
               "rework": 18,
               "toil": 14,
               "quality": 3,
@@ -2057,22 +2057,22 @@
               "other": 0
             },
             "sideCounts": {
-              "platform": 56,
+              "platform": 57,
               "product": 0
             },
             "productDelivery": 0
           },
           "timeToFeature": {
-            "linked": 25,
+            "linked": 26,
             "unresolved": 0,
             "prsWithNoClosingIssue": 39,
-            "coverage": 45.5,
+            "coverage": 46.4,
             "hoursP50": 1.9,
-            "hoursP90": 9.2,
-            "hoursMax": 10.9,
+            "hoursP90": 10.9,
+            "hoursMax": 11.9,
             "running": {
               "measured": 0,
-              "awaitingDeploy": 25,
+              "awaitingDeploy": 26,
               "hoursP50": null,
               "hoursP90": null,
               "deployGapP50": null,
@@ -2103,16 +2103,16 @@
               "terraform-fmt": 1
             }
           },
-          "ciFailureRate": 18.5,
+          "ciFailureRate": 18.2,
           "revisionsP50": 0,
           "revisionsP90": 2,
-          "landedFirstPushRate": 74.1,
+          "landedFirstPushRate": 74.5,
           "cycleTimeP50Minutes": 4.8,
           "cycleTimeP90Minutes": 21.3,
           "rework": {
-            "merges": 56,
+            "merges": 57,
             "fixMerges": 18,
-            "fixShare": 32.1,
+            "fixShare": 31.6,
             "attributed": 15,
             "medianHoursToRework": 7,
             "p90HoursToRework": 63.7,
@@ -2124,25 +2124,25 @@
             "greenToMergeP50Minutes": 0.4,
             "greenToMergeP90Minutes": 6.1,
             "greenToMergeMaxMinutes": 41.5,
-            "repushRate": 25.9,
-            "racedShare": 5.6,
-            "prsMeasured": 54,
-            "prsWithGreen": 51
+            "repushRate": 25.5,
+            "racedShare": 5.5,
+            "prsMeasured": 55,
+            "prsWithGreen": 52
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 41,
+            "runs": 42,
             "failures": 4,
             "redMinutes": 1268.3,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 54,
+            "prsMeasured": 55,
             "prsUnmeasured": 1,
-            "workflowRuns": 131,
+            "workflowRuns": 132,
             "reworkSource": "git-blame"
           }
         },
@@ -2369,28 +2369,28 @@
           "defaultBranch": "dev",
           "mergedPrs": 115,
           "workMix": {
-            "merges": 119,
-            "delivery": 31.1,
-            "rework": 9.2,
-            "toil": 25.2,
-            "quality": 10.1,
-            "docs": 13.4,
-            "unconventional": 10.9,
-            "toilRatio": 34.5,
+            "merges": 120,
+            "delivery": 31.7,
+            "rework": 10,
+            "toil": 25,
+            "quality": 10,
+            "docs": 13.3,
+            "unconventional": 10,
+            "toilRatio": 35,
             "counts": {
-              "delivery": 37,
-              "rework": 11,
+              "delivery": 38,
+              "rework": 12,
               "toil": 30,
               "quality": 12,
               "docs": 16,
-              "unconventional": 13,
+              "unconventional": 12,
               "other": 0
             },
             "sideCounts": {
-              "platform": 17,
-              "product": 102
+              "platform": 16,
+              "product": 104
             },
-            "productDelivery": 35
+            "productDelivery": 36
           },
           "timeToFeature": {
             "linked": 13,
@@ -2443,13 +2443,13 @@
           "ciFailureRate": 11.3,
           "revisionsP50": 0,
           "revisionsP90": 2,
-          "landedFirstPushRate": 61.7,
-          "cycleTimeP50Minutes": 11.1,
+          "landedFirstPushRate": 60.9,
+          "cycleTimeP50Minutes": 11,
           "cycleTimeP90Minutes": 44.3,
           "rework": {
-            "merges": 119,
-            "fixMerges": 11,
-            "fixShare": 9.2,
+            "merges": 120,
+            "fixMerges": 12,
+            "fixShare": 10,
             "attributed": 9,
             "medianHoursToRework": 17.6,
             "p90HoursToRework": 489.5,
@@ -2457,11 +2457,11 @@
             "correctedWithin24hShare": 55.6
           },
           "contention": {
-            "greenButUnmergedHours": 70.7,
+            "greenButUnmergedHours": 70.8,
             "greenToMergeP50Minutes": 4.6,
             "greenToMergeP90Minutes": 39,
             "greenToMergeMaxMinutes": 2800.2,
-            "repushRate": 38.3,
+            "repushRate": 39.1,
             "racedShare": 24.3,
             "prsMeasured": 115,
             "prsWithGreen": 114
@@ -2471,7 +2471,7 @@
             "shas": []
           },
           "integration": {
-            "runs": 518,
+            "runs": 524,
             "failures": 4,
             "redMinutes": 72.1,
             "unresolvedFailures": 0
@@ -2479,7 +2479,7 @@
           "coverage": {
             "prsMeasured": 115,
             "prsUnmeasured": 0,
-            "workflowRuns": 1056,
+            "workflowRuns": 1071,
             "reworkSource": "git-blame"
           }
         },
@@ -2487,42 +2487,42 @@
           "role": "sibling",
           "side": "product",
           "defaultBranch": "dev",
-          "mergedPrs": 39,
+          "mergedPrs": 40,
           "workMix": {
-            "merges": 39,
-            "delivery": 43.6,
-            "rework": 33.3,
-            "toil": 17.9,
-            "quality": 5.1,
+            "merges": 40,
+            "delivery": 42.5,
+            "rework": 32.5,
+            "toil": 17.5,
+            "quality": 7.5,
             "docs": 0,
             "unconventional": 0,
-            "toilRatio": 51.3,
+            "toilRatio": 50,
             "counts": {
               "delivery": 17,
               "rework": 13,
               "toil": 7,
-              "quality": 2,
+              "quality": 3,
               "docs": 0,
               "unconventional": 0,
               "other": 0
             },
             "sideCounts": {
               "platform": 0,
-              "product": 39
+              "product": 40
             },
             "productDelivery": 17
           },
           "timeToFeature": {
-            "linked": 3,
+            "linked": 4,
             "unresolved": 1,
             "prsWithNoClosingIssue": 35,
-            "coverage": 7.7,
+            "coverage": 10,
             "hoursP50": 1.2,
-            "hoursP90": 14.9,
-            "hoursMax": 14.9,
+            "hoursP90": 571,
+            "hoursMax": 571,
             "running": {
               "measured": 0,
-              "awaitingDeploy": 3,
+              "awaitingDeploy": 4,
               "hoursP50": null,
               "hoursP90": null,
               "deployGapP50": null,
@@ -2549,16 +2549,16 @@
               "dependency-audit": 1
             }
           },
-          "ciFailureRate": 2.6,
+          "ciFailureRate": 2.5,
           "revisionsP50": 0,
-          "revisionsP90": 2,
-          "landedFirstPushRate": 74.4,
+          "revisionsP90": 1,
+          "landedFirstPushRate": 72.5,
           "cycleTimeP50Minutes": 9.5,
-          "cycleTimeP90Minutes": 28.3,
+          "cycleTimeP90Minutes": 27.8,
           "rework": {
-            "merges": 39,
+            "merges": 40,
             "fixMerges": 13,
-            "fixShare": 33.3,
+            "fixShare": 32.5,
             "attributed": 12,
             "medianHoursToRework": 1.1,
             "p90HoursToRework": 22,
@@ -2566,29 +2566,29 @@
             "correctedWithin24hShare": 91.7
           },
           "contention": {
-            "greenButUnmergedHours": 5,
+            "greenButUnmergedHours": 5.3,
             "greenToMergeP50Minutes": 0.6,
             "greenToMergeP90Minutes": 17.6,
             "greenToMergeMaxMinutes": 99.9,
-            "repushRate": 25.6,
-            "racedShare": 10.3,
-            "prsMeasured": 39,
-            "prsWithGreen": 38
+            "repushRate": 27.5,
+            "racedShare": 12.5,
+            "prsMeasured": 40,
+            "prsWithGreen": 39
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 117,
+            "runs": 120,
             "failures": 0,
             "redMinutes": 0,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 39,
+            "prsMeasured": 40,
             "prsUnmeasured": 0,
-            "workflowRuns": 224,
+            "workflowRuns": 227,
             "reworkSource": "git-blame"
           }
         },
@@ -3351,31 +3351,31 @@
         }
       },
       "estate": {
-        "merges": 796,
-        "platformShare": 71.7,
-        "productShare": 28.3,
+        "merges": 799,
+        "platformShare": 71.5,
+        "productShare": 28.5,
         "toilRatio": 47.2,
-        "capabilityShare": 31.8,
+        "capabilityShare": 31.9,
         "capabilityBySide": {
           "platform": {
-            "merges": 186,
+            "merges": 187,
             "share": 23.4
           },
           "product": {
-            "merges": 67,
-            "share": 8.4
+            "merges": 68,
+            "share": 8.5
           }
         },
-        "tabsiiCapabilityShare": 8.4,
-        "contentionHours": 161.9,
+        "tabsiiCapabilityShare": 8.5,
+        "contentionHours": 162.3,
         "bySide": {
           "platform": {
             "merges": 571,
-            "share": 71.7
+            "share": 71.5
           },
           "product": {
-            "merges": 225,
-            "share": 28.3
+            "merges": 228,
+            "share": 28.5
           }
         },
         "gates": {
@@ -3410,7 +3410,7 @@
         "note": "merges are a proxy for effort, not a measure of time"
       },
       "amplification": {
-        "totalMerges": 796,
+        "totalMerges": 799,
         "avoidableMerges": 70,
         "avoidableShare": 8.8,
         "minRepos": 3,
@@ -3426,7 +3426,7 @@
       }
     },
     "90": {
-      "since": "2026-05-01T07:14:01.304Z",
+      "since": "2026-05-01T07:28:51.341Z",
       "repos": {
         "keiranholloway/biffo-template": {
           "role": "template",
@@ -3486,8 +3486,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:14:01.304Z but jobs were fetched only from 2026-07-16T07:06:40.523Z",
-            "coveredSince": "2026-07-16T07:06:40.523Z"
+            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
+            "coveredSince": "2026-07-16T07:21:32.829Z"
           },
           "ciFailureRate": 12.2,
           "revisionsP50": 0,
@@ -3593,8 +3593,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:14:01.304Z but jobs were fetched only from 2026-07-16T07:06:40.523Z",
-            "coveredSince": "2026-07-16T07:06:40.523Z"
+            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
+            "coveredSince": "2026-07-16T07:21:32.829Z"
           },
           "ciFailureRate": 8.6,
           "revisionsP50": 0,
@@ -3697,8 +3697,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:14:01.304Z but jobs were fetched only from 2026-07-16T07:06:40.523Z",
-            "coveredSince": "2026-07-16T07:06:40.523Z"
+            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
+            "coveredSince": "2026-07-16T07:21:32.829Z"
           },
           "ciFailureRate": 12.5,
           "revisionsP50": 0,
@@ -3747,18 +3747,18 @@
           "role": "plugin",
           "side": "platform",
           "defaultBranch": "dev",
-          "mergedPrs": 55,
+          "mergedPrs": 56,
           "workMix": {
-            "merges": 56,
-            "delivery": 30.4,
-            "rework": 32.1,
-            "toil": 25,
-            "quality": 5.4,
+            "merges": 57,
+            "delivery": 31.6,
+            "rework": 31.6,
+            "toil": 24.6,
+            "quality": 5.3,
             "docs": 0,
-            "unconventional": 7.1,
-            "toilRatio": 57.1,
+            "unconventional": 7,
+            "toilRatio": 56.1,
             "counts": {
-              "delivery": 17,
+              "delivery": 18,
               "rework": 18,
               "toil": 14,
               "quality": 3,
@@ -3767,22 +3767,22 @@
               "other": 0
             },
             "sideCounts": {
-              "platform": 56,
+              "platform": 57,
               "product": 0
             },
             "productDelivery": 0
           },
           "timeToFeature": {
-            "linked": 25,
+            "linked": 26,
             "unresolved": 0,
             "prsWithNoClosingIssue": 39,
-            "coverage": 45.5,
+            "coverage": 46.4,
             "hoursP50": 1.9,
-            "hoursP90": 9.2,
-            "hoursMax": 10.9,
+            "hoursP90": 10.9,
+            "hoursMax": 11.9,
             "running": {
               "measured": 0,
-              "awaitingDeploy": 25,
+              "awaitingDeploy": 26,
               "hoursP50": null,
               "hoursP90": null,
               "deployGapP50": null,
@@ -3801,19 +3801,19 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:14:01.304Z but jobs were fetched only from 2026-07-16T07:06:40.523Z",
-            "coveredSince": "2026-07-16T07:06:40.523Z"
+            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
+            "coveredSince": "2026-07-16T07:21:32.829Z"
           },
-          "ciFailureRate": 18.5,
+          "ciFailureRate": 18.2,
           "revisionsP50": 0,
           "revisionsP90": 2,
-          "landedFirstPushRate": 74.1,
+          "landedFirstPushRate": 74.5,
           "cycleTimeP50Minutes": 4.8,
           "cycleTimeP90Minutes": 21.3,
           "rework": {
-            "merges": 56,
+            "merges": 57,
             "fixMerges": 18,
-            "fixShare": 32.1,
+            "fixShare": 31.6,
             "attributed": 15,
             "medianHoursToRework": 7,
             "p90HoursToRework": 63.7,
@@ -3825,25 +3825,25 @@
             "greenToMergeP50Minutes": 0.4,
             "greenToMergeP90Minutes": 6.1,
             "greenToMergeMaxMinutes": 41.5,
-            "repushRate": 25.9,
-            "racedShare": 5.6,
-            "prsMeasured": 54,
-            "prsWithGreen": 51
+            "repushRate": 25.5,
+            "racedShare": 5.5,
+            "prsMeasured": 55,
+            "prsWithGreen": 52
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 41,
+            "runs": 42,
             "failures": 4,
             "redMinutes": 1268.3,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 54,
+            "prsMeasured": 55,
             "prsUnmeasured": 1,
-            "workflowRuns": 131,
+            "workflowRuns": 132,
             "reworkSource": "git-blame"
           }
         },
@@ -3905,8 +3905,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:14:01.304Z but jobs were fetched only from 2026-07-16T07:06:40.523Z",
-            "coveredSince": "2026-07-16T07:06:40.523Z"
+            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
+            "coveredSince": "2026-07-16T07:21:32.829Z"
           },
           "ciFailureRate": 0,
           "revisionsP50": 0,
@@ -4009,8 +4009,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:14:01.304Z but jobs were fetched only from 2026-07-16T07:06:40.523Z",
-            "coveredSince": "2026-07-16T07:06:40.523Z"
+            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
+            "coveredSince": "2026-07-16T07:21:32.829Z"
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -4059,19 +4059,19 @@
           "role": "instance",
           "side": "product",
           "defaultBranch": "dev",
-          "mergedPrs": 282,
+          "mergedPrs": 283,
           "workMix": {
-            "merges": 306,
-            "delivery": 31.7,
-            "rework": 17.3,
-            "toil": 21.9,
+            "merges": 308,
+            "delivery": 31.8,
+            "rework": 17.5,
+            "toil": 21.8,
             "quality": 5.2,
-            "docs": 8.2,
-            "unconventional": 15.4,
-            "toilRatio": 39.2,
+            "docs": 8.1,
+            "unconventional": 15.3,
+            "toilRatio": 39.3,
             "counts": {
-              "delivery": 97,
-              "rework": 53,
+              "delivery": 98,
+              "rework": 54,
               "toil": 67,
               "quality": 16,
               "docs": 25,
@@ -4080,14 +4080,14 @@
             },
             "sideCounts": {
               "platform": 32,
-              "product": 274
+              "product": 276
             },
-            "productDelivery": 94
+            "productDelivery": 95
           },
           "timeToFeature": {
             "linked": 26,
             "unresolved": 1,
-            "prsWithNoClosingIssue": 255,
+            "prsWithNoClosingIssue": 256,
             "coverage": 9.2,
             "hoursP50": 3.6,
             "hoursP90": 21.5,
@@ -4113,19 +4113,19 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:14:01.304Z but jobs were fetched only from 2026-07-16T07:06:40.523Z",
-            "coveredSince": "2026-07-16T07:06:40.523Z"
+            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
+            "coveredSince": "2026-07-16T07:21:32.829Z"
           },
-          "ciFailureRate": 19.5,
+          "ciFailureRate": 19.4,
           "revisionsP50": 0,
           "revisionsP90": 1,
-          "landedFirstPushRate": 65.6,
-          "cycleTimeP50Minutes": 9.1,
+          "landedFirstPushRate": 65.4,
+          "cycleTimeP50Minutes": 9.3,
           "cycleTimeP90Minutes": 37.9,
           "rework": {
-            "merges": 306,
-            "fixMerges": 53,
-            "fixShare": 17.3,
+            "merges": 308,
+            "fixMerges": 54,
+            "fixShare": 17.5,
             "attributed": 39,
             "medianHoursToRework": 1.5,
             "p90HoursToRework": 196.6,
@@ -4133,29 +4133,29 @@
             "correctedWithin24hShare": 84.6
           },
           "contention": {
-            "greenButUnmergedHours": 126.2,
-            "greenToMergeP50Minutes": 1.5,
+            "greenButUnmergedHours": 126.3,
+            "greenToMergeP50Minutes": 1.6,
             "greenToMergeP90Minutes": 27.7,
             "greenToMergeMaxMinutes": 2800.2,
-            "repushRate": 34.4,
+            "repushRate": 34.6,
             "racedShare": 13.1,
-            "prsMeasured": 282,
-            "prsWithGreen": 274
+            "prsMeasured": 283,
+            "prsWithGreen": 275
           },
           "flakes": {
             "pairs": 0,
             "shas": []
           },
           "integration": {
-            "runs": 887,
+            "runs": 896,
             "failures": 42,
             "redMinutes": 2734.1,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 282,
+            "prsMeasured": 283,
             "prsUnmeasured": 0,
-            "workflowRuns": 1715,
+            "workflowRuns": 1734,
             "reworkSource": "git-blame"
           }
         },
@@ -4163,42 +4163,42 @@
           "role": "sibling",
           "side": "product",
           "defaultBranch": "dev",
-          "mergedPrs": 107,
+          "mergedPrs": 108,
           "workMix": {
-            "merges": 108,
-            "delivery": 57.4,
-            "rework": 17.6,
-            "toil": 12,
-            "quality": 2.8,
-            "docs": 7.4,
+            "merges": 109,
+            "delivery": 56.9,
+            "rework": 17.4,
+            "toil": 11.9,
+            "quality": 3.7,
+            "docs": 7.3,
             "unconventional": 2.8,
-            "toilRatio": 29.6,
+            "toilRatio": 29.4,
             "counts": {
               "delivery": 62,
               "rework": 19,
               "toil": 13,
-              "quality": 3,
+              "quality": 4,
               "docs": 8,
               "unconventional": 3,
               "other": 0
             },
             "sideCounts": {
               "platform": 0,
-              "product": 108
+              "product": 109
             },
             "productDelivery": 62
           },
           "timeToFeature": {
-            "linked": 15,
+            "linked": 16,
             "unresolved": 1,
             "prsWithNoClosingIssue": 91,
-            "coverage": 14,
+            "coverage": 14.8,
             "hoursP50": 1.8,
-            "hoursP90": 14.9,
-            "hoursMax": 21.3,
+            "hoursP90": 21.3,
+            "hoursMax": 571,
             "running": {
               "measured": 0,
-              "awaitingDeploy": 15,
+              "awaitingDeploy": 16,
               "hoursP50": null,
               "hoursP90": null,
               "deployGapP50": null,
@@ -4217,19 +4217,19 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:14:01.304Z but jobs were fetched only from 2026-07-16T07:06:40.523Z",
-            "coveredSince": "2026-07-16T07:06:40.523Z"
+            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
+            "coveredSince": "2026-07-16T07:21:32.829Z"
           },
-          "ciFailureRate": 10.3,
+          "ciFailureRate": 10.2,
           "revisionsP50": 0,
           "revisionsP90": 1,
-          "landedFirstPushRate": 85,
+          "landedFirstPushRate": 84.3,
           "cycleTimeP50Minutes": 6.4,
-          "cycleTimeP90Minutes": 24.6,
+          "cycleTimeP90Minutes": 27.8,
           "rework": {
-            "merges": 108,
+            "merges": 109,
             "fixMerges": 19,
-            "fixShare": 17.6,
+            "fixShare": 17.4,
             "attributed": 15,
             "medianHoursToRework": 1.7,
             "p90HoursToRework": 24.5,
@@ -4237,14 +4237,14 @@
             "correctedWithin24hShare": 86.7
           },
           "contention": {
-            "greenButUnmergedHours": 12,
+            "greenButUnmergedHours": 12.2,
             "greenToMergeP50Minutes": 0.5,
-            "greenToMergeP90Minutes": 13.5,
+            "greenToMergeP90Minutes": 13.7,
             "greenToMergeMaxMinutes": 286.2,
-            "repushRate": 15,
-            "racedShare": 3.7,
-            "prsMeasured": 107,
-            "prsWithGreen": 101
+            "repushRate": 15.7,
+            "racedShare": 4.6,
+            "prsMeasured": 108,
+            "prsWithGreen": 102
           },
           "flakes": {
             "pairs": 1,
@@ -4253,15 +4253,15 @@
             ]
           },
           "integration": {
-            "runs": 316,
+            "runs": 319,
             "failures": 8,
             "redMinutes": 519.4,
             "unresolvedFailures": 0
           },
           "coverage": {
-            "prsMeasured": 107,
+            "prsMeasured": 108,
             "prsUnmeasured": 0,
-            "workflowRuns": 588,
+            "workflowRuns": 591,
             "reworkSource": "git-blame"
           }
         },
@@ -4323,8 +4323,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:14:01.304Z but jobs were fetched only from 2026-07-16T07:06:40.523Z",
-            "coveredSince": "2026-07-16T07:06:40.523Z"
+            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
+            "coveredSince": "2026-07-16T07:21:32.829Z"
           },
           "ciFailureRate": 4.2,
           "revisionsP50": 0,
@@ -4427,8 +4427,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:14:01.304Z but jobs were fetched only from 2026-07-16T07:06:40.523Z",
-            "coveredSince": "2026-07-16T07:06:40.523Z"
+            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
+            "coveredSince": "2026-07-16T07:21:32.829Z"
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -4531,8 +4531,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:14:01.304Z but jobs were fetched only from 2026-07-16T07:06:40.523Z",
-            "coveredSince": "2026-07-16T07:06:40.523Z"
+            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
+            "coveredSince": "2026-07-16T07:21:32.829Z"
           },
           "ciFailureRate": 3.8,
           "revisionsP50": 0,
@@ -4635,8 +4635,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:14:01.304Z but jobs were fetched only from 2026-07-16T07:06:40.523Z",
-            "coveredSince": "2026-07-16T07:06:40.523Z"
+            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
+            "coveredSince": "2026-07-16T07:21:32.829Z"
           },
           "ciFailureRate": 11.1,
           "revisionsP50": 0,
@@ -4741,8 +4741,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:14:01.304Z but jobs were fetched only from 2026-07-16T07:06:40.523Z",
-            "coveredSince": "2026-07-16T07:06:40.523Z"
+            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
+            "coveredSince": "2026-07-16T07:21:32.829Z"
           },
           "ciFailureRate": 18.2,
           "revisionsP50": 1,
@@ -4847,8 +4847,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:14:01.304Z but jobs were fetched only from 2026-07-16T07:06:40.523Z",
-            "coveredSince": "2026-07-16T07:06:40.523Z"
+            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
+            "coveredSince": "2026-07-16T07:21:32.829Z"
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -4951,8 +4951,8 @@
           },
           "gates": {
             "error": "unmeasured",
-            "reason": "window starts 2026-05-01T07:14:01.304Z but jobs were fetched only from 2026-07-16T07:06:40.523Z",
-            "coveredSince": "2026-07-16T07:06:40.523Z"
+            "reason": "window starts 2026-05-01T07:28:51.341Z but jobs were fetched only from 2026-07-16T07:21:32.829Z",
+            "coveredSince": "2026-07-16T07:21:32.829Z"
           },
           "ciFailureRate": null,
           "revisionsP50": null,
@@ -4999,31 +4999,31 @@
         }
       },
       "estate": {
-        "merges": 1491,
-        "platformShare": 63.9,
-        "productShare": 36.1,
+        "merges": 1495,
+        "platformShare": 63.8,
+        "productShare": 36.2,
         "toilRatio": 45.7,
         "capabilityShare": 33.4,
         "capabilityBySide": {
           "platform": {
-            "merges": 297,
+            "merges": 298,
             "share": 19.9
           },
           "product": {
-            "merges": 201,
+            "merges": 202,
             "share": 13.5
           }
         },
         "tabsiiCapabilityShare": 13.5,
-        "contentionHours": 301.9,
+        "contentionHours": 302.2,
         "bySide": {
           "platform": {
-            "merges": 953,
-            "share": 63.9
+            "merges": 954,
+            "share": 63.8
           },
           "product": {
-            "merges": 538,
-            "share": 36.1
+            "merges": 541,
+            "share": 36.2
           }
         },
         "gates": {
@@ -5037,7 +5037,7 @@
         "note": "merges are a proxy for effort, not a measure of time"
       },
       "amplification": {
-        "totalMerges": 1491,
+        "totalMerges": 1495,
         "avoidableMerges": 70,
         "avoidableShare": 4.7,
         "minRepos": 3,
@@ -5053,8 +5053,8 @@
       }
     },
     "prior": {
-      "since": "2026-07-16T07:06:40.523Z",
-      "until": "2026-07-23T07:06:40.523Z",
+      "since": "2026-07-16T07:21:32.829Z",
+      "until": "2026-07-23T07:21:32.829Z",
       "days": 7,
       "repos": {
         "keiranholloway/biffo-template": {
@@ -5781,17 +5781,17 @@
             }
           },
           "gates": {
-            "failingSteps": 57,
+            "failingSteps": 59,
             "locallyCatchable": 42,
-            "notLocallyCatchable": 11,
+            "notLocallyCatchable": 13,
             "unclassified": 4,
-            "share": 79.2,
+            "share": 76.4,
             "byKind": {
+              "deploy": 5,
               "test": 13,
               "plugin-terraform": 2,
               "release-subject": 1,
               "ownership": 3,
-              "deploy": 3,
               "terraform-validate": 2,
               "format": 11,
               "lint": 6,
@@ -5840,7 +5840,7 @@
           "coverage": {
             "prsMeasured": 36,
             "prsUnmeasured": 0,
-            "workflowRuns": 154,
+            "workflowRuns": 158,
             "reworkSource": "git-blame"
           }
         },
@@ -6736,11 +6736,11 @@
         },
         "gates": {
           "repos": 15,
-          "failingSteps": 126,
+          "failingSteps": 128,
           "locallyCatchable": 78,
-          "notLocallyCatchable": 29,
+          "notLocallyCatchable": 31,
           "unclassified": 19,
-          "share": 72.9,
+          "share": 71.6,
           "byKind": {
             "format": 21,
             "typecheck": 7,
@@ -6752,7 +6752,7 @@
             "sast": 2,
             "gitleaks": 4,
             "lint": 8,
-            "deploy": 5,
+            "deploy": 7,
             "ownership": 5,
             "plugin-terraform": 3,
             "release-subject": 1

@@ -37,6 +37,9 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | [#714](https://github.com/keiranholloway/biffo-template/issues/714) | `gh pr merge --auto` against a repo with `allow_auto_merge` **disabled does not queue — it merges immediately**. On a protected branch that is harmless; on an unprotected one it merges with checks still running. Every Biffo repo had it `false` until it was set by hand, so the documented flow silently meant its opposite | **boundary** · visibility | biffo-plugin-ideation#54 | biffo-template `cli/` | **fixed** ([#741](https://github.com/keiranholloway/biffo-template/pull/741)) — set at repo creation |
 | [#838](https://github.com/keiranholloway/biffo-template/issues/838) | `core.hooksPath` was `.husky/_` — a **relative** path git resolves against *each worktree's* root, pointing at a **gitignored** directory created only by `prepare` on `pnpm install`. AGENTS.md §1 *mandates* a fresh worktree per unit of work, so **the required workflow disarmed its own gates**: git skipped every hook with no warning, no error, no output. **7 of 37 working trees armed** | **fail-open** · visibility | tabsii-platform `.worktrees/discovery-rls` — three tracked hook files, no `.husky/_`, therefore no pyright, no lint-staged, no commitlint on anything committed there | biffo-template | **fixed** ([#845](https://github.com/keiranholloway/biffo-template/pull/845)) — dispatchers in the **shared** `.git/hooks`, which every worktree inherits |
 | [#855](https://github.com/keiranholloway/biffo-template/issues/855) | The local gate checked the repo **root only**. In the ten repos with no root `package.json`/`pyproject.toml` — every sibling, every plugin — it printed `n/a - no package.json in this repo` then **`verify passed`**, on repos whose frontend is TypeScript and whose API is Python. `tabsii-crm` ran **one** check on a 700-line change and reported a pass. Worse than the missing hooks it was built to fix: **a repo with no hooks makes no claim; this one claimed to have checked** | **fail-open** · drift | tabsii-crm, biffo-plugin-ideation | biffo-template | **fixed** ([#853](https://github.com/keiranholloway/biffo-template/pull/853), [#855](https://github.com/keiranholloway/biffo-template/pull/855)) — `js_dirs()` + `py_dirs()` |
+| — | **A skeleton shipped no `.gitignore` at all, so eleven satellites could not honour a rule their own AGENTS.md ships.** §1 mandates a worktree per unit of work under `.worktrees/` and states they are git-ignored "so worktrees never get committed or double-scanned". `_skeletons/plugin-template` carried **no `.gitignore`**; `sibling-template`'s 71-line one omitted the entry. Eleven of sixteen repos were affected. The symptom is mild and permanent, which is exactly why it survived: three satellites read as dirty forever, which trains you to stop reading `git status` — and a whole worktree can be committed by accident. Found only because a worktree sweep asked why three clean repos reported changes. **Deliberately not a `shared-files.json` candidate**: those `.gitignore`s legitimately differ (4 lines to 69, Python vs Node vs Terraform), so the existing repos got an append each and the skeletons got the fix for repos not yet created | **drift** | eleven satellites | biffo-template (`_skeletons/*`), plus one append per repo | **fixed** ([#945](https://github.com/keiranholloway/biffo-template/pull/945) + 8 satellite PRs) — guard proven to fail independently per skeleton |
+| — | **A worktree survey could not see the worktrees it was surveying.** The sweep parsed `git worktree list --porcelain` and keyed on `branch` lines — so every **detached-HEAD** worktree was silently skipped, and a leftover directory whose registration had already been pruned was invisible too. It reported "5 remaining" when there were 7 plus an orphan, and I quoted that number. The same shape as everything else on this page: the instrument could not observe part of what it was measuring, and its output looked complete | **visibility** | the sweep itself | diagnostic practice | **corrected** — re-run without the branch filter; the missed entries included one holding uncommitted work |
+| — | **A misconfigured upstream made a healthy cron look nine commits behind.** `practices-daily`'s worktree tracked `origin/dev` rather than `origin/chore/practices-snapshots`, so `git log @{u}..HEAD` compared its snapshot branch against an unrelated one and reported **9 unpushed commits**. Nothing was unpushed — its HEAD was already the remote tip. I quoted the 9 to the operator as a reason to keep the worktree; the reason was right and the number was invented by the measurement. A bare `git push` from there would also have targeted `dev` | **visibility** | biffo-template | biffo-template (worktree git config) | **fixed** — upstream repointed; now reports 0 |
 | — | **Four independently-sufficient defects stood between an admin edit and a run, and no gate could see any of them.** Idea Scout's "prompts live in the database" feature was merged, deployed and green across four repos, and did not work. Driving it end to end for the first time found, in the only order they can be found: (1) the Agents tab could not read its own agents — the whole `/api/v1/admin/*` prefix is unrouted at the CDN, which answers with the portal's HTML shell and a 403; (2) `builtin-agents` was declared at an ABSOLUTE path inside an app the host mounts, so its real URL was unreachable nonsense that four passing tests asserted, because `TestClient(app)` calls the app object where absolute paths do resolve; (3) the SPA was mounted at `/` ABOVE the API routes, and Starlette matches in registration order with no fall-through; (4) the founder run form could not submit at all. Each was enough alone. The feature reported green throughout | **visibility** · fail-open · boundary | biffo-plugin-idea-scout, biffo-platform | biffo-plugin-idea-scout (`admin_app.py`, `web/src/lib/api.ts`), biffo-platform (`db/imports/biffo/009`) | **fixed** ([#70](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/70), [#72](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/72), [#73](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/73), [platform#131](https://github.com/keiranholloway/biffo-platform/pull/131)) |
 | — | **A precedence rule chosen for backwards compatibility silently disabled the feature it belonged to.** #910 resolves an agent's prompt and model from the registry, with precedence "snapshot value if present, else the registry" — chosen so existing workflows keep working. Idea Scout's fan-in workflow, seeded by DDL module `003`, carried BOTH inline, so the registry was never consulted, an admin's edit changed nothing that ran, and three milestones closed green on top of it. The plugin-side fallback removal and the seed-script fix both landed and neither could help: a script only affects a FRESH seed, and `ddl-import` skips an applied file by name. Measured, not inferred — a marker added through the panel was absent from the run's `definition_snapshot`, and the model was the pre-fix slug while the row held the corrected one. **cost 25m** | **boundary** · visibility | biffo-plugin-idea-scout | biffo-platform (`db/imports/biffo/009`) | **fixed** ([platform#131](https://github.com/keiranholloway/biffo-platform/pull/131)) — re-verified: marker in the snapshot, all four titles carry it, `prompt_version: 3` recorded |
 | — | **A client/server shape mismatch reached a founder because the fetch helper ends in a blind cast.** `GET /models/last-used` returns `{"research_model": …}`; `api.ts` typed it as a bare `string \| null`; `request<T>` ends `return (await res.json()) as T`, so the compiler had nothing to compare. An object is truthy, so the picker's state became the envelope, no `<option value>` matched it, the browser rendered the FIRST model as if chosen, and submitting sent the envelope — `422 string_type, "input":{"research_model":null}`, the envelope echoed back. A founder loading the page and pressing **Run now** could not start a scout, and the form looked complete. Cost two failed submits mid-verification before the cause was found. A second, independent path to the same display lie exists whenever there is no last-used model and no `is_default` in the catalog | **visibility** | biffo-plugin-idea-scout | biffo-plugin-idea-scout (`web/src/lib/api.ts`, `RunForm.tsx`) | **fixed** ([#73](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/73)) — unwrapped, plus an explicit empty option so an unselected select cannot display a model |
@@ -250,13 +253,13 @@ shape recurring across unrelated components is a design problem, not bad luck.
 
 <!-- BEGIN generated: class-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write`. **283** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
+_Generated by `node scripts/practices-evidence.mjs --write`. **286** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
 
 | Primary class | Rows | Share |
 | --- | --- | --- |
-| **visibility** | 85 | 30% |
+| **visibility** | 87 | 30% |
 | fail-open | 66 | 23% |
-| drift | 62 | 22% |
+| drift | 63 | 22% |
 | process | 45 | 16% |
 | boundary | 25 | 9% |
 
@@ -351,19 +354,19 @@ markers; re-run the command.
 
 <!-- BEGIN generated: fix-repo-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write` from **283** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `practices-evidence.test.mjs` fails when this block does not match the dataset._
+_Generated by `node scripts/practices-evidence.mjs --write` from **286** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `practices-evidence.test.mjs` fails when this block does not match the dataset._
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 145 of 283 (51%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
-| **tabsii-platform** | 26 of 283 (9%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
-| **biffo-plugin-idea-scout** | 17 of 283 (6%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
-| **biffo-platform** | 14 of 283 (5%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
-| **tabsii-crm** | 14 of 283 (5%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
-| **biffo-plugin-ideation** | 14 of 283 (5%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **tabsii-intake** | 5 of 283 (2%) | CI generation, branch-protection contexts, the `python-jose` removal |
-| **tabsii-marketplace** | 2 of 283 (1%) | `python-jose` removal; the credential-dependent build |
-| **biffo-runners** | 1 of 283 (0%) | Runner fleet docs + fail-fast |
+| **biffo-template** | 147 of 286 (51%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
+| **tabsii-platform** | 26 of 286 (9%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
+| **biffo-plugin-idea-scout** | 17 of 286 (6%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
+| **biffo-platform** | 14 of 286 (5%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
+| **tabsii-crm** | 14 of 286 (5%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
+| **biffo-plugin-ideation** | 14 of 286 (5%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **tabsii-intake** | 5 of 286 (2%) | CI generation, branch-protection contexts, the `python-jose` removal |
+| **tabsii-marketplace** | 2 of 286 (1%) | `python-jose` removal; the credential-dependent build |
+| **biffo-runners** | 1 of 286 (0%) | Runner fleet docs + fail-fast |
 
 <!-- END generated: fix-repo-tally -->
 
@@ -845,6 +848,37 @@ is three implementation plans, an assessment of three PRD requirements against a
 running system, three issues, and the feature itself. The toil is CI queue,
 deploy waits, and the recovery steps above.
 
+### Second calibration: the proxy overstates toil by 32 points, 2026-07-30
+
+The first calibration (2026-07-27) recorded **toil 30.4%** against a merge-derived
+**43.5%** — the proxy overstating by ~13 points. Today, four sessions logging
+**981 minutes** between them:
+
+| | recorded | merge-derived | gap |
+| --- | ---: | ---: | ---: |
+| delivery | 25% | 27.5% (`capabilityShare`) | ~2 pts |
+| platform | 50% | — | — |
+| **toil** | **24.3%** | **56.2%** | **~32 pts** |
+
+**The gap more than doubled, and the cause is visible in today's work.** Of 153
+merges, a large share were nine near-identical `.gitignore` PRs, four resyncs and
+several shared-file syncs — every one classified `chore:`/`fix:` and therefore
+counted as toil, while by *intent* they were deliberate machine improvement. The
+collector cannot see intent; it sees a conventional-commit type.
+
+That is the same shape already recorded as *"share of merges is not a cost"*, now
+with a number: **a day spent deliberately fixing the machine is indistinguishable
+from a day lost fighting it**, and the proxy reads the second.
+
+**What this does NOT license.** It is tempting to conclude the proxy is simply
+wrong and should be discounted. Two calibration points, both from days chosen by
+whoever happened to log, is not a sample — and the direction of the bias is the
+convenient one for anyone recording their own effort. The honest statement is
+narrower: **the proxy and the record disagree by a widening margin, the
+disagreement concentrates in `toil`, and neither is yet established as the truth.**
+A third and fourth data point on ordinary days, logged by sessions that did not
+just have a bad one, is what would settle it.
+
 ### Measured: a one-day feature took four days, and why, 2026-07-30
 
 The operator expected Idea Scout in its current form to be **a single day**. It
@@ -1137,6 +1171,41 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**§1 "establish current state" stopped two milestones being built twice.**
+`biffo-template#713` and `#912` both read as work to do. Checking first showed
+#713's defect had been *retracted by its own author in the comments* — the body
+still described it, and implementing it would have reverted a merged fix and 401'd
+every admin — and #912 had been **built, merged and deployed the previous
+evening**, documented in a comment nobody had read. Two issues closed with
+evidence instead of two features rebuilt. The cost of checking was minutes; a
+sibling agent sent at #713 refused it on the same grounds independently.
+
+**§2 "verify in the environment that differs most" was the only thing that worked.**
+Four independently-sufficient defects sat between an admin edit and a run, and no
+gate in the estate could see any of them — a CDN routing gap needs a browser, an
+absolute route path needs a *mounted* app rather than a `TestClient`, mount-order
+shadowing needs a built `dist` a source checkout lacks, and a run form needs a real
+founder session. Driving the deployed product and **reading the transcript of what
+the model was actually sent** (`definition_snapshot.instructions`) settled in one
+query what three merged, green milestones had asserted wrongly.
+
+**§6 "suspect the ruler" caught a phantom, one hour after failing to.** A cron
+worktree reported 9 unpushed commits; checking the instrument showed its upstream
+pointed at the wrong branch and nothing was unpushed. That is the discipline
+working. It is recorded here beside its own counter-example — the same session
+asserted a model slug was dead from a catalogue listing while the estate's billing
+table showed 26 billed runs on it — because the two together are the lesson:
+**the rule is easy to apply to someone else's number and hard to apply to your
+own conclusion.**
+
+**A pre-push gate refusing eight pushes was correct, and the temptation was real.**
+Eight fresh worktrees had no dependencies installed, so the gate could not run its
+checks and refused. For a `.gitignore`-only change the refusal looks absurd, and
+`BIFFO_SKIP_VERIFY=1` was one keystroke away — the escape hatch H4 pre-registered
+as the counter-metric that would refute itself. Installing deps in eight worktrees
+was the slower, correct answer.
+
 
 **Mutation testing became the acceptance gate, not an occasional check.** Five
 guards in this build were verified by breaking the code and watching the test
@@ -3514,6 +3583,10 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **worked — §1 was the entire value, three times** | Establishing current state before building overturned three of #643's five families, showed #715's named repos were already protected by hand (moving the issue from "fix these" to "nothing re-checks"), and showed #782 and #758 were already fixed. Four issues that would otherwise have been *built*. |
 | `biffo-verify` | **worked — §3 gave the exact isolation** | On #889, reverting only the guard while keeping the model field produced `Failed: DID NOT RAISE HTTPException` on precisely the two guard tests. Reverting both gave 7 failures. That is what distinguishes "I wrote a test" from "this test defends the branch I added". |
 | `biffo-verify` | **worked — §6 applied to my own new audit** | `protection-audit.sh` was fail-open on its first run, reporting `ok` for three unprotected branches because `gh` prints 404 bodies to stdout. Caught by reading every line, which is what §6 asks for. |
+| `claude-in-chrome` | **worked — and it was the only instrument that could see the defects** | Four defects standing between an admin edit and a run were invisible to every gate in the estate; the browser found all four. It also produced the decisive artefact — the run's `definition_snapshot.instructions`, i.e. what the model was *actually sent* — which settled in one query what three merged milestones had asserted wrongly. Two operational notes: a stale bundle made a good deploy look broken until a hard reload (`index-BfpoZuPk.js` vs the server's `index-2mItIncF.js`), and the extension dropped mid-verification, which cost a reconnect. |
+| `biffo-verify` | **partial — §8's effort log was not reached until the skill was invoked explicitly at the end** | Sections 1–7 were applied throughout and earned their keep (see *what went well*). §8 was applied for the scoreboard and the cost section, but the **effort log was never run**: three entries existed for 2026-07-30 and none was this session's. It was produced only when the operator typed `/biffo-verify` hours later. This is the second recorded instance of the same failure — the 45%-low entry has the identical cause — and it suggests §8's ordering is wrong: the effort log is listed after the narrative sections, so it is reached last and dropped first. **It should be step 0**, run when the unit of work ends, before the writing-up that is easy to defer. |
+| `biffo-workflow` | **worked — 20+ PRs across 6 repos, no lost commits** | The unpiped push exit caught its own documented trap twice: an `echo $?` after a pipe read `0` for a push that had failed 128. The pre-push gate correctly refused nine pushes across two occasions (missing `web-admin`/`web` deps, then eight bare worktrees) — each refusal was right and each would have shipped as silence. |
+| `/loop`, `/code-review` | **should have been used and were not** | Neither was invoked. `/code-review` in particular: this session shipped ~20 PRs, several self-reviewed only, and two carried reasoning that later proved wrong (the model-slug claim, the startup-hook premise). A second reader on the diff is precisely what catches an argument that is internally consistent and externally false. Missed because the work felt incremental — each PR small, the error only visible across them. |
 | `biffo-workflow` | **worked — 7 PRs across 4 repos, no lost commits** | The unpiped push exit caught its own trap twice in one session: an `echo $?` after a pipe read `0` for a push that had failed 128, and the pre-push gate correctly refused two pushes whose worktree was missing `web-admin`/`web` deps. Both would have shipped as silence. |
 | `biffo-verify` | **did NOT work — §1 was applied to the wrong repo** | "Establish current state first" was performed, thoroughly, against `biffo-plugin-idea-scout` — whose workflows genuinely contain no deploy step. The seeding mechanism lives in the *instance*. §1 says establish current state; it does not say **name the repo the answer would live in before looking**, and this session cost 1h 20m to that gap. The step needs that sentence. |
 | `biffo-verify` | **should have been used and was not — §8, until the operator asked for it** | The cost record for this session was written only after *"WE NEED TO RECORD THIS AS TIME WASTED"*. §8 is step 0 of adding a row and it was not reached unprompted, which is the same failure the 45%-low effort entry already recorded: capture happens at the end, from memory, when someone asks. A trap nobody records is one the next session re-enters. |

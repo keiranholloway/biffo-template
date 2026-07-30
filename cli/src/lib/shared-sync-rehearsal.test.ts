@@ -69,7 +69,11 @@ function git(cwd: string, ...args: string[]): void {
  * candidate file is fine in the template and wrong *there*.
  */
 const candidateVerify = `#!/usr/bin/env bash
-set -uo pipefail
+# set -u only. This stub is executed through \`sh\` by the script under test, and
+# writing \`set -uo pipefail\` here reproduced, inside the fixture, the exact
+# defect the fixture had just caught in the real script: the runner's sh rejects
+# it and every rehearsal reported FAIL for the wrong reason.
+set -u
 [ "\${1:-}" = "--list" ] && exit 0
 if [ -f GATE-FAILS-HERE ]; then
   printf 'verify failed: typecheck\\n'

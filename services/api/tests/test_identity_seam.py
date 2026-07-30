@@ -283,7 +283,42 @@ class TestCompliance:
         assert reloaded.DefaultIdentityProvider is not None
 
     def test_auth_module_names_no_identity_table(self):
-        source = Path(auth_module.__file__).read_text()
-        assert "models.user" not in source
-        assert "import User" not in source
-        assert "FROM users" not in source
+        """Asked over the AST, not with a substring search (#956, #957).
+
+        The substring form this replaces passed only because `middleware/auth.py`
+        happens never to mention those words. It is not a weaker guard than it
+        looks — it is a guard that fires on *correct* code: `"import User"` also
+        matches `from ..identity import UserProfile`, the DTO that replaced the
+        model, and `"models.user"` matches any comment explaining the change.
+        The identical idiom failed exactly that way in #949, on the fix it was
+        meant to protect. A guard that fails on the fix gets deleted, so it is
+        worse than no guard.
+
+        The invariant is structural — does this module reach the Core user model?
+        — so it is asked structurally.
+        """
+        import ast
+
+        tree = ast.parse(Path(auth_module.__file__).read_text())
+
+        imports = [
+            f"line {node.lineno}: {ast.unparse(node)}"
+            for node in ast.walk(tree)
+            if (isinstance(node, ast.ImportFrom) and (node.module or "").endswith("models.user"))
+            or (
+                isinstance(node, ast.Import)
+                and any(a.name.endswith("models.user") for a in node.names)
+            )
+        ]
+        assert imports == [], f"auth.py reaches the Core user model: {imports}"
+
+        # Raw SQL naming the table would bypass the seam just as effectively as
+        # the ORM would. String constants only — prose in a docstring is fine.
+        sql = [
+            f"line {node.lineno}: {node.value!r}"
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and "from users" in node.value.lower()
+        ]
+        assert sql == [], f"auth.py queries the identity table directly: {sql}"

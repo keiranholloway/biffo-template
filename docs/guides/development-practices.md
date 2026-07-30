@@ -37,6 +37,11 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | [#714](https://github.com/keiranholloway/biffo-template/issues/714) | `gh pr merge --auto` against a repo with `allow_auto_merge` **disabled does not queue — it merges immediately**. On a protected branch that is harmless; on an unprotected one it merges with checks still running. Every Biffo repo had it `false` until it was set by hand, so the documented flow silently meant its opposite | **boundary** · visibility | biffo-plugin-ideation#54 | biffo-template `cli/` | **fixed** ([#741](https://github.com/keiranholloway/biffo-template/pull/741)) — set at repo creation |
 | [#838](https://github.com/keiranholloway/biffo-template/issues/838) | `core.hooksPath` was `.husky/_` — a **relative** path git resolves against *each worktree's* root, pointing at a **gitignored** directory created only by `prepare` on `pnpm install`. AGENTS.md §1 *mandates* a fresh worktree per unit of work, so **the required workflow disarmed its own gates**: git skipped every hook with no warning, no error, no output. **7 of 37 working trees armed** | **fail-open** · visibility | tabsii-platform `.worktrees/discovery-rls` — three tracked hook files, no `.husky/_`, therefore no pyright, no lint-staged, no commitlint on anything committed there | biffo-template | **fixed** ([#845](https://github.com/keiranholloway/biffo-template/pull/845)) — dispatchers in the **shared** `.git/hooks`, which every worktree inherits |
 | [#855](https://github.com/keiranholloway/biffo-template/issues/855) | The local gate checked the repo **root only**. In the ten repos with no root `package.json`/`pyproject.toml` — every sibling, every plugin — it printed `n/a - no package.json in this repo` then **`verify passed`**, on repos whose frontend is TypeScript and whose API is Python. `tabsii-crm` ran **one** check on a 700-line change and reported a pass. Worse than the missing hooks it was built to fix: **a repo with no hooks makes no claim; this one claimed to have checked** | **fail-open** · drift | tabsii-crm, biffo-plugin-ideation | biffo-template | **fixed** ([#853](https://github.com/keiranholloway/biffo-template/pull/853), [#855](https://github.com/keiranholloway/biffo-template/pull/855)) — `js_dirs()` + `py_dirs()` |
+| — | **Four independently-sufficient defects stood between an admin edit and a run, and no gate could see any of them.** Idea Scout's "prompts live in the database" feature was merged, deployed and green across four repos, and did not work. Driving it end to end for the first time found, in the only order they can be found: (1) the Agents tab could not read its own agents — the whole `/api/v1/admin/*` prefix is unrouted at the CDN, which answers with the portal's HTML shell and a 403; (2) `builtin-agents` was declared at an ABSOLUTE path inside an app the host mounts, so its real URL was unreachable nonsense that four passing tests asserted, because `TestClient(app)` calls the app object where absolute paths do resolve; (3) the SPA was mounted at `/` ABOVE the API routes, and Starlette matches in registration order with no fall-through; (4) the founder run form could not submit at all. Each was enough alone. The feature reported green throughout | **visibility** · fail-open · boundary | biffo-plugin-idea-scout, biffo-platform | biffo-plugin-idea-scout (`admin_app.py`, `web/src/lib/api.ts`), biffo-platform (`db/imports/biffo/009`) | **fixed** ([#70](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/70), [#72](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/72), [#73](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/73), [platform#131](https://github.com/keiranholloway/biffo-platform/pull/131)) |
+| — | **A precedence rule chosen for backwards compatibility silently disabled the feature it belonged to.** #910 resolves an agent's prompt and model from the registry, with precedence "snapshot value if present, else the registry" — chosen so existing workflows keep working. Idea Scout's fan-in workflow, seeded by DDL module `003`, carried BOTH inline, so the registry was never consulted, an admin's edit changed nothing that ran, and three milestones closed green on top of it. The plugin-side fallback removal and the seed-script fix both landed and neither could help: a script only affects a FRESH seed, and `ddl-import` skips an applied file by name. Measured, not inferred — a marker added through the panel was absent from the run's `definition_snapshot`, and the model was the pre-fix slug while the row held the corrected one. **cost 25m** | **boundary** · visibility | biffo-plugin-idea-scout | biffo-platform (`db/imports/biffo/009`) | **fixed** ([platform#131](https://github.com/keiranholloway/biffo-platform/pull/131)) — re-verified: marker in the snapshot, all four titles carry it, `prompt_version: 3` recorded |
+| — | **A client/server shape mismatch reached a founder because the fetch helper ends in a blind cast.** `GET /models/last-used` returns `{"research_model": …}`; `api.ts` typed it as a bare `string \| null`; `request<T>` ends `return (await res.json()) as T`, so the compiler had nothing to compare. An object is truthy, so the picker's state became the envelope, no `<option value>` matched it, the browser rendered the FIRST model as if chosen, and submitting sent the envelope — `422 string_type, "input":{"research_model":null}`, the envelope echoed back. A founder loading the page and pressing **Run now** could not start a scout, and the form looked complete. Cost two failed submits mid-verification before the cause was found. A second, independent path to the same display lie exists whenever there is no last-used model and no `is_default` in the catalog | **visibility** | biffo-plugin-idea-scout | biffo-plugin-idea-scout (`web/src/lib/api.ts`, `RunForm.tsx`) | **fixed** ([#73](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/73)) — unwrapped, plus an explicit empty option so an unselected select cannot display a model |
+| — | **A defect was asserted from a catalogue listing while the estate's own billing table disproved it.** `anthropic/claude-opus-4-8` is absent from OpenRouter's published `/v1/models` (367 models), from which I concluded it "is not a model" and would fail a run after three paid research calls — then shipped a plugin fix, a DDL correction and two guard tests on that basis. The agent-runs ledger shows **26 runs on that exact slug, $3.74 charged, 24 completed**, including every successful synthesis to date: OpenRouter normalises it. The dotted form is still preferable, because an unlisted alias is undocumented behaviour, but the stakes were invented. The refuting evidence was two clicks away in a surface I had already opened | **process** | biffo-plugin-idea-scout | biffo-plugin-idea-scout (`definitions.py`, `test_definitions.py`) | **corrected** ([#72](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/72)) — guard kept but relabelled hygiene, both assertion messages now state that the other form works |
+| — | **Synthesis-class agents ran at 44–98% of the default 120s wall clock for their whole life, and nothing reported the margin.** Eleven recorded Idea Scout synthesis runs: 52.8s, 1m26s, 1m38s, 1m41s, 1m42s, 1m45s, 1m46s, 1m47s, 1m48s, **1m57s (98%)**, then one that exceeded it and failed. `DEFAULT_TIMEOUT_SECONDS = 120.0` is sane for a chat-shaped worker and wrong for one emitting 5–10 scored candidates as a single structured generation — 5,676 output tokens is the normal size of that, not an outlier. The ledger shows duration; nothing shows duration **against the limit**, so a run at 98% and one at 44% look equally green | **visibility** | biffo-platform | biffo-platform (`db/imports/biffo/009`, `timeout_seconds: 240`) | **fixed for this agent**; the class is [template#937](https://github.com/keiranholloway/biffo-template/issues/937) |
 | — | **Three documented seeding hooks in this estate never fire, and a fourth mechanism that works was already in use in the same directory.** `plugin_chat_agents` had no rows on dev while idea-scout's fallback had been removed on the guarantee that a startup hook created them. The hook is `@app.on_event("startup")` in each plugin: the shared host attaches plugins with Starlette `Mount(...)`, and **lifespan does not propagate to a mounted sub-app** — reproduced in 12 lines; the app serves requests normally, only its startup is skipped. Core itself runs `Mangum(app, lifespan="off")` and invokes ddl-import explicitly from the deploy, so the platform had already decided not to trust lifespan for this. `db/imports/biffo/003`, `004` and `005` seed this very plugin that way — which is exactly why the Build Types tab renders five rows and the Agents tab rendered none. `004`'s own header records the identical lesson about a **third** dead hook, `on_install()`: documented in ADR-0003 §9, demonstrated in the skeleton, referenced nowhere in `cli/src/`. The premise that sent us elsewhere was M3's *"there is no deploy step to hang seeding on"*, which is true of the **plugin repo** and irrelevant — the seed lives in the instance, which has run that step three times. **cost 1h 20m** | **process** · fail-open · visibility | biffo-plugin-idea-scout, biffo-plugin-ideation | biffo-platform (`db/imports/biffo/006`, `007`) | **fixed** ([biffo-platform#129](https://github.com/keiranholloway/biffo-platform/pull/129)) — seeded by the mechanism already in the directory; [#924](https://github.com/keiranholloway/biffo-template/issues/924) tracks whether the dead hooks are removed or made to work |
 | — | **The parity guard ran only in `biffo-template`** — the single repo with both a root `package.json` and a root `pyproject.toml`, i.e. the one place the root-only assumption held. It validated the gate where the gate was already correct, and could not have caught the blind spot in any of the ten repos that had it | **fail-open** | biffo-template | biffo-template (`gate-coverage.sh`, per repo) | **fixed** — parity is now measured per repo against *that* repo's CI, and exits non-zero |
 | [#856](https://github.com/keiranholloway/biffo-template/pull/856) | Sibling and plugin repos have no `core-manifest.json`, so `biffo core upgrade` cannot reach them. The documented channel was *"vendor into the skeleton, plus a one-time manual copy-in"* — which only helps repos created **afterwards**, and nothing ever prompts the copy-in. **Second occurrence of the same absence**: it is how `AGENTS.md` drifted 68 lines behind in tabsii (#559), and how eight repos ended up two gate versions stale | **drift** · process | tabsii-crm | biffo-template (`shared-sync.sh`) | **fixed** — declared file list, `--check` reports drift and exits 1 |
@@ -245,15 +250,15 @@ shape recurring across unrelated components is a design problem, not bad luck.
 
 <!-- BEGIN generated: class-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write`. **281** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
+_Generated by `node scripts/practices-evidence.mjs --write`. **283** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
 
 | Primary class | Rows | Share |
 | --- | --- | --- |
-| **visibility** | 83 | 30% |
+| **visibility** | 85 | 30% |
 | fail-open | 66 | 23% |
-| drift | 64 | 23% |
-| process | 44 | 16% |
-| boundary | 24 | 9% |
+| drift | 62 | 22% |
+| process | 45 | 16% |
+| boundary | 25 | 9% |
 
 <!-- END generated: class-tally -->
 
@@ -346,19 +351,19 @@ markers; re-run the command.
 
 <!-- BEGIN generated: fix-repo-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write` from **281** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `practices-evidence.test.mjs` fails when this block does not match the dataset._
+_Generated by `node scripts/practices-evidence.mjs --write` from **283** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `practices-evidence.test.mjs` fails when this block does not match the dataset._
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 146 of 281 (52%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
-| **tabsii-platform** | 26 of 281 (9%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
-| **tabsii-crm** | 14 of 281 (5%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
-| **biffo-plugin-idea-scout** | 14 of 281 (5%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
-| **biffo-plugin-ideation** | 14 of 281 (5%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **biffo-platform** | 11 of 281 (4%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
-| **tabsii-intake** | 5 of 281 (2%) | CI generation, branch-protection contexts, the `python-jose` removal |
-| **tabsii-marketplace** | 2 of 281 (1%) | `python-jose` removal; the credential-dependent build |
-| **biffo-runners** | 1 of 281 (0%) | Runner fleet docs + fail-fast |
+| **biffo-template** | 145 of 283 (51%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
+| **tabsii-platform** | 26 of 283 (9%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
+| **biffo-plugin-idea-scout** | 17 of 283 (6%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
+| **biffo-platform** | 14 of 283 (5%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
+| **tabsii-crm** | 14 of 283 (5%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
+| **biffo-plugin-ideation** | 14 of 283 (5%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **tabsii-intake** | 5 of 283 (2%) | CI generation, branch-protection contexts, the `python-jose` removal |
+| **tabsii-marketplace** | 2 of 283 (1%) | `python-jose` removal; the credential-dependent build |
+| **biffo-runners** | 1 of 283 (0%) | Runner fleet docs + fail-fast |
 
 <!-- END generated: fix-repo-tally -->
 
@@ -839,6 +844,52 @@ were added: **330 min — delivery 180, platform 45, toil 105.** The delivery ha
 is three implementation plans, an assessment of three PRD requirements against a
 running system, three issues, and the feature itself. The toil is CI queue,
 deploy waits, and the recovery steps above.
+
+### Measured: a one-day feature took four days, and why, 2026-07-30
+
+The operator expected Idea Scout in its current form to be **a single day**. It
+took four, and asked the right question on day four: *"we seem to be going around
+in circles."* Partly. This separates the two causes, because they need different
+fixes.
+
+**Cause 1 — nothing exercised it end to end, so the defects could only be found
+serially.** Four independently-sufficient defects stood between an admin edit and a
+working run (row above). Each was invisible to every gate: the routing gap needs a
+browser and a CDN, the absolute-path mount needs a *mounted* app rather than a
+`TestClient`, the registration-order shadowing needs a built `dist` that a source
+checkout does not have, and the run form needs a real founder session. So they
+surfaced one per verification attempt, and each attempt cost a fix, a resync, a
+deploy and a re-verification. **That is not circling; it is a queue being
+discovered at the rate the only working instrument can reveal it.** But it reads
+identically from outside, and four days is the honest price of finding out this
+way.
+
+| | |
+| --- | --- |
+| PRs merged across four repos, 2026-07-30 | **34** |
+| Issues closed | **14** |
+| Idea Scout issues left open | **2** — both product decisions already deferred (#49, #50) |
+| Paid verification runs | 2 (~$0.52) |
+
+**Cause 2 — my own waste, ~1h45m of the four days.** Three items, all mine:
+
+| | cost | what would have prevented it |
+| --- | ---: | --- |
+| Built ideation's startup seeding on an unchecked premise | **1h 20m** | `ls db/imports/biffo/` — the working mechanism, three files, same directory |
+| Asserted a model slug was dead from a catalogue listing | **~20m** | reading the billing table in the admin surface I already had open |
+| Misread a 121s duration as "completed normally" | **~5m** | the run detail says `Turn 2 exceeded the run's remaining wall clock` |
+
+Both causes share one shape, and it is the estate's most-recorded finding: **the
+evidence was already in the system and nobody was reading it.** The billing table,
+the duration-versus-limit margin, the workflow's own `action_config` — all present,
+all queryable, none surfaced.
+
+**What actually shortened day four.** The first thing that worked was driving the
+deployed product as a founder and an admin, in a browser, and reading the
+transcript of what the model was *actually sent*. That single artefact —
+`definition_snapshot.instructions` — settled in one query what three merged
+milestones had asserted incorrectly. It should have been the first move on day one,
+not the last on day four.
 
 ### Measured: 1h 20m building a hook that never fires, 2026-07-30
 
@@ -2449,6 +2500,20 @@ design.
 **Recognising an infeasible live-repro and falling back to the right verification instead of skipping it.** The "two territories match the same postcode" ambiguous path looked like it needed a live click-through, until checking `territory_settings.overlap_tolerance_sqm`'s default (10 sqm — a few square metres) showed two territories can't be drawn to overlap enough to share a postcode centroid without the DB trigger rejecting the draw. Rather than either forcing a doomed manual geometry exercise or shrugging the path off as "unverified", running the existing `test_assignment_resolution_pg.py` (which already documents bypassing the same trigger deliberately, in a single transaction, as the only honest way to construct the case) against a real Postgres/PostGIS container was the correct proof — and it passed.
 
 ## What needs more thought
+
+**Nothing proves a feature works before it is called done, and "green" is
+routinely all four repos agreeing about nothing.** Idea Scout's prompts feature was
+merged and deployed across four repos, with three milestones closed, while four
+independently-sufficient defects stood between an admin edit and a run. Every one
+was outside what any gate in this estate can observe: a CDN routing gap, an
+absolute path inside a mounted app, Starlette registration order against a built
+`dist` a source checkout lacks, and a React state mismatch behind a blind `as T`
+cast. **What would have caught all four is one scripted end-to-end exercise of the
+deployed product** — sign in, open the admin surface, change something, run the
+thing, read what the model was actually sent. That artefact
+(`definition_snapshot.instructions`) settled in a single query what three merged
+milestones had asserted wrongly. It is writable today, it needs no new
+infrastructure, and its absence is why a one-day feature took four.
 
 **Nothing establishes that an extension point is wired before work is built on
 it.** This estate now has four documented hooks that never fire — `on_install()`,

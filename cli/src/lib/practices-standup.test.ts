@@ -9,6 +9,7 @@ import {
   readPath,
   buildFindings,
   FINDING_KINDS,
+  snapshotAgeDays,
 } from '../../../scripts/practices-standup.mjs'
 
 /**
@@ -236,5 +237,28 @@ describe('buildFindings', () => {
 
   it('produces nothing rather than guessing when the window is empty', () => {
     expect(buildFindings({ windows: { 1: { repos: {} } } }, [], [])).toEqual([])
+  })
+})
+
+describe('snapshotAgeDays', () => {
+  // The guard exists because the tool failed this on its own first real use: run
+  // from the primary checkout, the newest snapshot was two days old (today's lives
+  // on chore/practices-snapshots, never merged to dev) and it ranked it silently.
+  const now = new Date('2026-07-30T09:00:00Z')
+
+  it('is 0 for today', () => {
+    expect(snapshotAgeDays('2026-07-30.json', now)).toBe(0)
+  })
+
+  it('counts whole days for a stale snapshot', () => {
+    expect(snapshotAgeDays('2026-07-28.json', now)).toBe(2)
+  })
+
+  it('is 0 regardless of time of day — the cron runs at 04:30', () => {
+    expect(snapshotAgeDays('2026-07-30.json', new Date('2026-07-30T23:59:00Z'))).toBe(0)
+  })
+
+  it('returns null for a filename it cannot date rather than guessing', () => {
+    expect(snapshotAgeDays('estate-audits.json', now)).toBeNull()
   })
 })

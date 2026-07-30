@@ -30,7 +30,6 @@ it, so a plugin has nothing to clean up in between.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from collections.abc import Sequence
 from typing import Any
@@ -41,9 +40,11 @@ _LOGGER = logging.getLogger(__name__)
 #: lifespan-state mapping apps may populate; each app gets its own.
 _SPEC = {"type": "lifespan", "asgi": {"version": "3.0", "spec_version": "2.0"}}
 
-#: Put on the reply queue when the app returned from the lifespan scope without
-#: ever sending ``lifespan.startup.complete`` — i.e. it does not implement the
-#: protocol. Distinct from an exception, which means the same thing.
+#: Put on the reply queue when the app returned from the lifespan scope without ever
+#: sending ``lifespan.startup.complete``. On its own this says nothing about whether
+#: the app HAS a startup handler — see :meth:`SubAppLifespan.start`, which reads the
+#: engagement flag to decide. Treating it (or an exception) as "no handler"
+#: unconditionally fails open and lets an un-started plugin serve traffic.
 _NO_LIFESPAN = object()
 
 
@@ -74,9 +75,15 @@ class SubAppLifespan:
         self._events: asyncio.Queue[dict] = asyncio.Queue()
         self._replies: asyncio.Queue[Any] = asyncio.Queue()
         self._task: asyncio.Task[None] | None = None
+        #: True once the app has consumed a lifespan event. This is the ONLY thing
+        #: that distinguishes "does not implement lifespan" from "implements it and
+        #: died" when an app raises instead of sending ``lifespan.startup.failed``.
+        self._engaged = False
 
     async def _receive(self) -> dict:
-        return await self._events.get()
+        event = await self._events.get()
+        self._engaged = True
+        return event
 
     async def _send(self, message: dict) -> None:
         await self._replies.put(message)
@@ -97,15 +104,43 @@ class SubAppLifespan:
         Returns quietly when the app does not implement lifespan at all (nothing
         to run). Raises :class:`PluginStartupError` when it implements lifespan
         and that startup failed.
+
+        **Telling those two apart is the subtle part, and getting it wrong fails
+        open.** An app can die on the lifespan scope for two opposite reasons:
+
+        - it never implemented lifespan, and raised on an unrecognised scope type
+          (``assert scope["type"] == "http"`` is a common bare-ASGI idiom) — there
+          was no startup to run, so this is not an error;
+        - it *did* implement lifespan and its startup crashed — which is precisely
+          the "plugin serves traffic un-started" failure #924 exists to end.
+
+        Starlette and FastAPI send ``lifespan.startup.failed`` before re-raising,
+        so for them the second case is unambiguous. A raw-ASGI app need not, and
+        this class claims to support raw ASGI. So the discriminator is **whether
+        the app consumed the ``lifespan.startup`` event** (:attr:`_engaged`): an
+        app that took the event engaged with the protocol, and anything other than
+        a clean ``startup.complete`` after that is a startup failure.
         """
         self._task = asyncio.ensure_future(self._run())
         await self._events.put({"type": "lifespan.startup"})
         reply = await self._replies.get()
 
         if reply is _NO_LIFESPAN or isinstance(reply, BaseException):
-            # Not an error: plenty of valid ASGI apps have no lifespan handler.
-            _LOGGER.debug("Plugin %s does not implement the ASGI lifespan protocol.", self.label)
-            return
+            if not self._engaged:
+                # Never took the startup event, so it never engaged with lifespan
+                # at all. Nothing to run, and nothing wrong.
+                _LOGGER.debug(
+                    "Plugin %s does not implement the ASGI lifespan protocol.", self.label
+                )
+                return
+            # It took the event and then died without reporting an outcome. We
+            # cannot know its startup succeeded, so treat it as failed rather than
+            # letting it serve un-started.
+            if isinstance(reply, BaseException):
+                raise PluginStartupError(
+                    f"startup raised {type(reply).__name__}: {reply}"
+                ) from reply
+            raise PluginStartupError("startup returned without completing the lifespan handshake")
         kind = reply.get("type")
         if kind == "lifespan.startup.complete":
             _LOGGER.info("Plugin %s startup complete.", self.label)
@@ -121,13 +156,23 @@ class SubAppLifespan:
         it after every single invocation). It exists so a non-Lambda embedding, and
         this package's own tests, can release the suspended lifespan task instead of
         leaving it pending when the event loop closes.
+
+        A shutdown failure is **logged, not swallowed**. This deliberately no longer
+        wraps the wait in a blanket ``suppress(Exception)``: that hid real shutdown
+        errors, and a check that cannot report is the failure mode this repo keeps
+        paying for. A timeout or cancellation is expected (an app whose lifespan
+        never returns, or a loop being torn down) and stays quiet.
         """
         if self._task is None:
             return
+        task, self._task = self._task, None
         await self._events.put({"type": "lifespan.shutdown"})
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await asyncio.wait_for(self._task, timeout=5)
-        self._task = None
+        try:
+            await asyncio.wait_for(task, timeout=5)
+        except (TimeoutError, asyncio.CancelledError):
+            task.cancel()
+        except Exception:  # noqa: BLE001 — reported, not suppressed
+            _LOGGER.exception("Plugin %s raised during lifespan shutdown.", self.label)
 
 
 def startup_targets(

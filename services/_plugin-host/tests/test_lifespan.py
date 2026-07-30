@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import FastAPI
 from mangum.types import LambdaCognitoIdentity, LambdaMobileClientContext
@@ -267,6 +268,85 @@ def test_a_failing_plugin_is_quarantined_and_its_neighbours_keep_serving():
     # ...and one plugin's bad boot does not black out the shared Lambda.
     assert healthy.status_code == 200
     assert healthy.json() == {"seeded": True}
+
+
+# Both sides of the "raised on the lifespan scope" split. A raw-ASGI app need not
+# send `lifespan.startup.failed` before dying, so the exception alone cannot say
+# whether it failed or simply has no lifespan handler. The discriminator is whether
+# it consumed the `lifespan.startup` event. Getting this wrong fails OPEN — the
+# plugin serves traffic un-started, which is the bug #924 is about.
+
+
+def _raw_asgi(log: list[str], *, engage: bool, then_raise: bool) -> Any:
+    """A raw-ASGI plugin that either takes the lifespan.startup event or ignores the
+    scope entirely, and then either dies or returns."""
+
+    async def app(scope: dict, receive, send) -> None:  # noqa: ANN001
+        if scope["type"] == "lifespan":
+            if engage:
+                await receive()
+            if then_raise:
+                raise RuntimeError("db unreachable at cold start")
+            return
+        log.append("request")
+        await send(
+            {"type": "http.response.start", "status": 204, "headers": [(b"content-length", b"0")]}
+        )
+        await send({"type": "http.response.body", "body": b""})
+
+    return app
+
+
+def test_a_startup_that_raises_after_engaging_lifespan_is_quarantined():
+    """The fail-open case. It engaged with the protocol and died, so it must NOT be
+    mistaken for an app that simply has no startup handler."""
+    log: list[str] = []
+    host = build_host(
+        [MountedPlugin("crashy", _raw_asgi(log, engage=True, then_raise=True), "founder")],
+        authorize=_authorizer,
+    )
+    with TestClient(host) as client:
+        r = client.get("/crashy/ping", headers=FOUNDER)
+    assert r.status_code == 503, r.status_code
+    assert "db unreachable at cold start" in r.json()["detail"]
+    assert log == []  # never served a request un-started
+
+
+def test_an_app_that_raises_without_engaging_lifespan_is_treated_as_having_no_handler():
+    """The other side. A bare ASGI callable raising on an unrecognised scope type is
+    the common no-lifespan idiom, not a startup failure — it must still serve."""
+    log: list[str] = []
+    host = build_host(
+        [MountedPlugin("bare", _raw_asgi(log, engage=False, then_raise=True), "founder")],
+        authorize=_authorizer,
+    )
+    with TestClient(host) as client:
+        assert client.get("/bare/ping", headers=FOUNDER).status_code == 204
+    assert log == ["request"]
+
+
+def test_an_app_that_engages_then_returns_without_completing_is_quarantined():
+    """Consumed the startup event, then returned without reporting an outcome. We
+    cannot know its startup succeeded, so it must not serve."""
+    log: list[str] = []
+    host = build_host(
+        [MountedPlugin("silent", _raw_asgi(log, engage=True, then_raise=False), "founder")],
+        authorize=_authorizer,
+    )
+    with TestClient(host) as client:
+        r = client.get("/silent/ping", headers=FOUNDER)
+    assert r.status_code == 503
+    assert "without completing the lifespan handshake" in r.json()["detail"]
+
+
+def test_a_fastapi_startup_crash_still_reports_via_startup_failed():
+    """Starlette/FastAPI send `lifespan.startup.failed` BEFORE re-raising, so this
+    path never depended on the engagement flag. Pinned so the two mechanisms stay
+    independently covered — every plugin in the estate today is FastAPI."""
+    log: list[str] = []
+    lifespans = PluginLifespans([("p", _seeding_plugin(log, "p", fail=True))])
+    asyncio.run(lifespans.startup())
+    assert "could not reach Core to seed" in lifespans.failures["p"]
 
 
 def test_a_failing_admin_ingress_quarantines_only_the_admin_mount():

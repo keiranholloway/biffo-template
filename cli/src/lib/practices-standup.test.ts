@@ -262,3 +262,43 @@ describe('snapshotAgeDays', () => {
     expect(snapshotAgeDays('estate-audits.json', now)).toBeNull()
   })
 })
+
+describe('a choice made outside the ranking (#969)', () => {
+  /**
+   * The gap this closes: a whole day of throughput work on 2026-07-30 left NO
+   * record, because the work was directed ("fix these fail-opens") rather than
+   * picked from the ranking, and `--choose` can only resolve a rank. Tomorrow's
+   * loop closure therefore could not tell a directed day from an idle one.
+   */
+  it('reports "no metric recorded", not "unmeasurable today"', () => {
+    // The distinction is the point: `unmeasurable today` claims the measurement
+    // broke. A directed choice never had one, so blaming the instrument would
+    // send the reader looking for a collector bug that does not exist.
+    const directed = { kind: 'directed', label: 'fix the fail-opens', metric: null, note: 'x' }
+    expect(closeLoop(directed, { windows: {} })).toMatchObject({
+      verdict: 'no metric recorded',
+      now: null,
+      delta: null,
+    })
+  })
+
+  it('still closes the loop normally when a directed choice DID name a metric', () => {
+    const snap = { windows: { 1: { estate: { redMinutes: 12 } } } }
+    const directed = {
+      kind: 'directed',
+      label: 'shorten the red window',
+      metric: 'windows.1.estate.redMinutes',
+      metricValue: 30,
+    }
+    expect(closeLoop(directed, snap)).toMatchObject({ verdict: 'improved', delta: -18, now: 12 })
+  })
+
+  it('is distinguishable from having chosen nothing at all', () => {
+    // `null` in means no choice was ever recorded. That must stay different from
+    // a recorded directed choice, or the fix achieves nothing.
+    expect(closeLoop(null, { windows: {} })).toBeNull()
+    expect(closeLoop({ label: 'x', metric: null }, { windows: {} })?.verdict).toBe(
+      'no metric recorded',
+    )
+  })
+})

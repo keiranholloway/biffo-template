@@ -316,6 +316,15 @@ export function rank(findings) {
  */
 export function closeLoop(last, snapshot) {
   if (!last) return null
+  // A choice made outside the ranking never had a metric to move. Reporting that
+  // as `unmeasurable today` would claim the measurement broke, when in truth none
+  // was ever taken -- and that difference decides whether to suspect the fix or
+  // the instrument. It is also the difference between "we did directed work and
+  // did not measure it" and "nothing happened", which is the whole reason to
+  // record a directed choice at all.
+  if (!last.metric) {
+    return { ...last, now: null, delta: null, verdict: 'no metric recorded' }
+  }
   const now = readPath(snapshot, last.metric)
   if (now === undefined || now === null) {
     return { ...last, now: null, verdict: 'unmeasurable today', delta: null }
@@ -456,6 +465,44 @@ function main() {
   const findings = buildFindings(snapshot, corpus, audits)
   const loop = closeLoop(readLastChoice(logFile), snapshot)
 
+  // Work chosen outside the ranking -- the operator names it, or the backlog
+  // dictates it -- still needs recording, or tomorrow's loop closure cannot tell
+  // a directed day from an idle one. `--choose` alone could not express this:
+  // it resolves a rank, and directed work has none (#953-adjacent; found when a
+  // whole day of throughput work left no record at all).
+  const directedLabel = arg('--choose-directed')
+  if (directedLabel) {
+    const metric = arg('--metric') ?? null
+    let metricValue = null
+    if (metric) {
+      metricValue = readPath(snapshot, metric)
+      if (metricValue === undefined || metricValue === null) {
+        // Fail loudly rather than store a metric that reads null and then reports
+        // `no metric recorded` tomorrow, which would look like it was never given.
+        process.stderr.write(`--metric ${metric} does not resolve in ${file}\n`)
+        process.exit(1)
+      }
+    }
+    const entry = {
+      date: new Date().toISOString().slice(0, 10),
+      chosenAt: new Date().toISOString(),
+      kind: 'directed',
+      label: directedLabel,
+      metric,
+      metricValue,
+      costMinutes: null,
+      note: arg('--note') ?? '',
+    }
+    appendFileSync(logFile, `${JSON.stringify(entry)}\n`)
+    process.stdout.write(
+      `recorded (directed): ${directedLabel}\n` +
+        (metric
+          ? `  metric ${metric} = ${metricValue}\n`
+          : `  no metric -- tomorrow will say so rather than claim nothing happened\n`),
+    )
+    return
+  }
+
   const choose = arg('--choose')
   if (choose) {
     const picked = findings.find((f) => f.rank === Number(choose))
@@ -487,14 +534,28 @@ function main() {
 
   if (loop) {
     const colour = loop.verdict === 'improved' ? GREEN : loop.verdict === 'did not move' ? YELLOW : RED
-    process.stdout.write(`${BOLD}Yesterday you chose:${OFF} ${loop.label}\n`)
-    process.stdout.write(`  ${loop.metric}\n`)
     process.stdout.write(
-      `  ${loop.metricValue} → ${loop.now ?? '—'}   ${colour}${loop.verdict}${OFF}` +
-        `${loop.delta === null ? '' : ` (${loop.delta > 0 ? '+' : ''}${loop.delta})`}\n`,
+      `${BOLD}Yesterday you chose:${OFF} ${loop.label}${loop.kind === 'directed' ? ` ${DIM}(directed)${OFF}` : ''}\n`,
     )
+    if (loop.metric) {
+      process.stdout.write(`  ${loop.metric}\n`)
+      process.stdout.write(
+        `  ${loop.metricValue} → ${loop.now ?? '—'}   ${colour}${loop.verdict}${OFF}` +
+          `${loop.delta === null ? '' : ` (${loop.delta > 0 ? '+' : ''}${loop.delta})`}\n`,
+      )
+    } else {
+      process.stdout.write(
+        `  ${colour}${loop.verdict}${OFF} ${DIM}-- directed work, so there is nothing to close.` +
+          ` This is not the same as an idle day.${OFF}\n`,
+      )
+    }
     if (loop.note) process.stdout.write(`  ${DIM}note: ${loop.note}${OFF}\n`)
-    if (loop.verdict !== 'improved') {
+    if (loop.verdict === 'no metric recorded') {
+      process.stdout.write(
+        `  ${YELLOW}Nothing to conclude either way. If work like this should be measurable,` +
+          ` name a metric at choose time: --choose-directed "..." --metric <path>.${OFF}\n`,
+      )
+    } else if (loop.verdict !== 'improved') {
       process.stdout.write(
         `  ${YELLOW}An intervention whose metric did not move is a finding. Decide before picking a new one.${OFF}\n`,
       )
@@ -527,7 +588,8 @@ function main() {
     }
   }
   process.stdout.write(
-    `\n${DIM}Pick one:  node scripts/practices-standup.mjs --choose <rank> --note "<plan>"${OFF}\n\n`,
+    `\n${DIM}Pick one:  node scripts/practices-standup.mjs --choose <rank> --note "<plan>"${OFF}\n` +
+      `${DIM}Directed:  node scripts/practices-standup.mjs --choose-directed "<what>" [--metric <path>] --note "<plan>"${OFF}\n\n`,
   )
 }
 

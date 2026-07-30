@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -200,5 +200,33 @@ describe('the real skeletons', () => {
     for (const rule of SKELETON_RULES) {
       expect(rule.rationale, `${rule.id} must cite its evidence`).toMatch(/#\d+/)
     }
+  })
+})
+
+describe('every repo skeleton ignores .worktrees/', () => {
+  /**
+   * AGENTS.md §1 mandates a worktree per unit of work under `.worktrees/`, and
+   * says they are git-ignored "so worktrees never get committed or double-scanned".
+   * That held in `biffo-template` and in instances, and in **none** of the eleven
+   * satellites — `plugin-template` shipped no `.gitignore` at all, so every plugin
+   * repo was born unable to honour the rule it also ships in its own AGENTS.md.
+   *
+   * The symptom was mild and permanent: three satellites read as dirty forever,
+   * which trains you to ignore `git status`, and a whole worktree could be
+   * committed by accident.
+   */
+  const skeletonsWithRepoShape = ['plugin-template', 'sibling-template']
+
+  it.each(skeletonsWithRepoShape)('%s has a .gitignore carrying .worktrees/', (skeleton) => {
+    const path = join(skeletonsRoot(skeleton), '.gitignore')
+    expect(existsSync(path), `${skeleton} ships no .gitignore, so a scaffolded repo has none`).toBe(
+      true,
+    )
+    const lines = readFileSync(path, 'utf8')
+      .split('\n')
+      .map((l) => l.trim())
+    expect(lines, `${skeleton}/.gitignore must ignore .worktrees/ (AGENTS.md §1)`).toContain(
+      '.worktrees/',
+    )
   })
 })

@@ -18,6 +18,7 @@ from orchestrator.actions import (
     send_slack,
     send_whatsapp,
 )
+from orchestrator.email_branding import EmailBranding
 from orchestrator_fakes import FakeCore, FakeHttp, FakeSes, FlakyHttp, FlakySes
 
 
@@ -99,6 +100,96 @@ def test_send_email_recipient_template_missing_field_raises_action_error():
         )
 
     assert ses.calls == []
+
+
+def test_send_email_includes_html_part_with_default_branding():
+    ses = FakeSes()
+
+    send_email(
+        {
+            "from": "no-reply@example.com",
+            "to": "sales@example.com",
+            "subject": "Hi",
+            "body": "Hello there.",
+        },
+        {},
+        ses_client=ses,
+    )
+
+    call = ses.calls[0]
+    assert "Html" in call["Message"]["Body"]
+    assert call["Message"]["Body"]["Text"]["Data"] == "Hello there."
+    assert "Hello there." in call["Message"]["Body"]["Html"]["Data"]
+    assert call["Message"]["Body"]["Html"]["Data"].startswith("<!doctype html>")
+
+
+def test_send_email_plain_text_part_unaffected_by_branding():
+    ses = FakeSes()
+    branding = EmailBranding(company_name="Acme", subject_prefix="[Acme] ")
+
+    send_email(
+        {"from": "f@x", "to": "t@x", "subject": "New lead", "body": "Body copy."},
+        {},
+        ses_client=ses,
+        branding=branding,
+    )
+
+    # The plain-text fallback is exactly the rendered body — never HTML, never
+    # stripped-down markup — so a text-only client or spam filter sees the
+    # same words a human author wrote.
+    assert ses.calls[0]["Message"]["Body"]["Text"]["Data"] == "Body copy."
+
+
+def test_send_email_applies_branding_subject_prefix_and_sender_name():
+    ses = FakeSes()
+    branding = EmailBranding(from_name="Acme Notifications", subject_prefix="[Acme] ")
+
+    send_email(
+        {"from": "no-reply@acme.com", "to": "t@x", "subject": "New lead", "body": "b"},
+        {},
+        ses_client=ses,
+        branding=branding,
+    )
+
+    call = ses.calls[0]
+    assert call["Message"]["Subject"]["Data"] == "[Acme] New lead"
+    assert call["Source"] == "Acme Notifications <no-reply@acme.com>"
+
+
+def test_send_email_branding_reaches_html_body():
+    ses = FakeSes()
+    branding = EmailBranding(
+        company_name="Acme",
+        logo_url="https://assets.example.com/logo.png",
+        footer_text="Acme Co",
+    )
+
+    send_email(
+        {"from": "f@x", "to": "t@x", "subject": "s", "body": "b"},
+        {},
+        ses_client=ses,
+        branding=branding,
+    )
+
+    html_body = ses.calls[0]["Message"]["Body"]["Html"]["Data"]
+    assert "https://assets.example.com/logo.png" in html_body
+    assert "Acme Co" in html_body
+
+
+def test_send_email_body_templated_html_escapes_payload_content():
+    ses = FakeSes()
+
+    send_email(
+        {"from": "f@x", "to": "t@x", "subject": "s", "body": "Hi {name}"},
+        {"name": "<script>alert(1)</script>"},
+        ses_client=ses,
+    )
+
+    html_body = ses.calls[0]["Message"]["Body"]["Html"]["Data"]
+    assert "<script>alert(1)</script>" not in html_body
+    assert "&lt;script&gt;" in html_body
+    # the plain-text part is untouched — templating, not escaping, is its job
+    assert ses.calls[0]["Message"]["Body"]["Text"]["Data"] == "Hi <script>alert(1)</script>"
 
 
 # ── Google Chat ──────────────────────────────────────────────────────────────

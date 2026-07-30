@@ -36,6 +36,7 @@ from .actions import (
     WhatsAppSettings,
     prepare_delivery,
 )
+from .email_branding import EmailBranding
 from .manifest import MANIFEST_PATH
 
 logger = Logger()
@@ -149,6 +150,7 @@ class OrchestratorPlugin(BiffoPluginBase):
         whatsapp: WhatsAppSettings | None = None,
         ssm_client: Any | None = None,
         scheduler_client: Any | None = None,
+        branding: EmailBranding | None = None,
     ) -> None:
         manifest = load_manifest(MANIFEST_PATH)
         super().__init__(manifest, api=api if api is not None else SignedCoreClient())
@@ -171,6 +173,12 @@ class OrchestratorPlugin(BiffoPluginBase):
         # never from a workflow's action_config (which is stored in the DB) and
         # never from an env var (which shows in the function's config).
         self._whatsapp = whatsapp or _whatsapp_from_ssm(ssm_client)
+        # The shared branded email layout's configurable surface (issue
+        # tabsii-platform#378) — read once from the environment at cold start,
+        # like the WhatsApp credentials above, and threaded through every
+        # `email` dispatch (`_execute_run`/`_deliver`) rather than re-read per
+        # invocation.
+        self._branding = branding if branding is not None else EmailBranding.from_env()
 
         # Generic forwarder: react to *every* event and let Core decide what to
         # do (match it against enabled workflow definitions). Adding a new trigger
@@ -396,6 +404,7 @@ class OrchestratorPlugin(BiffoPluginBase):
                     http_client=self._http,
                     core_client=self.api,
                     whatsapp=self._whatsapp,
+                    branding=self._branding,
                 )
                 if inspect.isawaitable(result):
                     result = await result
@@ -457,6 +466,7 @@ class OrchestratorPlugin(BiffoPluginBase):
                     http_client=self._http,
                     core_client=self.api,
                     whatsapp=self._whatsapp,
+                    branding=self._branding,
                     # The orchestration run this action belongs to. The agent
                     # action passes it to Core so a completed run can be traced
                     # back to the definition that requested it — which is how

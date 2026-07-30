@@ -28,6 +28,8 @@ from typing import Any, Protocol
 
 from biffo_plugin_sdk import BiffoAPIError
 
+from .email_branding import EmailBranding, build_source, build_subject, render_email_html
+
 
 class SesClient(Protocol):
     """The slice of the boto3 SES client the email action uses."""
@@ -214,14 +216,30 @@ def _render_recipient(action: str, field: str, value: Any, payload: dict[str, An
 
 
 def send_email(
-    config: dict[str, Any], payload: dict[str, Any], *, ses_client: SesClient, **_: Any
+    config: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    ses_client: SesClient,
+    branding: EmailBranding | None = None,
+    **_: Any,
 ) -> dict[str, Any]:
-    """Send a templated email via SES.
+    """Send a templated, branded HTML email via SES (issue tabsii-platform#378).
 
     ``config`` keys: ``from`` (verified SES sender, required), ``to`` (address,
     address list, or a ``{field}`` template filled from the event payload —
     e.g. ``{email}`` to notify whoever triggered the run — required), ``subject``
     and ``body`` (optional ``{field}`` templates filled from the event payload).
+
+    Sends ``multipart/alternative`` — SES's ``send_email`` builds that MIME
+    structure automatically whenever ``Message.Body`` carries both ``Text``
+    and ``Html`` keys, so no separate raw-MIME path is needed. The ``Text``
+    part is exactly ``body`` rendered, unchanged from before this issue — the
+    plain-text fallback a spam filter or text-only client sees is never a
+    stripped-down version of the HTML, it is the same string the HTML is
+    *built from*. ``branding`` (the shared, instance-configurable layout —
+    see ``email_branding.py``) supplies the header/footer/colours/sender/
+    subject conventions; a caller that passes none gets ``EmailBranding()``'s
+    generic defaults rather than an unbranded or broken email.
     """
     source = _require(config, "email", "from")
     to = _render_recipient("email", "to", _require(config, "email", "to"), payload)
@@ -230,13 +248,21 @@ def send_email(
     subject = _render(config.get("subject", "Notification"), payload)
     body = _render(config.get("body", ""), payload)
 
+    active_branding = branding or EmailBranding()
+    full_subject = build_subject(active_branding, subject)
+    full_source = build_source(active_branding, source)
+    html_body = render_email_html(active_branding, subject=full_subject, text_body=body)
+
     try:
         response = ses_client.send_email(
-            Source=source,
+            Source=full_source,
             Destination={"ToAddresses": recipients},
             Message={
-                "Subject": {"Data": subject},
-                "Body": {"Text": {"Data": body}},
+                "Subject": {"Data": full_subject},
+                "Body": {
+                    "Text": {"Data": body},
+                    "Html": {"Data": html_body},
+                },
             },
         )
     except Exception as exc:  # noqa: BLE001 — classified, then recorded or retried

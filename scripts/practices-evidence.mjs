@@ -66,6 +66,10 @@ export const DEFAULT_REPO = 'keiranholloway/biffo-template'
 /** Prefixes used in the table for other repos. */
 export const REPO_PREFIXES = {
   tabsii: 'tabsii-com/tabsii-platform',
+  'tabsii-platform': 'tabsii-com/tabsii-platform',
+  'tabsii-crm': 'tabsii-com/tabsii-crm',
+  'tabsii-runners': 'tabsii-com/tabsii-runners',
+  'tabsii-intake': 'tabsii-com/tabsii-intake',
   'biffo-runners': 'keiranholloway/biffo-runners',
   'idea-scout': 'keiranholloway/biffo-plugin-idea-scout',
 }
@@ -77,17 +81,66 @@ export const REPO_PREFIXES = {
  * *earliest* reference is the best available proxy for when the failure
  * surfaced — later ones are usually the fix.
  *
+ * A markdown link's **URL** is resolved first and takes priority over any
+ * text sitting next to it. `tabsii-platform [#360](https://github.com/tabsii-com/tabsii-platform/pull/360)`
+ * used to attribute to `keiranholloway/biffo-template` — the bracket-wrapped
+ * number has no letter immediately touching it, so the old bare-`#N` path
+ * silently defaulted it to this repo, and the (correct-looking) `tabsii-platform`
+ * text one space to the left was never consulted. It was not a corner case:
+ * `keiranholloway/biffo-template#360` and `#143` are *real, unrelated* PRs in
+ * this repo, so `--enrich` fetched their real dates and wrote them into an
+ * entirely different row as if they were its own. Found on this very row
+ * (tabsii-platform#291) and confirmed already live in the committed dataset —
+ * the tabsii-platform#76 row's stored `date` is a biffo-template PR's date,
+ * not tabsii-platform's. Links are consumed first and blanked out so the
+ * fallback pass below never re-matches inside one.
+ *
  * @param {string} row
  */
 export function extractRefs(row) {
   const refs = []
-  const re = /\[?([a-z-]+)?#(\d+)\]?/gi
-  let m
-  while ((m = re.exec(row)) !== null) {
-    const prefix = m[1]
-    const repo = prefix ? (REPO_PREFIXES[prefix] ?? null) : DEFAULT_REPO
+  const resolvedNumbers = new Set() // numbers already tied to a *specific* repo
+
+  const linkRe = /\[[^\]]*\]\(https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/(?:issues|pull)\/(\d+)\)/g
+  let masked = row
+  let lm
+  while ((lm = linkRe.exec(row)) !== null) {
+    const key = `${lm[1]}#${lm[2]}`
+    if (!refs.includes(key)) refs.push(key)
+    resolvedNumbers.add(lm[2])
+    masked = masked.split(lm[0]).join(' '.repeat(lm[0].length))
+  }
+
+  // Pass 1 over what's left: prefixed forms (`tabsii-crm#133`) — these name a
+  // specific repo in text, same standing as a link.
+  const prefixedRe = /([a-z-]+)#(\d+)/gi
+  let pm
+  while ((pm = prefixedRe.exec(masked)) !== null) {
+    const repo = REPO_PREFIXES[pm[1]]
     if (!repo) continue
-    const key = `${repo}#${m[2]}`
+    resolvedNumbers.add(pm[2])
+  }
+  prefixedRe.lastIndex = 0
+  while ((pm = prefixedRe.exec(masked)) !== null) {
+    const repo = REPO_PREFIXES[pm[1]]
+    if (!repo) continue
+    const key = `${repo}#${pm[2]}`
+    if (!refs.includes(key)) refs.push(key)
+  }
+
+  // Pass 2: bare `#N`, optionally bracketed. Defaults to this repo — but only
+  // when nothing else in the row has already tied that same number to a named
+  // repo. A bare mention sharing a number with an already-resolved ref is
+  // almost always the *same* issue restated in prose (often inside backticks,
+  // quoting a commit message), not a second, coincidentally-numbered one in
+  // this repo — see the tabsii-crm#133 row, whose quoted "`does not close
+  // #133`" would otherwise silently out-vote the row's own linked
+  // tabsii-crm#133 with an unrelated biffo-template#133's date.
+  const bareRe = /\[?#(\d+)\]?/g
+  let bm
+  while ((bm = bareRe.exec(masked)) !== null) {
+    if (resolvedNumbers.has(bm[1])) continue
+    const key = `${DEFAULT_REPO}#${bm[1]}`
     if (!refs.includes(key)) refs.push(key)
   }
   return refs

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { assertInvokes, assertRunsCommand } from '../lib/workflow-run-commands.js'
 import type { CoreManifest } from '../lib/core-manifest.js'
 import { checkCommand } from './check.js'
 
@@ -50,7 +51,11 @@ describe('biffo check', () => {
     const workflow = readFileSync(join(repoRoot, '.github/workflows', file), 'utf8')
     // `pnpm --filter @biffo/cli` only works where cli/ exists — the template.
     expect(workflow).not.toContain('pnpm --filter @biffo/cli check')
-    for (const name of ciGuards) expect(workflow).toContain(`sh scripts/biffo.sh check ${name}`)
+    // Exact command membership, NOT `toContain` on the raw text. The substring
+    // form asserts a prefix, so renaming a guard by extension
+    // (plugin-collisions -> plugin-collisionsXX) left this passing over a
+    // workflow that no longer ran the guard — #720 caught that by accident.
+    for (const name of ciGuards) assertRunsCommand(workflow, `sh scripts/biffo.sh check ${name}`)
   })
 
   it.each(['ci.yml'])('%s does not run the out-of-band audits as a merge gate', (file) => {
@@ -62,7 +67,10 @@ describe('biffo check', () => {
     // The real hook moved to the tracked .githooks/ (#838); .husky/commit-msg is
     // now only a forwarder for clones whose core.hooksPath has not moved yet.
     const hook = readFileSync(join(repoRoot, '.githooks/commit-msg'), 'utf8')
-    expect(hook).toContain('sh scripts/biffo.sh check ownership')
+    // Token-boundary, not substring: the hook legitimately appends
+    // `--staged "$1" || exit 1`, so exact equality is wrong here — but
+    // `toContain` would also accept `check ownershipXX`, which runs nothing.
+    assertInvokes(hook, 'sh scripts/biffo.sh check ownership')
     expect(hook).not.toContain('pnpm --filter @biffo/cli')
   })
 })

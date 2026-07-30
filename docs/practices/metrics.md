@@ -242,16 +242,42 @@ Health of the integration branch (`dev`), from `push`-event runs only — the on
 that block everybody.
 
 - `failures` — red runs on the integration branch
-- `redMinutes` — summed gap between a red run and the next green run of the same
-  workflow
+- `redMinutes` — red time **while anyone was there to be blocked**: the gaps
+  between consecutive runs while red, each capped at `IDLE_CEILING_MINUTES` (60),
+  plus the full duration of every run that executed against a red branch
+- `redMinutesUncapped` — the same without the cap; the pre-#921 definition
+- `idleGapsCapped` — how many gaps hit the ceiling
 - `unresolvedFailures` — red runs never followed by a green one
 
 **An unresolved failure is reported, not closed.** Silently treating a
 never-recovered failure as instant recovery would make the worst case look like
 the best case.
 
-*Multiply by concurrency.* A red `dev` blocks every agent at once, so its cost is
-not one agent's time — it is however many were working.
+**Why `redMinutes` is not failure-to-recovery (#921).** It was, and on the
+standup's first real run that definition ranked `biffo-plugin-ideation` **first of
+five findings** at 21.1 hours — the most expensive item in the estate that day.
+Four failures between 09:28 and 11:47, then nothing until a green push at 06:36
+the next morning: **18.8 of the 21.1 hours, 89%, was a red branch with zero pushes
+against it.** Nobody was blocked; everyone was asleep. The genuinely blocked window
+was 2.3 hours, which ranks the finding *last*. Live data after the fix: **21.1h →
+3.3h**.
+
+The estate had already established this distinction one metric over, for the
+runner fleet — *"Flat queue under an idle fleet is not contention"* — and simply
+never applied it here. Same shape as a fix written for one caller instead of the
+class.
+
+*Multiply by concurrency — but only the capped figure.* A red `dev` blocks every
+agent at once, so its cost is not one agent's time but however many were working.
+That instruction previously sat beneath a number that was 89% idle, which made the
+guidance actively harmful: it said to scale up an overstatement.
+
+**Gaming vector.** The ceiling is a judgement, so it is the thing to attack: a
+branch left red across many short gaps still accrues in full, but one left red and
+abandoned now costs an hour whatever happens. That is deliberate — abandonment is
+what `unresolvedFailures` is for — but it means `redMinutes` alone cannot
+distinguish "fixed quickly" from "walked away from". Read it with
+`unresolvedFailures` and `idleGapsCapped`, never on its own.
 
 ### `gates` — the locally-catchable share (#914)
 

@@ -97,6 +97,16 @@ export const REPOS = [
 export const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out', 'startup_failure'])
 
 /**
+ * Longest gap between pushes that still counts as a red branch blocking someone
+ * (#921). Past this, nobody is waiting — see {@link integrationHealth}.
+ *
+ * One hour, chosen against the estate's own push cadence: `biffo-template` merged
+ * 37 a day at its peak and `tabsii-platform` 33 in the window that motivated this,
+ * so an hour of total silence on an integration branch is a lull, not a queue.
+ */
+export const IDLE_CEILING_MINUTES = 60
+
+/**
  * The workflow whose success means "this code is now running" (#767).
  *
  * Named identically across every deploying repo in the estate — checked on
@@ -895,47 +905,129 @@ export function detectFlakes(runs) {
 }
 
 /**
- * How long the integration branch spent red.
+ * How long the integration branch spent red **while anyone was there to be
+ * blocked by it**.
  *
  * A red `dev` blocks every agent at once, so its cost is multiplied by however
- * many are working. Measured as the gap between a failing push-event run and the
- * next successful run of the same workflow; a failure never followed by a
- * success is left open and reported separately rather than being silently
- * treated as instantly recovered.
+ * many are working. A failure never followed by a success is left open and
+ * reported separately rather than being silently treated as instantly recovered.
+ *
+ * ## Why this is not simply failure-to-recovery (#921)
+ *
+ * It used to be, and the first real run of `practices-standup.mjs` ranked the
+ * resulting number **first out of five findings** — 21.1 hours of red on
+ * `biffo-plugin-ideation`, the most expensive thing in the estate that day.
+ *
+ * The run timeline: four failures between 09:28 and 11:47, then **nothing until
+ * 06:36 the next morning**, when a push went green. Failure-to-recovery spanned
+ * that entire overnight, so **18.8 of the 21.1 hours — 89% — was a branch sitting
+ * red with zero pushes against it.** Nobody was blocked; everyone was asleep. The
+ * genuinely blocked window was 2.3 hours, which would have ranked the finding
+ * *last*.
+ *
+ * Worse, `docs/practices/metrics.md` instructs the reader to *multiply by
+ * concurrency* — so the guidance was to scale up a figure that was 89% idle.
+ *
+ * The estate had already established the distinction one metric over, for the
+ * runner fleet: *"Flat queue under an idle fleet is not contention."* It was
+ * simply never applied here — the same "fix written for one caller, not the
+ * class" shape this scoreboard keeps recording.
+ *
+ * ## The rule
+ *
+ * Red time accrues **between consecutive runs**, and each inter-run gap is capped
+ * at `idleCeilingMinutes`. Past an hour with no new push, a red branch has stopped
+ * costing anyone anything. A recovery run's own duration is counted uncapped — a
+ * run that is executing is never idle.
+ *
+ * The ceiling is a judgement and is therefore declared, overridable and tested,
+ * and `redMinutesUncapped` plus `idleGapsCapped` ship beside the headline so the
+ * correction is always visible rather than folded silently into a smaller number.
  *
  * @param {Array<Record<string, unknown>>} runs
  * @param {string} branch
+ * @param {number} idleCeilingMinutes longest gap that still counts as blocking
  */
-export function integrationHealth(runs, branch) {
+export function integrationHealth(runs, branch, idleCeilingMinutes = IDLE_CEILING_MINUTES) {
   const onBranch = runs
     .filter((run) => run.head_branch === branch && run.event === 'push')
     .sort((a, b) => Date.parse(String(a.created_at)) - Date.parse(String(b.created_at)))
   if (onBranch.length === 0) {
-    return { runs: 0, failures: null, redMinutes: null, unresolvedFailures: null }
+    return {
+      runs: 0,
+      failures: null,
+      redMinutes: null,
+      redMinutesUncapped: null,
+      idleGapsCapped: null,
+      unresolvedFailures: null,
+    }
   }
 
   /** @type {Map<string, number>} */
   const openedAt = new Map()
+  // Where the clock was last stopped for this workflow — the end of the most
+  // recent run while red. Red time accrues between *consecutive runs*, so this is
+  // what makes an idle stretch visible as one long gap rather than being buried
+  // inside a single failure-to-recovery span.
+  /** @type {Map<string, number>} */
+  const lastSeenAt = new Map()
   let redMinutes = 0
+  let redMinutesUncapped = 0
+  let idleGapsCapped = 0
   let failures = 0
+  const ceiling = idleCeilingMinutes * 60000
+
   for (const run of onBranch) {
     const workflow = /** @type {string} */ (run.name)
-    const at = Date.parse(String(run.updated_at ?? run.created_at))
-    if (FAILING_CONCLUSIONS.has(/** @type {string} */ (run.conclusion))) {
-      failures += 1
-      if (!openedAt.has(workflow)) openedAt.set(workflow, at)
-    } else if (run.conclusion === 'success') {
-      const start = openedAt.get(workflow)
-      if (start !== undefined) {
-        redMinutes += (at - start) / 60000
-        openedAt.delete(workflow)
+    const startedAt = Date.parse(String(run.created_at))
+    const endedAt = Date.parse(String(run.updated_at ?? run.created_at))
+    const failing = FAILING_CONCLUSIONS.has(/** @type {string} */ (run.conclusion))
+
+    const wasRed = openedAt.has(workflow)
+    const since = lastSeenAt.get(workflow)
+
+    if (wasRed) {
+      // The waiting gap since the previous run. Capped: past the ceiling nobody is
+      // waiting, so the branch is idle rather than blocking, and counting it makes
+      // an overnight look like an outage.
+      if (since !== undefined) {
+        const gap = Math.max(0, startedAt - since)
+        redMinutesUncapped += gap / 60000
+        if (gap > ceiling) idleGapsCapped += 1
+        redMinutes += Math.min(gap, ceiling) / 60000
       }
+      // This run executed against a red branch, so its own duration is red time
+      // whatever its verdict — and a run that is executing is never idle, so it is
+      // never capped. Summing gaps *and* durations this way makes
+      // `redMinutesUncapped` reproduce the pre-#921 figure exactly, which is what
+      // lets the correction be audited rather than taken on trust.
+      const ownDuration = Math.max(0, endedAt - startedAt) / 60000
+      redMinutes += ownDuration
+      redMinutesUncapped += ownDuration
     }
+
+    if (failing) {
+      failures += 1
+      // The branch goes red at the *end* of the first failing run: until it
+      // finished, nothing was known to be broken.
+      if (!wasRed) openedAt.set(workflow, endedAt)
+    } else if (run.conclusion === 'success' && wasRed) {
+      openedAt.delete(workflow)
+    }
+    // Every run is activity and stops the waiting clock, including a cancelled or
+    // skipped one — those are not verdicts, but somebody was plainly there.
+    lastSeenAt.set(workflow, endedAt)
   }
+
   return {
     runs: onBranch.length,
     failures,
     redMinutes: round1(redMinutes),
+    // Always reported beside the capped figure. A correction that cannot be seen
+    // is indistinguishable from a metric that was always this way, and this one
+    // moved a headline by 89%.
+    redMinutesUncapped: round1(redMinutesUncapped),
+    idleGapsCapped,
     unresolvedFailures: openedAt.size,
   }
 }

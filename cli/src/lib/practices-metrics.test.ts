@@ -298,6 +298,83 @@ describe('integrationHealth', () => {
     expect(health.runs).toBe(0)
     expect(health.failures).toBeNull()
   })
+
+  /**
+   * The real biffo-plugin-ideation timeline of 2026-07-29 (#921), verbatim from the
+   * API. Failure-to-recovery spanned the whole night, and the resulting 21.1h
+   * ranked FIRST of five findings on the standup's first real run. 18.8h of it --
+   * 89% -- was a red branch with zero pushes against it.
+   */
+  it('does not charge an overnight of zero pushes as blocked time', () => {
+    const push = (start: string, end: string, conclusion: string) =>
+      run('dev', start, conclusion, start, { event: 'push', updated_at: end })
+    const health = integrationHealth(
+      [
+        push('2026-07-29T09:28:41Z', '2026-07-29T09:29:45Z', 'failure'),
+        push('2026-07-29T10:13:14Z', '2026-07-29T10:14:19Z', 'failure'),
+        push('2026-07-29T11:00:19Z', '2026-07-29T11:01:33Z', 'failure'),
+        push('2026-07-29T11:47:26Z', '2026-07-29T11:48:42Z', 'failure'),
+        push('2026-07-30T06:36:29Z', '2026-07-30T06:38:01Z', 'success'),
+      ],
+      'dev',
+    )
+    expect(health.failures).toBe(4)
+    expect(health.unresolvedFailures).toBe(0)
+    // The pre-#921 figure, kept so the correction can be audited rather than
+    // trusted. This is exactly what the collector reported on the day.
+    expect(health.redMinutesUncapped).toBe(1268.3)
+    // The overnight gap is capped to the ceiling instead of contributing 18.8h.
+    expect(health.idleGapsCapped).toBe(1)
+    expect(health.redMinutes).toBeLessThan(210)
+    // ...and it must not over-correct into pretending nothing was wrong: three
+    // real sub-hour waits between four failures still count in full.
+    expect(health.redMinutes).toBeGreaterThan(135)
+  })
+
+  it('counts a sub-ceiling gap in full, so a genuine outage is not discounted', () => {
+    const push = (start: string, end: string, conclusion: string) =>
+      run('dev', start, conclusion, start, { event: 'push', updated_at: end })
+    const health = integrationHealth(
+      [
+        push('2026-07-20T10:00:00Z', '2026-07-20T10:02:00Z', 'failure'),
+        push('2026-07-20T10:45:00Z', '2026-07-20T10:47:00Z', 'success'),
+      ],
+      'dev',
+    )
+    // 43 min waiting + 2 min of recovery run = 45, uncapped and unchanged.
+    expect(health.redMinutes).toBe(45)
+    expect(health.redMinutesUncapped).toBe(45)
+    expect(health.idleGapsCapped).toBe(0)
+  })
+
+  it('takes the ceiling as an argument, because it is a judgement not a fact', () => {
+    const push = (start: string, end: string, conclusion: string) =>
+      run('dev', start, conclusion, start, { event: 'push', updated_at: end })
+    const runs = [
+      push('2026-07-20T10:00:00Z', '2026-07-20T10:00:00Z', 'failure'),
+      push('2026-07-21T10:00:00Z', '2026-07-21T10:00:00Z', 'success'),
+    ]
+    expect(integrationHealth(runs, 'dev', 60).redMinutes).toBe(60)
+    expect(integrationHealth(runs, 'dev', 15).redMinutes).toBe(15)
+    // A ceiling wide enough to contain the gap leaves the old behaviour intact.
+    expect(integrationHealth(runs, 'dev', 60 * 48).redMinutes).toBe(1440)
+  })
+
+  it('stops the waiting clock on a cancelled run — not a verdict, but somebody was there', () => {
+    const push = (start: string, end: string, conclusion: string) =>
+      run('dev', start, conclusion, start, { event: 'push', updated_at: end })
+    const health = integrationHealth(
+      [
+        push('2026-07-20T10:00:00Z', '2026-07-20T10:00:00Z', 'failure'),
+        push('2026-07-20T12:00:00Z', '2026-07-20T12:00:00Z', 'cancelled'),
+        push('2026-07-20T12:10:00Z', '2026-07-20T12:10:00Z', 'success'),
+      ],
+      'dev',
+    )
+    // 2h gap capped to 60, then a 10 min gap counted in full.
+    expect(health.redMinutes).toBe(70)
+    expect(health.unresolvedFailures).toBe(0)
+  })
 })
 
 describe('parseGitLog', () => {

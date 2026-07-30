@@ -146,6 +146,21 @@ Rollout order is template → instances → siblings/plugins, so a partial resul
 still interpretable: the three instance repos carry **128 of the 132** catchable
 failing steps in the 7-day baseline.
 
+## How the review reads these numbers (#914)
+
+Since 2026-07-30 the primary metric is **collected daily**, not reconstructed at
+review time: `gates` in each snapshot under `docs/practices/data/`, and the
+"Caught second · 7d" tile on the dashboard. `docs/practices/metrics.md#gates`
+carries the definition and the gaming vectors.
+
+**The counter-metrics are still not measured**, and the review must not imply
+otherwise. Gate duration p50 and bypass rate both need `verify.sh` to persist a
+run log and it keeps none — so of the three counter-metrics that can refute this
+experiment, only `cycleTimeP50Minutes` is live (2.6 in `biffo-template` on
+2026-07-30, against a 5.0 refutation line). `--no-verify` is unobservable in
+principle: it skips the hook that would record the bypass. Any bypass rate this
+estate ever reports is a lower bound.
+
 ## Prediction
 
 By **2026-08-05**, over a **7-day** window, measured identically to the baseline:
@@ -447,11 +462,36 @@ refuted H4 costs only the time spent.
   `biffo-template` (152 failed runs) and `tabsii-platform` (127) exceed it, and
   both are sampled newest-first, so their figures describe recent behaviour
   rather than the full 30 days.
-- **Step classification is a regex over step names**, in
-  `docs/practices/standards/local-gates.md`. It is a judgement call at the
-  margin — "Validate dev environment" is counted catchable, "Dependency audit"
-  is not. The classifier is committed alongside the baseline so the review uses
-  the same one.
+- **Step classification is a regex over step names.** It is a judgement call at
+  the margin — "Validate modules" is counted catchable, "Dependency audit" is
+  not.
+
+  **Corrected 2026-07-30 (#914).** This bullet used to claim the classifier was
+  "committed alongside the baseline so the review uses the same one", citing
+  `docs/practices/standards/local-gates.md`. **It was not.** That file carries the
+  baseline *result* — a table of counts by kind — and no classifier; nothing in
+  the repo classified a step name until #914. The 66% was hand-produced and the
+  rules behind it were never written down, so the pre-registered promise of a
+  reproducible review could not have been kept. The classifier now lives in
+  `STEP_KINDS` in `scripts/practices-metrics.mjs`, is unit-tested against the 25
+  distinct failing step names the estate really produced, and runs daily.
+
+  Two consequences for the 2026-08-05 review, both of which make the comparison
+  weaker than pre-registered:
+
+  - **The baseline cannot be exactly reproduced**, only approximated, because the
+    hand pass's rules are unrecoverable. Treat the machine series as anchored to
+    66%, not as continuing it.
+  - **Two kinds sit on the margin and move the headline by points.** On the 7 days
+    to 2026-07-30 the collector reads **69.5%** (107 of 154). Excluding
+    `gitleaks` as well would read **66.2%** — which reproduces the published 66%
+    almost exactly, and is therefore evidence that the hand pass excluded it.
+    This classifier counts it as catchable anyway, because #897 established that
+    its exclusion rested on a false rationale: CI runs a working-tree scan the
+    gate could run too. `build` is excluded, on the third limb of this
+    experiment's own criterion — deterministic and offline, but minutes rather
+    than seconds. Both calls are recorded here rather than buried in the number,
+    and `byKind` in every snapshot lets either be recomputed.
 - **Volume is not stable.** The estate ran 4,748 CI runs in the baseline window
   at a merge rate 6× its 90-day average. All primary metrics are shares.
 - **The rollout is staged**, so the review window contains a mixture of gated

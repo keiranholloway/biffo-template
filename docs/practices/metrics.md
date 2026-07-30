@@ -253,6 +253,55 @@ the best case.
 *Multiply by concurrency.* A red `dev` blocks every agent at once, so its cost is
 not one agent's time — it is however many were working.
 
+### `gates` — the locally-catchable share (#914)
+
+H4's primary outcome metric: of every step that failed in CI, what share would a
+**deterministic, offline check on a developer's machine** have caught first? A
+step CI catches second cost a push, a queue wait and a runner to discover
+something `pnpm run lint` would have said in four seconds.
+
+- `failingSteps` — every failing step of every failing job in the window
+- `locallyCatchable` / `notLocallyCatchable` — the two sides of the ratio
+- `share` — `locallyCatchable` over the **classified** steps
+- `unclassified` — steps no pattern matched, in neither side of the ratio
+- `byKind` — the per-kind tally, so the headline can be argued with
+
+**This is not `gate-coverage.sh`'s exclusion list, and must never be rewired to
+it.** Those answer different questions: `EXCLUDED_KINDS` is what `verify.sh`
+deliberately does not run; this is what a local check *could* catch. `ownership`
+is in the exclusion list because a `commit-msg` hook covers it instead — and H4
+counts its eleven CI failures as catchable. **The gap between "could be caught
+locally" and "is caught locally" is the quantity being measured**, so deriving
+one from the other would leave the metric unable to fail.
+
+**What it does not capture.** The counter-metrics both experiments pre-registered
+— gate duration p50 and bypass rate — are *not* here. They need `verify.sh` to
+persist a run log, and it keeps none. `--no-verify` is unobservable in principle:
+it skips the hook that would record the bypass, so any future bypass rate is a
+lower bound, not a measurement.
+
+**Gaming vector, and it is a real one.** The share is over *classified* steps, so
+anything the classifier does not recognise silently leaves the denominator. Rename
+a step, or add a check kind, and the headline improves without a single failure
+being prevented. That is why `unclassified` is reported beside the share and
+rendered in bold on the dashboard when non-zero — **a falling share with a rising
+`unclassified` is not an improvement, it is the metric going blind.** The second
+vector is cheaper: delete a local check and the CI failures it was preventing
+never appear, which looks identical to fixing them. `gate-coverage.sh` is the
+cross-check for that one.
+
+**Cost.** Alone among these metrics it costs an API request per *failed run* —
+there is no bulk endpoint for job steps. The lookback is therefore capped at
+`GATE_LOOKBACK_DAYS` (14: the 7-day window both experiments use, plus the
+equal-length prior period). A window wider than the cap reports
+`error: unmeasured` with the cutoff, rather than a share of the fortnight dressed
+up as a share of the quarter.
+
+**The baseline is not a continuation.** The published 66% was hand-classified and
+that classification was never written down — this file is the first version of
+it. Treat the first machine-measured figure as a new series anchored to a
+published number, not as the next point in an existing one.
+
 ---
 
 ## Measured elsewhere

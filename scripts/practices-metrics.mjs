@@ -36,6 +36,7 @@
  * Usage:
  *   node scripts/practices-metrics.mjs --out docs/practices/data
  *   node scripts/practices-metrics.mjs --window 30 --repo keiranholloway/biffo-template
+ *   node scripts/practices-metrics.mjs --gate-lookback 7   # cheaper jobs fetch
  */
 
 import { execFileSync } from 'node:child_process'
@@ -410,6 +411,9 @@ export function filterToWindow(data, since, until = null) {
   const from = Date.parse(since)
   const to = until === null ? Infinity : Date.parse(until)
   return {
+    // The bundle knows its own window, so a metric with a narrower fetch than
+    // the window can say so rather than quietly reporting partial data (#914).
+    windowSince: since,
     defaultBranch: data.defaultBranch,
     prs: data.prs.filter(
       (pr) => pr.mergedAt && Date.parse(pr.mergedAt) >= from && Date.parse(pr.mergedAt) < to,
@@ -423,6 +427,16 @@ export function filterToWindow(data, since, until = null) {
           commits: data.rework.commits.filter(
             (commit) => commit.at >= from && commit.at < to,
           ),
+        }
+      : null,
+    // Failing CI steps (#914), carrying the cutoff they were fetched from.
+    // `coveredSince` travels with the data because it is the difference between
+    // "no steps failed" and "we did not look" — a window wider than the fetch
+    // would otherwise report a flattering share over partial data.
+    steps: data.steps
+      ? {
+          coveredSince: data.steps.coveredSince,
+          failing: data.steps.failing.filter((step) => step.at >= from && step.at < to),
         }
       : null,
     // Deliberately NOT filtered by the window. An issue opened long before the
@@ -927,6 +941,166 @@ export function integrationHealth(runs, branch) {
 }
 
 /**
+ * Check kinds a **local** gate could catch, and the ones it could not (#914).
+ *
+ * This is H4's primary outcome metric — the share of failing CI steps that a
+ * deterministic, offline check on a developer's machine would have caught first.
+ * Until #914 it existed only as a hand-reconstruction: the collector fetched
+ * `/actions/runs` and never jobs or steps, so the 66% baseline in
+ * `docs/practices/experiments/H4-shift-left-gates.md` was classified by hand and
+ * the classification was never written down. This is that classification, in
+ * code, where it can be re-run and disagreed with.
+ *
+ * ## Why this does NOT reuse `gate-coverage.sh`'s `EXCLUDED_KINDS`
+ *
+ * That list exists and it is tempting, and reusing it would be wrong. The two
+ * answer different questions:
+ *
+ * - `EXCLUDED_KINDS` — kinds deliberately absent from `verify.sh`, the pre-push
+ *   gate, each with a reason.
+ * - **locally catchable** — kinds a local check *could* catch, whether or not one
+ *   runs today.
+ *
+ * `ownership` is the case that proves they differ: it is in `EXCLUDED_KINDS`
+ * because a **`commit-msg` hook** covers it rather than `verify.sh` — and H4
+ * names its eleven CI failures as a headline cost, i.e. as catchable. Deriving
+ * catchability from the exclusion list would have silently dropped those, plus
+ * `build`, `gitleaks` (#897 — excluded on a rationale that turned out to be
+ * false) and `pytest`. **The gap between "could be caught locally" and "is
+ * caught locally" is the quantity H4 exists to measure**, so collapsing the two
+ * would leave the metric unable to fail.
+ *
+ * ## Grounded in real step names, not invented ones
+ *
+ * Every pattern below was derived from the 25 distinct failing step names the
+ * estate actually produced over the 7 days to 2026-07-30 (154 failing steps
+ * across 12 repos). Unnamed steps arrive from the API as `Run <command>`, so
+ * both the human `name:` form and the raw command form are matched.
+ *
+ * Order matters: `Build and deploy plugin frontends` is a deploy, not a build,
+ * and `Sync and audit core-v<version>` is a release step, not a dependency
+ * audit. The specific patterns come first for exactly this reason.
+ */
+const STEP_KINDS = [
+  // --- not locally catchable: needs cloud credentials, a live environment, or
+  // state that does not exist until merge/release time.
+  { kind: 'deploy', catchable: false, match: /deploy|terraform (apply|init)|apply the .* schema/ },
+  { kind: 'publish', catchable: false, match: /publish|sync and audit core-v|tag core version/ },
+  // Not offline, and not deterministic over time: a newly-published advisory
+  // reddens CI with no code change, so a developer running it an hour earlier
+  // would legitimately have seen green.
+  { kind: 'dependency-audit', catchable: false, match: /dependency audit|pnpm audit|pip-audit/ },
+  // The squash-merge subject does not exist until the merge, so nothing local
+  // can check it. This is the one exclusion that is a fact rather than a choice.
+  { kind: 'release-subject', catchable: false, match: /release-subject/ },
+  { kind: 'setup', catchable: false, match: /^(set up|install) |^run actions\// },
+  // Deterministic and offline, but **not seconds** — a full Next build is minutes,
+  // which is why `local-gates.md` excludes it by name. H4's criterion is all three
+  // ("deterministic, offline checks that reproduce locally in seconds"), so this
+  // fails it on the third. Before `build`, so it wins over the generic test below.
+  { kind: 'build', catchable: false, match: /build/ },
+
+  // --- locally catchable. Specific guards before the generic kinds they contain.
+  { kind: 'ownership', catchable: true, match: /ownership/ },
+  { kind: 'corpus-guard', catchable: true, match: /corpus is append-only|practices-monotonic/ },
+  { kind: 'destructive-plan', catchable: true, match: /destructive-plan/ },
+  { kind: 'plugin-terraform', catchable: true, match: /plugin[- ]terraform/ },
+  { kind: 'plugin-collisions', catchable: true, match: /plugin[- ]collisions?/ },
+  // Needs a real Postgres, which is why it looks un-local — but the lane runs in
+  // ~3s against docker and is opt-in via TABSII_TEST_PG_DSN.
+  { kind: 'rls-test', catchable: true, match: /rls/ },
+  { kind: 'format', catchable: true, match: /format/ },
+  { kind: 'typecheck', catchable: true, match: /type ?check|pyright|tsc\b/ },
+  { kind: 'lint', catchable: true, match: /lint|ruff check|eslint/ },
+  { kind: 'sast', catchable: true, match: /sast|bandit/ },
+  { kind: 'gitleaks', catchable: true, match: /gitleaks/ },
+  { kind: 'terraform-fmt', catchable: true, match: /terraform.*fmt/ },
+  { kind: 'terraform-validate', catchable: true, match: /validate modules|terraform validate/ },
+  { kind: 'test', catchable: true, match: /test|pytest|vitest/ },
+]
+
+/**
+ * Classify one failing CI step.
+ *
+ * Returns `catchable: null` for a step no pattern matches, rather than guessing.
+ * An unclassified step is counted and reported but contributes to **neither**
+ * side of the share — the alternative is a silent default, and a default of
+ * `false` would let the headline improve every time CI grew a step this file has
+ * never seen. `unclassified > 0` on the dashboard is a prompt to extend the list.
+ *
+ * @param {string} stepName as reported by the jobs API
+ * @returns {{ kind: string, catchable: boolean | null }}
+ */
+export function classifyFailingStep(stepName) {
+  const name = String(stepName ?? '')
+    .toLowerCase()
+    .trim()
+  for (const entry of STEP_KINDS) {
+    if (entry.match.test(name)) return { kind: entry.kind, catchable: entry.catchable }
+  }
+  return { kind: 'unclassified', catchable: null }
+}
+
+/**
+ * H4's primary metric: the locally-catchable share of failing CI steps (#914).
+ *
+ * `share` is the percentage of **classified** steps that a local gate could have
+ * caught. Unclassified steps sit outside the ratio and are reported alongside it
+ * so the denominator is always visible — a share quoted without its
+ * `unclassified` count is not auditable.
+ *
+ * `byKind` exists so the headline can be argued with. A single percentage that
+ * moved is not evidence about a gate; "format fell from 19 to 2" is.
+ *
+ * @param {Array<{name: string}>} steps failing steps, in any order
+ */
+export function summariseGates(steps) {
+  /** @type {Record<string, number>} */
+  const byKind = {}
+  let catchable = 0
+  let notCatchable = 0
+  let unclassified = 0
+  for (const step of steps) {
+    const { kind, catchable: isCatchable } = classifyFailingStep(step.name)
+    byKind[kind] = (byKind[kind] ?? 0) + 1
+    if (isCatchable === null) unclassified += 1
+    else if (isCatchable) catchable += 1
+    else notCatchable += 1
+  }
+  return {
+    failingSteps: steps.length,
+    locallyCatchable: catchable,
+    notLocallyCatchable: notCatchable,
+    unclassified,
+    share: rate(catchable, catchable + notCatchable),
+    byKind,
+  }
+}
+
+/**
+ * {@link summariseGates} for one window, or an explicit `unmeasured` when the
+ * window predates the fetch (#914).
+ *
+ * The distinction this preserves: **"nothing failed" and "we did not look" are
+ * different claims, and only one of them is good news.** The same rule
+ * {@link percentile} follows for an empty set.
+ *
+ * @param {{coveredSince: string, failing: Array<{name: string, at: number}>} | null} steps
+ * @param {string | undefined} windowSince
+ */
+export function gatesForWindow(steps, windowSince) {
+  if (!steps) return { error: 'unmeasured', reason: 'no jobs fetched' }
+  if (windowSince && Date.parse(windowSince) < Date.parse(steps.coveredSince)) {
+    return {
+      error: 'unmeasured',
+      reason: `window starts ${windowSince} but jobs were fetched only from ${steps.coveredSince}`,
+      coveredSince: steps.coveredSince,
+    }
+  }
+  return summariseGates(steps.failing)
+}
+
+/**
  * Parse `git log` output into commits carrying the files they touched.
  *
  * Expects the format written by {@link gitLogCommand}: a header line of
@@ -1054,7 +1228,7 @@ export function summariseRework(fixes, merges) {
  * @param {{prs: Array<Record<string, any>>, runs: Array<Record<string, any>>, defaultBranch: string, rework: {fixes: Array<{at: number, correctedAt: number | null}>, merges: number} | null}} data
  */
 export function summariseRepo(repo, data, issueOpenedAt = new Map(), templateClosingIssues = new Map()) {
-  const { prs, runs, defaultBranch, rework } = data
+  const { prs, runs, defaultBranch, rework, steps, windowSince } = data
   const runsByBranch = indexRunsByBranch(runs)
   const merged = prs.filter((pr) => pr.mergedAt)
 
@@ -1089,6 +1263,11 @@ export function summariseRepo(repo, data, issueOpenedAt = new Map(), templateClo
         successfulDeploys(runs, defaultBranch),
       ),
     },
+    // H4's primary metric (#914). `unmeasured` rather than a number when the
+    // window reaches back further than the jobs fetch: the per-run jobs call is
+    // O(failed runs), so it is capped, and a 90-day window over a 14-day fetch
+    // would report a share of the fortnight as if it were the quarter.
+    gates: gatesForWindow(steps, windowSince),
     // Consistency — two metrics, never one. See prChurn().
     ciFailureRate: rate(measured.filter((c) => c.ciFailed).length, measured.length),
     revisionsP50: percentile(
@@ -1175,6 +1354,7 @@ export function summariseEstate(repos) {
       tabsiiCapabilityShare: null,
       contentionHours: null,
       bySide: {},
+      gates: aggregateGates(repos),
       note: 'merges are a proxy for effort, not a measure of time',
     }
   }
@@ -1228,7 +1408,52 @@ export function summariseEstate(repos) {
     tabsiiCapabilityShare: rate(tabsiiCapability, merges),
     contentionHours: round1(sum((r) => r.contention?.greenButUnmergedHours ?? 0)),
     bySide,
+    // H4's headline, estate-wide (#914). Aggregated over its own set of repos,
+    // not `usable`: a repo can fail CI steps in a window it merged nothing in,
+    // and requiring a workMix would drop exactly those.
+    gates: aggregateGates(repos),
     note: 'merges are a proxy for effort, not a measure of time',
+  }
+}
+
+/**
+ * Estate-wide roll-up of the per-repo gate metric (#914).
+ *
+ * Sums the raw counts and recomputes the share from them rather than averaging
+ * the per-repo percentages: a repo with one failing step would otherwise weigh
+ * the same as one with eighty. `repos` counts how many contributed, so a share
+ * computed over two repos cannot be mistaken for one covering the estate.
+ *
+ * @param {Record<string, any>} repos
+ */
+export function aggregateGates(repos) {
+  const measured = Object.values(repos).filter((r) => r?.gates && !r.gates.error)
+  if (measured.length === 0) {
+    return { repos: 0, failingSteps: 0, locallyCatchable: 0, unclassified: 0, share: null, byKind: {} }
+  }
+  /** @type {Record<string, number>} */
+  const byKind = {}
+  let failingSteps = 0
+  let locallyCatchable = 0
+  let notLocallyCatchable = 0
+  let unclassified = 0
+  for (const repo of measured) {
+    failingSteps += repo.gates.failingSteps
+    locallyCatchable += repo.gates.locallyCatchable
+    notLocallyCatchable += repo.gates.notLocallyCatchable
+    unclassified += repo.gates.unclassified
+    for (const [kind, n] of Object.entries(repo.gates.byKind)) {
+      byKind[kind] = (byKind[kind] ?? 0) + /** @type {number} */ (n)
+    }
+  }
+  return {
+    repos: measured.length,
+    failingSteps,
+    locallyCatchable,
+    notLocallyCatchable,
+    unclassified,
+    share: rate(locallyCatchable, locallyCatchable + notLocallyCatchable),
+    byKind,
   }
 }
 
@@ -1374,12 +1599,69 @@ function fetchRuns(slug, since) {
   return all
 }
 
+/**
+ * Every failing step of every failing run in the window (#914).
+ *
+ * This is the only metric here that costs a request **per run**: there is no bulk
+ * endpoint for job steps, so it is O(failed runs). That is why the caller caps
+ * the lookback rather than reusing the widest window — 90 days of failed runs
+ * across the estate is several thousand requests for a metric both experiments
+ * define on 7 days.
+ *
+ * Timestamped by the *run*, not the job: the window is about when the failure was
+ * discovered, and a job's own timing is an artefact of runner scheduling.
+ *
+ * @param {string} slug
+ * @param {Array<Record<string, any>>} runs already-fetched runs for this repo
+ * @param {string} since ISO cutoff — runs older than this are not walked
+ * @returns {{coveredSince: string, failing: Array<{name: string, at: number}>}}
+ */
+function fetchFailingSteps(slug, runs, since) {
+  const failed = runs.filter(
+    (run) => FAILING_CONCLUSIONS.has(run.conclusion) && run.created_at >= since,
+  )
+  /** @type {Array<{name: string, at: number}>} */
+  const failing = []
+  for (const run of failed) {
+    const at = Date.parse(run.created_at)
+    let body
+    try {
+      body = gh(['api', `repos/${slug}/actions/runs/${run.id}/jobs`])
+    } catch {
+      // A single unreadable run must not cost the whole repo its metric — the
+      // jobs of a run GitHub has expired are gone for good, and refusing to
+      // measure the other 150 steps because of one would be the fail-closed
+      // mirror of the fail-open shape this scoreboard keeps finding.
+      continue
+    }
+    for (const job of body.jobs ?? []) {
+      if (job.conclusion !== 'failure') continue
+      for (const step of job.steps ?? []) {
+        if (step.conclusion !== 'failure') continue
+        failing.push({ name: step.name, at })
+      }
+    }
+  }
+  return { coveredSince: since, failing }
+}
+
+/**
+ * How far back the per-run jobs fetch walks, in days (#914).
+ *
+ * 14 = the 7-day window H4 and H5 are both defined on, plus the equal-length
+ * prior period they are compared against. Wider costs a request per additional
+ * failed run for a number no experiment reads; narrower leaves the rate window
+ * `unmeasured`.
+ */
+export const GATE_LOOKBACK_DAYS = 14
+
 function parseArgs(argv) {
   const args = {
     windows: DEFAULT_WINDOWS,
     out: 'docs/practices/data',
     repo: null,
     reposRoot: null,
+    gateLookbackDays: GATE_LOOKBACK_DAYS,
   }
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--window') args.windows = [Number(argv[++i])]
@@ -1387,6 +1669,7 @@ function parseArgs(argv) {
     else if (argv[i] === '--out') args.out = argv[++i]
     else if (argv[i] === '--repo') args.repo = argv[++i]
     else if (argv[i] === '--repos-root') args.reposRoot = argv[++i]
+    else if (argv[i] === '--gate-lookback') args.gateLookbackDays = Number(argv[++i])
   }
   args.windows.sort((a, b) => a - b)
   return args
@@ -1417,6 +1700,17 @@ function main() {
   // same data. Collecting per-window would triple the API and blame cost and —
   // worse — let the windows disagree because they were taken at different times.
   const fetchSince = new Date(Date.now() - maxWindow * 864e5).toISOString()
+  const prior = priorWindow(args.windows)
+  // The gate metric's lookback is capped separately and **explicitly**, because
+  // it alone costs a request per failed run (see fetchFailingSteps).
+  //
+  // An earlier version derived this as `2 × priorWindow().days`, which was too
+  // clever: `priorWindow` calls the *second-largest* window the rate window, so
+  // running `--windows 1,7` made the cap 2 days and left the 7-day window — the
+  // one both H4 and H5 are defined on — `unmeasured`. The guard reported that
+  // honestly rather than hiding it, but a cost cap should not move when an
+  // unrelated window list changes. A constant says what it is.
+  const gatesSince = new Date(Date.now() - args.gateLookbackDays * 864e5).toISOString()
   const targets = args.repo ? REPOS.filter((r) => r.slug === args.repo) : REPOS
 
   /** @type {Record<string, any>} */
@@ -1433,8 +1727,11 @@ function main() {
       const runs = fetchRuns(repo.slug, fetchSince)
       const rework = fetchRework(join(reposRoot, repo.path), fetchSince, defaultBranch)
       const issues = fetchClosedIssues(repo.slug)
-      raw[repo.slug] = { prs, runs, defaultBranch, rework, issues }
-      process.stderr.write(`${prs.length} PRs, ${runs.length} runs, ${issues.length} closed issues\n`)
+      const steps = fetchFailingSteps(repo.slug, runs, gatesSince)
+      raw[repo.slug] = { prs, runs, defaultBranch, rework, issues, steps }
+      process.stderr.write(
+        `${prs.length} PRs, ${runs.length} runs, ${issues.length} closed issues, ${steps.failing.length} failing steps\n`,
+      )
     } catch (error) {
       // A repo that could not be read is recorded as such and excluded from
       // every aggregate. It is never allowed to contribute a zero.
@@ -1483,7 +1780,7 @@ function main() {
   // out of it, so "vs baseline" compares two disjoint sets of merges. Keyed by
   // name rather than a day count because it is a *span*, not a lookback, and
   // reading it as one would put its start date 83 days ago instead of 90.
-  const prior = priorWindow(args.windows)
+  // Computed once, above, because the gate lookback is derived from it too.
   if (prior) {
     /** @type {Record<string, any>} */
     const repos = {}

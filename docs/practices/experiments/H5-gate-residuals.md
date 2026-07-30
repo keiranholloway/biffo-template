@@ -176,6 +176,23 @@ By **2026-08-05**, over a 7-day window:
 - **Every exclusion carries a mechanical justification**, and the count of
   prose-only rationales is **zero**.
 
+## What is measured daily, and what is not (#914)
+
+- **Gate coverage** — H5's primary — is audited every morning by
+  `scripts/gate-coverage.sh` and lands in `docs/practices/data/estate-audits.json`
+  as a pass/fail plus a prose summary. On 2026-07-30 it read **`ok: false`**
+  ("some gates do not cover their own CI"), i.e. the primary prediction is
+  currently failing, six days before review. The audit does not yet emit
+  per-repo *numbers*, so which repo and which kind still needs reading by eye.
+- **The locally-catchable share** (H4's primary, and the thing these four gaps
+  are meant to move) is collected daily since #914 — see
+  `docs/practices/metrics.md#gates`.
+- **Gate duration p50 and bypass rate are not measured at all.** Both need
+  `verify.sh` to persist a run log; it prints per-check durations and keeps none.
+  Since gate duration in siblings above 60s refutes H5 on its own, **this
+  experiment cannot currently be refuted by its primary counter-metric** — worth
+  stating plainly at review rather than reporting the coverage number alone.
+
 ## Counter-metric — the entire risk
 
 Three of these add work to every push. The risk is the same one H4 named:

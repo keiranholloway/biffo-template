@@ -93,8 +93,31 @@ describe('protectionParamsFor', () => {
   })
 
   /** Without strict, a green branch can merge against code it never saw. */
-  it('always requires branches to be up to date', () => {
+  it('defaults to requiring branches to be up to date', () => {
+    // Renamed from "always requires" when strict became a parameter (#808). The
+    // default is unchanged and is still the right one for a backfill; "always" was
+    // the property that silently fought a running experiment.
     expect(protectionParamsFor(['CI']).required_status_checks.strict).toBe(true)
+  })
+
+  it('can preserve a deliberately relaxed strict (#808)', () => {
+    // Experiment H3 has strict:false on biffo-template's dev until 2026-08-11. The
+    // audit reports that as a `not-strict` finding, any finding makes --fix
+    // eligible, and --fix used to force strict:true back on with no message — so
+    // running the estate's own protection guard reverted the experiment.
+    expect(protectionParamsFor(['CI'], { strict: false }).required_status_checks.strict).toBe(false)
+  })
+
+  it('changes nothing else when strict is relaxed', () => {
+    // The relaxation must be surgical. If passing strict:false also dropped
+    // required_linear_history or re-enabled force pushes, this would be a much
+    // worse bug than the one being fixed.
+    const withoutChecks = (contexts: string[], options?: { strict?: boolean }) => {
+      const params: Record<string, unknown> = { ...protectionParamsFor(contexts, options) }
+      delete params.required_status_checks
+      return params
+    }
+    expect(withoutChecks(['CI'], { strict: false })).toEqual(withoutChecks(['CI']))
   })
 })
 

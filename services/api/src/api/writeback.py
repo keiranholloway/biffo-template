@@ -45,6 +45,7 @@ from .writeback_targets import (
     WriteBackColumn,
     WriteBackTarget,
     bind_principal_session,
+    redactable_columns,
     resolve_writeback_target,
 )
 
@@ -642,6 +643,19 @@ async def execute_writeback(
     row_id = getattr(row, "id", None)
     row_id = str(row_id) if row_id is not None else None
     workflow_run.status = "succeeded"
+    # Scrub the identifying values now that they are in the product row (#673).
+    #
+    # Here, and NOT at completion, which is where ADR-0027 and #673 both suggested
+    # putting it. `apply_writeback` reads `run.result` — `_submitted_values` above,
+    # after the AGENT_RUN_COMPLETED event — so redacting at completion would leave
+    # nothing to write and break the feature it is protecting. The values have to
+    # survive until exactly here.
+    #
+    # Consequence worth stating: a run that is DENIED or fails keeps its values,
+    # because they were never written anywhere else and the run record is then the
+    # only evidence of what was attempted. Scrubbing a failed run would destroy the
+    # audit trail to protect data that has not left the record.
+    _redact_written_values(agent_run, target)
     await _record(
         db,
         tenant_id=tenant_id,
@@ -650,6 +664,52 @@ async def execute_writeback(
         response={"table": target.table, "operation": operation, "row_id": row_id},
     )
     return WriteBackOutcome(status="written", run_id=workflow_run.id, row_id=row_id)
+
+
+#: What replaces a redacted value, rather than dropping the key.
+#:
+#: The key stays so the run record still shows WHICH columns were written — that is
+#: the explainability the record exists for. Dropping the key would make a redacted
+#: write indistinguishable from a column the agent never submitted.
+REDACTED_PLACEHOLDER = "[redacted]"
+
+
+def _redact_written_values(agent_run: AgentRun, target: WriteBackTarget) -> None:
+    """Replace written identifying values in ``AgentRun.result`` with a placeholder.
+
+    Mutates and reassigns `result` rather than editing in place: SQLAlchemy tracks
+    JSON columns by identity, so an in-place `dict` edit is not seen as a change and
+    would never be flushed. That failure would be silent and would look exactly like
+    redaction working.
+    """
+    redact = redactable_columns(target)
+    if not redact:
+        return
+    result = agent_run.result
+    if not isinstance(result, dict):
+        return
+
+    def _scrub(values: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: (REDACTED_PLACEHOLDER if key in redact and value is not None else value)
+            for key, value in values.items()
+        }
+
+    # BOTH shapes `_submitted_values` reads, or the redaction silently does nothing
+    # for one of them — which is worse than not having it, because it looks present.
+    # Caught by a test seeded with the back-compat shape: the write succeeded, the
+    # row held the value, and so did the run record.
+    arguments = result.get("arguments")
+    if isinstance(arguments, dict):
+        agent_run.result = {**result, "arguments": _scrub(arguments)}
+        return
+    if "output" in result:
+        # Prose completion: carries no columns, so there is nothing to scrub.
+        return
+    agent_run.result = {
+        **{k: v for k, v in result.items() if k in _RUN_METADATA_KEYS},
+        **_scrub({k: v for k, v in result.items() if k not in _RUN_METADATA_KEYS}),
+    }
 
 
 def missing_payload_derivations(target: WriteBackTarget, event: dict[str, Any] | None) -> list[str]:

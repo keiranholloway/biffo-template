@@ -819,3 +819,80 @@ def test_the_default_threshold_does_not_disable_on_a_single_denial(app, client):
             return rows[0].enabled
 
     assert asyncio.run(_enabled()) is True
+
+
+def test_a_written_identifying_value_does_not_stay_in_the_run_record(app, client):
+    """#673: once the value is in the product row, it stops living in AgentRun.result.
+
+    The point of the whole ticket: with write-back, a lead's email was held in the
+    row AND in the run record, admin-readable, with no retention policy anywhere —
+    so "forever" was the honest answer.
+
+    `email` is redacted by NAME, without the target declaring anything, which is the
+    half that covers every target that existed before #673.
+    """
+    _, factory = app
+    run_id = asyncio.run(
+        _seed(
+            factory,
+            writeback={
+                "table": "wb_notes",
+                "operation": "update",
+                "columns": {"email": "agent@example.com"},
+            },
+            result={"email": "agent@example.com"},
+            existing_note=Note(id="note-7", tenant_id="default", email=None, notes=None),
+            input_payload={"note_id": "note-7"},
+        )
+    )
+    assert _post(client, run_id).json()["status"] == "written"
+
+    async def _read() -> tuple[str | None, dict]:
+        async with factory() as session:
+            note = (await session.execute(select(Note).where(Note.id == "note-7"))).scalar_one()
+            run = (
+                await session.execute(select(AgentRun).where(AgentRun.id == run_id))
+            ).scalar_one()
+            return note.email, dict(run.result or {})
+
+    written, result = asyncio.run(_read())
+    # The product row keeps the real value — redaction must not damage the write.
+    assert written == "agent@example.com"
+    # The run record does not.
+    assert "agent@example.com" not in str(result)
+    # But it still shows WHICH column was written: dropping the key would make a
+    # redacted write indistinguishable from one the agent never submitted.
+    assert "email" in str(result)
+
+
+def test_a_denied_run_keeps_its_values_so_the_audit_trail_survives(app, client):
+    """The deliberate asymmetry (#673).
+
+    A denied run wrote nothing, so the run record is the ONLY evidence of what was
+    attempted. Scrubbing it would destroy the audit trail to protect data that never
+    left the record — the opposite of the trade this ticket is making.
+    """
+    _, factory = app
+    wb._provider = wb._default_provider  # noqa: SLF001  (the template default refuses)
+    run_id = asyncio.run(
+        _seed(
+            factory,
+            writeback={
+                "table": "wb_notes",
+                "operation": "update",
+                "columns": {"email": "denied@example.com"},
+            },
+            result={"email": "denied@example.com"},
+            input_payload={"note_id": "note-9"},
+        )
+    )
+    assert _post(client, run_id).json()["status"] == "denied"
+
+    async def _result() -> dict:
+        async with factory() as session:
+            run = (
+                await session.execute(select(AgentRun).where(AgentRun.id == run_id))
+            ).scalar_one()
+            return dict(run.result or {})
+
+    assert "denied@example.com" in str(asyncio.run(_result()))

@@ -580,15 +580,18 @@ async function applyAndOpenPr(
   const carried = applyMigrationCarry(options.cwd, migrations)
   writeInstanceCoreVersion(options.cwd, toVersion)
 
-  // Remove the orphaned core.version file when it is provably inherited (#434).
-  // Staged by the `git add -A` below and surfaced in the PR body. Only ever the
-  // delete case reaches here; a repurposed or unauthoritative file is left alone.
+  // Remove the core.version file when it is provably inherited (#434) or provably
+  // stale (#842). Staged by the `git add -A` below and surfaced in the PR body. A
+  // repurposed or unauthoritative file is still left alone.
   const cleanedCoreVersion = coreVersionCleanup?.action === 'delete'
   if (cleanedCoreVersion && existsSync(coreVersionCleanup.path)) {
     rmSync(coreVersionCleanup.path)
     log.info(
-      `Deleted orphaned ${CORE_VERSION_FILE} (inherited copy recording ${coreVersionCleanup.found}, ` +
-        `superseded by biffo.core.json) — nothing reads it as an authority (#434).`,
+      coreVersionCleanup.stale
+        ? `Deleted stale ${CORE_VERSION_FILE} (recorded ${coreVersionCleanup.found}, behind the ` +
+            `version biffo.core.json records — this instance has moved past it) (#842).`
+        : `Deleted orphaned ${CORE_VERSION_FILE} (inherited copy recording ${coreVersionCleanup.found}, ` +
+            `superseded by biffo.core.json) — nothing reads it as an authority (#434).`,
     )
   }
 
@@ -1008,9 +1011,16 @@ function printCoreVersionCleanup(cleanup: CoreVersionCleanup | null, applying: b
   if (cleanup === null) return
   if (cleanup.action === 'delete') {
     const verb = applying ? 'delete' : 'will delete'
+    // Name the evidence, not just the action (#842). "Equal to the authority" and
+    // "behind the authority" are different arguments for the same irreversible
+    // step, and a log that cannot distinguish them cannot be audited after the
+    // fact — which is how #788's fossil went unquestioned for 114 versions.
+    const why = cleanup.stale
+      ? `stale: records ${cleanup.found}, which this instance has already moved past`
+      : `orphaned inherited copy recording ${cleanup.found}`
     console.log(
       `  ${chalk.red('cleanup'.padEnd(15))} ${CORE_VERSION_FILE} ` +
-        chalk.dim(`(orphaned inherited copy recording ${cleanup.found}) — ${verb}`),
+        chalk.dim(`(${why}) — ${verb}`),
     )
     return
   }

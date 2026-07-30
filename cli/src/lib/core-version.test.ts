@@ -212,7 +212,11 @@ describe('planCoreVersionCleanup (#434)', () => {
     expect(planCoreVersionCleanup(dir)?.action).toBe('delete')
   })
 
-  it('keeps a repurposed core.version that differs from biffo.core.json', () => {
+  it('keeps a core.version ABOVE the authority — no upgrade path produces that', () => {
+    // Retained from before #842 and re-reasoned rather than re-pinned: 4.7.2 is
+    // *ahead* of 0.3.0, and core versions only move forward, so this cannot be a
+    // core version the instance moved past. It is somebody's own versioning that
+    // happens to be semver-shaped, and deleting it would destroy their data.
     writeFileSync(join(dir, 'core.version'), '4.7.2\n')
     writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: '0.3.0' }))
     expect(planCoreVersionCleanup(dir)).toEqual({
@@ -221,6 +225,40 @@ describe('planCoreVersionCleanup (#434)', () => {
       found: '4.7.2',
       reason: 'repurposed',
     })
+  })
+
+  it('deletes a core.version BELOW the authority — the #788 fossil (#842)', () => {
+    // The real shape: #788's fossil read 114 minor versions behind the authority
+    // and was treated as authoritative. Before #842 this branch returned
+    // `keep / repurposed`, so both live instances kept theirs indefinitely and
+    // `biffo core upgrade` reported it on every run without resolving it.
+    writeFileSync(join(dir, 'core.version'), '0.68.0\n')
+    writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: '0.182.0' }))
+    expect(planCoreVersionCleanup(dir)).toEqual({
+      path: join(dir, 'core.version'),
+      action: 'delete',
+      found: '0.68.0',
+      stale: true,
+    })
+  })
+
+  it('distinguishes the two deletions, so a log can say which evidence it had', () => {
+    // Equal is provably redundant; behind is provably stale. Same action, different
+    // arguments — collapsing them would hide the riskier one behind the safe one.
+    writeFileSync(join(dir, 'core.version'), '0.3.0\n')
+    writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: '0.3.0' }))
+    expect(planCoreVersionCleanup(dir)?.stale).toBeUndefined()
+    writeFileSync(join(dir, 'core.version'), '0.2.0\n')
+    expect(planCoreVersionCleanup(dir)?.stale).toBe(true)
+  })
+
+  it('keeps a non-semver even when it sorts below nothing — uncomparable is not evidence', () => {
+    // `compareCoreVersions` throws on a non-semver. Swallowing that into "stale"
+    // would delete every repurposed file, which is the broad reading of #842 that
+    // was deliberately not taken.
+    writeFileSync(join(dir, 'core.version'), '2026.07-rc1\n')
+    writeFileSync(join(dir, 'biffo.core.json'), JSON.stringify({ version: '0.182.0' }))
+    expect(planCoreVersionCleanup(dir)).toMatchObject({ action: 'keep', reason: 'repurposed' })
   })
 
   it('keeps a core.version repurposed to a non-semver string', () => {

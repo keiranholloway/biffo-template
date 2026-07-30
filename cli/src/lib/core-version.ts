@@ -317,10 +317,22 @@ export function readDeclinedMigrations(cwd: string): DeclinedMigration[] {
  *     an untouched inherited copy still matches. A value that differs — an
  *     app-release string, or a non-semver — looks repurposed and is kept.
  *
- * The equal-to-authority test means an instance that has upgraded since init
- * (its `biffo.core.json` moved forward while `core.version` did not) keeps the
- * file rather than risk a wrong deletion — the safe direction. Returns null when
- * there is no `core.version` file to consider.
+ * **Changed by #842.** An instance that had upgraded since init — its
+ * `biffo.core.json` moved forward while `core.version` did not — used to keep the
+ * file "rather than risk a wrong deletion". That was the safe direction for the
+ * deletion and the unsafe one for everything else: both live instances sat in
+ * exactly that branch, so the fossil #788 is about survived indefinitely, and
+ * `biffo core upgrade` printed it every time without ever resolving it.
+ *
+ * The test is now directional, because core versions only move forward:
+ *
+ *   - equal to the authority     → delete (provably redundant)
+ *   - **below** the authority    → delete (provably stale; this is #788's case)
+ *   - above the authority        → keep (no upgrade path produces this, so it is
+ *                                  somebody's own semver-shaped versioning)
+ *   - not semver at all          → keep (uncomparable is not evidence)
+ *
+ * Returns null when there is no `core.version` file to consider.
  */
 export type CoreVersionKeepReason = 'repurposed' | 'no-authority'
 
@@ -333,6 +345,16 @@ export interface CoreVersionCleanup {
   found: string
   /** Present only when action === 'keep'. */
   reason?: CoreVersionKeepReason
+  /**
+   * Set when the deletion is of a version the instance has moved PAST, rather
+   * than one equal to the authority (#842).
+   *
+   * Reported separately because the two deletions carry different evidence and a
+   * caller should be able to say which it did: an equal file is provably
+   * redundant, a behind file is provably stale. Collapsing them would make the
+   * riskier deletion indistinguishable from the safe one in the log.
+   */
+  stale?: boolean
 }
 
 export function planCoreVersionCleanup(cwd: string): CoreVersionCleanup | null {
@@ -356,7 +378,41 @@ export function planCoreVersionCleanup(cwd: string): CoreVersionCleanup | null {
   if (authority !== null && coreVersionsEqual(found, authority)) {
     return { path, action: 'delete', found }
   }
+  // A file BEHIND the authority is a provably stale fossil, so delete it (#842).
+  //
+  // Core versions only ever move forward, so a `core.version` lower than
+  // `biffo.core.json` cannot be anything an instance is currently using — it is
+  // the inherited copy that stopped being updated when the authority moved on.
+  // Keeping it is what cost #788: a fossil 114 minor versions behind was read as
+  // authoritative.
+  //
+  // A file AHEAD of the authority is the opposite: no upgrade path could have
+  // produced it, so it is somebody's own versioning that happens to be
+  // semver-shaped — an app release, say — and deleting it would destroy their
+  // data. That case, and any non-semver, still keeps.
+  //
+  // This is the narrow half of #842's ask. Deleting on *any* disagreement was
+  // considered and rejected: it cannot tell a stale core version from a
+  // deliberately repurposed one, and the irreversible direction should need the
+  // stronger evidence.
+  if (authority !== null && isStaleFossil(found, authority)) {
+    return { path, action: 'delete', found, stale: true }
+  }
   return { path, action: 'keep', found, reason: 'repurposed' }
+}
+
+/**
+ * Is `found` a core version this instance has provably moved past?
+ *
+ * Requires `found` to parse as semver — a non-semver cannot be compared, and an
+ * uncomparable value is not evidence of staleness.
+ */
+function isStaleFossil(found: string, authority: string): boolean {
+  try {
+    return compareCoreVersions(found, authority) === -1
+  } catch {
+    return false
+  }
 }
 
 /** Semver-equal, tolerant of a non-semver `a` (a repurposed core.version can be

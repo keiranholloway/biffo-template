@@ -8,7 +8,21 @@ variable "compute_security_group_id" {
 }
 
 variable "app_db_user" {
-  description = "Name of the least-privilege, non-owner Postgres role the Core API's request path connects as (#253). Created and granted by biffo:db-init, not by Terraform. Must match BIFFO_APP_ROLE_NAME on the Lambda; db-init fails loudly if they disagree."
+  # THIS IS THE PER-ENVIRONMENT KNOB. Do not fork this module to get a
+  # per-environment role name (#892).
+  #
+  # It has been a variable since 0.127.0 (#314, 867d58d). An instance nonetheless
+  # forked the module to add `local.app_db_user = "biffo_app_${...environment}"`
+  # and repointed outputs.tf at the local — three divergence declarations for what
+  # one argument at the user-owned call site does:
+  #
+  #   module "database" {
+  #     app_db_user = "biffo_app_${local.environment}"
+  #   }
+  #
+  # The description below says what the role IS; this comment says where to set it,
+  # because the first was evidently not enough to stop the fork.
+  description = "Name of the least-privilege, non-owner Postgres role the Core API's request path connects as (#253). THE per-environment knob — set it at the call site rather than forking this module. Created and granted by biffo:db-init, not by Terraform. Must match BIFFO_APP_ROLE_NAME on the Lambda; db-init fails loudly if they disagree."
   type        = string
   default     = "biffo_app"
 

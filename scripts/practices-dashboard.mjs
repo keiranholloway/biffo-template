@@ -461,6 +461,22 @@ export function renderDashboard(snapshot, sessions = null, definitionBreak = nul
       })
   const bySide = e(7).capabilityBySide ?? {}
 
+  // H4's primary metric (#914): the share of failing CI steps a local gate could
+  // have caught first. The sub-line always carries the denominator and the
+  // unclassified count — a share quoted alone is not auditable, and a rising
+  // `unclassified` is how this metric would silently start flattering itself.
+  const gates = e(7).gates ?? { share: null, failingSteps: 0, locallyCatchable: 0, unclassified: 0, byKind: {} }
+  const topKinds = Object.entries(gates.byKind ?? {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([kind, n]) => `${esc(kind)} ${n}`)
+    .join(' · ')
+  const gatesSub = gates.share === null
+    ? 'no failing steps classified in the window'
+    : `${gates.locallyCatchable} of ${gates.locallyCatchable + gates.notLocallyCatchable} failing steps · H4 target &lt;20% · baseline 66%` +
+      `${gates.unclassified ? ` · <strong>${gates.unclassified} unclassified</strong>` : ''}` +
+      `${topKinds ? `<br />${topKinds}` : ''}`
+
   const tile = (label, value, note, g) => `
     <div class="tile ${g}">
       <div class="label">${esc(label)}</div>
@@ -566,6 +582,13 @@ export function renderDashboard(snapshot, sessions = null, definitionBreak = nul
       fmt(greenPerMerge, ' min'),
       `correct work that could not land · ${fmt(e(7).contentionHours, 'h')} across ${fmt(e(7).merges)} merges · ${esc(baseLabel)} ${fmt(greenPerMergeBaseline, ' min')}`,
       grade(greenPerMerge, { warn: GREEN_WAIT_WARN_MINUTES, crit: GREEN_WAIT_WARN_MINUTES * 2 }),
+    )}
+    ${tile(
+      'Caught second · 7d',
+      fmt(gates.share, '%'),
+      gatesSub,
+      // H4's own numbers: target below 20%, refuted above 40%.
+      grade(gates.share, { warn: 20, crit: 40 }),
     )}
     ${tile(
       'Merges · 24h',

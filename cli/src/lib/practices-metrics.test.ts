@@ -33,6 +33,10 @@ import {
   classifyWork,
   filterToWindow,
   priorWindow,
+  classifyFailingStep,
+  summariseGates,
+  gatesForWindow,
+  aggregateGates,
 } from '../../../scripts/practices-metrics.mjs'
 // @ts-expect-error -- plain .mjs, same arrangement as above.
 import {
@@ -851,6 +855,15 @@ describe('renderDashboard', () => {
           platformShare: 78,
           productShare: 22,
           contentionHours: 9,
+          gates: {
+            repos: 2,
+            failingSteps: 20,
+            locallyCatchable: 12,
+            notLocallyCatchable: 8,
+            unclassified: 0,
+            share: 60,
+            byKind: { test: 9, format: 6, 'dependency-audit': 5 },
+          },
         },
         repos: {},
       },
@@ -897,6 +910,27 @@ describe('renderDashboard', () => {
     expect(html).toContain('78% / 22%') // platform vs product, 7d
     expect(html).toContain('9h') // green-but-unmerged, 7d
     expect(html).toContain('>5<') // merges, 24h
+    expect(html).toContain('60%') // locally-catchable share, 7d (#914)
+    expect(html).toContain('12 of 20 failing steps') // its denominator, always shown
+  })
+
+  it('shows the unclassified count only when it is non-zero, and in bold', () => {
+    // A falling share with a rising unclassified count is the metric going
+    // blind, not an improvement — so it cannot be a number you have to go
+    // looking for. At zero it is noise, hence the asymmetry.
+    expect(renderDashboard(snapshot)).not.toContain('unclassified')
+    const blind = structuredClone(snapshot)
+    blind.windows[7].estate.gates.unclassified = 7
+    expect(renderDashboard(blind)).toContain('<strong>7 unclassified</strong>')
+  })
+
+  it('renders a pre-#914 snapshot without a gates block rather than crashing', () => {
+    // Every snapshot committed before this metric existed looks like this.
+    const old = structuredClone(snapshot)
+    delete old.windows[7].estate.gates
+    const html = renderDashboard(old)
+    expect(html).toContain('no failing steps classified in the window')
+    expect(html).toContain('46%') // the rest of the page still renders
   })
 
   it('grades a tile from its window rather than defaulting to unknown', () => {
@@ -2052,5 +2086,164 @@ describe('class tally is generated, not transcribed', () => {
     expect(() => spliceTally('# no markers\n', 'b', CLASS_BEGIN, CLASS_END)).toThrow(
       /markers not found/,
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// H4/H5 gate metrics (#914)
+//
+// Every step name asserted below is one the estate really produced -- taken from
+// the 154 failing steps across 12 repos in the 7 days to 2026-07-30, not
+// invented. A classifier tested against imagined names would pass while
+// mis-reading production, which is the whole failure mode this metric replaces.
+// ---------------------------------------------------------------------------
+
+describe('classifyFailingStep', () => {
+  it('classifies the checks a local gate could run', () => {
+    for (const [name, kind] of [
+      ['Test', 'test'],
+      ['Format check', 'format'],
+      ['Type check', 'typecheck'],
+      ['Lint', 'lint'],
+      ['RLS-dependent tests', 'rls-test'],
+      ['Core ownership guard', 'ownership'],
+      ['Practices corpus is append-only', 'corpus-guard'],
+      ['Validate modules', 'terraform-validate'],
+      ['SAST (Bandit)', 'sast'],
+      ['gitleaks git history scan', 'gitleaks'],
+      ['Destructive-plan guard', 'destructive-plan'],
+      ['Plugin Terraform guard', 'plugin-terraform'],
+    ] as const) {
+      expect(classifyFailingStep(name), name).toEqual({ kind, catchable: true })
+    }
+  })
+
+  it('classifies what no local check could have caught', () => {
+    for (const [name, kind] of [
+      ['Publish', 'publish'],
+      ['Sync and audit core-v<version>', 'publish'],
+      ['Dependency audit', 'dependency-audit'],
+      ['Set up Python', 'setup'],
+      // Deterministic and offline, but minutes not seconds — fails the third
+      // limb of H4's criterion, and excluded by name in local-gates.md.
+      ['Build portal', 'build'],
+      ['Apply the tabsii schema', 'deploy'],
+      ['Build and deploy plugin frontends', 'deploy'],
+      ['Run terraform apply -input=false -auto-approve', 'deploy'],
+      ['Run sh scripts/biffo.sh check release-subject', 'release-subject'],
+    ] as const) {
+      expect(classifyFailingStep(name), name).toEqual({ kind, catchable: false })
+    }
+  })
+
+  it('reads an unnamed step, which arrives as "Run <command>"', () => {
+    expect(classifyFailingStep('Run pnpm run test')).toEqual({ kind: 'test', catchable: true })
+    expect(classifyFailingStep('Run terraform -chdir=terraform fmt -check -recursive')).toEqual({
+      kind: 'terraform-fmt',
+      catchable: true,
+    })
+  })
+
+  it('does not let a generic word outrank the specific step it appears in', () => {
+    // Each of these matches an earlier-or-later pattern it must not be assigned
+    // to. Order in STEP_KINDS is load-bearing; this is the test that fails if it
+    // gets reordered.
+    expect(classifyFailingStep('Build and deploy plugin frontends').kind).toBe('deploy')
+    expect(classifyFailingStep('Sync and audit core-v<version>').kind).toBe('publish')
+    expect(classifyFailingStep('RLS-dependent tests').kind).toBe('rls-test')
+    // "Build portal" contains neither, but plain `build` must not fall through
+    // to the generic `test`/`lint` patterns either.
+    expect(classifyFailingStep('Build portal').kind).toBe('build')
+  })
+
+  it('returns null -- not false -- for a step it has never seen', () => {
+    // A default of `false` would improve the headline every time CI grew a step
+    // this file does not know, i.e. the metric would get better by going blind.
+    expect(classifyFailingStep('Summon a badger')).toEqual({
+      kind: 'unclassified',
+      catchable: null,
+    })
+  })
+})
+
+describe('summariseGates', () => {
+  it('computes the share over classified steps only', () => {
+    const result = summariseGates([
+      { name: 'Test' },
+      { name: 'Lint' },
+      { name: 'Format check' },
+      { name: 'Publish' },
+      { name: 'Summon a badger' },
+    ])
+    expect(result.failingSteps).toBe(5)
+    expect(result.locallyCatchable).toBe(3)
+    expect(result.notLocallyCatchable).toBe(1)
+    expect(result.unclassified).toBe(1)
+    // 3 of 4 classified -- the unclassified step is in neither side of the ratio.
+    expect(result.share).toBe(75)
+  })
+
+  it('breaks the headline down by kind so it can be argued with', () => {
+    const result = summariseGates([{ name: 'Test' }, { name: 'Test' }, { name: 'Lint' }])
+    expect(result.byKind).toEqual({ test: 2, lint: 1 })
+  })
+
+  it('returns a null share for no steps, not a clean 0%', () => {
+    const result = summariseGates([])
+    expect(result.failingSteps).toBe(0)
+    expect(result.share).toBeNull()
+  })
+})
+
+describe('gatesForWindow', () => {
+  const steps = {
+    coveredSince: '2026-07-16T00:00:00.000Z',
+    failing: [{ name: 'Test', at: Date.parse('2026-07-20T00:00:00Z') }],
+  }
+
+  it('measures a window inside the fetch', () => {
+    expect(gatesForWindow(steps, '2026-07-23T00:00:00.000Z').share).toBe(100)
+  })
+
+  it('refuses a window that reaches back further than the fetch', () => {
+    // The 90d window over a 14d jobs fetch. Reporting the fortnight's share as
+    // the quarter's would be a partial masquerading as a whole.
+    const result = gatesForWindow(steps, '2026-05-01T00:00:00.000Z')
+    expect(result.error).toBe('unmeasured')
+    expect(result.coveredSince).toBe(steps.coveredSince)
+    expect(result.share).toBeUndefined()
+  })
+
+  it('reports unmeasured when no jobs were fetched at all', () => {
+    expect(gatesForWindow(null, '2026-07-23T00:00:00.000Z').error).toBe('unmeasured')
+  })
+})
+
+describe('aggregateGates', () => {
+  it('recomputes the share from summed counts, not by averaging percentages', () => {
+    const repos = {
+      big: { gates: summariseGates(Array.from({ length: 80 }, () => ({ name: 'Test' }))) },
+      small: { gates: summariseGates([{ name: 'Publish' }]) },
+    }
+    const result = aggregateGates(repos)
+    expect(result.repos).toBe(2)
+    expect(result.failingSteps).toBe(81)
+    // Averaging the two repo shares would give 50%. Weighting by steps is 98.8%.
+    expect(result.share).toBe(98.8)
+  })
+
+  it('excludes an unmeasured repo rather than letting it contribute a zero', () => {
+    const repos = {
+      measured: { gates: summariseGates([{ name: 'Test' }]) },
+      blind: { gates: { error: 'unmeasured' } },
+      broken: { error: 'unmeasured' },
+    }
+    const result = aggregateGates(repos)
+    expect(result.repos).toBe(1)
+    expect(result.share).toBe(100)
+  })
+
+  it('reports a null share when nothing was measured', () => {
+    expect(aggregateGates({ blind: { gates: { error: 'unmeasured' } } }).share).toBeNull()
   })
 })

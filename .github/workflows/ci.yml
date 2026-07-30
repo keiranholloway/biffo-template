@@ -248,7 +248,13 @@ jobs:
       - name: Test
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         # Exit code 5 = no tests collected — valid for the template repo before tests are added
-        run: uv run pytest --cov --cov-report=xml || [ $? -eq 5 ]
+        run: uv run pytest --cov --cov-report=xml --cov-report=json || [ $? -eq 5 ]
+      - name: Error-branch coverage
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        # Fails only when error handling is ADDED with nothing exercising it
+        # (#956). An unexecuted `except` is unverified, and that is where every
+        # fail-open this estate has found actually lived.
+        run: uv run python scripts/error_branch_coverage.py --check
       - name: Coverage upload
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         uses: codecov/codecov-action@v5

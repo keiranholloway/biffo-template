@@ -152,7 +152,15 @@ diff_files() {
   # right after their sync PRs merged. The question is "is this repository
   # current", not "is my laptop current", and a drift detector that fires on a
   # stale checkout is one you learn to ignore.
-  git -C "$d" fetch origin --quiet 2>/dev/null
+  # --prune, or a merged sync PR breaks this repo's sync permanently (#943).
+  # GitHub deletes chore/sync-shared when the PR merges; a plain fetch leaves the
+  # local refs/remotes/origin/chore/sync-shared behind, and --force-with-lease
+  # below then compares against a ref the remote no longer has and refuses with
+  # "stale info". Measured on biffo-runners and tabsii-data-model-design today:
+  # both had a tracking ref for a branch that was gone, and both failed every run
+  # until pruned. Success was self-limiting -- the first merge poisoned the next
+  # sync.
+  git -C "$d" fetch origin --prune --quiet 2>/dev/null
   # `dev` first, per AGENTS.md section 2: it is the integration branch in every
   # Biffo repo. origin/HEAD is NOT a substitute -- it points at `main` in
   # several clones, and `main` is a stale release branch that legitimately does
@@ -198,7 +206,8 @@ stage_repo() {
   label="$2"
   base="$3"
 
-  git -C "$d" fetch origin --quiet || return 1
+  # --prune for the same reason as the drift check above (#943).
+  git -C "$d" fetch origin --prune --quiet || return 1
   wt="$d/.worktrees/shared-sync"
   git -C "$d" worktree remove --force "$wt" 2>/dev/null
   # `branch -D` reports on STDOUT, so a quiet run printed "Deleted branch
@@ -339,11 +348,26 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>" >/dev/null 2>&1
   push_out=$(git -C "$wt" push --force-with-lease -u origin HEAD 2>&1)
   push_rc=$?
   if [ "$push_rc" -ne 0 ]; then
+    # ORDER IS LOAD-BEARING, and the previous order named the wrong cause (#943).
+    #
+    # git's own rejection reason is a statement about why the push failed; hook
+    # output is only evidence about the hook. So the git-level rejections are
+    # matched FIRST.
+    #
+    # "verify ran NOTHING" used to be matched before them — and `verify.sh` prints
+    # that line and exits 0 in a repo with no CI, so it appears in the output of
+    # every NO-CI push whether it succeeded or not. Any failure in such a repo was
+    # therefore reported as "GATE REFUSED THE PUSH". Today that sent two repos'
+    # diagnosis to a gate that had exited 0, while the real cause — a stale lease —
+    # went unnamed. This is the second time this classifier has named the wrong
+    # cause; the comment above it records the first.
     case "$push_out" in
+      *"stale info"*)
+        printf '%-26s \033[31mstale lease\033[0m - run `git fetch --prune` in that clone\n' "$label" ;;
+      *"non-fast-forward"*|*"fetch first"*)
+        printf '%-26s \033[31mbranch diverged\033[0m - someone else pushed to chore/sync-shared\n' "$label" ;;
       *"verify failed"*|*"verify ran NOTHING"*)
         printf '%-26s \033[31mGATE REFUSED THE PUSH\033[0m - run scripts/verify.sh there\n' "$label" ;;
-      *"stale info"*|*"non-fast-forward"*)
-        printf '%-26s \033[31mbranch diverged\033[0m - someone else pushed to chore/sync-shared\n' "$label" ;;
       *)
         printf '%-26s \033[31mpush failed\033[0m: %s\n' "$label" "$(echo "$push_out" | tail -1)" ;;
     esac

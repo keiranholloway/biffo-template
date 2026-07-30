@@ -49,6 +49,9 @@ override.tf.json
 .terraformrc
 terraform.rc
 tfplan
+tfplan*
+*.tfplan
+plan.out
 
 # Biffo local project store — persisted by biffo init, read by biffo deploy
 .biffo/

@@ -34,6 +34,51 @@ if [ -z "${GIT_SSH_COMMAND:-}" ]; then
   export GIT_SSH_COMMAND="$_ssh -o IdentitiesOnly=yes -o BatchMode=yes"
 fi
 
+# cron has no unlocked keyring either, and that is the *same class* of bug as the
+# ssh-agent one above — a credential that exists only inside a desktop session.
+#
+# `gh auth login` stores its token in the GNOME keyring when one is available;
+# `~/.config/gh/hosts.yml` then carries no `oauth_token` at all. Cron has no
+# session D-Bus to reach the keyring through, so every `gh api graphql` call
+# returns `HTTP 401: Requires authentication`.
+#
+# This is not hypothetical: on 2026-07-30 all fifteen repos 401'd, the collector
+# wrote a snapshot in which every repo was `unmeasured` and `estate.merges` was
+# 0, and the dashboard was never re-rendered — so the bookmarked page silently
+# showed the previous day. It had worked 24 hours earlier, which is exactly what a
+# session-dependent credential looks like.
+#
+# GH_TOKEN takes precedence over the keyring, so a 0600 file is enough. Kept out
+# of the repo and out of `hosts.yml`; set PRACTICES_GH_TOKEN_FILE to override.
+if [ -z "${GH_TOKEN:-}" ] && [ -z "${GITHUB_TOKEN:-}" ]; then
+  _tokfile="${PRACTICES_GH_TOKEN_FILE:-$HOME/.config/biffo/gh-token}"
+  if [ -r "$_tokfile" ]; then
+    GH_TOKEN=$(tr -d '[:space:]' < "$_tokfile")
+    export GH_TOKEN
+  fi
+fi
+
+# Preflight, and it must be fatal.
+#
+# Every metric here degrades gracefully by design: a repo that cannot be read is
+# recorded as `unmeasured` and excluded from the aggregates rather than
+# contributing a zero. That is right for one repo and wrong for all of them —
+# "nothing could be measured" is not a data point, it is a broken job, and the
+# 2026-07-30 run proved that the graceful path will happily produce a
+# publishable-looking file containing no data.
+#
+# So: fail here, loudly, before anything is written. A cron job that dies with a
+# reason in the log is recoverable; one that writes an empty snapshot over a good
+# one is how a series quietly acquires a hole.
+if ! _whoami=$(gh api user -q .login 2>&1); then
+  echo "practices-daily: FATAL — gh cannot authenticate, so nothing can be collected." >&2
+  echo "practices-daily: $_whoami" >&2
+  echo "practices-daily: cron has no keyring; put a token in ${PRACTICES_GH_TOKEN_FILE:-$HOME/.config/biffo/gh-token}" >&2
+  echo "practices-daily:   install -d -m 700 ~/.config/biffo && umask 077 && gh auth token > ~/.config/biffo/gh-token" >&2
+  exit 1
+fi
+echo "practices-daily: authenticated to GitHub as $_whoami"
+
 REPO="${PRACTICES_REPO:-/home/keiran/code/biffo-template}"
 BRANCH="chore/practices-snapshots"
 DATA_DIR="docs/practices/data"

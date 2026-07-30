@@ -215,8 +215,15 @@ pytest_is_fast() {
 #
 # With no ci.yml there is nothing to mirror, so everything applicable runs:
 # best-effort beats silence in a repo that has no pipeline to disagree with.
+# NO_CI is set once, up front, so the two states this predicate conflates stay
+# distinguishable to the reader even though it answers the same for both (#942).
+# "Yes, CI runs this" and "there is no CI to ask" are not the same claim, and a
+# repo that LOST its ci.yml must not read as maximally covered. The summary
+# below says which one produced the run.
+[ -f .github/workflows/ci.yml ] || NO_CI=1
+
 ci_has() {
-  [ -f .github/workflows/ci.yml ] || return 0
+  [ -n "${NO_CI:-}" ] && return 0
   grep -qE "$1" .github/workflows/ci.yml
 }
 
@@ -533,4 +540,7 @@ if [ -z "$PASSED" ]; then
 fi
 printf '\033[32mverify passed\033[0m -%s\n' "$PASSED"
 [ -n "$SKIPPED" ] && printf '\033[90mnot applicable here:%s\033[0m\n' "$SKIPPED"
+# Say which question was answered. Without this, a repo whose ci.yml was deleted
+# prints exactly what a fully-mirrored repo prints (#942).
+[ -n "${NO_CI:-}" ] && printf '\033[33mno ci.yml - nothing to mirror, so every applicable check ran as\nbest-effort. This is NOT evidence that CI requires them. If this repo is\nmeant to have CI, its workflow is missing.\033[0m\n'
 printf '\n'

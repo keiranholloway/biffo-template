@@ -39,6 +39,33 @@ def client() -> TestClient:
     return TestClient(app)
 
 
+def _bake(version: str) -> None:
+    """Write the generated module as packaging would, and defeat the bytecode cache.
+
+    Clearing `sys.modules` is not enough, and finding that out was instructive: two
+    of these tests wrote `CORE_VERSION = "9.9.9"` and `CORE_VERSION = "1.2.3"` —
+    **identical byte length** — within the same second. Python validates a cached
+    `.pyc` on (mtime, size), both matched, so the stale bytecode was reused and the
+    second test read the first's value.
+
+    That is the same timestamp-invalidation trap #724 is about: zip/unzip rewrites
+    mtimes, which is why precompiling a Lambda package needs
+    `--invalidation-mode unchecked-hash`. Here the fix is simply to delete the
+    cached bytecode along with the module.
+    """
+    GENERATED.write_text(f'CORE_VERSION = "{version}"\n')
+    sys.modules.pop("api._core_version", None)
+    for stale in (GENERATED.parent / "__pycache__").glob("_core_version.*"):
+        stale.unlink()
+
+
+def _unbake() -> None:
+    GENERATED.unlink(missing_ok=True)
+    sys.modules.pop("api._core_version", None)
+    for stale in (GENERATED.parent / "__pycache__").glob("_core_version.*"):
+        stale.unlink()
+
+
 def test_a_checkout_reports_unknown_rather_than_raising():
     """No generated module in a working tree, and that is not a failure.
 
@@ -70,43 +97,87 @@ def test_health_reports_the_baked_version_when_one_is_packaged(client: TestClien
     removes it. Without this the suite only ever proves the `unknown` path — which
     is the half that already worked.
     """
-    GENERATED.write_text('CORE_VERSION = "9.9.9"\n')
+    _bake("9.9.9")
     try:
-        # `core_version()` imports lazily, so a fresh call picks the new module up;
-        # drop any negative cache from the earlier ImportError.
-        sys.modules.pop("api._core_version", None)
         assert core_version() == "9.9.9"
         assert client.get("/api/v1/health").json()["version"] == "9.9.9"
     finally:
-        GENERATED.unlink()
-        sys.modules.pop("api._core_version", None)
+        _unbake()
 
 
-def test_the_resolver_agrees_with_what_would_be_baked():
-    """The script and the runtime must not disagree about the same checkout.
+def test_the_resolver_and_the_runtime_agree(tmp_path: Path):
+    """The script and the runtime must mean the same thing about the same checkout.
 
-    Two halves written at different times, in different languages, that only work
-    if they mean the same thing. Asserting the script's output alone would prove
-    nothing about what `/health` reports.
+    Two halves written at different times in different languages, that only work if
+    they agree. Asserting the script's output alone would prove nothing about what
+    `/health` reports.
+
+    Hermetic on purpose. The first version of this test ran the resolver against
+    whatever checkout it happened to land in and asserted exit 0 — which **failed in
+    CI**, because `ci.yml`'s Python job fetches no tags, so the template's `core-v*`
+    path had nothing to read. That was environment coupling in the test, not a bug
+    in the resolver: the resolver failing loudly with no version available is
+    exactly its designed behaviour.
+
+    (Worth noting: `ci.yml` already carries a comment about that trap and three of
+    its four jobs set `fetch-tags`/`fetch-depth: 0`. The test job does not. Left
+    alone here — this test no longer needs tags, and widening the fix is a separate
+    change.)
+
+    So the agreement is exercised through the `biffo.core.json` path, which needs no
+    git state at all.
     """
-    # Absolute /bin/sh: ruff's S607 objects to a partial executable path, and it
-    # has a point — a bare "sh" resolves against PATH, which a test should not
-    # depend on.
+    (tmp_path / "biffo.core.json").write_text('{"version": "1.2.3"}\n')
     result = subprocess.run(  # noqa: S603
         ["/bin/sh", str(REPO_ROOT / "scripts" / "resolve-core-version.sh"), "--quiet"],
         capture_output=True,
         text=True,
-        cwd=REPO_ROOT,
+        cwd=tmp_path,
         check=False,
     )
-    assert result.returncode == 0, f"resolver failed in this checkout: {result.stderr}"
+    assert result.returncode == 0, f"resolver failed on an instance fixture: {result.stderr}"
     resolved = result.stdout.strip()
-    assert resolved, "resolver exited 0 but emitted nothing"
+    assert resolved == "1.2.3", "resolver must read biffo.core.json, the ADR-0006 authority"
 
-    GENERATED.write_text(f'CORE_VERSION = "{resolved}"\n')
+    # And the runtime reads back exactly what the resolver would have baked.
+    _bake(resolved)
     try:
-        sys.modules.pop("api._core_version", None)
         assert core_version() == resolved
     finally:
-        GENERATED.unlink()
-        sys.modules.pop("api._core_version", None)
+        _unbake()
+
+
+def test_the_resolver_refuses_a_checkout_with_no_version_source(tmp_path: Path):
+    """No authority and no tags must exit non-zero, not emit something plausible.
+
+    This is the property that makes build-time resolution worth anything: a
+    deployment that cannot say what version it is should fail the build, not ship
+    and report `unknown`. It is also the case CI accidentally exercised.
+    """
+    result = subprocess.run(  # noqa: S603
+        ["/bin/sh", str(REPO_ROOT / "scripts" / "resolve-core-version.sh"), "--quiet"],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert not result.stdout.strip(), "must emit no version when it cannot determine one"
+
+
+def test_the_resolver_refuses_a_garbled_authority(tmp_path: Path):
+    """A malformed biffo.core.json fails rather than falling back to a tag.
+
+    #811 records what falling back cost: a garbled record resolved to a
+    114-version-old fossil and was read as authoritative.
+    """
+    (tmp_path / "biffo.core.json").write_text('{"nope": true}\n')
+    result = subprocess.run(  # noqa: S603
+        ["/bin/sh", str(REPO_ROOT / "scripts" / "resolve-core-version.sh"), "--quiet"],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert not result.stdout.strip()

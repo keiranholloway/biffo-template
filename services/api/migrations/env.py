@@ -28,6 +28,23 @@ def run_migrations_offline() -> None:
 async def run_migrations_online() -> None:
     # Keep bound values out of StatementError tracebacks here too (#85):
     # a failing migration is exactly when the output gets read and pasted.
+    # NO `connect_args` here, and that is load-bearing rather than an omission
+    # (#764).
+    #
+    # `api/database.py` gives the *application* engine
+    # `connect_args=_connect_args_for(settings.db_search_path)`, so every app
+    # connection carries the instance's search path (#458, ADR-0005). Alembic's
+    # engine deliberately does not, so migrations run on the default search path.
+    #
+    # Migration 0010's `_has_core_users_table()` depends on exactly that. It calls
+    # an unqualified `sa.inspect(...).has_table("users")`, and it is *correct* only
+    # because that resolves against the default path: an instance whose users live
+    # in another schema — tabsii's `tabsii.users` — reads False, which is the right
+    # answer, because those are not Core's to alter.
+    #
+    # Add a search path here and that guard silently starts finding a table it must
+    # not touch, and a migration would `batch_alter_table` an instance's own users
+    # table. Guarded by `test_alembic_engine_carries_no_search_path`.
     engine = create_async_engine(settings.database_url, hide_parameters=True)
     async with engine.connect() as connection:
         await connection.run_sync(

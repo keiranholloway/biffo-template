@@ -444,6 +444,58 @@ if [ -f scripts/practices-monotonic.mjs ]; then
   ci_has "practices-monotonic" && run_check corpus-append-only node scripts/practices-monotonic.mjs
 fi
 
+# Terraform plan artefacts, refused by CONTENT (biffo-runners#1).
+#
+# A saved plan is a zip. `strings`/`grep` over it is a false-negative machine —
+# a pre-commit check on `terraform/tfplan2` reported it clean and it carried a
+# live private key. gitleaks cannot see inside it either, so the working-tree
+# pass below is no protection: the bytes are compressed.
+#
+# So the answer is not a better scanner, it is refusing to track the artefact at
+# all. Name-based ignoring already failed: `.gitignore` carried `tfplan`, and the
+# file that nearly leaked was `tfplan2`.
+#
+# Detection is content-first: a zip magic (`PK\003\004`) whose central
+# directory names a `tfplan` member. Filenames are stored uncompressed in a zip,
+# so this needs no `unzip` and works on any machine.
+# Skipped for --list, which must answer a question about the repo without doing
+# work. Measured 4.2s over 907 tracked files before this gate existed, which
+# timed out three parity tests that only wanted the check NAMES.
+#
+# Candidates are narrowed by extension FIRST, then detected by content. The
+# narrowing is not a weakening: the files it skips are text, and text is exactly
+# what gitleaks can already scan. The whole reason a plan needs its own guard is
+# that its bytes are compressed and no scanner can read them.
+#
+# `read -r -d ""` is a bashism and this file runs under `sh`. Using it here made
+# the loop error and the guard report nothing — a fail-open inside the guard
+# written to close one. It passed `sh -n`, because the syntax is valid; only
+# running it revealed the failure.
+plan_artefacts=""
+if [ -z "$LIST" ]; then
+  plan_artefacts=$(
+    git ls-files | while IFS= read -r f; do
+      case "$f" in
+        *.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs|*.py|*.md|*.json|*.yml|*.yaml|*.tf|\
+        *.tfvars|*.sh|*.toml|*.txt|*.css|*.html|*.svg|*.lock|*.snap|*.sql) continue ;;
+      esac
+      [ -f "$f" ] || continue
+      case $(head -c 4 "$f" 2>/dev/null | od -An -c 2>/dev/null | tr -d " ") in
+        # -a because the file is binary and grep would otherwise decline to report.
+        PK003004) LC_ALL=C grep -aq tfplan "$f" 2>/dev/null && printf "%s\n" "$f" ;;
+      esac
+    done
+  )
+fi
+if [ -n "$plan_artefacts" ]; then
+  printf "\033[31mFAIL\033[0m terraform plan artefact is tracked:\n"
+  printf "  %s\n" $plan_artefacts
+  printf "A saved plan is a zip and routinely contains credentials. It cannot be\n"
+  printf "scanned by gitleaks or by grep. Remove it from the index:\n"
+  printf "  git rm --cached <file>\n\n"
+  exit 1
+fi
+
 # gitleaks, WORKING-TREE pass only (#897). `--no-git` is what CI's second pass
 # runs, and it is the half a pre-push gate can meaningfully do.
 #

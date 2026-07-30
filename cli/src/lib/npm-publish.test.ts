@@ -47,6 +47,19 @@ npm error code E401
 npm error 401 Unauthorized - PUT https://registry.npmjs.org/@biffo%2fcli
 `
 
+/**
+ * The trap from #664, as npm actually reports it. A 404 on PUT is the registry
+ * declining to say whether a private package exists — it means "not allowed",
+ * not "no such package". Before #697 this classified as `unknown` and collected
+ * "re-dispatch this workflow", which is the loop that burned three versions.
+ */
+const E404_ON_PUT = `
+npm error code E404
+npm error 404 Not Found - PUT https://registry.npmjs.org/@biffo%2fcli - Not found
+npm error 404
+npm error 404  '@biffo/cli@11.5.1' is not in this registry.
+`
+
 const REGISTRY_DOWN = `
 npm error code E500
 npm error 500 Internal Server Error - PUT https://registry.npmjs.org/@biffo%2fcli
@@ -206,6 +219,24 @@ describe('describePublishFailure', () => {
       expect(report.summary).toContain('will not help')
       expect(report.summary).toContain('404')
       expect(report.summary).toContain('11.5.1')
+    })
+
+    it('classifies a real E404-on-PUT as auth, not unknown (#697)', () => {
+      // The test above asserts the PROSE names the 404 trap, but feeds it an
+      // ENEEDAUTH log — so it passed for two years' worth of commits while the
+      // classifier had no E404 entry at all and a genuine E404 fell to `unknown`.
+      // This is the missing half: the same trap, driven by the log that triggers it.
+      expect(classifyPublishFailure(E404_ON_PUT)).toBe('auth')
+    })
+
+    it('does NOT tell you to re-dispatch on an E404 — that is the #664 loop', () => {
+      const report = describePublishFailure(attempt({ log: E404_ON_PUT }))
+      expect(report.kind).toBe('auth')
+      // The `unknown` branch's advice is "re-dispatch this workflow", and following
+      // it on an auth failure burns a version number per attempt. Assert the
+      // absence, because the cost of this bug was acting on wrong advice.
+      expect(report.annotations.join(' ')).not.toContain('re-dispatch this workflow')
+      expect(report.summary).toContain('will not help')
     })
   })
 

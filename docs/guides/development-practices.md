@@ -231,6 +231,14 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **A hand-written test double returned the shape the code *emits* instead of the shape it *receives*, so 17 tests pinned a contract that did not exist.** `FakeCore.get` returned `{"items": [...]}` for `/api/v1/data/lead_source_costs`; the core's generic-CRUD list returns a **bare array**. The proxy route was declared `-> dict`, so FastAPI's *response* validation rejected the real payload and every load of the Analytics panel 500'd — while the Python suite, the JS suite, Playwright E2E and CI in two repos were all green. `CoreApiClient.get` is annotated `-> dict` but returns whatever `.json()` produced, so the annotation actively pointed the wrong way, and `rollups.py` **three files away** already had the correct `cast(list[dict], …)` + wrap. The panel's six calls run under `Promise.all`, so one rejection blanked all five other reports and the banner named none of them. Condition: **a double whose shape is written from the author's expectation rather than from the real service teaches the test the author's error** — the fixture encoded the exact assumption it existed to check | **fail-open** · drift | tabsii-crm (deployed page, first click-through) | tabsii-crm [#124](https://github.com/tabsii-com/tabsii-crm/pull/124) | **fixed** — the fake now returns a bare array and is typed `dict \| list`; three tests fail against the old route |
 | — | **CSS class names are strings, so a panel written against classes that do not exist passes every gate and renders as bare HTML.** `AnalyticsPanel.tsx` used `.card`, `.data-table`, `.filter-bar`, `.error-text`, `.stat-row` — none of which exist in `tabsii-crm`, whose convention is a prefixed block per feature in `globals.css` (`.ov-*`, `.access-*`, `.discovery-*`) — and shipped with **no CSS of its own**. eslint, `tsc`, 164 unit tests, Playwright and a production build were all green, because nothing that runs locally resolves a class name against a stylesheet. The visible result was an unstyled page whose speed stat read `Median time to first contact0m5 of 17 leads contacted`. Same family as the Vite `base` row above — a string that only means something in a browser | **visibility** | tabsii-crm (deployed page) | tabsii-crm [#125](https://github.com/tabsii-com/tabsii-crm/pull/125) | **fixed** — `.analytics-*` block on the existing precedent. **The general case is open**: nothing warns that a className matches no rule in the bundle |
 | — | **A repo hardened a gate for itself and went on shipping the unhardened version into every repo it generates, for as long as the hardening existed.** Both `_skeletons/*/.github/workflows/ci.yml` ran `pnpm audit --audit-level=high` and `uv run pip-audit` inline — the exact commands [#591](https://github.com/keiranholloway/biffo-template/issues/591) was filed about — while this repo's own CI had called the hardened wrappers since #592, and #636/#717/#721 kept improving them. Six siblings and two plugin repos were born reddening a required check on any npm/PyPI blip. **The distribution channel is the actual finding.** #743 proposed moving the audits into `biffo check` on the grounds that copying them into every satellite "drifts with nothing to detect it" — correct when it was written, and no longer true: `shared-files.json` + `scripts/shared-sync.sh` landed the same week, so a verbatim copy *plus* a drift check is now the cheaper answer and needs no npm round-trip in CI. The issue also says neither skeleton has a `scripts/` directory; both had one by the time it was read. **A design argument decays as fast as the constraint it rests on** — re-derive the option table before implementing an issue's recommendation | **drift** | biffo-template `_skeletons/` | biffo-template `_skeletons/`, `scripts/`, `shared-files.json` | **fixed** ([#743](https://github.com/keiranholloway/biffo-template/issues/743)) — plus a `hardened-dependency-audit` skeleton rule and a shared-files↔skeleton parity test, both watched failing first. cost ~1h 20m |
+| [tabsii-platform#335](https://github.com/tabsii-com/tabsii-platform/pull/335) | **An RLS policy that passes `NULL` for a scope argument structurally excludes every scoped role, and holding the permission is irrelevant.** `media_assets_create` is `fn_authorized('media_assets.create', tenant_id, NULL, …)`; in `fn_authorized` every branch but the tenant-wide one is guarded by `p_<x>_id IS NOT NULL`, so a NULL-brand call can only match a **tenant-wide** assignment. `Brand HQ` is `scope_level = 'brand'`, so it holds `media_assets.create` and is denied anyway. The FDD publish endpoint would have 403'd for the exact role the feature exists for — Brand HQ manages a brand's disclosure documents — while working perfectly for an HQ Admin. No SQLite test can see it (SQLite runs no RLS), and a brand-scoped reviewer clicking through would not either | **drift** | tabsii-platform `domains/tabsii/fdd_admin.py` | same — the subordinate write moved to the master session, with the reason recorded | **fixed** — pinned in the real-Postgres lane: a brand-scoped `media_assets` insert is refused, the same role's `fdds` insert succeeds |
+| [tabsii-platform#347](https://github.com/tabsii-com/tabsii-platform/issues/347) | **`audit_logs` is write-only: the permission is granted, the RLS policy exists, and nothing in the product can read it.** `audit_logs.read` is hand-curated into role grants in modules 019/025/027/032 and module 011 declares a SELECT policy for it — but there is no ORM model, no generic-CRUD registration and no bespoke route anywhere. `break_glass` records privileged role grants and the FDD feature records compliance events into a table reachable only by direct database access. Surfaced when the acknowledgement audit row **could not be confirmed** during dev verification and had to be recorded as unverified. Second-order: `audit_logs_read` also passes a NULL brand — the same shape as the row above — so a Brand HQ user holds `audit_logs.read` and would still read zero rows even once a route exists | **visibility** | tabsii-platform (dev verification) | tabsii-platform `domains/tabsii/` | **open** — needs a decision on *who* may read the trail before a route is worth writing |
+| [tabsii-platform#343](https://github.com/tabsii-com/tabsii-platform/pull/343) | **Generic CRUD accepts a query-parameter filter over HTTP and silently ignores it, so a filtered-looking list returns everything the caller may see.** `crud_handlers.make_list_handler` takes only the tenant dependency, the caller and the session, and builds `select(model).where(model.tenant_id == tenant_id)` — no query-param filtering exists. The CRM's FDD version list was pointed at `/api/v1/data/fdds?brand_id=<id>`; a brand-scoped role is saved by the row policy, but a **tenant-wide HQ Admin would have seen every brand's disclosure documents inside one brand's panel**. 200, plausible data, wrong answer. Neither the sibling's router test (which pins the forwarded *path*) nor its Playwright E2E (whose fixture server *does* filter) could observe it | **fail-open** | tabsii-crm `routers/fdds.py` | tabsii-platform — a brand-scoped domain route | **fixed** — two brands seeded in one tenant; dropping the predicate fails with `assert 3 == 2` |
+| [tabsii-platform#342](https://github.com/tabsii-com/tabsii-platform/pull/342) | **`CAST(:x AS jsonb)` silently mangles JSON into the string `"0"` on SQLite, and every `audit_logs` write in the codebase uses that exact pattern.** `jsonb` matches none of SQLite's affinity keywords, so it falls to NUMERIC affinity and CAST-ing JSON text to NUMERIC yields `"0"` with no error. Correct on Postgres, which is why it shipped. **No prior test had ever read `new_value` back**, so the pattern propagated from `break_glass.py` through `fdd_admin.py` to `public_disclosure.py` before an assertion on stored content finally caught it | **visibility** | tabsii-platform `domains/tabsii/tests/` | same — rewrite-before-execute, scoped to the SQLite lane only | **fixed** — production SQL unchanged and correct |
+| [tabsii-crm#136](https://github.com/tabsii-com/tabsii-crm/pull/136) | **A date-only string parsed by a datetime parser renders the previous day west of UTC — on a legally meaningful date.** `earliest_signing_date` is a bare `YYYY-MM-DD` (the FTC cooling-off date); `new Date('2026-02-14').toLocaleDateString()` parses it as UTC midnight and shows `2/13/2026` in `America/Los_Angeles`. Every *other* field in the same response is a full ISO datetime, which is exactly what made uniform treatment look correct. Caught only because the server-side agent flagged the type difference and it was relayed before the sibling shipped | **drift** | tabsii-crm `components/LeadDrawer.tsx` | same | **fixed** — regression test pinned to `TZ=America/Los_Angeles` |
+| [biffo-template#903](https://github.com/keiranholloway/biffo-template/issues/903) | **Merged, CI green and Terraform applied still leaves a feature that does not exist at runtime, and every signal says success.** After the FDD acknowledgement milestone merged, its two `authorization_type = NONE` routes were present in API Gateway (infra deploy ran) while the Lambda still served pre-merge code (app deploy queued). `GET` returned FastAPI's default `{"detail":"Not Found"}` rather than the handler's own constant. The distinction was visible **only** by comparing the 404 *message* against a pre-existing public route's handler message — status code, route listing and workflow conclusions were all consistent with a working feature. There is no signal anywhere that a deploy for a given commit has landed, so verification had to poll the deployed endpoint itself | **visibility** | tabsii-platform (dev verification) | biffo-template `.github/workflows/` | **open** |
+| [biffo-template#903](https://github.com/keiranholloway/biffo-template/issues/903) | **Cross-repo deploy ordering is prose in a PR body, so a sibling shipped ahead of the core API it depends on and showed users an error.** The CRM's FDD panel calls two new core endpoints; the dependency was written into the sibling PR's description and auto-merge armed on both. The sibling's CI finished first, merged first and deployed first while the core PR sat queued behind the runner fleet — producing a live panel that errored for every user who clicked it. Each repo's CI is independent and `--auto` merges as soon as *that* repo's checks pass; nothing reads the constraint | **process** | tabsii-crm (dev deploy) | biffo-template `.github/workflows/` | **open** |
+| [tabsii-crm#137](https://github.com/tabsii-com/tabsii-crm/issues/137) | **Upstream API errors reach the UI as double-encoded JSON, because the proxy passes the whole response body as its `detail` string.** `core_client.py` raises `CoreApiError(status, response.text)` on every verb and the routers pass that into `HTTPException(detail=…)`, so FastAPI serialises an already-JSON string a second time and users see `{"detail":"{\"detail\":\"Method Not Allowed\"}"}`. Pre-existing and general — every proxied router has it — and invisible until a panel rendered the failure text inline instead of swallowing it | **visibility** | tabsii-crm `core_client.py` | same | **open** |
 | — | **Both dependency-audit scripts reported INCONCLUSIVE — and misdiagnosed a healthy registry — on every invocation when `jq` was absent, while exiting 0.** Found by stubbing `pnpm` to return a real, parseable, *clean* audit payload on a PATH without `jq`: the gate printed `the registry returned a non-JSON/error response` three times and passed. `jq` is the parser the entire finding-vs-hiccup distinction rests on, so without it the retry-and-warn path — written to stop the gate failing open — *is* the fail-open, and it names the wrong culprit while doing it. Exactly the shape of the dash-`echo` defect #717 fixed in the same file, one dependency further out. A missing `jq` is deterministic, not transient, so it now exits 1 loudly | **fail-open** | biffo-template `scripts/{js,py}-dependency-audit.sh` | same, and every satellite via `shared-files.json` | **fixed** ([#743](https://github.com/keiranholloway/biffo-template/issues/743)) — `command -v jq` guard, before any audit runs |
 | [#883](https://github.com/keiranholloway/biffo-template/issues/883) | **A file was added to the shared set, both skeletons were fixed, and `shared-sync.sh` was never run** — so 12 of 13 satellites went without the hardened dependency audits it was added for. The skeleton only reaches repos created *afterwards*, which is precisely the "vendor it and hope" failure `shared-sync.sh` exists to end; the distribution defect recurred **through its own fix**. AGENTS.md §9 states in bold that adding a file to the shared set is not done until `--check` is clean. Found by running the estate audits, not by review | **drift** · process | biffo-template `shared-files.json` | 12 satellite repos | **fixed** (11 merged, 1 blocked on an unrelated red `dev`) |
 | [#714](https://github.com/keiranholloway/biffo-template/issues/714) | **The `--auto` fix was applied by hand to five repos and nothing re-asked, so the next nine were born `false`.** #714 recorded the condition and fixed the five repos that existed; measured 2026-07-29 across 13 satellites, **9 had `allow_auto_merge=false`** — the documented default in `biffo-workflow` step 7 was unavailable in two thirds of the estate, and its assertion that "all five active Biffo repos" have it was true when written and never re-checked. Same shape as [#715](https://github.com/keiranholloway/biffo-template/issues/715): branch protection has an audit that re-asks; this setting has none | **drift** · fail-open | estate-wide sync rollout | 9 repo settings | **partly fixed** — settings corrected, but nothing re-checks them (no audit) |
@@ -254,14 +262,14 @@ shape recurring across unrelated components is a design problem, not bad luck.
 
 <!-- BEGIN generated: class-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write`. **309** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
+_Generated by `node scripts/practices-evidence.mjs --write`. **320** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
 
 | Primary class | Rows | Share |
 | --- | --- | --- |
-| **visibility** | 92 | 30% |
-| fail-open | 73 | 24% |
-| drift | 65 | 21% |
-| process | 53 | 17% |
+| **visibility** | 97 | 30% |
+| fail-open | 74 | 23% |
+| drift | 69 | 22% |
+| process | 54 | 17% |
 | boundary | 26 | 8% |
 
 <!-- END generated: class-tally -->
@@ -355,19 +363,19 @@ markers; re-run the command.
 
 <!-- BEGIN generated: fix-repo-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write` from **309** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `practices-evidence.test.mjs` fails when this block does not match the dataset._
+_Generated by `node scripts/practices-evidence.mjs --write` from **320** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `practices-evidence.test.mjs` fails when this block does not match the dataset._
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 152 of 309 (49%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
-| **tabsii-platform** | 32 of 309 (10%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
-| **biffo-plugin-idea-scout** | 17 of 309 (6%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
-| **biffo-platform** | 14 of 309 (5%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
-| **tabsii-crm** | 14 of 309 (5%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
-| **biffo-plugin-ideation** | 14 of 309 (5%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **tabsii-intake** | 5 of 309 (2%) | CI generation, branch-protection contexts, the `python-jose` removal |
-| **tabsii-marketplace** | 2 of 309 (1%) | `python-jose` removal; the credential-dependent build |
-| **biffo-runners** | 1 of 309 (0%) | Runner fleet docs + fail-fast |
+| **biffo-template** | 155 of 320 (48%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
+| **tabsii-platform** | 36 of 320 (11%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
+| **biffo-plugin-idea-scout** | 17 of 320 (5%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
+| **tabsii-crm** | 16 of 320 (5%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
+| **biffo-platform** | 14 of 320 (4%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
+| **biffo-plugin-ideation** | 14 of 320 (4%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **tabsii-intake** | 5 of 320 (2%) | CI generation, branch-protection contexts, the `python-jose` removal |
+| **tabsii-marketplace** | 2 of 320 (1%) | `python-jose` removal; the credential-dependent build |
+| **biffo-runners** | 1 of 320 (0%) | Runner fleet docs + fail-fast |
 
 <!-- END generated: fix-repo-tally -->
 
@@ -1184,6 +1192,52 @@ real second instance within the same session** — the prefix guard blocked M5
 until its grant was added; the settings guard's drift check immediately flagged
 `database_url`, which ends in the literal string `base_url`. Guards over
 relationships find the class; tests over behaviour find the instance.
+### Measured: five milestones, three scoped defects, and the review that caught them, 2026-07-29
+
+`0004-fdd-disclosure` — five milestones across three repos (schema + Object-Lock
+evidence store, publish, send, candidate acknowledgement, CRM surface), every PR
+green, ~1,600 backend tests passing throughout.
+
+**Three of the defects found were invisible to every test in the stack**, and all
+three share one shape: *they only appear for a particular caller, timezone or
+scope.*
+
+| Defect | Who it broke for | Why no suite saw it |
+| --- | --- | --- |
+| `media_assets` NULL-brand policy | **only brand-scoped roles** (Brand HQ) | SQLite runs no RLS; an HQ Admin passes |
+| cross-brand version list | **only tenant-wide callers** (HQ Admin) | router test pins the *path*; E2E fixture *does* filter |
+| date-only parsed as datetime | **only west of UTC** | CI and dev both run UTC |
+
+None was found by a gate. All three were found by **reading the diff and the
+code it depends on** — the NULL-brand one by reading `fn_authorized`'s branch
+structure after a subagent's plausible-sounding justification, the list one by
+reading `make_list_handler` rather than trusting that `?brand_id=` did something,
+the date one by a subagent flagging a type difference it had noticed but not been
+asked about.
+
+**The review, not the suite, was the control.** That is worth stating plainly
+because it is the opposite of the usual lesson: more tests would not have caught
+any of these, since each suite was pointed at a boundary the defect sits behind.
+
+**Where the wall clock actually went**, and it was not the fixes:
+
+| Loop | Cost | Structural? |
+| --- | --- | --- |
+| `BEHIND` → `update-branch` → full CI re-run | **4 occurrences**, ~6–10 min each | **Yes** — concurrent work merges into `dev` faster than a CI cycle completes; auto-merge does *not* update a stale branch |
+| Deploy queue (scale-to-zero cold start) | **7–20 min per deploy**, ~6 deploys | Yes — fleet is correct, latency is inherent |
+| Polling the deployed endpoint to detect a landed deploy | ~17 probes across 13 min | **Yes** — no deploy-completion signal exists (#903) |
+
+**Auto-merge is armed and still loses the race — an eighth data point.** Arming
+`--auto` removed the *merge* race but not the *staleness* race: `--auto` will not
+run `update-branch`, so every time concurrent work landed first the PR sat
+`BEHIND` until something noticed. The eventual working pattern was a poll loop
+that re-runs `update-branch` itself. That is a workaround for a missing setting,
+not a fix.
+
+**Verification cost roughly an hour and found two more defects** — the
+double-encoded proxy error and the write-only audit trail — neither of which any
+amount of additional unit testing would have surfaced, because both are about
+what a *human sees* rather than what the code returns.
 
 ### The self-estimate was 45% low, and the cause was the unit
 
@@ -1350,6 +1404,44 @@ wrong `down_revision` splits an Alembic chain, and the newest file by timestamp
 is not reliably the head. Parsing every revision and asserting exactly one head
 before and after took one script and removed the guess entirely.
 
+**Reading the code a subagent's justification rests on, rather than the
+justification.** A build agent put an insert on the RLS session, reasoning that
+`media_assets` has a real INSERT policy and bypassing it would be lazy —
+plausible, well-argued, and wrong. Reading `fn_authorized`'s actual branch
+structure showed the policy passes a NULL brand and so can only ever match a
+tenant-wide assignment; the endpoint would have 403'd for every Brand HQ user
+while working for an HQ Admin. The tell was that the argument was about a
+*principle* (don't bypass RLS) rather than about *this policy's call shape*.
+
+**Seeding a fixture so the wrong implementation cannot pass it.** The plan
+required proof that the cooling-off date derives from `acknowledged_at` rather
+than `delivered_at`. A fixture where those dates coincide passes either way and
+proves nothing, so they were seeded **30 days apart**: re-deriving from the wrong
+column fails with `assert '2026-01-15' == '2026-02-14'`. Same discipline caught
+the cross-brand list — two brands in one tenant, so a missing predicate returns 3
+rows where 2 are expected.
+
+**Comparing a 404's *message*, not its status, to tell "route absent" from
+"handler ran".** After a milestone merged and its Terraform applied, the endpoint
+still returned 404. Status code, API Gateway route listing and workflow
+conclusions all looked correct. Probing a *pre-existing* public route returned
+its handler's own message while the new one returned FastAPI's default
+`"Not Found"` — proving the Lambda was serving pre-merge code, in one comparison,
+with no redeploy guesswork.
+
+**Attempting the destructive operation to prove the guarantee.** The whole
+feature rests on evidence being undeletable. Every layer above it was green and
+the object could still have been perfectly deletable, so the delete was actually
+attempted: `AccessDenied … object protected by object lock`. An overwrite was
+attempted too — it created a new version while the locked original survived
+intact. Neither is inferable from Terraform or from a `head-object` field.
+
+**Creating a scoped test user rather than verifying as an admin.** The
+convenient path was to click through as the already-signed-in platform admin.
+That account bypasses exactly the check that had been broken. A brand-scoped
+Brand HQ user was provisioned instead — and the publish that succeeded for it is
+the *only* evidence that the fix works, since an admin would have passed either
+way.
 
 **Verifying an issue's claims before building from them — three of five were
 stale or wrong.** #643 listed five families of instance forks. Checked against
@@ -2864,6 +2956,32 @@ to ask for gates by what changed rather than by where the work was scoped, but
 that needs the prompt to know which gates map to which paths, which nothing
 currently states in one place.
 
+**Nobody has audited how many RLS policies pass a NULL scope argument, and each
+one silently excludes every scoped role.** `media_assets_create` and
+`audit_logs_read` both call `fn_authorized(code, tenant_id, NULL, …)`. Because
+every non-tenant-wide branch of `fn_authorized` is guarded by
+`p_<x>_id IS NOT NULL`, a NULL-scope call is **only** satisfiable by a
+tenant-wide assignment — so a brand-scoped role can hold the permission, appear
+correctly granted in `whoami`, and read or write nothing. Two were found by
+accident while building an unrelated feature. `db/imports/tabsii/011_rls_policies.sql`
+is one grep away from answering how many more there are, and nothing in CI
+compares a policy's call shape against the `scope_level` of the roles granted its
+code.
+
+**A subagent can be given a wrong contract and will implement it faithfully.**
+The CRM was told the brand's version list lived at generic CRUD with a
+`?brand_id=` filter. That filter does not exist, and the agent had no reason to
+doubt it — it built against the contract, its tests pinned the contract, and its
+E2E fixture *implemented* the contract, so three independent green signals agreed
+with a false premise. It was caught by reading the core handler, not by anything
+the sibling could have run. When two agents build either side of an interface,
+the interface itself is the unreviewed artefact.
+
+**A fixture server that is more capable than the real thing turns E2E into
+theatre.** `api-fixtures.mjs` filtered the version list by brand. The real core
+did not. The E2E passed *because* the fake was better than production — the
+precise inversion of what a fake is for. Nothing checks that a stub's behaviour
+is a subset of the real service's.
 
 **Nothing generates the "where the work lands" table, and it drifted 2.5×.** It
 is headed *"Generated, not typed"* and warns that hand-typed counts go stale —
@@ -3997,6 +4115,12 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-workflow` | **should have been invoked for the plan doc** | The implementation plan was written straight into the planning scratchpad and only landed in-repo when `biffo-sib-build` refused to proceed without it. Nothing was lost, but the plan is a repo artefact from the moment it is agreed, and treating it as one unit of work from the start would have been cleaner. |
 | `biffo-verify` | **worked — applied retroactively, §4/§5 in spirit** | Comparing the deployed API response and rendered UI directly (not reading `assignment.py` in isolation) is what found the territory_id gap on tabsii-platform#291 — the source alone reads as correct, since the value does flow through the function. |
 | `biffo-workflow` | **partial — the recurring `dev`-staleness/auto-merge race hit again** | Same shape already on this page: ~9 PRs this session (tabsii-platform#348, #354, #355, #356 among them) needed a manual `--auto` re-arm after `gh pr merge` reported "not up to date with base branch". Reinforces the existing finding rather than adding a new one — worth downgrading from "known gap" to "expect this every time, script around it". |
+| `biffo-sib-build` | **worked — Step 0.5 is the step that earns the skill** | On `0004-fdd-disclosure`, re-validating the plan's stated preconditions caught that its cited RLS-test template (`test_discovery_rls_pg.py`) was not merged and was sitting **red** in an open PR. A merged sibling was used as the pattern instead. Cost: two `ls`/`gh` calls. Step 0.5 also correctly found nothing else stale, which is the outcome that makes the cheap ones worth running. |
+| `biffo-sib-build` | **partial — "one PR per milestone" does not survive a cross-repo milestone** | Step 2 assumes a milestone maps to one PR. M4 (platform + intake page) and M5 (core reads + CRM panel) each needed **two PRs in two repos**, with a merge-order constraint between them that the skill has no concept of. Ordering was written into the PR bodies as prose; the CRM merged first anyway and shipped a panel that errored (biffo-template#903). The skill needs a cross-repo milestone shape, or an explicit "core first, then the surface" step. |
+| `biffo-sib-build` | **partial — the plan's own M5 was unbuildable as written** | M5 required per-lead disclosure state in the UI, but M1 had deliberately given `FddAcknowledgement` no generic CRUD and no read endpoint was ever specified — so there was no API to render it from. The skill's "stop and ask" step covers a milestone whose *approach* fails against real code; this was a milestone with a **missing dependency the plan never enumerated**. Adding the endpoint was the obvious call, but the skill offers no guidance on whether that counts as executing the plan or amending it. |
+| Subagents (7 build across 3 repos) | **worked — but every one of the three real defects was found in review, not by the agent** | Each agent tested thoroughly, proved its negatives bite, and reported honestly — including flagging the `audit_logs` schema constraint and the date-vs-datetime difference rather than papering over them. What they could not do is doubt a premise they were handed: the wrong `?brand_id=` contract was implemented faithfully, pinned by its own tests, and *implemented by its own E2E fixture*. Delegation scaled the building; it did not scale the doubting. |
+| `claude-in-chrome` | **worked — and was the only way to run the candidate journey** | The acknowledgement path has no authenticated caller by design (the token *is* the authority), so the browser was the genuine route. `read_network_requests` confirmed the deployed page called the deployed public route unauthenticated. One friction: network tracking only starts when the tool is first called, so the first page load's requests were missed and the page had to be reloaded. |
+| `biffo-verify` | **worked — §4 caught a feature that was merged, applied, and absent** | Reading the deployed artefact rather than the source is what revealed the Lambda was serving pre-merge code while its API Gateway routes existed. §5 ("read past the layer masking the truth") is what made it legible: the 404's *message* distinguished "route absent" from "handler ran" when the status code could not. |
 
 ## Adding a row
 

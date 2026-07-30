@@ -102,6 +102,16 @@ class Settings(BaseSettings):
     # permits two further generations of agent-triggered-by-agent.
     agent_max_run_depth: int = 2
 
+    # Write-back (ADR-0027) — consecutive denials before a definition disables
+    # itself (biffo-template#680). A workflow whose owner has left should stop
+    # trying, visibly, rather than generating a denial per event forever.
+    #
+    # Configurable because the right number depends on traffic, not on Core: three
+    # denials is minutes on a busy trigger and weeks on a quiet one, so an operator
+    # tuning this is expressing "how long before I want to be told", which Core
+    # cannot know. The default is unchanged from the constant it replaces.
+    writeback_max_consecutive_denials: int = 3
+
     # Agentic workers — default model for agent runs (ADR-0017, biffo-template#910).
     # When an orchestration workflow's agent action provides no model, and the
     # agent is not found in the registry (or the registry row has no model), this

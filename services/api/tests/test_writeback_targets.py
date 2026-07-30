@@ -308,3 +308,53 @@ def test_a_payload_derived_column_is_still_not_agent_writeable():
             columns=(wb.WriteBackColumn(name="lead_id", label="Lead", type="text"),),
             derived=(wb.from_payload("lead_id", "lead_id"),),
         )
+
+
+class TestPiiRedaction:
+    """#673: identifying values must not persist in AgentRun.result after the write."""
+
+    def test_a_declared_sensitive_column_is_redactable(self):
+        target = _target(
+            columns=(
+                wb.WriteBackColumn(name="notes", label="Notes", sensitive=True),
+                wb.WriteBackColumn(name="stage", label="Stage"),
+            ),
+        )
+        assert wb.redactable_columns(target) == frozenset({"notes"})
+
+    def test_an_identifying_column_name_is_redactable_without_being_declared(self):
+        # The half that covers targets nobody has annotated. The flag alone is
+        # forgetful: every target that existed before #673 declares nothing.
+        target = _target(
+            columns=(
+                wb.WriteBackColumn(name="email", label="Email"),
+                wb.WriteBackColumn(name="phone_number", label="Phone"),
+                wb.WriteBackColumn(name="pipeline_stage_id", label="Stage"),
+            ),
+        )
+        assert wb.redactable_columns(target) == frozenset({"email", "phone_number"})
+
+    def test_free_text_is_not_redacted_by_name(self):
+        # Deliberate. `notes` is where PII hides, but it is also where the
+        # explanation lives, and a run record scrubbed of its reasoning stops being
+        # auditable. Free text is the case for the explicit flag, not the heuristic.
+        target = _target(columns=(wb.WriteBackColumn(name="notes", label="Notes"),))
+        assert wb.redactable_columns(target) == frozenset()
+
+    def test_the_pii_list_is_not_the_secrets_list(self):
+        """These two must never be merged, and the reason is a shipped feature.
+
+        `_SENSITIVE_SUBSTRINGS` feeds `events/event_fields.py`, which derives the
+        orchestration trigger-field catalogue. Adding `email`/`phone` there would
+        strip them from state-change payloads and from the trigger fields the UI
+        offers — silently breaking recipient-field templating, which sends to
+        `{email}` and relies on `LeadCapturedPayload` carrying it.
+        """
+        from api.routing.crud_handlers import _SENSITIVE_SUBSTRINGS
+
+        assert "email" not in _SENSITIVE_SUBSTRINGS
+        assert "phone" not in _SENSITIVE_SUBSTRINGS
+        # And the PII list must not have absorbed the secrets, which would make the
+        # separation cosmetic.
+        assert "token" not in wb.PII_NAME_SUBSTRINGS
+        assert "password" not in wb.PII_NAME_SUBSTRINGS

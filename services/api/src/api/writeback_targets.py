@@ -101,6 +101,14 @@ class WriteBackColumn:
     #: Permitted values when ``type`` is ``enum``; ignored otherwise.
     values: tuple[str, ...] = ()
     overwrite: str = "if_empty"
+    #: Scrub this column's submitted value from ``AgentRun.result`` once it has been
+    #: written to the product row (#673, ADR-0027).
+    #:
+    #: Opt-in and therefore forgetful, which is why it is only half the mechanism:
+    #: ``PII_NAME_SUBSTRINGS`` covers the obvious identifiers without anyone having
+    #: to remember. Use this flag for what a name cannot reveal — a free-text
+    #: ``notes`` column that happens to carry an address, say.
+    sensitive: bool = False
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -120,6 +128,55 @@ class WriteBackColumn:
                 f"Column {self.name!r} is an enum but declares no values, so nothing "
                 "could ever be written to it."
             )
+
+
+#: Column-name fragments treated as personally identifying for write-back
+#: redaction (#673).
+#:
+#: **Deliberately separate from ``routing.crud_handlers._SENSITIVE_SUBSTRINGS``,
+#: and it must stay that way.** That tuple holds security secrets — password,
+#: token, api_key, ssn — and feeds three call sites, including
+#: ``events/event_fields.py``, which derives the orchestration trigger-field
+#: catalogue. Adding ``email`` or ``phone`` there would strip them from
+#: state-change event payloads AND from the trigger fields the UI offers, which
+#: would silently break recipient-field templating: ``LeadCapturedPayload``
+#: carries ``email``/``phone``/``first_name``, and ``events/registry.py`` documents
+#: templating ``{email}`` into an email action's "To" field. Fixing a PII concern
+#: by breaking a shipped feature is not a trade worth making quietly.
+#:
+#: Identifiers only, not free text. ``notes`` is where PII hides, but it is also
+#: where the *explanation* lives, and a run record scrubbed of its reasoning stops
+#: being auditable. Free text is the case for the explicit ``sensitive`` flag.
+PII_NAME_SUBSTRINGS = (
+    "email",
+    "phone",
+    "mobile",
+    "first_name",
+    "last_name",
+    "full_name",
+    "address",
+    "postcode",
+    "post_code",
+    "zip",
+    "dob",
+    "date_of_birth",
+)
+
+
+def redactable_columns(target: WriteBackTarget) -> frozenset[str]:
+    """Column names whose written values must not persist in ``AgentRun.result``.
+
+    The union of the two halves #673 settled on: what an author declared
+    (``sensitive=True``) and what the column name gives away. Neither alone is
+    enough — the flag is forgetful about existing targets, the names are blind to
+    anything unusually named.
+    """
+    return frozenset(
+        column.name
+        for column in target.columns
+        if column.sensitive
+        or any(fragment in column.name.lower() for fragment in PII_NAME_SUBSTRINGS)
+    )
 
 
 @dataclass(frozen=True)

@@ -28,6 +28,7 @@ from api.events.registry import (
     AgentRunEventPayload,
     EventType,
     WorkflowDefinitionEventPayload,
+    registered_events,
 )
 
 if TYPE_CHECKING:
@@ -57,6 +58,71 @@ def test_every_core_event_describes_its_payload():
             f"{event.detail_type} declares neither a payload_model nor explicit fields. "
             f"Add a payload_model (preferred), or list it in FIELDLESS_EVENTS if it "
             f"genuinely has no filterable payload."
+        )
+
+
+def test_registered_events_covers_at_least_the_core_ones():
+    """The widened guard below must never see FEWER events than the narrow one.
+
+    ``_CORE_EVENTS`` is read out of ``vars(registry)`` — module constants, present
+    the moment the module imports. ``registered_events()`` reads ``_REGISTRY``,
+    which is populated by ``register_event`` calls as modules import. Those are
+    different mechanisms, and if the second ever lags the first, the widened
+    assertion would quietly cover less while looking broader.
+
+    This is the anti-vacuity control for that specific direction: a superset
+    check, not a count.
+    """
+    registered = {(e.source, e.detail_type) for e in registered_events()}
+    core = {(e.source, e.detail_type) for e in _CORE_EVENTS}
+    assert core <= registered, (
+        f"registered_events() is missing core events declared in registry.py: {core - registered}. "
+        f"The widened guard would be weaker than the narrow one."
+    )
+
+
+def test_every_registered_event_describes_its_payload():
+    """The same property, over EVERY event in the registry — not just Core's (#694).
+
+    ## Why the narrow version was not enough
+
+    ``test_every_core_event_describes_its_payload`` iterates ``vars(registry)``,
+    which by construction contains only the events *this file's own module*
+    declares. That was a deliberate choice — the comment on ``_CORE_EVENTS`` says
+    it is "independent of whatever else (plugins, instance modules) may have
+    registered" — and it is the right scope for a test about Core's own events.
+
+    But the property being asserted is not about Core. The trigger catalog the UI
+    renders comes from ``registered_events()`` (``routers/orchestration.py``
+    iterates it), so an event registered by a plugin or an instance domain reaches
+    the same dropdown with no field metadata and nothing notices. #694 was filed
+    believing no such guard existed at all; the guard existed, and its scope was
+    narrower than its subject.
+
+    ## Why it is currently equivalent, and why it is still worth having
+
+    In the template nothing calls ``register_event`` outside ``events/registry.py``,
+    so this set equals the core set today and the test passes trivially. It stops
+    being trivial in two places:
+
+    - **an instance**, which inherits ``services/api/tests/`` through
+      ``core upgrade`` and registers its own domain events (ADR-0022);
+    - **the template**, the moment #848 relocates ``LEAD_CAPTURED`` out of Core
+      and into an instance domain — which is exactly the change this guard needs
+      to be in place *before*, not after.
+
+    The ``FIELDLESS_EVENTS`` opt-out applies here too, keyed on ``detail_type``, so
+    an instance event with genuinely no filterable payload has the same escape
+    hatch Core events do.
+    """
+    for event in registered_events():
+        has_metadata = event.payload_model is not None or bool(event.fields)
+        opted_out = event.detail_type in FIELDLESS_EVENTS
+        assert has_metadata or opted_out, (
+            f"{event.source}/{event.detail_type} is in the event registry but declares "
+            f"neither a payload_model nor explicit fields, so it reaches the trigger "
+            f"catalog with nothing to filter on. Add a payload_model (preferred), or "
+            f"list it in FIELDLESS_EVENTS if it genuinely has no filterable payload."
         )
 
 

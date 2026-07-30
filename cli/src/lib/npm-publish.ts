@@ -69,6 +69,24 @@ const AUTH = [
   /\bneed auth\b/i,
   /do(?: not|n't) have permission/i,
   /you must be logged in/i,
+  // 404 on a PUT is npm's UNAUTHORISED answer, not a missing package (#697).
+  //
+  // The registry declines to reveal whether a private package exists, so it
+  // returns 404 rather than 403 to a caller without rights. It reads as "no such
+  // package" and means "not allowed".
+  //
+  // This was already understood — the `auth` summary below has named the trap
+  // since #664, where three consecutive re-dispatches were burned on it. What was
+  // never written was the classifier entry, so a real E404 log fell through to
+  // `unknown` and collected the advice "if it looks transient … re-dispatch this
+  // workflow": precisely the loop #664 documented, recommended by the code that
+  // documented it.
+  //
+  // Safe against the ordering above: the registry answers already-published with
+  // 403, never 404, so this cannot shadow ALREADY_PUBLISHED. And this classifier
+  // only ever reads `npm publish` output, where a 404 on PUT has no other meaning.
+  /\bE404\b/,
+  /404 Not Found - PUT/i,
 ]
 
 /** Read npm's combined output. `already-published` wins over `auth`: both are 403s. */

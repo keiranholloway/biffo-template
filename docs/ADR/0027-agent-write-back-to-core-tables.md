@@ -421,6 +421,42 @@ undone.
   JSON. Existing redaction covers declared **secrets**, not PII; write-back does not
   change that posture and does not claim to.
 
+  **Amended (#673): `result` no longer keeps identifying values it has written.**
+  The consequence above was recorded and left open; measurement made it worse than
+  it reads. `AgentRun.result` is admin-readable and rendered raw in the portal, and
+  **no retention or purge mechanism exists anywhere in Core** — so "persist" meant
+  indefinitely, and a lead's email sat in the product row and the run record both.
+
+  Two mechanisms, because either alone fails:
+
+  - a per-column `sensitive: True` on `WriteBackColumn` — precise, and forgetful:
+    every target that existed before #673 declares nothing;
+  - `PII_NAME_SUBSTRINGS` matched against column names — retroactive and needs no
+    author action, and blind to anything unusually named.
+
+  Three things about it are deliberate and should not be "tidied" later:
+
+  1. **It is a separate list from `routing.crud_handlers._SENSITIVE_SUBSTRINGS`.**
+     That tuple holds security secrets and feeds `events/event_fields.py`, which
+     derives the orchestration trigger-field catalogue. Adding `email`/`phone` there
+     would strip them from state-change payloads and from the trigger fields the UI
+     offers — silently breaking recipient-field templating, which sends to `{email}`
+     and relies on `LeadCapturedPayload` carrying it.
+  2. **It redacts after the write, not at completion.** This ADR and #673 both
+     suggested completion; `apply_writeback` *reads* `result` after the
+     `AGENT_RUN_COMPLETED` event, so redacting there would leave nothing to write and
+     break the feature it protects.
+  3. **A denied or failed run keeps its values.** Nothing was written elsewhere, so
+     the run record is the only evidence of what was attempted. Scrubbing it would
+     destroy the audit trail to protect data that never left the record.
+
+  Free text is not name-matched. `notes` is where PII hides, but also where the
+  explanation lives, and a run record scrubbed of its reasoning stops being
+  auditable — so free text is the case for the explicit flag.
+
+  Still open: there is no retention policy on terminal runs. Redaction removes the
+  identifying values; everything else a run holds is still kept forever.
+
 ### Neutral
 
 - **The read ceiling stays unbuilt.** Write-back needs no Core read — the agent

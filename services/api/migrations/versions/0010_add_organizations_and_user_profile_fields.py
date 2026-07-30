@@ -104,6 +104,20 @@ def _has_core_users_table() -> bool:
     itself reflect — the default search path. An instance whose users live in
     another schema (tabsii's `tabsii.users`) reads False here, which is correct:
     those are not Core's to alter.
+
+    **What that correctness rests on (#764).** "The default search path" is not a
+    property of this function; it is a property of the engine Alembic runs on.
+    `migrations/env.py` passes **no** `connect_args` to `create_async_engine`,
+    while the application engine in `api/database.py` passes
+    `connect_args=_connect_args_for(settings.db_search_path)`. So the app sees the
+    instance's schemas and migrations do not.
+
+    That asymmetry was undocumented and untested until #764: give Alembic a search
+    path and this guard silently starts returning True for an instance's own users
+    table, and the migration below would `batch_alter_table` a table Core does not
+    own. `test_alembic_engine_carries_no_search_path` now holds the invariant;
+    `test_migration_0010_optional_users.py` cannot, because it runs on SQLite,
+    which has no schemas.
     """
     return sa.inspect(op.get_bind()).has_table("users")
 

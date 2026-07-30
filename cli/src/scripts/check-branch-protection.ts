@@ -107,6 +107,8 @@ export async function runBranchProtectionCheck(
 
   const findings: BranchProtectionFinding[] = []
   const audited: string[] = []
+  /** Branch → the `strict` already in force, for branches that ARE protected (#808). */
+  const observedStrict = new Map<string, boolean>()
 
   for (const branch of BRANCHES) {
     // Skip branches this repo does not have, rather than reporting them.
@@ -121,6 +123,10 @@ export async function runBranchProtectionCheck(
     try {
       const { data } = await octokit.repos.getBranchProtection({ owner, repo, branch })
       findings.push(...auditBranch(branch, data))
+      // Remember a deliberately-relaxed `strict` so --fix cannot revert it (#808).
+      // Absent protection leaves this unset, which is what makes the backfill
+      // still apply the full policy.
+      observedStrict.set(branch, data.required_status_checks?.strict ?? false)
     } catch (err) {
       // 404 here means "branch exists, protection does not" — the state the
       // 403 skip leaves behind, and the whole reason this guard exists.
@@ -161,12 +167,27 @@ export async function runBranchProtectionCheck(
     console.log(formatPlans(plans))
 
     let applied = 0
+    let preserved = 0
     for (const plan of plans.filter((p) => p.action === 'apply')) {
+      // Preserve a `strict: false` that is ALREADY in force (#808). An absent
+      // protection leaves `observedStrict` unset and gets the full policy, which
+      // is the gap this command exists to close; a present-but-relaxed setting is
+      // somebody's decision — H3 has exactly this on biffo-template's dev until
+      // 2026-08-11 — and backfilling a gap must not overwrite a decision.
+      const existing = observedStrict.get(plan.branch)
+      const strict = existing ?? true
+      if (existing === false) {
+        preserved += 1
+        console.log(
+          `  ${plan.branch}: keeping strict=false — already set on this branch, so it is a\n` +
+            '      decision rather than a gap. Change it deliberately with `gh api`, not here.',
+        )
+      }
       await octokit.repos.updateBranchProtection({
         owner,
         repo,
         branch: plan.branch,
-        ...protectionParamsFor(plan.contexts),
+        ...protectionParamsFor(plan.contexts, { strict }),
       })
       applied += 1
     }
@@ -180,7 +201,11 @@ export async function runBranchProtectionCheck(
       process.exit(1)
     }
 
-    console.log(`\n✓ protection applied to ${applied} branch(es). Re-run without --fix to verify.`)
+    console.log(
+      `\n✓ protection applied to ${applied} branch(es)` +
+        (preserved > 0 ? `, ${preserved} keeping an existing strict=false` : '') +
+        '. Re-run without --fix to verify.',
+    )
     return
   }
 

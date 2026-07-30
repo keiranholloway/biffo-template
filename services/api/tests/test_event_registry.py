@@ -15,6 +15,36 @@ from api.events.registry import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _pristine_event_registry():
+    """Restore ``_REGISTRY`` around every test in this file (#694).
+
+    Several tests here call ``register_event`` with synthetic identities —
+    ``test.source/unit.registered``, ``test.source/dup.identity`` — and
+    ``_REGISTRY`` is module-global, so those entries persisted for the rest of the
+    pytest session. Nothing noticed while the only assertions over the registry
+    were "is this specific event present".
+
+    ``test_every_registered_event_describes_its_payload`` (#694) does assert a
+    property of the WHOLE registry, and it failed in CI on exactly this leak:
+    ``test.source/unit.registered`` declares no payload_model and no fields
+    because it is a fixture, not an event — so a guard about real events was
+    reporting a test artefact.
+
+    Fixing the leak rather than teaching the guard to ignore ``test.source`` is
+    deliberate: an allow-list would also hide a real instance event that shares the
+    shape, and the leak is a latent order-dependence for every future assertion
+    over this registry, not just this one. Same pattern and same reasoning as
+    ``_pristine_scope_resolver_registry`` (#648 item 4).
+    """
+    from api.events import registry as reg
+
+    saved = dict(reg._REGISTRY)  # noqa: SLF001
+    yield
+    reg._REGISTRY.clear()  # noqa: SLF001
+    reg._REGISTRY.update(saved)  # noqa: SLF001
+
+
 def test_core_events_are_registered():
     events = registered_events()
     assert DEMO_REQUESTED in events

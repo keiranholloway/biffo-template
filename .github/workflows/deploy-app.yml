@@ -89,6 +89,12 @@ jobs:
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/dev') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev'))
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          # The template resolves its own core version from its highest core-v*
+          # tag (#648), and checkout fetches NO tags at the default depth of 1.
+          # Without this the resolver fails the build — which is the designed
+          # behaviour, but the cause would be this line, not the deploy.
+          fetch-tags: true
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
@@ -141,6 +147,12 @@ jobs:
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/dev'
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          # The template resolves its own core version from its highest core-v*
+          # tag (#648), and checkout fetches NO tags at the default depth of 1.
+          # Without this the resolver fails the build — which is the designed
+          # behaviour, but the cause would be this line, not the deploy.
+          fetch-tags: true
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
@@ -362,6 +374,22 @@ jobs:
           cp -r src/ package/
           cp -r migrations/ package/
           cp alembic.ini package/
+          # Bake the core version in at BUILD time (#648). Resolved from
+          # biffo.core.json in an instance, or the highest core-v* tag in the
+          # template; the script exits non-zero if it can determine neither, so
+          # "we could not tell" is a red build rather than a /health response
+          # quietly reading "unknown" months later.
+          #
+          # NOT the repo-root core.version the issue originally asked for: that
+          # file is a fossil since #423 (0.41.17 against an authority of 0.181.0
+          # on biffo-platform, measured 2026-07-30) and #842 now deletes it.
+          #
+          # Written beside api/core_version.py, which imports it relatively so the
+          # same module works under `api.*` in tests and `src.api.*` in Lambda.
+          core_version=$(sh ../../scripts/resolve-core-version.sh)
+          printf 'CORE_VERSION = "%s"\n' "$core_version" > package/src/api/_core_version.py
+          echo "Baked core version $core_version into the package"
+
           # Bundle every installed plugin's manifest so discover_plugin_manifests()
           # can find it at runtime — the Lambda otherwise only ships services/api/
           # itself. Both plugin channels are bundled: services/*/ (third-party,
@@ -387,7 +415,42 @@ jobs:
             mkdir -p "package/db/imports/$import_name"
             cp "$import_dir"*.sql "package/db/imports/$import_name/" 2>/dev/null || true
           done
-          cd package && zip -r ../lambda.zip .
+          # Precompile the whole package to bytecode (#724).
+          #
+          # /var/task is READ-ONLY in Lambda, so the interpreter can never write a
+          # bytecode cache: every cold start recompiles all ~1,620 .py files from
+          # source. Measured on biffo-platform, that is ~60% of a ~4.0s init.
+          #
+          # --invalidation-mode unchecked-hash is LOAD-BEARING, not a tidy default.
+          # zip/unzip rewrites every mtime, and a timestamp-invalidated .pyc is then
+          # discarded as stale — giving today's behaviour back with a green build and
+          # nothing to see. Measured here with mtimes forced to 2030:
+          #
+          #     no .pyc          0.22-0.27s
+          #     timestamp .pyc   0.21-0.22s   <- no benefit whatsoever
+          #     unchecked-hash   0.12s
+          #
+          # Runs AFTER everything is assembled and after the __pycache__ trim above,
+          # or the trim would delete exactly what this produces.
+          python -m compileall -q --invalidation-mode unchecked-hash package
+          # Guard the size, because the trim above exists for a reason (#724).
+          #
+          # Bytecode adds ~56% to the zip (17.8 -> 27.8 MB measured on this
+          # template). update-function-code base64-encodes the body at ~1.33x
+          # against a ~70MB request cap, so the template lands at ~37MB with ~33MB
+          # spare — but an instance carrying heavy native deps has less. Failing here
+          # with the numbers beats update-function-code failing opaquely after the
+          # upload, which is the shape this comment block is already about.
+          zipped=$(cd package && zip -qr ../lambda.zip . && stat -c%s ../lambda.zip)
+          request_mb=$(awk -v b="$zipped" 'BEGIN{printf "%.1f", b*1.33/1048576}')
+          echo "Package: $(awk -v b="$zipped" 'BEGIN{printf "%.1f", b/1048576}')MB zipped, ~${request_mb}MB as a base64 request body"
+          if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
+            echo "::error::Lambda package is ~${request_mb}MB as a base64 request body, against a ~70MB cap." >&2
+            echo "Bytecode precompilation (#724) adds ~56%. Either drop a heavy dependency, or" >&2
+            echo "move this function to an S3-based update, or stop precompiling and accept the" >&2
+            echo "~2.5s cold start. Do not raise this threshold without measuring the real cap." >&2
+            exit 1
+          fi
           # --output text --query 'LastUpdateStatus' suppresses the CLI's default
           # output, which is the *entire* function configuration as JSON —
           # including Environment.Variables (the master DATABASE_URL and, since
@@ -722,6 +785,12 @@ jobs:
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/staging') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging'))
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          # The template resolves its own core version from its highest core-v*
+          # tag (#648), and checkout fetches NO tags at the default depth of 1.
+          # Without this the resolver fails the build — which is the designed
+          # behaviour, but the cause would be this line, not the deploy.
+          fetch-tags: true
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
@@ -774,6 +843,12 @@ jobs:
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/staging'
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          # The template resolves its own core version from its highest core-v*
+          # tag (#648), and checkout fetches NO tags at the default depth of 1.
+          # Without this the resolver fails the build — which is the designed
+          # behaviour, but the cause would be this line, not the deploy.
+          fetch-tags: true
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
@@ -995,6 +1070,22 @@ jobs:
           cp -r src/ package/
           cp -r migrations/ package/
           cp alembic.ini package/
+          # Bake the core version in at BUILD time (#648). Resolved from
+          # biffo.core.json in an instance, or the highest core-v* tag in the
+          # template; the script exits non-zero if it can determine neither, so
+          # "we could not tell" is a red build rather than a /health response
+          # quietly reading "unknown" months later.
+          #
+          # NOT the repo-root core.version the issue originally asked for: that
+          # file is a fossil since #423 (0.41.17 against an authority of 0.181.0
+          # on biffo-platform, measured 2026-07-30) and #842 now deletes it.
+          #
+          # Written beside api/core_version.py, which imports it relatively so the
+          # same module works under `api.*` in tests and `src.api.*` in Lambda.
+          core_version=$(sh ../../scripts/resolve-core-version.sh)
+          printf 'CORE_VERSION = "%s"\n' "$core_version" > package/src/api/_core_version.py
+          echo "Baked core version $core_version into the package"
+
           # Bundle every installed plugin's manifest so discover_plugin_manifests()
           # can find it at runtime — the Lambda otherwise only ships services/api/
           # itself. Both plugin channels are bundled: services/*/ (third-party,
@@ -1020,7 +1111,42 @@ jobs:
             mkdir -p "package/db/imports/$import_name"
             cp "$import_dir"*.sql "package/db/imports/$import_name/" 2>/dev/null || true
           done
-          cd package && zip -r ../lambda.zip .
+          # Precompile the whole package to bytecode (#724).
+          #
+          # /var/task is READ-ONLY in Lambda, so the interpreter can never write a
+          # bytecode cache: every cold start recompiles all ~1,620 .py files from
+          # source. Measured on biffo-platform, that is ~60% of a ~4.0s init.
+          #
+          # --invalidation-mode unchecked-hash is LOAD-BEARING, not a tidy default.
+          # zip/unzip rewrites every mtime, and a timestamp-invalidated .pyc is then
+          # discarded as stale — giving today's behaviour back with a green build and
+          # nothing to see. Measured here with mtimes forced to 2030:
+          #
+          #     no .pyc          0.22-0.27s
+          #     timestamp .pyc   0.21-0.22s   <- no benefit whatsoever
+          #     unchecked-hash   0.12s
+          #
+          # Runs AFTER everything is assembled and after the __pycache__ trim above,
+          # or the trim would delete exactly what this produces.
+          python -m compileall -q --invalidation-mode unchecked-hash package
+          # Guard the size, because the trim above exists for a reason (#724).
+          #
+          # Bytecode adds ~56% to the zip (17.8 -> 27.8 MB measured on this
+          # template). update-function-code base64-encodes the body at ~1.33x
+          # against a ~70MB request cap, so the template lands at ~37MB with ~33MB
+          # spare — but an instance carrying heavy native deps has less. Failing here
+          # with the numbers beats update-function-code failing opaquely after the
+          # upload, which is the shape this comment block is already about.
+          zipped=$(cd package && zip -qr ../lambda.zip . && stat -c%s ../lambda.zip)
+          request_mb=$(awk -v b="$zipped" 'BEGIN{printf "%.1f", b*1.33/1048576}')
+          echo "Package: $(awk -v b="$zipped" 'BEGIN{printf "%.1f", b/1048576}')MB zipped, ~${request_mb}MB as a base64 request body"
+          if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
+            echo "::error::Lambda package is ~${request_mb}MB as a base64 request body, against a ~70MB cap." >&2
+            echo "Bytecode precompilation (#724) adds ~56%. Either drop a heavy dependency, or" >&2
+            echo "move this function to an S3-based update, or stop precompiling and accept the" >&2
+            echo "~2.5s cold start. Do not raise this threshold without measuring the real cap." >&2
+            exit 1
+          fi
           # --output text --query 'LastUpdateStatus' suppresses the CLI's default
           # output, which is the *entire* function configuration as JSON —
           # including Environment.Variables (the master DATABASE_URL and, since
@@ -1363,6 +1489,12 @@ jobs:
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          # The template resolves its own core version from its highest core-v*
+          # tag (#648), and checkout fetches NO tags at the default depth of 1.
+          # Without this the resolver fails the build — which is the designed
+          # behaviour, but the cause would be this line, not the deploy.
+          fetch-tags: true
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
@@ -1419,6 +1551,12 @@ jobs:
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          # The template resolves its own core version from its highest core-v*
+          # tag (#648), and checkout fetches NO tags at the default depth of 1.
+          # Without this the resolver fails the build — which is the designed
+          # behaviour, but the cause would be this line, not the deploy.
+          fetch-tags: true
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
@@ -1640,6 +1778,22 @@ jobs:
           cp -r src/ package/
           cp -r migrations/ package/
           cp alembic.ini package/
+          # Bake the core version in at BUILD time (#648). Resolved from
+          # biffo.core.json in an instance, or the highest core-v* tag in the
+          # template; the script exits non-zero if it can determine neither, so
+          # "we could not tell" is a red build rather than a /health response
+          # quietly reading "unknown" months later.
+          #
+          # NOT the repo-root core.version the issue originally asked for: that
+          # file is a fossil since #423 (0.41.17 against an authority of 0.181.0
+          # on biffo-platform, measured 2026-07-30) and #842 now deletes it.
+          #
+          # Written beside api/core_version.py, which imports it relatively so the
+          # same module works under `api.*` in tests and `src.api.*` in Lambda.
+          core_version=$(sh ../../scripts/resolve-core-version.sh)
+          printf 'CORE_VERSION = "%s"\n' "$core_version" > package/src/api/_core_version.py
+          echo "Baked core version $core_version into the package"
+
           # Bundle every installed plugin's manifest so discover_plugin_manifests()
           # can find it at runtime — the Lambda otherwise only ships services/api/
           # itself. Both plugin channels are bundled: services/*/ (third-party,
@@ -1665,7 +1819,42 @@ jobs:
             mkdir -p "package/db/imports/$import_name"
             cp "$import_dir"*.sql "package/db/imports/$import_name/" 2>/dev/null || true
           done
-          cd package && zip -r ../lambda.zip .
+          # Precompile the whole package to bytecode (#724).
+          #
+          # /var/task is READ-ONLY in Lambda, so the interpreter can never write a
+          # bytecode cache: every cold start recompiles all ~1,620 .py files from
+          # source. Measured on biffo-platform, that is ~60% of a ~4.0s init.
+          #
+          # --invalidation-mode unchecked-hash is LOAD-BEARING, not a tidy default.
+          # zip/unzip rewrites every mtime, and a timestamp-invalidated .pyc is then
+          # discarded as stale — giving today's behaviour back with a green build and
+          # nothing to see. Measured here with mtimes forced to 2030:
+          #
+          #     no .pyc          0.22-0.27s
+          #     timestamp .pyc   0.21-0.22s   <- no benefit whatsoever
+          #     unchecked-hash   0.12s
+          #
+          # Runs AFTER everything is assembled and after the __pycache__ trim above,
+          # or the trim would delete exactly what this produces.
+          python -m compileall -q --invalidation-mode unchecked-hash package
+          # Guard the size, because the trim above exists for a reason (#724).
+          #
+          # Bytecode adds ~56% to the zip (17.8 -> 27.8 MB measured on this
+          # template). update-function-code base64-encodes the body at ~1.33x
+          # against a ~70MB request cap, so the template lands at ~37MB with ~33MB
+          # spare — but an instance carrying heavy native deps has less. Failing here
+          # with the numbers beats update-function-code failing opaquely after the
+          # upload, which is the shape this comment block is already about.
+          zipped=$(cd package && zip -qr ../lambda.zip . && stat -c%s ../lambda.zip)
+          request_mb=$(awk -v b="$zipped" 'BEGIN{printf "%.1f", b*1.33/1048576}')
+          echo "Package: $(awk -v b="$zipped" 'BEGIN{printf "%.1f", b/1048576}')MB zipped, ~${request_mb}MB as a base64 request body"
+          if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
+            echo "::error::Lambda package is ~${request_mb}MB as a base64 request body, against a ~70MB cap." >&2
+            echo "Bytecode precompilation (#724) adds ~56%. Either drop a heavy dependency, or" >&2
+            echo "move this function to an S3-based update, or stop precompiling and accept the" >&2
+            echo "~2.5s cold start. Do not raise this threshold without measuring the real cap." >&2
+            exit 1
+          fi
           # --output text --query 'LastUpdateStatus' suppresses the CLI's default
           # output, which is the *entire* function configuration as JSON —
           # including Environment.Variables (the master DATABASE_URL and, since

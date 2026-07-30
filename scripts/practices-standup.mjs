@@ -419,7 +419,16 @@ function main() {
     return i === -1 ? null : argv[i + 1]
   }
   const dataDir = arg('--data') ?? 'docs/practices/data'
-  const logFile = arg('--log') ?? 'docs/practices/standup.jsonl'
+  // Outside the repo by default, for the same reason the effort log is (#940):
+  // appending a choice must not dirty whatever checkout you happen to run this
+  // from, and it must not need a PR per entry. `practices-daily.sh` copies it onto
+  // the snapshot branch, which is what version-controls the history.
+  //
+  // It used to default to `docs/practices/standup.jsonl`, i.e. relative to cwd —
+  // so the record of what was chosen landed in the primary checkout as an
+  // untracked file and was never committed anywhere.
+  const logFile =
+    arg('--log') ?? join(process.env.HOME ?? '.', '.practices-standup.jsonl')
   const { file, data: snapshot } = latestSnapshot(dataDir)
 
   // Refuse stale data rather than ranking it. Fatal by default: the whole point of

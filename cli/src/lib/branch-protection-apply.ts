@@ -104,13 +104,30 @@ export interface ProtectionParams {
  * protected correctly on day one — rather than a second, subtly different
  * policy that then drifts from the first.
  *
- * `strict: true` is not negotiable here: without it a branch can merge while
- * behind its base, which is the state that lets an already-green PR land against
- * code it was never tested with.
+ * `strict: true` is the default and the right one for a **backfill**: without it a
+ * branch can merge while behind its base, which is the state that lets an
+ * already-green PR land against code it was never tested with.
+ *
+ * It is a parameter rather than a literal because it used to be neither, and that
+ * silently fought a running experiment (#808). Experiment H3 has `strict: false`
+ * on `biffo-template`'s `dev` deliberately, until 2026-08-11. The audit reports
+ * that as a `not-strict` finding — correctly, it is worth knowing — and any
+ * finding makes `--fix` eligible, at which point this function forced
+ * `strict: true` back on and **reverted the experiment with no message saying so**.
+ *
+ * The caller now distinguishes the two cases, because they are different claims:
+ *
+ *   - protection **absent** → apply the full policy, `strict: true` included. That
+ *     is #714/#715, the gap this command exists to close.
+ *   - protection **present** with `strict: false` → somebody set that. Report it;
+ *     do not silently overwrite a decision while claiming to backfill a gap.
  */
-export function protectionParamsFor(contexts: string[]): ProtectionParams {
+export function protectionParamsFor(
+  contexts: string[],
+  options: { strict?: boolean } = {},
+): ProtectionParams {
   return {
-    required_status_checks: { strict: true, contexts: [...contexts].sort() },
+    required_status_checks: { strict: options.strict ?? true, contexts: [...contexts].sort() },
     enforce_admins: false,
     required_pull_request_reviews: {
       required_approving_review_count: 0,

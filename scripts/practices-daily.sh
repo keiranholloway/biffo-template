@@ -263,12 +263,39 @@ if [ -n "$FAILING" ]; then
   fi
 fi
 
-if git diff --quiet -- "$DATA_DIR" "$PAGE" docs/practices/sessions.jsonl; then
+# Copy the two external logs onto the snapshot branch BEFORE the commit (#940).
+#
+# This used to happen ~50 lines below, i.e. AFTER the commit and push — and the
+# comment there claimed it was "what version-controls the history". It was not:
+# every run starts with `git reset --hard`, so the copy was discarded before the
+# next commit could ever see it. `docs/practices/sessions.jsonl` had therefore
+# NEVER been committed; the live log had 61 rows and `dev` had no such file.
+#
+# It was masked by the `git add ... 2>/dev/null || git add "$DATA_DIR" "$PAGE"`
+# fallback that used to be on the line below: `git add` fails on a path that does
+# not exist, the fallback quietly staged the other two, and the run reported
+# success. A fallback that hides a missing file is how a persistence step gets to
+# do nothing for weeks.
+#
+# Both logs live outside the repo so appending never dirties a working checkout and
+# no PR is needed per entry. `|| true` on each: a bare `[ -f x ] && cp` is a
+# compound whose status is the test's, so on a machine with neither log yet the
+# line would abort the script under `set -e`.
+EFFORT="${PRACTICES_EFFORT_LOG:-$HOME/.practices-sessions.jsonl}"
+STANDUP="${PRACTICES_STANDUP_LOG:-$HOME/.practices-standup.jsonl}"
+TRACKED_LOGS="docs/practices/sessions.jsonl docs/practices/standup.jsonl"
+{ [ -f "$EFFORT" ] && cp "$EFFORT" docs/practices/sessions.jsonl; } || true
+{ [ -f "$STANDUP" ] && cp "$STANDUP" docs/practices/standup.jsonl; } || true
+
+if git diff --quiet -- "$DATA_DIR" "$PAGE" $TRACKED_LOGS; then
   echo "practices-daily: no change"
   exit 0
 fi
 
-git add "$DATA_DIR" "$PAGE" docs/practices/sessions.jsonl 2>/dev/null || git add "$DATA_DIR" "$PAGE"
+# No `|| git add "$DATA_DIR" "$PAGE"` fallback: that is what hid the bug above. A
+# log that does not exist yet is simply not staged, and `git add` tolerates that
+# when the other paths are valid — but a genuine failure now surfaces.
+git add "$DATA_DIR" "$PAGE" $TRACKED_LOGS
 # --no-verify: this is a generated artefact on a data branch, and the pre-push
 # whole-project pyright is irrelevant to it. Every other gate still applies when
 # the branch is reviewed.
@@ -307,16 +334,8 @@ echo "practices-daily: pushed snapshot $(date -u +%F)"
 # can falsify that inference, and it is the one part nobody can automate. A rule
 # with nothing watching it stops being followed silently — that is how nine
 # orphan worktrees accumulated under a documented hygiene rule.
-# The effort log lives outside the repo so appending never dirties the primary
-# checkout, and so a PR is not needed per entry. Copy it onto the snapshot
-# branch here, which is what version-controls the history.
-EFFORT="${PRACTICES_EFFORT_LOG:-$HOME/.practices-sessions.jsonl}"
-# `|| true` matters under `set -e`: a bare `[ -f x ] && cp` is a compound whose
-# status is the test's, so on a machine with no effort log yet this line would
-# abort the whole script — after the push, so the day's work would land and the
-# job would still report failure.
-{ [ -f "$EFFORT" ] && cp "$EFFORT" docs/practices/sessions.jsonl; } || true
-
+# The copies now happen before the commit (see #940 above). $EFFORT is already set
+# there; only the nudge remains here, which reads the external log directly.
 NUDGE="$(node scripts/practices-session.mjs --nudge --file "$EFFORT" || true)"
 if [ -n "$NUDGE" ]; then
   echo "$NUDGE"

@@ -330,6 +330,33 @@ export function closeLoop(last, snapshot) {
   return { ...last, now, delta, verdict }
 }
 
+/**
+ * Is the newest snapshot actually about the last 24 hours?
+ *
+ * **This guard exists because the tool failed it on its own first real use.** Run
+ * from the primary checkout with default arguments, the newest file in
+ * `docs/practices/data/` was `2026-07-28.json` — today's snapshot lives on the
+ * `chore/practices-snapshots` branch, in the daily worktree, and is deliberately
+ * never merged to `dev`. The standup printed a confident ranking of two-day-old
+ * numbers with no indication anything was wrong.
+ *
+ * That is the fail-open shape this whole programme exists to remove, committed by
+ * the tool built to find it. A ranking of stale data is worse than no ranking: it
+ * spends the day's budget on yesterday's problem and reports success.
+ *
+ * Returns the staleness in whole days, so the caller can refuse.
+ *
+ * @param {string} file snapshot filename, `YYYY-MM-DD.json`
+ * @param {Date} now
+ */
+export function snapshotAgeDays(file, now = new Date()) {
+  const match = /^(\d{4}-\d{2}-\d{2})\.json$/.exec(file)
+  if (!match) return null
+  const snapshotDay = Date.parse(`${match[1]}T00:00:00Z`)
+  const today = Date.parse(`${now.toISOString().slice(0, 10)}T00:00:00Z`)
+  return Math.round((today - snapshotDay) / 864e5)
+}
+
 /** Read `windows.1.repos["o/r"].x.y` out of a snapshot. */
 export function readPath(object, path) {
   if (!path) return undefined
@@ -394,6 +421,25 @@ function main() {
   const dataDir = arg('--data') ?? 'docs/practices/data'
   const logFile = arg('--log') ?? 'docs/practices/standup.jsonl'
   const { file, data: snapshot } = latestSnapshot(dataDir)
+
+  // Refuse stale data rather than ranking it. Fatal by default: the whole point of
+  // this tool is to direct the day's effort, and directing it at a two-day-old
+  // problem is the most expensive thing it could do.
+  const ageDays = snapshotAgeDays(file)
+  if (ageDays !== null && ageDays > 0 && !argv.includes('--allow-stale')) {
+    process.stderr.write(
+      `\n${RED}FATAL${OFF}: newest snapshot in ${dataDir} is ${file} — ${ageDays} day(s) old.\n` +
+        `Ranking stale data would spend today's budget on an old problem.\n\n` +
+        `Today's snapshot is written by the daily cron on the chore/practices-snapshots\n` +
+        `branch and is deliberately never merged to dev, so the primary checkout does\n` +
+        `not carry it. Point at the daily worktree:\n\n` +
+        `  node scripts/practices-standup.mjs --data .worktrees/practices-daily/docs/practices/data\n\n` +
+        `Or collect fresh data (~5 min):\n\n` +
+        `  node scripts/practices-metrics.mjs --windows 1,7,90 --out ${dataDir} --repos-root ~/code\n\n` +
+        `--allow-stale overrides this, for reading a historical snapshot on purpose.\n`,
+    )
+    process.exit(1)
+  }
   const corpus = readCorpus(arg('--corpus') ?? 'docs/practices/evidence.jsonl')
   const auditsFile = join(dataDir, 'estate-audits.json')
   const audits = existsSync(auditsFile) ? JSON.parse(readFileSync(auditsFile, 'utf8')).audits ?? [] : []

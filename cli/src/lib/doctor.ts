@@ -191,6 +191,13 @@ export function checkCoreVersionCurrency(facts: RepoFacts): DoctorFinding[] {
  * with nothing signalling that it is dead, and it has already misled a reader
  * with the code in front of them. #811 stopped the CLI trusting it; nothing
  * stops a human.
+ *
+ * **Kept deliberately, as a permanent regression guard (#842).** The two live
+ * instances' copies are gone and nothing in this repo writes `core.version` any
+ * more — every reference reads it — so in a healthy estate this check never
+ * fires. Firing means either a pre-#423 instance has surfaced that has not yet
+ * run an upgrade, or something has started writing the file again. It is not
+ * dead code awaiting removal once the fossils were cleared.
  */
 export function checkFossilCoreVersion(facts: RepoFacts): DoctorFinding[] {
   if (facts.fossilCoreVersion === null || facts.localCoreVersion === null) return []
@@ -205,8 +212,10 @@ export function checkFossilCoreVersion(facts: RepoFacts): DoctorFinding[] {
         `${facts.localCoreVersion}. core.version is inherited from \`biffo init\` and has not ` +
         `been maintained since; biffo.core.json is the authority. Reading the wrong one is #788.`,
       remedy:
-        'Ignore core.version. `biffo core upgrade` removes it when it can prove it is inherited, ' +
-        'and deliberately keeps it when it may have been repurposed.',
+        'Ignore core.version. `biffo core upgrade` removes it when it can prove it is redundant ' +
+        '(equal to biffo.core.json) or stale (behind it), and deliberately keeps a copy AHEAD of ' +
+        'biffo.core.json or not a version at all — no upgrade produces those, so they are ' +
+        'somebody’s own file and this warning is then expected.',
     },
   ]
 }

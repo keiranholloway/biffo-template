@@ -1465,6 +1465,7 @@ import {
   parseStatus,
   mergeExtracted,
   orphanedRows,
+  pairRows,
 } from '../../../scripts/practices-evidence.mjs'
 
 describe('extractRefs', () => {
@@ -1568,6 +1569,63 @@ describe('extractRows / analyse', () => {
     expect(a.coverage.withCost).toBe(0)
     expect(a.coverage.withDate).toBe(0)
     expect(a.coverage.costHours).toBeNull()
+  })
+})
+
+describe('mergeExtracted — stored rows sharing a key must not collapse', () => {
+  // The dataset has 19 ref-keys shared by more than one row: two distinct
+  // findings both citing #669, for instance. The first orphan fix matched by
+  // SET MEMBERSHIP, so a stored row counted as "represented" whenever ANY fresh
+  // row shared one of its keys — and the second row with that key was neither
+  // in `merged` (only fresh rows are) nor in the orphans. Against a pristine
+  // checkout that silently deleted 326 -> 323.
+  const A = {
+    refs: ['o/r#1'],
+    summary: 'first finding citing 1',
+    date: '2026-01-01',
+    costMinutes: 10,
+  }
+  const B = {
+    refs: ['o/r#1'],
+    summary: 'second finding citing 1',
+    date: '2026-01-02',
+    costMinutes: 20,
+  }
+
+  it('keeps the stored row the markdown no longer yields', () => {
+    // Markdown now yields only ONE row carrying that ref.
+    const fresh = [
+      { refs: ['o/r#1'], summary: 'first finding citing 1', date: null, costMinutes: null },
+    ]
+    const merged = mergeExtracted(fresh, [A, B])
+    expect(merged).toHaveLength(2)
+    expect(merged.map((r) => r.summary)).toContain('second finding citing 1')
+  })
+
+  it('never loses a row: output is at least as large as the stored input', () => {
+    const fresh = [{ refs: ['o/r#1'], summary: 'only one now', date: null, costMinutes: null }]
+    expect(mergeExtracted(fresh, [A, B]).length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('pairs one-to-one rather than by set membership', () => {
+    const fresh = [
+      { refs: ['o/r#1'], summary: 'first finding citing 1', date: null, costMinutes: null },
+      { refs: ['o/r#1'], summary: 'second finding citing 1', date: null, costMinutes: null },
+    ]
+    const { pairs, orphans } = pairRows(fresh, [A, B])
+    expect(pairs.size).toBe(2)
+    expect(orphans).toHaveLength(0)
+    // Each fresh row claimed a DIFFERENT stored row.
+    expect(new Set([pairs.get(0), pairs.get(1)]).size).toBe(2)
+  })
+
+  it('still enriches from the row it claimed', () => {
+    const fresh = [
+      { refs: ['o/r#1'], summary: 'first finding citing 1', date: null, costMinutes: null },
+    ]
+    const merged = mergeExtracted(fresh, [A])
+    expect(merged[0].date).toBe('2026-01-01')
+    expect(merged[0].costMinutes).toBe(10)
   })
 })
 

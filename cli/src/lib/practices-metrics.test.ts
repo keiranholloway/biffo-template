@@ -524,6 +524,66 @@ describe('mergeContention', () => {
     expect(result.racedShare).toBe(100)
   })
 
+  /**
+   * H3's counter-metric (#973). `strict: false` buys back the rebase race by
+   * allowing exactly this: B goes green at 10:00 against a `dev` that A then
+   * moves at 10:30, and B merges at 11:00 in a combination no run ever tested.
+   * Under `strict: true` that merge is refused until B rebases.
+   */
+  it('counts a merge whose base moved between first green and merge', () => {
+    const runsByBranch = indexRunsByBranch([
+      run('feat/a', 'aaa', 'success', '2026-07-20T09:00:00Z'),
+      run('feat/b', 'bbb', 'success', '2026-07-20T10:00:00Z'),
+    ])
+    const result = mergeContention(
+      [
+        pr('feat/a', '2026-07-20T08:00:00Z', '2026-07-20T10:30:00Z', 1),
+        pr('feat/b', '2026-07-20T08:00:00Z', '2026-07-20T11:00:00Z', 2),
+      ],
+      runsByBranch,
+    )
+    // Only B is stale: A merged at 10:30 with nothing landing after its 09:00
+    // green, while B's base moved under it.
+    expect(result.staleMerges).toBe(1)
+    expect(result.staleMergeShare).toBe(50)
+  })
+
+  /**
+   * The metric must not fire on the PR's own merge, or every measured PR would
+   * read as stale and the counter-metric would be a constant.
+   */
+  it('does not call a lone merge stale against itself', () => {
+    const runsByBranch = indexRunsByBranch([
+      run('feat/only', 'aaa', 'success', '2026-07-20T10:00:00Z'),
+    ])
+    const result = mergeContention(
+      [pr('feat/only', '2026-07-20T09:00:00Z', '2026-07-20T11:00:00Z')],
+      runsByBranch,
+    )
+    expect(result.staleMerges).toBe(0)
+    expect(result.staleMergeShare).toBe(0)
+  })
+
+  /**
+   * `dev` and `staging` are separate races. Keying staleness by base ref is
+   * what stops a promotion merge from making every `dev` PR read as stale.
+   */
+  it('does not let a merge to another base make a PR stale', () => {
+    const runsByBranch = indexRunsByBranch([
+      run('feat/x', 'aaa', 'success', '2026-07-20T10:00:00Z'),
+      run('release/y', 'bbb', 'success', '2026-07-20T10:00:00Z'),
+    ])
+    const onStaging = {
+      ...pr('release/y', '2026-07-20T09:00:00Z', '2026-07-20T10:30:00Z', 2),
+      baseRefName: 'staging',
+    }
+    const result = mergeContention(
+      [pr('feat/x', '2026-07-20T09:00:00Z', '2026-07-20T11:00:00Z', 1), onStaging],
+      runsByBranch,
+    )
+    expect(result.staleMerges).toBe(0)
+  })
+
   it('does not count a PR that merged straight after going green', () => {
     const runsByBranch = indexRunsByBranch([
       run('feat/quick', 'aaa', 'success', '2026-07-20T10:00:00Z'),

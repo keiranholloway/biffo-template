@@ -430,6 +430,14 @@ class TestBiffoPluginBaseAbstract:
 
 
 class TestBiffoPluginBaseLifecycleHooks:
+    """The ABC's shape only — these hooks are **not invoked** by the platform.
+
+    Nothing in the CLI, Core or the plugin host reaches them
+    (biffo-template#709, guarded by ``test_lifecycle_hooks_not_invoked.py``).
+    What follows proves a subclass can define and override them, not that they
+    ever run on their own.
+    """
+
     def test_on_install_and_on_uninstall_are_callable(self) -> None:
         plugin = ExamplePlugin()
 

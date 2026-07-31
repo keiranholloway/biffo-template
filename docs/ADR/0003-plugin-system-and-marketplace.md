@@ -196,7 +196,7 @@ A Python package published to PyPI that plugins import. It provides:
 - **`register_plugin(manifest: dict)`** — validates the manifest against the schema and returns a serialisable registration object. Called at plugin startup.
 - **`BiffoAPIClient`** — a typed `httpx` wrapper pre-configured with the Core API URL and auth headers (injected from environment). Handles JWT injection, retry logic, and error mapping.
 - **`@subscribe(detail_type: str)`** — decorator that registers an EventBridge event handler. The handler receives a parsed `BiffoEvent` with `tenant_id` extracted from the envelope.
-- **`BiffoPluginBase`** — abstract base class for plugin implementations. Enforces required methods (`on_install`, `on_uninstall`, `on_upgrade`).
+- **`BiffoPluginBase`** — abstract base class for plugin implementations. Enforces required methods (`on_install`, `on_uninstall`, `on_upgrade`) — which are **not invoked**; see [§9a](#9a-the-lifecycle-hooks-are-not-invoked) before putting anything in them.
 
 The SDK does **not** provide a framework or DI container — it is a thin utility layer. Plugins write plain Python; the SDK just standardises the integration points.
 
@@ -264,6 +264,47 @@ Upgrade and teardown are the **responsibility of the application** (the user's d
 - **Teardown (uninstall)** — User runs `biffo plugin uninstall <name>`. The CLI removes the plugin's code and Terraform modules and commits. Migrations are deliberately NOT touched — no cleanup/drop migration is generated (see the "Implementation Note" below for why). Any tables the plugin created remain in the database; dropping them, if desired, requires a manually-written Alembic migration.
 
 No automatic uninstall happens. The user controls the lifecycle.
+
+### 9a. The lifecycle hooks are **not invoked**
+
+> **Amendment, 2026-07-31 (issue [#709](https://github.com/keiranholloway/biffo-template/issues/709)).**
+
+`BiffoPluginBase` declares `on_install()`, `on_uninstall()` and `on_upgrade()`,
+and this ADR was read as promising that the CLI calls them at the moments
+described above. **It never did.** No call site was ever written — `cli/src`
+does not reference the names — so for the whole life of the plugin system these
+have been three declared, implemented, tested, documented methods that no code
+path reaches.
+
+This was not a harmless stale sentence. The plugin skeleton *demonstrated
+seeding through `on_install()`*, which is the example a plugin author copies
+when they need baseline data, and the result is a seed that silently never runs
+with the symptom appearing three layers away: the plugin deploys clean, its
+tables are empty, and whatever validates against those rows rejects everything.
+One investigation of exactly that shape cost 1h20m.
+
+The decision is to **leave the hooks uninvoked and say so** rather than build
+the invocation machinery. Running a plugin's Python against a live Core at
+install time needs credentials, a failure story and a rollback story, and it
+would duplicate two mechanisms that already work:
+
+- **Startup self-seeding** — a plugin that contributes an ASGI app to the shared
+  plugin host (`api_ingress`, ADR-0021 §1) has its ASGI lifespan driven by the
+  host, which performs the handshake itself because Starlette's `Mount` never
+  delivers the lifespan scope (#924, #948). Startup runs once per process, i.e.
+  every cold start, so the work must be idempotent. Core's
+  `POST /api/v1/internal/plugins/me/config/seed` exists for this; it was itself
+  not idempotent until #1000, so the path is real but young.
+- **Out-of-band seeding** — a SQL module in the instance's `db/imports/<name>/`,
+  applied by `biffo data apply` on every deploy. This needs no credentials and
+  no running plugin, and it is the only option for an event-only plugin, which
+  has no startup at all. It is what the first-party plugins use.
+
+The hooks stay declared, as no-ops, so existing plugins keep type-checking.
+`packages/python-sdk/tests/test_lifecycle_hooks_not_invoked.py` holds this
+honest in both directions: it fails if any document claims the hooks run, and it
+also fails if something starts invoking them — at which point this section, the
+SDK docstrings and the skeleton get rewritten to match the new truth.
 
 ---
 

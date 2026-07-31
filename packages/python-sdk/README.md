@@ -51,10 +51,40 @@ class MyPlugin(BiffoPluginBase):
                 "/api/v1/internal/welcome", json={"user": event.detail}
             )
 
+    # Required by the ABC and NOT INVOKED by anything — see below.
     def on_install(self) -> None: ...
 
     def on_uninstall(self) -> None: ...
 ```
+
+## The lifecycle hooks are not invoked
+
+`on_install()`, `on_uninstall()` and `on_upgrade()` are declared on
+`BiffoPluginBase` and **nothing calls them**. ADR-0003 §9 describes a
+`biffo plugin install` that would; the call site was never built, and the CLI
+does not reference the names at all. Implement them as no-ops. Anything you put
+in one — seeding especially — silently never happens, and the symptom shows up
+somewhere else entirely: the plugin deploys clean, its tables are empty, and
+whatever reads those rows finds none
+([#709](https://github.com/keiranholloway/biffo-template/issues/709)).
+
+Baseline data has two working homes instead:
+
+- **Self-seed at startup** — for a plugin that contributes an ASGI app to the
+  shared plugin host (`api_ingress`, ADR-0021). The host drives each mounted
+  app's ASGI lifespan itself, because Starlette's `Mount` never delivers the
+  lifespan scope — until
+  [#948](https://github.com/keiranholloway/biffo-template/pull/948) a plugin's
+  own `@app.on_event("startup")` was just as dead as `on_install()`. Startup
+  runs once per process, so on every cold start: the work must be idempotent.
+  Core's `POST /api/v1/internal/plugins/me/config/seed` is the endpoint built
+  for this, and it was itself not idempotent until
+  [#1000](https://github.com/keiranholloway/biffo-template/pull/1000) — this
+  path is young, so verify your own seed rather than assuming it.
+- **Seed out of band** — a SQL module in the instance's `db/imports/<name>/`,
+  applied by `biffo data apply` on every deploy. No credentials, no running
+  plugin, and the only option for an event-only plugin, which has no startup to
+  hang anything on.
 
 Handlers are registered against `self.events`, an `EventSubscriber` private to
 the instance. In the Lambda entrypoint, turn the raw EventBridge payload into a

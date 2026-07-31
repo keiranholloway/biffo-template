@@ -24,7 +24,7 @@
           "name": "is_active",
           "type": "Boolean",
           "nullable": true,
-          "description": "Nullable because declared column defaults are not applied by the generated migration DDL (only the in-process SQLAlchemy model) — see README's 'Known limitations' section. Treat NULL as false; this plugin's own on_install() always sets it explicitly."
+          "description": "Nullable because declared column defaults are not applied by the generated migration DDL (only the in-process SQLAlchemy model) — see README's 'Known limitations' section. Treat NULL as false; this plugin's own seed always sets it explicitly."
         }
       ],
       "indexes": [

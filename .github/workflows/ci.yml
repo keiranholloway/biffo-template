@@ -70,6 +70,13 @@ jobs:
   release-guards:
     name: Release Guards
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    # A self-hosted spot runner that is reclaimed mid-job leaves the job hanging
+    # rather than failing: on 2026-07-30 five jobs across two PRs died with
+    # "The runner has received a shutdown signal", and without a timeout a job
+    # whose runner simply vanishes burns the 360-minute default before anyone
+    # is told. 20m is ~4x the slowest job observed across this repo and
+    # biffo-platform (JS, 5.4m), so a cold cache or a large PR will not trip it.
+    timeout-minutes: 20
     # Runs on pull_request AND merge_group — but the guards themselves only do
     # anything on a pull_request.
     #
@@ -151,6 +158,7 @@ jobs:
   js:
     name: JS (lint, types, test, audit)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -229,6 +237,7 @@ jobs:
   python:
     name: Python (lint, types, test, security)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: astral-sh/setup-uv@v6
@@ -285,6 +294,7 @@ jobs:
   security-secrets:
     name: Secret Scan
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: read
@@ -334,6 +344,7 @@ jobs:
   infra-validate:
     name: Terraform Validate & Security
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: hashicorp/setup-terraform@v4

@@ -131,14 +131,70 @@ export function readCoreManifest(templateRoot: string): CoreManifest {
   return result.data
 }
 
-/** Length of the matching prefix, or -1 if it doesn't match. A prefix ending in
- * '/' matches a directory subtree (startsWith); otherwise it matches an exact
- * file path. */
-function matchLength(relPath: string, prefix: string): number {
-  if (prefix.endsWith('/')) {
-    return relPath === prefix.slice(0, -1) || relPath.startsWith(prefix) ? prefix.length : -1
+/**
+ * `*` matches any run of characters **within one path segment** — it never
+ * crosses a `/`. Deliberately narrower than a shell glob: a narrower carve-out
+ * leaves MORE paths on the template-owned side, which is the direction that
+ * blocks rather than the direction that quietly widens (issue #755).
+ */
+function globToRegExp(pattern: string): RegExp {
+  const source = pattern
+    .split('*')
+    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+    .join('[^/]*')
+  return new RegExp(`^${source}$`)
+}
+
+/** Compiled once per pattern; the manifest is tiny and read repeatedly. */
+const GLOB_CACHE = new Map<string, RegExp>()
+
+function globMatches(relPath: string, pattern: string): boolean {
+  let re = GLOB_CACHE.get(pattern)
+  if (!re) {
+    re = globToRegExp(pattern)
+    GLOB_CACHE.set(pattern, re)
   }
-  return relPath === prefix ? prefix.length : -1
+  return re.test(relPath)
+}
+
+/**
+ * How specific a matching entry is, so longest-match-wins can rank it — or -1
+ * if it doesn't match. Three forms:
+ *
+ *   - **prefix** — trailing `/`, matches the whole subtree (`services/api/`)
+ *   - **exact file** — no `*`, matches that one path (`.gitleaks.toml`)
+ *   - **glob** — contains `*`, matched against the WHOLE path, never a subtree
+ *     (`.github/workflows/*.instance.yml`). A trailing `/` on a glob therefore
+ *     means nothing: no file path ends in `/`, so such an entry matches nothing.
+ *
+ * ## How a glob ranks against a prefix and against an exact file (issue #755)
+ *
+ * A glob has no self-evident "length", so it scores its **literal characters**
+ * — pattern length minus its `*`s. A `*` matches unbounded text and therefore
+ * asserts nothing about the path; only the literals do. Two consequences, both
+ * deliberate, both tested:
+ *
+ *   1. **A glob beats the prefix that contains it**, which is the whole point:
+ *      `.github/workflows/*.instance.yml` scores 31 against `.github/`'s 8, so
+ *      the carve-out wins inside the subtree it sits in — exactly as the longer
+ *      prefix `services/api/` beats `services/`.
+ *   2. **An exact-file entry can never lose to a glob.** Every literal in a glob
+ *      matching path P is a distinct character of P, so a glob scores at most
+ *      `P.length` — the exact entry's score — and a tie goes to user-owned. So
+ *      the template can always pin one named file back, and no glob added later
+ *      can silently take a path an exact entry already claims.
+ */
+function matchLength(relPath: string, pattern: string): number {
+  if (pattern.includes('*')) {
+    if (!globMatches(relPath, pattern)) return -1
+    let literals = 0
+    for (const ch of pattern) if (ch !== '*') literals++
+    return literals
+  }
+  if (pattern.endsWith('/')) {
+    return relPath === pattern.slice(0, -1) || relPath.startsWith(pattern) ? pattern.length : -1
+  }
+  return relPath === pattern ? pattern.length : -1
 }
 
 function longestMatch(relPath: string, prefixes: readonly string[]): number {
@@ -151,8 +207,9 @@ function longestMatch(relPath: string, prefixes: readonly string[]): number {
 }
 
 /**
- * Whether a repo-relative (posix) path is owned by the template. Longest
- * matching prefix wins; on a tie, user-owned wins — so an upgrade is
+ * Whether a repo-relative (posix) path is owned by the template. The longest
+ * matching entry wins (see `matchLength` for how a prefix, an exact file and a
+ * glob are each scored); on a tie, user-owned wins — so an upgrade is
  * fail-closed and never touches a path the template doesn't unambiguously own.
  */
 export function isTemplateOwned(relPath: string, manifest: CoreManifest): boolean {

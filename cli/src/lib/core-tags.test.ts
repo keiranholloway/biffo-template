@@ -44,6 +44,12 @@ describe('templateOwnedPathspecs', () => {
       readFileSync(join(repoRoot, 'core-manifest.json'), 'utf8'),
     ) as CoreManifest
     expect(templateOwnedPathspecs(real)).toContain(':(exclude)services/api/migrations/versions/')
+    // A nested user-owned GLOB excludes the same way (#755) — an instance's own
+    // `*.instance.yml` workflow must not read as a template change either. Git
+    // honours wildcards in a pathspec, and it is broader there than in the
+    // manifest resolver (git's `*` crosses `/`); that only ever excludes MORE
+    // from "did the template change?", never includes something it shouldn't.
+    expect(templateOwnedPathspecs(real)).toContain(':(exclude).github/workflows/*.instance.yml')
   })
 })
 

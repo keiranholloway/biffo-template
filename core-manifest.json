@@ -48,6 +48,7 @@
     "turbo.json"
   ],
   "userOwned": [
+    ".github/workflows/*.instance.yml",
     "services/",
     "services/api/migrations/versions/",
     "services/api/src/api/domains/",

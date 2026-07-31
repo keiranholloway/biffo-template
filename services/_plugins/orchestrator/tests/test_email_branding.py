@@ -336,3 +336,41 @@ def test_from_env_footer_links_drops_malformed_entries():
 def test_from_env_blank_company_name_falls_back_to_default():
     branding = EmailBranding.from_env({"EMAIL_BRANDING_COMPANY_NAME": ""})
     assert branding.company_name == EmailBranding().company_name
+
+
+# ── unsubscribe_url (RFC 8058, tabsii-platform#378 follow-on) ───────────────
+
+
+def test_unsubscribe_url_renders_as_footer_link():
+    html_doc = render_email_html(
+        EmailBranding(), subject="s", text_body="b", unsubscribe_url="https://example.com/u/x"
+    )
+    _assert_well_formed_html(html_doc)
+    assert 'href="https://example.com/u/x"' in html_doc
+    assert "Unsubscribe" in html_doc
+
+
+def test_unsubscribe_url_appears_alongside_configured_footer_links():
+    branding = EmailBranding(footer_links=(("Privacy", "https://example.com/privacy"),))
+    html_doc = render_email_html(
+        branding, subject="s", text_body="b", unsubscribe_url="https://example.com/u/x"
+    )
+    assert 'href="https://example.com/privacy"' in html_doc
+    assert 'href="https://example.com/u/x"' in html_doc
+    assert "Privacy" in html_doc
+    assert "Unsubscribe" in html_doc
+
+
+def test_unsubscribe_url_is_escaped_same_as_other_footer_links():
+    html_doc = render_email_html(
+        EmailBranding(),
+        subject="s",
+        text_body="b",
+        unsubscribe_url='https://example.com/u?x=1"><script>alert(1)</script>',
+    )
+    assert "<script>alert(1)</script>" not in html_doc
+
+
+def test_no_unsubscribe_url_leaves_footer_unchanged():
+    html_doc = render_email_html(EmailBranding(), subject="s", text_body="b")
+    assert "Unsubscribe" not in html_doc

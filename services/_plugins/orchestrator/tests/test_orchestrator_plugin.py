@@ -82,7 +82,7 @@ async def test_process_event_executes_created_run():
 
     # The action fired exactly once.
     assert len(ses.calls) == 1
-    assert ses.calls[0]["Message"]["Subject"]["Data"] == "Demo from Acme"
+    assert ses.calls[0]["Content"]["Simple"]["Subject"]["Data"] == "Demo from Acme"
     # The outcome was recorded as succeeded with the SES message id.
     results = core.result_posts()
     assert len(results) == 1
@@ -101,8 +101,8 @@ async def test_process_event_email_uses_configured_branding():
     await plugin.process_event(_event())
 
     call = ses.calls[0]
-    assert call["Message"]["Subject"]["Data"] == "[Acme] Demo from Acme"
-    assert "Acme Co" in call["Message"]["Body"]["Html"]["Data"]
+    assert call["Content"]["Simple"]["Subject"]["Data"] == "[Acme] Demo from Acme"
+    assert "Acme Co" in call["Content"]["Simple"]["Body"]["Html"]["Data"]
 
 
 async def test_plugin_defaults_branding_when_not_passed():
@@ -546,7 +546,7 @@ async def test_delivery_email_uses_ses():
     await plugin.deliver_on_completion(_completed_event())
 
     assert len(ses.calls) == 1
-    assert ses.calls[0]["Message"]["Body"]["Text"]["Data"] == "Outcome: shipped"
+    assert ses.calls[0]["Content"]["Simple"]["Body"]["Text"]["Data"] == "Outcome: shipped"
 
 
 async def test_delivery_permanent_failure_does_not_raise(monkeypatch):
@@ -646,7 +646,7 @@ async def test_fire_scheduled_run_executes_the_claimed_action():
     await plugin.fire_scheduled_run("run-1")
 
     assert len(ses.calls) == 1
-    assert ses.calls[0]["Message"]["Subject"]["Data"] == "Demo from Acme"
+    assert ses.calls[0]["Content"]["Simple"]["Subject"]["Data"] == "Demo from Acme"
     assert core.fire_posts() == ["run-1"]
     results = core.result_posts()
     assert len(results) == 1

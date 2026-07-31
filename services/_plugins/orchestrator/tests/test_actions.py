@@ -38,10 +38,10 @@ def test_send_email_renders_templates_and_sends():
 
     assert result == {"message_id": "ses-message-1"}
     call = ses.calls[0]
-    assert call["Source"] == "no-reply@example.com"
+    assert call["FromEmailAddress"] == "no-reply@example.com"
     assert call["Destination"]["ToAddresses"] == ["sales@example.com"]
-    assert call["Message"]["Subject"]["Data"] == "New demo from Acme"
-    assert call["Message"]["Body"]["Text"]["Data"] == "Contact: lead@acme.com"
+    assert call["Content"]["Simple"]["Subject"]["Data"] == "New demo from Acme"
+    assert call["Content"]["Simple"]["Body"]["Text"]["Data"] == "Contact: lead@acme.com"
 
 
 def test_missing_template_field_renders_empty():
@@ -49,7 +49,7 @@ def test_missing_template_field_renders_empty():
 
     send_email({"from": "f@x", "to": "t@x", "subject": "Hi {missing}"}, {}, ses_client=ses)
 
-    assert ses.calls[0]["Message"]["Subject"]["Data"] == "Hi "
+    assert ses.calls[0]["Content"]["Simple"]["Subject"]["Data"] == "Hi "
 
 
 def test_list_of_recipients():
@@ -117,10 +117,10 @@ def test_send_email_includes_html_part_with_default_branding():
     )
 
     call = ses.calls[0]
-    assert "Html" in call["Message"]["Body"]
-    assert call["Message"]["Body"]["Text"]["Data"] == "Hello there."
-    assert "Hello there." in call["Message"]["Body"]["Html"]["Data"]
-    assert call["Message"]["Body"]["Html"]["Data"].startswith("<!doctype html>")
+    assert "Html" in call["Content"]["Simple"]["Body"]
+    assert call["Content"]["Simple"]["Body"]["Text"]["Data"] == "Hello there."
+    assert "Hello there." in call["Content"]["Simple"]["Body"]["Html"]["Data"]
+    assert call["Content"]["Simple"]["Body"]["Html"]["Data"].startswith("<!doctype html>")
 
 
 def test_send_email_plain_text_part_unaffected_by_branding():
@@ -137,7 +137,7 @@ def test_send_email_plain_text_part_unaffected_by_branding():
     # The plain-text fallback is exactly the rendered body — never HTML, never
     # stripped-down markup — so a text-only client or spam filter sees the
     # same words a human author wrote.
-    assert ses.calls[0]["Message"]["Body"]["Text"]["Data"] == "Body copy."
+    assert ses.calls[0]["Content"]["Simple"]["Body"]["Text"]["Data"] == "Body copy."
 
 
 def test_send_email_applies_branding_subject_prefix_and_sender_name():
@@ -152,8 +152,8 @@ def test_send_email_applies_branding_subject_prefix_and_sender_name():
     )
 
     call = ses.calls[0]
-    assert call["Message"]["Subject"]["Data"] == "[Acme] New lead"
-    assert call["Source"] == "Acme Notifications <no-reply@acme.com>"
+    assert call["Content"]["Simple"]["Subject"]["Data"] == "[Acme] New lead"
+    assert call["FromEmailAddress"] == "Acme Notifications <no-reply@acme.com>"
 
 
 def test_send_email_branding_reaches_html_body():
@@ -171,7 +171,7 @@ def test_send_email_branding_reaches_html_body():
         branding=branding,
     )
 
-    html_body = ses.calls[0]["Message"]["Body"]["Html"]["Data"]
+    html_body = ses.calls[0]["Content"]["Simple"]["Body"]["Html"]["Data"]
     assert "https://assets.example.com/logo.png" in html_body
     assert "Acme Co" in html_body
 
@@ -185,11 +185,92 @@ def test_send_email_body_templated_html_escapes_payload_content():
         ses_client=ses,
     )
 
-    html_body = ses.calls[0]["Message"]["Body"]["Html"]["Data"]
+    html_body = ses.calls[0]["Content"]["Simple"]["Body"]["Html"]["Data"]
     assert "<script>alert(1)</script>" not in html_body
     assert "&lt;script&gt;" in html_body
     # the plain-text part is untouched — templating, not escaping, is its job
-    assert ses.calls[0]["Message"]["Body"]["Text"]["Data"] == "Hi <script>alert(1)</script>"
+    text_body = ses.calls[0]["Content"]["Simple"]["Body"]["Text"]["Data"]
+    assert text_body == "Hi <script>alert(1)</script>"
+
+
+# ── One-click unsubscribe (RFC 8058, tabsii-platform#378 follow-on) ─────────
+
+
+def test_send_email_with_unsubscribe_url_sets_rfc8058_headers():
+    ses = FakeSes()
+
+    send_email(
+        {"from": "f@x", "to": "t@x", "subject": "s", "body": "b"},
+        {"unsubscribe_url": "https://example.com/u/abc123"},
+        ses_client=ses,
+    )
+
+    headers = ses.calls[0]["Content"]["Simple"]["Headers"]
+    assert {"Name": "List-Unsubscribe", "Value": "<https://example.com/u/abc123>"} in headers
+    assert {
+        "Name": "List-Unsubscribe-Post",
+        "Value": "List-Unsubscribe=One-Click",
+    } in headers
+
+
+def test_send_email_unsubscribe_url_appears_in_html_footer_and_text_part():
+    ses = FakeSes()
+
+    send_email(
+        {"from": "f@x", "to": "t@x", "subject": "s", "body": "Hello there."},
+        {"unsubscribe_url": "https://example.com/u/abc123"},
+        ses_client=ses,
+    )
+
+    call = ses.calls[0]
+    html_body = call["Content"]["Simple"]["Body"]["Html"]["Data"]
+    text_body = call["Content"]["Simple"]["Body"]["Text"]["Data"]
+    assert 'href="https://example.com/u/abc123"' in html_body
+    assert "https://example.com/u/abc123" in text_body
+    # the original body is still there, untouched, alongside the appended line
+    assert "Hello there." in text_body
+
+
+def test_send_email_without_unsubscribe_url_has_no_headers_key():
+    ses = FakeSes()
+
+    send_email(
+        {"from": "f@x", "to": "t@x", "subject": "s", "body": "b"},
+        {},
+        ses_client=ses,
+    )
+
+    assert "Headers" not in ses.calls[0]["Content"]["Simple"]
+
+
+def test_send_email_without_unsubscribe_url_footer_and_text_unaffected():
+    ses = FakeSes()
+
+    send_email(
+        {"from": "f@x", "to": "t@x", "subject": "s", "body": "Hello there."},
+        {},
+        ses_client=ses,
+    )
+
+    call = ses.calls[0]
+    html_body = call["Content"]["Simple"]["Body"]["Html"]["Data"]
+    text_body = call["Content"]["Simple"]["Body"]["Text"]["Data"]
+    assert "Unsubscribe" not in html_body
+    assert text_body == "Hello there."
+
+
+def test_send_email_falsy_unsubscribe_url_treated_as_absent():
+    ses = FakeSes()
+
+    send_email(
+        {"from": "f@x", "to": "t@x", "subject": "s", "body": "b"},
+        {"unsubscribe_url": ""},
+        ses_client=ses,
+    )
+
+    call = ses.calls[0]
+    assert "Headers" not in call["Content"]["Simple"]
+    assert "Unsubscribe" not in call["Content"]["Simple"]["Body"]["Html"]["Data"]
 
 
 # ── Google Chat ──────────────────────────────────────────────────────────────

@@ -53,10 +53,14 @@ gives `services/api/src/api/domains/` precedence over `services/api/`.
    config, which emitted `out/admin/demo-requests/index.html`. Only *ownership*
    changes.
 
-2. **`apps/portal/src/instance-nav.ts` is user-owned** (an exact-file entry) —
-   the discovery half. It exports `INSTANCE_NAV_LINKS`, shipped **empty** by the
-   template. The template-owned `nav.tsx` renders
-   `resolveInstanceNavLinks(INSTANCE_NAV_LINKS)` after its own links.
+2. **`apps/portal/src/instance-nav.ts` is user-owned and OPTIONAL** (an
+   exact-file entry) — the discovery half. It exports `INSTANCE_NAV_LINKS`, and
+   the template does **not** ship it: `@/instance-nav` resolves to the
+   template-owned `src/lib/instance-nav-empty.ts` unless an instance creates its
+   own, which then takes precedence. The template-owned `nav.tsx` renders
+   `resolveInstanceNavLinks(INSTANCE_NAV_LINKS)` after its own links either way.
+   See Consequences for why the default must live on the template side, and for
+   the three resolvers that have to agree about it.
 
    The seam is split on purpose: the **shape** lives in the template-owned
    `apps/portal/src/lib/instance-nav-contract.ts`, so the template can evolve
@@ -112,25 +116,47 @@ route, and #558 has not moved since 2026-07-25.
 
 - Every instance has a standard, user-owned home for its own admin surfaces, and
   adding one never touches a template-owned file.
-- **`nav.tsx` (template-owned) imports `@/instance-nav` (user-owned).** For a
-  freshly scaffolded instance this is a non-issue — `biffo init` copies the
-  seeded file. But `biffo core upgrade` does not carry user-owned paths, so an
-  instance created *before* this core version receives the new `nav.tsx` without
-  the file it imports and its portal build fails with a module-not-found. The
-  fix is one file, and the upgrade PR's own CI surfaces it before merge:
+- **`nav.tsx` (template-owned) imports `@/instance-nav`, which is optional.**
+  This was originally shipped as a *mandatory* user-owned file, and that was
+  wrong: `biffo core upgrade` never carries user-owned paths, so every instance
+  created before this ADR would have taken the new `nav.tsx` without the module
+  it imports and failed `module not found` in the upgrade PR's own CI. Both live
+  instances were in exactly that state. **Amended before any instance upgraded.**
 
-  ```ts
-  // apps/portal/src/instance-nav.ts
-  import type { InstanceNavLink } from '@/lib/instance-nav-contract'
+  The file is now optional. `apps/portal/src/lib/instance-nav-empty.ts` is
+  template-owned, always present, and is what `@/instance-nav` resolves to by
+  default; an instance that wants entries creates `src/instance-nav.ts` and it
+  takes precedence. The "declare nothing" case requires the instance to do
+  nothing at all.
 
-  export const INSTANCE_NAV_LINKS: InstanceNavLink[] = []
-  ```
+  **Three resolvers have to agree, and each needed its own handling:**
 
-  This is inherent to any bundled front-end seam: unlike ADR-0022's Python
-  discovery, which globs `domains/` at runtime and mounts nothing when it is
-  absent, a bundler resolves the import at build time and cannot degrade. A
-  general "seed a user-owned file the instance lacks" carry in `core upgrade`
-  would remove the manual step; it is deliberately not in scope here.
+  | Resolver | Where | How |
+  | --- | --- | --- |
+  | `tsc` | `apps/portal/tsconfig.json` | `paths` maps `@/instance-nav` to the empty default |
+  | Next build | `apps/portal/next.config.ts` | webpack alias overrides when the instance file exists |
+  | vitest | `apps/portal/vitest.config.ts` | its own `resolve.alias`; it reads neither of the above |
+
+  Two things here are counter-intuitive and were found by building, not by
+  reasoning:
+
+  - **A tsconfig fallback list does not work.** Next's SWC loader rejects a
+    multi-element `paths` array for a non-wildcard key — *"should be an array
+    with one element because the src path does not contain a wildcard"* — and it
+    surfaces as a Rust panic loading `next.config`, naming neither this seam nor
+    the file. `paths` must stay single-element; the override goes in webpack.
+  - **Aliasing the `@/instance-nav` specifier does nothing.** SWC rewrites
+    tsconfig `paths` at transform time, so webpack never sees that key. The
+    alias must target the *resolved* default path. The specifier version built
+    successfully and silently emitted a bundle containing the empty default —
+    a green build proving nothing, which is why this was verified by grepping
+    the emitted bundle for a probe value rather than by the build's exit code.
+
+  The general lesson stands and is worth stating separately: **a seam whose
+  "declare nothing" case still requires the instance to do something will break
+  every instance that predates it.** ADR-0022's Python discovery avoids this by
+  globbing at runtime; anything bundled resolves earlier and harder, so the
+  default must live on the template side.
 - `tabsii-platform` can relocate its four files into the group, replace its
   `nav.tsx` patch with one `INSTANCE_NAV_LINKS` entry, and drop that divergence
   declaration.

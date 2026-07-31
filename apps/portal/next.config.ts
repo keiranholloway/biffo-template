@@ -1,6 +1,53 @@
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import type { NextConfig } from 'next'
 
+/**
+ * `src/instance-nav.ts` is OPTIONAL, and this is what makes it optional.
+ *
+ * ADR-0028 gave instances a user-owned place to declare admin nav entries, and
+ * template-owned `nav.tsx` imports `@/instance-nav` statically. A bundler
+ * resolves static imports at build time and cannot degrade, so as originally
+ * shipped every instance had to carry a file whose whole content was an empty
+ * array — and any instance created before ADR-0028 would fail `module not
+ * found` on its next `core upgrade`, because `core upgrade` deliberately never
+ * carries user-owned paths. Both live instances were in exactly that state.
+ *
+ * So: `tsconfig.json` points `@/instance-nav` at the template-owned empty
+ * default, which always exists, and this alias overrides it with the
+ * instance's own file when there is one. An instance that wants nav entries
+ * creates `src/instance-nav.ts`; one that does not never learns this exists.
+ *
+ * Why the alias rather than a tsconfig fallback list: Next's SWC loader rejects
+ * a multi-element `paths` array for a non-wildcard key outright —
+ * *"should be an array with one element because the src path does not contain
+ * a wildcard"* — so the obvious `["./src/instance-nav.ts", "./src/lib/…"]`
+ * does not build. Verified, not assumed.
+ *
+ * The two must agree on the module's SHAPE, which they do by construction:
+ * both export `INSTANCE_NAV_LINKS: InstanceNavLink[]` from the template-owned
+ * contract, so typechecking against the default is sound for either.
+ */
+const instanceNav = join(import.meta.dirname, 'src', 'instance-nav.ts')
+const emptyDefault = join(import.meta.dirname, 'src', 'lib', 'instance-nav-empty.ts')
+
+/** The sliver of webpack's config this touches. Next types the callback's
+ *  argument as `any`, which the shared lint config rightly refuses. */
+interface WebpackResolveConfig {
+  resolve: { alias?: Record<string, string> }
+}
+
 const nextConfig: NextConfig = {
+  webpack: (config: WebpackResolveConfig) => {
+    if (existsSync(instanceNav)) {
+      // Alias the RESOLVED path, not the '@/instance-nav' specifier: SWC
+      // rewrites tsconfig `paths` at transform time, so webpack never sees the
+      // alias key. Verified — aliasing the specifier built successfully and
+      // silently emitted the empty default.
+      config.resolve.alias = { ...config.resolve.alias, [emptyDefault]: instanceNav }
+    }
+    return config
+  },
   output: 'export',
   trailingSlash: true,
   // The portal is strictly the admin console (issue #306). It serves /admin and

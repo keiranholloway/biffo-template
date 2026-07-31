@@ -3,6 +3,7 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
+      "@/instance-nav": ["./src/lib/instance-nav-empty.ts"],
       "@/*": ["./src/*"]
     },
     "noEmit": true,

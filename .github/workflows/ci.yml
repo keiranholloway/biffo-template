@@ -245,6 +245,21 @@ jobs:
           enable-cache: true
       - id: install
         run: uv sync --all-groups
+      # `uv sync` installs the workspace lock — core. An instance's own product
+      # domains (ADR-0022) declare their extra dependencies in a user-owned,
+      # fully pinned `domains/<name>/requirements.txt`, which is NOT in that lock
+      # (#891); this installs them as a second layer, constrained by the lock so
+      # a domain can never move a core package.
+      #
+      # It sits here, ahead of every gate, on purpose: lint, pyright, pytest AND
+      # pip-audit then all see the same environment the Lambda will ship. A
+      # domain dependency nobody type-checks and no advisory database is ever
+      # asked about is the fail-open shape `scripts/py-dependency-audit.sh`
+      # already exists to fight. A no-op in this template, which ships no
+      # product domain.
+      - name: Product-domain dependencies
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/sync-domain-deps.sh
       - name: Lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: uv run ruff check .

@@ -382,6 +382,27 @@ jobs:
           # zip. The path is ../ because this step runs in the api-service
           # artifact dir and the full repo checkout is its parent.
           uv pip install ../packages/cognito-auth --target package/ --no-deps
+          # An instance's own product domains (ADR-0022) may need Python packages
+          # the template does not ship — tabsii's PostGIS columns need geoalchemy2
+          # and shapely. `services/api/pyproject.toml` is template-owned, so until
+          # #891 the only way to declare them was to FORK that manifest, and taking
+          # them upstream instead would make every instance pay the import cost for
+          # one instance's geometry columns (#890, cf. the #724 cold-start work
+          # this same step already exists to serve).
+          #
+          # So a domain declares them in a user-owned, fully pinned
+          # `domains/<name>/requirements.txt`, and this installs that as a SECOND
+          # layer on top of the frozen core export above — under a constraint file
+          # exported from the same lock, so a domain can never move, downgrade or
+          # replace a core package here. See scripts/domain_requirements.py.
+          #
+          # It runs BEFORE the trim below, not after: the trim removes boto3 and
+          # friends because the Lambda runtime provides them, and a domain's
+          # transitives must be subject to that same trim rather than quietly
+          # reinstating ~10MB of runtime-provided packages into the zip.
+          #
+          # A no-op in this template, which ships no product domain.
+          sh ../scripts/sync-domain-deps.sh --target package/
           # Trim the package before zipping so the code update fits AWS's direct
           # update-function-code limit. That API base64-encodes the zip into the
           # request body (~1.33x), so a ~54MB zip inflates past the ~70MB request
@@ -1165,6 +1186,27 @@ jobs:
           # zip. The path is ../ because this step runs in the api-service
           # artifact dir and the full repo checkout is its parent.
           uv pip install ../packages/cognito-auth --target package/ --no-deps
+          # An instance's own product domains (ADR-0022) may need Python packages
+          # the template does not ship — tabsii's PostGIS columns need geoalchemy2
+          # and shapely. `services/api/pyproject.toml` is template-owned, so until
+          # #891 the only way to declare them was to FORK that manifest, and taking
+          # them upstream instead would make every instance pay the import cost for
+          # one instance's geometry columns (#890, cf. the #724 cold-start work
+          # this same step already exists to serve).
+          #
+          # So a domain declares them in a user-owned, fully pinned
+          # `domains/<name>/requirements.txt`, and this installs that as a SECOND
+          # layer on top of the frozen core export above — under a constraint file
+          # exported from the same lock, so a domain can never move, downgrade or
+          # replace a core package here. See scripts/domain_requirements.py.
+          #
+          # It runs BEFORE the trim below, not after: the trim removes boto3 and
+          # friends because the Lambda runtime provides them, and a domain's
+          # transitives must be subject to that same trim rather than quietly
+          # reinstating ~10MB of runtime-provided packages into the zip.
+          #
+          # A no-op in this template, which ships no product domain.
+          sh ../scripts/sync-domain-deps.sh --target package/
           # Trim the package before zipping so the code update fits AWS's direct
           # update-function-code limit. That API base64-encodes the zip into the
           # request body (~1.33x), so a ~54MB zip inflates past the ~70MB request
@@ -1960,6 +2002,27 @@ jobs:
           # zip. The path is ../ because this step runs in the api-service
           # artifact dir and the full repo checkout is its parent.
           uv pip install ../packages/cognito-auth --target package/ --no-deps
+          # An instance's own product domains (ADR-0022) may need Python packages
+          # the template does not ship — tabsii's PostGIS columns need geoalchemy2
+          # and shapely. `services/api/pyproject.toml` is template-owned, so until
+          # #891 the only way to declare them was to FORK that manifest, and taking
+          # them upstream instead would make every instance pay the import cost for
+          # one instance's geometry columns (#890, cf. the #724 cold-start work
+          # this same step already exists to serve).
+          #
+          # So a domain declares them in a user-owned, fully pinned
+          # `domains/<name>/requirements.txt`, and this installs that as a SECOND
+          # layer on top of the frozen core export above — under a constraint file
+          # exported from the same lock, so a domain can never move, downgrade or
+          # replace a core package here. See scripts/domain_requirements.py.
+          #
+          # It runs BEFORE the trim below, not after: the trim removes boto3 and
+          # friends because the Lambda runtime provides them, and a domain's
+          # transitives must be subject to that same trim rather than quietly
+          # reinstating ~10MB of runtime-provided packages into the zip.
+          #
+          # A no-op in this template, which ships no product domain.
+          sh ../scripts/sync-domain-deps.sh --target package/
           # Trim the package before zipping so the code update fits AWS's direct
           # update-function-code limit. That API base64-encodes the zip into the
           # request body (~1.33x), so a ~54MB zip inflates past the ~70MB request

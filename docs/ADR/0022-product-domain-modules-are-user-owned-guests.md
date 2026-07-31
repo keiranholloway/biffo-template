@@ -57,6 +57,15 @@ template-owned core API**, exactly as the manifest already does for
 3. **The `domains/` tree is seeded once** (an `__init__.py` + `README.md`) like
    `docs/ADR/`, then owned by the instance and never carried by an upgrade.
 
+4. **A domain declares its own Python dependencies in a fully pinned
+   `domains/<name>/requirements.txt`, installed as a second, constrained layer**
+   (issue #891). `services/api/pyproject.toml` is template-owned, so without this
+   a domain needing a package the template does not ship had to fork the core
+   manifest — which is what tabsii-platform did for `geoalchemy2`/`shapely`.
+   Taking such packages upstream is the wrong answer: every instance would pay
+   the import cost for one instance's geometry columns (#890, and cold start is a
+   measured problem — #724). The mechanism is described in full below.
+
 An instance relocates its domain files under `domains/<name>/` — mechanical, no
 behaviour change. This honours all three data ADRs: the data stays in core
 (0002 ✓), siblings are unchanged (0007 ✓), and plugins are untouched (0003 ✓).
@@ -104,6 +113,68 @@ Rely on the existing `Core-Divergence` trailer / `biffo.divergence.json` per fil
   forever. It is a way to keep flagging *past* the problem, not to remove it.
   Rejected.
 
+## Domain dependencies: a second layer, never a merged resolution (#891)
+
+A domain lists what it needs, exactly pinned, in
+`services/api/src/api/domains/<name>/requirements.txt`. `scripts/sync-domain-deps.sh`
+installs those files **after** the core's `uv export --frozen` set and **under a
+constraint file exported from the same lock** — into the venv in `ci.yml`, and
+into `package/` in `deploy-app.yml` before the zip.
+
+The ordering is the design. Core resolves first, from a lock the template owns;
+domain packages are layered on top of a resolution they never join.
+
+**Why not an extra in the core manifest.** `[project.optional-dependencies]
+domains = [...]` in `services/api/pyproject.toml`, exported with `--extra
+domains`, is the obvious answer and it is the wrong one: the instance would still
+be editing a template-owned file — the exact fork this is meant to remove — and
+would conflict with it on every upstream dependency bump. It also merges domain
+requirements into core's resolution, which is precisely the power a domain must
+not have.
+
+**Why not a uv workspace member per domain.** A real member with its own
+`pyproject.toml` would give real locking through `uv.lock`, but only if
+`biffo-api` depended on it — and that edge would have to be declared in the
+template-owned manifest, per instance, which PEP 621 cannot express dynamically.
+It would also give the domain a second, conflicting packaging identity for a
+directory that is imported as `api.domains.<name>`, and full workspace-resolver
+influence over core's pins.
+
+**A domain cannot shadow or downgrade a core dependency.** Two independent
+mechanisms, one legible and one authoritative:
+
+- `scripts/domain_requirements.py` rejects, with the file and line, any
+  requirement whose PEP 503-normalized name already appears in `uv.lock` — at any
+  version, in any group. It also rejects anything not pinned with `==`, anything
+  sourced from a URL/VCS/local path, any option line (`--index-url`,
+  `--extra-index-url`, `--find-links`, `-e`, nested `-r`/`-c`), and two domains
+  disagreeing about a shared version. It runs in `ci.yml` (via
+  `services/api/tests/test_domain_requirements.py`, which is template-owned so it
+  reaches every instance) and again inside `sync-domain-deps.sh` before anything
+  is installed.
+- The `--constraint` file makes it true rather than merely checked, including for
+  **transitive** dependencies the early check never sees. Anything a domain pulls
+  that core already resolved is pinned to core's version; a domain that needs a
+  different one gets a resolution failure, not a package quietly replaced in the
+  Lambda. Measured on this template: a domain requiring `sqlalchemy-utils`
+  resolves `greenlet==3.5.3` and `typing-extensions==4.15.0` — core's locked
+  versions — where the same install unconstrained takes `greenlet==3.5.4` and
+  `typing-extensions==4.16.0`. `greenlet` 3.5.4 is the release that broke a
+  deploy in #410.
+
+**The lockfile story.** The workspace `uv.lock` is untouched, so `--frozen` keeps
+meaning exactly what #410 made it mean. The domain's requirements file *is* its
+lockfile: fully pinned, reviewable in a diff, generated with `uv pip compile`.
+And because `ci.yml` installs it into the same venv, `pip-audit` sees it —
+domain dependencies are advisory-scanned like core's, rather than being a set
+nobody ever looked at.
+
+**What this deliberately does not do.** It does not let a domain hold a different
+version of a package core already has. That is not an oversight; two copies of
+one distribution cannot both be on a Lambda's `sys.path`, so the only honest
+options were "fail loudly" and "let one silently win". A domain that genuinely
+needs a newer core dependency must move core's pin, upstream and on purpose.
+
 ## Consequences
 
 - Every instance has a standard, user-owned home for its product domain; the
@@ -114,6 +185,11 @@ Rely on the existing `Core-Divergence` trailer / `biffo.divergence.json` per fil
   operation)`), so the discovery seam simply *includes* them rather than
   synthesizing anything. A domain that fails to import raises at startup: a
   broken product domain should surface at deploy, not silently serve nothing.
+- A domain can depend on packages the template does not ship, without forking a
+  template-owned manifest and without every other instance carrying the import
+  cost. What it cannot do is change what core depends on — that stays a
+  deliberate upstream decision, and the resolver, not a convention, is what
+  enforces it.
 - The core invariants still apply inside a domain: `TenantScopedModel` on every
   table (invariant #1), `require_tenant_context` on every route (invariant #2),
   `BiffoEvent` for every event (invariant #3), no DB client outside

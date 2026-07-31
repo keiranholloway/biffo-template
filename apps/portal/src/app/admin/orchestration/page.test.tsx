@@ -2207,6 +2207,98 @@ describe('OrchestrationPage', () => {
       fireEvent.change(screen.getByLabelText('Record into'), { target: { value: 'leads' } })
       expect(screen.getByText(/never from the agent/)).toBeInTheDocument()
     })
+
+    // ── testing a write-back workflow (#749) ────────────────────────────────
+    //
+    // "Test workflow" is the only gate before Enable. It used to send no
+    // `writeback`, so Core generated no submit tool, the model answered in prose,
+    // and the panel showed that prose result's metadata under "Would write" —
+    // while a live run given the same result writes nothing.
+
+    /** Fill a testable agent that records Notes on the lead. */
+    async function fillTestableWriteBack() {
+      await openAgentWithWriteBack()
+      fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'qualifier' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }))
+      fireEvent.change(screen.getByLabelText('Instructions'), { target: { value: 'Qualify it.' } })
+      fireEvent.change(screen.getByLabelText('Record into'), { target: { value: 'leads' } })
+      fireEvent.click(screen.getByLabelText(/^Notes/))
+    }
+
+    it('sends the write-back with the test, so the preview gets the submit tool', async () => {
+      mockDryRun(
+        completedRun({
+          result: { output_tool: 'submit_leads_record', arguments: { notes: 'Strong fit.' } },
+        }),
+      )
+      await fillTestableWriteBack()
+
+      fireEvent.click(screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement)
+      await screen.findByText('test passed')
+
+      const body = startWorkflowDryRun.mock.calls.at(0)?.[1] as Record<string, unknown>
+      // Core generates `submit_leads_record` FROM this key. Without it the
+      // preview is a plain completion — the one shape a live write-back run
+      // reads as "no columns" and refuses to write.
+      expect(body.writeback).toEqual({
+        table: 'leads',
+        operation: 'update',
+        columns: { notes: '{output.notes}' },
+      })
+    })
+
+    it('shows the submitted columns under "Would write", not the run metadata', async () => {
+      mockDryRun(
+        completedRun({
+          result: {
+            output_tool: 'submit_leads_record',
+            arguments: { notes: 'Strong fit — budget confirmed.' },
+            model: 'moonshotai/kimi-k3',
+            turns: 1,
+            finish_reason: 'stop',
+          },
+        }),
+      )
+      await fillTestableWriteBack()
+
+      fireEvent.click(screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement)
+
+      expect(await screen.findByText('Would write')).toBeInTheDocument()
+      expect(screen.getByText('Strong fit — budget confirmed.')).toBeInTheDocument()
+      // Labelled by the target's own column label — one term for the one mapped
+      // column — and the run metadata that used to be displayed as the row is
+      // nowhere in the panel.
+      expect(screen.getByRole('term')).toHaveTextContent('Notes')
+      expect(screen.queryByText(/finish_reason/)).not.toBeInTheDocument()
+    })
+
+    it('says the workflow would write nothing when the agent answered in prose', async () => {
+      // The exact shape #749 reported: a plain completion, which `writeback.py`
+      // reads as no columns. It used to be rendered under "Would write".
+      mockDryRun(
+        completedRun({
+          messages: [{ role: 'assistant', content: 'Qualification verdict: strong fit.' }],
+          result: {
+            output: 'Qualification verdict: strong fit.',
+            model: 'moonshotai/kimi-k3',
+            turns: 1,
+            finish_reason: 'stop',
+          },
+        }),
+      )
+      await fillTestableWriteBack()
+
+      fireEvent.click(screen.getAllByRole('button', { name: 'Test workflow' })[0] as HTMLElement)
+
+      // Said twice on purpose: in the preview panel where "Would write" used to
+      // sit, and as the reason the test did not pass.
+      expect(await screen.findAllByText(/would write nothing/)).toHaveLength(2)
+      expect(screen.queryByText('Would write')).not.toBeInTheDocument()
+      // And it is NOT a pass: a preview that would write nothing must not unlock
+      // the workflow that is only there to write.
+      expect(screen.queryByText('test passed')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Enable workflow' })).toBeDisabled()
+    })
   })
 
   it('shows which user a write-capable workflow runs as', async () => {

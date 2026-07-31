@@ -259,6 +259,11 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **A counter-metric built to falsify an experiment was, in its first version, a second reading of the metric it was meant to check — and three passing unit tests could not see it.** H3’s content-loss risk sat `open` for three days because nothing measured it. `staleMergeShare` counts merges whose base moved between the PR’s green run and its merge — anchored, at first, to the **first** green. That is wrong by construction: under `strict: true` a raced PR goes green, falls behind, rebases and re-greens, so its base *always* moved after its first green. The metric counted rebases — `racedShare` under another name — and moved **with** the primary rather than against it, scoring tabsii-platform at **44.7% stale while `strict` was still on**, a value the gate makes impossible. No unit test was wrong; each asserted exactly what it claimed, on fixtures too small to contain a rebase. What caught it was running the collector on the live estate and asking whether the number was *possible* rather than whether it was plausible. A second defect hid behind it: `runsForPr` admits runs created up to 24h **after** the merge, so the last green could postdate the merge and make a PR unstaleable — a silent false negative that had reported two real cases clean | **process** · visibility | biffo-template (caught pre-merge, on the live-data run) | biffo-template `scripts/practices-metrics.mjs` | **fixed** ([#977](https://github.com/keiranholloway/biffo-template/pull/977)) — anchored to the last green preceding the merge; regression tests pin both cases |
 | — | **`enforce_admins: false` on ELEVEN of twelve estate repos makes every branch-protection rule advisory for the only human who merges, and no audit reports it.** Three repos carrying `strict: true` — `tabsii-intake`, `tabsii-geo`, `biffo-plugin-ideation` — showed merges the new stale-merge metric says were not up to date, which that gate makes impossible by construction. The explanation is that protection binds an admin **nowhere except `biffo-template`**, the single repo where `enforce_admins` is on. The daily estate audit checks that branches **are** protected (19 branches, all protected, `OK` every day) and never checks that the protection **binds anyone** — so a repo can show a full required-check list, pass the audit, and still be one where any of it can be walked past without a trace. Two consequences past the obvious: **H3’s comparator `tabsii-crm` is not gated the same way as its treatment repo**, a confound the experiment never recorded, and `tabsii-platform` — added to H3’s treatment arm the same day — is unbound too. Nothing was looking; this surfaced only because an unrelated metric disagreed with a setting | **fail-open** · visibility | estate-wide, 11 of 12 repos (via `staleMergeShare` disagreeing with `strict: true`) | not fixed — extend the daily protection audit to report `enforce_admins`, then decide per repo whether bypass is intended | **unfiled** |
 | — | **A dead runner and a rejected change were the same number, so an integration branch read as broken when nothing was.** `FAILING_CONCLUSIONS` excludes `cancelled` on the stated grounds that a superseded run is not a defect — correct, and **only half the cases**: a runner killed mid-job reports `cancelled` only *sometimes*. The rest of the time GitHub concludes the run `failure` **with no failing step**, and that label was counted as if code had broken. On `tabsii-platform`, **all six** `dev` failures inspected had zero failing steps and 3–21 steps left incomplete; one deploy succeeded through thirteen steps and froze on "Package and deploy Lambda". The board reported **8 integration failures and 111.7 red minutes** on a branch where not one gate had rejected anything. Invisible because the run-level conclusion is all anyone reads — diagnosing it needs the per-run jobs payload, which the collector already fetched for an unrelated metric. It also mattered on a deadline: `tabsii-platform` joined H3’s treatment arm the same day already past both of its refutation thresholds, entirely on kills that have nothing to do with `strict` | **visibility** · fail-open | tabsii-platform `dev` (found diagnosing rank 4 of the daily standup) | biffo-template `scripts/practices-metrics.mjs` | **fixed** ([#982](https://github.com/keiranholloway/biffo-template/pull/982)) — validated against 7 real runs including a negative control; correction takes tabsii-platform 24h from 8/111.7 to 1/0 while leaving biffo-template’s genuine 2/54.7 untouched |
+| [#983](https://github.com/keiranholloway/biffo-template/issues/983) | **A core upgrade shipped two template-owned tests whose preconditions the instance did not meet, and both failed CI.** `biffo core upgrade` 0.181.0 → 0.196.1 into biffo-platform: (a) `test_error_branch_coverage.py` reads `docs/practices/error-branch-baseline.json` unconditionally, but the baseline is a measurement **of the repo it lives in** so it is correctly NOT template-owned — the test travels and its data cannot, and the error names neither `scripts/error_branch_coverage.py --write` nor the `pytest --cov --cov-report=json` run it needs first. **Every instance hits this**, biffo-platform was simply first. (b) `test_event_registry_fields.py` refuses a registered event with no `payload_model`; `biffo.core/idea.submitted` is **instance-owned** and had none. Its fix cannot go where the other payload models live (`events/registry.py`) nor in the test's `FIELDLESS_EVENTS` — both template-owned, so either would be reverted by the next upgrade and the failure would return. **The shape both share: a rule arrives with the upgrade, the thing it judges does not, and the obvious place to fix it is the one the next upgrade overwrites.** Distinguished from the night's spot-runner kills by reading step conclusions first — these said `failure`, not `cancelled` | **drift** · process | biffo-platform | biffo-platform ([#136](https://github.com/keiranholloway/biffo-platform/pull/136)) instance-side; biffo-template for the precondition itself | **fixed** instance-side; upstream **open** as [#983](https://github.com/keiranholloway/biffo-template/issues/983) |
+| — | **`core upgrade` reported a permanent schema divergence that was a docstring, and pointed at the most dangerous available fix.** The 0.181.0 → 0.196.1 run warned that migration `0010`'s body had changed upstream and *"this change will NOT reach you… fresh environments get the new body, you keep the old"*. Comparing both files as **ASTs with docstrings stripped** shows them **identical** — the entire drift is a paragraph added in #764 explaining that `migrations/env.py` passes no `connect_args`. There is no schema difference at all. The tempting response to that wording is to write a forward migration bringing the instance into line, i.e. **inventing a change that does not exist**, with `batch_alter_table` on a Core-owned table. The tool compares **bytes**, so a comment edit upstream is indistinguishable from a behaviour change, and the warning then recurs in every instance's upgrade log forever — training readers to skim past the one case that matters. Fix: compare stripped ASTs; a documentation-only diff should carry the docstring across silently | **visibility** | biffo-platform (reported by the CLI) | biffo-template (`cli/` upgrade planner) | **worked around** — docstring synced after proving AST equivalence ([#136](https://github.com/keiranholloway/biffo-platform/pull/136), re-run then reported 0 conflicts); tool fix **open** on [#983](https://github.com/keiranholloway/biffo-template/issues/983) |
+| — | **A template-owned CI file reaches instances and future repos but no existing satellite, so a one-line fix took nine hand-written PRs.** No job in any `ci.yml` set `timeout-minutes`, so a job whose spot runner vanished burned the **360-minute default** rather than failing. Fixing it upstream covers **instances** (`.github/` is `templateOwned` → `biffo core upgrade`) and **repos created later** (both skeletons) — and reaches **none of the nine existing satellites**, because `ci.yml` is deliberately absent from `shared-files.json` (each repo's genuinely differs: idea-scout has two frontend jobs, runners has no workflows at all) and satellites are not instances. **Neither distribution channel covers the middle case**, which is most of the estate. Cost: 9 PRs across 2 GitHub orgs to bound 52 jobs, plus 10 more via the two instances. Same absence already recorded twice for `AGENTS.md` (#559) and the local gates (#855) | **drift** | the whole estate | biffo-template ([#980](https://github.com/keiranholloway/biffo-template/pull/980)) + 8 satellite PRs + 2 instance upgrades | **fixed** — 62 jobs bounded across 11 repos; the *channel* gap is unchanged |
+| — | **Six of my own probes were wrong in one session; five were caught by arithmetic or an identity comparison, one reached the scoreboard.** Two not recorded elsewhere: `find -maxdepth 2` missed `apps/frontend/package.json` at depth **3**, so six repos reported "nothing to install" when each had a frontend — empty output read as *nothing there* rather than *my search was too shallow*; and `jq`'s `//` operator treats **`false` as empty**, so `.required_status_checks.strict // "none"` reported "no required checks" for a repo with **five**, nearly deciding against `--auto` on the #714 grounds. The other four: a regex guard that could not match `5.8×` (`\b` cannot match between U+00D7 and a space), `--extract` reporting rows written but never rows deleted (326 + 6 = 329), a CI monitor settled on a force-pushed-past commit, and a page-behaviour claim made from grepped HTML. **The common structure is not carelessness — every input was real.** It is that a cheap check and a sufficient check are indistinguishable from the inside, and the instrument is always newer and less tested than the subject. What worked, every time: **when you add N things assert the total grew by N; when you claim a page behaves a way, load it; when a probe says "nothing", prove the probe can find something** | **visibility** · process | biffo-template (my own tooling, this session) | diagnostic practice | **corrected** — five pre-filing, one retracted after filing ([#987](https://github.com/keiranholloway/biffo-template/pull/987)) |
+| — | **The pre-push gate cannot scope to the diff, so a one-line YAML change pays a full-toolchain price — and the estate makes you pay it eight times.** Adding `timeout-minutes` to `.github/workflows/ci.yml` in eight satellites required `pnpm install` in **every** worktree, because `verify.sh` runs each repo's whole suite regardless of what changed: `FAIL test(web-admin) … vitest: not found`, **push rejected**. No test in any of those repos reads that file. **~55 minutes of the session was installing dependencies to satisfy tests that cannot observe the change.** Two facts compound and neither is visible alone: the gate has no diff-scoping, and no distribution channel reaches existing satellites (see the row above), so the same edit is made eight times. Either alone is mild; together a one-line estate-wide config change costs an hour. **Scoping the gate once removes this from every future config-or-docs change across eleven repos** — a far better trade than shortening any individual step. Note the gate is right to be strict for code; the defect is that it cannot tell the two cases apart | **process** | 8 satellite repos | biffo-template (`scripts/verify.sh` diff-scoping) | **not fixed** — recorded with the measurement; the rollout was completed by paying the cost |
 
 ### What the classes say
 
@@ -275,15 +280,15 @@ shape recurring across unrelated components is a design problem, not bad luck.
 
 <!-- BEGIN generated: class-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write`. **343** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
+_Generated by `node scripts/practices-evidence.mjs --write`. **348** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
 
 | Primary class | Rows | Share |
 | --- | --- | --- |
-| **visibility** | 107 | 31% |
+| **visibility** | 109 | 31% |
 | fail-open | 80 | 23% |
-| drift | 70 | 20% |
-| process | 60 | 17% |
-| boundary | 26 | 8% |
+| drift | 72 | 21% |
+| process | 61 | 18% |
+| boundary | 26 | 7% |
 
 <!-- END generated: class-tally -->
 
@@ -376,19 +381,19 @@ markers; re-run the command.
 
 <!-- BEGIN generated: fix-repo-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write` from **343** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `cli/src/lib/practices-metrics.test.ts` fails when this block does not match the dataset._
+_Generated by `node scripts/practices-evidence.mjs --write` from **348** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `cli/src/lib/practices-metrics.test.ts` fails when this block does not match the dataset._
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 160 of 343 (47%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
-| **tabsii-platform** | 34 of 343 (10%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
-| **biffo-plugin-idea-scout** | 20 of 343 (6%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
-| **tabsii-crm** | 15 of 343 (4%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
-| **biffo-platform** | 14 of 343 (4%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
-| **biffo-plugin-ideation** | 14 of 343 (4%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **tabsii-intake** | 5 of 343 (1%) | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-runners** | 2 of 343 (1%) | Runner fleet docs + fail-fast |
-| **tabsii-marketplace** | 2 of 343 (1%) | `python-jose` removal; the credential-dependent build |
+| **biffo-template** | 164 of 348 (47%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
+| **tabsii-platform** | 34 of 348 (10%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
+| **biffo-plugin-idea-scout** | 20 of 348 (6%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
+| **biffo-platform** | 15 of 348 (4%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
+| **tabsii-crm** | 15 of 348 (4%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
+| **biffo-plugin-ideation** | 14 of 348 (4%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **tabsii-intake** | 5 of 348 (1%) | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-runners** | 2 of 348 (1%) | Runner fleet docs + fail-fast |
+| **tabsii-marketplace** | 2 of 348 (1%) | `python-jose` removal; the credential-dependent build |
 
 <!-- END generated: fix-repo-tally -->
 
@@ -946,6 +951,62 @@ transcript of what the model was *actually sent*. That single artefact —
 `definition_snapshot.instructions` — settled in one query what three merged
 milestones had asserted incorrectly. It should have been the first move on day one,
 not the last on day four.
+
+### Measured: 60% toil, and almost none of it was the work (2026-07-31, part 2)
+
+**240 agent-minutes: platform 95 · toil 145 · delivery 0.** The delivered change
+was *one line of YAML per job*. Nearly two and a half hours went round it. Where
+it actually went, largest first:
+
+| ~min | What | Structural, or a mistake? |
+| ---: | --- | --- |
+| **~55** | `pnpm install` in 8 satellite worktrees, plus 2 push rejections, to land a **one-line YAML change** | **Structural** |
+| **~30** | #136's CI failure → diagnose → fix → push → re-run, twice | **Structural** (see the rows above) |
+| **~25** | Chasing a portal 404 that did not exist | **My mistake** |
+| **~20** | Re-work from my own wrong probes (`-maxdepth 2`, `jq //`, a malformed `worktree add`, a branch-scoped monitor) | **My mistake** |
+| **~15** | Waiting on CI with nothing else to do | Structural, irreducible |
+
+#### The loop worth shortening is one thing, not eight
+
+The 55 minutes is the finding, and it is **not** eight small annoyances. It is
+**one** structural fact multiplied by eight:
+
+> The pre-push gate runs the repo's **whole** suite regardless of what changed,
+> so editing `.github/workflows/ci.yml` — a file no test in any of those repos
+> reads — required a full JS toolchain in every worktree. `verify.sh` reported
+> `FAIL test(web-admin) … vitest: not found` and **rejected the push**.
+
+Two independent facts compound into that cost, and neither is visible alone:
+
+1. **The gate cannot scope to the diff.** A YAML/docs-only change pays the same
+   price as a 700-line refactor. That is defensible for code and pure overhead here.
+2. **No distribution channel reaches existing satellites** (row above), so the
+   change had to be made **8 separate times** rather than once.
+
+Either alone is mild. Together they turn a one-line estate-wide config change
+into an hour of installing dependencies to satisfy tests that cannot observe it.
+**Fixing the gate's scoping once removes this cost from every future config or
+docs change across eleven repos** — which is a much better trade than shortening
+any individual step.
+
+#### The self-inflicted 45 minutes
+
+~45 of the 145 was my own: 25 chasing a non-defect, 20 in re-work from probes
+that were wrong. That is **31% of the toil and 19% of the session**, and it is
+not noise — it is the largest single lever I personally control. Both classes had
+a cheap tell available *before* the cost was paid (a response header; asserting a
+probe can find something), which is recorded as its own row rather than buried
+here.
+
+#### Why this session flatters the merge proxy badly
+
+By merge count this looks like a productive session — fourteen PRs. By intent it
+was **zero delivery**: no customer-visible feature was built in these 240
+minutes. Every merge was the machine maintaining itself or repairing damage. A
+proxy counting merges, or weighting `ci:`/`fix:`/`docs:` commits as platform
+work, would read this as healthy platform investment. **95 minutes of it were
+chosen; 145 were not**, and only a recorded session can tell those apart.
+
 
 ### Measured: two features shipped, and the machine took a third of it (2026-07-31)
 
@@ -2953,6 +3014,30 @@ comparison — `gh pr view --json headRefOid` against
 green has to name which commit it is green about.**
 
 
+**Reading step conclusions before assuming infrastructure.** Five CI jobs had
+already been killed by spot reclamation this session, so a sixth red check
+looked like more of the same. It was not: the step said **`failure`**, not
+`cancelled`, and the log named two real test failures the core upgrade had
+introduced. Re-running would have burned the cycle and taught nothing. The
+one-command discriminator — `gh api repos/<o>/<r>/actions/jobs/<id>` and read
+`.steps[].conclusion` — is what separated "the fleet ate it again" from "the
+upgrade broke something".
+
+**Proving AST equivalence before writing a migration.** `core upgrade` reported
+migration `0010` as a permanent convergence gap, wording that points squarely at
+writing a forward migration. Comparing the two files as ASTs with docstrings
+stripped showed them **identical** — the drift was a comment. A forward migration
+would have invented a schema change that does not exist, with `batch_alter_table`
+on a Core-owned table, on an instance.
+
+**Checking `allow_auto_merge` and required checks before arming nine PRs.** The
+scoreboard already records that `--auto` against a repo with auto-merge disabled
+merges *immediately* rather than queuing (#714). Verifying first showed all nine
+had it enabled with required checks, so `--auto` was genuinely safe — and the two
+that merged instantly were then confirmed green on their merged SHA rather than
+assumed.
+
+
 ## What needs more thought
 
 **The corpus guard asserts the file grows, not that it makes sense.**
@@ -2963,6 +3048,21 @@ the page beside it. **A duplicate-`summary` check is one line and would have
 caught the first.** Nothing at all would have caught the second, because no gate
 knows what a PR was supposed to contain — that comparison exists only in the head
 of whoever is resolving, and it is exactly the thing a tired person skips.
+
+**A gate that cannot scope to the diff makes config and docs changes cost like
+code changes.** `verify.sh` runs the whole suite whatever changed, so eight
+YAML-only edits needed eight full toolchain installs. It is correct to be strict
+about code; nothing distinguishes the two cases, and the estate has no channel
+that would let the edit happen once instead of eight times, so the costs
+multiply rather than add.
+
+**Nothing tells you a merge count is measuring the wrong thing.** Fourteen PRs
+merged today and **zero** delivered customer-visible value — every one was the
+machine maintaining itself or repairing damage. The merge-derived platform/toil
+split cannot see that distinction, because a `ci:` commit that was *chosen* and
+one that was *forced by a broken runner fleet* look identical to it. The only
+correction available is a recorded session, which is exactly the input most
+likely to be skipped on the days it matters most.
 
 **Nothing links a hand-written test mock to the client it doubles.** Adding a
 method to `createApi` leaves every bespoke `vi.mock` object one key short, and
@@ -4200,6 +4300,9 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `biffo-verify` | **worked — §4's "read the live config, not the Terraform" was decisive twice** | The CDN module had the 404→200 rewrite already fixed in source; only reading the **live** distribution (403→403, 404→404) plus `x-cache: Miss` vs `Error from cloudfront` showed the reported bug did not exist. Separately, `terraform plan` could not render the value under review (`known after apply` for a whole env map), so the only confirmation that `price-capacity-optimized` took effect was reading the deployed Lambda's environment afterwards. |
+| `biffo-verify` | **worked — §1 stopped a fix being written for a non-defect** | Establishing state on the portal 404 found the CDN fix already shipped, the route real, and the origin a different bucket entirely. The row had already been *filed*; §1 on the follow-up is what turned it into a retraction rather than a wasted fix. |
+| `biffo-verify` | **partial — §8's effort log reached only on explicit invocation, for the FOURTH time** | Same cause recorded three times before, with the previous entry already concluding *"it should be step 0"*. It still is not: the skill lists it eighth, after the narrative sections, so it is reached last and dropped first. This session it was run first **only because the operator typed `/biffo-verify`** — the trigger was external again. A recommendation recorded four times and unactioned is a defect in the skill's ordering, not in the operator. Concretely: move the `practices-session.mjs` call to the top of §8, or make it §0. |
 | `biffo-verify` | **worked — §3 and §6 together caught a guard that could never fire** | The valuation guard passed on every clean description and would have passed forever. §6's *"what does this do when it cannot run?"* applied to a regex means: feed it violations. Doing so showed it matched `4.0x` and ignored `5.8\u00d7` — the exact spelling the source used. §3's discipline (watch it fail) is what turned a written test into a defending one; the same technique then proved the concurrency guard real by showing it reports 1 for sequential awaits and 3 for `asyncio.gather`. |
 | `biffo-verify` | **worked — §4 and §5 turned "flaky CI" into a one-line Terraform fix** | §4 (read the *live* config, not the source) gave `INSTANCE_ALLOCATION_STRATEGY=lowest-price` and 17/17 runners on one instance type. §5 (read past the masking layer) mattered twice: `cancelled` masked an infrastructure kill as a test failure, and CloudTrail `BidEvictedEvent` distinguished reclamation from the orphan-sweep defect already documented in the same file — which would have made the fix useless. |
 | `biffo-verify` | **partial — §8 was reached only when the operator typed the command, for the third recorded time** | Sections 1–7 were applied throughout and paid for themselves. The effort log was not run until `/biffo-verify` was invoked explicitly at the end of a long session. This is the **third** entry with this cause; the previous one already concluded *"it should be step 0"*. It was not, because the skill's own ordering still lists it eighth. A recommendation recorded twice and not acted on is a defect in the skill, not in the operator — the fix is to move the effort log to the top of §8, or to a §0. |

@@ -462,11 +462,34 @@ jobs:
           zipped=$(cd package && zip -qr ../lambda.zip . && stat -c%s ../lambda.zip)
           request_mb=$(awk -v b="$zipped" 'BEGIN{printf "%.1f", b*1.33/1048576}')
           echo "Package: $(awk -v b="$zipped" 'BEGIN{printf "%.1f", b/1048576}')MB zipped, ~${request_mb}MB as a base64 request body"
+          # Over the cap, DEGRADE before failing: bytecode is an optimisation, and a
+          # slower cold start beats an instance that cannot deploy at all. Dropping
+          # it costs ~2.5s on a cold invoke and ~56% of the zip, and the deployed
+          # code is byte-for-byte the same either way.
+          #
+          # This exists because tabsii-platform outgrew the inline cap -- 60.3MB
+          # zipped, ~80.2MB as a request body -- and the guard failed the deploy
+          # outright, which left the instance's /health reporting a version 173
+          # releases old with every merged change unshipped. The fallback is not the
+          # real fix (that is an S3-based update, which lifts the ceiling to 250MB
+          # unzipped and needs an artifacts bucket that does not exist yet); it is
+          # what stops a size ceiling being an outage in the meantime.
           if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
-            echo "::error::Lambda package is ~${request_mb}MB as a base64 request body, against a ~70MB cap." >&2
-            echo "Bytecode precompilation (#724) adds ~56%. Either drop a heavy dependency, or" >&2
-            echo "move this function to an S3-based update, or stop precompiling and accept the" >&2
-            echo "~2.5s cold start. Do not raise this threshold without measuring the real cap." >&2
+            echo "::warning::~${request_mb}MB exceeds the inline cap; dropping bytecode and retrying." >&2
+            find package -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+            rm -f lambda.zip
+            zipped=$(cd package && zip -qr ../lambda.zip . && stat -c%s ../lambda.zip)
+            request_mb=$(awk -v b="$zipped" 'BEGIN{printf "%.1f", b*1.33/1048576}')
+            echo "Without bytecode: $(awk -v b="$zipped" 'BEGIN{printf "%.1f", b/1048576}')MB zipped, ~${request_mb}MB as a request body"
+            echo "::warning::Cold start is ~2.5s slower until this moves to an S3-based update (#724)." >&2
+          fi
+          # Still over without bytecode means the package itself is too big, and no
+          # amount of not-precompiling saves it. Fail loudly rather than let
+          # update-function-code reject it opaquely after the upload.
+          if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
+            echo "::error::Lambda package is ~${request_mb}MB as a base64 request body even without bytecode, against a ~70MB cap." >&2
+            echo "Move this function to an S3-based update (250MB unzipped) or drop a heavy" >&2
+            echo "dependency. Do not raise this threshold without measuring the real cap." >&2
             exit 1
           fi
           # --output text --query 'LastUpdateStatus' suppresses the CLI's default
@@ -1176,11 +1199,34 @@ jobs:
           zipped=$(cd package && zip -qr ../lambda.zip . && stat -c%s ../lambda.zip)
           request_mb=$(awk -v b="$zipped" 'BEGIN{printf "%.1f", b*1.33/1048576}')
           echo "Package: $(awk -v b="$zipped" 'BEGIN{printf "%.1f", b/1048576}')MB zipped, ~${request_mb}MB as a base64 request body"
+          # Over the cap, DEGRADE before failing: bytecode is an optimisation, and a
+          # slower cold start beats an instance that cannot deploy at all. Dropping
+          # it costs ~2.5s on a cold invoke and ~56% of the zip, and the deployed
+          # code is byte-for-byte the same either way.
+          #
+          # This exists because tabsii-platform outgrew the inline cap -- 60.3MB
+          # zipped, ~80.2MB as a request body -- and the guard failed the deploy
+          # outright, which left the instance's /health reporting a version 173
+          # releases old with every merged change unshipped. The fallback is not the
+          # real fix (that is an S3-based update, which lifts the ceiling to 250MB
+          # unzipped and needs an artifacts bucket that does not exist yet); it is
+          # what stops a size ceiling being an outage in the meantime.
           if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
-            echo "::error::Lambda package is ~${request_mb}MB as a base64 request body, against a ~70MB cap." >&2
-            echo "Bytecode precompilation (#724) adds ~56%. Either drop a heavy dependency, or" >&2
-            echo "move this function to an S3-based update, or stop precompiling and accept the" >&2
-            echo "~2.5s cold start. Do not raise this threshold without measuring the real cap." >&2
+            echo "::warning::~${request_mb}MB exceeds the inline cap; dropping bytecode and retrying." >&2
+            find package -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+            rm -f lambda.zip
+            zipped=$(cd package && zip -qr ../lambda.zip . && stat -c%s ../lambda.zip)
+            request_mb=$(awk -v b="$zipped" 'BEGIN{printf "%.1f", b*1.33/1048576}')
+            echo "Without bytecode: $(awk -v b="$zipped" 'BEGIN{printf "%.1f", b/1048576}')MB zipped, ~${request_mb}MB as a request body"
+            echo "::warning::Cold start is ~2.5s slower until this moves to an S3-based update (#724)." >&2
+          fi
+          # Still over without bytecode means the package itself is too big, and no
+          # amount of not-precompiling saves it. Fail loudly rather than let
+          # update-function-code reject it opaquely after the upload.
+          if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
+            echo "::error::Lambda package is ~${request_mb}MB as a base64 request body even without bytecode, against a ~70MB cap." >&2
+            echo "Move this function to an S3-based update (250MB unzipped) or drop a heavy" >&2
+            echo "dependency. Do not raise this threshold without measuring the real cap." >&2
             exit 1
           fi
           # --output text --query 'LastUpdateStatus' suppresses the CLI's default
@@ -1902,11 +1948,34 @@ jobs:
           zipped=$(cd package && zip -qr ../lambda.zip . && stat -c%s ../lambda.zip)
           request_mb=$(awk -v b="$zipped" 'BEGIN{printf "%.1f", b*1.33/1048576}')
           echo "Package: $(awk -v b="$zipped" 'BEGIN{printf "%.1f", b/1048576}')MB zipped, ~${request_mb}MB as a base64 request body"
+          # Over the cap, DEGRADE before failing: bytecode is an optimisation, and a
+          # slower cold start beats an instance that cannot deploy at all. Dropping
+          # it costs ~2.5s on a cold invoke and ~56% of the zip, and the deployed
+          # code is byte-for-byte the same either way.
+          #
+          # This exists because tabsii-platform outgrew the inline cap -- 60.3MB
+          # zipped, ~80.2MB as a request body -- and the guard failed the deploy
+          # outright, which left the instance's /health reporting a version 173
+          # releases old with every merged change unshipped. The fallback is not the
+          # real fix (that is an S3-based update, which lifts the ceiling to 250MB
+          # unzipped and needs an artifacts bucket that does not exist yet); it is
+          # what stops a size ceiling being an outage in the meantime.
           if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
-            echo "::error::Lambda package is ~${request_mb}MB as a base64 request body, against a ~70MB cap." >&2
-            echo "Bytecode precompilation (#724) adds ~56%. Either drop a heavy dependency, or" >&2
-            echo "move this function to an S3-based update, or stop precompiling and accept the" >&2
-            echo "~2.5s cold start. Do not raise this threshold without measuring the real cap." >&2
+            echo "::warning::~${request_mb}MB exceeds the inline cap; dropping bytecode and retrying." >&2
+            find package -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+            rm -f lambda.zip
+            zipped=$(cd package && zip -qr ../lambda.zip . && stat -c%s ../lambda.zip)
+            request_mb=$(awk -v b="$zipped" 'BEGIN{printf "%.1f", b*1.33/1048576}')
+            echo "Without bytecode: $(awk -v b="$zipped" 'BEGIN{printf "%.1f", b/1048576}')MB zipped, ~${request_mb}MB as a request body"
+            echo "::warning::Cold start is ~2.5s slower until this moves to an S3-based update (#724)." >&2
+          fi
+          # Still over without bytecode means the package itself is too big, and no
+          # amount of not-precompiling saves it. Fail loudly rather than let
+          # update-function-code reject it opaquely after the upload.
+          if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
+            echo "::error::Lambda package is ~${request_mb}MB as a base64 request body even without bytecode, against a ~70MB cap." >&2
+            echo "Move this function to an S3-based update (250MB unzipped) or drop a heavy" >&2
+            echo "dependency. Do not raise this threshold without measuring the real cap." >&2
             exit 1
           fi
           # --output text --query 'LastUpdateStatus' suppresses the CLI's default

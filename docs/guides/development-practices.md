@@ -1557,6 +1557,32 @@ not for removing it.
 
 ## What went well — practices that earned their keep
 
+**Resolving ownership against the manifest instead of against the issue title.**
+Triaging eleven instance issues, each was checked against
+`core-manifest.json` by longest-prefix-wins rather than by what it appeared to
+be about. That moved six upstream — and stopped one. A stale-guide issue *looked*
+like the same category (it described template-owned orchestrator code), but
+`docs/guides/` is unowned and fail-closes to **user**, and the guide does not
+exist in the template at all. It is an instance's own document about the
+template's code, so the fix stays put. Ownership is a property of the **file**,
+not of the subject matter, and the two disagree often enough to be worth checking
+every time.
+
+**Attempting the transfer rather than planning around it.** `gh issue transfer`
+was tried on the first issue and refused: *private → public*. That failure is
+what surfaced the real question — the workaround **publishes** private content —
+which would have stayed invisible if the transfer had simply worked. A cheap
+action that fails cleanly is a better probe than a careful theory.
+
+**Verifying an issue's own claims before acting on them.** #406 asserted the
+engine path was `services/_plugins/orchestrator` and the guide's
+`services/orchestrator` was wrong. Both directories exist, so the claim was not
+self-evidently true — `services/orchestrator` turned out to hold **12 files,
+every one gitignored `__pycache__` residue, 0 tracked**, against 35 real files
+in the other. The issue was right, and the check took a minute; had it been
+wrong, the fix would have introduced the very error it claimed to remove.
+
+
 **Checking path ownership before writing, not after.** The S3 upload (#995)
 needs a Terraform output. Every comparable output in the estate —
 `portal_bucket_name`, `core_api_lambda_name` — lives in
@@ -3262,6 +3288,9 @@ assumed.
 
 ## What needs more thought
 
+| — | **Nothing at filing time says which repo owns the code a symptom appears in, so a backlog fills with issues its own repo cannot action.** Six of eleven open instance issues had their fix in a template-owned path. Two of the six **state their own template ownership in the body** and were filed downstream regardless; one was raised against an instance it had not even surfaced in, in a repo with almost no other traffic, where nobody would have found it. This is not carelessness — an issue is filed where the symptom appeared, which is the only thing the reporter knows, and the tracker offers no signal about ownership. The cost is a backlog that reads as instance work while being platform work: re-filing alone took one instance from 2 open issues to **0** and another from 9 to **5**, with every remainder genuinely instance-level. Candidates: an issue template asking which path the symptom lives in, or a triage step that resolves the answer against `core-manifest.json` | **visibility** · boundary | biffo-platform, tabsii-platform | not fixed — the check exists (`core-manifest.json`, longest-prefix-wins); nothing invokes it at filing time | **unfiled** |
+
+
 | — | **A requirement can be asserted from a pattern and turn out not to exist.** #994 listed four prerequisites for the S3 upload, one of which was an `s3:PutObject` grant for the deploy role. That was inferred from how least-privilege estates usually work, not checked. The role in fact carries `AdministratorAccess` (attached imperatively by `AwsAdapter.setupOidcTrust`), so no IAM change was needed at all. Harmless here — the issue was over-specified, not under-specified — but the same habit in the other direction is how a missing grant reaches production, and the corpus already carries "S3 prefix not in IAM" as a real defect. An issue's prerequisite list is a claim about the world and deserves the same evidence standard as a finding | **process** | biffo-template #994 | practice — check the privilege model before listing it as work | **unfiled** |
 
 
@@ -4553,6 +4582,7 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `biffo-verify` | **worked — §1 prevented seven duplicate issues and one wrong fix** | §1 (establish current state before writing) was applied twice over: before filing each upstream issue, biffo-template's backlog was searched for an existing counterpart — none had one, which is itself the finding — and before acting on #406, its factual claims were checked against the code rather than trusted. The second check mattered: both `services/orchestrator` and `services/_plugins/orchestrator` exist, so "the path is wrong" was not self-evident. It was right (12 gitignored `.pyc` files versus 35 real ones), but a minute's checking was the difference between a correction and introducing the error being corrected. |
 | `biffo-verify` | **worked — §1 and §7 both changed the outcome** | §1 (establish current state first) meant checking `core-manifest.json` ownership before writing the Terraform output, which is the only reason the S3 feature actually reaches existing instances rather than silently never activating. §7 (say what you did not verify) was load-bearing separately: stating that biffo-platform's `/health` was unchecked prompted the operator to point out the credentials existed, turning a declared gap into a passing check. Both are cases where the skill produced evidence rather than merely documenting its absence. |
 | `biffo-verify` | **worked — §4 was the difference between two opposite wrong answers** | Backlog triage, two issues whose acceptance no checkout could settle. #724's source showed the fix present and §4's measurement showed it had **worked** (p50 4035ms → 2212ms) — closed. #924's source showed the mechanism landed and CloudWatch showed it **failing on every cold start** — kept open, with a named fix. **Two verification agents reading only code called #924 closable.** §4 is usually framed as a defence against the stale-deploy theory; here it was the only way to grade a backlog at all, and it failed in *both* directions, so reading source is not the conservative choice. |
 | `biffo-verify` | **worked — §1 applied to 38 issues at once retired six of them for ~15 minutes of agent time** | "Establish the current state before writing anything" scales to a whole backlog and is by far the highest-return step in it: one issue already fixed with its test, one asking for a guard that exists, one half-disproved by four merged PRs, one closable by a single query. All four would otherwise have been planned and built. Worth stating in the skill that §1 is a *bulk* operation, not only a per-task one. |

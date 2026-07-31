@@ -176,6 +176,8 @@ export interface CoreUpgradeGit {
   aheadBehind(cwd: string): Promise<{ ahead: number; behind: number; hasUpstream: boolean }>
   getRemoteUrl(cwd: string, remote?: string): Promise<string>
   createBranch(cwd: string, branch: string): Promise<void>
+  /** Switch to an existing branch — the undo of `createBranch` (#984). */
+  switchBranch(cwd: string, branch: string): Promise<void>
   add(cwd: string, paths: string[]): Promise<void>
   commit(cwd: string, message: string): Promise<void>
   push(cwd: string, branch: string, opts?: { remote?: string; token?: string }): Promise<void>
@@ -573,8 +575,98 @@ async function applyAndOpenPr(
 
   const branch = upgradeBranchName(fromVersion, toVersion)
 
+  // Where the caller's HEAD was, so it can be put back (#984). `createBranch`
+  // switches the checkout it was pointed at, and this used to be a one-way trip:
+  // the repo was left parked on the upgrade branch whether the run succeeded or
+  // threw. AGENTS.md §2 forbids exactly that, and it is worse than untidy — other
+  // agents commonly work the same repo through worktrees, so anything that reads
+  // the primary afterwards (a `git grep`, an audit, another tool's `--cwd .`)
+  // silently reads the upgrade tree instead of the integration branch.
+  //
+  // Read here rather than reusing the currency check's value so it is the branch
+  // as it stands immediately before HEAD moves, not as it stood before planning.
+  const callerBranch = await git.currentBranch(options.cwd)
+
   log.step(1, 4, `Creating branch ${branch}`)
   await git.createBranch(options.cwd, branch)
+
+  // Everything past this point runs with HEAD moved, so it all belongs to the
+  // `finally` below — including the steps that fail in practice (push, PR).
+  try {
+    await buildCommitAndOpenPr(
+      options,
+      deps,
+      plan,
+      migrations,
+      fromVersion,
+      toVersion,
+      breaking,
+      theirsDir,
+      coreVersionCleanup,
+      branch,
+      token,
+    )
+  } finally {
+    await restoreCallerBranch(git, options.cwd, callerBranch, branch)
+  }
+}
+
+/**
+ * Put HEAD back where the caller left it, best-effort (#984).
+ *
+ * Never throws. It runs in a `finally`, so throwing would replace whatever real
+ * error the upgrade hit — a failed push reported as a failed checkout — and the
+ * upgrade's actual outcome (branch pushed, PR opened) is not undone by HEAD
+ * being in the wrong place. A warning naming both branches is the honest report:
+ * the caller can finish the restore with one command.
+ */
+async function restoreCallerBranch(
+  git: CoreUpgradeGit,
+  cwd: string,
+  callerBranch: string,
+  upgradeBranch: string,
+): Promise<void> {
+  // A detached HEAD has no branch name to switch back to. Unreachable today —
+  // `checkInstanceCurrency` refuses one before any planning happens — so this is
+  // a guard against that check moving, not a live path.
+  if (callerBranch === 'HEAD' || callerBranch === '') {
+    log.warn(
+      `Left ${cwd} on ${upgradeBranch}: HEAD was detached on entry, so there is no branch to ` +
+        'restore (#984).',
+    )
+    return
+  }
+  try {
+    await git.switchBranch(cwd, callerBranch)
+  } catch {
+    log.warn(
+      `Could not switch ${cwd} back to ${callerBranch} — it is still on ${upgradeBranch}. ` +
+        `Restore it with \`git switch ${callerBranch}\` (#984).`,
+    )
+  }
+}
+
+/**
+ * Apply, commit, push and open the PR — the whole of the upgrade that runs while
+ * HEAD is on the upgrade branch. Split out purely so its caller can wrap it in
+ * the `finally` that restores the caller's branch (#984).
+ */
+async function buildCommitAndOpenPr(
+  options: CoreUpgradeOptions,
+  deps: CoreUpgradeDeps,
+  plan: UpgradePlan,
+  migrations: MigrationCarryPlan,
+  fromVersion: string,
+  toVersion: string,
+  breaking: BreakingChange[],
+  theirsDir: string,
+  coreVersionCleanup: CoreVersionCleanup | null,
+  branch: string,
+  /** Resolved by the caller, before the branch exists, so a missing token fails
+   * the run without having moved HEAD first. */
+  token: string,
+): Promise<void> {
+  const { git } = deps
 
   const applied = applyUpgradePlan(options.cwd, plan, theirsDir)
   const carried = applyMigrationCarry(options.cwd, migrations)

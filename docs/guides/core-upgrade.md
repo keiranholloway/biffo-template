@@ -390,6 +390,8 @@ Override the auto-resolution only when you need to (e.g. a pre-tag instance, or 
 
 What `--apply` does, in order: creates a branch `biffo/core-upgrade-<from>-to-<to>`, writes the merged files (and bumps `biffo.core.json`), commits, pushes, and opens a PR against `--base` (default: your current branch). It never pushes to a protected branch directly.
 
+It then puts your checkout back on the branch it was on, whether the run succeeded or failed (#984). The upgrade branch is built in your working tree, so HEAD does move while it runs — it just does not stay moved. If the switch back cannot be made, it says so and names the branch to return to rather than leaving you to discover it: a checkout parked on an upgrade branch is what [AGENTS.md §2](../../AGENTS.md) forbids, and it silently redirects anything else reading that repo.
+
 Useful flags:
 
 - `--apply` — actually do it (without this, it's a dry-run preview).

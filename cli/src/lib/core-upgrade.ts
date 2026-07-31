@@ -142,9 +142,25 @@ const EMPTY_SUMMARY: () => Record<MergeStatus, number> = () => ({
  */
 export async function planCoreUpgrade(options: PlanCoreUpgradeOptions): Promise<UpgradePlan> {
   const mergeFile = options.mergeFile ?? gitMergeFile
-  const base = new Set(listTemplateOwnedFiles(options.baseDir, options.manifest))
+  // The two template-side trees are read as *git* trees, not as directories
+  // (#1006). Whatever the operator built locally in a template checkout —
+  // `apps/portal/tsconfig.tsbuildinfo` after a build, a `.terraform.lock.hcl`
+  // per module after `terraform init` — is gitignored, has no upstream
+  // counterpart, and used to be proposed to the instance as an `added` file to
+  // commit. That made the change set an instance received a function of the
+  // operator's machine rather than of the target version.
+  //
+  // A `git archive <tag>` extraction (the usual base/target) already holds
+  // tracked files only, so this is a no-op there and bites exactly the case it
+  // is for: a live checkout used directly, via the `--to-template` override or
+  // the "target is the template's own latest tag" fast path.
+  //
+  // `oursDir` is deliberately NOT filtered: the instance tree is the one thing
+  // the merge must see exactly as it is on disk.
+  const trackedOnly = { trackedOnly: true }
+  const base = new Set(listTemplateOwnedFiles(options.baseDir, options.manifest, trackedOnly))
   const ours = new Set(listTemplateOwnedFiles(options.oursDir, options.manifest))
-  const theirs = new Set(listTemplateOwnedFiles(options.theirsDir, options.manifest))
+  const theirs = new Set(listTemplateOwnedFiles(options.theirsDir, options.manifest, trackedOnly))
 
   // A template-owned file the instance deleted is drift (#370 blocks instances
   // from editing these paths), so an upgrade restores it (#395) — unless the

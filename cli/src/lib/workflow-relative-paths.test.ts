@@ -17,12 +17,36 @@
  * via `biffo core upgrade` is where it breaks. A guard that runs in the repo
  * that OWNS the file is the only thing that catches this before distribution.
  *
- * Deliberately narrow. An earlier draft checked *every* `../` reference and was
- * wrong: `../lambda.zip` and `../plugin-host.zip` are build artifacts created
- * at runtime and legitimately absent from the checkout, and interpolated names
- * cannot be resolved statically at all. Only an *executed script* must exist
- * before the step runs, so only that is asserted here — a guard that cries wolf
- * on correct code gets deleted, and then catches nothing.
+ * Deliberately narrow on EXISTENCE. An earlier draft checked *every* `../`
+ * reference for existence and was wrong: `../lambda.zip` and
+ * `../plugin-host.zip` are build artifacts created at runtime and legitimately
+ * absent from the checkout. Only an *executed script* must exist before its step
+ * runs, so only that is asserted below — a guard that cries wolf on correct code
+ * gets deleted, and then catches nothing.
+ *
+ * ## What that narrowing cost, and the second assertion it produced
+ *
+ * Excusing build artifacts from the EXISTENCE check silently excused them from
+ * every check, and a bug moved straight into the gap: the core API step wrote
+ * its zip to the step's own directory and then read it back one level higher.
+ *
+ *     zipped=$(cd package && zip -qr ../lambda.zip .)   # -> <step>/lambda.zip
+ *     aws lambda update-function-code --zip-file fileb://../lambda.zip
+ *                                                        # -> <repo>/lambda.zip
+ *
+ * It failed with `Unable to load paramfile fileb://../lambda.zip` — after a
+ * successful build, after the version was baked, and after two *other* bugs in
+ * the same step had been fixed, each of which had been masking it. The three
+ * sibling zips in the same job (pr-signer, plugin-host, per-plugin) all read
+ * theirs back bare and were correct; only this one carried the extra `../`.
+ *
+ * A runtime artifact cannot be checked for existence, but it CAN be checked for
+ * **agreement**: whatever a step's `zip` writes is what its `fileb://` must
+ * read. That needs no filesystem and no knowledge of what the artifact contains.
+ *
+ * Interpolated names stop being a problem under this rule rather than needing an
+ * exemption — every one of these is `cd <dir> && zip ../<name>.zip`, and
+ * `<dir>/../<name>.zip` normalises to `<name>.zip` whatever `<dir>` expands to.
  */
 
 import { existsSync, readFileSync } from 'node:fs'
@@ -63,6 +87,35 @@ function executedScripts(yaml: string): { path: string; line: number }[] {
   return found
 }
 
+/**
+ * Artifacts a step's `zip` writes, resolved against the step's own directory.
+ *
+ * Every call in these workflows is `cd <dir> && zip [flags] <dir-relative>.zip`,
+ * so the output is `normalize(<dir>/<arg>)`. The `cd` scopes the argument the
+ * same way whether it is command-substituted (`$( … )`), subshelled (`( … )`)
+ * or balanced by a later `cd ..` — all three shapes appear here.
+ */
+function zipOutputs(yaml: string): { path: string; line: number }[] {
+  const found: { path: string; line: number }[] = []
+  yaml.split('\n').forEach((raw, line) => {
+    if (/^\s*#/.test(raw)) return
+    const m = /cd\s+"?([^"'&|;]+?)"?\s*&&\s*zip\s+[^&|;]*?"?([^\s"';&|]+\.zip)"?/.exec(raw)
+    if (m) found.push({ path: normalize(join(m[1], m[2])), line })
+  })
+  return found
+}
+
+/** Every `fileb://` the workflow reads back, resolved against its step. */
+function filebReads(yaml: string): { path: string; line: number }[] {
+  const found: { path: string; line: number }[] = []
+  yaml.split('\n').forEach((raw, line) => {
+    if (/^\s*#/.test(raw)) return
+    const m = /fileb:\/\/([^\s"'\\]+)/.exec(raw)
+    if (m) found.push({ path: normalize(m[1]), line })
+  })
+  return found
+}
+
 const WORKFLOWS = ['deploy-app.yml', 'deploy-infra.yml', 'ci.yml']
 
 describe('workflow scripts resolve against their working-directory', () => {
@@ -93,6 +146,26 @@ describe('workflow scripts resolve against their working-directory', () => {
       })
       .filter((x): x is string => x !== null)
 
+    expect(broken).toEqual([])
+  })
+
+  it.each(WORKFLOWS)('%s reads back the build artifacts it writes', (workflow) => {
+    const path = join(repoRoot, '.github/workflows', workflow)
+    if (!existsSync(path)) return
+    const yaml = readFileSync(path, 'utf8')
+    const written = new Set(zipOutputs(yaml).map((z) => z.path))
+    const reads = filebReads(yaml)
+    if (reads.length === 0) return
+    // Guard the guard: if the extractors stop matching, an empty set must not
+    // read as agreement.
+    expect(written.size).toBeGreaterThan(0)
+
+    const broken = reads
+      .filter(({ path: p }) => !written.has(p))
+      .map(
+        ({ path: p, line }) =>
+          `${workflow}:${line + 1}  fileb://${p}  is never written by a zip in this workflow (written: ${[...written].join(', ')})`,
+      )
     expect(broken).toEqual([])
   })
 })

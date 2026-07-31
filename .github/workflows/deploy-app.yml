@@ -478,7 +478,7 @@ jobs:
           # string loses nothing.
           aws lambda update-function-code \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
-            --zip-file fileb://../lambda.zip \
+            --zip-file fileb://lambda.zip \
             --output text --query 'LastUpdateStatus'
       - name: Initialise database schema
         run: |
@@ -1192,7 +1192,7 @@ jobs:
           # string loses nothing.
           aws lambda update-function-code \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
-            --zip-file fileb://../lambda.zip \
+            --zip-file fileb://lambda.zip \
             --output text --query 'LastUpdateStatus'
       - name: Initialise database schema
         run: |
@@ -1918,7 +1918,7 @@ jobs:
           # string loses nothing.
           aws lambda update-function-code \
             --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
-            --zip-file fileb://../lambda.zip \
+            --zip-file fileb://lambda.zip \
             --output text --query 'LastUpdateStatus'
       - name: Initialise database schema
         run: |

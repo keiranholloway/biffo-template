@@ -257,6 +257,41 @@ impossible by construction, and it moved *with* `racedShare` rather than against
 it. Three unit tests passed throughout. Running the collector on live data and
 asking whether the numbers were possible is what caught it.
 
+### Correction — 2026-07-31, the counter-metric was counting dead runners
+
+**Most of `tabsii-platform`'s red was never a broken branch.** Diagnosing why it
+kept `dev` red found that **all six** failures inspected had *zero failing steps*
+and 3–21 steps left incomplete — runners killed mid-job, which GitHub concludes
+`failure` rather than `cancelled` about half the time. Not one gate had rejected
+a change.
+
+`FAILING_CONCLUSIONS` already excluded `cancelled` for exactly this reason; it
+simply did not cover the other label. Fixed in #981, validated against seven real
+runs including a negative control.
+
+What the counter-metric actually reads once dead runners are re-attributed:
+
+| repo | before | after |
+| --- | --- | --- |
+| tabsii-platform, 24h | 8 failures / 111.7 min | **1 / 0** |
+| tabsii-platform, 7d | 11 / 175.2 | **3 / 41.8** |
+| biffo-template, 7d | 2 / 54.7 | **2 / 54.7 — unchanged** |
+
+Three things this does *not* license, recorded so the Tuesday reading cannot
+quietly help itself to them:
+
+1. **It does not clear `tabsii-platform`.** Three genuine failures in 7 days is
+   still above the `> 2` threshold. Only the red-minutes breach clears.
+2. **It does not move the treatment repo.** `biffo-template`'s failures were
+   real, so its 2 / 54.7 stands — still inside both thresholds and still close
+   enough to either that one bad merge refutes. A correction that had rescued
+   the author's own arm and nothing else would deserve much more suspicion than
+   this one.
+3. **It does not fix the deploys.** A killed deploy still leaves `dev` silently
+   stale with no retry or alert — that is #973, unchanged. This stops the
+   estate *mislabelling* it as a broken integration branch; it does not stop it
+   happening.
+
 ## Falsification
 
 **Refuted if `racedShare` is still above 8% on 2026-08-04** with at least 50

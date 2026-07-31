@@ -201,22 +201,24 @@ class TestTheFact:
     """The hooks really are dead — and this fails loudly on the day they are not."""
 
     @requires_repo
+    def test_the_scan_actually_reaches_code(self) -> None:
+        """A scan that examines nothing cannot fail, and would be worse than none.
+
+        This is not paranoia: the first version of this guard matched the skip
+        list against a path's *absolute* parts, so running from a worktree under
+        ``.worktrees/`` silently skipped every file and passed locally while
+        failing in CI. Assert the corpus is non-empty and contains the module
+        that declares the hooks.
+        """
+        scanned = _invocation_candidates()
+        assert len(scanned) > 100, f"only {len(scanned)} files scanned — the walk is broken"
+        assert "packages/python-sdk/src/biffo_plugin_sdk/plugin.py" in scanned
+
+    @requires_repo
     def test_nothing_invokes_the_hooks(self) -> None:
         callers: list[str] = []
-        for root in _INVOCATION_ROOTS:
-            base = REPO_ROOT / root
-            if not base.is_dir():
-                continue
-            for path in base.rglob("*"):
-                if not path.is_file() or path.suffix not in _TEXT_SUFFIXES:
-                    continue
-                parts = set(path.parts)
-                if parts & _SKIP_DIRS or "tests" in parts or path.name.startswith("test_"):
-                    continue
-                relative = path.relative_to(REPO_ROOT).as_posix()
-                if _is_exempt(relative):
-                    continue
-                callers.extend(_hook_calls(path, relative))
+        for relative, path in _invocation_candidates().items():
+            callers.extend(_hook_calls(path, relative))
         assert not callers, (
             "Something now invokes a plugin lifecycle hook:\n  "
             + "\n  ".join(callers)
@@ -225,6 +227,40 @@ class TestTheFact:
             "the plugin skeleton to describe what now happens, then delete "
             "TestTheClaim and this assertion."
         )
+
+
+def _invocation_candidates() -> dict[str, Path]:
+    """``{relative path: path}`` for every file that could contain a call site.
+
+    Only executable sources — a README cannot invoke anything, and treating one
+    as if it could is how this guard first went wrong. Tests are excluded too: a
+    test calling ``plugin.on_install()`` directly exercises a method, it is not
+    evidence that the platform ever does.
+
+    Skip-list matching is on the path **relative to the repo root**. Matching
+    absolute parts made every file under a ``.worktrees/`` checkout invisible,
+    so the scan passed locally by examining nothing —
+    :meth:`TestTheFact.test_the_scan_actually_reaches_code` now catches that.
+    """
+    suffixes = {".py", ".ts", ".tsx", ".js", ".mjs"}
+    candidates: dict[str, Path] = {}
+    for root in _INVOCATION_ROOTS:
+        base = REPO_ROOT / root
+        if not base.is_dir():
+            continue
+        for path in base.rglob("*"):
+            if not path.is_file() or path.suffix not in suffixes:
+                continue
+            relative_path = path.relative_to(REPO_ROOT)
+            parts = set(relative_path.parts)
+            if parts & _SKIP_DIRS or "tests" in parts or path.name.startswith("test_"):
+                continue
+            if path.name.endswith((".test.ts", ".test.tsx", ".spec.ts")):
+                continue
+            relative = relative_path.as_posix()
+            if not _is_exempt(relative):
+                candidates[relative] = path
+    return candidates
 
 
 def _hook_calls(path: Path, relative: str) -> list[str]:

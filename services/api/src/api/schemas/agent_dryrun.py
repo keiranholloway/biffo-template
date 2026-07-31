@@ -40,16 +40,6 @@ class WorkflowDryRunRequest(BaseModel):
     ``sample_event`` is whatever payload the builder wants to test against; the
     dry-run fences it as untrusted data (ADR-0014 §5) and never interprets it.
     Sample *generation* is the portal's job (#505) — this endpoint just runs it.
-
-    **Every field of the agent action that shapes the run belongs here (#749).**
-    The dry run used to declare a four-key subset, so a write-back workflow was
-    previewed with no write-back and a tool-using worker with no tools: the model
-    answered in prose, the preview showed run metadata under "Would write", and
-    "test passed" unlocked **Enable workflow** having proved nothing about the
-    contract the live run would actually be held to. The parity is guarded by
-    ``test_admin_orchestration_dryrun_router`` against the action catalog, so a
-    field added there fails the suite until it is either previewed or explicitly
-    excluded.
     """
 
     agent_name: str = Field(min_length=1, max_length=200)
@@ -63,16 +53,6 @@ class WorkflowDryRunRequest(BaseModel):
     # dry-run runs a single buffered turn only (MVP), so the tool loop that
     # max_turns would bound is not run. See agent_dryrun_service for the follow-up.
     max_turns: int | None = Field(default=None, ge=1)
-    # The worker's declared tool list (ADR-0014 §7, #569). Carried onto the
-    # snapshot verbatim, so a preview offers the model the same tools a live run
-    # would — an agent previewed without its tools is a different agent.
-    tools: list[str] | None = None
-    # The write-back sub-config (ADR-0027): ``{"table", "operation", "columns"}``.
-    # Its presence is what makes Core generate the terminal ``submit_<table>_record``
-    # tool the model must call, so a preview that omits it previews a *plain
-    # completion* — the one result shape a real write-back run treats as "no
-    # columns", writes nothing for, and records a refusal against.
-    writeback: dict[str, Any] | None = None
     sample_event: dict[str, Any] = Field(default_factory=dict)
     trigger: DryRunTrigger | None = None
 

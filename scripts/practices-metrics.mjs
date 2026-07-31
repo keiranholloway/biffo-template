@@ -295,6 +295,18 @@ export function indexClosingIssues(templateSlug, templatePrs) {
  * binding constraint on this metric and it must be visible, not inferred from a
  * small `measured`.
  *
+ * `templateIndexEmpty` exists because this metric reported `measured: 0` for a
+ * reason that had nothing to do with the data. `closingIssues` is built from the
+ * TEMPLATE repo's PRs, and `--repo <instance>` filters the fetch to that instance
+ * — so the template's PRs were never fetched, the map was empty, and every
+ * carried PR fell through to `carriedWithoutIssue`. Nothing distinguished "these
+ * PRs closed no issue" from "I never loaded the side of the join that would
+ * know". #776's own verification command was the one that could not work, and
+ * two separate triages concluded the metric was unproven on the strength of it.
+ *
+ * A zero that means "I could not see the input" must never be reported as a zero
+ * that means "I looked and there was nothing".
+ *
  * @param {Array<Record<string, any>>} instancePrs merged, with `body`
  * @param {Map<number, string[]>} closingIssues template PR → issue keys
  * @param {Map<string, string>} issueOpenedAt issue key → ISO createdAt
@@ -306,6 +318,9 @@ export function crossRepoTimeToFeature(instancePrs, closingIssues, issueOpenedAt
   let carriedPrs = 0
   let carriedWithoutIssue = 0
   let awaitingDeploy = 0
+  // Captured before the loop: an empty index makes every count below meaningless,
+  // and the caller must be able to tell that from a genuine absence of issues.
+  const templateIndexEmpty = closingIssues.size === 0
   for (const pr of instancePrs) {
     // Branch name first: a PR that merely documents the marker is not an
     // upgrade, and counting one as such is how the template reported carrying
@@ -337,10 +352,16 @@ export function crossRepoTimeToFeature(instancePrs, closingIssues, issueOpenedAt
       }
     }
   }
+  // Unattributable is NOT a subset of carriedWithoutIssue — it replaces it. With
+  // no template index there is no basis to claim a carried PR closed nothing, so
+  // the honest report is "this many could not be attributed", and the latency
+  // fields stay null rather than reading as a measured zero.
+  const unattributable = templateIndexEmpty ? carriedPrs : 0
   return {
     upgradePrs,
     carriedPrs,
-    carriedWithoutIssue,
+    carriedWithoutIssue: templateIndexEmpty ? 0 : carriedWithoutIssue,
+    unattributable,
     awaitingDeploy,
     measured: hours.length,
     hoursP50: round1(percentile(hours, 50)),
@@ -2289,6 +2310,34 @@ function main() {
     process.exit(1)
   }
 
+  // The cross-repo join's LEFT side is the template's PRs and issues, and it is
+  // needed even when `--repo <instance>` narrows the targets to one instance —
+  // otherwise the join has nothing to resolve against and reports every carried
+  // PR as closing no issue. Fetch it supplementarily: PRs and closed issues only
+  // (no runs, rework or steps), and deliberately NOT added to `raw`, so it feeds
+  // the indexes without appearing as a reported repo in the snapshot.
+  const templateRepo = REPOS.find((r) => r.role === 'template')
+  const templateIsTarget = targets.some((r) => r.slug === templateRepo?.slug)
+  /** @type {{prs: Array<Record<string, any>>, issues: Array<Record<string, any>>}} */
+  let templateJoinData = { prs: [], issues: [] }
+  if (templateRepo && !templateIsTarget) {
+    process.stderr.write(`  ${templateRepo.slug} (join only) … `)
+    try {
+      templateJoinData = {
+        prs: fetchPrs(templateRepo.slug, fetchSince),
+        issues: fetchClosedIssues(templateRepo.slug),
+      }
+      process.stderr.write(
+        `${templateJoinData.prs.length} PRs, ${templateJoinData.issues.length} closed issues\n`,
+      )
+    } catch (error) {
+      // Non-fatal: the rest of the snapshot is still valid. The crossRepo block
+      // reports `unattributable` rather than a misleading zero.
+      process.stderr.write(`FAILED — crossRepo will report unattributable\n`)
+      failures.push({ repo: `${templateRepo.slug} (join)`, error: String(error).split('\n')[0] })
+    }
+  }
+
   // One index across every collected repo, not per-repo: an instance PR routinely
   // closes a template issue, and a per-repo map would report every one of those
   // as unresolved — losing exactly the cross-repo distribution cases this metric
@@ -2300,14 +2349,21 @@ function main() {
       issueOpenedAt.set(`${repo.slug}#${issue.number}`, issue.createdAt)
     }
   }
+  if (templateRepo && !templateIsTarget) {
+    for (const issue of templateJoinData.issues) {
+      issueOpenedAt.set(`${templateRepo.slug}#${issue.number}`, issue.createdAt)
+    }
+  }
 
   // Template PR -> the issues it closed, built once. An instance upgrade PR
   // names template PR numbers; this is what turns those into issues, and hence
-  // into a start time.
-  const templateRepo = REPOS.find((r) => r.role === 'template')
+  // into a start time. Sourced from `raw` when the template is a target, and
+  // from the supplementary join fetch above when `--repo` narrowed it out —
+  // without that fallback the map is empty and the join silently resolves
+  // nothing (see `crossRepoTimeToFeature`'s `unattributable`).
   const templateClosingIssues = indexClosingIssues(
     templateRepo?.slug ?? '',
-    raw[templateRepo?.slug ?? '']?.prs ?? [],
+    raw[templateRepo?.slug ?? '']?.prs ?? templateJoinData.prs,
   )
 
   /** @type {Record<string, any>} */

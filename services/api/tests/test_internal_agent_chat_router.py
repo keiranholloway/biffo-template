@@ -2,9 +2,8 @@
 (/api/v1/internal/agent-chat/{agent_key}, ADR-0017 §3 seam #3).
 
 The dual-auth path a plugin's Lambda uses: a SigV4 service principal AND a
-forwarded, re-verified founder token — since #621 resolved as one `Principal` by
-`require_signed_principal`. Both the SigV4 gate and the token verification are
-exercised elsewhere (ADR-0009; packages/cognito-auth; test_principal.py), so here
+forwarded, re-verified founder token. Both the SigV4 gate and the token
+verification are exercised elsewhere (ADR-0009; packages/cognito-auth), so here
 they are faked/overridden and the focus is this endpoint's own logic: the run is
 run_as the *forwarded founder*, the gate is the agent's required_group, a missing
 forwarded token is 401, and an unknown agent is 404.
@@ -16,13 +15,12 @@ plugins (ADR-0017 seam #1 extension).
 import asyncio
 from collections.abc import AsyncGenerator
 
+import pytest
 from api.chat_agents import ChatAgent, register_chat_agent
 from api.chat_engine import ChatTurnResult
 from api.database import get_db
-from api.identity import identity_session
+from api.middleware import forwarded_user
 from api.middleware.auth import AuthenticatedUser
-from api.middleware.forwarded_user import FORWARDED_USER_HEADER
-from api.middleware.principal import Principal, require_principal
 from api.middleware.service_auth import ServicePrincipal, require_service_principal
 from api.models.agent_run import AgentRun  # noqa: F401 — registers the table on Base.metadata
 from api.models.base import Base
@@ -107,7 +105,7 @@ def _build_app(*, founder: AuthenticatedUser, invoker: FakeInvoker):
     app.dependency_overrides[require_service_principal] = lambda: ServicePrincipal(
         principal_arn="arn:aws:sts::123456789012:assumed-role/proj-dev-plugin-ideation-role/s"
     )
-    app.dependency_overrides[require_principal] = lambda: Principal(user=founder)
+    app.dependency_overrides[internal_agent_chat.require_forwarded_user] = lambda: founder
     app.dependency_overrides[internal_agent_chat._get_runtime_invoker] = lambda: invoker
     return app, session_factory, engine
 
@@ -168,99 +166,61 @@ def test_an_unknown_agent_is_404():
     asyncio.run(engine.dispose())
 
 
-# ── the auth gates, exercised through the route (#621) ──────────────────────────
-#
-# These used to call the retired `require_forwarded_user` directly. The
-# dependency's own semantics now live in test_principal.py; what is worth
-# asserting *here* is that this route is still wired to both gates, which only a
-# request through the route can show.
-
-
-def _client_without_user_override(*, iam: bool = True) -> TestClient:
-    """A client with the SigV4 gate satisfied (or not) but the user gate real."""
-    app, _, engine = _build_app(founder=_founder(roles=["founder"]), invoker=FakeInvoker())
-    del app.dependency_overrides[require_principal]
-    if not iam:
-        del app.dependency_overrides[require_service_principal]
-    app.dependency_overrides[identity_session] = lambda: None
-    client = TestClient(app)
-    client._engine = engine  # type: ignore[attr-defined]  — disposed by the caller
-    return client
+# ── the forwarded-user dependency itself (shared middleware, ADR-0017 §3/§5) ─────
 
 
 def test_a_missing_forwarded_token_is_401():
-    """The user gate: a signed call with no forwarded token cannot act for anyone."""
-    client = _client_without_user_override()
-
-    resp = client.post(_BASE, json={"message": "hi"})
-
-    assert resp.status_code == 401
-    asyncio.run(client._engine.dispose())  # type: ignore[attr-defined]
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(forwarded_user.require_forwarded_user(forwarded_token=None, db=None))  # type: ignore[arg-type]
+    assert exc.value.status_code == 401
 
 
-def test_a_forwarded_token_that_fails_verification_is_401(monkeypatch):
-    """Core, not the plugin, is the authority on who the user is: a token that
-    does not verify here buys nothing, however well the request was signed."""
-    import api.middleware.principal as principal_module
+def test_the_forwarded_token_is_verified_via_cores_own_mapping(monkeypatch):
+    seen: dict[str, str] = {}
 
-    def _reject(credentials):
-        raise HTTPException(status_code=401, detail="Invalid token")
+    def _fake_claims_from_token(credentials):
+        seen["token"] = credentials.credentials
+        return {"sub": "founder-sub-abc"}
 
-    monkeypatch.setattr(principal_module, "claims_from_token", _reject)
-    client = _client_without_user_override()
-
-    resp = client.post(_BASE, json={"message": "hi"}, headers={FORWARDED_USER_HEADER: "a.b.c"})
-
-    assert resp.status_code == 401
-    asyncio.run(client._engine.dispose())  # type: ignore[attr-defined]
-
-
-def test_an_unsigned_caller_is_401_even_with_a_valid_user_token(monkeypatch):
-    """The service gate: this route is not reachable by a browser holding a
-    perfectly good Cognito token. Only a verified service may drive it."""
-    import api.middleware.principal as principal_module
-
-    monkeypatch.setattr(
-        principal_module, "claims_from_token", lambda credentials: {"sub": "founder-sub-abc"}
-    )
-
-    async def _identity(claims, db):
+    async def _fake_authenticated_identity(claims, db):
+        seen["claims_sub"] = claims["sub"]
         return _founder(roles=["founder"])
 
-    monkeypatch.setattr(principal_module, "authenticated_identity", _identity)
-    client = _client_without_user_override(iam=False)
+    monkeypatch.setattr(forwarded_user, "claims_from_token", _fake_claims_from_token)
+    monkeypatch.setattr(forwarded_user, "authenticated_identity", _fake_authenticated_identity)
 
-    resp = client.post(_BASE, json={"message": "hi"}, headers={FORWARDED_USER_HEADER: "a.b.c"})
+    user = asyncio.run(
+        forwarded_user.require_forwarded_user(forwarded_token="a.b.c", db=None)  # type: ignore[arg-type]
+    )
 
-    assert resp.status_code == 401
-    asyncio.run(client._engine.dispose())  # type: ignore[attr-defined]
+    assert seen["token"] == "a.b.c"  # the header value is what gets verified
+    assert seen["claims_sub"] == "founder-sub-abc"  # ...and its claims drive identity
+    assert user.sub == "founder-sub-abc"
 
 
 def test_a_deactivated_account_is_401_on_the_forwarded_path_too(monkeypatch):
     """The #150 deactivation gate must apply however the token arrived (#621).
 
     This path used to verify the token and stop, so a suspended user's unexpired
-    access token kept working through every plugin-forwarded route. Asserted
-    through the route, because the defect was never in the checks themselves —
-    it was in which dependency this route reached for.
+    access token kept working through every plugin-forwarded route. Both
+    dependencies now run the same `authenticated_identity`.
     """
-    import api.middleware.principal as principal_module
-
     monkeypatch.setattr(
-        principal_module, "claims_from_token", lambda credentials: {"sub": "founder-sub-abc"}
+        forwarded_user, "claims_from_token", lambda credentials: {"sub": "founder-sub-abc"}
     )
 
     async def _deactivated(claims, db):
         raise HTTPException(status_code=401, detail="Account is deactivated")
 
-    monkeypatch.setattr(principal_module, "authenticated_identity", _deactivated)
-    client = _client_without_user_override()
+    monkeypatch.setattr(forwarded_user, "authenticated_identity", _deactivated)
 
-    resp = client.post(_BASE, json={"message": "hi"}, headers={FORWARDED_USER_HEADER: "a.b.c"})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            forwarded_user.require_forwarded_user(forwarded_token="a.b.c", db=None)  # type: ignore[arg-type]
+        )
 
-    assert resp.status_code == 401
-    assert "deactivated" in resp.json()["detail"]
-    asyncio.run(client._engine.dispose())  # type: ignore[attr-defined]
+    assert exc.value.status_code == 401
+    assert "deactivated" in str(exc.value.detail)
 
 
 # ── Dynamic chat agents: live, DB-backed resolution (ADR-0017 seam #1 extension) ──

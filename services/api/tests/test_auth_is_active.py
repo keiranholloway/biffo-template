@@ -2,11 +2,10 @@
 path, so a suspended user can't keep calling the API with an already-issued
 access token.
 
-Covers both transports deliberately (#621). The flag was originally enforced only
-in `require_auth`; the SigV4/plugin path had a dependency of its own that did not,
-so the mitigation silently missed every plugin-forwarded route. That second
-dependency is gone and `require_principal` now serves both headers, but the
-assertions below stay duplicated across both entry points on purpose: they are
+Covers both dependencies deliberately (#621). The flag was originally enforced
+only in `require_auth`; `require_forwarded_user` — the SigV4/plugin path — did
+not, so the mitigation silently missed every plugin-forwarded route. The
+assertions below are duplicated across both entry points on purpose: they are
 what stops the two drifting apart again.
 
 Specifically about the *default* provider, whose store is the Core's own
@@ -25,10 +24,9 @@ from api.identity import (
     set_identity_provider,
 )
 from api.middleware.auth import require_auth
-from api.middleware.principal import require_principal
+from api.middleware.forwarded_user import require_forwarded_user
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
-from starlette.requests import Request
 
 pytestmark = pytest.mark.skipif(
     find_spec("api.models.user") is None,
@@ -53,12 +51,6 @@ def _use_default_provider():
 
 def _credentials() -> HTTPAuthorizationCredentials:
     return HTTPAuthorizationCredentials(scheme="Bearer", credentials="token")
-
-
-def _unsigned_request() -> Request:
-    """A request with no IAM context — the transport is what varies here, not the
-    caller's authorization, so the service principal is deliberately absent."""
-    return Request({"type": "http", "headers": [], "aws.event": {"requestContext": {}}})
 
 
 class _FakeRow(NamedTuple):
@@ -116,16 +108,7 @@ async def test_allows_user_without_a_row_yet():
     assert caller.sub == "sub-1"
 
 
-# ── the same flag, via the forwarded (SigV4/plugin) transport — #621 ────────────
-
-
-async def _forwarded(db: object):
-    return await require_principal(
-        _unsigned_request(),
-        credentials=None,
-        forwarded_token="token",
-        db=db,  # type: ignore[arg-type]
-    )
+# ── the same flag, via the forwarded (SigV4/plugin) path — #621 ─────────────────
 
 
 async def test_rejects_deactivated_user_on_the_forwarded_path():
@@ -133,16 +116,16 @@ async def test_rejects_deactivated_user_on_the_forwarded_path():
     forwarded by a plugin, must be refused exactly as a direct call is."""
     db = _FakeDb(is_active=False)
     with pytest.raises(HTTPException) as exc:
-        await _forwarded(db)
+        await require_forwarded_user(forwarded_token="token", db=db)  # type: ignore[arg-type]
     assert exc.value.status_code == 401
     assert db.executed  # the provider lookup actually ran on this path
 
 
 async def test_allows_active_user_on_the_forwarded_path():
-    principal = await _forwarded(_FakeDb(True))
-    assert principal.user.sub == "sub-1"
+    caller = await require_forwarded_user(forwarded_token="token", db=_FakeDb(True))  # type: ignore[arg-type]
+    assert caller.sub == "sub-1"
 
 
 async def test_forwarded_path_allows_user_without_a_row_yet():
-    principal = await _forwarded(_FakeDb(None))
-    assert principal.user.sub == "sub-1"
+    caller = await require_forwarded_user(forwarded_token="token", db=_FakeDb(None))  # type: ignore[arg-type]
+    assert caller.sub == "sub-1"

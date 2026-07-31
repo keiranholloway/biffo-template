@@ -108,7 +108,7 @@ async def authenticated_identity(claims: dict, db: AsyncSession) -> Authenticate
     by every authenticated path.
 
     It exists because it once wasn't. `require_auth` grew these checks inline
-    while the SigV4/plugin path (ADR-0017 §3/§5) had its own dependency that
+    while `require_forwarded_user` (the SigV4/plugin path, ADR-0017 §3/§5)
     verified the token and stopped there, so a suspended user's still-valid
     access token kept working through any plugin-forwarded route for the
     remainder of its ~1h life — the #150 mitigation covered one family and not
@@ -201,10 +201,8 @@ async def require_auth(
     This is the bearer-token half of authentication: it reads the token from
     `Authorization` and hands off to `authenticated_identity` for the checks that
     apply to every authenticated caller however they arrived. The SigV4/plugin
-    path reads the token from a different header, but there is no longer a
-    second dependency doing so — `middleware/principal.require_principal` covers
-    both transports and calls the same function, so the two cannot drift apart
-    again (#621).
+    path (`require_forwarded_user`) reads the token from a different header and
+    then calls the same function, so the two cannot drift apart again (#621).
 
     Where the identity record lives is the deployment's business, not the Core's:
     every database-backed question goes through the ADR-0012 `IdentityProvider`.

@@ -1,5 +1,4 @@
 import type { createApiClient } from './api-client'
-import type { WriteBackConfigValue } from './orchestration-api'
 import type { PromptPart } from './prompt-parts'
 
 /**
@@ -28,13 +27,6 @@ import type { PromptPart } from './prompt-parts'
  * `instructions`/`goals` accept EITHER a plain string (a single inline part — the
  * pre-library shape) OR an ordered list of prompt-library parts, exactly as a
  * saved agent action's `action_config` does (ADR-0015 §2).
- *
- * **Send the whole agent config, not the prompt half of it (#749).** This used
- * to carry four keys, so a write-back workflow was previewed with no write-back:
- * Core generates the terminal `submit_<table>_record` tool *from* `writeback`,
- * so omitting it left the model with no tool to call, answering in prose — the
- * one result shape a live write-back run treats as "no columns" and refuses to
- * write. The preview then reported success for the outcome that writes nothing.
  */
 export interface WorkflowDryRunRequest {
   agent_name: string
@@ -42,13 +34,6 @@ export interface WorkflowDryRunRequest {
   goals?: string | PromptPart[] | null
   model?: string
   max_turns?: number
-  /** The worker's declared tools (ADR-0014 §7). An agent previewed without its
-   *  tools is a different agent from the one being enabled. */
-  tools?: string[]
-  /** The write-back sub-config (ADR-0027) — what makes Core attach the submit
-   *  tool the model must call. Core answers 422 when no contract can be
-   *  generated for it, because a live run would then write nothing. */
-  writeback?: WriteBackConfigValue
   /** Whatever payload the builder wants to test against — fenced as untrusted
    *  data by the agent runtime, never interpreted here. Seeded from the
    *  trigger's declared fields (#505). */

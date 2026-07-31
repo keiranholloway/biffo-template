@@ -425,41 +425,12 @@ function promptHasContent(value: ConfigValue | undefined): boolean {
 interface DryRunOutcome {
   runId: string
   output: string
-  /** The run's raw `result`. NOT the write-back preview — for a plain completion
-   *  it is `{output, model, turns, finish_reason}`, which is run metadata. Use
-   *  `submittedColumns` to get the columns; rendering this object under "Would
-   *  write" is the bug #749 is about. */
+  /** Set when the agent answered through an output tool — the typed columns a
+   *  write-back WOULD have written, which is the more useful preview for a
+   *  write-back workflow and the thing the dry run deliberately did not do. */
   result: Record<string, unknown> | null
-  /** The typed columns the agent submitted through its output tool, or `null`
-   *  when it never called one. Distinct from `{}`: `null` means "answered in
-   *  prose", which for a write-back workflow means it would write nothing. */
-  submitted: Record<string, unknown> | null
   model: string | null
   costUsd: number | null
-}
-
-/**
- * The columns the agent actually submitted, from a run's structured result.
- *
- * Mirrors `_submitted_values` in `services/api/src/api/writeback.py`, which is
- * the code that decides what a live run writes: the columns live under
- * `arguments`, and the sibling keys (`output`, `model`, `turns`,
- * `finish_reason`) describe the *run*, never the row. `null` means the model
- * never called the submit tool — it answered in prose, and a live write-back run
- * given that result writes nothing and records a refusal.
- */
-function submittedColumns(result: Record<string, unknown> | null): Record<string, unknown> | null {
-  if (result == null) return null
-  const args = result['arguments']
-  if (args == null || typeof args !== 'object' || Array.isArray(args)) return null
-  return args as Record<string, unknown>
-}
-
-/** Whether a submitted value would actually put something in the column. Mirrors
- *  the live refusal in `writeback.py`: a run whose mapped columns all resolve to
- *  nothing writes nothing at all. */
-function wouldFill(value: unknown): boolean {
-  return value != null && value !== ''
 }
 
 /** Terminal states, from the run lifecycle (ADR-0014 §6). */
@@ -898,11 +869,6 @@ export default function OrchestrationPage() {
     }
     const [source, detail_type] = triggerKey.split('|')
     const turns = maxTurnsValue()
-    const tools = asList(config[TOOLS_FIELD])
-    // The columns this workflow declared — the preview is only meaningful about a
-    // write-back the author actually configured. Same "omit rather than empty"
-    // rule the save path uses: an empty mapping reads as "fill this with nothing".
-    const declaredColumns = writeback != null ? Object.keys(writeback.columns) : []
     const request: WorkflowDryRunRequest = {
       agent_name: asString(config.agent_name),
       instructions: toPromptField(config.instructions),
@@ -910,12 +876,6 @@ export default function OrchestrationPage() {
       ...(config.goals != null ? { goals: toPromptField(config.goals) } : {}),
       ...(asString(config.model) !== '' ? { model: asString(config.model) } : {}),
       ...(turns != null ? { max_turns: turns } : {}),
-      // Without these the preview runs a differently-configured agent than the
-      // one Enable would turn on (#749): no tools, and — the one that mattered —
-      // no generated submit tool, so the model answers in prose and the write-back
-      // half of the workflow is never exercised at all.
-      ...(tools.length > 0 ? { tools } : {}),
-      ...(writeback != null && declaredColumns.length > 0 ? { writeback } : {}),
       ...(source != null && source !== '' && detail_type != null && detail_type !== ''
         ? { trigger: { source, detail_type } }
         : {}),
@@ -942,12 +902,10 @@ export default function OrchestrationPage() {
         setDryRunError(run.error ?? 'The agent run failed.')
         return
       }
-      const submitted = submittedColumns(run.result)
       setDryRunResult({
         runId: run.id,
         output: outputFromRun(run),
         result: run.result,
-        submitted,
         // Read off the snapshot rather than the request: this is the model the
         // run actually executed with, including Core's default when none was set.
         model:
@@ -956,20 +914,6 @@ export default function OrchestrationPage() {
             : null,
         costUsd: run.cost_usd,
       })
-      // A write-back workflow whose preview filled no column has NOT passed. The
-      // live path refuses exactly this (`writeback.py`: every mapped column
-      // resolving to nothing is a refusal, not a no-op write), so letting it
-      // unlock Enable is the fail-open in #749 — a green test on a workflow that
-      // would write nothing. The output is still shown, because reading the prose
-      // is how the author works out what to change.
-      if (declaredColumns.length > 0 && !declaredColumns.some((n) => wouldFill(submitted?.[n]))) {
-        setDryRunError(
-          'The agent answered in prose and did not fill the record — this workflow ' +
-            'would write nothing. Adjust the instructions so it returns the fields ' +
-            'you asked it to record.',
-        )
-        return
-      }
       setTestedSnapshot(snapshotAtSend)
     } catch (err: unknown) {
       // A superseded poll is not a failure — a newer test owns the panel now, so
@@ -2114,62 +2058,18 @@ export default function OrchestrationPage() {
                         {dryRunResult.output}
                       </pre>
                     )}
-                    {/* "Would write" is a claim about the DATABASE, so it is only
-                        drawn for a workflow that declared a write-back, and only
-                        from the columns the agent actually submitted. It used to
-                        render the run's whole `result`, which for a prose answer
-                        is `{output, model, turns, finish_reason}` — run metadata
-                        shown as though it were the row (#749). */}
-                    {writeback != null && Object.keys(writeback.columns).length > 0 ? (
-                      dryRunResult.submitted != null ? (
-                        <div className="mt-2">
-                          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                            Would write
-                          </p>
-                          <dl className="mt-1 space-y-1 text-sm text-gray-800">
-                            {Object.keys(writeback.columns).map((name) => {
-                              const value = dryRunResult.submitted?.[name]
-                              const label =
-                                writebackTarget?.columns.find((c) => c.name === name)?.label ?? name
-                              return (
-                                <div key={name} className="flex gap-2">
-                                  <dt className="shrink-0 font-medium">{label}</dt>
-                                  <dd
-                                    className={
-                                      wouldFill(value)
-                                        ? 'whitespace-pre-wrap break-words'
-                                        : 'text-amber-700'
-                                    }
-                                  >
-                                    {wouldFill(value)
-                                      ? String(value)
-                                      : 'the agent left this empty — nothing would be written here'}
-                                  </dd>
-                                </div>
-                              )
-                            })}
-                          </dl>
-                        </div>
-                      ) : (
-                        <p className="mt-2 text-sm text-amber-700">
-                          The agent answered in prose and did not fill the record — this workflow
-                          would write nothing.
+                    {dryRunResult.result != null && (
+                      <div className="mt-2">
+                        {/* The typed columns a write-back WOULD have written. The
+                            dry run deliberately did not write them, so showing
+                            them is the whole point of previewing this workflow. */}
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                          Would write
                         </p>
-                      )
-                    ) : (
-                      dryRunResult.result != null && (
-                        <div className="mt-2">
-                          {/* No write-back, so this is the run's own structured
-                              answer (ADR-0017 output_tools) — shown as what it is
-                              rather than as a database write. */}
-                          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                            Structured result
-                          </p>
-                          <pre className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-800">
-                            {JSON.stringify(dryRunResult.result, null, 2)}
-                          </pre>
-                        </div>
-                      )
+                        <pre className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-800">
+                          {JSON.stringify(dryRunResult.result, null, 2)}
+                        </pre>
+                      </div>
                     )}
                     {dryRunResult.output === '' && dryRunResult.result == null && (
                       <p className="mt-1 text-sm text-gray-500">

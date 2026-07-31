@@ -32,11 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..identity import identity_session
 from .auth import AuthenticatedUser, authenticated_identity, claims_from_token
 from .forwarded_user import FORWARDED_USER_HEADER
-from .service_auth import (
-    ServicePrincipal,
-    optional_service_principal,
-    require_service_principal,
-)
+from .service_auth import ServicePrincipal, optional_service_principal
 
 #: ``auto_error=False`` so a missing/non-Bearer ``Authorization`` yields ``None``
 #: instead of a 401 raised before we can look at the forwarded header. A SigV4
@@ -96,37 +92,3 @@ async def require_principal(
 
     claims = claims_from_token(HTTPAuthorizationCredentials(scheme="Bearer", credentials=token))
     return Principal(user=await authenticated_identity(claims, db), service=service)
-
-
-async def require_signed_principal(
-    service: ServicePrincipal = Depends(require_service_principal),
-    principal: Principal = Depends(require_principal),
-) -> Principal:
-    """A principal that a **verified service** carried, for ``/api/v1/internal/*``.
-
-    The internal route families (ADR-0017 §3 chat, §5 owner-scoped data) are
-    dual-authenticated by design: a SigV4 service principal proves *which
-    machine* is calling, and the forwarded token proves *which user* it acts
-    for. Neither alone suffices, and that is a security property, not a
-    convenience — the service gate is what stops a browser reaching an internal
-    route with nothing but a bearer token, and the user gate is what stops a
-    plugin acting for a founder it holds no valid token for.
-
-    So this is not the second authorization stack coming back. There is still
-    exactly one place a user identity is resolved (:func:`require_principal`,
-    with its deactivation gate, platform-admin sync and permission resolution);
-    this only adds the requirement that ``service`` is present, expressed as a
-    dependency rather than an ``if`` in every handler.
-
-    Declaring ``require_service_principal`` first is deliberate: FastAPI
-    resolves dependencies in signature order, so an unsigned caller is refused
-    by the service gate (401 "Service authentication required", or 403 for a
-    non-allowlisted principal) before any token is verified — the same response,
-    for the same reason, as when these routes named the two dependencies
-    separately. The cost is that ``optional_service_principal`` runs twice per
-    request; it is pure and reads only the already-parsed Lambda event.
-
-    The returned principal carries the *required* service, so callers can rely
-    on ``is_service_call`` being true without re-deriving it.
-    """
-    return Principal(user=principal.user, service=service)

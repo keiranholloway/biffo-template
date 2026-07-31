@@ -166,3 +166,30 @@ variable "plugin_host_api_domain" {
   type        = string
   default     = ""
 }
+
+variable "core_api_health_domain" {
+  description = <<-EOT
+    Regional domain of the Core API Gateway, e.g.
+    "abc123.execute-api.eu-west-1.amazonaws.com" — NO scheme, NO path. When set,
+    CloudFront routes exactly one path, baseurl.com/api/v1/health, to the Core
+    API.
+
+    Without it that request falls through to the root behaviour — the
+    user-application sibling's static bucket — and returns that app's HTML with
+    a 403. A health check pointed at the public domain then measures the static
+    site, not the API.
+
+    Deliberately only the health path, not api/v1/*. Routing everything would
+    remove CORS from the sibling frontends and is arguably tidier, but it puts
+    every authenticated endpoint behind the CDN at once; that is a separate
+    decision.
+
+    Fed via a tfvar rather than a live module.api_gateway reference for the same
+    reason as plugin_host_api_domain: the gateway's cors_origins already
+    references module.cdn.distribution_domain, so a reference the other way
+    forms a cdn<->api_gateway cycle. Usually the same value as
+    plugin_host_api_domain, since one gateway fronts both.
+  EOT
+  type        = string
+  default     = ""
+}

@@ -305,6 +305,24 @@ resource "aws_cloudfront_distribution" "portal" {
     }
   }
 
+  # The Core API, for its health endpoint only. Present only when
+  # core_api_health_domain is set. Separate origin id from "plugin-host" even
+  # when both point at the same gateway — CloudFront allows that, and coupling
+  # them would mean one cannot be enabled without the other.
+  dynamic "origin" {
+    for_each = var.core_api_health_domain == "" ? [] : [var.core_api_health_domain]
+    content {
+      domain_name = origin.value
+      origin_id   = "core-api"
+      custom_origin_config {
+        http_port              = 80
+        https_port             = 443
+        origin_protocol_policy = "https-only"
+        origin_ssl_protocols   = ["TLSv1.2"]
+      }
+    }
+  }
+
   # The ROOT behavior — the user-application sibling's, when one is registered,
   # and the portal bucket as a placeholder when none is. See
   # local.default_target_origin_id for why this is a conditional rather than a
@@ -346,6 +364,36 @@ resource "aws_cloudfront_distribution" "portal" {
       target_origin_id         = ordered_cache_behavior.value
       viewer_protocol_policy   = "redirect-to-https"
       allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+      cached_methods           = ["GET", "HEAD"]
+      compress                 = true
+      cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
+      origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
+    }
+  }
+
+  # The Core API health endpoint — exactly one path, `api/v1/health`.
+  #
+  # Without this, baseurl.com/api/v1/health falls through to
+  # default_cache_behavior (the user-app sibling's static bucket) and returns
+  # that app's HTML with a 403. A health check pointed at the public domain then
+  # measures the static site, not the API — reporting the API down when it is
+  # up, or up when it is unreachable. Observed on a live instance, where
+  # /api/v1/health returned the portal's HTML while the API itself answered
+  # correctly on its gateway URL.
+  #
+  # An exact path pattern, not a prefix: this deliberately does NOT route
+  # api/v1/*. See the variable's own documentation for why that is a separate
+  # decision. Caching disabled — a cached health response is not a health check.
+  # GET/HEAD/OPTIONS only; health is a read. No rewrite function, for the same
+  # reason as the plugin-host route: it rewrites clean URLs to index.html for
+  # static export and must never touch an API request.
+  dynamic "ordered_cache_behavior" {
+    for_each = var.core_api_health_domain == "" ? {} : { "api/v1/health" = "core-api" }
+    content {
+      path_pattern             = ordered_cache_behavior.key
+      target_origin_id         = ordered_cache_behavior.value
+      viewer_protocol_policy   = "redirect-to-https"
+      allowed_methods          = ["GET", "HEAD", "OPTIONS"]
       cached_methods           = ["GET", "HEAD"]
       compress                 = true
       cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id

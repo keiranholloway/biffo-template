@@ -386,7 +386,7 @@ jobs:
           #
           # Written beside api/core_version.py, which imports it relatively so the
           # same module works under `api.*` in tests and `src.api.*` in Lambda.
-          core_version=$(sh ../../scripts/resolve-core-version.sh)
+          core_version=$(sh ../scripts/resolve-core-version.sh)
           printf 'CORE_VERSION = "%s"\n' "$core_version" > package/src/api/_core_version.py
           echo "Baked core version $core_version into the package"
 
@@ -1082,7 +1082,7 @@ jobs:
           #
           # Written beside api/core_version.py, which imports it relatively so the
           # same module works under `api.*` in tests and `src.api.*` in Lambda.
-          core_version=$(sh ../../scripts/resolve-core-version.sh)
+          core_version=$(sh ../scripts/resolve-core-version.sh)
           printf 'CORE_VERSION = "%s"\n' "$core_version" > package/src/api/_core_version.py
           echo "Baked core version $core_version into the package"
 
@@ -1790,7 +1790,7 @@ jobs:
           #
           # Written beside api/core_version.py, which imports it relatively so the
           # same module works under `api.*` in tests and `src.api.*` in Lambda.
-          core_version=$(sh ../../scripts/resolve-core-version.sh)
+          core_version=$(sh ../scripts/resolve-core-version.sh)
           printf 'CORE_VERSION = "%s"\n' "$core_version" > package/src/api/_core_version.py
           echo "Baked core version $core_version into the package"
 

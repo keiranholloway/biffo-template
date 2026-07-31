@@ -5,8 +5,11 @@ behaviours the wedge depends on: matching + idempotent claim (dispatch_event),
 and outcome recording (record_result).
 """
 
+from typing import Any
+
 import pytest
 from api import orchestration as svc
+from api import scope_resolvers as sr
 from api.models.base import Base
 from api.models.orchestration import (  # noqa: F401 — registers tables on Base.metadata
     ActionLog,
@@ -15,7 +18,7 @@ from api.models.orchestration import (  # noqa: F401 — registers tables on Bas
 )
 from api.run_observers import RunOutcome
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
 @pytest.fixture
@@ -375,3 +378,224 @@ async def test_run_outcome_reads_the_payload_the_producer_actually_stored(db_ses
     )
 
     assert outcome.trigger_payload == {"lead_id": "lead-1", "email": "a@example.com"}
+
+
+# ── Hierarchy-scoped dispatch (#616) ─────────────────────────────────────────
+#
+# `scope_matches_chain` is proven exhaustively as a pure function in
+# test_scope_resolvers.py. That is not the same thing as proving the engine
+# *uses* it: a refactor that dropped the `resolve_scope_chain` /
+# `scope_matches_chain` calls out of `dispatch_event` would leave every one of
+# those unit tests green while every scoped workflow in the estate silently
+# fired for every brand. These tests drive the same behaviour through
+# `dispatch_event` — the path production actually takes — and assert on claimed
+# runs and rows in the database, not on the resolver's return value.
+#
+# The claim under test (docs/implementation/0003-hierarchy-scoped-workflows):
+# a brand-scoped workflow fires for its own brand's unit event and does NOT
+# fire for a sibling brand's.
+
+# Stands in for the instance-owned hierarchy lookup a real resolver performs
+# against its own tables (tabsii's brand/region/unit). The template deliberately
+# owns no such tables — the levels are opaque strings here, exactly as in
+# `scope_resolvers.py`.
+_HIERARCHY: dict[str, dict[str, str | None]] = {
+    "unit-alpha-1": {"brand": "brand-alpha", "region": "region-north", "unit": "unit-alpha-1"},
+    "unit-alpha-2": {"brand": "brand-alpha", "region": "region-south", "unit": "unit-alpha-2"},
+    # Sibling brand: a different brand entirely, under no shared ancestor.
+    "unit-beta-1": {"brand": "brand-beta", "region": "region-east", "unit": "unit-beta-1"},
+}
+
+
+@pytest.fixture
+def resolver_calls():
+    """Register a brand/region/unit resolver for the duration of one test and
+    yield the list of sessions it was called with.
+
+    The registry is a single module-global pair (an instance has exactly one
+    hierarchy shape), so it is saved and restored around every test — the same
+    discipline test_scope_resolvers.py uses, and necessary here because a real
+    instance registers its own resolver at import time and would otherwise be
+    clobbered for the rest of the process.
+
+    Recording the sessions is deliberate: it proves `dispatch_event` threads its
+    own `AsyncSession` into the resolver (a real resolver needs it to look up a
+    unit's region/brand) and that the chain is resolved once per event, not once
+    per candidate definition.
+    """
+    calls: list[AsyncSession] = []
+
+    async def resolver(
+        db: AsyncSession, source: str, detail_type: str, payload: dict[str, Any]
+    ) -> dict[str, str | None]:
+        calls.append(db)
+        unit_id = payload.get("unit_id")
+        known = _HIERARCHY.get(unit_id) if unit_id is not None else None
+        if known is None:
+            return {"brand": payload.get("brand_id"), "region": None, "unit": unit_id}
+        return dict(known)
+
+    saved_levels, saved_resolver = sr._levels, sr._resolver  # noqa: SLF001
+    sr.register_scope_resolver(resolver, levels=("brand", "region", "unit"))
+    yield calls
+    sr._levels, sr._resolver = saved_levels, saved_resolver  # noqa: SLF001
+
+
+async def _onboard_unit(db_session, unit_id: str, *, idempotency_key: str | None = None):
+    """Dispatch a unit-level event exactly as the engine would — the payload
+    carries only the unit's own id, so every coarser level in the chain comes
+    from the resolver, not from the event."""
+    return await svc.dispatch_event(
+        db_session,
+        tenant_id="default",
+        source="biffo.core",
+        detail_type="unit.onboarded",
+        idempotency_key=idempotency_key or f"onboard-{unit_id}",
+        event={"unit_id": unit_id},
+    )
+
+
+async def test_dispatch_fires_a_brand_scoped_definition_for_its_own_unit(
+    db_session, resolver_calls
+):
+    """(a) A Brand-scoped workflow fires for a unit event under that brand,
+    even though the event names no brand — the resolver supplies it."""
+    definition = await _make_definition(
+        db_session,
+        name="alpha welcome",
+        trigger_detail_type="unit.onboarded",
+        scope={"level": "brand", "id": "brand-alpha"},
+    )
+
+    claimed = await _onboard_unit(db_session, "unit-alpha-1")
+
+    assert [c.definition_id for c in claimed] == [definition.id]
+    assert claimed[0].created is True
+    assert await _count(db_session, WorkflowRun) == 1
+    # The chain came from the registered resolver, called with dispatch's own
+    # session — not inferred from the payload by dispatch_event itself.
+    assert resolver_calls == [db_session]
+
+
+async def test_dispatch_does_not_fire_a_brand_scoped_definition_for_a_sibling_brand(
+    db_session, resolver_calls
+):
+    """(b) The assertion the whole feature rests on: the *same* definition,
+    the *same* trigger, a unit belonging to a different brand — no run, and
+    nothing written to the database."""
+    await _make_definition(
+        db_session,
+        name="alpha welcome",
+        trigger_detail_type="unit.onboarded",
+        scope={"level": "brand", "id": "brand-alpha"},
+    )
+
+    claimed = await _onboard_unit(db_session, "unit-beta-1")
+
+    assert claimed == []
+    assert await _count(db_session, WorkflowRun) == 0
+    assert resolver_calls == [db_session]
+
+
+async def test_dispatch_routes_a_unit_event_to_only_its_own_brands_definition(
+    db_session, resolver_calls
+):
+    """Both brands' workflows and an unscoped one exist side by side on the
+    same trigger. One event must claim exactly two of the three: its own
+    brand's, and the tenant-wide one."""
+    alpha = await _make_definition(
+        db_session,
+        name="alpha welcome",
+        trigger_detail_type="unit.onboarded",
+        scope={"level": "brand", "id": "brand-alpha"},
+    )
+    beta = await _make_definition(
+        db_session,
+        name="beta welcome",
+        trigger_detail_type="unit.onboarded",
+        scope={"level": "brand", "id": "brand-beta"},
+    )
+    tenant_wide = await _make_definition(
+        db_session,
+        name="tenant wide audit",
+        trigger_detail_type="unit.onboarded",
+        scope=None,
+    )
+
+    claimed = await _onboard_unit(db_session, "unit-alpha-1")
+
+    assert {c.definition_id for c in claimed} == {alpha.id, tenant_wide.id}
+    assert beta.id not in {c.definition_id for c in claimed}
+    assert await _count(db_session, WorkflowRun) == 2
+    # Resolved once for the event, not once per candidate definition.
+    assert len(resolver_calls) == 1
+
+
+async def test_dispatch_brand_scope_covers_every_region_beneath_it(db_session, resolver_calls):
+    """ "A higher level covers everything beneath it": the same brand-scoped
+    definition fires for two units in two different regions of that brand."""
+    await _make_definition(
+        db_session,
+        name="alpha welcome",
+        trigger_detail_type="unit.onboarded",
+        scope={"level": "brand", "id": "brand-alpha"},
+    )
+
+    first = await _onboard_unit(db_session, "unit-alpha-1")
+    second = await _onboard_unit(db_session, "unit-alpha-2")
+
+    assert len(first) == 1
+    assert len(second) == 1
+    # Distinct events, distinct runs — not an idempotent re-claim of one run.
+    assert first[0].run_id != second[0].run_id
+    assert await _count(db_session, WorkflowRun) == 2
+
+
+async def test_dispatch_region_scoped_definition_ignores_a_sibling_region(
+    db_session, resolver_calls
+):
+    """The same containment rule one level down: a Region-scoped definition
+    fires for its own region's unit and not for another region of the *same*
+    brand — so matching is genuinely per-level, not "same brand wins"."""
+    await _make_definition(
+        db_session,
+        name="north only",
+        trigger_detail_type="unit.onboarded",
+        scope={"level": "region", "id": "region-north"},
+    )
+
+    fired = await _onboard_unit(db_session, "unit-alpha-1")  # region-north
+    not_fired = await _onboard_unit(db_session, "unit-alpha-2")  # region-south, same brand
+
+    assert len(fired) == 1
+    assert not_fired == []
+    assert await _count(db_session, WorkflowRun) == 1
+
+
+async def test_dispatch_scoped_definition_is_still_tenant_scoped(db_session, resolver_calls):
+    """(c) Scope refines tenancy, it never widens it: a definition whose scope
+    matches the event perfectly still does not fire across a tenant boundary
+    (ADR-0001)."""
+    await _make_definition(
+        db_session,
+        tenant_id="other-tenant",
+        name="other tenant alpha welcome",
+        trigger_detail_type="unit.onboarded",
+        scope={"level": "brand", "id": "brand-alpha"},
+    )
+
+    claimed = await _onboard_unit(db_session, "unit-alpha-1")
+
+    assert claimed == []
+    assert await _count(db_session, WorkflowRun) == 0
+
+
+async def test_dispatch_does_not_resolve_a_chain_when_nothing_is_scoped(db_session, resolver_calls):
+    """Unscoped definitions keep today's behaviour and cost nothing: the
+    resolver (potentially a database round-trip) is never invoked."""
+    await _make_definition(db_session, trigger_detail_type="unit.onboarded", scope=None)
+
+    claimed = await _onboard_unit(db_session, "unit-alpha-1")
+
+    assert len(claimed) == 1
+    assert resolver_calls == []

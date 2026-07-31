@@ -169,6 +169,27 @@ def test_lead_captured_carries_the_fields_a_first_touch_needs():
     assert fields["email"].type == "string"
 
 
+def test_lead_captured_can_name_the_brand_not_just_identify_it():
+    """A candidate-facing email has to say the brand, and ids are not sayable.
+
+    Regression: a live first-touch email rendered "Thank you for your interest in
+    00000000-0000-0000-0000-00000000000b", because ``brand_id`` and ``brand_slug``
+    were the only brand fields on the payload and the author templated the one
+    that looked most like the brand. The orchestrator renders through a
+    ``defaultdict(str)``, so ``{brand_name}`` would have rendered as *empty* had
+    the author guessed it — a missing name field cannot announce itself, which is
+    why it is asserted here rather than left to review.
+    """
+    fields = {f.name: f for f in LEAD_CAPTURED.payload_fields()}
+
+    assert "brand_name" in fields, (
+        "lead.captured carries no human-readable brand name, so an email action "
+        "templating the brand can only reach brand_id/brand_slug and will put an "
+        "opaque identifier in front of a candidate."
+    )
+    assert fields["brand_name"].type == "string"
+
+
 def test_agent_run_payload_model_matches_the_real_reference_payload():
     """The model is the source for the fields; assert it still equals the emit site.
 

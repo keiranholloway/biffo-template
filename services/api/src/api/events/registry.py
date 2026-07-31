@@ -159,11 +159,24 @@ class LeadCapturedPayload(BaseModel):
     ``consent_to_contact`` travels for the same reason in reverse: a
     ``trigger_filter`` is an all-of match over payload keys, so consent can only
     gate an automation if it is one of them.
+
+    ``brand_name`` is the same argument applied to the brand rather than the
+    candidate. ``brand_id`` and ``brand_slug`` identify *which* brand to a
+    machine; neither is a thing you can put in front of a human. An author
+    writing "Thank you for your interest in …" has to name the brand, and with
+    only the id and the slug on offer they will reach for one of those — a real
+    candidate-facing email went out reading "Thank you for your interest in
+    00000000-0000-0000-0000-00000000000b". Nothing catches this: ``_render`` in
+    the orchestrator formats through a ``defaultdict(str)``, so a placeholder
+    for a field that does not travel renders as empty string rather than
+    failing, which means the *absence* of a name field is silent and its
+    presence is the only fix.
     """
 
     lead_id: str
     brand_id: str
     brand_slug: str
+    brand_name: str
     pipeline_stage_id: str
     source: str
     status: str

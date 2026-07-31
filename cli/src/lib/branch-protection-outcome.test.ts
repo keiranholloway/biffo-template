@@ -42,6 +42,20 @@ const skipped403 = outcome({
   reason: 'Upgrade to GitHub Team or make this repository public to enable this feature.',
 })
 
+/**
+ * The plugin path's second gap (#1001): `biffo plugin create` could not derive
+ * the CI job contexts, so it declined to protect at all. Declining is right —
+ * see `planProtection` — but the end state is the same unprotected branch, for
+ * a reason that is neither a 403 nor a failure.
+ */
+const skippedNoContexts = outcome({
+  status: 'skipped-no-contexts',
+  repo: 'biffo-plugin-ideation',
+  protectedBranches: [],
+  unprotectedBranches: ['dev'],
+  reason: 'No status-check contexts could be derived from .github/workflows/ci.yml.',
+})
+
 beforeEach(() => {
   vi.clearAllMocks()
   resetBranchProtectionOutcomes()
@@ -58,6 +72,10 @@ describe('isUnprotected', () => {
 
   it('is true for a hard failure', () => {
     expect(isUnprotected(outcome({ status: 'failed', unprotectedBranches: ['main'] }))).toBe(true)
+  })
+
+  it('is true when the contexts could not be determined', () => {
+    expect(isUnprotected(skippedNoContexts)).toBe(true)
   })
 
   it('is true for a PARTIAL application — the 403 arrived after dev was protected', () => {
@@ -108,6 +126,36 @@ describe('formatBranchProtectionSummary', () => {
     expect(formatBranchProtectionSummary([outcome()])).toEqual([
       'Branch protection applied to acme/my-app',
     ])
+  })
+
+  // ─── #1001: the two causes must not read the same ─────────────────────────
+
+  it('names the undeterminable-contexts repo and says the contexts were the problem', () => {
+    const lines = formatBranchProtectionSummary([skippedNoContexts]).join('\n')
+
+    expect(lines).toContain('acme/biffo-plugin-ideation')
+    expect(lines).toContain('unprotected: dev')
+    expect(lines).toContain('could not be determined')
+  })
+
+  it('gives the CI-job remedy, not the upgrade-the-plan one, when contexts were the cause', () => {
+    // Two causes, two remedies. Telling someone to upgrade their plan when the
+    // problem is an unnamed CI job sends them somewhere that cannot help.
+    const lines = formatBranchProtectionSummary([skippedNoContexts]).join('\n')
+
+    expect(lines).toContain('the fix is the CI job names, not the plan')
+    expect(lines).not.toContain('after upgrading the plan')
+  })
+
+  it('gives the plan remedy for a 403, and both when a run hit both causes', () => {
+    expect(formatBranchProtectionSummary([skipped403]).join('\n')).toContain(
+      'after upgrading the plan',
+    )
+
+    const both = formatBranchProtectionSummary([skipped403, skippedNoContexts]).join('\n')
+    expect(both).toContain('the fix is the CI job names, not the plan')
+    expect(both).toContain('after upgrading the plan')
+    expect(both).toContain('2 of 2')
   })
 })
 

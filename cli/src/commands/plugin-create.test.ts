@@ -10,6 +10,10 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  recordBranchProtectionOutcome,
+  resetBranchProtectionOutcomes,
+} from '../lib/branch-protection-outcome.js'
 import { INSTANCE_CORE_FILE } from '../lib/core-version.js'
 import { findSkeletonRoot } from '../lib/plugin-scaffold.js'
 import { log } from '../lib/logger.js'
@@ -24,6 +28,11 @@ function logWarnings(): string[] {
   return (log.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) =>
     String(c[0]),
   )
+}
+
+/** Everything the run reported at error level, joined — the end-of-run summary. */
+function reportedErrors(): string {
+  return vi.mocked(log.error).mock.calls.flat().join('\n')
 }
 
 const SKELETON = findSkeletonRoot(new URL('.', import.meta.url).pathname, 'plugin-template')
@@ -46,7 +55,19 @@ function makeGitHubMock() {
   return {
     createEmptyRepo: vi.fn().mockResolvedValue('https://github.com/acme/biffo-plugin-acme-crm.git'),
     setDefaultBranch: vi.fn().mockResolvedValue(undefined),
-    protectSingleBranch: vi.fn().mockResolvedValue(undefined),
+    // Mirrors the real adapter: it records on the run collector and returns the
+    // outcome, so the end-of-run summary sees the same thing a real run would.
+    protectSingleBranch: vi
+      .fn()
+      .mockImplementation(async (org: string, repo: string, branch: string) =>
+        recordBranchProtectionOutcome({
+          status: 'applied',
+          org,
+          repo,
+          protectedBranches: [branch],
+          unprotectedBranches: [],
+        }),
+      ),
     setRepoVariable: vi.fn().mockResolvedValue(undefined),
     getRepoVariable: vi.fn().mockResolvedValue(undefined),
     repoRunnerCount: vi.fn().mockResolvedValue(3),
@@ -72,6 +93,10 @@ beforeEach(() => {
   // The mocked logger is module-level, so its calls accumulate across tests —
   // an assertion about "did this warn?" would otherwise see a previous test's.
   vi.mocked(log.warn).mockClear()
+  vi.mocked(log.error).mockClear()
+  vi.mocked(log.success).mockClear()
+  // Module-scoped, and a real CLI run is one process — tests clear it themselves.
+  resetBranchProtectionOutcomes()
   projectRoot = mkdtempSync(join(tmpdir(), 'biffo-project-'))
   mkdirSync(join(projectRoot, 'services'), { recursive: true })
 })
@@ -361,6 +386,88 @@ describe.runIf(SKELETON)('runPluginCreate', () => {
         expect(git.push).toHaveBeenCalled()
         expect(github.setDefaultBranch).toHaveBeenCalled()
         expect(github.protectSingleBranch).not.toHaveBeenCalled()
+      })
+
+      // ─── #1001: the plugin path's two silent skips ──────────────────────────
+      //
+      // Both of these runs succeed end to end. The only thing wrong with either
+      // is that the repo it just created has an unprotected `dev`. If the run
+      // can finish without saying so, the defect #999 closed for `init` and
+      // `sibling create` is still live here.
+
+      describe('branch-protection summary', () => {
+        /** A skeleton whose CI declares no named jobs, so no contexts can be derived. */
+        function skeletonWithoutJobs(): string {
+          const skeleton = join(projectRoot, 'skeleton-no-jobs')
+          cpSync(SKELETON!, skeleton, { recursive: true })
+          writeFileSync(join(skeleton, '.github/workflows/ci.yml'), 'name: CI\non: [push]\n')
+          return skeleton
+        }
+
+        it('ends the run NAMING the repo it left unprotected after a 403', async () => {
+          const { deps, github } = remoteDeps()
+          github.protectSingleBranch.mockImplementation(
+            async (org: string, repo: string, branch: string) =>
+              recordBranchProtectionOutcome({
+                status: 'skipped-403',
+                org,
+                repo,
+                protectedBranches: [],
+                unprotectedBranches: [branch],
+                reason: 'Upgrade to GitHub Team or make this repository public.',
+              }),
+          )
+
+          await runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), deps)
+
+          const reported = reportedErrors()
+          expect(reported).toContain('acme/biffo-plugin-acme-crm')
+          expect(reported).toContain('unprotected: dev')
+          expect(reported).toContain('Upgrade to GitHub Team')
+          expect(reported).toContain('biffo check branch-protection --fix')
+        })
+
+        it('ends the run NAMING the repo when the contexts could not be determined', async () => {
+          const { deps, github } = remoteDeps()
+
+          await runPluginCreate(
+            'acme-crm',
+            options({ standalone: true, org: 'acme', skeletonRoot: skeletonWithoutJobs() }),
+            deps,
+          )
+
+          expect(github.protectSingleBranch).not.toHaveBeenCalled()
+          const reported = reportedErrors()
+          expect(reported).toContain('acme/biffo-plugin-acme-crm')
+          expect(reported).toContain('unprotected: dev')
+          expect(reported).toContain('could not be determined')
+        })
+
+        it('gives the CI-job remedy for undeterminable contexts, not "upgrade the plan"', async () => {
+          // The two causes have different fixes, which is why this needed a
+          // fourth status rather than being folded into `failed`.
+          const { deps } = remoteDeps()
+
+          await runPluginCreate(
+            'acme-crm',
+            options({ standalone: true, org: 'acme', skeletonRoot: skeletonWithoutJobs() }),
+            deps,
+          )
+
+          expect(reportedErrors()).toContain('the fix is the CI job names, not the plan')
+          expect(reportedErrors()).not.toContain('after upgrading the plan')
+        })
+
+        it('says nothing at error level when dev was actually protected', async () => {
+          const { deps } = remoteDeps()
+
+          await runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), deps)
+
+          expect(vi.mocked(log.error)).not.toHaveBeenCalled()
+          expect(vi.mocked(log.success).mock.calls.flat().join('\n')).toContain(
+            'Branch protection applied to acme/biffo-plugin-acme-crm',
+          )
+        })
       })
 
       it('refuses --org together with --no-commit, since there is nothing to push', async () => {

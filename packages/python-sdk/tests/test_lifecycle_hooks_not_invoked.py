@@ -31,7 +31,9 @@ record this guard exists because of.
 from __future__ import annotations
 
 import ast
+import json
 import re
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -125,8 +127,60 @@ requires_repo = pytest.mark.skipif(
 )
 
 
+def _match_length(relative: str, prefix: str) -> int:
+    """Longest-match length, mirroring ``isTemplateOwned`` in core-manifest.ts.
+
+    A prefix ending in ``/`` matches a subtree; anything else is an exact file.
+    """
+    if prefix.endswith("/"):
+        if relative == prefix.rstrip("/") or relative.startswith(prefix):
+            return len(prefix)
+        return -1
+    return len(prefix) if relative == prefix else -1
+
+
+@lru_cache(maxsize=1)
+def _instance_manifest() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """``(templateOwned, userOwned)`` when running in an INSTANCE, else empty.
+
+    An instance is identified by ``biffo.core.json``; the template has none.
+    """
+    if not (REPO_ROOT / "biffo.core.json").is_file():
+        return ((), ())
+    manifest = REPO_ROOT / "core-manifest.json"
+    if not manifest.is_file():
+        return ((), ())
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    return (tuple(data.get("templateOwned", [])), tuple(data.get("userOwned", [])))
+
+
+def _is_instance_owned(relative: str) -> bool:
+    """True when an INSTANCE owns this path, so the template cannot dictate it.
+
+    This guard travels with `biffo core upgrade`; the files it judges do not.
+    Applied to an instance it walked the whole repo and failed on
+    ``docs/ADR/0003-…`` and ``services/idea-scout/README.md`` — both user-owned,
+    both carrying wording the upgrade deliberately never carries, and neither
+    fixable in a way the next upgrade would not revert. That is the same shape
+    as #983: a rule arrives with the upgrade, the thing it judges does not.
+
+    Always False in the template, where the guard's whole point is to hold.
+    """
+    template_owned, user_owned = _instance_manifest()
+    if not user_owned:
+        return False
+    best_user = max((_match_length(relative, p) for p in user_owned), default=-1)
+    if best_user < 0:
+        return False
+    best_template = max((_match_length(relative, p) for p in template_owned), default=-1)
+    # Ties go to the user, matching the manifest's fail-closed resolution.
+    return best_user >= best_template
+
+
 def _is_exempt(relative: str) -> bool:
-    return any(relative == entry or relative.startswith(f"{entry}/") for entry in _EXEMPT)
+    if any(relative == entry or relative.startswith(f"{entry}/") for entry in _EXEMPT):
+        return True
+    return _is_instance_owned(relative)
 
 
 def _text_files() -> list[Path]:

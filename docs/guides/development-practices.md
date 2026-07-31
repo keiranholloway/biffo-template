@@ -248,6 +248,13 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **`practices-evidence.mjs`'s own ref-extractor silently misattributed cross-repo citations to this repo, and had already corrupted 79 stored dates before anyone noticed.** `extractRefs` resolved a bracket-wrapped number like `tabsii-platform [#360](https://github.com/tabsii-com/tabsii-platform/pull/360)` by looking only at the text immediately touching the `#` — nothing does, so it fell back to the bare-ref default, `keiranholloway/biffo-template`. `--enrich` then fetched *that* repo's real, unrelated issue #360 and wrote its creation date into a tabsii-platform row as if it were the row's own. Found while adding this session's two rows above, whose `fixesIn` cross-repo PR links tripped the same path; confirmed already live in the committed dataset — the tabsii-platform#76 row's stored date was quietly a biffo-template PR's date, off by 3 weeks. Re-running the fixed extractor against the full corpus found 79 rows carrying a date computed the same wrong way. Fixed by resolving a markdown link's **URL** first, ahead of any adjoining text, and by no longer letting a bare, unlinked `#N` default to this repo when the same number is already tied to a named repo elsewhere in the row | **fail-open** | biffo-template `scripts/practices-evidence.mjs` (this page's own tooling) | biffo-template `scripts/practices-evidence.mjs` | **fixed** — 79 corrupted dates re-enriched from the correct repo; a residual gap remains for a bare same-numbered mention inside quoted prose with no adjoining prefix at all, which still has no repo to resolve against |
 | — | **The probe used to confirm a deploy is itself a gate, and mine passed when it could not discriminate.** Verifying four demo fixes on dev, two of my own ad-hoc checks returned a positive that carried no information. (1) To prove tabsii-marketplace#28 had shipped I grepped the deployed bundle for `getCurrentSession\|isValid\|replace(` — `replace(` appears in essentially every minified JS bundle, so five of the five chunks I tested "matched", including `polyfills`. It printed `PRESENT in deployed bundle` and meant nothing. Redone against `"checking"` (a `Step` value the fix introduces) and `/browse` (`safeNext`'s fallback), it discriminated — those appear in the `signin` chunk and nowhere else. (2) Probing `curl -o /dev/null -w '%{http_code}'` across `/ /marketplace /intake /crm` returned `200` for all four and I read it as "all routes live" — but `/marketplace/brands`, which **does not exist**, also returned `200`, serving the corporate marketing page through the SPA fallback. The status code was evidence the CDN answers, not that the route exists. Both are the same shape as this page's vacuous-test rows, except the artefact is a **verification command typed once and never reviewed** — no diff, no test, nothing that would ever be read again. The habit that catches it is the one already written for guards: *name the value that would make this fail, and check that value is reachable* | **fail-open** | ad-hoc deploy verification (tabsii-marketplace, tabsii-crm) | practice — a verification pattern must be unique to the change, and a 200 from a CDN is not a route | **corrected before shipping** — the weak result was retracted in the same session and re-established with discriminating markers |
 | [#973](https://github.com/keiranholloway/biffo-template/issues/973) | **A deploy workflow failed outright — not a race, an actual failure — and nothing distinguished that from success for 21 hours.** tabsii-platform#399 merged to `dev` with every required check green. Its `Deploy Application` run died mid-job at `Package and deploy Lambda` (self-hosted runner killed, step conclusion `null`, cascading `null` through DB schema init, DDL imports and every plugin deploy step after it) and reported `failure` — but nothing retried it and nothing alerted on it, so the merged, CI-green PR simply never reached the deployed Lambda. The next `dev` commit hit the same runner-kill shape in its own CI run, confirming the failure mode is common infrastructure flakiness, not this PR's code. Only found because a live click-through (AGENTS.md §4) hit a 404 on a route the PR said existed, and unzipping the deployed Lambda (`aws lambda get-function` → `Code.Location`) showed the new module simply absent. This is a second, independent occurrence of the gap [#903](https://github.com/keiranholloway/biffo-template/issues/903) already named ("no signal anywhere that a deploy for a given commit has actually landed") — #903's case was an ordering race between two repos' deploys; this one is a single repo's deploy workflow failing outright with no retry path, which is arguably worse because a CI failure only blocks its own PR while a silently-failed deploy blocks everyone until someone happens to check `gh run list --branch dev` | **visibility** | tabsii-platform (dev, verifying tabsii-platform#399/tabsii-crm#153's live timeline) | biffo-template `.github/workflows/deploy-app.yml` (proposed: bounded auto-retry on a runner-cancellation signature, and/or a notification distinct from CI-red, and/or a deployed-vs-HEAD drift check) | **open** — recovered by hand this time via `gh run rerun <ci-run> --failed` (confirmed the flake) then `gh workflow run "Deploy Application" --ref dev -f environment=dev`; cost ~25m to diagnose once suspected, on top of the wait for the redeploy itself |
+| — | **A guard against valuation figures could not match the exact spelling the source used.** Founder-facing copy must carry no price or multiple (the taxonomy came from *asking* prices with no confirmed sales, so a multiple reads as a valuation it is not). The guard was `\b\d+(?:\.\d+)?\s*[x\u00d7]\b` — and `\b` **cannot match between `\u00d7` (U+00D7) and a space**, because neither is a word character. It caught `4.0x` and silently ignored `5.8\u00d7`, which is the form the source table actually used. It would have passed forever on the one input it existed to reject. Caught only by writing a test *of the guard* asserting it fires on known-bad strings; a trailing `(?![a-z0-9])` fixes both spellings. **The generalisable rule: a regex guard needs a test that feeds it violations, not only clean input** — clean input cannot distinguish a working pattern from one that matches nothing | **fail-open** | biffo-plugin-idea-scout | biffo-plugin-idea-scout (`tests/test_idea_scout_seed_business_models.py`) | **fixed** ([#78](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/78)) — plus a guard-the-guard test |
+| — | **A commit that silently never happened, then a push that reported success having pushed nothing.** In a fresh biffo-platform worktree the pre-commit hook runs `lint-staged`; without `pnpm install` it fails `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL Command "lint-staged" not found` and **aborts the commit**. The subsequent `git push` then printed the full `verify passed` gate output and `* [new branch]` — pushing the branch at its base commit with nothing on it — and exited **0**. The first visible symptom was `gh pr create` failing with *"No commits between dev and <branch>"*, several minutes later. AGENTS.md §2 says install deps before working and §6 says print the exit status; both are written for the *push*, and the trap is at the **commit**. `git rev-list --count origin/dev..HEAD` before opening a PR is the cheap check that would have caught it immediately | **fail-open** · visibility | biffo-platform | AGENTS.md §2/§6 wording; `pnpm install` in a fresh worktree | **worked around** — deps installed and recommitted; the guidance still frames this as a push-time risk |
+| — | **Five CI jobs killed mid-step across two PRs, reported as `cancelled` rather than `failure`, because the runner fleet is spot-only with `lowest-price` allocation.** `##[error]The runner has received a shutdown signal` five seconds into `pyright`, then `Terminate orphan process: (pyright)`. Three different instances died at the *same second* (19:48:26). The module default `instance_allocation_strategy = "lowest-price"` concentrates every runner in whichever single pool is cheapest, so the four-entry `instance_types` list bought **no** diversification: **17 of 17 recent runners were `t3a.large`**, and one pool reclamation took the whole fleet. Confirmed rather than inferred — CloudTrail showed 5 × `BidEvictedEvent` at exactly that second, while the `biffo-gha-scale-down` `TerminateInstances` calls sat three minutes earlier on *idle* runners, ruling out the orphan-sweep defect already documented in the same file. Two false trails on the way: `describe-instances` returned `InvalidInstanceID.NotFound` (the fleet is in **us-east-2**, not the instance's `eu-west-1`, same account) which read as "different account"; and `cancelled` reads as a flaky test rather than an infrastructure kill. **cost ~45m** across 3 re-runs, waiting and diagnosis | **visibility** · process | biffo-platform CI | biffo-runners (`terraform/main.tf`) | **fixed** ([biffo-runners#19](https://github.com/keiranholloway/biffo-runners/pull/19), applied) — `price-capacity-optimized`, 8 instance types, 3 AZs; next batch immediately launched mixed `t3a.large`/`t3.large` in the new AZ |
+| — | **`503 {"message":"Service Unavailable"}` was a Lambda *throttle*, and the account limit was 100× below the AWS default.** `ConcurrentExecutions` was **10** vs a default of **1000** — the cap AWS applies to young accounts, **per account**: tabsii's was raised on 2026-07-10 and biffo-platform's had never been requested, so a note recording the earlier fix read as though this one had also been done. The tell is `Throttles > 0` with **`Errors: 0`** (14 throttles / 0 errors / 35 invocations over 3h): nothing is crashing, the code never runs. Amplified by the app: every `/api/v1/plugins/*` request is served by the shared plugin host which then calls Core, so **each request costs two invocations**, and a 7-call page load wanted ~14 concurrent against a ceiling of 10 — it self-throttled before a second user arrived. `core-api` showing *more* invocations than the host fronting it is the signature. **The Service Quotas case status also lies**: the raise applied in ~20 seconds while the request still read `CASE_OPENED`, so `aws lambda get-account-settings` is the authority, not the case | **visibility** · boundary | biffo-platform dev | AWS account quota; biffo-plugin-idea-scout (`GET /form-options`) | **fixed** — quota 10→1000 applied; page load 7 requests → 3 ([#80](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/80)) |
+| — | **A hand-written `createApi` mock missing one new method hung the test suite past 120s, three times in one session.** Adding a method to the real client leaves the tests' bespoke `vi.mock` object short one key; the resulting undefined call rejects inside a mount-time `Promise.all`, and vitest sits until the runner's timeout rather than failing fast. Each occurrence read as "the admin suite is slow" until the mock was compared against the client. The mock's own comment already warns *"Names taken from createApi itself, not guessed — a wrong name here fails as 'no rows rendered', which reads exactly like the feature being broken."* — the warning is present, correct, and does not prevent the omission, because nothing links the two files. **cost ~15m** across three occurrences | **drift** · visibility | biffo-plugin-idea-scout (`web/`, `web-admin/`) | biffo-plugin-idea-scout | **worked around** — mocks updated each time; nothing yet asserts the mock's key set matches `createApi`'s |
+| — | **The portal serves 404s as HTTP 200, so a dead URL is indistinguishable from a live one.** A reported failure at `/dashboard/new-idea-scout/` was investigated as an application bug; the path renders Next.js's *"This page could not be found"* with a **200** status (static-export behaviour), and no `dashboard` route exists in either the instance's or the template's portal source. The real app is at `/idea-scout/`. Cost the first minutes of a live incident chasing a page that does not exist, and it means no monitor or link-checker can detect a broken portal link | **visibility** | biffo-platform / apps/portal | apps/portal (template-owned) | **not fixed** — filed here only; a static export needs the 404 served with a 404 status, or CloudFront mapping it |
+| — | **`practices-evidence.mjs --extract` deletes rows on every run, and its own code says it does not.** Run against a pristine `dev` with no edits at all, the dataset goes **326 -> 323**: four stored rows have no counterpart afterwards. The function that should prevent this carries an explicit comment — *"Orphans are KEPT, not dropped... This used to `return fresh.map(...)`, which silently deleted every stored row the markdown no longer mentioned. That is a data-loss fail-open, and it fired"* — so the failure mode was diagnosed, fixed once, documented at length, and is live again. The loss is invisible in the ordinary way: `--extract` reports the number it *wrote* (`extracted 323 rows`), never the number it removed, and the generated tally simply quotes a smaller total. Found only because 326 + 6 new rows produced 329 rather than 332, and the arithmetic was checked. **Anything appending to this dataset should verify the row count grows by exactly what it added.** | **fail-open** · visibility | biffo-template (the practices tooling itself) | biffo-template (`scripts/practices-evidence.mjs`, `orphanedRows`/`rowKeys` matching) | **open** — the four rows were restored by hand this session; nothing prevents the next run dropping them again |
 
 ### What the classes say
 
@@ -264,13 +271,13 @@ shape recurring across unrelated components is a design problem, not bad luck.
 
 <!-- BEGIN generated: class-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write`. **324** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
+_Generated by `node scripts/practices-evidence.mjs --write`. **334** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
 
 | Primary class | Rows | Share |
 | --- | --- | --- |
-| **visibility** | 99 | 31% |
-| fail-open | 76 | 23% |
-| drift | 67 | 21% |
+| **visibility** | 104 | 31% |
+| fail-open | 78 | 23% |
+| drift | 70 | 21% |
 | process | 56 | 17% |
 | boundary | 26 | 8% |
 
@@ -365,19 +372,19 @@ markers; re-run the command.
 
 <!-- BEGIN generated: fix-repo-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write` from **324** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `cli/src/lib/practices-metrics.test.ts` fails when this block does not match the dataset._
+_Generated by `node scripts/practices-evidence.mjs --write` from **334** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `cli/src/lib/practices-metrics.test.ts` fails when this block does not match the dataset._
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 155 of 324 (48%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
-| **tabsii-platform** | 34 of 324 (10%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
-| **biffo-plugin-idea-scout** | 17 of 324 (5%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
-| **biffo-platform** | 14 of 324 (4%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
-| **tabsii-crm** | 14 of 324 (4%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
-| **biffo-plugin-ideation** | 14 of 324 (4%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **tabsii-intake** | 5 of 324 (2%) | CI generation, branch-protection contexts, the `python-jose` removal |
-| **tabsii-marketplace** | 2 of 324 (1%) | `python-jose` removal; the credential-dependent build |
-| **biffo-runners** | 1 of 324 (0%) | Runner fleet docs + fail-fast |
+| **biffo-template** | 156 of 334 (47%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
+| **tabsii-platform** | 34 of 334 (10%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
+| **biffo-plugin-idea-scout** | 20 of 334 (6%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
+| **tabsii-crm** | 15 of 334 (4%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
+| **biffo-platform** | 14 of 334 (4%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
+| **biffo-plugin-ideation** | 14 of 334 (4%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **tabsii-intake** | 5 of 334 (1%) | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-runners** | 2 of 334 (1%) | Runner fleet docs + fail-fast |
+| **tabsii-marketplace** | 2 of 334 (1%) | `python-jose` removal; the credential-dependent build |
 
 <!-- END generated: fix-repo-tally -->
 
@@ -935,6 +942,37 @@ transcript of what the model was *actually sent*. That single artefact —
 `definition_snapshot.instructions` — settled in one query what three merged
 milestones had asserted incorrectly. It should have been the first move on day one,
 not the last on day four.
+
+### Measured: two features shipped, and the machine took a third of it (2026-07-31)
+
+**360 agent-minutes: delivery 265 · platform 30 · toil 65.** Two Idea Scout
+features reached dev and were verified live (a business-model picker; collapsing
+the run form's seven mount-time requests into three), plus the corpus spike that
+produced the taxonomy. The 65 minutes of toil is the interesting number, because
+**none of it was caused by the change being wrong**.
+
+- **~45m — five CI jobs killed by spot reclamation, across two PRs, three
+  re-runs.** Structural, not unlucky: the fleet is spot-only with `lowest-price`
+  allocation, which had put 17 of 17 recent runners in one pool. No amount of
+  care in the PR avoids this; only the allocation strategy does. Each round trip
+  is ~6 minutes of waiting plus the re-diagnosis cost of a failure that reports
+  `cancelled` and therefore looks like a flaky test.
+- **~10m — a commit that never happened.** Recovered by printing exit status and
+  counting commits ahead, both of which are already in AGENTS.md and both of
+  which are written about the *push* rather than the commit.
+- **~15m — three suite hangs from one missing mock key**, each presenting as
+  slowness rather than failure.
+
+**The loop worth shortening is the first one**, and it was: one Terraform change
+removed the concentration that made a single reclamation fatal. The other two are
+symptoms of the same shape — *a failure that does not announce itself as one* —
+which is what the visibility class is counting.
+
+Worth separating from the toil: **the 503 that started the incident was real and
+its diagnosis was cheap** (~15m to `Throttles > 0, Errors: 0`). What made it
+expensive was that the fix required a quota raise nobody had requested for this
+account, while a note recorded the *other* account's raise as done.
+
 
 ### Measured: 1h 20m building a hook that never fires, 2026-07-30
 
@@ -2855,6 +2893,51 @@ design.
 **Recognising an infeasible live-repro and falling back to the right verification instead of skipping it.** The "two territories match the same postcode" ambiguous path looked like it needed a live click-through, until checking `territory_settings.overlap_tolerance_sqm`'s default (10 sqm — a few square metres) showed two territories can't be drawn to overlap enough to share a postcode centroid without the DB trigger rejecting the draw. Rather than either forcing a doomed manual geometry exercise or shrugging the path off as "unverified", running the existing `test_assignment_resolution_pg.py` (which already documents bypassing the same trigger deliberately, in a single transaction, as the only honest way to construct the case) against a real Postgres/PostGIS container was the correct proof — and it passed.
 
 **A green PR, green CI and a completed merge were still not treated as "shipped."** Landing the unified lead-timeline endpoint (tabsii-platform#399), the actual acceptance test was a live click-through against the real lead, not the merge itself. That single habit is what caught it: the browser rendered `Could not load activity`, and unzipping the deployed core Lambda (`aws lambda get-function` → `Code.Location` → grep) showed the new module absent entirely, 21 hours after merge, despite every visible signal — the PR page, the issue, the CI run on that PR — reading as success. Reading the source or re-running the test suite would have shown nothing wrong, because nothing was.
+**Test the guard with violations, not only with clean input.** A rule forbidding
+valuation figures in founder-facing copy was enforced by a regex that passed on
+every real description and would have passed forever: `\b` cannot match between
+`\u00d7` and a space, so it silently ignored `5.8\u00d7` — the exact spelling the
+source table used. Clean input cannot tell a working pattern from one that
+matches nothing. Writing a test that feeds the guard known-bad strings found it
+in under a minute, and the same technique proved a second guard genuine by
+showing it reports 1 for sequential awaits and 3 for `asyncio.gather`.
+
+**CloudTrail settled which of two plausible causes was real.** Five CI jobs died
+in the same second. Two mechanisms could do that: spot reclamation, or the
+orphan sweep whose identical signature is documented in the same Terraform file
+("killed three of them in the same seconds they claimed jobs"). Guessing had a
+50% chance of shipping a fix that changed nothing. `BidEvictedEvent` × 5 at
+exactly that second, against `scale-down`'s `TerminateInstances` three minutes
+earlier on idle runners, decided it in one query — and `StateTransitionReason`
+(`Service initiated` vs `User initiated`) corroborated it independently.
+
+**Reproducing by the reporter's exact URL found that the page did not exist.**
+The reported 503 was real, but the path it was reported on renders Next.js's
+404 with a 200 status and has no route in either repo. Chasing the application
+would have been chasing nothing; the actual defect was two layers away in an
+account quota.
+
+**Verifying the deployed artifact rather than the pipeline.** Three claims this
+session were checked against the running system rather than a green workflow:
+the served JS bundle contained `/form-options` and none of the five endpoints it
+replaced; the live scale-up Lambda's environment showed
+`price-capacity-optimized` (which the Terraform *plan* could not display,
+because the new subnet id deferred the whole map to `known after apply`); and
+the `ddl-import` payload showed `"applied": ["010_…"]` against nine `skipped`,
+which a green deploy alone does not distinguish from a file that never ran.
+
+**Checking the arithmetic on a tool's own output caught silent data loss.**
+Appending 6 rows to a 326-row dataset produced 329. The command reported success
+(`extracted 329 rows`) and the regenerated tally quoted 329 without complaint —
+every surface agreed. Only 326 + 6 = 332 disagreed. Isolating it against a
+pristine checkout showed the tool drops 4 rows on *every* run, unrelated to the
+edit, in a function whose comment states it was fixed for exactly this. Two
+further checks were then needed and both paid: a grep that reported rows
+"missing" turned out to have broken escaping (the ruler, again), and restoring
+the orphans produced 334 rather than 333 because one had been re-parsed rather
+than lost. **The generalisable habit: when you add N things, assert the total
+grew by N** — every other signal here was green and wrong.
+
 
 ## What needs more thought
 
@@ -2866,6 +2949,39 @@ the page beside it. **A duplicate-`summary` check is one line and would have
 caught the first.** Nothing at all would have caught the second, because no gate
 knows what a PR was supposed to contain — that comparison exists only in the head
 of whoever is resolving, and it is exactly the thing a tired person skips.
+
+**Nothing links a hand-written test mock to the client it doubles.** Adding a
+method to `createApi` leaves every bespoke `vi.mock` object one key short, and
+the failure presents as a *hang* — the undefined call rejects inside a mount-time
+`Promise.all` and vitest waits for its timeout. It happened three times in one
+session, in two different frontends, and the mock's own comment already warns
+about exactly this. A comment that is correct, prominent and ignored three times
+is not a documentation problem. A test asserting the mock's key set is a superset
+of the real client's would fail loudly at the point of change.
+
+**A recorded fix on one AWS account reads as done for the whole estate.** The
+Lambda concurrency cap is per-account, and a note saying "quota increase to 1000
+requested" was about tabsii's account while the same symptom was live on
+biffo-platform's. Nothing in the note was wrong; nothing in it said *which*
+account either. Anything recorded about an account-scoped limit needs the account
+id in it, and the check is `aws lambda get-account-settings`, not the Service
+Quotas case status — which still read `CASE_OPENED` after the raise had applied.
+
+**A page load costs twice what it looks like, and nothing surfaces that.** Every
+`/api/v1/plugins/*` request is served by the shared plugin host, which then calls
+Core: two Lambda invocations per request, invisible from the client. Seven
+mount-time fetches therefore wanted ~14 concurrent invocations. The signature is
+visible in metrics — `core-api` showing *more* invocations than the host that
+fronts it — but only if you already suspect it. No budget, lint or review step
+counts a page's request fan-out against the platform's concurrency ceiling.
+
+**`terraform plan` cannot show the values you most want to check.** The change
+that mattered was `INSTANCE_ALLOCATION_STRATEGY`, and the plan rendered the whole
+environment map as `-> (known after apply)` because one new subnet id was
+unknown. The plan was reviewable for *shape* (2 add, 2 change, 0 destroy) but not
+for *content*, and the only way to confirm the intended value was to apply and
+then read the live Lambda. Worth knowing before treating a plan as a review
+artefact.
 
 **Two practices PRs cannot be landed independently, and the workaround is
 sequential.** #907 and #905 both regenerate the same block, so #905 had to wait
@@ -4053,6 +4169,10 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `biffo-verify` | **worked — §3 and §6 together caught a guard that could never fire** | The valuation guard passed on every clean description and would have passed forever. §6's *"what does this do when it cannot run?"* applied to a regex means: feed it violations. Doing so showed it matched `4.0x` and ignored `5.8\u00d7` — the exact spelling the source used. §3's discipline (watch it fail) is what turned a written test into a defending one; the same technique then proved the concurrency guard real by showing it reports 1 for sequential awaits and 3 for `asyncio.gather`. |
+| `biffo-verify` | **worked — §4 and §5 turned "flaky CI" into a one-line Terraform fix** | §4 (read the *live* config, not the source) gave `INSTANCE_ALLOCATION_STRATEGY=lowest-price` and 17/17 runners on one instance type. §5 (read past the masking layer) mattered twice: `cancelled` masked an infrastructure kill as a test failure, and CloudTrail `BidEvictedEvent` distinguished reclamation from the orphan-sweep defect already documented in the same file — which would have made the fix useless. |
+| `biffo-verify` | **partial — §8 was reached only when the operator typed the command, for the third recorded time** | Sections 1–7 were applied throughout and paid for themselves. The effort log was not run until `/biffo-verify` was invoked explicitly at the end of a long session. This is the **third** entry with this cause; the previous one already concluded *"it should be step 0"*. It was not, because the skill's own ordering still lists it eighth. A recommendation recorded twice and not acted on is a defect in the skill, not in the operator — the fix is to move the effort log to the top of §8, or to a §0. |
+| `new-plugin-feature` | **partial — no path for a premise that dies mid-plan** | Steps 0–3 worked well; the research step surfaced that the intended data source's ToS §9.C forbids the crawling the whole feature assumed. The right answer was to abandon the plan and spike something smaller, which the skill has no route for: it goes Plan Mode → `ExitPlanMode` → file issues, and "the premise is now wrong" exits through none of them. Ended up leaving plan mode with a hand-written spike plan and never reaching Step 6. Worth a step: *if research invalidates the feature's premise, say so and stop — do not file the issues.* |
 | `new-plugin-feature` | **worked — Step 3's research changed the plan's shape twice** | It established that idea-scout's agent prompts were *already* admin-editable via `_resolve_agent`, so requirement (a) was a missing UI rather than missing plumbing; and that a founder's "last used model" is derivable from their newest run, so the operator's sticky-choice decision needed no new per-founder state. Both would have been built the long way without the research step. |
 | `build-plugin-feature` | **worked — and its review-the-diff step is the entire value** | Four defects in one milestone, all found by reading the change, none by a suite that was green at 26, 28 and 30 tests. The skill's claim that "a subagent reporting tests pass is not the same as the change being correct" was demonstrated four times in one build, including a button that would have destroyed a working prompt. |
 | `build-plugin-feature` | **worked — Step 3.6, which I corrected earlier the same day** | The step used to say this session has no browser and should print a URL and stop. Rewritten to do the click-through, it immediately paid: the founder run form was observed with an **empty** model catalog before seeding, which verified the degradation path by accident of ordering, and then with a deliberately-seeded non-web-capable entry, which verified the filter rather than the render. Neither observation was available from tests. |

@@ -1558,6 +1558,37 @@ not for removing it.
 
 ## What went well — practices that earned their keep
 
+**Refusing to believe a zero, three times in one session, on the session's own
+work.** Building the RLS grant-satisfiability guard produced three clean-looking
+results that were each false, and every one was caught by the same reflex rather
+than by a gate: a guard returning `0 of 152 policies` (structurally incapable of
+finding its own motivating case); a schema sweep reporting a defect that module
+063 had already fixed (a 33-hour-old database); and an `INSERT 0 0` mutation test
+whose three subsequent passes proved nothing, because the mutation had never
+applied. **The third is the sharpest** — it was an attempt to verify a guard, and
+it silently verified nothing. `biffo-verify`'s question *"does this zero mean
+nothing there, or could not see the input?"* is the estate's highest-yield habit
+and it earned its place again here. The generalisation now applied: **a new guard
+is not trusted until it has failed against a known-true instance**, which is why
+both guards in #440 shipped mutation-tested rather than merely green.
+
+**Proving the test fails before the fix exists, with the failure recorded.** The
+module 070 tests were run against a schema without module 070 and failed with
+`DID NOT RAISE DBAPIError` on exactly the three cases asserting rejection, while
+the three asserting acceptance passed. That is the escalation demonstrated rather
+than argued, and it cost nothing — the schema simply had not had the module
+applied yet, so no destructive experiment on the working tree was needed (cf. the
+`git checkout HEAD --` incident under *needs more thought*). **Where a fix is a
+DDL module, fail-first is free**: build the schema without it, run, apply, re-run.
+
+**Reading the deploy payload rather than the green tick.** #440 reaches a live
+instance, so the merge triggered a deploy that applies DDL. The run went green,
+which proves the workflow ran, not that the module landed. The `ddl-import`
+response says `{"ok": true, "applied": ["070_ura_scope_matches_role.sql"],
+"skipped": [...73 modules...]}` — exactly one applied, every prior one correctly
+checksum-skipped. That is the difference between *"did the deploy succeed"* and
+*"did my change reach the database"*, and only the second one was the question.
+
 **Resolving ownership against the manifest instead of against the issue title.**
 Triaging eleven instance issues, each was checked against
 `core-manifest.json` by longest-prefix-wins rather than by what it appeared to
@@ -3288,6 +3319,12 @@ assumed.
 
 
 ## What needs more thought
+
+| — | **A new guard's ZERO is a claim about the world, and the first version of this one was structurally incapable of finding the defect it was written for.** The class is *"an RLS-gated row is invisible on this session, and invisible is indistinguishable from absent"* — this page's own most-repeated finding. The obvious check is *does a policy pass NULL for a scope the TABLE has a column for*, and it reported **0 of 152 policies**. Not a clean bill of health: `media_assets` has no `brand_id` column **at all**, so it could never have caught `media_assets.create`, the known-true case that motivated it. Reported rather than interrogated, a guard that finds nothing would have shipped as proof the class was closed — a fail-open in the very mechanism built to end fail-opens. The working relationship is one level up: between the `scope_level` of the **roles** holding a permission and the scope arguments its **policies** pass. **The rule this suggests: a new guard is not trusted until it has been run against a known-true instance and failed.** Both guards in #440 were finally proven by mutation, not by passing | **fail-open** · visibility | tabsii-platform, building the guard itself | tabsii-platform [#440](https://github.com/tabsii-com/tabsii-platform/pull/440) — rewritten and mutation-tested | **fixed** |
+| — | **A long-lived local database drifts in two directions at once, and neither is visible from a query.** The RLS grant sweep was first run against a lane container left up for 33 hours. It predated `063_audit_logs_brand_scoping.sql` — the module that *fixed* `audit_logs.read` — so the audit reported a defect that had already shipped a fix, and the whole 49-item baseline described a schema that no longer existed. Caught only by reading `db/imports/` and noticing a filename that described the finding being reported. **Then the opposite:** verifying the guard against that same database took it from **5 seeded roles to 148**, because the DDL seeds exactly one tenant and every other role is created by a *test*. So the same query before and after the suite gives different answers, with nothing indicating why. Behind the DDL, and ahead of it by residue. Nothing stamps a lane database with the DDL revision it was built from | **drift** · visibility | tabsii-platform local RLS lane | not fixed — candidates: build into a throwaway database per run, or record the highest applied module and refuse a stale one | **unfiled** |
+| — | **A guard that reads runtime state in a shared-database lane is order-dependent until proven otherwise, and "it passed when I ran it" is not that proof.** The grant-satisfiability check passed run alone and **failed on the full lane**, reporting three findings that were test fixtures — `test_marketplace_media.py` builds a region-scoped role holding `brand_media.read` to exercise one policy, which is legitimate. Keying findings on `(permission_code, scope_level)` rather than role name was not enough, because a fixture can invent a genuinely new pair. Fixed by confining the guard to the DDL-seeded tenant, plus an assertion naming the four roles it must find so a re-seed or rename fails loudly instead of quietly shrinking what is examined. This lane deliberately runs the whole suite **twice against one database**, so residue is guaranteed rather than hypothetical — and every existing guard that queries application tables inherits this exposure | **fail-open** · process | tabsii-platform RLS lane, full-suite run | tabsii-platform #440 — scoped to the seeded tenant; 253 passed twice | **fixed** |
+| — | **The estate's own escalation guard was satisfied by zero as readily as by one.** `chk_ura_one_level` on `user_role_assignments` reads `num_nonnulls(brand_id, region_id, unit_id, franchisee_id) <= 1` — which permits **none set**, the tenant-wide shape. `fn_authorized`'s first branch matches when all four are NULL and does not inspect the passed scope arguments at all, so a role declared `scope_level = 'brand'` assigned that way matched **every row in the tenant**, for every permission it held, while `whoami` reported the role's intended shape. Found incidentally while building an unrelated guard, not by any audit. The declarative fix is a composite FK, and it was built and then **rejected**: `MATCH SIMPLE` skips enforcement entirely when any referencing column is NULL, so it would have been a fail-open inside the guard — and closing that needs a `NOT NULL` that rejects live rows. A trigger has neither problem. **Worth asking of every `<=` in a constraint in this estate: is zero a legal answer, and did anyone mean it to be?** | **fail-open** · security | tabsii-platform | tabsii-platform #440 — DDL module 070, deployed to dev (`applied: ["070_ura_scope_matches_role.sql"]`) | **fixed** |
+| — | **Recording the choice before building is not sufficient to avoid a false `did not move` — the tool produces one by a second route.** `/practices-standup`'s loop closure fires on any prior entry regardless of whether a **new snapshot has been collected since**, so a choice recorded the same morning as the snapshot it was read from is scored against its own baseline and the delta is 0 by construction. Observed 2026-07-31: choice `chosenAt` 04:22Z, snapshot `generatedAt` 03:39Z, same file, printed `16.8 → 16.8  did not move (0)` and labelled it *"Yesterday you chose"*. The metric had in fact moved **29.6 → 16.8 (-43%)**, and even that was not attributable because the intervention post-dated the collection — the honest verdict was *too early*. The skill is emphatic about the ordering rule and that rule **was followed**; the guidance is therefore incomplete rather than ignored. A `did not move` is meant to be the most valuable signal this process produces, and one that fires on a self-comparison trains the reader to discount all of them. **A delta of exactly 0 deserves the same suspicion as a zero row count** | **visibility** · fail-open | biffo-template `practices-standup.mjs` | biffo-template [#1037](https://github.com/keiranholloway/biffo-template/issues/1037) — refuse to score a choice whose `chosenAt` is at or after the snapshot's `generatedAt` | **open** |
 
 | — | **Nothing at filing time says which repo owns the code a symptom appears in, so a backlog fills with issues its own repo cannot action.** Six of eleven open instance issues had their fix in a template-owned path. Two of the six **state their own template ownership in the body** and were filed downstream regardless; one was raised against an instance it had not even surfaced in, in a repo with almost no other traffic, where nobody would have found it. This is not carelessness — an issue is filed where the symptom appeared, which is the only thing the reporter knows, and the tracker offers no signal about ownership. The cost is a backlog that reads as instance work while being platform work: re-filing alone took one instance from 2 open issues to **0** and another from 9 to **5**, with every remainder genuinely instance-level. Candidates: an issue template asking which path the symptom lives in, or a triage step that resolves the answer against `core-manifest.json` | **visibility** · boundary | biffo-platform, tabsii-platform | not fixed — the check exists (`core-manifest.json`, longest-prefix-wins); nothing invokes it at filing time | **unfiled** |
 

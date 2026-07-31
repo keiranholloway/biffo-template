@@ -664,3 +664,198 @@ def test_seeding_a_repeated_agent_key_inserts_it_once():
     assert asyncio.run(_get_row_count(session_factory, agent_key="repeated-key")) == 1
 
     asyncio.run(engine.dispose())
+
+
+def _blind_the_pre_read(monkeypatch):
+    """Make the seed route's existing-key pre-read return nothing.
+
+    The production failure (#924) is a race, not a logic error: a burst of
+    simultaneous plugin cold starts — what a fresh deploy produces, since it
+    replaces every warm Lambda at once — has each request read "no rows yet"
+    and then all insert, so every loser gets
+    ``UniqueViolationError ... "uq_plugin_chat_agent_key"`` and a 500.
+
+    Reproducing that with real concurrency needs two connections interleaved
+    inside one request, which SQLite's locking makes non-deterministic. The
+    observable condition is exactly what this patch creates instead: the
+    pre-read does not return a key that IS committed by the time the insert
+    flushes. The route must still succeed and report it as already existing.
+    """
+
+    async def _blind(db, *, tenant_id: str, plugin_name: str) -> set[str]:
+        return set()
+
+    monkeypatch.setattr(internal_plugin_config, "_existing_agent_keys", _blind)
+
+
+def test_seeding_survives_a_row_committed_after_the_pre_read(monkeypatch):
+    """A key the pre-read missed must not 500 the plugin's cold-start seed.
+
+    Fails without the SAVEPOINT: the insert reaches the unique constraint and
+    the request 500s, which is what `biffo-platform-dev-plugin-host` logged on
+    every cold start while Core was perfectly healthy.
+    """
+    principal = ServicePrincipal(
+        principal_arn="arn:aws:sts::123456789012:assumed-role/proj-dev-plugin-ideation-role/session"
+    )
+    app, session_factory, engine = _build_app(principal=principal)
+    client = TestClient(app)
+
+    asyncio.run(
+        _insert_plugin_agents(
+            session_factory,
+            [
+                {
+                    "plugin_name": "ideation",
+                    "role": "analyst",
+                    "agent_key": "ideation-analyst",
+                    "system_prompt": "ADMIN EDITED",
+                    "agent_name": "Ideation Analyst",
+                    "model": "claude-3-sonnet",
+                    "required_group": "founder",
+                }
+            ],
+        )
+    )
+
+    _blind_the_pre_read(monkeypatch)
+
+    resp = client.post(
+        "/api/v1/internal/plugins/me/config/seed",
+        json=[
+            {
+                "agent_key": "ideation-analyst",
+                "agent_name": "Different Name",
+                "role": "analyst",
+                "system_prompt": "BUILT-IN DEFAULT",
+                "model": "claude-3-sonnet-different",
+                "required_group": "founder",
+                "active": True,
+                "max_history_messages": 40,
+                "max_output_tokens": 1024,
+                "timeout_seconds": 20.0,
+            }
+        ],
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == [{"role": "analyst", "created": False}]
+
+    # Exactly one row, and the loser did not overwrite the winner's values:
+    # insert-if-absent, never ON CONFLICT DO UPDATE (#824).
+    assert asyncio.run(_get_row_count(session_factory, agent_key="ideation-analyst")) == 1
+    assert (
+        asyncio.run(_get_system_prompt(session_factory, agent_key="ideation-analyst"))
+        == "ADMIN EDITED"
+    )
+
+    asyncio.run(engine.dispose())
+
+
+def test_a_lost_race_on_one_role_still_seeds_the_others(monkeypatch):
+    """One conflicting key must not cost the rest of the batch.
+
+    A plugin seeds all its roles in one call. If a conflict aborted the whole
+    transaction, a single role that another cold start won would leave every
+    other role unseeded — the failure #924 exists to end, one row narrower.
+    """
+    principal = ServicePrincipal(
+        principal_arn="arn:aws:sts::123456789012:assumed-role/proj-dev-plugin-ideation-role/session"
+    )
+    app, session_factory, engine = _build_app(principal=principal)
+    client = TestClient(app)
+
+    asyncio.run(
+        _insert_plugin_agents(
+            session_factory,
+            [
+                {
+                    "plugin_name": "ideation",
+                    "role": "analyst",
+                    "agent_key": "ideation-analyst",
+                    "system_prompt": "ALREADY THERE",
+                    "agent_name": "Ideation Analyst",
+                    "model": "claude-3-sonnet",
+                    "required_group": "founder",
+                }
+            ],
+        )
+    )
+
+    _blind_the_pre_read(monkeypatch)
+
+    def _definition(agent_key: str, role: str) -> dict:
+        return {
+            "agent_key": agent_key,
+            "agent_name": agent_key,
+            "role": role,
+            "system_prompt": "Do the thing.",
+            "model": "claude-3-sonnet",
+            "required_group": "founder",
+            "active": True,
+            "max_history_messages": 40,
+            "max_output_tokens": 1024,
+            "timeout_seconds": 20.0,
+        }
+
+    resp = client.post(
+        "/api/v1/internal/plugins/me/config/seed",
+        json=[
+            _definition("ideation-analyst", "analyst"),
+            _definition("ideation-critic", "critic"),
+        ],
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == [
+        {"role": "analyst", "created": False},
+        {"role": "critic", "created": True},
+    ]
+    assert asyncio.run(_get_row_count(session_factory, agent_key="ideation-critic")) == 1
+    assert asyncio.run(_get_row_count(session_factory, agent_key="ideation-analyst")) == 1
+
+    asyncio.run(engine.dispose())
+
+
+def test_seeding_twice_over_the_same_committed_rows_is_a_no_op(monkeypatch):
+    """The whole point, end to end: seed, commit, seed again — no error, no change.
+
+    The second call runs with the pre-read blinded, so it goes all the way to
+    the database constraint rather than short-circuiting — the cold-start path
+    as production actually exercises it, not as the fast path describes it.
+    """
+    principal = ServicePrincipal(
+        principal_arn="arn:aws:sts::123456789012:assumed-role/proj-dev-plugin-ideation-role/session"
+    )
+    app, session_factory, engine = _build_app(principal=principal)
+    client = TestClient(app)
+
+    payload = [
+        {
+            "agent_key": f"ideation-{role}",
+            "agent_name": role,
+            "role": role,
+            "system_prompt": "Do the thing.",
+            "model": "claude-3-sonnet",
+            "required_group": "founder",
+            "active": True,
+            "max_history_messages": 40,
+            "max_output_tokens": 1024,
+            "timeout_seconds": 20.0,
+        }
+        for role in ("analyst", "critic", "scribe")
+    ]
+
+    first = client.post("/api/v1/internal/plugins/me/config/seed", json=payload)
+    assert first.status_code == 200, first.text
+    assert [r["created"] for r in first.json()] == [True, True, True]
+
+    _blind_the_pre_read(monkeypatch)
+
+    second = client.post("/api/v1/internal/plugins/me/config/seed", json=payload)
+    assert second.status_code == 200, second.text
+    assert [r["created"] for r in second.json()] == [False, False, False]
+
+    assert asyncio.run(_get_row_count(session_factory, plugin_name="ideation")) == 3
+
+    asyncio.run(engine.dispose())

@@ -264,6 +264,9 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **A template-owned CI file reaches instances and future repos but no existing satellite, so a one-line fix took nine hand-written PRs.** No job in any `ci.yml` set `timeout-minutes`, so a job whose spot runner vanished burned the **360-minute default** rather than failing. Fixing it upstream covers **instances** (`.github/` is `templateOwned` → `biffo core upgrade`) and **repos created later** (both skeletons) — and reaches **none of the nine existing satellites**, because `ci.yml` is deliberately absent from `shared-files.json` (each repo's genuinely differs: idea-scout has two frontend jobs, runners has no workflows at all) and satellites are not instances. **Neither distribution channel covers the middle case**, which is most of the estate. Cost: 9 PRs across 2 GitHub orgs to bound 52 jobs, plus 10 more via the two instances. Same absence already recorded twice for `AGENTS.md` (#559) and the local gates (#855) | **drift** | the whole estate | biffo-template ([#980](https://github.com/keiranholloway/biffo-template/pull/980)) + 8 satellite PRs + 2 instance upgrades | **fixed** — 62 jobs bounded across 11 repos; the *channel* gap is unchanged |
 | — | **Six of my own probes were wrong in one session; five were caught by arithmetic or an identity comparison, one reached the scoreboard.** Two not recorded elsewhere: `find -maxdepth 2` missed `apps/frontend/package.json` at depth **3**, so six repos reported "nothing to install" when each had a frontend — empty output read as *nothing there* rather than *my search was too shallow*; and `jq`'s `//` operator treats **`false` as empty**, so `.required_status_checks.strict // "none"` reported "no required checks" for a repo with **five**, nearly deciding against `--auto` on the #714 grounds. The other four: a regex guard that could not match `5.8×` (`\b` cannot match between U+00D7 and a space), `--extract` reporting rows written but never rows deleted (326 + 6 = 329), a CI monitor settled on a force-pushed-past commit, and a page-behaviour claim made from grepped HTML. **The common structure is not carelessness — every input was real.** It is that a cheap check and a sufficient check are indistinguishable from the inside, and the instrument is always newer and less tested than the subject. What worked, every time: **when you add N things assert the total grew by N; when you claim a page behaves a way, load it; when a probe says "nothing", prove the probe can find something** | **visibility** · process | biffo-template (my own tooling, this session) | diagnostic practice | **corrected** — five pre-filing, one retracted after filing ([#987](https://github.com/keiranholloway/biffo-template/pull/987)) |
 | — | **The pre-push gate cannot scope to the diff, so a one-line YAML change pays a full-toolchain price — and the estate makes you pay it eight times.** Adding `timeout-minutes` to `.github/workflows/ci.yml` in eight satellites required `pnpm install` in **every** worktree, because `verify.sh` runs each repo's whole suite regardless of what changed: `FAIL test(web-admin) … vitest: not found`, **push rejected**. No test in any of those repos reads that file. **~55 minutes of the session was installing dependencies to satisfy tests that cannot observe the change.** Two facts compound and neither is visible alone: the gate has no diff-scoping, and no distribution channel reaches existing satellites (see the row above), so the same edit is made eight times. Either alone is mild; together a one-line estate-wide config change costs an hour. **Scoping the gate once removes this from every future config-or-docs change across eleven repos** — a far better trade than shortening any individual step. Note the gate is right to be strict for code; the defect is that it cannot tell the two cases apart | **process** | 8 satellite repos | biffo-template (`scripts/verify.sh` diff-scoping) | **not fixed** — recorded with the measurement; the rollout was completed by paying the cost |
+| [#924](https://github.com/keiranholloway/biffo-template/issues/924) | **A lifecycle hook was fixed, shipped, and has failed on every cold start since — and the failure is invisible because a second mechanism happens to write the same data.** #948 made the plugin-host run each mounted plugin's lifespan, and it does. The seed it performs then dies: `UniqueViolationError … uq_plugin_chat_agent_key`, every cold start, because the insert is not idempotent and two concurrent cold starts race each other. Nobody noticed because the rows are correct anyway — `db/imports/biffo/006_*.sql` writes equivalent data from the DDL import, so the *observable* state is right while the mechanism under test has never once succeeded. **Two verification agents read the source and both concluded it was closable pending a click-through**; one CloudWatch query said otherwise. The generalisation is the expensive one: **a mechanism landing and a mechanism working are different claims**, and a backlog cannot tell them apart because the issue that tracks it was written before either was true. Compounding it, the plugin-host reported `Failed to seed … (Core may be unavailable)` when Core was up and had answered with a constraint violation — wording that buys a wrong first theory | **visibility** · fail-open | biffo-platform dev (CloudWatch, during backlog triage) | biffo-template ([#1000](https://github.com/keiranholloway/biffo-template/pull/1000)) SAVEPOINT-per-insert; error text in [idea-scout#83](https://github.com/keiranholloway/biffo-plugin-idea-scout/pull/83), [ideation#103](https://github.com/keiranholloway/biffo-plugin-ideation/pull/103) | **fixed** upstream; [#924](https://github.com/keiranholloway/biffo-template/issues/924) **stays open** until a deploy shows the seed succeed |
+| — | **Six of 38 backlog issues did not describe reality, and two of the five ranked "highest impact" were closable without writing code.** A full verification pass over `biffo-template`'s open issues: **#764** was done (PR #931, test and all); **#967** was done; **#994** auto-closed mid-session; **#946** asked for a guard that already exists (it described the upgrade *planner*, not the ownership guard, which reads `git diff --name-status` unfiltered and already blocks added files under a `templateOwned` prefix); **#715**'s body was half false — its "nothing ever backfills" claim had been disproved by four merged PRs; **#724** needed one CloudWatch query, which showed the fix had already worked (p50 init **4035ms → 2212ms, −45%**). **An open issue is a claim, not a fact** — and its age is not the signal, because the estate moves faster than the backlog is re-read. The structural cause is that **1 of 38 issues carried a label** against a 47-label taxonomy, so nothing could be navigated without reading all of it, so it was never read and never pruned | **process** · visibility | biffo-template backlog (38 open) | diagnostic practice — verify before ranking; labelling as the prerequisite that makes pruning possible. Captured as the `/groom-backlog` skill | **fixed** — 38 → 27 open, all labelled, 8 PRs merged |
+| — | **`cancelled` has two causes here and only one of them means "re-run"; treating them as one wastes runs and teaches "CI is flaky".** Already recorded is spot reclamation killing PR-branch jobs. The second is `ci.yml`'s own `concurrency: cancel-in-progress: true` keyed on `github.ref` — so when several agents merge into `dev` inside a few minutes, **each merge cancels the previous run**. Five in a row on 2026-07-31. The runs are not broken, they are **superseded**, and re-running a superseded run is meaningless work against an old SHA. They are indistinguishable at the `conclusion` level: both say `cancelled`, neither has a failing step. What separates them is whether a *newer* run exists for a *newer* head — so the correct response is `git merge-base --is-ancestor <your-squash-sha> origin/dev` plus the newest run's status, never a re-run. Found by an agent that stopped to ask why five consecutive `dev` runs were cancelled instead of retrying them | **visibility** | biffo-template `dev` (5 consecutive post-merge runs) | diagnostic practice — check supersession before re-running; `cancel-in-progress` is working as designed | **understood** — no code change; the reading habit is the fix |
 
 ### What the classes say
 
@@ -280,14 +283,14 @@ shape recurring across unrelated components is a design problem, not bad luck.
 
 <!-- BEGIN generated: class-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write`. **352** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
+_Generated by `node scripts/practices-evidence.mjs --write`. **358** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
 
 | Primary class | Rows | Share |
 | --- | --- | --- |
-| **visibility** | 111 | 32% |
-| fail-open | 81 | 23% |
+| **visibility** | 114 | 32% |
+| fail-open | 82 | 23% |
 | drift | 72 | 20% |
-| process | 62 | 18% |
+| process | 64 | 18% |
 | boundary | 26 | 7% |
 
 <!-- END generated: class-tally -->
@@ -381,19 +384,19 @@ markers; re-run the command.
 
 <!-- BEGIN generated: fix-repo-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write` from **352** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `cli/src/lib/practices-metrics.test.ts` fails when this block does not match the dataset._
+_Generated by `node scripts/practices-evidence.mjs --write` from **358** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `cli/src/lib/practices-metrics.test.ts` fails when this block does not match the dataset._
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 167 of 352 (47%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
-| **tabsii-platform** | 34 of 352 (10%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
-| **biffo-plugin-idea-scout** | 20 of 352 (6%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
-| **biffo-platform** | 15 of 352 (4%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
-| **tabsii-crm** | 15 of 352 (4%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
-| **biffo-plugin-ideation** | 14 of 352 (4%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **tabsii-intake** | 5 of 352 (1%) | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-runners** | 2 of 352 (1%) | Runner fleet docs + fail-fast |
-| **tabsii-marketplace** | 2 of 352 (1%) | `python-jose` removal; the credential-dependent build |
+| **biffo-template** | 170 of 358 (47%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
+| **tabsii-platform** | 34 of 358 (9%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
+| **biffo-plugin-idea-scout** | 20 of 358 (6%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
+| **biffo-platform** | 15 of 358 (4%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
+| **tabsii-crm** | 15 of 358 (4%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
+| **biffo-plugin-ideation** | 14 of 358 (4%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **tabsii-intake** | 5 of 358 (1%) | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-runners** | 2 of 358 (1%) | Runner fleet docs + fail-fast |
+| **tabsii-marketplace** | 2 of 358 (1%) | `python-jose` removal; the credential-dependent build |
 
 <!-- END generated: fix-repo-tally -->
 
@@ -452,6 +455,50 @@ there. Neither is evidence about the estate.
 
 
 ## Where the cycles go
+
+### Measured: verifying a backlog cost 15 minutes and removed 6 issues (2026-07-31)
+
+**~2h 45m of agent time took `biffo-template` from 38 open issues to 27.** The
+split is the finding, because it is nothing like where the effort was expected to
+go.
+
+| Phase | Agent time | Outcome |
+| --- | --- | --- |
+| Verification (3 parallel agents, ~12 issues each) | **~15 min** | 6 issues closed with no code written |
+| Building (5 parallel agents, partitioned by file) | ~1h 40m | 8 PRs merged, 5 more issues closed |
+| Orchestration, measurement, corrections | ~50 min | 2 live defects found, 1 issue filed |
+
+**Verification returned the most per minute by a wide margin.** Fifteen minutes
+of read-only checking retired six issues — one already fixed with its test in
+place, one asking for a guard that exists, one whose body was half disproved by
+four merged PRs, one closable by a single CloudWatch query. Every one of those
+would otherwise have been *planned, scoped and built*. The cheapest work in a
+backlog is establishing which of it is real, and it is the step that gets
+skipped because it produces no diff.
+
+**Two things only a running system could answer.** #724 asked for "a measured
+reduction in cold start"; the source showed the fix present, and the measurement
+showed it had **worked** (p50 4035ms → 2212ms) — closable, but only by querying.
+#924 went the other way: the source showed the mechanism landed, and CloudWatch
+showed it **failing on every cold start** since. Two agents reading code reached
+the wrong verdict on it. Neither issue could be settled from a checkout, and they
+failed in opposite directions — so "read the code" is not conservative, it is
+just unreliable in an unpredictable direction.
+
+**Parallelism worked because the partition was by file, not by topic.** Five
+build agents ran concurrently with zero merge conflicts between them. The two
+issues sharing `deploy-app.yml` were given to *one* agent as sequential PRs;
+splitting them across agents would have guaranteed a conflict. The shared
+append-only files (`evidence.jsonl`, this document) were declared off-limits to
+all five and written once, centrally, afterwards — which is the only reason this
+session did not reproduce **#953** five times over.
+
+**What it cost, honestly:** ~30 minutes of the total was toil, none of it the
+work itself — the SSH remote authenticating as the wrong account (every agent hit
+it independently and each rediscovered the HTTPS workaround), five superseded
+`dev` runs read as failures before the `cancel-in-progress` cause was understood,
+and ESLint scanning a gitignored `apps/portal/out/` that a local reproduction
+build had populated, rejecting a push with no hint from `git status`.
 
 ### Five defects in one step, priced (2026-07-31)
 
@@ -1454,6 +1501,36 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**Asking a sub-agent to say what it could NOT verify is what located the two
+issues only a running system could grade.** Each verification agent was told
+*"if you cannot verify without running something, say so rather than guessing"*.
+Both flagged the same class of gap — post-deploy init duration, a live
+click-through — and that list was precisely the set of issues worth checking
+personally. Without the instruction the agents would have produced confident
+verdicts from source on both, and one of those verdicts (#924 closable) was
+wrong. **The honest non-answer is a routing signal**, not a shortfall: it says
+which work cannot be delegated.
+
+**Distrusting a sub-agent's stale-issue verdict, and confirming it at the
+source.** An agent reported #946 STALE-WRONG — an issue a human filed
+deliberately. Two greps confirmed it (`parseNameStatus` keeps every status;
+`services/api/` is a `templateOwned` prefix, so added files are already
+blocked). Cheap, and closing a deliberately-filed issue on an agent's say-so
+would have been the wrong habit even when the agent is right. The general rule:
+**every STALE verdict is an agent telling you to discard human work — confirm
+it yourself.**
+
+**An agent correcting my root cause, and the correction changing the plan.** I
+attributed #924's constraint violation to a collision between the self-seed and
+`006_*.sql`. The implementing agent found the SQL seeds `plugin_name =
+idea-scout` while the violated key was `plugin_name = host` — different rows, so
+the race is self-seed against self-seed. The fix was unaffected, but the
+follow-up was: retiring the SQL is a **data** question, not a file deletion, and
+with #912 having removed the fallback, deleting on my wrong reading would have
+surfaced as a 502. Recorded because the correction arrived from a subordinate
+agent and was accepted on its evidence, which is the direction that usually
+fails.
 
 **Read past the layer that is masking the truth (§5) — on my own verification,
 not on the bug.** Confirming `biffo-platform`'s `/health` after a green
@@ -3113,6 +3190,29 @@ assumed.
 | — | **`botocore` is bundled into every Lambda package and is already in the runtime.** Measuring tabsii-platform's package during the size incident: 184MB unzipped, of which **botocore ~24MB** is shipped despite AWS providing it. It is not the largest item (numpy + numpy.libs at 57MB, via shapely, is), but it is the only one that is pure waste rather than a real dependency. Not enough on its own to clear the inline cap (~68MB base64 after removal, still over), which is why it was not pursued under time pressure — but it is free size in every instance, forever, and nothing measures package composition at all | **process** | tabsii-platform | not fixed — exclude boto3/botocore from the package; revisit alongside the S3 artifacts bucket | **unfiled** |
 
 
+**Nothing distinguishes "this mechanism shipped" from "this mechanism works",
+and the backlog is where that gap hides.** #924 is the clean case: the fix
+merged, distributed to the instance, and has failed on every cold start since —
+invisible because a *second* mechanism writes equivalent rows, so the observable
+state is correct while the thing under test has never once succeeded. An issue
+tracking a mechanism is written before either claim is true and is never
+revisited to distinguish them, so it ages into "presumably done". The estate has
+no signal for *"this code path executed successfully in a deployed
+environment"* — `/health` reports a version, which answers "did the deploy
+land", a strictly weaker question. Until something answers the stronger one,
+every mechanism-shaped issue needs a human to go and look, and that does not
+scale past a backlog of this size.
+
+**A 47-label taxonomy with 1 of 38 issues labelled is worse than no taxonomy.**
+The labels existed and were plausible (`core`, `cli`, `migrations`, `portal`,
+`ci-cd`); nothing applied them, so the backlog could only be read linearly,
+so it was not read, so it grew. Labelling all 38 took minutes once the
+verification evidence was in hand — but only *because* it was in hand.
+Labelling from titles beforehand would have encoded the same wrong assumptions
+the titles carried. The open question is what keeps it current: nothing in
+`biffo-workflow` or the issue templates requires a label at filing time, so
+this will decay back unless the filing path enforces it.
+
 **The corpus guard asserts the file grows, not that it makes sense.**
 `corpus-append-only` exists to stop rows being deleted, and it does that. But
 both of today's wrong conflict resolutions satisfied it: one added 88 duplicate
@@ -4373,6 +4473,9 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `biffo-verify` | **worked — §4 was the difference between two opposite wrong answers** | Backlog triage, two issues whose acceptance no checkout could settle. #724's source showed the fix present and §4's measurement showed it had **worked** (p50 4035ms → 2212ms) — closed. #924's source showed the mechanism landed and CloudWatch showed it **failing on every cold start** — kept open, with a named fix. **Two verification agents reading only code called #924 closable.** §4 is usually framed as a defence against the stale-deploy theory; here it was the only way to grade a backlog at all, and it failed in *both* directions, so reading source is not the conservative choice. |
+| `biffo-verify` | **worked — §1 applied to 38 issues at once retired six of them for ~15 minutes of agent time** | "Establish the current state before writing anything" scales to a whole backlog and is by far the highest-return step in it: one issue already fixed with its test, one asking for a guard that exists, one half-disproved by four merged PRs, one closable by a single query. All four would otherwise have been planned and built. Worth stating in the skill that §1 is a *bulk* operation, not only a per-task one. |
+| `groom-backlog` | **created this session — not yet independently exercised** | Written *from* this session rather than used to drive it, so it has no honest outcome yet; recorded now so the next invocation can be compared against it. The instructions it encodes that were learned the hard way: partition build agents **by file** (five ran concurrently with zero conflicts; the two issues sharing `deploy-app.yml` went to one agent as sequential PRs), declare the append-only corpus off-limits to every agent and write it once centrally (else #953 reproduces N times), and tell agents explicitly that a previous triage found issues stale — without that line, agents rationalise every open issue as real. |
 | `biffo-verify` | **worked — §4's "read the live config, not the Terraform" was decisive twice** | The CDN module had the 404→200 rewrite already fixed in source; only reading the **live** distribution (403→403, 404→404) plus `x-cache: Miss` vs `Error from cloudfront` showed the reported bug did not exist. Separately, `terraform plan` could not render the value under review (`known after apply` for a whole env map), so the only confirmation that `price-capacity-optimized` took effect was reading the deployed Lambda's environment afterwards. |
 | `biffo-verify` | **worked — §1 stopped a fix being written for a non-defect** | Establishing state on the portal 404 found the CDN fix already shipped, the route real, and the origin a different bucket entirely. The row had already been *filed*; §1 on the follow-up is what turned it into a retraction rather than a wasted fix. |
 | `biffo-verify` | **partial — §8's effort log reached only on explicit invocation, for the FOURTH time** | Same cause recorded three times before, with the previous entry already concluding *"it should be step 0"*. It still is not: the skill lists it eighth, after the narrative sections, so it is reached last and dropped first. This session it was run first **only because the operator typed `/biffo-verify`** — the trigger was external again. A recommendation recorded four times and unactioned is a defect in the skill's ordering, not in the operator. Concretely: move the `practices-session.mjs` call to the top of §8, or make it §0. |

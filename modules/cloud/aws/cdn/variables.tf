@@ -130,3 +130,36 @@ variable "plugin_host_api_domain" {
   type        = string
   default     = ""
 }
+
+variable "core_api_health_domain" {
+  description = <<-EOT
+    Regional domain of the API Gateway fronting the Core API, e.g.
+    "abc123.execute-api.eu-west-1.amazonaws.com" — NO scheme, NO path. When set,
+    this module routes exactly ONE path, `api/v1/health`, to it.
+
+    Deliberately just the health endpoint, not `api/v1/*`. Without any API
+    behaviour, a request to baseurl.com/api/v1/health falls through to
+    default_cache_behavior — the user-application sibling's static bucket — and
+    returns that app's HTML with a 403 rather than the API's JSON. So a health
+    check pointed at the public domain silently measures the wrong thing: it
+    reads a 403 from a static site and reports the API as down, or reads a 200
+    from an SPA shell and reports it as up. Neither answer is about the API.
+
+    Routing the WHOLE of `api/v1/*` would remove CORS from the sibling
+    frontends and is the tidier architecture, but it puts every authenticated
+    endpoint behind the CDN at once and changes caching, header forwarding and
+    the auth surface for all of them together. That is a separate decision;
+    this variable does not make it.
+
+    Caching is disabled (a cached health response is not a health check) and all
+    viewer headers except Host are forwarded, matching plugin_host_api_domain.
+    GET/HEAD/OPTIONS only — health is a read.
+
+    Empty by default (no route). Typically wired to module.api_gateway's
+    endpoint host in the root config. Safe to point at the same gateway as
+    plugin_host_api_domain: CloudFront permits two origins sharing a domain
+    under different origin ids, and the two path patterns are disjoint.
+  EOT
+  type        = string
+  default     = ""
+}

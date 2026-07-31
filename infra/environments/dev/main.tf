@@ -149,7 +149,15 @@ module "cdn" {
   # The value is the api_gateway module's api_domain output, written to a tfvar once
   # the API exists (it is stable across applies).
   plugin_host_api_domain = var.plugin_host_api_domain
-  tags                   = local.tags
+
+  # Routes ONE path, api/v1/health, to the Core API. Without it that request
+  # falls through to the user-app sibling's bucket and returns the app's HTML,
+  # so a health check on the public domain measures the static site rather than
+  # the API. Fed from a tfvar for the same cycle reason as
+  # plugin_host_api_domain above — the same value, when both are in use.
+  core_api_health_domain = var.core_api_health_domain
+
+  tags = local.tags
 }
 
 module "auth" {

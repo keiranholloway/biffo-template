@@ -258,6 +258,7 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **A CI monitor reported `ALL SETTLED` about a commit that was no longer the PR head, and every check said `pass`.** After a force-push, `gh pr checks <N>` and `gh run list --branch <b>` both answer for *the branch*, not for a SHA — so the superseded run reaching a terminal state (`cancelled`, caused by the force-push itself) read as completion, while the real run for the new head was still `queued` with all five checks pending. Merging on that signal would have merged code no green check had described. Caught only by comparing `gh pr view --json headRefOid` against the run's `head_sha`: `723c0f1` vs `6613de4`. The same arithmetic-style check that caught the two other instrument failures this session. **The tell is that `cancelled` is a terminal state**, so any "are all checks non-pending?" loop treats a force-push-cancelled run as a finished one. A monitor must select its run by `headSha == <PR head>`, not by branch and recency. Third time in one session that a green signal described something other than the thing under test — and this instrument was **built during** the session that wrote up the other two, so knowing the pattern did not prevent reproducing it | **visibility** · fail-open | biffo-template (my own CI monitor, caught pre-merge) | diagnostic practice — pin the monitor to the PR's `headRefOid`, and treat `cancelled` as "superseded", never "done" | **corrected before merging** — monitor re-armed against the SHA; the five checks were still pending and passed ~4 min later |
 | — | **A counter-metric built to falsify an experiment was, in its first version, a second reading of the metric it was meant to check — and three passing unit tests could not see it.** H3’s content-loss risk sat `open` for three days because nothing measured it. `staleMergeShare` counts merges whose base moved between the PR’s green run and its merge — anchored, at first, to the **first** green. That is wrong by construction: under `strict: true` a raced PR goes green, falls behind, rebases and re-greens, so its base *always* moved after its first green. The metric counted rebases — `racedShare` under another name — and moved **with** the primary rather than against it, scoring tabsii-platform at **44.7% stale while `strict` was still on**, a value the gate makes impossible. No unit test was wrong; each asserted exactly what it claimed, on fixtures too small to contain a rebase. What caught it was running the collector on the live estate and asking whether the number was *possible* rather than whether it was plausible. A second defect hid behind it: `runsForPr` admits runs created up to 24h **after** the merge, so the last green could postdate the merge and make a PR unstaleable — a silent false negative that had reported two real cases clean | **process** · visibility | biffo-template (caught pre-merge, on the live-data run) | biffo-template `scripts/practices-metrics.mjs` | **fixed** ([#977](https://github.com/keiranholloway/biffo-template/pull/977)) — anchored to the last green preceding the merge; regression tests pin both cases |
 | — | **`enforce_admins: false` on ELEVEN of twelve estate repos makes every branch-protection rule advisory for the only human who merges, and no audit reports it.** Three repos carrying `strict: true` — `tabsii-intake`, `tabsii-geo`, `biffo-plugin-ideation` — showed merges the new stale-merge metric says were not up to date, which that gate makes impossible by construction. The explanation is that protection binds an admin **nowhere except `biffo-template`**, the single repo where `enforce_admins` is on. The daily estate audit checks that branches **are** protected (19 branches, all protected, `OK` every day) and never checks that the protection **binds anyone** — so a repo can show a full required-check list, pass the audit, and still be one where any of it can be walked past without a trace. Two consequences past the obvious: **H3’s comparator `tabsii-crm` is not gated the same way as its treatment repo**, a confound the experiment never recorded, and `tabsii-platform` — added to H3’s treatment arm the same day — is unbound too. Nothing was looking; this surfaced only because an unrelated metric disagreed with a setting | **fail-open** · visibility | estate-wide, 11 of 12 repos (via `staleMergeShare` disagreeing with `strict: true`) | not fixed — extend the daily protection audit to report `enforce_admins`, then decide per repo whether bypass is intended | **unfiled** |
+| — | **A dead runner and a rejected change were the same number, so an integration branch read as broken when nothing was.** `FAILING_CONCLUSIONS` excludes `cancelled` on the stated grounds that a superseded run is not a defect — correct, and **only half the cases**: a runner killed mid-job reports `cancelled` only *sometimes*. The rest of the time GitHub concludes the run `failure` **with no failing step**, and that label was counted as if code had broken. On `tabsii-platform`, **all six** `dev` failures inspected had zero failing steps and 3–21 steps left incomplete; one deploy succeeded through thirteen steps and froze on "Package and deploy Lambda". The board reported **8 integration failures and 111.7 red minutes** on a branch where not one gate had rejected anything. Invisible because the run-level conclusion is all anyone reads — diagnosing it needs the per-run jobs payload, which the collector already fetched for an unrelated metric. It also mattered on a deadline: `tabsii-platform` joined H3’s treatment arm the same day already past both of its refutation thresholds, entirely on kills that have nothing to do with `strict` | **visibility** · fail-open | tabsii-platform `dev` (found diagnosing rank 4 of the daily standup) | biffo-template `scripts/practices-metrics.mjs` | **fixed** ([#982](https://github.com/keiranholloway/biffo-template/pull/982)) — validated against 7 real runs including a negative control; correction takes tabsii-platform 24h from 8/111.7 to 1/0 while leaving biffo-template’s genuine 2/54.7 untouched |
 
 ### What the classes say
 
@@ -274,11 +275,11 @@ shape recurring across unrelated components is a design problem, not bad luck.
 
 <!-- BEGIN generated: class-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write`. **337** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
+_Generated by `node scripts/practices-evidence.mjs --write`. **338** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
 
 | Primary class | Rows | Share |
 | --- | --- | --- |
-| **visibility** | 105 | 31% |
+| **visibility** | 106 | 31% |
 | fail-open | 79 | 23% |
 | drift | 70 | 21% |
 | process | 57 | 17% |
@@ -375,19 +376,19 @@ markers; re-run the command.
 
 <!-- BEGIN generated: fix-repo-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write` from **337** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `cli/src/lib/practices-metrics.test.ts` fails when this block does not match the dataset._
+_Generated by `node scripts/practices-evidence.mjs --write` from **338** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `cli/src/lib/practices-metrics.test.ts` fails when this block does not match the dataset._
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 157 of 337 (47%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
-| **tabsii-platform** | 34 of 337 (10%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
-| **biffo-plugin-idea-scout** | 20 of 337 (6%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
-| **tabsii-crm** | 15 of 337 (4%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
-| **biffo-platform** | 14 of 337 (4%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
-| **biffo-plugin-ideation** | 14 of 337 (4%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **tabsii-intake** | 5 of 337 (1%) | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-runners** | 2 of 337 (1%) | Runner fleet docs + fail-fast |
-| **tabsii-marketplace** | 2 of 337 (1%) | `python-jose` removal; the credential-dependent build |
+| **biffo-template** | 158 of 338 (47%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
+| **tabsii-platform** | 34 of 338 (10%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
+| **biffo-plugin-idea-scout** | 20 of 338 (6%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
+| **tabsii-crm** | 15 of 338 (4%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
+| **biffo-platform** | 14 of 338 (4%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
+| **biffo-plugin-ideation** | 14 of 338 (4%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **tabsii-intake** | 5 of 338 (1%) | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-runners** | 2 of 338 (1%) | Runner fleet docs + fail-fast |
+| **tabsii-marketplace** | 2 of 338 (1%) | `python-jose` removal; the credential-dependent build |
 
 <!-- END generated: fix-repo-tally -->
 

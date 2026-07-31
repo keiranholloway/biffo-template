@@ -97,6 +97,61 @@ export const REPOS = [
 export const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out', 'startup_failure'])
 
 /**
+ * Did this run fail because a **runner died**, rather than because a gate
+ * rejected the change? (#982)
+ *
+ * ## The hole this closes
+ *
+ * `FAILING_CONCLUSIONS` above excludes `cancelled` because a killed or
+ * superseded run is not a defect. That reasoning is right and its coverage is
+ * only partial: **a runner killed mid-job reports `cancelled` only sometimes.**
+ * The rest of the time GitHub concludes the run `failure` with *no failing
+ * step* — the same physical event, a different label, and the second label was
+ * counted as if code had broken.
+ *
+ * Measured on `tabsii-com/tabsii-platform`, 2026-07-31: **all six** `dev`
+ * failures inspected had zero failing steps and 3–21 steps left incomplete. One
+ * deploy succeeded through thirteen steps and froze on "Package and deploy
+ * Lambda". Not one gate rejected a change, while the estate's board reported 8
+ * integration failures and 111.7 red minutes on that branch.
+ *
+ * ## Why this is not cosmetic
+ *
+ * H3's counter-metric refutes the experiment on `integration.failures > 2` or
+ * `redMinutes > 60`. `tabsii-platform` joined its treatment arm on 2026-07-31
+ * already past both — entirely on runner kills, which have nothing to do with
+ * `strict`. Left alone, the experiment gets refuted for something it never
+ * touched, four days later.
+ *
+ * ## The rule, and why it errs the way it does
+ *
+ * A failed run is a runner kill when **no job reports a failing step** and **at
+ * least one failed job has a step that never completed**. Both halves matter:
+ * the first says nothing rejected the change, the second says work was still
+ * outstanding when the lights went out.
+ *
+ * A failed run with no steps recorded at all is deliberately **not** classified
+ * as a kill. It stays a failure. That is the conservative direction for a
+ * counter-metric — it can still refute an experiment the author would prefer to
+ * confirm — and this file's whole purpose is to make that the default.
+ *
+ * A job that hits its `timeout-minutes` (20 since #980) marks the offending step
+ * `failure`, so a genuine hang stays a genuine failure and is not laundered
+ * through here.
+ *
+ * @param {Array<Record<string, any>>} jobs the `jobs` array of one run
+ * @returns {boolean}
+ */
+export function isRunnerKill(jobs) {
+  const failed = (jobs ?? []).filter((job) => job.conclusion === 'failure')
+  if (failed.length === 0) return false
+  const steps = failed.flatMap((job) => job.steps ?? [])
+  if (steps.length === 0) return false
+  if (steps.some((step) => step.conclusion === 'failure')) return false
+  return steps.some((step) => step.conclusion === null || step.conclusion === undefined)
+}
+
+/**
  * Longest gap between pushes that still counts as a red branch blocking someone
  * (#921). Past this, nobody is waiting — see {@link integrationHealth}.
  *
@@ -447,6 +502,11 @@ export function filterToWindow(data, since, until = null) {
       ? {
           coveredSince: data.steps.coveredSince,
           failing: data.steps.failing.filter((step) => step.at >= from && step.at < to),
+          // Carried whole, deliberately NOT filtered to the window: it is a
+          // lookup keyed by run id, and `integrationHealth` does its own window
+          // filtering. Narrowing it here would silently un-classify runs and
+          // reinstate the very failures this exists to re-attribute.
+          killedRunIds: data.steps.killedRunIds,
         }
       : null,
     // Deliberately NOT filtered by the window. An issue opened long before the
@@ -1031,7 +1091,12 @@ export function detectFlakes(runs) {
  * @param {string} branch
  * @param {number} idleCeilingMinutes longest gap that still counts as blocking
  */
-export function integrationHealth(runs, branch, idleCeilingMinutes = IDLE_CEILING_MINUTES) {
+export function integrationHealth(
+  runs,
+  branch,
+  idleCeilingMinutes = IDLE_CEILING_MINUTES,
+  kills = null,
+) {
   const onBranch = runs
     .filter((run) => run.head_branch === branch && run.event === 'push')
     .sort((a, b) => Date.parse(String(a.created_at)) - Date.parse(String(b.created_at)))
@@ -1043,8 +1108,20 @@ export function integrationHealth(runs, branch, idleCeilingMinutes = IDLE_CEILIN
       redMinutesUncapped: null,
       idleGapsCapped: null,
       unresolvedFailures: null,
+      runnerKills: null,
+      failuresUnclassified: null,
     }
   }
+
+  // The jobs fetch is capped (#914), so a window can reach back further than
+  // the classification does. Those failures are reported as
+  // `failuresUnclassified` and left counted as failures rather than quietly
+  // assumed innocent: an unclassified failure is not a proven kill, and the
+  // whole point of this field is that a counter-metric must be able to refute.
+  const killedIds = kills?.ids ?? null
+  const classifiedFrom = kills?.coveredSince ? Date.parse(kills.coveredSince) : null
+  let runnerKills = 0
+  let failuresUnclassified = 0
 
   /** @type {Map<string, number>} */
   const openedAt = new Map()
@@ -1064,7 +1141,17 @@ export function integrationHealth(runs, branch, idleCeilingMinutes = IDLE_CEILIN
     const workflow = /** @type {string} */ (run.name)
     const startedAt = Date.parse(String(run.created_at))
     const endedAt = Date.parse(String(run.updated_at ?? run.created_at))
-    const failing = FAILING_CONCLUSIONS.has(/** @type {string} */ (run.conclusion))
+    let failing = FAILING_CONCLUSIONS.has(/** @type {string} */ (run.conclusion))
+    if (failing && killedIds) {
+      if (classifiedFrom !== null && startedAt < classifiedFrom) {
+        failuresUnclassified += 1
+      } else if (killedIds.has(run.id)) {
+        // A dead runner is not a gate rejecting a change, so it neither counts
+        // as a failure nor opens a red span.
+        runnerKills += 1
+        failing = false
+      }
+    }
 
     const wasRed = openedAt.has(workflow)
     const since = lastSeenAt.get(workflow)
@@ -1112,6 +1199,11 @@ export function integrationHealth(runs, branch, idleCeilingMinutes = IDLE_CEILIN
     redMinutesUncapped: round1(redMinutesUncapped),
     idleGapsCapped,
     unresolvedFailures: openedAt.size,
+    // Failures re-attributed to a dead runner (#982), and failures the jobs
+    // fetch did not reach. `null` on both when no classification was supplied,
+    // so "not asked" stays distinguishable from "asked, found none".
+    runnerKills: killedIds ? runnerKills : null,
+    failuresUnclassified: killedIds ? failuresUnclassified : null,
   }
 }
 
@@ -1477,7 +1569,12 @@ export function summariseRepo(repo, data, issueOpenedAt = new Map(), templateClo
     review: reviewCoverage(merged),
     // Trust in the gates themselves.
     flakes: detectFlakes(runs),
-    integration: integrationHealth(runs, defaultBranch),
+    integration: integrationHealth(
+      runs,
+      defaultBranch,
+      IDLE_CEILING_MINUTES,
+      steps ? { ids: steps.killedRunIds, coveredSince: steps.coveredSince } : null,
+    ),
     // Honesty about coverage: the denominator every rate above was computed on.
     coverage: {
       prsMeasured: measured.length,
@@ -1834,8 +1931,15 @@ function fetchRuns(slug, since) {
  *
  * @param {string} slug
  * @param {Array<Record<string, any>>} runs already-fetched runs for this repo
+ * It also classifies each failed run as a **runner kill** or a real failure
+ * (#982) — free, because the jobs payload it already fetches is exactly what
+ * `isRunnerKill` needs. Doing it anywhere else would mean paying the per-run
+ * request twice.
+ *
+ * @param {string} slug
+ * @param {Array<Record<string, any>>} runs already-fetched runs for this repo
  * @param {string} since ISO cutoff — runs older than this are not walked
- * @returns {{coveredSince: string, failing: Array<{name: string, at: number}>}}
+ * @returns {{coveredSince: string, failing: Array<{name: string, at: number}>, killedRunIds: Set<number>}}
  */
 function fetchFailingSteps(slug, runs, since) {
   const failed = runs.filter(
@@ -1843,6 +1947,8 @@ function fetchFailingSteps(slug, runs, since) {
   )
   /** @type {Array<{name: string, at: number}>} */
   const failing = []
+  /** @type {Set<number>} */
+  const killedRunIds = new Set()
   for (const run of failed) {
     const at = Date.parse(run.created_at)
     let body
@@ -1855,6 +1961,7 @@ function fetchFailingSteps(slug, runs, since) {
       // mirror of the fail-open shape this scoreboard keeps finding.
       continue
     }
+    if (isRunnerKill(body.jobs ?? [])) killedRunIds.add(run.id)
     for (const job of body.jobs ?? []) {
       if (job.conclusion !== 'failure') continue
       for (const step of job.steps ?? []) {
@@ -1863,7 +1970,7 @@ function fetchFailingSteps(slug, runs, since) {
       }
     }
   }
-  return { coveredSince: since, failing }
+  return { coveredSince: since, failing, killedRunIds }
 }
 
 /**

@@ -20,6 +20,7 @@ import {
   detectFlakes,
   indexRunsByBranch,
   integrationHealth,
+  isRunnerKill,
   mergeContention,
   parseGitLog,
   percentile,
@@ -266,7 +267,110 @@ describe('detectFlakes', () => {
   })
 })
 
+describe('isRunnerKill', () => {
+  const job = (conclusion: string, steps: Array<string | null>) => ({
+    conclusion,
+    steps: steps.map((c, i) => ({ name: `step ${i}`, conclusion: c })),
+  })
+
+  /**
+   * Ground truth, `tabsii-com/tabsii-platform` run 30573503264 on 2026-07-30:
+   * "Deploy to dev" succeeded through thirteen steps, froze on "Package and
+   * deploy Lambda", and left six more pending. GitHub concluded the run
+   * `failure`; the board read it as a broken integration branch.
+   */
+  it('calls a job that froze mid-step a runner kill', () => {
+    expect(
+      isRunnerKill([job('failure', ['success', 'success', 'success', null, null, null])]),
+    ).toBe(true)
+  })
+
+  /**
+   * The other half of the estate's red: a step genuinely rejected the change.
+   * biffo-template run 30555489992 failed on "Sync and audit core-v<version>",
+   * which is a real defect and must stay counted.
+   */
+  it('does not launder a real failing step', () => {
+    expect(isRunnerKill([job('failure', ['success', 'failure'])])).toBe(false)
+  })
+
+  /**
+   * A run where one job died and another genuinely failed is a real failure.
+   * Erring the other way would let any concurrent runner death hide a defect.
+   */
+  it('treats a mixed run as a real failure', () => {
+    expect(isRunnerKill([job('failure', ['success', null]), job('failure', ['failure'])])).toBe(
+      false,
+    )
+  })
+
+  /**
+   * No steps recorded at all is unexplained, not proven innocent. It stays a
+   * failure — the conservative direction for a metric whose job is to be able
+   * to refute an experiment its author would rather confirm.
+   */
+  it('does not classify a failure with no steps recorded', () => {
+    expect(isRunnerKill([job('failure', [])])).toBe(false)
+    expect(isRunnerKill([])).toBe(false)
+  })
+
+  it('ignores steps of jobs that did not fail', () => {
+    expect(isRunnerKill([job('success', ['success', null])])).toBe(false)
+  })
+})
+
 describe('integrationHealth', () => {
+  /**
+   * The reason this exists (#982). tabsii-platform joined H3's treatment arm
+   * reading 8 failures and 111.7 red minutes — every one a dead runner. H3
+   * refutes above 2 failures or 60 red minutes, so without this the experiment
+   * gets refuted by something it never touched.
+   */
+  it('does not count a dead runner as an integration failure', () => {
+    const runs = [
+      run('dev', 'aaa', 'failure', '2026-07-20T10:00:00Z', { event: 'push', id: 1 }),
+      run('dev', 'bbb', 'success', '2026-07-20T10:30:00Z', { event: 'push', id: 2 }),
+    ]
+    const health = integrationHealth(runs, 'dev', 240, {
+      ids: new Set([1]),
+      coveredSince: '2026-07-01T00:00:00Z',
+    })
+    expect(health.failures).toBe(0)
+    expect(health.runnerKills).toBe(1)
+    // A kill must not open a red span either, or the minutes survive the fix.
+    expect(health.redMinutes).toBe(0)
+    expect(health.unresolvedFailures).toBe(0)
+  })
+
+  /**
+   * The jobs fetch is capped, so a 90-day window outruns it. Those failures are
+   * reported separately and left counted — an unclassified failure is not a
+   * proven kill, and assuming otherwise would make the correction itself a
+   * fail-open.
+   */
+  it('leaves a failure outside the classified window counted, and says so', () => {
+    const health = integrationHealth(
+      [run('dev', 'aaa', 'failure', '2026-07-01T10:00:00Z', { event: 'push', id: 1 })],
+      'dev',
+      240,
+      { ids: new Set([1]), coveredSince: '2026-07-15T00:00:00Z' },
+    )
+    expect(health.failures).toBe(1)
+    expect(health.runnerKills).toBe(0)
+    expect(health.failuresUnclassified).toBe(1)
+  })
+
+  /** "Not asked" must stay distinguishable from "asked, found none". */
+  it('reports null rather than zero when no classification was supplied', () => {
+    const health = integrationHealth(
+      [run('dev', 'aaa', 'failure', '2026-07-20T10:00:00Z', { event: 'push', id: 1 })],
+      'dev',
+    )
+    expect(health.failures).toBe(1)
+    expect(health.runnerKills).toBeNull()
+    expect(health.failuresUnclassified).toBeNull()
+  })
+
   it('measures the gap from a red push to the next green', () => {
     const health = integrationHealth(
       [

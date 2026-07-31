@@ -25,6 +25,7 @@ import {
   readMigrations,
   rechainMigration,
   reissuedRevisionId,
+  stripPythonDocstrings,
   validateChain,
 } from './core-migrations.js'
 import { listTemplateOwnedFiles } from './core-manifest.js'
@@ -476,6 +477,48 @@ describe('planMigrationCarry — recognising an already-carried migration', () =
     expect(plan.recognised[0]?.how).toBe('body')
   })
 
+  /**
+   * #983. Only the MODULE docstring used to be stripped, so prose on a function
+   * inside the migration still counted as schema. That is where #764's paragraph
+   * went, and every instance holding migration 0010 was told for ever after that
+   * the template had changed it and the change would never reach them — pointing
+   * the reader at writing a forward migration for a difference that is not there.
+   */
+  it('a paragraph added to a FUNCTION docstring is not a difference', () => {
+    const guarded = (doc: string) =>
+      migration(
+        '0010',
+        '0009',
+        `if _has_users():\n        op.add_column("users", sa.Column("phone", sa.String(32)))\n\n\ndef _has_users() -> bool:\n    """${doc}"""\n    return sa.inspect(op.get_bind()).has_table("users")`,
+      )
+    expect(migrationBodyHash(guarded('Whether this instance has a Core users table.'))).toBe(
+      migrationBodyHash(
+        guarded(
+          'Whether this instance has a Core users table.\n\n    What that rests on (#764): migrations/env.py passes no connect_args,\n    while api/database.py passes connect_args=_connect_args_for(...).',
+        ),
+      ),
+    )
+  })
+
+  it('a class docstring is prose too', () => {
+    const withClass = (doc: string) =>
+      migration('0003', null, `pass\n\n\nclass _Helper:\n    """${doc}"""\n\n    x = 1`)
+    expect(migrationBodyHash(withClass('One line.'))).toBe(migrationBodyHash(withClass('Another.')))
+  })
+
+  it('negative control: SQL inside op.execute is substance, not prose', () => {
+    // The dangerous over-reach. A triple-quoted string is a docstring only in a
+    // docstring POSITION; the block form of op.execute opens one at the start of
+    // a line, and stripping it would make two different migrations identical.
+    const sql = (table: string) =>
+      migration(
+        '0003',
+        null,
+        `op.execute(\n        """\n        CREATE TABLE ${table} (id int);\n        """\n    )`,
+      )
+    expect(migrationBodyHash(sql('alpha'))).not.toBe(migrationBodyHash(sql('beta')))
+  })
+
   it('a base migration hashes like any other — empty Revises is not a difference', () => {
     // `Revises: ` on a base migration is chaining metadata, not DDL. Leaving it
     // in gave every base migration a hash of its own, which made an indistinct
@@ -540,6 +583,42 @@ describe('planMigrationCarry — recognising an already-carried migration', () =
 
       expect(plan.skipped).toContain('0010_orgs.py')
       expect(plan.divergedBodies).toEqual([])
+    })
+
+    it('does not flag a docstring-only edit as a convergence gap (#983)', () => {
+      // The reported case, end to end: the instance carried 0010, the template
+      // later added a paragraph to a function docstring inside it, and every
+      // subsequent upgrade reported a permanent schema divergence that did not
+      // exist. Both files produce an identical database.
+      const body = (doc: string) =>
+        `op.create_table("organizations")\n\n\ndef _has_users() -> bool:\n    """${doc}"""\n    return True`
+      write(templateDir, '0001_base.py', migration('0001', null))
+      write(
+        templateDir,
+        '0010_orgs.py',
+        migration(
+          '0010',
+          '0001',
+          body(
+            'Whether Core owns users here.\n\n    Rests on env.py passing no connect_args (#764).',
+          ),
+        ),
+      )
+      write(instanceDir, '0001_base.py', migration('0001', null))
+      write(
+        instanceDir,
+        '0010_orgs.py',
+        stampCarriedFrom(
+          migration('0010', '0001', body('Whether Core owns users here.')),
+          '0010_orgs.py',
+        ),
+      )
+
+      const plan = planMigrationCarry({ templateDir, instanceDir })
+      expect(plan.skipped).toContain('0010_orgs.py')
+      expect(plan.divergedBodies).toEqual([])
+      // Carried silently: it is not re-issued as a new migration either.
+      expect(plan.entries).toEqual([])
     })
 
     it('reports nothing when the instance has not carried the migration at all', () => {
@@ -733,5 +812,73 @@ describe.skipIf(runningInInstance)('the real template', () => {
     } finally {
       rmSync(instanceDir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('stripPythonDocstrings (#983)', () => {
+  it('drops a module docstring', () => {
+    expect(stripPythonDocstrings('"""Doc."""\nimport os\n').trim()).toBe('import os')
+  })
+
+  it('drops a module docstring preceded by a shebang and comments', () => {
+    // The old regex anchored at the start of the file, so a leading comment
+    // hid the docstring from it entirely.
+    const out = stripPythonDocstrings('#!/usr/bin/env python\n# note\n"""Doc."""\nimport os\n')
+    expect(out).not.toContain('Doc.')
+    expect(out).toContain('import os')
+  })
+
+  it('drops a function docstring, one-line or multi-line', () => {
+    expect(stripPythonDocstrings('def f():\n    """One."""\n    return 1\n')).toBe(
+      'def f():\n    return 1\n',
+    )
+    expect(
+      stripPythonDocstrings('def f():\n    """One.\n\n    Two.\n    """\n    return 1\n'),
+    ).toBe('def f():\n    return 1\n')
+  })
+
+  it('drops a docstring after a multi-line signature', () => {
+    const src = 'def f(\n    x: int,\n) -> bool:\n    """Doc."""\n    return True\n'
+    expect(stripPythonDocstrings(src)).toBe('def f(\n    x: int,\n) -> bool:\n    return True\n')
+  })
+
+  it('drops a class docstring and its methods’ docstrings', () => {
+    const out = stripPythonDocstrings(
+      'class A:\n    """C."""\n\n    def m(self):\n        """M."""\n        return 1\n',
+    )
+    expect(out).not.toContain('"""')
+    expect(out).toContain('def m(self):')
+  })
+
+  it('drops a docstring separated from its header by a comment', () => {
+    const out = stripPythonDocstrings('def f():\n    # why\n    """Doc."""\n    return 1\n')
+    expect(out).not.toContain('Doc.')
+  })
+
+  it('KEEPS a triple-quoted string that is not in a docstring position', () => {
+    // The whole safety of this: `op.execute("""...""")` in block form opens a
+    // triple quote at the start of a line, and it is DDL.
+    const src =
+      'def upgrade() -> None:\n    """Doc."""\n    op.execute(\n        """\n        CREATE TABLE t (id int);\n        """\n    )\n'
+    const out = stripPythonDocstrings(src)
+    expect(out).not.toContain('Doc.')
+    expect(out).toContain('CREATE TABLE t (id int);')
+  })
+
+  it('KEEPS a triple-quoted assignment, which is a value not a docstring', () => {
+    const src =
+      'def upgrade() -> None:\n    sql = (\n        """\n        SELECT 1;\n        """\n    )\n    op.execute(sql)\n'
+    expect(stripPythonDocstrings(src)).toContain('SELECT 1;')
+  })
+
+  it('handles single-quoted triple strings the same way', () => {
+    expect(stripPythonDocstrings("def f():\n    '''Doc.'''\n    return 1\n")).toBe(
+      'def f():\n    return 1\n',
+    )
+  })
+
+  it('leaves source with no docstrings untouched', () => {
+    const src = 'import os\n\n\ndef f():\n    return os.sep\n'
+    expect(stripPythonDocstrings(src)).toBe(src)
   })
 })

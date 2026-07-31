@@ -26,6 +26,29 @@
 // 2. Directory-style routes (no file extension) map to their static index.html,
 //    since S3 has no directory-index behaviour of its own.
 //
+// CloudFront Functions splits a request's query string off `request.uri`
+// (which is path-only) into a separate `request.querystring` object, shaped
+// `{ key: { value } }` — or `{ key: { multiValue: [{ value }, ...] } }` for a
+// repeated key — never a raw string. Re-serialise it for use in a Location
+// header; a plain string concatenation of `request.uri` alone silently drops
+// it (issue #961), which strands query-param-dependent routes (e.g. a
+// marketplace's `/brand/?slug=<x>`) on the bare path with no param.
+function serializeQueryString(querystring) {
+  var pairs = []
+  for (var key in querystring) {
+    if (!Object.prototype.hasOwnProperty.call(querystring, key)) continue
+    var entry = querystring[key]
+    if (entry && entry.multiValue) {
+      for (var i = 0; i < entry.multiValue.length; i++) {
+        pairs.push(encodeURIComponent(key) + '=' + encodeURIComponent(entry.multiValue[i].value))
+      }
+    } else if (entry && typeof entry.value !== 'undefined') {
+      pairs.push(encodeURIComponent(key) + '=' + encodeURIComponent(entry.value))
+    }
+  }
+  return pairs.length ? '?' + pairs.join('&') : ''
+}
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- CloudFront invokes handler() by name
 function handler(event) {
   var request = event.request
@@ -38,7 +61,11 @@ function handler(event) {
         statusCode: 302,
         statusDescription: 'Found',
         headers: {
-          location: { value: uri.slice(0, uri.length - 'index.txt'.length) },
+          location: {
+            value:
+              uri.slice(0, uri.length - 'index.txt'.length) +
+              serializeQueryString(request.querystring),
+          },
           'cache-control': { value: 'no-store' },
         },
       }

@@ -57,6 +57,49 @@ import { dirname } from 'node:path'
 export const SOURCE = 'docs/guides/development-practices.md'
 export const EVIDENCE = 'docs/practices/evidence.jsonl'
 
+/**
+ * Where the generated tallies go. **Git-ignored, and that is the point (#953).**
+ *
+ * These tables used to be spliced into SOURCE and committed. Every practices PR
+ * appends a row and regenerates them, so any two concurrent PRs conflicted *by
+ * construction*, and always inside the generated region — the part no human
+ * should be resolving. The only correct resolution was "discard both sides and
+ * re-run `--write`", which is not remotely obvious from the conflict, and the
+ * plausible manual resolution (pick a side) silently commits wrong numbers that
+ * a later PR's guard then catches.
+ *
+ * A generated artefact in version control is a cache, and this one is
+ * invalidated by every write to its source. So it is no longer committed:
+ * `--markdown` prints it, `--write` writes it here, and the dashboard renders
+ * it for reading. Nothing derived stays in the committed page.
+ */
+export const TALLIES = 'docs/practices/tallies.generated.md'
+
+/**
+ * Wrap the two tally blocks in a header saying plainly that the file is
+ * generated, since a git-ignored file has no history to explain itself.
+ *
+ * @param {string} repoBlock
+ * @param {string} classBlock
+ */
+export function renderTallies(repoBlock, classBlock) {
+  return [
+    '<!-- GENERATED FILE — do not edit, and do not commit. -->',
+    '',
+    '# Practices tallies',
+    '',
+    'Regenerate with `node scripts/practices-evidence.mjs --write`.',
+    'Source of truth is `docs/practices/evidence.jsonl`; this file is derived',
+    'from it and is git-ignored so concurrent practices PRs cannot conflict on',
+    'it (#953).',
+    '',
+    repoBlock,
+    '',
+    classBlock,
+    '',
+  ].join('\n')
+}
+
 /** The five failure shapes. Order is the page's own. */
 export const CLASSES = ['fail-open', 'boundary', 'drift', 'visibility', 'process']
 
@@ -702,13 +745,11 @@ function main() {
     const repoBlock = tallyMarkdown(rows)
     const classBlock = classMarkdown(rows)
     if (has('--write')) {
-      // Both blocks in one pass: splicing them in separate invocations is how
-      // a page ends up with one current table and one stale one.
-      let page = readFileSync(SOURCE, 'utf8')
-      page = spliceTally(page, repoBlock)
-      page = spliceTally(page, classBlock, CLASS_BEGIN, CLASS_END)
-      writeFileSync(SOURCE, page)
-      process.stderr.write(`spliced fix-repo and class tallies into ${SOURCE}\n`)
+      // Written to a GENERATED, git-ignored file — never spliced into the
+      // committed page (#953). Both blocks in one pass: emitting them in
+      // separate invocations is how one ends up current and the other stale.
+      writeFileSync(TALLIES, renderTallies(repoBlock, classBlock))
+      process.stderr.write(`wrote fix-repo and class tallies to ${TALLIES}\n`)
     } else {
       process.stdout.write(`${repoBlock}\n\n${classBlock}\n`)
     }

@@ -333,11 +333,9 @@ function indexByKeys(rows) {
 }
 
 export function mergeExtracted(fresh, existing) {
-  const index = indexByKeys(existing)
-  const merged = fresh.map((row) => {
-    const prior = rowKeys(row)
-      .map((key) => index.get(key))
-      .find(Boolean)
+  const { pairs, orphans } = pairRows(fresh, existing)
+  const merged = fresh.map((row, i) => {
+    const prior = pairs.get(i)
     if (!prior) return row
     return {
       ...row,
@@ -358,7 +356,56 @@ export function mergeExtracted(fresh, existing) {
   // Deleting a row is legitimate, but it has to be *deliberate*. Keeping the
   // orphan and reporting it makes an accidental loss a no-op and an intentional
   // one an explicit edit to this file.
-  return [...merged, ...orphanedRows(fresh, existing)]
+  //
+  // The FIRST fix kept orphans by set membership — a stored row was
+  // "represented" whenever ANY fresh row shared one of its keys. That still
+  // dropped rows, because `rowKeys` includes a refs key and **19 ref-keys in
+  // this dataset are shared by more than one row**: two distinct findings both
+  // citing #669 collapse onto whichever the markdown still yields, and the
+  // other is neither in `merged` (which only ever holds fresh rows) nor in the
+  // orphans (its key is present). Against a pristine checkout that silently
+  // deleted 326 -> 323. Matching is therefore ONE-TO-ONE: a stored row is
+  // represented only when a fresh row actually claimed *it*.
+  return [...merged, ...orphans]
+}
+
+/**
+ * Pair fresh rows to stored rows one-to-one.
+ *
+ * Each stored row may be claimed by at most one fresh row, so N stored rows
+ * sharing a key cannot collapse onto one fresh row. Whatever is left unclaimed
+ * is a genuine orphan and is preserved.
+ *
+ * @param {Array<Record<string, any>>} fresh
+ * @param {Array<Record<string, any>>} existing
+ * @returns {{ pairs: Map<number, Record<string, any>>, orphans: Array<Record<string, any>> }}
+ */
+export function pairRows(fresh, existing) {
+  /** @type {Map<string, number[]>} */
+  const buckets = new Map()
+  existing.forEach((row, i) => {
+    for (const key of rowKeys(row)) {
+      if (!buckets.has(key)) buckets.set(key, [])
+      buckets.get(key).push(i)
+    }
+  })
+
+  const claimed = new Set()
+  /** @type {Map<number, Record<string, any>>} */
+  const pairs = new Map()
+  fresh.forEach((row, fi) => {
+    for (const key of rowKeys(row)) {
+      const bucket = buckets.get(key)
+      if (!bucket) continue
+      const free = bucket.find((i) => !claimed.has(i))
+      if (free === undefined) continue
+      claimed.add(free)
+      pairs.set(fi, existing[free])
+      return
+    }
+  })
+
+  return { pairs, orphans: existing.filter((_, i) => !claimed.has(i)) }
 }
 
 /**
@@ -372,8 +419,7 @@ export function mergeExtracted(fresh, existing) {
  * @param {Array<Record<string, any>>} existing
  */
 export function orphanedRows(fresh, existing) {
-  const freshKeys = new Set(fresh.flatMap((r) => rowKeys(r)))
-  return existing.filter((r) => !rowKeys(r).some((key) => freshKeys.has(key)))
+  return pairRows(fresh, existing).orphans
 }
 
 /** @param {string} file */

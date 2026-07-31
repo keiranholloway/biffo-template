@@ -210,6 +210,44 @@ describe('planCoreUpgrade (classification)', () => {
     expect(p.entries.map((e) => e.path)).not.toContain('core.version')
     expect(p.changes.map((e) => e.path)).toEqual(['services/api/a.py'])
   })
+
+  it('leaves an instance-authored *.instance.yml workflow alone, and still carries ci.yml (#755)', async () => {
+    // The real manifest: `.github/` is template-owned except the
+    // `*.instance.yml` carve-out, so an instance's own CI lane is not even
+    // enumerated, while a template-shipped workflow upgrades normally.
+    w(ours, '.github/workflows/db-tests.instance.yml', 'name: db tests')
+    w(base, '.github/workflows/ci.yml', 'v1')
+    w(ours, '.github/workflows/ci.yml', 'v1')
+    w(theirs, '.github/workflows/ci.yml', 'v2')
+    const p = await planCoreUpgrade({
+      baseDir: base,
+      oursDir: ours,
+      theirsDir: theirs,
+      manifest: readCoreManifest(repoRoot),
+      mergeFile: fakeMerge,
+    })
+    expect(p.entries.map((e) => e.path)).not.toContain('.github/workflows/db-tests.instance.yml')
+    expect(statusOf(p.entries, '.github/workflows/ci.yml')).toBe('take-theirs')
+  })
+
+  it('would keep-ours an instance workflow even without the carve-out (#755)', async () => {
+    // The issue's own claim, verified: `classify()` returns keep-ours for a path
+    // absent from both base and theirs, so an upgrade never touched an
+    // instance-authored workflow in the first place. The carve-out is about the
+    // ownership *guard* refusing the commit, not about upgrade safety — which is
+    // why widening `.github/` here costs nothing at merge time.
+    w(ours, '.github/workflows/db-tests.instance.yml', 'name: db tests')
+    const p = await planCoreUpgrade({
+      baseDir: base,
+      oursDir: ours,
+      theirsDir: theirs,
+      // Pre-#755 ownership: `.github/` template-owned, no carve-out.
+      manifest: { version: 1, templateOwned: ['.github/'], userOwned: [], released: [] },
+      mergeFile: fakeMerge,
+    })
+    expect(statusOf(p.entries, '.github/workflows/db-tests.instance.yml')).toBe('keep-ours')
+    expect(p.changes).toHaveLength(0)
+  })
 })
 
 describe('gitMergeFile (real git integration)', () => {

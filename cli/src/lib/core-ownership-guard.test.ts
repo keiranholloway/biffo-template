@@ -69,6 +69,35 @@ describe('checkCoreOwnership — what it lets through', () => {
     expect(result.blocked).toEqual(['services/api/src/api/models/base.py'])
   })
 
+  it('lets an instance add its own *.instance.yml workflow, and nothing else under .github/ (#755)', () => {
+    // The carve-out: a CI lane an instance authored for something only it has
+    // needs no `Core-Divergence:` trailer, because there is no template file to
+    // diverge from.
+    const allowed = check({
+      changedFiles: ['.github/workflows/db-tests.instance.yml'],
+    })
+    expect(allowed.blocked).toEqual([])
+    expect(allowed.skipped).toBeNull()
+
+    // ...and the guard still hard-blocks every other path under .github/,
+    // including any edit to a template-shipped workflow. A carve-out that
+    // accidentally widened would be worth more than the friction it removes.
+    const blocked = check({
+      changedFiles: [
+        '.github/workflows/ci.yml',
+        '.github/workflows/deploy-app.yml',
+        '.github/dependabot.yml',
+        '.github/workflows/nested/db.instance.yml',
+      ],
+    })
+    expect(blocked.blocked).toEqual([
+      '.github/workflows/ci.yml',
+      '.github/workflows/deploy-app.yml',
+      '.github/dependabot.yml',
+      '.github/workflows/nested/db.instance.yml',
+    ])
+  })
+
   it('exempts a core-upgrade branch, which is when these paths are meant to move', () => {
     const result = check({
       changedFiles: ['services/api/src/api/main.py'],

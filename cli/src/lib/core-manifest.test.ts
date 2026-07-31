@@ -48,6 +48,83 @@ describe('isTemplateOwned (longest-prefix, tie -> user)', () => {
   })
 })
 
+/**
+ * Glob entries and how they rank (issue #755). A glob scores its literal
+ * characters — pattern length minus its `*`s — because a `*` matches unbounded
+ * text and asserts nothing about the path. The ordering these tests pin down is
+ * the part that silently changes ownership if it is got wrong.
+ */
+describe('isTemplateOwned (glob entries, #755)', () => {
+  const GLOBBED: CoreManifest = {
+    version: 1,
+    templateOwned: ['.github/', '.github/workflows/ci.instance.yml'],
+    userOwned: ['.github/workflows/*.instance.yml'],
+    released: [],
+  }
+
+  it('a glob beats the prefix that contains it', () => {
+    // `.github/workflows/*.instance.yml` scores 31 literals; `.github/` scores 8.
+    expect(isTemplateOwned('.github/workflows/foo.instance.yml', GLOBBED)).toBe(false)
+    expect(isTemplateOwned('.github/workflows/ci.yml', GLOBBED)).toBe(true)
+    expect(isTemplateOwned('.github/dependabot.yml', GLOBBED)).toBe(true)
+  })
+
+  it('an exact-file entry never loses to a glob', () => {
+    // A glob matching path P has at most P.length literals, so an exact entry
+    // for P ties at worst — and the template side wins outright when it is
+    // strictly longer. The template can always pin one named file back.
+    expect(isTemplateOwned('.github/workflows/ci.instance.yml', GLOBBED)).toBe(true)
+  })
+
+  it('a tie between a glob and an exact entry still goes to user-owned', () => {
+    // A tie is reachable only when the `*` matches the empty string:
+    // `.github/xy*.yml` and `.github/xy.yml` both score 14 on `.github/xy.yml`.
+    // The fail-closed tie rule is unchanged by globs.
+    const tied: CoreManifest = {
+      version: 1,
+      templateOwned: ['.github/xy*.yml'],
+      userOwned: ['.github/xy.yml'],
+      released: [],
+    }
+    expect(isTemplateOwned('.github/xy.yml', tied)).toBe(false)
+  })
+
+  it('a more specific glob outranks a broader one', () => {
+    const layered: CoreManifest = {
+      version: 1,
+      templateOwned: ['.github/workflows/*.yml'],
+      userOwned: ['.github/workflows/*.instance.yml'],
+      released: [],
+    }
+    expect(isTemplateOwned('.github/workflows/ci.yml', layered)).toBe(true)
+    expect(isTemplateOwned('.github/workflows/db.instance.yml', layered)).toBe(false)
+  })
+
+  it('* never crosses a path separator', () => {
+    // Narrower on purpose: a glob that spanned `/` would carve out paths nobody
+    // was thinking about, and everything it fails to match stays template-owned
+    // — the direction that blocks rather than the direction that widens.
+    expect(isTemplateOwned('.github/workflows/nested/foo.instance.yml', GLOBBED)).toBe(true)
+  })
+
+  it('treats regex metacharacters in a pattern as literals', () => {
+    const dotted: CoreManifest = {
+      version: 1,
+      templateOwned: ['.github/'],
+      userOwned: ['.github/a.b*.yml'],
+      released: [],
+    }
+    expect(isTemplateOwned('.github/a.bc.yml', dotted)).toBe(false)
+    expect(isTemplateOwned('.github/axbc.yml', dotted)).toBe(true)
+  })
+
+  it('leaves non-glob entries scoring exactly as before', () => {
+    // Regression fence: adding globs must not shift prefix/exact ranking.
+    expect(isTemplateOwned('services/api/src/x.py', MANIFEST)).toBe(true)
+    expect(isTemplateOwned('services/acme-crm/x.json', MANIFEST)).toBe(false)
+  })
+})
+
 describe('real repo core-manifest.json', () => {
   it('parses and classifies core vs user paths as expected', () => {
     const manifest = readCoreManifest(repoRoot)
@@ -67,6 +144,60 @@ describe('real repo core-manifest.json', () => {
     // Still an exact-file grant, not a root-wide one — a sibling root config a
     // user might add stays their own.
     expect(isTemplateOwned('.env', manifest)).toBe(false)
+  })
+
+  it('carves out .github/workflows/*.instance.yml so an instance can add its own CI (#755)', () => {
+    const manifest = readCoreManifest(repoRoot)
+    // `.github/` is template-owned wholesale, which left an instance unable to
+    // add a lane testing something only that instance has (a DDL-import, a
+    // sibling, its own deploy shape). Such a workflow has no template
+    // counterpart, so `Core-Divergence:` — "this instance must differ from a
+    // template file" — was the wrong instrument, and every use of it added a
+    // ledger entry that can never converge.
+    expect(isTemplateOwned('.github/workflows/db-tests.instance.yml', manifest)).toBe(false)
+
+    // ...and the carve-out is exactly that suffix, in exactly that directory.
+    // Everything else under .github/ stays template-owned, including every
+    // workflow the template ships: a carve-out that accidentally widens is the
+    // real risk, so pin the boundary rather than the one happy path.
+    expect(isTemplateOwned('.github/workflows/ci.yml', manifest)).toBe(true)
+    expect(isTemplateOwned('.github/workflows/deploy-app.yml', manifest)).toBe(true)
+    expect(isTemplateOwned('.github/workflows/instance.yml', manifest)).toBe(true)
+    expect(isTemplateOwned('.github/workflows/db-tests.instance.yaml', manifest)).toBe(true)
+    expect(isTemplateOwned('.github/workflows/nested/x.instance.yml', manifest)).toBe(true)
+    expect(isTemplateOwned('.github/dependabot.yml', manifest)).toBe(true)
+    expect(isTemplateOwned('.github/actions/setup/action.yml', manifest)).toBe(true)
+    expect(isTemplateOwned('.github/CODEOWNERS', manifest)).toBe(true)
+    expect(isTemplateOwned('.github/x.instance.yml', manifest)).toBe(true)
+  })
+
+  it('was template-owned before the carve-out, which is the whole defect (#755)', () => {
+    // The failing state, reconstructed from the live manifest by dropping the
+    // one entry that fixes it: without the glob, an instance-authored workflow
+    // resolves template-owned and the ownership guard refuses the commit.
+    const manifest = readCoreManifest(repoRoot)
+    const before: CoreManifest = {
+      ...manifest,
+      userOwned: manifest.userOwned.filter((p) => !p.includes('*.instance.yml')),
+    }
+    expect(before.userOwned.length).toBe(manifest.userOwned.length - 1)
+    expect(isTemplateOwned('.github/workflows/db-tests.instance.yml', before)).toBe(true)
+    // ci.yml is template-owned on both sides — the carve-out moved one path, not the directory.
+    expect(isTemplateOwned('.github/workflows/ci.yml', before)).toBe(true)
+  })
+
+  it('the template itself ships no *.instance.yml, so there is nothing to collide with (#755)', () => {
+    // The carve-out's premise. A template-shipped `*.instance.yml` would be a
+    // file the template maintains but can never distribute — it resolves
+    // user-owned, so `biffo core upgrade` would not carry it and every instance
+    // would silently miss it (the #243/#325 failure mode).
+    const tracked = execFileSync('git', ['ls-files', '--', '*.instance.yml'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    })
+      .split('\n')
+      .filter(Boolean)
+    expect(tracked).toEqual([])
   })
 
   it('carves out services/_plugins/ so first-party plugins are carried by core upgrade', () => {

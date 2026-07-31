@@ -43,6 +43,77 @@ variable "enable_core_plugins" {
   default     = true
 }
 
+# Branding for the transactional emails the orchestration engine sends.
+#
+# `orchestrator.email_branding` has read this config surface since #378, but
+# nothing ever supplied it: no instance passed these env vars, so every Biffo
+# instance's candidate-facing email went out headed with the module's
+# brand-neutral fallback, "Biffo". That fallback is doing its job — it keeps an
+# unconfigured instance rendering a coherent email — but it was the ONLY value
+# reachable, which made it a default nobody chose rather than a default anybody
+# could override.
+#
+# Declared here, inline, rather than in the instance's variables.tf: this file is
+# template-owned and rides `biffo core upgrade`, so a variable it references must
+# be one it also declares (see this file's header — referencing an instance's
+# user-owned variables is what breaks the upgrade for older instances). An
+# instance supplies the values from its own tfvars; supplying nothing keeps
+# today's behaviour exactly.
+variable "email_branding" {
+  description = <<-EOT
+    Branding applied to transactional emails sent by the orchestration engine.
+    Every attribute is optional; an omitted one falls back to the brand-neutral
+    default in orchestrator/email_branding.py. `logo_url` must be an absolute,
+    publicly-reachable URL — SES does not host attachments, so the recipient's
+    client fetches it directly. `footer_links` is a comma-separated list of
+    `Label|URL` pairs.
+  EOT
+  type = object({
+    company_name     = optional(string, "")
+    logo_url         = optional(string, "")
+    logo_alt         = optional(string, "")
+    primary_color    = optional(string, "")
+    background_color = optional(string, "")
+    footer_text      = optional(string, "")
+    footer_links     = optional(string, "")
+    from_name        = optional(string, "")
+    subject_prefix   = optional(string, "")
+  })
+  default = {}
+
+  # A colour goes straight into the inline CSS of every email. A typo'd one is
+  # invisible in a plan and shows up as an unstyled email in a real inbox, so
+  # reject it here rather than at the recipient.
+  validation {
+    condition = alltrue([
+      for c in [var.email_branding.primary_color, var.email_branding.background_color] :
+      c == "" || can(regex("^#[0-9A-Fa-f]{6}$", c))
+    ])
+    error_message = "primary_color and background_color must be 6-digit hex like \"#1f2933\", or empty to use the default."
+  }
+}
+
+locals {
+  # Empty attributes are dropped rather than passed as empty env vars, so an
+  # unset field falls through to the Python default by absence. That matters for
+  # the colours: `from_env` reads them with `or defaults.x`, but the string
+  # fields use `.get(key, default)`, where a present-but-empty value would win
+  # and blank the field instead of falling back.
+  email_branding_env = {
+    for k, v in {
+      EMAIL_BRANDING_COMPANY_NAME     = var.email_branding.company_name
+      EMAIL_BRANDING_LOGO_URL         = var.email_branding.logo_url
+      EMAIL_BRANDING_LOGO_ALT         = var.email_branding.logo_alt
+      EMAIL_BRANDING_PRIMARY_COLOR    = var.email_branding.primary_color
+      EMAIL_BRANDING_BACKGROUND_COLOR = var.email_branding.background_color
+      EMAIL_BRANDING_FOOTER_TEXT      = var.email_branding.footer_text
+      EMAIL_BRANDING_FOOTER_LINKS     = var.email_branding.footer_links
+      EMAIL_BRANDING_FROM_NAME        = var.email_branding.from_name
+      EMAIL_BRANDING_SUBJECT_PREFIX   = var.email_branding.subject_prefix
+    } : k => v if v != ""
+  }
+}
+
 # The orchestration engine: reacts to every event, matches enabled workflow
 # definitions via the Core internal API, dispatches their actions. No third-party
 # credential is wired by default — the WhatsApp action is opt-in per instance and
@@ -58,6 +129,8 @@ module "plugin_orchestrator" {
   event_bus_name         = module.events.event_bus_name
   core_api_url           = module.api_gateway.api_endpoint
   core_api_execution_arn = module.api_gateway.execution_arn
+
+  environment_variables = local.email_branding_env
 
   tags = local.tags
 }

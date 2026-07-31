@@ -255,6 +255,7 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **A hand-written `createApi` mock missing one new method hung the test suite past 120s, three times in one session.** Adding a method to the real client leaves the tests' bespoke `vi.mock` object short one key; the resulting undefined call rejects inside a mount-time `Promise.all`, and vitest sits until the runner's timeout rather than failing fast. Each occurrence read as "the admin suite is slow" until the mock was compared against the client. The mock's own comment already warns *"Names taken from createApi itself, not guessed — a wrong name here fails as 'no rows rendered', which reads exactly like the feature being broken."* — the warning is present, correct, and does not prevent the omission, because nothing links the two files. **cost ~15m** across three occurrences | **drift** · visibility | biffo-plugin-idea-scout (`web/`, `web-admin/`) | biffo-plugin-idea-scout | **worked around** — mocks updated each time; nothing yet asserts the mock's key set matches `createApi`'s |
 | — | **The portal serves 404s as HTTP 200, so a dead URL is indistinguishable from a live one.** A reported failure at `/dashboard/new-idea-scout/` was investigated as an application bug; the path renders Next.js's *"This page could not be found"* with a **200** status (static-export behaviour), and no `dashboard` route exists in either the instance's or the template's portal source. The real app is at `/idea-scout/`. Cost the first minutes of a live incident chasing a page that does not exist, and it means no monitor or link-checker can detect a broken portal link | **visibility** | biffo-platform / apps/portal | apps/portal (template-owned) | **not fixed** — filed here only; a static export needs the 404 served with a 404 status, or CloudFront mapping it |
 | — | **`practices-evidence.mjs --extract` deletes rows on every run, and its own code says it does not.** Run against a pristine `dev` with no edits at all, the dataset goes **326 -> 323**: four stored rows have no counterpart afterwards. The function that should prevent this carries an explicit comment — *"Orphans are KEPT, not dropped... This used to `return fresh.map(...)`, which silently deleted every stored row the markdown no longer mentioned. That is a data-loss fail-open, and it fired"* — so the failure mode was diagnosed, fixed once, documented at length, and is live again. The loss is invisible in the ordinary way: `--extract` reports the number it *wrote* (`extracted 323 rows`), never the number it removed, and the generated tally simply quotes a smaller total. Found only because 326 + 6 new rows produced 329 rather than 332, and the arithmetic was checked. **Anything appending to this dataset should verify the row count grows by exactly what it added.** | **fail-open** · visibility | biffo-template (the practices tooling itself) | biffo-template (`scripts/practices-evidence.mjs`, `orphanedRows`/`rowKeys` matching) | **fixed** ([#978](https://github.com/keiranholloway/biffo-template/pull/978)) — matching is now one-to-one (`pairRows`), so N stored rows sharing a ref cannot collapse onto one fresh row. Measured 326 -> 323 before, 326 -> 326 after; three of the four new tests fail against the old implementation and only those three |
+| — | **A CI monitor reported `ALL SETTLED` about a commit that was no longer the PR head, and every check said `pass`.** After a force-push, `gh pr checks <N>` and `gh run list --branch <b>` both answer for *the branch*, not for a SHA — so the superseded run reaching a terminal state (`cancelled`, caused by the force-push itself) read as completion, while the real run for the new head was still `queued` with all five checks pending. Merging on that signal would have merged code no green check had described. Caught only by comparing `gh pr view --json headRefOid` against the run's `head_sha`: `723c0f1` vs `6613de4`. The same arithmetic-style check that caught the two other instrument failures this session. **The tell is that `cancelled` is a terminal state**, so any "are all checks non-pending?" loop treats a force-push-cancelled run as a finished one. A monitor must select its run by `headSha == <PR head>`, not by branch and recency. Third time in one session that a green signal described something other than the thing under test — and this instrument was **built during** the session that wrote up the other two, so knowing the pattern did not prevent reproducing it | **visibility** · fail-open | biffo-template (my own CI monitor, caught pre-merge) | diagnostic practice — pin the monitor to the PR's `headRefOid`, and treat `cancelled` as "superseded", never "done" | **corrected before merging** — monitor re-armed against the SHA; the five checks were still pending and passed ~4 min later |
 
 ### What the classes say
 
@@ -271,11 +272,11 @@ shape recurring across unrelated components is a design problem, not bad luck.
 
 <!-- BEGIN generated: class-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write`. **334** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
+_Generated by `node scripts/practices-evidence.mjs --write`. **335** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
 
 | Primary class | Rows | Share |
 | --- | --- | --- |
-| **visibility** | 104 | 31% |
+| **visibility** | 105 | 31% |
 | fail-open | 78 | 23% |
 | drift | 70 | 21% |
 | process | 56 | 17% |
@@ -372,19 +373,19 @@ markers; re-run the command.
 
 <!-- BEGIN generated: fix-repo-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write` from **334** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `cli/src/lib/practices-metrics.test.ts` fails when this block does not match the dataset._
+_Generated by `node scripts/practices-evidence.mjs --write` from **335** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `cli/src/lib/practices-metrics.test.ts` fails when this block does not match the dataset._
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 156 of 334 (47%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
-| **tabsii-platform** | 34 of 334 (10%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
-| **biffo-plugin-idea-scout** | 20 of 334 (6%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
-| **tabsii-crm** | 15 of 334 (4%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
-| **biffo-platform** | 14 of 334 (4%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
-| **biffo-plugin-ideation** | 14 of 334 (4%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **tabsii-intake** | 5 of 334 (1%) | CI generation, branch-protection contexts, the `python-jose` removal |
-| **biffo-runners** | 2 of 334 (1%) | Runner fleet docs + fail-fast |
-| **tabsii-marketplace** | 2 of 334 (1%) | `python-jose` removal; the credential-dependent build |
+| **biffo-template** | 156 of 335 (47%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
+| **tabsii-platform** | 34 of 335 (10%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
+| **biffo-plugin-idea-scout** | 20 of 335 (6%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
+| **tabsii-crm** | 15 of 335 (4%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
+| **biffo-platform** | 14 of 335 (4%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
+| **biffo-plugin-ideation** | 14 of 335 (4%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **tabsii-intake** | 5 of 335 (1%) | CI generation, branch-protection contexts, the `python-jose` removal |
+| **biffo-runners** | 2 of 335 (1%) | Runner fleet docs + fail-fast |
+| **tabsii-marketplace** | 2 of 335 (1%) | `python-jose` removal; the credential-dependent build |
 
 <!-- END generated: fix-repo-tally -->
 
@@ -2937,6 +2938,16 @@ further checks were then needed and both paid: a grep that reported rows
 the orphans produced 334 rather than 333 because one had been re-parsed rather
 than lost. **The generalisable habit: when you add N things, assert the total
 grew by N** — every other signal here was green and wrong.
+
+
+**Comparing the PR head against the run's `head_sha` caught a merge about to
+happen on the wrong evidence.** A monitor reported `ALL SETTLED` with five
+passing checks; the run it had settled on was for a commit superseded by a
+force-push, and the real run was still queued. `cancelled` is a terminal state,
+so "all checks non-pending" is satisfied by a run the force-push killed. One
+comparison — `gh pr view --json headRefOid` against
+`gh api .../runs/<id> --jq .head_sha` — settled it. **Any check that a PR is
+green has to name which commit it is green about.**
 
 
 ## What needs more thought

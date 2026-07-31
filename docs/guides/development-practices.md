@@ -247,6 +247,7 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | [tabsii-crm#133](https://github.com/tabsii-com/tabsii-crm/issues/133) | **The same lexical-closing-keyword trap recurred through a third vector: PR body prose, independent of the commit.** tabsii-crm#141's description contained `## Scope note — this PR alone does not close #133` — the same `close #N`-inside-a-denial shape as the tabsii-platform#76 row above — and the issue closed at merge anyway. Confirmed directly this time: the actual squash-merge commit message did **not** contain the phrase (only `Refs #133`), so keeping a denial out of the commit is not sufficient — GitHub's linker reads the PR description text on its own, separately from whatever ends up in the commit. Caught by re-listing open issues per this page's own standing rule, and reopened before the (genuinely incomplete, pending a companion PR in another repo) fix was mistaken for done | **visibility** · process | tabsii-crm [#133](https://github.com/tabsii-com/tabsii-crm/issues/133) | practice — never write a closing keyword in prose, in the PR body **or** the commit | **caught before harm** — reopened same session, re-closed once the companion PR (tabsii-platform#354) actually merged |
 | — | **`practices-evidence.mjs`'s own ref-extractor silently misattributed cross-repo citations to this repo, and had already corrupted 79 stored dates before anyone noticed.** `extractRefs` resolved a bracket-wrapped number like `tabsii-platform [#360](https://github.com/tabsii-com/tabsii-platform/pull/360)` by looking only at the text immediately touching the `#` — nothing does, so it fell back to the bare-ref default, `keiranholloway/biffo-template`. `--enrich` then fetched *that* repo's real, unrelated issue #360 and wrote its creation date into a tabsii-platform row as if it were the row's own. Found while adding this session's two rows above, whose `fixesIn` cross-repo PR links tripped the same path; confirmed already live in the committed dataset — the tabsii-platform#76 row's stored date was quietly a biffo-template PR's date, off by 3 weeks. Re-running the fixed extractor against the full corpus found 79 rows carrying a date computed the same wrong way. Fixed by resolving a markdown link's **URL** first, ahead of any adjoining text, and by no longer letting a bare, unlinked `#N` default to this repo when the same number is already tied to a named repo elsewhere in the row | **fail-open** | biffo-template `scripts/practices-evidence.mjs` (this page's own tooling) | biffo-template `scripts/practices-evidence.mjs` | **fixed** — 79 corrupted dates re-enriched from the correct repo; a residual gap remains for a bare same-numbered mention inside quoted prose with no adjoining prefix at all, which still has no repo to resolve against |
 | — | **The probe used to confirm a deploy is itself a gate, and mine passed when it could not discriminate.** Verifying four demo fixes on dev, two of my own ad-hoc checks returned a positive that carried no information. (1) To prove tabsii-marketplace#28 had shipped I grepped the deployed bundle for `getCurrentSession\|isValid\|replace(` — `replace(` appears in essentially every minified JS bundle, so five of the five chunks I tested "matched", including `polyfills`. It printed `PRESENT in deployed bundle` and meant nothing. Redone against `"checking"` (a `Step` value the fix introduces) and `/browse` (`safeNext`'s fallback), it discriminated — those appear in the `signin` chunk and nowhere else. (2) Probing `curl -o /dev/null -w '%{http_code}'` across `/ /marketplace /intake /crm` returned `200` for all four and I read it as "all routes live" — but `/marketplace/brands`, which **does not exist**, also returned `200`, serving the corporate marketing page through the SPA fallback. The status code was evidence the CDN answers, not that the route exists. Both are the same shape as this page's vacuous-test rows, except the artefact is a **verification command typed once and never reviewed** — no diff, no test, nothing that would ever be read again. The habit that catches it is the one already written for guards: *name the value that would make this fail, and check that value is reachable* | **fail-open** | ad-hoc deploy verification (tabsii-marketplace, tabsii-crm) | practice — a verification pattern must be unique to the change, and a 200 from a CDN is not a route | **corrected before shipping** — the weak result was retracted in the same session and re-established with discriminating markers |
+| [#973](https://github.com/keiranholloway/biffo-template/issues/973) | **A deploy workflow failed outright — not a race, an actual failure — and nothing distinguished that from success for 21 hours.** tabsii-platform#399 merged to `dev` with every required check green. Its `Deploy Application` run died mid-job at `Package and deploy Lambda` (self-hosted runner killed, step conclusion `null`, cascading `null` through DB schema init, DDL imports and every plugin deploy step after it) and reported `failure` — but nothing retried it and nothing alerted on it, so the merged, CI-green PR simply never reached the deployed Lambda. The next `dev` commit hit the same runner-kill shape in its own CI run, confirming the failure mode is common infrastructure flakiness, not this PR's code. Only found because a live click-through (AGENTS.md §4) hit a 404 on a route the PR said existed, and unzipping the deployed Lambda (`aws lambda get-function` → `Code.Location`) showed the new module simply absent. This is a second, independent occurrence of the gap [#903](https://github.com/keiranholloway/biffo-template/issues/903) already named ("no signal anywhere that a deploy for a given commit has actually landed") — #903's case was an ordering race between two repos' deploys; this one is a single repo's deploy workflow failing outright with no retry path, which is arguably worse because a CI failure only blocks its own PR while a silently-failed deploy blocks everyone until someone happens to check `gh run list --branch dev` | **visibility** | tabsii-platform (dev, verifying tabsii-platform#399/tabsii-crm#153's live timeline) | biffo-template `.github/workflows/deploy-app.yml` (proposed: bounded auto-retry on a runner-cancellation signature, and/or a notification distinct from CI-red, and/or a deployed-vs-HEAD drift check) | **open** — recovered by hand this time via `gh run rerun <ci-run> --failed` (confirmed the flake) then `gh workflow run "Deploy Application" --ref dev -f environment=dev`; cost ~25m to diagnose once suspected, on top of the wait for the redeploy itself |
 
 ### What the classes say
 
@@ -263,13 +264,13 @@ shape recurring across unrelated components is a design problem, not bad luck.
 
 <!-- BEGIN generated: class-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write`. **326** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
+_Generated by `node scripts/practices-evidence.mjs --write`. **324** classified rows, ordered by count — the ranking is the finding, so it is not fixed to the list above._
 
 | Primary class | Rows | Share |
 | --- | --- | --- |
-| **visibility** | 99 | 30% |
+| **visibility** | 99 | 31% |
 | fail-open | 76 | 23% |
-| drift | 69 | 21% |
+| drift | 67 | 21% |
 | process | 56 | 17% |
 | boundary | 26 | 8% |
 
@@ -364,19 +365,19 @@ markers; re-run the command.
 
 <!-- BEGIN generated: fix-repo-tally -->
 
-_Generated by `node scripts/practices-evidence.mjs --write` from **326** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `cli/src/lib/practices-metrics.test.ts` fails when this block does not match the dataset._
+_Generated by `node scripts/practices-evidence.mjs --write` from **324** rows in `docs/practices/evidence.jsonl`. Do not edit between the markers — `cli/src/lib/practices-metrics.test.ts` fails when this block does not match the dataset._
 
 | Repo | Fixes landing here | Notes |
 | --- | --- | --- |
-| **biffo-template** | 155 of 326 (48%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
-| **tabsii-platform** | 36 of 326 (11%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
-| **biffo-plugin-idea-scout** | 17 of 326 (5%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
-| **tabsii-crm** | 16 of 326 (5%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
-| **biffo-platform** | 14 of 326 (4%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
-| **biffo-plugin-ideation** | 14 of 326 (4%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
-| **tabsii-intake** | 5 of 326 (2%) | CI generation, branch-protection contexts, the `python-jose` removal |
-| **tabsii-marketplace** | 2 of 326 (1%) | `python-jose` removal; the credential-dependent build |
-| **biffo-runners** | 1 of 326 (0%) | Runner fleet docs + fail-fast |
+| **biffo-template** | 155 of 324 (48%) | Core API, CLI, CI, CDN module, skeletons, migrations, publish pipeline, repo settings, orchestration schema, write-back framework, the git-hook chain, the estate audits, the practices tooling itself |
+| **tabsii-platform** | 34 of 324 (10%) | Divergence ratchet, repo settings, the RLS lane and its tests, raw-SQL portability, SES identity and bounce capture, the invite payload |
+| **biffo-plugin-idea-scout** | 17 of 324 (5%) | Adapter seam, research search capability, its own stylesheet, release + publish workflows |
+| **biffo-platform** | 14 of 324 (4%) | Instantiated infra — API Gateway routes, CDN, vendored-plugin resyncs, DDL seeds, log config |
+| **tabsii-crm** | 14 of 324 (4%) | Its E2E harness, a repo setting that diverged, a timeline rendering a failed fetch as "nothing sent", the missing sibling proxy |
+| **biffo-plugin-ideation** | 14 of 324 (4%) | A UI rendering a 500 as an empty state; its publish workflow; a dead manifest block; an analyst that never searched |
+| **tabsii-intake** | 5 of 324 (2%) | CI generation, branch-protection contexts, the `python-jose` removal |
+| **tabsii-marketplace** | 2 of 324 (1%) | `python-jose` removal; the credential-dependent build |
+| **biffo-runners** | 1 of 324 (0%) | Runner fleet docs + fail-fast |
 
 <!-- END generated: fix-repo-tally -->
 
@@ -1274,6 +1275,32 @@ Three subagents batch-working tabsii-platform/tabsii-crm/tabsii-runners issues i
 Measured: at least 5 redirect cycles across two agents (platform, crm) before the orchestrating session gave up nudging and took over the remaining merges directly with its own polling loop. Each redirect cost a full subagent turn — 250k–400k tokens per the usage figures reported — for zero new work. The fix that actually worked was not a better instruction (explicit "poll with sleep, don't end your turn" was given and still didn't stick on the third occurrence) but **removing the dependency on the agent to babysit CI entirely** — the orchestrating session polled and merged the remaining PRs itself.
 
 **Structural, not a one-off**: identical shape in two independently-briefed agents in the same session, on the third distinct occurrence for one of them despite an explicit correction after the first two. A subagent has no mechanism to resume itself on an external event; treat "wait for X" as an instruction it structurally cannot follow, not one it forgot.
+
+### Measured: a merged, CI-green PR sat 21 hours undeployed, discovered only by clicking through (2026-07-31)
+
+tabsii-platform#399 merged with every check green. Its own `Deploy Application`
+run failed at the "Package and deploy Lambda" step (runner killed mid-job) and
+nothing re-deployed `dev` afterward — the next commit's CI hit the identical
+runner-kill shape, so nobody was watching either run. The gap sat for ~21 hours
+until a live click-through against the real feature hit a 404.
+
+**~25 minutes once suspected, not counting the 21-hour wait nobody was
+watching**: confirm the browser 404 → check network requests (only the CORS
+preflight was visible, not the real GET) → check CloudWatch logs for both the
+sibling and core Lambdas (no errors, meaning the request never reached the
+missing route) → unzip the deployed core Lambda and grep for the module (absent
+— the actual cause) → `gh run list --branch dev` to find the failed deploy run
+→ rerun the next commit's CI to rule out a real regression → `gh workflow run
+"Deploy Application" --ref dev -f environment=dev` → wait for the redeploy →
+re-unzip to confirm the module landed → re-verify in the browser.
+
+**Structural, not a one-off**: this is the second occurrence of the exact gap
+[#903](https://github.com/keiranholloway/biffo-template/issues/903) already
+named — "no signal anywhere that a deploy for a given commit has actually
+landed" — filed as [#973](https://github.com/keiranholloway/biffo-template/issues/973).
+Recovering it required knowing to unzip the deployed artifact rather than
+trusting the green PR; without that specific habit this would have read as "the
+feature has a bug" and sent the search into the application code instead.
 
 ### What this is not
 
@@ -2827,6 +2854,8 @@ design.
 
 **Recognising an infeasible live-repro and falling back to the right verification instead of skipping it.** The "two territories match the same postcode" ambiguous path looked like it needed a live click-through, until checking `territory_settings.overlap_tolerance_sqm`'s default (10 sqm — a few square metres) showed two territories can't be drawn to overlap enough to share a postcode centroid without the DB trigger rejecting the draw. Rather than either forcing a doomed manual geometry exercise or shrugging the path off as "unverified", running the existing `test_assignment_resolution_pg.py` (which already documents bypassing the same trigger deliberately, in a single transaction, as the only honest way to construct the case) against a real Postgres/PostGIS container was the correct proof — and it passed.
 
+**A green PR, green CI and a completed merge were still not treated as "shipped."** Landing the unified lead-timeline endpoint (tabsii-platform#399), the actual acceptance test was a live click-through against the real lead, not the merge itself. That single habit is what caught it: the browser rendered `Could not load activity`, and unzipping the deployed core Lambda (`aws lambda get-function` → `Code.Location` → grep) showed the new module absent entirely, 21 hours after merge, despite every visible signal — the PR page, the issue, the CI run on that PR — reading as success. Reading the source or re-running the test suite would have shown nothing wrong, because nothing was.
+
 ## What needs more thought
 
 **The corpus guard asserts the file grows, not that it makes sense.**
@@ -4221,6 +4250,7 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **worked — §4 caught a feature that was merged, applied, and absent** | Reading the deployed artefact rather than the source is what revealed the Lambda was serving pre-merge code while its API Gateway routes existed. §5 ("read past the layer masking the truth") is what made it legible: the 404's *message* distinguished "route absent" from "handler ran" when the status code could not. |
 | `biffo-verify` | **worked — §4 was the whole of the verification, and §6 caught my own weak probe** | Five demo-feedback fixes across three repos, all merged and deployed with green CI, which §4 correctly treats as worth nothing. Unzipping `tabsii-platform-dev-core-api` showed `MarketplaceApplyRequest` carrying `postcode`/`phone`/`consent_to_contact`; grepping the deployed Next chunks showed `apply-postcode` and the `signin` fix's unique markers. Separately, §6's *"what would make this fail?"* is what exposed that my first `#28` probe matched `replace(` and could not fail — the scoreboard row above exists because the skill's own question was asked of an ad-hoc command rather than of a CI gate. |
 | `biffo-verify` | **partial — §8 fired on operator prompt for the fourth consecutive session** | Previous three entries each recorded §8 arriving as a closing sweep rather than at the moment of the finding, and each named the trigger as the cause. This session the pattern was identical: five issues found, fixed, merged, deployed and verified, and nothing was written here until the operator typed `/biffo-verify`. **A section that has now diagnosed its own non-use four times running is not going to be fixed by a fifth diagnosis.** The specific defect is that §8's triggers are all *states* ("cost >30 min", "a gap you noticed") which require someone to stop and self-assess, and every one of the four misses happened while the session still had work queued. Either the skill needs an explicit "before reporting completion to the operator, write §8" step in the flow other skills already run, or `biffo-workflow`'s merge step needs to prompt it — the failure is consistently at the *seam between finishing work and reporting it*, which is a place a checklist can actually sit. |
+| `biffo-verify` | **worked — §4 caught a third, differently-shaped case of the same class** | Landing tabsii-platform#399, the merge, CI and PR page were all green; only unzipping the deployed core Lambda (§4's exact technique) showed the new module absent, 21 hours after merge, because its own `Deploy Application` run had failed and nothing retried or alerted. Filed as [#973](https://github.com/keiranholloway/biffo-template/issues/973), reinforcing [#903](https://github.com/keiranholloway/biffo-template/issues/903). §8 again arrived only once the operator typed `/biffo-verify` — same seam the row above already names, so recorded here rather than argued as a fifth instance of that finding. |
 
 ## Adding a row
 

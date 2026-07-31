@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { isTemplateOwned, listTemplateOwnedFiles, readCoreManifest } from './core-manifest.js'
@@ -79,8 +79,41 @@ describe('the template seeds the carve-out', () => {
   // legitimately rename, replace, or delete the seeded README.
   const runningInInstance = isInstanceRepo(repoRoot)
 
-  it.runIf(!runningInInstance)('ships an empty nav registry for an instance to append to', () => {
-    expect(existsSync(join(repoRoot, INSTANCE_NAV_FILE))).toBe(true)
+  it.runIf(!runningInInstance)('does NOT ship the nav registry — it is optional', () => {
+    // Reversed deliberately. As first shipped, ADR-0028 required EVERY instance
+    // to carry this file, because template-owned nav.tsx imports it statically
+    // and a bundler cannot degrade. `core upgrade` never carries user-owned
+    // paths, so both live instances would have failed `module not found` on
+    // their next upgrade. The file is now optional, defaulted by the
+    // template-owned empty module and overridden by a webpack alias.
+    expect(existsSync(join(repoRoot, INSTANCE_NAV_FILE))).toBe(false)
+    expect(existsSync(join(repoRoot, 'apps/portal/src/lib/instance-nav-empty.ts'))).toBe(true)
+  })
+
+  it('maps @/instance-nav to exactly ONE path, which must exist', () => {
+    // Next's SWC loader rejects a multi-element `paths` array for a
+    // non-wildcard key outright -- "should be an array with one element because
+    // the src path does not contain a wildcard" -- and the failure surfaces as
+    // a Rust panic while loading next.config, which names neither this file nor
+    // the seam. The tempting fallback list is what does not build.
+    const tsconfig = JSON.parse(
+      readFileSync(join(repoRoot, 'apps/portal/tsconfig.json'), 'utf8'),
+    ) as { compilerOptions: { paths: Record<string, string[]> } }
+    const mapped = tsconfig.compilerOptions.paths['@/instance-nav']
+    expect(mapped, '@/instance-nav must stay mapped or nav.tsx cannot resolve').toBeDefined()
+    expect(mapped).toHaveLength(1)
+    expect(existsSync(join(repoRoot, 'apps/portal', mapped[0]))).toBe(true)
+  })
+
+  it('overrides that default via next.config when an instance supplies its own', () => {
+    // Aliasing the '@/instance-nav' SPECIFIER silently does nothing: SWC
+    // rewrites tsconfig paths at transform time, so webpack never sees the key.
+    // Verified by building both ways -- the specifier alias produced a bundle
+    // with the stub's contents while reporting success. The alias must target
+    // the RESOLVED default path.
+    const config = readFileSync(join(repoRoot, 'apps/portal/next.config.ts'), 'utf8')
+    expect(config).toMatch(/existsSync\(instanceNav\)/)
+    expect(config).toMatch(/\[emptyDefault\]: instanceNav/)
   })
 
   it.runIf(!runningInInstance)('ships the route group with a README explaining it', () => {

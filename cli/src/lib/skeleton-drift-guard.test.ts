@@ -159,6 +159,49 @@ describe('hardened-dependency-audit rule', () => {
   })
 })
 
+describe('derived-app-title rule', () => {
+  function layout(contents: string): void {
+    const abs = join(root, 'apps', 'frontend', 'src', 'app', 'layout.tsx')
+    mkdirSync(dirname(abs), { recursive: true })
+    writeFileSync(abs, contents)
+  }
+
+  /**
+   * #963: the sibling skeleton hard-coded `title: 'Sibling App'` and nothing at
+   * `biffo sibling create` time touched it, so every sibling ever scaffolded
+   * was born with that literal in its <title> — still visible in two of
+   * tabsii's five deployed siblings' out/index.html.
+   */
+  it('flags the literal title the sibling skeleton shipped', () => {
+    layout(
+      "import type { Metadata } from 'next'\n\nexport const metadata: Metadata = {\n  title: 'Sibling App',\n}\n",
+    )
+    const v = auditSkeleton(root, 'test-skeleton')
+    expect(v).toHaveLength(1)
+    expect(v[0]!.rule).toBe('derived-app-title')
+    expect(v[0]!.detail).toContain("'Sibling App'")
+  })
+
+  it('flags any hard-coded literal, not just that one string', () => {
+    layout('export const metadata = {\n  title: `Some Other App`,\n}\n')
+    expect(auditSkeleton(root, 'test-skeleton')).toHaveLength(1)
+  })
+
+  it('accepts a title derived from a build-time constant', () => {
+    layout(
+      "import { SIBLING_TITLE } from '@/lib/branding'\n\nexport const metadata = {\n  title: {\n    default: SIBLING_TITLE,\n    template: `${SIBLING_TITLE} - %s`,\n  },\n}\n",
+    )
+    expect(auditSkeleton(root, 'test-skeleton')).toEqual([])
+  })
+
+  it('does not flag a comment that quotes the placeholder shape it replaced', () => {
+    layout(
+      "import { SIBLING_TITLE } from '@/lib/branding'\n\nexport const metadata = {\n  // Was `title: 'Sibling App'` before #963 — now derived from the sibling name.\n  title: { default: SIBLING_TITLE },\n}\n",
+    )
+    expect(auditSkeleton(root, 'test-skeleton')).toEqual([])
+  })
+})
+
 describe('scope', () => {
   it('ignores files outside .github/workflows', () => {
     mkdirSync(join(root, 'docs'), { recursive: true })
@@ -194,6 +237,28 @@ describe('the real skeletons', () => {
     const violations = auditSkeleton(dir, name)
     expect(formatViolations(violations)).toBe('')
     expect(violations).toEqual([])
+  })
+
+  /**
+   * `derived-app-title` only applies to `src/app/layout.tsx`, and only the
+   * sibling skeleton has one. Assert the file exists before trusting the
+   * rule's silence — the same "prove we are auditing something real" trap
+   * skeletonsRoot documents.
+   */
+  it('audits the sibling skeleton’s real root layout', () => {
+    const layout = join(
+      skeletonsRoot('sibling-template'),
+      'apps',
+      'frontend',
+      'src',
+      'app',
+      'layout.tsx',
+    )
+    expect(existsSync(layout), 'sibling-template has a root layout').toBe(true)
+    const contents = readFileSync(layout, 'utf8')
+    expect(contents).not.toContain("title: 'Sibling App'")
+    // It derives from the sibling's own name rather than naming a title at all.
+    expect(contents).toContain('SIBLING_TITLE')
   })
 
   it('every rule cites the issue that proves it matters', () => {

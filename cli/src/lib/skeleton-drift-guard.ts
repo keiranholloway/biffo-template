@@ -63,6 +63,22 @@ export interface SkeletonViolation {
 const isWorkflow = (rel: string): boolean =>
   rel.startsWith('.github/workflows/') && (rel.endsWith('.yml') || rel.endsWith('.yaml'))
 
+const isRootLayout = (rel: string): boolean => rel.endsWith('src/app/layout.tsx')
+
+/**
+ * TSX with whole-line `//`, `/*` and jsdoc-continuation comments removed.
+ *
+ * Same reasoning as `executableLines` above: the `derived-app-title` rule
+ * matches source *text*, and the layout it guards documents the placeholder
+ * shape it replaced. A guard that reddens on its own rationale gets deleted
+ * rather than obeyed.
+ */
+const uncommented = (contents: string): string =>
+  contents
+    .split('\n')
+    .filter((line) => !/^\s*(\/\/|\/\*|\*)/.test(line))
+    .join('\n')
+
 /**
  * Lines a workflow actually executes, with YAML comments removed.
  *
@@ -147,6 +163,24 @@ export const SKELETON_RULES: SkeletonRule[] = [
         `${offenders.length} step(s) run an unhardened dependency audit directly: ` +
         `${offenders.map((l) => l.trim()).join(' | ')}. Call ${wanted.join(' / ')} instead.`
       )
+    },
+  },
+  {
+    id: 'derived-app-title',
+    rationale:
+      'A root layout that hard-codes `metadata.title` ships that literal as every generated ' +
+      "repo's browser title, and nothing at scaffold time ever touches it. The sibling skeleton " +
+      "carried `title: 'Sibling App'` for its whole life, so two of tabsii's five siblings were " +
+      'still serving it in their deployed out/index.html — visible to users, not just in source ' +
+      '(#963). Derive it from the build-time `NEXT_PUBLIC_SIBLING_NAME` instead (see the ' +
+      "skeleton's own `src/lib/branding.ts`), the way the portal derives `PORTAL_TITLE` (#389).",
+    appliesTo: isRootLayout,
+    check: (_rel, contents) => {
+      const match = /\btitle:\s*(['"`])([^'"`]*)\1/.exec(uncommented(contents))
+      return match
+        ? `metadata.title is the hard-coded literal ${match[1]}${match[2]}${match[1]}; ` +
+            'derive it from the generated app’s own name instead'
+        : null
     },
   },
 ]

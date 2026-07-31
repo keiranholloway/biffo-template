@@ -604,6 +604,97 @@ describe('configureBranchProtection', () => {
   })
 })
 
+// ─── protectSingleBranch (the plugin-repo path) ──────────────────────────────
+//
+// #1001: this method had the identical fail-open `configureBranchProtection`
+// just lost. It returned `Promise<void>` and swallowed the 403 with two
+// warnings, so `biffo plugin create --org` printed next steps and exited 0 with
+// nothing recording that the repo it had created had an unprotected `dev`.
+
+describe('protectSingleBranch', () => {
+  it('RETURNS a skipped-403 outcome naming the branch left unprotected', async () => {
+    const planLimited = Object.assign(
+      new Error('Upgrade to GitHub Team or make this repository public to enable this feature.'),
+      { status: 403 },
+    )
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValue({ data: {} })
+    octokitMock.repos.updateBranchProtection = vi.fn().mockRejectedValue(planLimited)
+
+    const result = await adapter().protectSingleBranch('acme', 'biffo-plugin-x', 'dev', ['Lint'])
+
+    expect(result).toMatchObject({
+      status: 'skipped-403',
+      org: 'acme',
+      repo: 'biffo-plugin-x',
+      protectedBranches: [],
+      unprotectedBranches: ['dev'],
+    })
+    expect(result.reason).toContain('Upgrade to GitHub Team')
+  })
+
+  it('records the skip on the run collector, so a caller that ignores the return value still reports it', async () => {
+    const planLimited = Object.assign(new Error('403'), { status: 403 })
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValue({ data: {} })
+    octokitMock.repos.updateBranchProtection = vi.fn().mockRejectedValue(planLimited)
+
+    await adapter().protectSingleBranch('acme', 'biffo-plugin-x', 'dev', ['Lint'])
+
+    expect(pendingBranchProtectionOutcomes()).toHaveLength(1)
+    expect(pendingBranchProtectionOutcomes()[0]).toMatchObject({
+      status: 'skipped-403',
+      repo: 'biffo-plugin-x',
+    })
+  })
+
+  it('returns an applied outcome on the happy path', async () => {
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValue({ data: {} })
+    octokitMock.repos.updateBranchProtection = vi.fn().mockResolvedValue({})
+
+    const result = await adapter().protectSingleBranch('acme', 'biffo-plugin-x', 'dev', [
+      'Lint',
+      'Test',
+    ])
+
+    expect(result).toMatchObject({
+      status: 'applied',
+      protectedBranches: ['dev'],
+      unprotectedBranches: [],
+    })
+  })
+
+  it('records skipped-no-contexts and still throws on an empty context list', async () => {
+    // The throw is the contract — protection requiring nothing reads as
+    // configured while gating on nothing. Recording it too means that if any
+    // caller ever swallows this, the summary still names the repo.
+    await expect(
+      adapter().protectSingleBranch('acme', 'biffo-plugin-x', 'dev', []),
+    ).rejects.toThrow(/no required status checks/)
+
+    expect(pendingBranchProtectionOutcomes()[0]).toMatchObject({
+      status: 'skipped-no-contexts',
+      org: 'acme',
+      repo: 'biffo-plugin-x',
+      unprotectedBranches: ['dev'],
+    })
+  })
+
+  it('records a failed outcome and still rethrows on a non-403 error', async () => {
+    const boom = Object.assign(new Error('500 Internal Server Error'), { status: 500 })
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValue({ data: {} })
+    octokitMock.repos.updateBranchProtection = vi.fn().mockRejectedValue(boom)
+
+    await expect(
+      adapter().protectSingleBranch('acme', 'biffo-plugin-x', 'dev', ['Lint']),
+    ).rejects.toThrow('500 Internal')
+
+    expect(pendingBranchProtectionOutcomes()[0]).toMatchObject({
+      status: 'failed',
+      protectedBranches: [],
+      unprotectedBranches: ['dev'],
+    })
+  })
+})
+
 // ─── createEnvironments ──────────────────────────────────────────────────────
 
 describe('createEnvironments', () => {

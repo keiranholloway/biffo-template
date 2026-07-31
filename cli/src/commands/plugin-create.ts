@@ -5,6 +5,11 @@ import chalk from 'chalk'
 import { Command } from 'commander'
 import { GitAdapter } from '../adapters/git/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
+import {
+  recordBranchProtectionOutcome,
+  reportBranchProtectionSummary,
+  type BranchProtectionOutcome,
+} from '../lib/branch-protection-outcome.js'
 import { resolveGithubToken } from '../lib/credentials.js'
 import {
   addSource,
@@ -64,25 +69,35 @@ export const pluginCreateCommand = new Command('create')
     ) => {
       const cwd = options.cwd ? resolve(options.cwd) : process.cwd()
       try {
-        await runPluginCreate(
-          name,
-          {
-            firstParty: options.firstParty ?? false,
-            standalone: options.standalone ?? false,
-            ...(options.org ? { org: options.org } : {}),
-            ...(options.runnerLabel ? { runnerLabel: options.runnerLabel } : {}),
-            register: options.register !== false,
-            ...(options.skeleton ? { skeletonRoot: resolve(options.skeleton) } : {}),
-            dryRun: options.dryRun ?? false,
-            commit: options.commit !== false,
-            cwd,
-          },
-          {
-            git: new GitAdapter(),
-            makeGitHub: (token: string) => new GitHubAdapter(token),
-            resolveToken: resolveGithubToken,
-          },
-        )
+        // Nested, not one try/catch/finally: `process.exit` in the catch below
+        // terminates synchronously, so a sibling `finally` would never run and
+        // the run that most needs the summary — the one that died — would be
+        // the one that never printed it. The inner `finally` runs before the
+        // outer catch. Same reason `init` and `sibling create` wrap in a
+        // `finally` at all (#715, #1001).
+        try {
+          await runPluginCreate(
+            name,
+            {
+              firstParty: options.firstParty ?? false,
+              standalone: options.standalone ?? false,
+              ...(options.org ? { org: options.org } : {}),
+              ...(options.runnerLabel ? { runnerLabel: options.runnerLabel } : {}),
+              register: options.register !== false,
+              ...(options.skeleton ? { skeletonRoot: resolve(options.skeleton) } : {}),
+              dryRun: options.dryRun ?? false,
+              commit: options.commit !== false,
+              cwd,
+            },
+            {
+              git: new GitAdapter(),
+              makeGitHub: (token: string) => new GitHubAdapter(token),
+              resolveToken: resolveGithubToken,
+            },
+          )
+        } finally {
+          reportBranchProtectionSummary()
+        }
       } catch (err) {
         log.error((err as Error).message)
         process.exit(1)
@@ -110,7 +125,7 @@ export interface StandaloneGitHub {
     repo: string,
     branch: string,
     statusChecks: string[],
-  ): Promise<void>
+  ): Promise<BranchProtectionOutcome>
   setRepoVariable(org: string, repo: string, name: string, value: string): Promise<void>
   getRepoVariable(org: string, repo: string, name: string): Promise<string | undefined>
   repoRunnerCount(org: string, repo: string): Promise<number | null>
@@ -170,6 +185,11 @@ export async function runPluginCreate(
       )
     }
     await runStandaloneCreate(names, options, deps)
+    // The last thing the standalone path does, and deliberately not a step: a
+    // run that created a repo must not be able to finish quietly having left
+    // its `dev` unprotected (#1001, and #715 before it). Drains, so the
+    // command layer's `finally` copy does not print a second time.
+    reportBranchProtectionSummary()
     return
   }
 
@@ -411,10 +431,27 @@ async function createAndPushStandaloneRepo(
   const contexts = existsSync(ciPath) ? workflowCheckContexts(readFileSync(ciPath, 'utf8')) : []
 
   if (contexts.length === 0) {
+    // Refusing to protect is right — `protectSingleBranch` throws on an empty
+    // context list for good reason — but the *skip* used to be one more warning
+    // in a long transcript, and the run then printed its next-steps block and
+    // exited 0. Same end state as the 403: a created repo, a successful-looking
+    // run, an unprotected `dev`. Recorded as its own status because the remedy
+    // differs — name the CI jobs, not upgrade the plan (#1001).
     log.warn(
       `Could not determine required status checks from ${ciPath} — skipping branch protection. ` +
         'Configure it manually on dev once you know the CI job names.',
     )
+    recordBranchProtectionOutcome({
+      status: 'skipped-no-contexts',
+      org,
+      repo: names.dist,
+      protectedBranches: [],
+      unprotectedBranches: ['dev'],
+      reason:
+        `No status-check contexts could be derived from ${ciPath}, so there was nothing to ` +
+        'require. Protection with an empty context list reads as configured while admitting ' +
+        'every PR, so none was applied.',
+    })
   } else {
     await github.protectSingleBranch(org, names.dist, 'dev', contexts)
   }

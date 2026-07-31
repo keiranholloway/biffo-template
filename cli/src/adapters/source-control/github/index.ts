@@ -694,6 +694,13 @@ export class GitHubAdapter {
    * `statusChecks` must be non-empty. Protection that requires nothing is worse
    * than none: it reads as configured while gating on nothing, so callers that
    * could not determine the contexts must not silently land here.
+   *
+   * Like `configureBranchProtection`, this **returns and records** what actually
+   * happened (#1001). It used to return `Promise<void>` and swallow the 403 with
+   * two log warnings, so `biffo plugin create --org` printed its next-steps
+   * block and exited 0 with nothing anywhere recording that the repo it had just
+   * created had an unprotected `dev` — the identical defect #715 described for
+   * the deployable path, on the path #999 deliberately left out of scope.
    */
   async protectSingleBranch(
     org: string,
@@ -701,59 +708,99 @@ export class GitHubAdapter {
     branch: string,
     statusChecks: string[],
     protectionIntervalMs = 3_000,
-  ): Promise<void> {
+  ): Promise<BranchProtectionOutcome> {
     if (statusChecks.length === 0) {
-      throw new Error(
+      // Recorded *and* thrown. The throw is the contract — a caller that cannot
+      // determine contexts must not reach here — but recording first means that
+      // if some future caller ever swallows this, the summary still names the
+      // repo rather than the run ending quietly all over again.
+      const message =
         `Refusing to protect ${org}/${repo}@${branch} with no required status checks — ` +
-          `that reads as protected while gating on nothing. Determine the workflow's job ` +
-          `contexts first.`,
-      )
+        `that reads as protected while gating on nothing. Determine the workflow's job ` +
+        `contexts first.`
+      recordBranchProtectionOutcome({
+        status: 'skipped-no-contexts',
+        org,
+        repo,
+        protectedBranches: [],
+        unprotectedBranches: [branch],
+        reason: message,
+      })
+      throw new Error(message)
     }
 
-    log.info(`Waiting for ${branch} branch to be ready...`)
-    await this.waitForBranch(org, repo, branch)
-    log.info(`Configuring branch protection on ${branch}...`)
+    try {
+      log.info(`Waiting for ${branch} branch to be ready...`)
+      await this.waitForBranch(org, repo, branch)
+      log.info(`Configuring branch protection on ${branch}...`)
 
-    const params = {
-      owner: org,
-      repo,
-      branch,
-      required_status_checks: { strict: true, contexts: statusChecks },
-      enforce_admins: false,
-      required_pull_request_reviews: {
-        required_approving_review_count: 0,
-        dismiss_stale_reviews: false,
-      },
-      restrictions: null,
-      required_linear_history: true,
-      allow_force_pushes: false,
-      allow_deletions: false,
-    }
-
-    const deadline = Date.now() + 30_000
-    while (true) {
-      try {
-        await this.octokit.repos.updateBranchProtection(params)
-        break
-      } catch (err: unknown) {
-        const status = (err as { status?: number }).status
-        if (status === 403) {
-          // Same plan limitation the deployable path documents: private org
-          // repos need Team/Enterprise for branch protection. Skipping is safe
-          // and retrying would hit the identical 403.
-          log.warn(`Branch protection unavailable for ${org}/${repo}: ${(err as Error).message}`)
-          log.warn('  Add it later via GitHub once the plan allows it, or make the repo public.')
-          return
-        }
-        if (status !== 404 || Date.now() >= deadline) throw err
-        log.info('Branch protection endpoint not yet ready, retrying...')
-        await new Promise((resolve) => setTimeout(resolve, protectionIntervalMs))
+      const params = {
+        owner: org,
+        repo,
+        branch,
+        required_status_checks: { strict: true, contexts: statusChecks },
+        enforce_admins: false,
+        required_pull_request_reviews: {
+          required_approving_review_count: 0,
+          dismiss_stale_reviews: false,
+        },
+        restrictions: null,
+        required_linear_history: true,
+        allow_force_pushes: false,
+        allow_deletions: false,
       }
+
+      const deadline = Date.now() + 30_000
+      while (true) {
+        try {
+          await this.octokit.repos.updateBranchProtection(params)
+          break
+        } catch (err: unknown) {
+          const status = (err as { status?: number }).status
+          if (status === 403) {
+            // Same plan limitation the deployable path documents: private org
+            // repos need Team/Enterprise for branch protection. Not throwing is
+            // still right — retrying would hit the identical 403 — but the skip
+            // is now returned and recorded, not just logged (#1001).
+            log.warn(`Branch protection unavailable for ${org}/${repo}: ${(err as Error).message}`)
+            log.warn('  Add it later via GitHub once the plan allows it, or make the repo public.')
+            return recordBranchProtectionOutcome({
+              status: 'skipped-403',
+              org,
+              repo,
+              protectedBranches: [],
+              unprotectedBranches: [branch],
+              reason: (err as Error).message,
+            })
+          }
+          if (status !== 404 || Date.now() >= deadline) throw err
+          log.info('Branch protection endpoint not yet ready, retrying...')
+          await new Promise((resolve) => setTimeout(resolve, protectionIntervalMs))
+        }
+      }
+    } catch (err: unknown) {
+      // Recorded, then rethrown unchanged — see `configureBranchProtection`.
+      recordBranchProtectionOutcome({
+        status: 'failed',
+        org,
+        repo,
+        protectedBranches: [],
+        unprotectedBranches: [branch],
+        reason: (err as Error).message,
+      })
+      throw err
     }
 
     log.success(
       `Branch protection configured on ${branch} (${statusChecks.length} required check(s))`,
     )
+    return recordBranchProtectionOutcome({
+      status: 'applied',
+      org,
+      repo,
+      protectedBranches: [branch],
+      unprotectedBranches: [],
+    })
   }
 
   async createEnvironments(config: ProvisioningConfig): Promise<void> {

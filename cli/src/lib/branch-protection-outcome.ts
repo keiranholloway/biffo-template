@@ -43,11 +43,18 @@ import { log } from './logger.js'
  * - `skipped-403` — GitHub refused (plan limitation). Non-fatal by design;
  *   retrying the same call would hit the identical 403. This is the case that
  *   must never again be silent.
+ * - `skipped-no-contexts` — the caller could not work out which status checks to
+ *   require, so it declined to protect at all. Declining is correct: protection
+ *   with an empty context list reads as configured while gating on nothing, and
+ *   a PR against it reports CLEAN before any run registers. But the end state is
+ *   the same unprotected branch as a 403, reached for a different reason and
+ *   with a different remedy — name/fix the CI jobs, not upgrade the plan — so it
+ *   gets its own status rather than being folded into `failed` (#1001).
  * - `failed` — anything else went wrong. The adapter still throws, so the run
  *   aborts loudly; the outcome is recorded so the summary can say *which*
  *   branches were left behind when it did.
  */
-export type BranchProtectionStatus = 'applied' | 'skipped-403' | 'failed'
+export type BranchProtectionStatus = 'applied' | 'skipped-403' | 'skipped-no-contexts' | 'failed'
 
 export interface BranchProtectionOutcome {
   status: BranchProtectionStatus
@@ -117,23 +124,53 @@ export function formatBranchProtectionSummary(
 
   for (const outcome of unprotected) {
     const left = outcome.unprotectedBranches.join(', ') || 'unknown'
-    const why =
-      outcome.status === 'skipped-403'
-        ? "GitHub returned 403 — the org's plan does not allow branch protection on this repo"
-        : outcome.status === 'failed'
-          ? 'branch protection failed'
-          : 'branch protection incomplete'
-    lines.push(`  ${outcome.org}/${outcome.repo} — unprotected: ${left} (${why})`)
+    lines.push(
+      `  ${outcome.org}/${outcome.repo} — unprotected: ${left} (${whyUnprotected(outcome)})`,
+    )
     if (outcome.reason) lines.push(`      ${outcome.reason}`)
   }
 
   lines.push(
     '  Direct pushes, force-pushes and merges with red or missing checks are all allowed on ' +
       'those branches right now.',
-    '  Fix it with:  biffo check branch-protection --fix   (after upgrading the plan, or ' +
-      'making the repo public)',
+  )
+
+  // The remedy is not the same for every cause, and saying so is the point of
+  // having a fourth status at all (#1001). A 403 is fixed by the plan; an
+  // undeterminable context list is fixed by the repo's CI reporting job names
+  // that can be required — `--fix` derives them from observed runs, so it only
+  // helps once at least one run has completed.
+  if (unprotected.some((o) => o.status === 'skipped-no-contexts')) {
+    lines.push(
+      '  Where the required checks could not be determined, the fix is the CI job names, not ' +
+        'the plan: make the workflow report named jobs, let one run complete, then backfill.',
+    )
+  }
+  const has403 = unprotected.some((o) => o.status === 'skipped-403')
+  lines.push(
+    '  Fix it with:  biffo check branch-protection --fix   ' +
+      (has403
+        ? '(after upgrading the plan, or making the repo public)'
+        : '(it derives the required checks from the runs the repo has actually reported)'),
   )
   return lines
+}
+
+/** One clause explaining why a repo ended the run unprotected. */
+function whyUnprotected(outcome: BranchProtectionOutcome): string {
+  switch (outcome.status) {
+    case 'skipped-403':
+      return "GitHub returned 403 — the org's plan does not allow branch protection on this repo"
+    case 'skipped-no-contexts':
+      return (
+        'the required status checks could not be determined, and protection requiring ' +
+        'nothing reads as configured while gating on nothing'
+      )
+    case 'failed':
+      return 'branch protection failed'
+    default:
+      return 'branch protection incomplete'
+  }
 }
 
 /**

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { InstanceNavLink } from '@/lib/instance-nav-contract'
 import { Nav } from './nav'
@@ -84,18 +84,32 @@ describe('Nav — instance-owned entries (ADR-0028)', () => {
     expect(screen.queryByRole('link', { name: 'External' })).not.toBeInTheDocument()
   })
 
-  it('renders no extra links when the instance declares none', () => {
+  it('contributes nothing when the instance declares none', () => {
+    // Asserted as a DIFFERENCE, not as an absolute list.
+    //
+    // This test previously hardcoded the eight core labels, and that broke the
+    // first real instance it reached: biffo-platform's nav.tsx carries its own
+    // 'Early access' link, so a template-owned test failed inside the upgrade
+    // PR for a divergence the instance is entitled to have — and cannot fix,
+    // because the test is template-owned and the next upgrade would revert any
+    // edit. Found by running an actual `core upgrade`, not by any local run.
+    //
+    // It is the same mistake twice more in ADR-0028's original shape: a
+    // template-owned test asserting the exact contents of something instances
+    // are expected to customise. The registry's contribution is the only thing
+    // this test can legitimately own.
+    declare()
     render(<Nav />)
-    const labels = screen.getAllByRole('link').map((el) => el.textContent)
-    expect(labels).toEqual([
-      'Microservices',
-      'Marketplace',
-      'Plugins',
-      'Endpoints',
-      'Users',
-      'Workflows',
-      'Agent runs',
-      'Prompt library',
-    ])
+    const withNone = screen.getAllByRole('link').map((el) => el.textContent)
+    cleanup()
+
+    declare({ href: '/admin/instance-probe/', label: 'Instance probe' })
+    render(<Nav />)
+    const withOne = screen.getAllByRole('link').map((el) => el.textContent)
+
+    expect(withOne).toEqual([...withNone, 'Instance probe'])
+    expect(withNone).not.toContain('Instance probe')
+    // Guards the guard: an empty nav would satisfy the diff vacuously.
+    expect(withNone.length).toBeGreaterThan(3)
   })
 })

@@ -524,6 +524,121 @@ describe('mergeContention', () => {
     expect(result.racedShare).toBe(100)
   })
 
+  /**
+   * H3's counter-metric (#977). `strict: false` buys back the rebase race by
+   * allowing exactly this: B goes green at 10:00 against a `dev` that A then
+   * moves at 10:30, and B merges at 11:00 in a combination no run ever tested.
+   * Under `strict: true` that merge is refused until B rebases.
+   */
+  it('counts a merge whose base moved between first green and merge', () => {
+    const runsByBranch = indexRunsByBranch([
+      run('feat/a', 'aaa', 'success', '2026-07-20T09:00:00Z'),
+      run('feat/b', 'bbb', 'success', '2026-07-20T10:00:00Z'),
+    ])
+    const result = mergeContention(
+      [
+        pr('feat/a', '2026-07-20T08:00:00Z', '2026-07-20T10:30:00Z', 1),
+        pr('feat/b', '2026-07-20T08:00:00Z', '2026-07-20T11:00:00Z', 2),
+      ],
+      runsByBranch,
+    )
+    // Only B is stale: A merged at 10:30 with nothing landing after its 09:00
+    // green, while B's base moved under it.
+    expect(result.staleMerges).toBe(1)
+    expect(result.staleMergeShare).toBe(50)
+  })
+
+  /**
+   * The defect the unit tests missed and a live run caught: anchoring to the
+   * FIRST green counts a rebased-and-re-greened PR as stale, which is what
+   * `strict: true` forces every raced PR to do. That made the counter-metric a
+   * second reading of `racedShare` — it scored 44% on repos where the gate
+   * makes staleness impossible by construction.
+   *
+   * Here B goes green at 10:00, A lands at 10:30, B rebases and re-greens at
+   * 10:45, then merges at 11:00. The base did NOT move after the run that
+   * validated what merged, so B is not stale.
+   */
+  it('does not call a rebased-and-re-greened PR stale', () => {
+    const runsByBranch = indexRunsByBranch([
+      run('feat/a', 'aaa', 'success', '2026-07-20T09:00:00Z'),
+      run('feat/b', 'bbb', 'success', '2026-07-20T10:00:00Z'),
+      run('feat/b', 'ccc', 'success', '2026-07-20T10:45:00Z'),
+    ])
+    const result = mergeContention(
+      [
+        pr('feat/a', '2026-07-20T08:00:00Z', '2026-07-20T10:30:00Z', 1),
+        pr('feat/b', '2026-07-20T08:00:00Z', '2026-07-20T11:00:00Z', 2),
+      ],
+      runsByBranch,
+    )
+    expect(result.staleMerges).toBe(0)
+    // ...while the race it paid to avoid is still counted, which is the point:
+    // the two metrics must be able to disagree.
+    expect(result.racedShare).toBe(50)
+  })
+
+  /**
+   * `runsForPr` admits runs created up to 24h AFTER the merge, so the last
+   * green overall can postdate the merge. Anchoring to it unclamped puts the
+   * window's start after its end and makes the PR unstaleable — a silent false
+   * negative, worst on exactly the busy branches this metric is watching.
+   *
+   * B is genuinely stale (A landed at 10:30, after B's 10:00 green) and also
+   * has a post-merge run at 11:30. It must still count.
+   */
+  it('ignores a green that completed after the merge when anchoring', () => {
+    const runsByBranch = indexRunsByBranch([
+      run('feat/a', 'aaa', 'success', '2026-07-20T09:00:00Z'),
+      run('feat/b', 'bbb', 'success', '2026-07-20T10:00:00Z'),
+      run('feat/b', 'bbb', 'success', '2026-07-20T11:30:00Z'),
+    ])
+    const result = mergeContention(
+      [
+        pr('feat/a', '2026-07-20T08:00:00Z', '2026-07-20T10:30:00Z', 1),
+        pr('feat/b', '2026-07-20T08:00:00Z', '2026-07-20T11:00:00Z', 2),
+      ],
+      runsByBranch,
+    )
+    expect(result.staleMerges).toBe(1)
+  })
+
+  /**
+   * The metric must not fire on the PR's own merge, or every measured PR would
+   * read as stale and the counter-metric would be a constant.
+   */
+  it('does not call a lone merge stale against itself', () => {
+    const runsByBranch = indexRunsByBranch([
+      run('feat/only', 'aaa', 'success', '2026-07-20T10:00:00Z'),
+    ])
+    const result = mergeContention(
+      [pr('feat/only', '2026-07-20T09:00:00Z', '2026-07-20T11:00:00Z')],
+      runsByBranch,
+    )
+    expect(result.staleMerges).toBe(0)
+    expect(result.staleMergeShare).toBe(0)
+  })
+
+  /**
+   * `dev` and `staging` are separate races. Keying staleness by base ref is
+   * what stops a promotion merge from making every `dev` PR read as stale.
+   */
+  it('does not let a merge to another base make a PR stale', () => {
+    const runsByBranch = indexRunsByBranch([
+      run('feat/x', 'aaa', 'success', '2026-07-20T10:00:00Z'),
+      run('release/y', 'bbb', 'success', '2026-07-20T10:00:00Z'),
+    ])
+    const onStaging = {
+      ...pr('release/y', '2026-07-20T09:00:00Z', '2026-07-20T10:30:00Z', 2),
+      baseRefName: 'staging',
+    }
+    const result = mergeContention(
+      [pr('feat/x', '2026-07-20T09:00:00Z', '2026-07-20T11:00:00Z', 1), onStaging],
+      runsByBranch,
+    )
+    expect(result.staleMerges).toBe(0)
+  })
+
   it('does not count a PR that merged straight after going green', () => {
     const runsByBranch = indexRunsByBranch([
       run('feat/quick', 'aaa', 'success', '2026-07-20T10:00:00Z'),

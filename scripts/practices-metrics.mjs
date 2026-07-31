@@ -815,7 +815,37 @@ export const RACE_THRESHOLD_MINUTES = 10
  * time is **163 hours across 453 PRs**. The cost lives entirely in the tail, so
  * this function reports p90, the max and the total, and never the median alone.
  *
- * @param {Array<{createdAt: string, mergedAt: string | null, headRefName: string}>} prs
+ * ## The counter-metric: `staleMergeShare`
+ *
+ * Everything above prices the cost of `strict: true`. Relaxing it buys that
+ * cost back and sells something else, and until #977 nothing measured what:
+ * the practices corpus recorded the trade as *"a stale whole-file rewrite is
+ * now more likely to land silently — the experiment's falsification criteria
+ * measure merge friction and say nothing about content loss"* and left it
+ * **open**. An experiment that can only observe the benefit of its own
+ * intervention will conclude the intervention worked.
+ *
+ * A merge is **stale** when the base branch moved between the PR's first green
+ * run and its merge — so the combination that actually landed is one no CI run
+ * ever tested. That is precisely the exposure `strict` exists to prevent, which
+ * makes it the honest counter to `racedShare`: the two should move in opposite
+ * directions, and H3 is only decidable if both are on the page.
+ *
+ * It costs **no extra API calls**. `baseRefName` already rides along on the PR
+ * fetch, so the other merges to the same base are already in hand — measured by
+ * counting them, not by asking GitHub what the base tip was at merge time.
+ *
+ * Two honest limits, neither of which a reader can infer from the number:
+ *
+ * - **It counts exposure, not damage.** Most stale merges are harmless — the
+ *   two changes touched nothing in common. This is the population content loss
+ *   is drawn *from*, an upper bound on the risk rather than a count of
+ *   incidents, and it must not be quoted as "N things broke".
+ * - **It undercounts at the window edge**, because a base merge that happened
+ *   just before the window opened is not in `prs` to be counted. The bias is
+ *   one-directional and toward zero, so a rise is always real.
+ *
+ * @param {Array<{createdAt: string, mergedAt: string | null, headRefName: string, baseRefName?: string}>} prs
  * @param {Map<string, Array<Record<string, unknown>>>} runsByBranch
  */
 export function mergeContention(prs, runsByBranch) {
@@ -825,6 +855,23 @@ export function mergeContention(prs, runsByBranch) {
   let repushed = 0
   let raced = 0
   let measured = 0
+  let stale = 0
+
+  // Merge times bucketed by base branch. Keyed by base ref because a repo's
+  // `dev` and `staging` are separate races — a merge to `staging` does not make
+  // a `dev` PR stale. Bucketing narrows the scan below; it does not make it a
+  // lookup, and at this n (~1k merges) a linear scan per PR is not worth a
+  // binary search.
+  /** @type {Map<string, number[]>} */
+  const baseMergeTimes = new Map()
+  for (const pr of merged) {
+    const base = pr.baseRefName
+    if (!base) continue
+    const at = Date.parse(/** @type {string} */ (pr.mergedAt))
+    const times = baseMergeTimes.get(base)
+    if (times) times.push(at)
+    else baseMergeTimes.set(base, [at])
+  }
 
   for (const pr of merged) {
     const churn = prChurn(pr, runsByBranch)
@@ -845,6 +892,37 @@ export function mergeContention(prs, runsByBranch) {
     if (lag <= 0) continue
     greenToMerge.push(lag)
     if (lag > RACE_THRESHOLD_MINUTES && churn.revisions > 0) raced += 1
+
+    // Did the base move underneath this PR between the run that validated what
+    // actually merged and the merge itself?
+    //
+    // **The anchor is the LAST green, not the first**, and the difference is
+    // the whole metric. `greens[0]` is right for the wait above — it is when
+    // the work first became correct — but wrong here: a PR that goes green,
+    // falls behind, rebases and goes green again *was* tested against the base
+    // it landed on, and anchoring to its first green would call that stale.
+    // Doing so measured re-greened rebases, i.e. `racedShare` under another
+    // name, and moved with the primary instead of against it — a counter-metric
+    // that agrees with the thing it is supposed to check is worse than none.
+    // Caught by running the collector on live data, where `strict: true` repos
+    // scored 44% "stale" — a value the gate makes impossible by construction.
+    //
+    // Strictly between: a merge at exactly the green was already in what CI
+    // tested, and this PR's own merge is excluded by the half-open upper bound
+    // rather than by comparing PR numbers, which the shape of this data does
+    // not guarantee are unique across repos.
+    // Clamped to greens that completed **before the merge**. `runsForPr`
+    // deliberately admits runs created up to 24h after `mergedAt`, so the last
+    // green overall can postdate the merge — and an unclamped anchor would put
+    // the window's start after its end, making the PR unstaleable. That is a
+    // silent false negative: it suppresses exactly the merges this is looking
+    // for, on the branches busy enough to still be running CI after they land.
+    // `lag > 0` above guarantees at least one green precedes the merge.
+    const mergedAt = Date.parse(/** @type {string} */ (pr.mergedAt))
+    const greensBeforeMerge = greens.filter((at) => at <= mergedAt)
+    const lastGreen = greensBeforeMerge[greensBeforeMerge.length - 1]
+    const baseMerges = pr.baseRefName ? (baseMergeTimes.get(pr.baseRefName) ?? []) : []
+    if (baseMerges.some((at) => at > lastGreen && at < mergedAt)) stale += 1
   }
 
   return {
@@ -859,6 +937,11 @@ export function mergeContention(prs, runsByBranch) {
     // forced to repush. tabsii-crm scores 0% here and biffo-template 13.9%,
     // which is the difference a busy shared integration branch makes.
     racedShare: rate(raced, measured),
+    // H3's counter-metric (#977): the share of merges whose base moved between
+    // first green and merge, so the landed combination was never tested. Reads
+    // as exposure, not damage — see the note above before quoting it.
+    staleMergeShare: rate(stale, greenToMerge.length),
+    staleMerges: stale,
     prsMeasured: measured,
     prsWithGreen: greenToMerge.length,
   }

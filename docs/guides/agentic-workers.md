@@ -115,8 +115,41 @@ surfacing that a choice had been made on the operator's behalf. Tracked as #414.
 This is only detectable through the run snapshot or the invoice, because the
 output is *correct*, just more expensive.
 
+### A worker can sit at 98% of its wall clock and still look healthy
+
+`timeout_seconds` defaults to 120s, which is generous for a chat-shaped worker
+and tight for one asked to emit a large structured payload in a single turn. An
+Idea Scout synthesis agent ran between **44% and 98%** of that default across
+eleven consecutive runs and then timed out (#937). Every one of those runs
+reported `completed` and a duration; a duration says nothing on its own, because
+the same 100 seconds is comfortable against a 240s limit and one slow generation
+from failing against a 120s one.
+
+The runtime now logs the margin for **every** terminated run — success, blown
+limit, provider outage alike — as structured fields on one line:
+
+```json
+{
+  "message": "Agent run wall clock",
+  "agent_name": "idea-scout-synthesis",
+  "elapsed_seconds": 117.4,
+  "timeout_seconds": 120.0,
+  "wall_clock_share": 0.9783,
+  "wall_clock_pct": 97.8,
+  "near_wall_clock_limit": true
+}
+```
+
+Anything at or above **80%** of its limit is logged at `WARNING` instead, with a
+message telling you to raise `timeout_seconds` on that worker. The margin is
+*not* stored on the run record — Core's completion schema has no field for it —
+so this log is where the signal lives.
+
 ## Operating notes
 
+- **Filter the runtime log for `near_wall_clock_limit`.** A worker warning here
+  is one slow generation from failing; raise its `timeout_seconds` (clamped to
+  the deployment's `AGENT_RUNTIME_MAX_SECONDS`, 240s by default) before it does.
 - **Verify a workflow dispatches after editing it.** Fire one event and confirm
   `agent.run.requested` follows `demo.requested` in the orchestrator log. Given
   the silent-disable behaviour above, this is the only reliable check.

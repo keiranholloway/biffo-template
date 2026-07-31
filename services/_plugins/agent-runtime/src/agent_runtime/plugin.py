@@ -134,7 +134,42 @@ class AgentRuntimePlugin(BiffoPluginBase):
             state.transition_to(outcome.status)
         except RunStateError:  # pragma: no cover — the loop only ever terminates
             logger.exception("Agent run produced an illegal terminal state")
+        self._log_wall_clock(str(run_id), run, outcome)
         await self._report(str(run_id), outcome)
+
+    @staticmethod
+    def _log_wall_clock(run_id: str, run: dict[str, Any], outcome: RunOutcome) -> None:
+        """Report how much of its wall clock the run used (issue #937).
+
+        Duration on its own says nothing: 100 seconds is comfortable against a
+        240s limit and one slow generation from failing against a 120s one. Only
+        the *share* distinguishes them, and nothing reported it — so a class of
+        synthesis worker sat between 44% and 98% of the default 120s for eleven
+        consecutive runs and the first visible sign of it was a timeout.
+
+        Emitted for every terminated run, at warning level once the share crosses
+        :data:`NEAR_LIMIT_SHARE`, so "workers running close to their ceiling" is
+        a log filter rather than an archaeology exercise.
+        """
+        report = outcome.wall_clock_report()
+        if not report:  # pragma: no cover — the loop always reports the margin
+            return
+        fields: dict[str, Any] = {
+            "run_id": run_id,
+            # The class of worker, not just the instance: "which agents run near
+            # their ceiling" is the question this log exists to answer.
+            "agent_name": run.get("agent_name"),
+            "status": outcome.status,
+            **report,
+        }
+        if outcome.near_wall_clock_limit:
+            logger.warning(
+                "Agent run finished close to its wall-clock limit; raise "
+                "timeout_seconds on this worker before it starts timing out",
+                extra=fields,
+            )
+        else:
+            logger.info("Agent run wall clock", extra=fields)
 
     async def reap_stale_runs(self) -> None:
         """Ask Core to fail runs a dead runtime left in ``running`` (§5, #402).

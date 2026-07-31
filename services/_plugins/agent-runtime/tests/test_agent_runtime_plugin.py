@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
+from typing import Any
 
+import pytest
+from agent_runtime.loop import AgentLoop
 from agent_runtime.openrouter import LLMResponse
 from agent_runtime.plugin import AGENT_RUN_REQUESTED, AGENT_RUNS_REAP_DUE, AgentRuntimePlugin
 from agent_runtime.redaction import EMAIL_PLACEHOLDER
-from agent_runtime_fakes import FakeCore, FakeLLM, llm_error, make_run
+from agent_runtime_fakes import FakeClock, FakeCore, FakeLLM, llm_error, make_run
 from biffo_plugin_sdk import BiffoEvent
 
 
@@ -344,3 +348,94 @@ async def test_a_run_request_does_not_trigger_a_sweep():
     await _plugin(core, llm).events.dispatch(_event())
 
     assert core.reaps() == []
+
+
+# ── The wall-clock margin (issue #937) ───────────────────────────────────────
+#
+# A synthesis worker ran between 44% and 98% of the default 120s wall clock for
+# eleven consecutive runs and then timed out. Every one of those runs reported
+# "completed" and a duration; none reported the duration *against the limit*, so
+# the drift toward the ceiling was invisible until it was a failure. The runtime
+# now says the margin out loud on every terminated run.
+
+
+def _timed_plugin(core: FakeCore, llm: FakeLLM, *, step: float) -> AgentRuntimePlugin:
+    """A plugin whose loop uses a clock advancing ``step`` seconds per read."""
+    return AgentRuntimePlugin(
+        api=core.client(), llm=llm, loop=AgentLoop(llm, clock=FakeClock(step))
+    )
+
+
+def _wall_clock_logs(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
+    """Every log line carrying the margin, as its flat structured fields."""
+    return [dict(r.__dict__) for r in caplog.records if "wall_clock_share" in r.__dict__]
+
+
+async def test_a_run_near_its_wall_clock_ceiling_is_reported_as_a_warning(caplog):
+    core = FakeCore()
+    llm = FakeLLM()
+    # Two clock reads at 50s each land the run at 100s of the default 120s.
+    plugin = _timed_plugin(core, llm, step=50.0)
+
+    with caplog.at_level(logging.INFO):
+        await plugin.events.dispatch(_event())
+
+    records = _wall_clock_logs(caplog)
+    assert len(records) == 1
+    record = records[0]
+    assert record["levelno"] == logging.WARNING
+    assert record["wall_clock_share"] == pytest.approx(0.8333, abs=1e-3)
+    assert record["wall_clock_pct"] == pytest.approx(83.3, abs=0.1)
+    assert record["near_wall_clock_limit"] is True
+    assert (record["elapsed_seconds"], record["timeout_seconds"]) == (100.0, 120.0)
+    # Named so "which class of worker runs near its ceiling" is answerable.
+    assert record["agent_name"] == "demo-enricher"
+    assert record["run_id"] == "run-1"
+
+
+async def test_a_run_with_headroom_reports_the_margin_without_crying_wolf(caplog):
+    core = FakeCore()
+    llm = FakeLLM()
+    plugin = _timed_plugin(core, llm, step=6.0)
+
+    with caplog.at_level(logging.INFO):
+        await plugin.events.dispatch(_event())
+
+    records = _wall_clock_logs(caplog)
+    assert len(records) == 1
+    assert records[0]["levelno"] == logging.INFO
+    assert records[0]["wall_clock_share"] == pytest.approx(0.1, abs=1e-4)
+    assert records[0]["near_wall_clock_limit"] is False
+
+
+async def test_a_run_raising_its_timeout_stops_being_flagged(caplog):
+    """The margin follows the limit, not the duration.
+
+    The same 100-second run that is a warning against the default 120s is
+    unremarkable against the 240s a worker can ask for — which is exactly the
+    fix an operator applies after seeing the warning, and it must show up.
+    """
+    core = FakeCore(make_run(timeout_seconds=240))
+    llm = FakeLLM()
+    plugin = _timed_plugin(core, llm, step=50.0)
+
+    with caplog.at_level(logging.INFO):
+        await plugin.events.dispatch(_event())
+
+    record = _wall_clock_logs(caplog)[0]
+    assert (record["elapsed_seconds"], record["timeout_seconds"]) == (100.0, 240.0)
+    assert record["levelno"] == logging.INFO
+    assert record["near_wall_clock_limit"] is False
+
+
+async def test_a_run_that_failed_still_reports_its_margin(caplog):
+    core = FakeCore()
+    llm = FakeLLM(error=llm_error("502 from provider"))
+    plugin = _timed_plugin(core, llm, step=10.0)
+
+    with caplog.at_level(logging.INFO):
+        await plugin.events.dispatch(_event())
+
+    record = _wall_clock_logs(caplog)[0]
+    assert record["status"] == "failed"
+    assert record["elapsed_seconds"] == 20.0

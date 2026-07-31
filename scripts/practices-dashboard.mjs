@@ -519,6 +519,7 @@ export function renderDashboard(snapshot, sessions = null, definitionBreak = nul
       ${cell(r.ciFailureRate, '%', 25, 15)}
       ${cell(r.contention?.repushRate, '%', 30, 15)}
       ${cell(r.contention?.racedShare, '%', 10, 3)}
+      <td class="num">${fmt(r.contention?.staleMergeShare, '%')}</td>
       ${cell(r.contention?.greenButUnmergedHours, 'h', 50, 10)}
       ${cell(r.workMix?.toilRatio, '%', 50, 35)}
       <td class="num">${fmt(r.rework?.medianHoursToRework, 'h')}</td>
@@ -614,7 +615,9 @@ export function renderDashboard(snapshot, sessions = null, definitionBreak = nul
       <thead>
         <tr>
           <th>Repository</th><th>24h</th><th>PRs 90d</th><th>CI fail</th>
-          <th>Repush</th><th>Raced</th><th>Green wait</th><th>Toil</th><th>Rework lag</th>
+          <th>Repush</th><th>Raced</th>
+          <th title="Merges whose base moved between first green and merge — exposure to untested combinations, not damage. Deliberately uncoloured: a high number is the risk window H3 accepted, not an incident count.">Stale</th>
+          <th>Green wait</th><th>Toil</th><th>Rework lag</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>

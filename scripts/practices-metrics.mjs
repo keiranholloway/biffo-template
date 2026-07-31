@@ -892,14 +892,28 @@ export function mergeContention(prs, runsByBranch) {
     greenToMerge.push(lag)
     if (lag > RACE_THRESHOLD_MINUTES && churn.revisions > 0) raced += 1
 
-    // Did the base move underneath this PR between its first green and its
-    // merge? Strictly between: a merge at exactly `greens[0]` was already
-    // included in what CI tested, and this PR's own merge is excluded by the
-    // half-open upper bound rather than by comparing PR numbers, which the
-    // shape of this data does not guarantee are unique across repos.
+    // Did the base move underneath this PR between the run that validated what
+    // actually merged and the merge itself?
+    //
+    // **The anchor is the LAST green, not the first**, and the difference is
+    // the whole metric. `greens[0]` is right for the wait above — it is when
+    // the work first became correct — but wrong here: a PR that goes green,
+    // falls behind, rebases and goes green again *was* tested against the base
+    // it landed on, and anchoring to its first green would call that stale.
+    // Doing so measured re-greened rebases, i.e. `racedShare` under another
+    // name, and moved with the primary instead of against it — a counter-metric
+    // that agrees with the thing it is supposed to check is worse than none.
+    // Caught by running the collector on live data, where `strict: true` repos
+    // scored 44% "stale" — a value the gate makes impossible by construction.
+    //
+    // Strictly between: a merge at exactly the green was already in what CI
+    // tested, and this PR's own merge is excluded by the half-open upper bound
+    // rather than by comparing PR numbers, which the shape of this data does
+    // not guarantee are unique across repos.
+    const lastGreen = greens[greens.length - 1]
     const mergedAt = Date.parse(/** @type {string} */ (pr.mergedAt))
     const baseMerges = pr.baseRefName ? (baseMergeTimes.get(pr.baseRefName) ?? []) : []
-    if (baseMerges.some((at) => at > greens[0] && at < mergedAt)) stale += 1
+    if (baseMerges.some((at) => at > lastGreen && at < mergedAt)) stale += 1
   }
 
   return {

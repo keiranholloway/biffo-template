@@ -549,6 +549,36 @@ describe('mergeContention', () => {
   })
 
   /**
+   * The defect the unit tests missed and a live run caught: anchoring to the
+   * FIRST green counts a rebased-and-re-greened PR as stale, which is what
+   * `strict: true` forces every raced PR to do. That made the counter-metric a
+   * second reading of `racedShare` — it scored 44% on repos where the gate
+   * makes staleness impossible by construction.
+   *
+   * Here B goes green at 10:00, A lands at 10:30, B rebases and re-greens at
+   * 10:45, then merges at 11:00. The base did NOT move after the run that
+   * validated what merged, so B is not stale.
+   */
+  it('does not call a rebased-and-re-greened PR stale', () => {
+    const runsByBranch = indexRunsByBranch([
+      run('feat/a', 'aaa', 'success', '2026-07-20T09:00:00Z'),
+      run('feat/b', 'bbb', 'success', '2026-07-20T10:00:00Z'),
+      run('feat/b', 'ccc', 'success', '2026-07-20T10:45:00Z'),
+    ])
+    const result = mergeContention(
+      [
+        pr('feat/a', '2026-07-20T08:00:00Z', '2026-07-20T10:30:00Z', 1),
+        pr('feat/b', '2026-07-20T08:00:00Z', '2026-07-20T11:00:00Z', 2),
+      ],
+      runsByBranch,
+    )
+    expect(result.staleMerges).toBe(0)
+    // ...while the race it paid to avoid is still counted, which is the point:
+    // the two metrics must be able to disagree.
+    expect(result.racedShare).toBe(50)
+  })
+
+  /**
    * The metric must not fire on the PR's own merge, or every measured PR would
    * read as stale and the counter-metric would be a constant.
    */

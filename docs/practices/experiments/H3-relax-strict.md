@@ -5,6 +5,9 @@
 **Amended:** 2026-07-28 — counter-metric extended to cover silent content loss,
 which the original could not see. Adds a way to refute; removes none. See
 [Amendment](#amendment--2026-07-28-hours-after-pre-registration).
+**Extended:** 2026-07-31 — `tabsii-platform` joins the treatment arm, and the
+content-loss counter-metric becomes measurable rather than anecdotal (#973).
+Adds no way to refute; removes none.
 **Review on:** 2026-08-04 (**7 days** — cut from 14 on 2026-07-29, #850)
 
 > Written and committed before the intervention, like [H1](./H1-merge-race.md)
@@ -70,7 +73,7 @@ are still required. The only thing removed is the requirement that a branch be
 
 ## Prediction
 
-By **2026-08-11**, on a 7-day window, for `keiranholloway/biffo-template`:
+By **2026-08-04**, on a 7-day window, for `keiranholloway/biffo-template`:
 
 - **`racedShare` below 3%** (from 16.0%) — primary
 - `repushRate` below 25% (from 43.6%) — secondary
@@ -144,6 +147,99 @@ does not retire the condition — a guard that has never fired and a risk that
 does not exist look identical, which is the mistake this whole file exists to
 avoid.
 
+### Extension — 2026-07-31, `tabsii-platform` joins the treatment arm
+
+**Recorded before the numbers it will be judged on exist**, and against the
+author's own interest: H3 is currently tracking toward *refuted*, so this extends
+a treatment that may be rolled back on 2026-08-04.
+
+Day 0 named the thread and did not pull it: *"`tabsii-platform` at 30% is the one
+repo behaving as the theory predicts a `strict: true` repo should, which is a
+thread worth pulling — it is also the busiest instance."* It has since become the
+estate's single largest measured cost — **16.8h of 33.1h green-but-unmerged in
+24 hours, 50.8% of the total** — so `strict` came off its `dev` on 2026-07-31 via
+the same sub-endpoint, all six required checks unchanged.
+
+Baseline at the moment of change, from the 2026-07-31 snapshot:
+
+| | 24h | 7d |
+| --- | ---: | ---: |
+| `racedShare` | **47.2%** | 30.3% |
+| `repushRate` | 52.8% | 43.0% |
+| green-but-unmerged | 16.8h (n=36) | 101.1h (n=142) |
+| `integration.failures` | **8** | 11 |
+| `integration.redMinutes` | **111.7** | 175.2 |
+
+**The counter-metric's central premise does not hold here, and that is the most
+useful thing this extension contributes.** The original argued
+`integration.failures` sits at zero *partly because `strict` is on*, which is why
+its movement prices the gate. On `tabsii-platform` the gate was fully on and
+`dev` still took **8 failures and 111.7 red minutes in one day** — already past
+both thresholds (`>2`, `>60`) that would refute H3 on `biffo-template`. Whatever
+was reddening that branch, `strict` was not preventing it. A gate charged 16.8h a
+day whose stated benefit is already absent is the clearest case in the estate for
+removing it.
+
+Predicted by 2026-08-04, 7-day window, `tabsii-platform`: `racedShare` below 15%
+(from 30.3%), `repushRate` below 30% (from 43.0%). Deliberately weaker than
+`biffo-template`'s <3%, because that target has not been met and predicting it
+again would be ignoring the estate's own reading.
+
+**What this costs, stated plainly.** It spends the cleanest `strict: true`
+observation in the estate four days before review — day 0's interim analysis
+leans on `tabsii-platform` as the repo behaving as theory predicts, and that data
+point stops accruing now. `tabsii-crm` remains the untouched comparator, so H3's
+actual falsification test is intact, but the *interim narrative* is weaker and no
+later reading should pretend otherwise. The rollback rule now covers two repos:
+a refuted H3 turns `strict` back on for `tabsii-platform` as well.
+
+### Amendment — 2026-07-31, the counter-metric becomes measurable
+
+The 2026-07-28 amendment added silent content loss as a refuting condition and
+left it detectable **only by a human noticing a count had gone down**. That is
+not a measurement, and a condition nobody can evaluate is one that will read as
+"did not occur" at review time.
+
+`contention.staleMergeShare` (#973) now counts merges whose base moved between
+the PR's first green and its merge — the population content loss is drawn from,
+collected for every repo at no extra API cost. It **adds no refuting condition**;
+the three above stand exactly as written. It makes the third one checkable
+instead of anecdotal, and it establishes what the exposure was under `strict` so
+the after-reading has something to be compared against.
+
+Read it as **exposure, not damage**: most stale merges touch nothing in common.
+A rise means the risk window widened, not that anything broke.
+
+**Validated against the estate rather than only against its own unit tests**, on
+2026-07-31, 7-day window — the check being that a metric of what `strict`
+prevents must read ~0 wherever `strict` is on:
+
+| repo | `strict` | stale | raced |
+| --- | --- | ---: | ---: |
+| biffo-template | **false** | **1.9%** | 12.3% |
+| tabsii-platform | **false** (today) | **3.5%** | 30.6% |
+| tabsii-crm, geo, marketplace, app, biffo-platform, both plugins | true | **0%** | 4–30% |
+| tabsii-intake | true | 4.5% | 18.2% |
+
+The two `strict: false` repos are the only ones carrying exposure, while
+`strict: true` repos score zero against raced shares as high as 30% — so the
+metric separates staleness from the race instead of restating it.
+
+**The one exception is a finding, not noise.** `tabsii-intake` has
+`enforce_admins: false`, so branch protection does not bind the estate's only
+admin: the gate is advisory there, and the metric caught a merge that genuinely
+was not up to date. A counter-metric that only ever confirms the setting would
+be worth little; this one disagreed with the setting and was right.
+
+**The first version of this metric was wrong in a way its tests could not see**,
+and the correction is the reason the table above is worth anything. It anchored
+staleness to a PR's *first* green, which counts every rebased-and-re-greened PR
+as stale — exactly what `strict` forces raced PRs to do. It scored
+`tabsii-platform` at **44.7%** under `strict: true`, a value the gate makes
+impossible by construction, and it moved *with* `racedShare` rather than against
+it. Three unit tests passed throughout. Running the collector on live data and
+asking whether the numbers were possible is what caught it.
+
 ## Falsification
 
 **Refuted if `racedShare` is still above 8% on 2026-08-04** with at least 50
@@ -186,13 +282,13 @@ the duration.
   of its seven days predate it. The effect is small and if anything flatters the
   baseline rather than the result.
 - **Two interventions are now in force at once** — auto-merge from H1, and this.
-  They are not separable in the 2026-08-11 reading. This is a real weakness and
+  They are not separable in the 2026-08-04 reading. This is a real weakness and
   is the price of H1 having been abandoned rather than completed.
 - **Volume is not stable.** All primary metrics are rates or per-PR.
 
 ## Interim observation — 2026-07-28, day 0
 
-**Not a result.** The review date is 2026-08-11 and the prediction is on a 7-day
+**Not a result.** The review date is 2026-08-04 and the prediction is on a 7-day
 window; this is one day, most of which predates the intervention. It is recorded
 because the numbers do **not** point the way the change's advocate (me) expected,
 and an inconvenient early reading is exactly the thing that gets quietly dropped

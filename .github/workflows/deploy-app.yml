@@ -432,7 +432,25 @@ jobs:
           #
           # Runs AFTER everything is assembled and after the __pycache__ trim above,
           # or the trim would delete exactly what this produces.
-          python -m compileall -q --invalidation-mode unchecked-hash package
+          # Through uv, NOT a bare `python`. This job installs uv with
+          # `python-version: 3.13` and never runs actions/setup-python, so there is
+          # no `python` on PATH at all: the self-hosted runners carry python3 only.
+          # It died `python: command not found`, exit 127, AFTER a successful build
+          # and after the core version had already been baked in — so the deploy read
+          # as a versioning problem twice over (#414) rather than a missing
+          # interpreter. GitHub-hosted images ship python-is-python3, which is why
+          # this survived until the estate moved onto its own runners.
+          #
+          # `--no-project` because this step runs in the api-service artifact dir;
+          # without it uv walks up, finds the repo pyproject.toml and tries to sync a
+          # project that has nothing to do with the package being built.
+          #
+          # The version must match the LAMBDA runtime, not merely be importable: an
+          # unchecked-hash .pyc built by the wrong minor is silently ignored at
+          # runtime — a green build that quietly loses the optimisation this line
+          # exists for. Pinned to the same 3.13 as this job setup-uv step, and
+          # workflow-python-interpreter.test.ts fails if the two ever drift apart.
+          uv run --no-project --python 3.13 python -m compileall -q --invalidation-mode unchecked-hash package
           # Guard the size, because the trim above exists for a reason (#724).
           #
           # Bytecode adds ~56% to the zip (17.8 -> 27.8 MB measured on this
@@ -1128,7 +1146,25 @@ jobs:
           #
           # Runs AFTER everything is assembled and after the __pycache__ trim above,
           # or the trim would delete exactly what this produces.
-          python -m compileall -q --invalidation-mode unchecked-hash package
+          # Through uv, NOT a bare `python`. This job installs uv with
+          # `python-version: 3.13` and never runs actions/setup-python, so there is
+          # no `python` on PATH at all: the self-hosted runners carry python3 only.
+          # It died `python: command not found`, exit 127, AFTER a successful build
+          # and after the core version had already been baked in — so the deploy read
+          # as a versioning problem twice over (#414) rather than a missing
+          # interpreter. GitHub-hosted images ship python-is-python3, which is why
+          # this survived until the estate moved onto its own runners.
+          #
+          # `--no-project` because this step runs in the api-service artifact dir;
+          # without it uv walks up, finds the repo pyproject.toml and tries to sync a
+          # project that has nothing to do with the package being built.
+          #
+          # The version must match the LAMBDA runtime, not merely be importable: an
+          # unchecked-hash .pyc built by the wrong minor is silently ignored at
+          # runtime — a green build that quietly loses the optimisation this line
+          # exists for. Pinned to the same 3.13 as this job setup-uv step, and
+          # workflow-python-interpreter.test.ts fails if the two ever drift apart.
+          uv run --no-project --python 3.13 python -m compileall -q --invalidation-mode unchecked-hash package
           # Guard the size, because the trim above exists for a reason (#724).
           #
           # Bytecode adds ~56% to the zip (17.8 -> 27.8 MB measured on this
@@ -1836,7 +1872,25 @@ jobs:
           #
           # Runs AFTER everything is assembled and after the __pycache__ trim above,
           # or the trim would delete exactly what this produces.
-          python -m compileall -q --invalidation-mode unchecked-hash package
+          # Through uv, NOT a bare `python`. This job installs uv with
+          # `python-version: 3.13` and never runs actions/setup-python, so there is
+          # no `python` on PATH at all: the self-hosted runners carry python3 only.
+          # It died `python: command not found`, exit 127, AFTER a successful build
+          # and after the core version had already been baked in — so the deploy read
+          # as a versioning problem twice over (#414) rather than a missing
+          # interpreter. GitHub-hosted images ship python-is-python3, which is why
+          # this survived until the estate moved onto its own runners.
+          #
+          # `--no-project` because this step runs in the api-service artifact dir;
+          # without it uv walks up, finds the repo pyproject.toml and tries to sync a
+          # project that has nothing to do with the package being built.
+          #
+          # The version must match the LAMBDA runtime, not merely be importable: an
+          # unchecked-hash .pyc built by the wrong minor is silently ignored at
+          # runtime — a green build that quietly loses the optimisation this line
+          # exists for. Pinned to the same 3.13 as this job setup-uv step, and
+          # workflow-python-interpreter.test.ts fails if the two ever drift apart.
+          uv run --no-project --python 3.13 python -m compileall -q --invalidation-mode unchecked-hash package
           # Guard the size, because the trim above exists for a reason (#724).
           #
           # Bytecode adds ~56% to the zip (17.8 -> 27.8 MB measured on this

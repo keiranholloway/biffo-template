@@ -40,7 +40,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** Snapshot schema version. Bump when a field's meaning changes, never when one is added. */
@@ -1907,6 +1907,9 @@ function parseArgs(argv) {
     repo: null,
     reposRoot: null,
     gateLookbackDays: GATE_LOOKBACK_DAYS,
+    // Relative to cwd, like `out`. Overridable so the daily worktree can point
+    // at the corpus it actually carries rather than whichever it is run beside.
+    corpus: 'docs/practices/evidence.jsonl',
   }
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--window') args.windows = [Number(argv[++i])]
@@ -1915,6 +1918,7 @@ function parseArgs(argv) {
     else if (argv[i] === '--repo') args.repo = argv[++i]
     else if (argv[i] === '--repos-root') args.reposRoot = argv[++i]
     else if (argv[i] === '--gate-lookback') args.gateLookbackDays = Number(argv[++i])
+    else if (argv[i] === '--corpus') args.corpus = argv[++i]
   }
   args.windows.sort((a, b) => a - b)
   return args
@@ -1935,6 +1939,69 @@ function resolveReposRoot() {
     encoding: 'utf8',
   }).trim()
   return join(commonDir, '..', '..')
+}
+
+/** Statuses that mean the finding is dealt with. Everything else is outstanding. */
+const FAIL_OPEN_DONE = new Set(['fixed', 'closed', 'fixed downstream'])
+
+/**
+ * The fail-open backlog, read from the corpus (#956).
+ *
+ * ## Why this is top-level and not under a window
+ *
+ * It is a point-in-time count of a single file, identical whether you ask about
+ * one day or ninety. Filing it under `windows.90.estate` would render one number
+ * three times and invite reading it as a trend, which is the drift the page's own
+ * headline suffered.
+ *
+ * ## Which of these may be used as a target, and which may not
+ *
+ * **`unfiled` and `oldestUnfixedDays` are targets.** `unfiled` means recorded and
+ * never converted into an issue — 8 of 90 when this was written — and nothing
+ * except neglect makes it rise. `oldestUnfixedDays` rises only by leaving things.
+ *
+ * **`unfixed` is NOT a target, and must not be quoted as health.** It rises when
+ * findings are *discovered*, and discovering them is the work. A day that finds
+ * four and fixes three moves it the "wrong" way while being an excellent day.
+ * Driving that number down rewards not looking, which is precisely the failure
+ * this whole corpus exists to record.
+ *
+ * Returns `{ error: 'unmeasured' }` rather than zeros when the corpus cannot be
+ * read — this file's own rule (see the header): "could not measure" is never
+ * reported as zero, because a zero here would read as a clean estate.
+ */
+export function summariseFailOpenBacklog(corpusPath, now = new Date()) {
+  let rows
+  try {
+    rows = readFileSync(corpusPath, 'utf8')
+      .split('\n')
+      .filter((l) => l.trim() !== '')
+      .map((l) => JSON.parse(l))
+  } catch {
+    return { error: 'unmeasured' }
+  }
+
+  const failOpen = rows.filter(
+    (r) => r.class === 'fail-open' || (r.alsoClass ?? []).includes('fail-open'),
+  )
+  const outstanding = failOpen.filter((r) => !FAIL_OPEN_DONE.has(r.status))
+
+  const ages = outstanding
+    .map((r) => (r.date ? Math.round((now - Date.parse(`${r.date}T00:00:00Z`)) / 864e5) : null))
+    .filter((d) => typeof d === 'number' && Number.isFinite(d) && d >= 0)
+
+  return {
+    total: failOpen.length,
+    // Not a target. See the note above before quoting this anywhere.
+    unfixed: outstanding.length,
+    unfiled: outstanding.filter((r) => r.status === 'unfiled').length,
+    oldestUnfixedDays: ages.length > 0 ? Math.max(...ages) : null,
+    byStatus: Object.fromEntries(
+      [...new Set(outstanding.map((r) => r.status ?? 'unset'))]
+        .sort()
+        .map((k) => [k, outstanding.filter((r) => (r.status ?? 'unset') === k).length]),
+    ),
+  }
 }
 
 function main() {
@@ -2068,11 +2135,15 @@ function main() {
     windows.prior = { ...prior, repos, estate: summariseEstate(repos) }
   }
 
+
+
   const snapshot = {
     schema: SCHEMA_VERSION,
     collectedAt: new Date().toISOString(),
     windowDays: args.windows,
     windows,
+    // Point-in-time, deliberately outside `windows` — see summariseFailOpenBacklog.
+    failOpenBacklog: summariseFailOpenBacklog(args.corpus),
     unmeasured: failures,
   }
 

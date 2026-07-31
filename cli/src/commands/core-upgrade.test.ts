@@ -51,6 +51,7 @@ function fakeGit(over: Record<string, unknown> = {}) {
     aheadBehind: vi.fn().mockResolvedValue({ ahead: 0, behind: 0, hasUpstream: true }),
     getRemoteUrl: vi.fn().mockResolvedValue('git@github.com:acme/instance.git'),
     createBranch: vi.fn().mockResolvedValue(undefined),
+    switchBranch: vi.fn().mockResolvedValue(undefined),
     add: vi.fn().mockResolvedValue(undefined),
     commit: vi.fn().mockResolvedValue(undefined),
     push: vi.fn().mockResolvedValue(undefined),
@@ -608,6 +609,113 @@ describe('runCoreUpgrade — orphaned core.version cleanup (#434)', () => {
     expect(vi.mocked(log.info).mock.calls.map((c) => String(c[0]))).not.toContainEqual(
       expect.stringContaining('Deleted orphaned'),
     )
+  })
+})
+
+/**
+ * Issue #984: `--apply` created the upgrade branch by checking it out in the
+ * caller's own checkout and never moved HEAD back, so the repo it was pointed at
+ * was left parked on the upgrade branch — which AGENTS.md §2 forbids, and which
+ * silently redirects every other tool reading that checkout.
+ *
+ * The restore has to hold on the failure paths too. Push and PR creation are the
+ * two steps that talk to the network, so they are the ones that actually fail in
+ * practice — and they fail *after* the branch has been created, which is exactly
+ * when leaving HEAD moved is least recoverable by the caller.
+ */
+describe('runCoreUpgrade --apply — restores the caller’s branch (#984)', () => {
+  let base: string
+  let theirs: string
+  let instance: string
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    base = mkdtempSync(join(tmpdir(), 'rb-base-'))
+    theirs = mkdtempSync(join(tmpdir(), 'rb-theirs-'))
+    instance = mkdtempSync(join(tmpdir(), 'rb-inst-'))
+    writeFileSync(join(base, 'core.version'), '0.1.0\n')
+    writeFileSync(join(base, 'core-manifest.json'), JSON.stringify(MANIFEST))
+    w(base, 'services/api/main.py', 'v1')
+    writeFileSync(join(theirs, 'core.version'), '0.2.0\n')
+    writeFileSync(join(theirs, 'core-manifest.json'), JSON.stringify(MANIFEST))
+    w(theirs, 'services/api/main.py', 'v2')
+    writeFileSync(join(instance, 'biffo.core.json'), JSON.stringify({ version: '0.1.0' }))
+    w(instance, 'services/api/main.py', 'v1')
+  })
+  afterEach(() => {
+    for (const d of [base, theirs, instance]) rmSync(d, { recursive: true, force: true })
+  })
+
+  const applyOpts = (): Parameters<typeof runCoreUpgrade>[0] => ({
+    cwd: instance,
+    templateRepo: theirs,
+    baseDir: base,
+    theirsDir: theirs,
+    apply: true,
+  })
+
+  it('switches back to the branch the caller was on after opening the PR', async () => {
+    const { deps, git, createPullRequest } = fakeDeps()
+
+    await runCoreUpgrade(applyOpts(), deps)
+
+    expect(createPullRequest).toHaveBeenCalled()
+    // The fake reports `main` as the caller's branch; HEAD must end up back
+    // there, not on the upgrade branch createBranch switched to.
+    expect(git.switchBranch).toHaveBeenCalledWith(instance, 'main')
+  })
+
+  it('restores the branch even when the push fails', async () => {
+    const { deps, git } = fakeDeps({
+      push: vi.fn().mockRejectedValue(new Error('Failed to push branch')),
+    })
+
+    await expect(runCoreUpgrade(applyOpts(), deps)).rejects.toThrow(/push/i)
+
+    expect(git.createBranch).toHaveBeenCalled()
+    expect(git.switchBranch).toHaveBeenCalledWith(instance, 'main')
+  })
+
+  it('restores the branch even when opening the PR fails', async () => {
+    const { deps, git } = fakeDeps()
+    const failing: CoreUpgradeDeps = {
+      ...deps,
+      makeGitHub: () => ({
+        defaultBranch: vi.fn().mockResolvedValue('dev'),
+        createPullRequest: vi.fn().mockRejectedValue(new Error('field: base, code: invalid')),
+      }),
+    }
+
+    await expect(runCoreUpgrade(applyOpts(), failing)).rejects.toThrow(/invalid/)
+
+    expect(git.switchBranch).toHaveBeenCalledWith(instance, 'main')
+  })
+
+  it('does not fail the upgrade when the restore itself fails, but says so', async () => {
+    const { deps, git } = fakeDeps({
+      switchBranch: vi.fn().mockRejectedValue(new Error('local changes would be overwritten')),
+    })
+
+    // The PR was opened; a failed restore is a hygiene problem, not a reason to
+    // report the upgrade as failed.
+    await expect(runCoreUpgrade(applyOpts(), deps)).resolves.toBeUndefined()
+
+    expect(git.switchBranch).toHaveBeenCalledWith(instance, 'main')
+    expect(vi.mocked(log.warn).mock.calls.map((c) => String(c[0]))).toContainEqual(
+      expect.stringContaining('main'),
+    )
+  })
+
+  it('never moves HEAD at all when the branch could not be created', async () => {
+    const { deps, git } = fakeDeps({
+      createBranch: vi.fn().mockRejectedValue(new Error('branch already exists')),
+    })
+
+    await expect(runCoreUpgrade(applyOpts(), deps)).rejects.toThrow(/already exists/)
+
+    // HEAD never moved, so there is nothing to restore and no switch to make.
+    expect(git.switchBranch).not.toHaveBeenCalled()
   })
 })
 

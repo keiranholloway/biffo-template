@@ -298,6 +298,16 @@ export class GitAdapter {
   }
 
   /**
+   * Switch to an existing branch. Fails if it does not exist, and — deliberately
+   * — if the switch would discard uncommitted work: this is the undo half of
+   * `createBranch` (#984), so it must never be able to destroy the tree it is
+   * putting back.
+   */
+  async switchBranch(cwd: string, branch: string): Promise<void> {
+    await execa('git', ['switch', branch], { cwd })
+  }
+
+  /**
    * Push the current HEAD to `branch` on the remote. When `token` is given and
    * the remote is HTTPS, it's embedded in the push URL for auth (SSH/file
    * remotes push with ambient credentials). The authenticated URL is never

@@ -202,6 +202,14 @@ describe('GitAdapter core-upgrade ops (ADR-0006 Phase 3b)', () => {
     expect(execaMock).toHaveBeenCalledWith('git', ['switch', '-c', 'biffo/x'], { cwd: '/r' })
   })
 
+  it('switchBranch switches to an existing branch, without -c or --force (#984)', async () => {
+    execaMock.mockResolvedValue({} as never)
+    await adapter.switchBranch('/r', 'dev')
+    // No `-c`: the branch already exists. No `--force`/`--discard-changes`: this
+    // is the restore path, so it must fail rather than destroy uncommitted work.
+    expect(execaMock).toHaveBeenCalledWith('git', ['switch', 'dev'], { cwd: '/r' })
+  })
+
   it('push injects the token into an HTTPS remote URL', async () => {
     execaMock
       .mockResolvedValueOnce({ stdout: 'https://github.com/acme/app.git' } as never) // get-url

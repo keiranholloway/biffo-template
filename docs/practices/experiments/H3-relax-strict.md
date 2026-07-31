@@ -266,7 +266,7 @@ and 3–21 steps left incomplete — runners killed mid-job, which GitHub conclu
 a change.
 
 `FAILING_CONCLUSIONS` already excluded `cancelled` for exactly this reason; it
-simply did not cover the other label. Fixed in #981, validated against seven real
+simply did not cover the other label. Fixed in #982, validated against seven real
 runs including a negative control.
 
 What the counter-metric actually reads once dead runners are re-attributed:

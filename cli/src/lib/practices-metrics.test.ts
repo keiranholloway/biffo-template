@@ -321,7 +321,7 @@ describe('isRunnerKill', () => {
 
 describe('integrationHealth', () => {
   /**
-   * The reason this exists (#981). tabsii-platform joined H3's treatment arm
+   * The reason this exists (#982). tabsii-platform joined H3's treatment arm
    * reading 8 failures and 111.7 red minutes — every one a dead runner. H3
    * refutes above 2 failures or 60 red minutes, so without this the experiment
    * gets refuted by something it never touched.

@@ -98,7 +98,7 @@ export const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out', 'startup_fai
 
 /**
  * Did this run fail because a **runner died**, rather than because a gate
- * rejected the change? (#981)
+ * rejected the change? (#982)
  *
  * ## The hole this closes
  *
@@ -1199,7 +1199,7 @@ export function integrationHealth(
     redMinutesUncapped: round1(redMinutesUncapped),
     idleGapsCapped,
     unresolvedFailures: openedAt.size,
-    // Failures re-attributed to a dead runner (#981), and failures the jobs
+    // Failures re-attributed to a dead runner (#982), and failures the jobs
     // fetch did not reach. `null` on both when no classification was supplied,
     // so "not asked" stays distinguishable from "asked, found none".
     runnerKills: killedIds ? runnerKills : null,
@@ -1932,7 +1932,7 @@ function fetchRuns(slug, since) {
  * @param {string} slug
  * @param {Array<Record<string, any>>} runs already-fetched runs for this repo
  * It also classifies each failed run as a **runner kill** or a real failure
- * (#981) — free, because the jobs payload it already fetches is exactly what
+ * (#982) — free, because the jobs payload it already fetches is exactly what
  * `isRunnerKill` needs. Doing it anywhere else would mean paying the per-run
  * request twice.
  *

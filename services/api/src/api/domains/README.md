@@ -50,6 +50,57 @@ routes it did as a native router. Nothing else changes.
 - A domain that fails to import raises at startup — a broken product domain
   should surface at deploy, not silently serve nothing.
 
+## Declaring Python dependencies (#891)
+
+Need a package the template does not ship — `geoalchemy2` and `shapely` for
+PostGIS geometry columns, say? Do **not** edit `services/api/pyproject.toml`. It
+is template-owned, so the commit-time guard blocks it, `biffo core upgrade`
+fights you over it forever, and taking the package upstream would make every
+other instance pay its import cost on every cold start (#890, #724).
+
+Declare it in `domains/<name>/requirements.txt` instead:
+
+```
+# domains/<name>/requirements.txt — this file IS your domain's lockfile.
+geoalchemy2==0.15.2
+shapely==2.0.6
+```
+
+Generate it rather than hand-editing, so the transitive closure is pinned too:
+
+```bash
+uv pip compile services/api/src/api/domains/<name>/requirements.in \
+  -o services/api/src/api/domains/<name>/requirements.txt
+```
+
+Then install it into your venv, exactly as CI and the deploy do:
+
+```bash
+uv sync --all-groups && sh scripts/sync-domain-deps.sh
+```
+
+`ci.yml` runs the same command (so your domain's dependencies are type-checked,
+tested and advisory-scanned), and `deploy-app.yml` runs it with `--target
+package/` (so they reach the Lambda). There is nothing else to wire.
+
+**The rules, and why.** Your file is installed as a *second* layer on top of
+core's own frozen resolution, under a constraint file exported from `uv.lock`.
+So:
+
+- **Every requirement must be pinned with `==`.** No ranges, no URLs, no VCS
+  refs, no local paths, no `--index-url`/`--find-links`/`-e`/`-r` lines. A deploy
+  must ship what a reviewer read.
+- **You may not name a package that is already in `uv.lock`.** It is a core
+  dependency; import it, it is already installed. Restating it — even at the same
+  version — is rejected by name, and a *different* version is refused by the
+  resolver on top of that. Two copies of one distribution cannot both be on the
+  Lambda's path, so a domain that needs a newer core dependency has to move
+  core's pin upstream, deliberately, rather than have one silently win here.
+- **Two domains sharing a dependency must agree on its version.**
+
+`scripts/domain_requirements.py --check` tells you about all of this by file and
+line, and runs in CI whether you remember to or not.
+
 ## Registering with a core seam (including your identity provider)
 
 `routers` is not the only thing a domain may export. Because discovery **imports**

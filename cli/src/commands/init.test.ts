@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { BiffoConfigSchema } from '../config/schema.js'
+import {
+  recordBranchProtectionOutcome,
+  resetBranchProtectionOutcomes,
+} from '../lib/branch-protection-outcome.js'
+import { log } from '../lib/logger.js'
 import type { InitSession } from '../lib/session.js'
 import { getLatestCoreVersion } from '../lib/core-version.js'
 import {
@@ -112,6 +117,57 @@ function makeAwsMock() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resetBranchProtectionOutcomes()
+})
+
+// ─── #715: the run must not end quietly with an unprotected repo ─────────────
+
+describe('branch-protection summary', () => {
+  it('names the repo in an end-of-run summary when protection was skipped on a 403', async () => {
+    const github = makeGithubMock()
+    github.configureBranchProtection = vi.fn().mockImplementation(async () =>
+      recordBranchProtectionOutcome({
+        status: 'skipped-403',
+        org: 'acme',
+        repo: 'my-app',
+        protectedBranches: [],
+        unprotectedBranches: ['dev', 'staging', 'main'],
+        reason: 'Upgrade to GitHub Team or make this repository public.',
+      }),
+    )
+
+    await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
+
+    const reported = vi.mocked(log.error).mock.calls.flat().join('\n')
+    expect(reported).toContain('acme/my-app')
+    expect(reported).toContain('biffo check branch-protection --fix')
+  })
+
+  it('stays quiet on a resumed run that never re-attempts protection', async () => {
+    // `github_settings` already checkpointed → the adapter is never called, so
+    // there is nothing this run knows. Inventing a verdict would be its own lie.
+    const github = makeGithubMock()
+
+    await runInit(
+      github as never,
+      makeAwsMock() as never,
+      CONFIG,
+      makeSession({
+        completedSteps: [
+          'verify_credentials',
+          'github_repo',
+          'oidc_trust',
+          'terraform_backend',
+          'github_branches',
+          'github_instance_files',
+          'github_settings',
+        ] as never,
+      }),
+    )
+
+    expect(github.configureBranchProtection).not.toHaveBeenCalled()
+    expect(vi.mocked(log.error)).not.toHaveBeenCalled()
+  })
 })
 
 // ─── Happy path ───────────────────────────────────────────────────────────────

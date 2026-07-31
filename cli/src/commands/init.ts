@@ -7,6 +7,7 @@ import { BiffoConfigSchema, resolveDnsConfig, type BiffoConfig } from '../config
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
 import { assertBuildIsFresh } from '../lib/build-freshness.js'
+import { reportBranchProtectionSummary } from '../lib/branch-protection-outcome.js'
 import { resolveAwsCredentials, resolveGithubToken } from '../lib/credentials.js'
 import {
   getLatestCoreVersion,
@@ -154,12 +155,21 @@ export const initCommand = new Command('init')
       const github = new GitHubAdapter(githubToken)
       const aws = new AwsAdapter(config)
 
-      await runInit(github, aws, config, session, {
-        git: new GitAdapter(),
-        awsFor: (siblingConfig) => new AwsAdapter(siblingConfig),
-        skeletonRoot: defaultSiblingTemplateRoot(),
-        githubToken,
-      })
+      // `finally`, not a plain call after: an init that dies at a later step
+      // has still already created and (not) protected a repo, and that is
+      // exactly the run whose operator most needs to be told (#715).
+      // `reportBranchProtectionSummary` drains, so the copy at the end of
+      // `runInit` and this one never double-print.
+      try {
+        await runInit(github, aws, config, session, {
+          git: new GitAdapter(),
+          awsFor: (siblingConfig) => new AwsAdapter(siblingConfig),
+          skeletonRoot: defaultSiblingTemplateRoot(),
+          githubToken,
+        })
+      } finally {
+        reportBranchProtectionSummary()
+      }
 
       const { org, repo } = (
         config.source_control as { provider: 'github'; config: { org: string; repo: string } }
@@ -425,6 +435,11 @@ export async function runInit(
       log.step(6, totalSteps, 'Application sibling already created — skipping')
     }
   }
+
+  // The last thing the run does, and deliberately not a step: a scaffolding run
+  // must not be able to finish quietly having left a repo unprotected (#715).
+  // No-op when the nested `runSiblingCreate` above already drained it.
+  reportBranchProtectionSummary()
 
   deleteSession(config.project.name)
   saveProjectConfig(config)

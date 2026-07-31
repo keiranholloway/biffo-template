@@ -2,6 +2,10 @@ import { execSync } from 'node:child_process'
 import { Octokit } from '@octokit/rest'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { BiffoConfigSchema } from '../../../config/schema.js'
+import {
+  pendingBranchProtectionOutcomes,
+  resetBranchProtectionOutcomes,
+} from '../../../lib/branch-protection-outcome.js'
 import { DEFAULT_STATUS_CHECKS, GitHubAdapter } from './index.js'
 
 vi.mock('@octokit/rest')
@@ -55,6 +59,9 @@ let octokitMock: ReturnType<typeof makeOctokitMock>
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // The outcome collector is module-scoped and a real CLI run is one process,
+  // so tests have to clear it themselves.
+  resetBranchProtectionOutcomes()
   octokitMock = makeOctokitMock()
   vi.mocked(Octokit).mockImplementation(function () {
     return octokitMock as unknown as Octokit
@@ -499,11 +506,101 @@ describe('configureBranchProtection', () => {
     octokitMock.repos.getBranch = vi.fn().mockResolvedValue({ data: {} })
     octokitMock.repos.updateBranchProtection = vi.fn().mockRejectedValue(planLimited)
 
-    await expect(adapter().configureBranchProtection(CONFIG)).resolves.toBeUndefined()
+    await expect(adapter().configureBranchProtection(CONFIG)).resolves.toBeDefined()
 
     // Only the first branch (dev) is attempted — no point retrying staging/main
     // against the same org-level plan limitation.
     expect(octokitMock.repos.updateBranchProtection).toHaveBeenCalledTimes(1)
+  })
+
+  // ─── #715 / #737 item 2: the skip must be structurally visible ─────────────
+  //
+  // This method used to return `Promise<void>`, so a 403 skip and a fully
+  // protected repo were the same value to every caller. Three repos ran
+  // unprotected for three weeks behind that.
+
+  it('RETURNS a skipped-403 outcome naming every branch left unprotected', async () => {
+    const planLimited = Object.assign(
+      new Error('Upgrade to GitHub Team or make this repository public to enable this feature.'),
+      { status: 403 },
+    )
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValue({ data: {} })
+    octokitMock.repos.updateBranchProtection = vi.fn().mockRejectedValue(planLimited)
+
+    const result = await adapter().configureBranchProtection(CONFIG)
+
+    expect(result).toMatchObject({
+      status: 'skipped-403',
+      org: 'acme',
+      repo: 'my-app',
+      protectedBranches: [],
+      unprotectedBranches: ['dev', 'staging', 'main'],
+    })
+    expect(result.reason).toContain('Upgrade to GitHub Team')
+  })
+
+  it('records the skip on the run collector, so a caller that ignores the return value still reports it', async () => {
+    const planLimited = Object.assign(new Error('403'), { status: 403 })
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValue({ data: {} })
+    octokitMock.repos.updateBranchProtection = vi.fn().mockRejectedValue(planLimited)
+
+    await adapter().configureBranchProtection(CONFIG)
+
+    expect(pendingBranchProtectionOutcomes()).toHaveLength(1)
+    expect(pendingBranchProtectionOutcomes()[0]).toMatchObject({
+      status: 'skipped-403',
+      repo: 'my-app',
+    })
+  })
+
+  it('reports a PARTIAL skip: dev protected, staging 403 — the outcome names only the two left open', async () => {
+    // The pre-fix code returned `void` from the middle of the loop, so this
+    // state — one branch protected, two not — was completely unrepresentable.
+    const planLimited = Object.assign(new Error('plan limitation'), { status: 403 })
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValue({ data: {} })
+    octokitMock.repos.updateBranchProtection = vi
+      .fn()
+      .mockResolvedValueOnce({})
+      .mockRejectedValue(planLimited)
+
+    const result = await adapter().configureBranchProtection(CONFIG)
+
+    expect(result.status).toBe('skipped-403')
+    expect(result.protectedBranches).toEqual(['dev'])
+    expect(result.unprotectedBranches).toEqual(['staging', 'main'])
+  })
+
+  it('returns an applied outcome listing all three branches on the happy path', async () => {
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValue({ data: {} })
+    octokitMock.repos.updateBranchProtection = vi.fn().mockResolvedValue({})
+
+    const result = await adapter().configureBranchProtection(CONFIG)
+
+    expect(result).toMatchObject({
+      status: 'applied',
+      protectedBranches: ['dev', 'staging', 'main'],
+      unprotectedBranches: [],
+    })
+  })
+
+  it('records a failed outcome and still rethrows on a non-403 error', async () => {
+    // A hard failure was never the fail-open — it aborts the run loudly, and
+    // must keep doing so. It is recorded only so the summary can say which
+    // branches it got to first.
+    const boom = Object.assign(new Error('500 Internal Server Error'), { status: 500 })
+    octokitMock.repos.getBranch = vi.fn().mockResolvedValue({ data: {} })
+    octokitMock.repos.updateBranchProtection = vi
+      .fn()
+      .mockResolvedValueOnce({})
+      .mockRejectedValue(boom)
+
+    await expect(adapter().configureBranchProtection(CONFIG)).rejects.toThrow('500 Internal')
+
+    expect(pendingBranchProtectionOutcomes()[0]).toMatchObject({
+      status: 'failed',
+      protectedBranches: ['dev'],
+      unprotectedBranches: ['staging', 'main'],
+    })
   })
 })
 

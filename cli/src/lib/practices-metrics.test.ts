@@ -579,6 +579,31 @@ describe('mergeContention', () => {
   })
 
   /**
+   * `runsForPr` admits runs created up to 24h AFTER the merge, so the last
+   * green overall can postdate the merge. Anchoring to it unclamped puts the
+   * window's start after its end and makes the PR unstaleable — a silent false
+   * negative, worst on exactly the busy branches this metric is watching.
+   *
+   * B is genuinely stale (A landed at 10:30, after B's 10:00 green) and also
+   * has a post-merge run at 11:30. It must still count.
+   */
+  it('ignores a green that completed after the merge when anchoring', () => {
+    const runsByBranch = indexRunsByBranch([
+      run('feat/a', 'aaa', 'success', '2026-07-20T09:00:00Z'),
+      run('feat/b', 'bbb', 'success', '2026-07-20T10:00:00Z'),
+      run('feat/b', 'bbb', 'success', '2026-07-20T11:30:00Z'),
+    ])
+    const result = mergeContention(
+      [
+        pr('feat/a', '2026-07-20T08:00:00Z', '2026-07-20T10:30:00Z', 1),
+        pr('feat/b', '2026-07-20T08:00:00Z', '2026-07-20T11:00:00Z', 2),
+      ],
+      runsByBranch,
+    )
+    expect(result.staleMerges).toBe(1)
+  })
+
+  /**
    * The metric must not fire on the PR's own merge, or every measured PR would
    * read as stale and the counter-metric would be a constant.
    */

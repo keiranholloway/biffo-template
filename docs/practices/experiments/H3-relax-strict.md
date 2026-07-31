@@ -225,11 +225,28 @@ The two `strict: false` repos are the only ones carrying exposure, while
 `strict: true` repos score zero against raced shares as high as 30% — so the
 metric separates staleness from the race instead of restating it.
 
-**The one exception is a finding, not noise.** `tabsii-intake` has
-`enforce_admins: false`, so branch protection does not bind the estate's only
-admin: the gate is advisory there, and the metric caught a merge that genuinely
-was not up to date. A counter-metric that only ever confirms the setting would
-be worth little; this one disagreed with the setting and was right.
+**The exceptions are a finding, not noise, and they change what this experiment
+has been comparing.** Three `strict: true` repos show non-zero staleness
+(`tabsii-intake`, `tabsii-geo`, `biffo-plugin-ideation`). The cause is
+`enforce_admins: false` on **eleven of twelve estate repos**: protection does not
+bind the estate's only admin anywhere except `biffo-template`, so `strict` is
+advisory almost everywhere and the metric caught merges that genuinely were not
+up to date. A counter-metric that only ever agreed with the settings would be
+worth little; this one disagreed and was right.
+
+**The confound that follows was never recorded, and it is H3's, not the
+metric's.** `biffo-template` — the treatment repo — is the *one* repo where
+branch protection actually binds. Its comparator `tabsii-crm` has
+`enforce_admins: false`, and so does `tabsii-platform`, added to the treatment
+arm today. So the pre-registered contrast was never purely `strict: false` vs
+`strict: true`; it was partly *"bound"* vs *"advisory"*. This does not rescue or
+sink the hypothesis, and it is recorded here rather than in the result so that it
+cannot be discovered afterwards and used to explain away whichever verdict
+arrives on 2026-08-04.
+
+It also makes the Intervention section's claim that ``enforce_admins`` "stays on"
+true of `biffo-template` and **false of the estate around it** — a sentence that
+read as an estate-wide guarantee for three days.
 
 **The first version of this metric was wrong in a way its tests could not see**,
 and the correction is the reason the table above is worth anything. It anchored

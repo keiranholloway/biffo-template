@@ -857,9 +857,11 @@ export function mergeContention(prs, runsByBranch) {
   let measured = 0
   let stale = 0
 
-  // Merge times per base branch, so staleness is a lookup rather than an O(n^2)
-  // rescan. Keyed by base ref because a repo's `dev` and `staging` are separate
-  // races — a merge to `staging` does not make a `dev` PR stale.
+  // Merge times bucketed by base branch. Keyed by base ref because a repo's
+  // `dev` and `staging` are separate races — a merge to `staging` does not make
+  // a `dev` PR stale. Bucketing narrows the scan below; it does not make it a
+  // lookup, and at this n (~1k merges) a linear scan per PR is not worth a
+  // binary search.
   /** @type {Map<string, number[]>} */
   const baseMergeTimes = new Map()
   for (const pr of merged) {
@@ -870,7 +872,6 @@ export function mergeContention(prs, runsByBranch) {
     if (times) times.push(at)
     else baseMergeTimes.set(base, [at])
   }
-  for (const times of baseMergeTimes.values()) times.sort((a, b) => a - b)
 
   for (const pr of merged) {
     const churn = prChurn(pr, runsByBranch)
@@ -910,8 +911,16 @@ export function mergeContention(prs, runsByBranch) {
     // tested, and this PR's own merge is excluded by the half-open upper bound
     // rather than by comparing PR numbers, which the shape of this data does
     // not guarantee are unique across repos.
-    const lastGreen = greens[greens.length - 1]
+    // Clamped to greens that completed **before the merge**. `runsForPr`
+    // deliberately admits runs created up to 24h after `mergedAt`, so the last
+    // green overall can postdate the merge — and an unclamped anchor would put
+    // the window's start after its end, making the PR unstaleable. That is a
+    // silent false negative: it suppresses exactly the merges this is looking
+    // for, on the branches busy enough to still be running CI after they land.
+    // `lag > 0` above guarantees at least one green precedes the merge.
     const mergedAt = Date.parse(/** @type {string} */ (pr.mergedAt))
+    const greensBeforeMerge = greens.filter((at) => at <= mergedAt)
+    const lastGreen = greensBeforeMerge[greensBeforeMerge.length - 1]
     const baseMerges = pr.baseRefName ? (baseMergeTimes.get(pr.baseRefName) ?? []) : []
     if (baseMerges.some((at) => at > lastGreen && at < mergedAt)) stale += 1
   }

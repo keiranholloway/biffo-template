@@ -616,7 +616,7 @@ export function renderDashboard(snapshot, sessions = null, definitionBreak = nul
         <tr>
           <th>Repository</th><th>24h</th><th>PRs 90d</th><th>CI fail</th>
           <th>Repush</th><th>Raced</th>
-          <th title="Merges whose base moved between first green and merge — exposure to untested combinations, not damage. Deliberately uncoloured: a high number is the risk window H3 accepted, not an incident count.">Stale</th>
+          <th title="Merges whose base moved between the last green run and the merge, so the landed combination was never tested. Exposure, not damage — deliberately uncoloured: a high number is the risk window H3 accepted, not an incident count.">Stale</th>
           <th>Green wait</th><th>Toil</th><th>Rework lag</th>
         </tr>
       </thead>

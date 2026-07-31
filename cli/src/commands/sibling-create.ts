@@ -10,6 +10,7 @@ import { GitHubAdapter } from '../adapters/source-control/github/index.js'
 import { BiffoConfigSchema, type BiffoConfig } from '../config/schema.js'
 import { SiblingConfigSchema, type SiblingConfig } from '../config/sibling-schema.js'
 import { assertBuildIsFresh } from '../lib/build-freshness.js'
+import { reportBranchProtectionSummary } from '../lib/branch-protection-outcome.js'
 import { parseGitHubRepo } from '../lib/core-upgrade.js'
 import { getLatestCoreVersion } from '../lib/core-version.js'
 import { resolveGithubToken } from '../lib/credentials.js'
@@ -152,11 +153,17 @@ async function runSiblingCreateCommand(name: string, options: CommandOptions): P
   const coreAws = new AwsAdapter(coreConfig)
   const git = new GitAdapter()
 
-  await runSiblingCreate(github, aws, coreAws, git, config, session, {
-    coreConfig,
-    skeletonRoot: options.templateRoot,
-    githubToken: token,
-  })
+  // `finally` for the same reason as `biffo init`: a run that aborts after the
+  // GitHub step has still left a repo behind, protected or not (#715).
+  try {
+    await runSiblingCreate(github, aws, coreAws, git, config, session, {
+      coreConfig,
+      skeletonRoot: options.templateRoot,
+      githubToken: token,
+    })
+  } finally {
+    reportBranchProtectionSummary()
+  }
 
   const { org, repo } = githubRepo(config)
   const pathPrefix = resolvePathPrefix(config)
@@ -395,6 +402,10 @@ export async function runSiblingCreate(
   } else {
     log.step(8, totalSteps, 'Already registered with the core project — skipping')
   }
+
+  // See the identical call in `runInit`: the run must not end quietly with an
+  // unprotected repo (#715, #737 item 2).
+  reportBranchProtectionSummary()
 
   deleteSiblingSession(config.project.name)
 }

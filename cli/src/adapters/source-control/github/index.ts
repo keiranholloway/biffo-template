@@ -1,6 +1,10 @@
 import { execSync } from 'node:child_process'
 import { Octokit } from '@octokit/rest'
 import type { BiffoConfig, ProvisioningConfig } from '../../../config/schema.js'
+import {
+  recordBranchProtectionOutcome,
+  type BranchProtectionOutcome,
+} from '../../../lib/branch-protection-outcome.js'
 import { log } from '../../../lib/logger.js'
 
 export interface GitHubAdapterOptions {
@@ -545,11 +549,27 @@ export class GitHubAdapter {
     log.info(`Default branch set to ${branch}`)
   }
 
+  /**
+   * Protect `dev`, `staging` and `main`, and **say what actually happened**.
+   *
+   * This used to return `Promise<void>`, which made the 403 path (GitHub
+   * refusing branch protection on a private org repo whose plan does not
+   * include it) indistinguishable from success at every call site: the method
+   * logged two warnings and returned, and the scaffold went on to report a
+   * repo created. Nothing durable recorded that protection had been skipped,
+   * so the only trace was a log line in the middle of a long provisioning
+   * transcript. Three repos — including a live core platform — ran completely
+   * unprotected for three weeks on the strength of that (#715, #737 item 2).
+   *
+   * The returned outcome is also pushed onto the run-scoped collector in
+   * `lib/branch-protection-outcome.ts`, so callers that do nothing with the
+   * return value still get named in the end-of-run summary.
+   */
   async configureBranchProtection(
     config: ProvisioningConfig,
     protectionIntervalMs = 3_000,
     statusChecks: string[] = DEFAULT_STATUS_CHECKS,
-  ): Promise<void> {
+  ): Promise<BranchProtectionOutcome> {
     const { org, repo } = (
       config.source_control as { provider: 'github'; config: { org: string; repo: string } }
     ).config
@@ -560,61 +580,100 @@ export class GitHubAdapter {
     // main: production, reserved until a prod environment is built (#559)
     const branches = ['dev', 'staging', 'main']
 
-    for (const branch of branches) {
-      log.info(`Waiting for ${branch} branch to be ready...`)
-      await this.waitForBranch(org, repo, branch)
-      log.info(`Configuring branch protection on ${branch}...`)
+    // Tracked per branch, not as one boolean for the repo: protection is applied
+    // one branch at a time, so a 403 (or a hard failure) partway through leaves
+    // the earlier branches protected and the rest not. The summary has to be
+    // able to name exactly which ones are still open.
+    const applied: string[] = []
+    const remaining = () => branches.filter((b) => !applied.includes(b))
 
-      const params = {
-        owner: org,
-        repo,
-        branch,
-        required_status_checks: { strict: true, contexts: statusChecks },
-        enforce_admins: false,
-        required_pull_request_reviews: {
-          required_approving_review_count: 0,
-          dismiss_stale_reviews: false,
-        },
-        restrictions: null,
-        required_linear_history: true,
-        allow_force_pushes: false,
-        allow_deletions: false,
-      }
+    try {
+      for (const branch of branches) {
+        log.info(`Waiting for ${branch} branch to be ready...`)
+        await this.waitForBranch(org, repo, branch)
+        log.info(`Configuring branch protection on ${branch}...`)
 
-      const deadline = Date.now() + 30_000
-      while (true) {
-        try {
-          await this.octokit.repos.updateBranchProtection(params)
-          break
-        } catch (err: unknown) {
-          const status = (err as { status?: number }).status
-          if (status === 403) {
-            // GitHub requires Team/Enterprise for branch protection on a
-            // private repo owned by an organization (free-plan orgs and
-            // most personal accounts on paid individual plans differ here —
-            // this 403 is the API's own signal, not something worth trying
-            // to predict from the plan name in advance). Skipping is safe:
-            // callers can add protection later via the same GitHub UI/API
-            // once the org's plan supports it, or after making the repo
-            // public. Retrying the same request or trying the next branch
-            // would just hit the identical 403 again.
-            log.warn(`Branch protection unavailable for ${org}/${repo}: ${(err as Error).message}`)
-            log.warn(
-              '  This usually means the organization is on a plan that only supports branch ' +
-                'protection on public repos (GitHub Team/Enterprise is required for private ' +
-                'org repos). Skipping branch protection — add it later via GitHub once the ' +
-                'plan allows it, or make the repo public.',
-            )
-            return
+        const params = {
+          owner: org,
+          repo,
+          branch,
+          required_status_checks: { strict: true, contexts: statusChecks },
+          enforce_admins: false,
+          required_pull_request_reviews: {
+            required_approving_review_count: 0,
+            dismiss_stale_reviews: false,
+          },
+          restrictions: null,
+          required_linear_history: true,
+          allow_force_pushes: false,
+          allow_deletions: false,
+        }
+
+        const deadline = Date.now() + 30_000
+        while (true) {
+          try {
+            await this.octokit.repos.updateBranchProtection(params)
+            applied.push(branch)
+            break
+          } catch (err: unknown) {
+            const status = (err as { status?: number }).status
+            if (status === 403) {
+              // GitHub requires Team/Enterprise for branch protection on a
+              // private repo owned by an organization (free-plan orgs and
+              // most personal accounts on paid individual plans differ here —
+              // this 403 is the API's own signal, not something worth trying
+              // to predict from the plan name in advance). Not throwing is
+              // still right: retrying the same request or trying the next
+              // branch would hit the identical 403, and failing the whole
+              // scaffold over a plan limitation would be worse. What changed
+              // is that the skip is now returned and recorded, not just logged.
+              log.warn(
+                `Branch protection unavailable for ${org}/${repo}: ${(err as Error).message}`,
+              )
+              log.warn(
+                '  This usually means the organization is on a plan that only supports branch ' +
+                  'protection on public repos (GitHub Team/Enterprise is required for private ' +
+                  'org repos). Skipping branch protection — add it later via GitHub once the ' +
+                  'plan allows it, or make the repo public.',
+              )
+              return recordBranchProtectionOutcome({
+                status: 'skipped-403',
+                org,
+                repo,
+                protectedBranches: applied,
+                unprotectedBranches: remaining(),
+                reason: (err as Error).message,
+              })
+            }
+            if (status !== 404 || Date.now() >= deadline) throw err
+            log.info('Branch protection endpoint not yet ready, retrying...')
+            await new Promise((resolve) => setTimeout(resolve, protectionIntervalMs))
           }
-          if (status !== 404 || Date.now() >= deadline) throw err
-          log.info('Branch protection endpoint not yet ready, retrying...')
-          await new Promise((resolve) => setTimeout(resolve, protectionIntervalMs))
         }
       }
+    } catch (err: unknown) {
+      // Recorded, then rethrown unchanged. A hard failure already aborts the
+      // run loudly — that was never the fail-open — but the summary should
+      // still be able to say which branches it got to before it died.
+      recordBranchProtectionOutcome({
+        status: 'failed',
+        org,
+        repo,
+        protectedBranches: applied,
+        unprotectedBranches: remaining(),
+        reason: (err as Error).message,
+      })
+      throw err
     }
 
     log.success('Branch protection configured on dev, staging, and main')
+    return recordBranchProtectionOutcome({
+      status: 'applied',
+      org,
+      repo,
+      protectedBranches: applied,
+      unprotectedBranches: [],
+    })
   }
 
   /**

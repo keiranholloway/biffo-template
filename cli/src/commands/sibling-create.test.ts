@@ -4,6 +4,11 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BiffoConfigSchema } from '../config/schema.js'
 import { SiblingConfigSchema } from '../config/sibling-schema.js'
+import {
+  recordBranchProtectionOutcome,
+  resetBranchProtectionOutcomes,
+} from '../lib/branch-protection-outcome.js'
+import { log } from '../lib/logger.js'
 import type { SiblingSession } from '../lib/sibling-session.js'
 import {
   assertCoreSupportsSiblingRouting,
@@ -218,6 +223,9 @@ describe('runSiblingCreate', () => {
   beforeEach(() => {
     skeletonRoot = mkdtempSync(join(tmpdir(), 'sibling-skeleton-'))
     writeFileSync(join(skeletonRoot, 'biffo.sibling.json'), '{}')
+    resetBranchProtectionOutcomes()
+    vi.mocked(log.error).mockClear()
+    vi.mocked(log.success).mockClear()
   })
 
   afterEach(() => {
@@ -251,6 +259,76 @@ describe('runSiblingCreate', () => {
     expect(github.createEmptyRepo).not.toHaveBeenCalled()
     expect(aws.verifyCredentials).not.toHaveBeenCalled()
     expect(git.commit).not.toHaveBeenCalled()
+  })
+
+  // ─── #715 / #737 item 2 ────────────────────────────────────────────────────
+  //
+  // "Branch protection silently fails on private org repos… It should be
+  // reported, not swallowed." The run below succeeds end to end; the only thing
+  // wrong with it is that the repo it produced is unprotected. If it can finish
+  // without saying so, the defect is back.
+
+  it('ends the run with an explicit summary NAMING the repo it left unprotected', async () => {
+    const github = makeGithubMock()
+    github.configureBranchProtection = vi.fn().mockImplementation(async () =>
+      recordBranchProtectionOutcome({
+        status: 'skipped-403',
+        org: 'acme',
+        repo: 'reports',
+        protectedBranches: [],
+        unprotectedBranches: ['dev', 'staging', 'main'],
+        reason: 'Upgrade to GitHub Team or make this repository public.',
+      }),
+    )
+    const aws = makeAwsMock()
+    const coreAws = makeAwsMock()
+    coreAws.readTerraformOutputs.mockResolvedValue(CORE_OUTPUTS)
+
+    await runSiblingCreate(
+      github as never,
+      aws as never,
+      coreAws as never,
+      makeGitMock(),
+      SIBLING_CONFIG,
+      makeSession(),
+      { coreConfig: CORE_CONFIG, skeletonRoot, githubToken: 'gh-token' },
+    )
+
+    const reported = vi.mocked(log.error).mock.calls.flat().join('\n')
+    expect(reported).toContain('acme/reports')
+    expect(reported).toContain('dev, staging, main')
+    expect(reported).toContain('biffo check branch-protection --fix')
+  })
+
+  it('says nothing about branch protection when every branch was protected', async () => {
+    const github = makeGithubMock()
+    github.configureBranchProtection = vi.fn().mockImplementation(async () =>
+      recordBranchProtectionOutcome({
+        status: 'applied',
+        org: 'acme',
+        repo: 'reports',
+        protectedBranches: ['dev', 'staging', 'main'],
+        unprotectedBranches: [],
+      }),
+    )
+    const aws = makeAwsMock()
+    const coreAws = makeAwsMock()
+    coreAws.readTerraformOutputs.mockResolvedValue(CORE_OUTPUTS)
+
+    await runSiblingCreate(
+      github as never,
+      aws as never,
+      coreAws as never,
+      makeGitMock(),
+      SIBLING_CONFIG,
+      makeSession(),
+      { coreConfig: CORE_CONFIG, skeletonRoot, githubToken: 'gh-token' },
+    )
+
+    expect(vi.mocked(log.error)).not.toHaveBeenCalled()
+    expect(vi.mocked(log.success).mock.calls.flat().join('\n')).toContain(
+      'Branch protection applied to acme/reports',
+    )
   })
 
   it('runs all 8 steps in order on a fresh session', async () => {

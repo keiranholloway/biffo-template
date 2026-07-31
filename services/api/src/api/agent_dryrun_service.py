@@ -36,9 +36,23 @@ agent.
 to ``create_run`` is now the same shape a real agent action builds, so the
 preview exercises the real assembly, the real tool wiring and the real turn loop
 — including ``max_turns``, which the synchronous single-turn MVP never ran.
+
+**The snapshot must carry the whole contract, not the prompt half of it (#749).**
+It used to be hand-rolled from four keys, so a workflow with a write-back was
+previewed *without* one: the model was offered no ``submit_<table>_record``, it
+answered in prose, and a plain-completion result is exactly what ``writeback``'s
+``_submitted_values`` reads as no columns — the shape a live run refuses to write
+and records a refusal for. "Test passed" therefore proved nothing about the very
+thing the author was about to enable, and the builder's "Would write" panel
+showed run metadata as though it were the columns. So the snapshot now carries
+``tools`` and ``writeback`` too, and goes through the same
+``apply_writeback_output_tool`` the live path calls, rather than a subset that
+drifts every time the action gains a field.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from aws_lambda_powertools import Logger
 from fastapi import HTTPException, status
@@ -50,6 +64,7 @@ from .events import emit_event
 from .events.registry import AGENT_RUN_REQUESTED
 from .prompt_parts import PromptPartsError
 from .schemas.agent_dryrun import WorkflowDryRunAccepted, WorkflowDryRunRequest
+from .writeback_targets import apply_writeback_output_tool
 
 logger = Logger()
 
@@ -75,13 +90,14 @@ async def start_dry_run(
         HTTPException(422): the draft's prompt parts do not resolve against this
             tenant's library — a referenced component is missing, or a required
             variable is unsupplied. The same verdict a save would give, surfaced
-            before enabling.
+            before enabling. Also when a declared write-back yields no result
+            contract, see below.
 
     A dry run is always ``depth=0`` with no ``causation_id``: it is a preview
     requested by a person, not a link in a causation chain, so it can neither be
     blamed for a loop nor extend one.
     """
-    snapshot: dict[str, object] = {
+    snapshot: dict[str, Any] = {
         "instructions": request.instructions,
         "model": request.model or settings.agent_assistant_model,
     }
@@ -89,6 +105,34 @@ async def start_dry_run(
         snapshot["goals"] = request.goals
     if request.max_turns is not None:
         snapshot["max_turns"] = request.max_turns
+    if request.tools:
+        snapshot["tools"] = request.tools
+    if request.writeback:
+        snapshot["writeback"] = request.writeback
+
+    # The same call the live path makes on the way in (``routers/internal_agents``):
+    # a write-back's result contract is Core's to state, generated from the
+    # registered target (ADR-0027 §6). Applying it here is the whole of #749 —
+    # without it the previewed model is offered no ``submit_<table>_record``, so
+    # it answers in prose, and prose is precisely the shape ``writeback``'s
+    # ``_submitted_values`` reads as *no columns*. The preview then "passed"
+    # while demonstrating the one outcome that writes nothing.
+    snapshot = apply_writeback_output_tool(snapshot)
+    if request.writeback and not snapshot.get("output_tools"):
+        # Declared a write-back, and no contract could be generated for it: this
+        # deployment registers no such target, or none of the chosen columns are
+        # writeable. A live run would be handed no submit tool and would write
+        # nothing, so refusing is the honest verdict — the alternative is the
+        # green test this issue is about.
+        table = request.writeback.get("table")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"No write-back contract could be generated for table {table!r}: this "
+                "deployment does not permit an agent to write there, or none of the "
+                "chosen columns are writeable. A live run would write nothing."
+            ),
+        )
 
     try:
         # No idempotency key: a preview is explicitly requested each time, so a

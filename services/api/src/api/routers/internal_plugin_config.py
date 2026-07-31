@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
@@ -45,6 +46,23 @@ def _own_plugin_name(principal: ServicePrincipal) -> str:
         )
     (name,) = names
     return name.removeprefix("system:")
+
+
+async def _existing_agent_keys(db: AsyncSession, *, tenant_id: str, plugin_name: str) -> set[str]:
+    """Every agent_key this plugin already has committed, in one query.
+
+    A fast path only: it answers "created or already existed" for the common
+    case without attempting a doomed insert per row. It is **not** the thing
+    that makes seeding safe — the row it cannot see is the one a concurrent
+    cold start is inserting right now. :func:`seed_config` handles that.
+    """
+    rows = await db.scalars(
+        select(PluginChatAgent.agent_key).where(
+            PluginChatAgent.tenant_id == tenant_id,
+            PluginChatAgent.plugin_name == plugin_name,
+        )
+    )
+    return set(rows)
 
 
 @router.get("", response_model=list[PluginChatAgentResponse])
@@ -109,7 +127,27 @@ async def seed_config(
     the operator chose, not the built-in constant the plugin was born with.
 
     Runs on every plugin cold start. Idempotent: calling it twice produces the
-    same result and changes nothing on the second call.
+    same result and changes nothing on the second call — **including when the
+    two calls overlap**. The pre-read below cannot see a row another transaction
+    has not committed yet, so on a burst of simultaneous cold starts (a fresh
+    deploy replaces every warm Lambda at once) several requests read "absent"
+    and all insert. Every loser then hit
+    ``UniqueViolationError ... "uq_plugin_chat_agent_key"`` and a 500, which the
+    plugin logged as a failed startup seed (#924). So the insert runs inside a
+    SAVEPOINT: a conflict rolls back that one row and is reported as "already
+    existed", exactly as if the pre-read had seen it. Same idiom as
+    ``agent_runs.create_run`` and ``orchestration.claim_run``.
+
+    **Insert-if-absent, never ON CONFLICT DO UPDATE.** #824 states the
+    requirement — "re-running must be a no-op, not a reset of an admin's edits"
+    — and this route runs on *every* cold start, so DO UPDATE would revert an
+    operator's edited prompt to the plugin's built-in constant continuously and
+    invisibly. A plugin that wants new built-in prompt text to take effect
+    changes it where the change is auditable (an admin edit, or a DDL-import
+    module), not by having a Lambda boot overwrite live config. Nothing in the
+    row records whether its current values came from an admin or from an older
+    build, so "the plugin owns its own rows" is not a distinction this route can
+    make safely.
 
     Does not create PluginChatAgentHistory rows. History records *admin edits*;
     a seed-created row is the row's origin, not a change to it.
@@ -129,14 +167,9 @@ async def seed_config(
 
     plugin_name = _own_plugin_name(principal)
 
-    # Fetch all existing agent_keys for this plugin in this tenant, in one query.
-    existing = await db.scalars(
-        select(PluginChatAgent.agent_key).where(
-            PluginChatAgent.tenant_id == principal.tenant_id,
-            PluginChatAgent.plugin_name == plugin_name,
-        )
+    existing_keys = await _existing_agent_keys(
+        db, tenant_id=principal.tenant_id, plugin_name=plugin_name
     )
-    existing_keys = set(existing)
 
     results: list[SeedPluginChatAgentResponse] = []
 
@@ -145,14 +178,10 @@ async def seed_config(
 
         if not already_exists:
             # Claim the key immediately, so a request that repeats an agent_key
-            # inserts it once rather than twice. Two inserts would violate the
-            # unique constraint and surface as an opaque IntegrityError at flush
-            # — during a plugin's cold start, which is the worst place to debug
-            # one. A repeated key is caller error; failing it deterministically
-            # as "created once, already existed after that" is more useful than
-            # a 500.
+            # inserts it once rather than twice. A repeated key is caller error;
+            # failing it deterministically as "created once, already existed
+            # after that" is more useful than a 500.
             existing_keys.add(definition.agent_key)
-            # Insert only if it doesn't exist.
             agent = PluginChatAgent(
                 tenant_id=principal.tenant_id,
                 plugin_name=plugin_name,
@@ -167,7 +196,19 @@ async def seed_config(
                 max_output_tokens=definition.max_output_tokens,
                 timeout_seconds=definition.timeout_seconds,
             )
-            db.add(agent)
+            try:
+                # SAVEPOINT per row: a concurrent seed that committed the same
+                # key between the pre-read and here rolls back this insert only,
+                # leaving the rest of the batch — and the caller's transaction —
+                # intact. Without it the unique violation poisons the whole
+                # session and the plugin's cold-start seed 500s.
+                async with db.begin_nested():
+                    db.add(agent)
+                    await db.flush()
+            except IntegrityError:
+                # Somebody else got there first. That is precisely the outcome
+                # this route promises, so it is a success, not an error.
+                already_exists = True
 
         results.append(
             SeedPluginChatAgentResponse(role=definition.role, created=not already_exists)

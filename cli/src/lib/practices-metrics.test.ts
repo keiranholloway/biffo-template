@@ -2362,6 +2362,7 @@ describe('estate headline is capability, not the proving ground (#768)', () => {
 import {
   tallyMarkdown,
   classMarkdown,
+  renderTallies,
   spliceTally,
   TALLY_BEGIN,
   TALLY_END,
@@ -2393,22 +2394,38 @@ describe('fix-repo tally is generated, not transcribed', () => {
     expect(rows.length).toBeGreaterThan(100)
   })
 
-  it('matches what is committed in the page', () => {
-    const page = readRepo('docs/guides/development-practices.md')
-    const start = page.indexOf(TALLY_BEGIN)
-    const end = page.indexOf(TALLY_END)
-    expect(start, `${TALLY_BEGIN} missing from the page`).toBeGreaterThan(-1)
-    expect(end).toBeGreaterThan(start)
+  it('generates from the dataset without throwing, which is what is worth asserting', () => {
+    // Replaced "matches what is committed in the page" (#953). The tally is no
+    // longer committed: it was regenerated from the full dataset on every
+    // append, so any two concurrent practices PRs conflicted by construction,
+    // always inside the generated block. The property worth guarding was never
+    // "the committed copy is fresh" — it was "the dataset still produces a
+    // report", which is this.
+    const block = tallyMarkdown(rows)
+    expect(block).toContain(TALLY_BEGIN)
+    expect(block).toContain(TALLY_END)
+    expect(block).toMatch(/\| \*\*biffo-template\*\* \|/)
+  })
 
-    const committed = page.slice(start, end + TALLY_END.length)
-    expect(
-      committed,
-      'The fix-repo tally is stale. Run `node scripts/practices-evidence.mjs --write`.\n' +
-        'This block is generated from evidence.jsonl — do not edit it by hand.\n' +
-        'If --write does not settle it, suspect prettier: the page is covered by\n' +
-        '`format:check`, so a generator emitting non-prettier-stable markdown makes\n' +
-        '`pnpm run format` and `--write` fight, and this message blames the wrong one.',
-    ).toBe(tallyMarkdown(rows))
+  it('commits NO derived counts in the page — the whole point of #953', () => {
+    // The regression that matters now is the opposite of the old one: someone
+    // re-splicing a generated table back into the committed page reinstates the
+    // conflict. A number inside the markers is the tell.
+    const page = readRepo('docs/guides/development-practices.md')
+    for (const [begin, end] of [
+      [TALLY_BEGIN, TALLY_END],
+      [CLASS_BEGIN, CLASS_END],
+    ]) {
+      const start = page.indexOf(begin)
+      const stop = page.indexOf(end)
+      expect(start, `${begin} missing from the page`).toBeGreaterThan(-1)
+      const region = page.slice(start, stop)
+      expect(
+        region,
+        `${begin} contains a generated table row again — that reinstates the ` +
+          'conflict #953 removed. Tallies belong in docs/practices/tallies.generated.md.',
+      ).not.toMatch(/^\|.*\d+ of \d+/m)
+    }
   })
 
   it('appears exactly once — a second copy is the failure this replaced', () => {
@@ -2452,16 +2469,15 @@ describe('class tally is generated, not transcribed', () => {
     .filter((l) => l.trim())
     .map((l) => JSON.parse(l))
 
-  it('matches what is committed in the page', () => {
-    const page = readRepo('docs/guides/development-practices.md')
-    const start = page.indexOf(CLASS_BEGIN)
-    const end = page.indexOf(CLASS_END)
-    expect(start, `${CLASS_BEGIN} missing from the page`).toBeGreaterThan(-1)
-    expect(end).toBeGreaterThan(start)
-    expect(
-      page.slice(start, end + CLASS_END.length),
-      'The class tally is stale. Run `node scripts/practices-evidence.mjs --write`.',
-    ).toBe(classMarkdown(rows))
+  it('generates from the dataset without throwing (#953 — no longer committed)', () => {
+    const block = classMarkdown(rows)
+    expect(block).toContain(CLASS_BEGIN)
+    expect(block).toContain(CLASS_END)
+    // The ranking is the finding, so assert it is actually ordered rather than
+    // just present — an unsorted tally is the one wrong answer that matters.
+    const counts = [...block.matchAll(/\| (\d+) \| \d+% \|/g)].map((m) => Number(m[1]))
+    expect(counts.length).toBeGreaterThan(2)
+    expect([...counts].sort((a, b) => b - a)).toEqual(counts)
   })
 
   it('appears exactly once', () => {
@@ -2490,14 +2506,17 @@ describe('class tally is generated, not transcribed', () => {
     expect(total).toBe(known.length)
   })
 
-  it('--write splices both blocks, never one', () => {
-    // Splicing them in separate runs is how a page gets one current table and
-    // one stale one -- which is the failure being fixed, one table over.
-    const page = readRepo('docs/guides/development-practices.md')
-    expect(page).toContain(TALLY_BEGIN)
-    expect(page).toContain(CLASS_BEGIN)
-    expect(page.slice(page.indexOf(TALLY_BEGIN))).toContain(tallyMarkdown(rows))
-    expect(page.slice(page.indexOf(CLASS_BEGIN))).toContain(classMarkdown(rows))
+  it('--write renders both blocks into one generated file, never one', () => {
+    // Emitting them in separate runs is how one ends up current and the other
+    // stale. Still true after #953 moved them out of the committed page --
+    // the destination changed, the one-pass requirement did not.
+    const file = renderTallies(tallyMarkdown(rows), classMarkdown(rows))
+    expect(file).toContain(TALLY_BEGIN)
+    expect(file).toContain(CLASS_BEGIN)
+    expect(file).toContain(tallyMarkdown(rows))
+    expect(file).toContain(classMarkdown(rows))
+    // Says what it is: a git-ignored file has no history to explain itself.
+    expect(file).toMatch(/GENERATED FILE/)
   })
 
   it('refuses to append when its own markers are missing', () => {

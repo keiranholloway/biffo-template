@@ -94,3 +94,6 @@ samconfig.toml
 # a deployment. Never committed: a stale committed copy would report the wrong
 # version, which is the exact defect #648's original mechanism would have shipped.
 services/api/src/api/_core_version.py
+
+# Generated practices tallies — derived from evidence.jsonl, never committed (#953)
+docs/practices/tallies.generated.md

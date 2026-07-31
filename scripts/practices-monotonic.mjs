@@ -84,14 +84,69 @@ export function countTableRows(text) {
   const isRow = (l) => l.startsWith('|')
   const isSeparator = (l) => isRow(l) && /^\|[\s:|-]+\|?\s*$/.test(l)
   let count = 0
+  // Rows inside a `<!-- BEGIN generated: … -->` region are DERIVED, not evidence.
+  // Counting them made the guard react to tally churn: regenerating a tally after
+  // an append changes these counts for reasons that have nothing to do with
+  // whether anyone lost a finding, and removing the generated blocks entirely
+  // (#953) reads as a 14-row loss when nothing was lost at all. The guard exists
+  // to protect what a human wrote; that is the only thing it should count.
+  let inGenerated = false
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i].trimEnd()
+    if (/^<!--\s*BEGIN generated:/.test(line)) {
+      inGenerated = true
+      continue
+    }
+    if (/^<!--\s*END generated:/.test(line)) {
+      inGenerated = false
+      continue
+    }
+    if (inGenerated) continue
     if (!isRow(line) || isSeparator(line)) continue
     // The line immediately before a separator is that table's header.
     if (i + 1 < lines.length && isSeparator(lines[i + 1].trimEnd())) continue
     count += 1
   }
   return count
+}
+
+/**
+ * Rows whose `summary` already appears earlier in the corpus.
+ *
+ * The append-only guard asserts the file **grows**; it cannot tell growth from
+ * duplication. A botched conflict resolution on `evidence.jsonl` — the shape
+ * that actually happens, because both sides append — satisfies "bigger than
+ * before" while double-counting findings, and every share and ranking derived
+ * from the corpus is then wrong in a direction nobody checks.
+ *
+ * Compared against the merge base rather than asserted at zero: one duplicate
+ * is already present, and a gate that fails on somebody else's pre-existing
+ * damage gets disabled rather than fixed. Introducing a NEW one fails.
+ *
+ * Matched on the first 120 characters, because a re-worded duplicate is a
+ * judgement call but a copy is not.
+ *
+ * @param {string} text raw JSONL
+ */
+export function countDuplicateSummaries(text) {
+  if (!text) return 0
+  const seen = new Set()
+  let duplicates = 0
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') continue
+    let row
+    try {
+      row = JSON.parse(line)
+    } catch {
+      // A malformed line is not this guard's business — the parse gate owns it.
+      continue
+    }
+    const key = String(row?.summary ?? '').slice(0, 120)
+    if (key === '') continue
+    if (seen.has(key)) duplicates += 1
+    seen.add(key)
+  }
+  return duplicates
 }
 
 /** True when any commit in the range explains a deliberate removal. */
@@ -140,16 +195,38 @@ function main() {
     return
   }
 
+  const baseEvidenceText = git(['show', `${mergeBase}:${EVIDENCE}`])
+  const headEvidenceText = existsSync(EVIDENCE) ? readFileSync(EVIDENCE, 'utf8') : ''
   const base = {
-    evidence: countEvidence(git(['show', `${mergeBase}:${EVIDENCE}`])),
+    evidence: countEvidence(baseEvidenceText),
     tableRows: countTableRows(git(['show', `${mergeBase}:${MARKDOWN}`])),
   }
   const head = {
-    evidence: countEvidence(existsSync(EVIDENCE) ? readFileSync(EVIDENCE, 'utf8') : ''),
+    evidence: countEvidence(headEvidenceText),
     tableRows: countTableRows(existsSync(MARKDOWN) ? readFileSync(MARKDOWN, 'utf8') : ''),
   }
   const messages = git(['log', '--format=%B', `${mergeBase}..HEAD`])
   const { losses, ok } = assess(base, head, hasRemovalTrailer(messages))
+
+  // Growth is not enough: a botched merge on an append-only file can double
+  // rows and satisfy every count above. Checked separately so its message can
+  // name the actual remedy, which is not "rebase" but "re-append only your own
+  // rows onto the other side's file".
+  const baseDupes = countDuplicateSummaries(baseEvidenceText)
+  const headDupes = countDuplicateSummaries(headEvidenceText)
+  if (headDupes > baseDupes) {
+    process.stderr.write(
+      `\npractices-monotonic: duplicate summaries ${baseDupes} → ${headDupes} ` +
+        `(+${headDupes - baseDupes}).\n\n` +
+        `The corpus grew, but by copying rows rather than adding findings — which the\n` +
+        `append-only check cannot see, and which silently skews every share and ranking\n` +
+        `derived from it.\n\n` +
+        `This is what a wrong conflict resolution on evidence.jsonl looks like. The fix\n` +
+        `is NOT to union both sides: take origin/${baseRef}'s file and re-append only the\n` +
+        `rows your branch added.\n`,
+    )
+    process.exit(1)
+  }
 
   for (const loss of losses) {
     process.stderr.write(

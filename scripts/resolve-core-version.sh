@@ -32,9 +32,22 @@
 # which is the intended behaviour, not a bug to work around.
 #
 # Usage:
-#   sh scripts/resolve-core-version.sh          # from a repo root
+#   sh scripts/resolve-core-version.sh          # from anywhere
 #   sh scripts/resolve-core-version.sh --quiet  # no diagnostics on stderr
 set -eu
+
+# Resolve the repo root from this script's OWN location rather than trusting the
+# caller's working directory. `deploy-app.yml` calls this from
+# `working-directory: api-service` — the artifact dir `download-artifact`
+# unpacks into — where `biffo.core.json` and the git tags are both invisible.
+# The script then reported "cannot determine a core version" and failed the
+# deploy, which read as a missing version rather than a wrong CWD.
+#
+# Requiring every caller to cd first is the fragile version of this: it worked
+# until one caller didn't, and the failure surfaced only in an instance, because
+# this repo never runs deploy-app.yml (it is non-deployable — it publishes to
+# npm). Locating the root here fixes it for every caller at once.
+cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
 QUIET=0
 [ "${1:-}" = "--quiet" ] && QUIET=1

@@ -339,8 +339,81 @@ export function stampCarriedFrom(content: string, templateFile: string): string 
   return content.replace(REVISION_RE, (m) => `${CARRIED_FROM_MARKER} ${templateFile}\n${m}`)
 }
 
-/** The module docstring, if the file opens with one. */
-const MODULE_DOCSTRING_RE = /^\s*("""|''')[\s\S]*?\1/
+/** Opens a triple-quoted string at the start of a line (an `r`/`u` prefix is
+ * still a docstring; `f`/`b` prefixes are not, and never appear as one). */
+const DOCSTRING_OPEN_RE = /^[rRuU]?("""|''')/
+/** Starts a `def` / `async def` / `class` header. */
+const DEF_OR_CLASS_RE = /^(async\s+def|def|class)\b/
+/** Ends a suite header — a trailing `:`, allowing a trailing comment. */
+const HEADER_END_RE = /:\s*(#.*)?$/
+
+/**
+ * Drop every **docstring** from Python source, leaving the executable text.
+ *
+ * A docstring is a triple-quoted string in a docstring *position*: the first
+ * statement of the module, or the first statement after a `def` / `async def` /
+ * `class` header. Position is the whole point — a triple-quoted string anywhere
+ * else is a value, and in a migration it is usually the SQL of an
+ * `op.execute("""…""")`, which is exactly the substance this comparison must
+ * keep. Multi-line signatures are handled: the header is tracked until the line
+ * that closes it with `:`.
+ *
+ * This is a scanner, not a Python parser, and it inherits the same documented
+ * limit as the comment handling below: a triple quote that appears at the start
+ * of a line *inside* another string literal would confuse it. Reaching for a
+ * real parser would mean shelling out to `python -c` from a Node CLI and
+ * failing when an instance's toolchain is not on PATH — a worse trade for a
+ * shape that does not occur in Alembic migrations.
+ */
+export function stripPythonDocstrings(source: string): string {
+  const lines = source.split('\n')
+  const out: string[] = []
+  // A module docstring is the first statement, so the file opens in a
+  // docstring position.
+  let expectDocstring = true
+  let inHeader = false
+  let i = 0
+
+  while (i < lines.length) {
+    const line = lines[i] as string
+    const trimmed = line.trim()
+    // Blank lines and whole-line comments are dropped by the filter below
+    // anyway, and neither ends a docstring position: `def f():` may be followed
+    // by a comment and then its docstring.
+    if (trimmed === '' || trimmed.startsWith('#')) {
+      out.push(line)
+      i++
+      continue
+    }
+
+    const open = expectDocstring ? DOCSTRING_OPEN_RE.exec(trimmed) : null
+    if (open) {
+      const delim = open[1] as string
+      expectDocstring = false
+      // A one-line docstring closes on its own line.
+      if (trimmed.slice(open[0].length).includes(delim)) {
+        i++
+        continue
+      }
+      i++
+      while (i < lines.length && !(lines[i] as string).includes(delim)) i++
+      if (i < lines.length) i++ // drop the closing line too
+      continue
+    }
+
+    if (inHeader || DEF_OR_CLASS_RE.test(trimmed)) {
+      const closed = HEADER_END_RE.test(line.trimEnd())
+      inHeader = !closed
+      expectDocstring = closed
+    } else {
+      expectDocstring = false
+    }
+    out.push(line)
+    i++
+  }
+
+  return out.join('\n')
+}
 
 /**
  * Identity of a migration's *substance*: its DDL, and nothing else.
@@ -349,7 +422,8 @@ const MODULE_DOCSTRING_RE = /^\s*("""|''')[\s\S]*?\1/
  *
  *   - the `revision` / `down_revision` assignments, which a carry rewrites by
  *     design;
- *   - the module docstring, and any full-line `#` comment;
+ *   - every docstring — the module's and every function's and class's — and any
+ *     full-line `#` comment;
  *   - the provenance marker;
  *   - blank lines and trailing whitespace.
  *
@@ -365,13 +439,30 @@ const MODULE_DOCSTRING_RE = /^\s*("""|''')[\s\S]*?\1/
  * `alreadyCarried` still refuses to draw any conclusion from a body that more
  * than one migration shares.
  *
+ * **Only the module docstring used to be stripped** (#983), so a docstring on a
+ * *function* inside the migration still counted as substance. #764 added a
+ * paragraph to `_has_core_users_table`'s docstring in migration 0010 explaining
+ * that `migrations/env.py` passes no `connect_args`, and every instance that had
+ * already carried 0010 was told, on every subsequent upgrade, forever:
+ *
+ *     body drift  0010_add_organizations_and_user_profile_fields.py
+ *                 The template has changed this migration since you carried it.
+ *                 ... this change will NOT reach you.
+ *                 It stays a convergence gap: fresh environments get the new
+ *                 body, you keep the old.
+ *
+ * Nothing executable had changed; the instance and a fresh environment produce
+ * an identical database. That warning is not merely noise — it points the reader
+ * at writing a forward migration to "correct" a schema difference that does not
+ * exist, against a table Core owns, on a live instance. It also drowns out a
+ * *genuine* body change, which would look exactly the same.
+ *
  * Inline trailing comments are deliberately NOT stripped: doing so means
  * distinguishing a `#` that starts a comment from one inside a string literal,
  * which needs a Python parser. Whole-line comments cover the real case.
  */
 export function migrationBodyHash(content: string): string {
-  const normalised = content
-    .replace(MODULE_DOCSTRING_RE, '')
+  const normalised = stripPythonDocstrings(content)
     .split('\n')
     .map((line) => line.trimEnd())
     .filter(

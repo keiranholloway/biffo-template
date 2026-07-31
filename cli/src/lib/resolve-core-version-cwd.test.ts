@@ -59,7 +59,24 @@ describe('resolve-core-version.sh is independent of the caller working directory
     expect(run(join(workdir, 'api-service'), '../scripts/resolve-core-version.sh')).toBe('9.9.9')
   })
 
-  it('resolves it when invoked by absolute path from an unrelated directory', () => {
-    expect(run(tmpdir(), join(workdir, 'scripts/resolve-core-version.sh'))).toBe('9.9.9')
+  /**
+   * The counter-case, and the reason the walk starts at the CALLER rather than
+   * at `dirname $0`.
+   *
+   * Resolving from the script's own location would answer `9.9.9` here — the
+   * version of the tree the script happens to live in, for a caller standing
+   * somewhere else entirely. That is precisely the fallback #811 records:
+   * a checkout with no authority of its own resolving to another one's version
+   * and being read as authoritative, in that case a 114-version-old fossil.
+   *
+   * `services/api/tests/test_health_core_version.py` already asserts both
+   * halves of this (no version source, and a garbled one, must exit non-zero).
+   * An earlier attempt at this fix made the script script-relative and broke
+   * all three of those tests — so this case is kept here, next to the ones that
+   * motivated the change, to make the tension explicit rather than leaving the
+   * next person to rediscover it from a red Python job.
+   */
+  it('refuses to answer for a caller standing outside any instance', () => {
+    expect(() => run(tmpdir(), join(workdir, 'scripts/resolve-core-version.sh'))).toThrow()
   })
 })

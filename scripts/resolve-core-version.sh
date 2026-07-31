@@ -36,18 +36,41 @@
 #   sh scripts/resolve-core-version.sh --quiet  # no diagnostics on stderr
 set -eu
 
-# Resolve the repo root from this script's OWN location rather than trusting the
-# caller's working directory. `deploy-app.yml` calls this from
-# `working-directory: api-service` — the artifact dir `download-artifact`
-# unpacks into — where `biffo.core.json` and the git tags are both invisible.
-# The script then reported "cannot determine a core version" and failed the
-# deploy, which read as a missing version rather than a wrong CWD.
+# Find the checkout the CALLER is standing in, by walking up for the instance
+# authority. `deploy-app.yml` runs this with `working-directory: api-service` —
+# the directory `download-artifact` unpacks the built API into, one level below
+# the checkout root — where a bare `[ -f biffo.core.json ]` sees nothing. The
+# script then reported "cannot determine a core version" and failed every
+# deploy, which reads as a missing version rather than a wrong directory. The
+# version was present the whole time, one level up.
 #
-# Requiring every caller to cd first is the fragile version of this: it worked
-# until one caller didn't, and the failure surfaced only in an instance, because
-# this repo never runs deploy-app.yml (it is non-deployable — it publishes to
-# npm). Locating the root here fixes it for every caller at once.
-cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+# ## Why up from the caller, and NOT from this script's own location
+#
+# Resolving `dirname $0/..` looks equivalent and is not: it would make the
+# script always answer about the repo it *lives in*, ignoring the caller
+# entirely. That breaks the two properties this file exists to guarantee, both
+# already asserted in services/api/tests/test_health_core_version.py:
+#
+#   - a checkout with no version source must FAIL, not quietly answer with some
+#     other checkout's `core-v*` tag;
+#   - a garbled `biffo.core.json` must FAIL rather than fall back to a tag —
+#     #811 records that fallback resolving to a 114-version-old fossil and being
+#     read as authoritative.
+#
+# Both are safety properties about *the tree being deployed*, so the caller's
+# position is the question, not this script's. Walking up answers the deploy
+# case without giving that up: `api-service/` is inside the checkout, so the
+# walk finds the root's authority and stops.
+#
+# The loop is bounded by `/`, and stopping at the first hit means a nested
+# checkout resolves to the nearest authority rather than an outer one.
+root=$PWD
+while [ "$root" != / ] && [ ! -f "$root/biffo.core.json" ]; do
+  root=$(dirname -- "$root")
+done
+if [ -f "$root/biffo.core.json" ]; then
+  cd -- "$root"
+fi
 
 QUIET=0
 [ "${1:-}" = "--quiet" ] && QUIET=1

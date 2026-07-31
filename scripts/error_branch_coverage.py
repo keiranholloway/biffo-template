@@ -52,6 +52,40 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BASELINE = REPO_ROOT / "docs/practices/error-branch-baseline.json"
 COVERAGE_JSON = REPO_ROOT / "coverage.json"
 
+# The two commands that take the first measurement, in the order they must run.
+# Named in every message about a missing baseline, because the missing piece is
+# never obvious from the failure: the analyser reads `coverage.json`, which only
+# exists after a --cov run, and neither the FileNotFoundError nor "N error
+# branches added" says so (#983).
+BOOTSTRAP_COMMANDS = (
+    "uv run pytest --cov --cov-report=json",
+    "uv run python scripts/error_branch_coverage.py --write",
+)
+
+# Why an absent baseline is a normal state, not a broken repo.
+#
+# This script is template-owned and reaches every instance through `biffo core
+# upgrade`. Its baseline is NOT, and must not be: the file is a measurement of
+# the repo it lives in, so shipping the template's copy would assert the
+# template's unexecuted branches against an instance's tree — wrong data, naming
+# files that do not exist there.
+#
+# So the test travels and its data cannot, and every instance arrives at this
+# gate having never taken the measurement. A ratchet with no prior position
+# should start, not block.
+NO_BASELINE_MESSAGE = (
+    f"No error-branch baseline at {BASELINE.relative_to(REPO_ROOT)}.\n"
+    "\n"
+    "That file is a measurement of THIS repo, so it is not distributed by a core\n"
+    "upgrade — a fresh instance has simply never taken it (#983). Take it with:\n"
+    "\n"
+    f"  {BOOTSTRAP_COMMANDS[0]}\n"
+    f"  {BOOTSTRAP_COMMANDS[1]}\n"
+    "\n"
+    "Until then the ratchet has no prior position to compare against, so it\n"
+    "reports what it finds and does not fail."
+)
+
 
 @dataclass(frozen=True)
 class Branch:
@@ -143,9 +177,17 @@ def unexecuted(coverage: dict, root: Path) -> list[Branch]:
     return out
 
 
-def load_baseline() -> dict:
+def load_baseline() -> dict | None:
+    """The committed baseline, or None when this repo has never taken one.
+
+    None rather than an empty baseline. They are different states and used to be
+    conflated: an empty baseline means "measured, and found nothing", which for a
+    tree this size means the analyser is broken; a missing one means "never
+    measured". Reading the second as the first made every branch look NEW and
+    red-lit the gate on every instance that upgraded (#983).
+    """
     if not BASELINE.is_file():
-        return {"total": 0, "branches": []}
+        return None
     return json.loads(BASELINE.read_text())
 
 
@@ -176,6 +218,16 @@ def main() -> int:
         return 0
 
     baseline = load_baseline()
+    if baseline is None:
+        # Report, then stop. Loudly, on stderr, naming both commands — a gate
+        # that goes quiet without saying so is the fail-open this whole script
+        # exists to hunt.
+        print(NO_BASELINE_MESSAGE, file=sys.stderr)
+        for branch in sorted(found, key=lambda b: (b.path, b.line)):
+            print(f"      {branch.path}:{branch.line}  [{branch.kind}] {branch.label}")
+        print(f"unexecuted error branches: {len(keys)}  (no baseline yet)")
+        return 0
+
     known = set(baseline.get("branches", []))
     new = [k for k in keys if k not in known]
 

@@ -89,7 +89,31 @@ class TestUnexecuted:
         assert ebc.unexecuted(coverage, tmp_path) == []
 
 
+@pytest.mark.skipif(
+    not ebc.BASELINE.is_file(),
+    reason=(
+        "no error-branch baseline in this repo yet — it is a measurement of the repo it "
+        "lives in, so a core upgrade cannot ship one (#983). Take it with:\n"
+        f"  {ebc.BOOTSTRAP_COMMANDS[0]}\n"
+        f"  {ebc.BOOTSTRAP_COMMANDS[1]}"
+    ),
+)
 class TestBaseline:
+    """Assertions about the committed baseline — which not every repo has.
+
+    This test file is template-owned and arrives in every instance through
+    ``biffo core upgrade``; ``docs/practices/error-branch-baseline.json`` is
+    correctly NOT template-owned, because it measures the tree it sits in. So the
+    test travels and its data cannot, and these two used to raise a bare
+    ``FileNotFoundError`` in every instance that upgraded past the version which
+    introduced them (#983) — naming neither the analyser's ``--write`` flag nor
+    the ``pytest --cov --cov-report=json`` run it needs first.
+
+    Skipped rather than failed where no baseline exists. Where one does — this
+    repo, and any instance that has taken the measurement — it is asserted on
+    exactly as before, so the ratchet is not loosened by a single notch.
+    """
+
     def test_the_committed_baseline_parses_and_is_a_real_measurement(self):
         data = json.loads(ebc.BASELINE.read_text())
         assert data["total"] == len(data["branches"])
@@ -102,6 +126,60 @@ class TestBaseline:
         root = ebc.REPO_ROOT
         missing = [k for k in data["branches"] if not (root / k.split(":")[0]).is_file()]
         assert missing == [], f"baseline references deleted files: {missing}"
+
+
+class TestNoBaselineYet:
+    """A ratchet with no prior position starts; it does not block (#983).
+
+    Every instance reaches this gate having never taken the measurement, because
+    the baseline is not distributable. Treating "never measured" as "measured
+    zero" made every branch it found look newly added, and red-lit the
+    ``Error-branch coverage`` CI step on every core upgrade with a message
+    ("Either cover it, or run --write to accept it deliberately") that never
+    mentioned the file was simply absent.
+    """
+
+    def _coverage(self, tmp_path: Path) -> Path:
+        (tmp_path / "m.py").write_text("try:\n    f()\nexcept OSError:\n    g()\n")
+        cov = tmp_path / "coverage.json"
+        cov.write_text(
+            json.dumps({"files": {"m.py": {"executed_lines": [2], "missing_lines": [4]}}})
+        )
+        return cov
+
+    def _run(self, tmp_path, monkeypatch, baseline: Path) -> int:
+        monkeypatch.setattr(ebc, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(ebc, "BASELINE", baseline)
+        cov = self._coverage(tmp_path)
+        monkeypatch.setattr("sys.argv", ["x", "--check", "--coverage", str(cov)])
+        return ebc.main()
+
+    def test_check_reports_and_passes_when_no_baseline_exists(self, tmp_path, monkeypatch, capsys):
+        assert self._run(tmp_path, monkeypatch, tmp_path / "absent.json") == 0
+        out = capsys.readouterr()
+        # The finding is still printed — starting the ratchet is not hiding it.
+        assert "m.py:4" in out.out
+        assert "no baseline yet" in out.out
+
+    def test_the_message_names_both_bootstrap_commands_in_order(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # The whole cost of #983 was that the failure named neither command, and
+        # the --cov run is not guessable from "FileNotFoundError".
+        self._run(tmp_path, monkeypatch, tmp_path / "absent.json")
+        err = capsys.readouterr().err
+        assert "pytest --cov --cov-report=json" in err
+        assert "error_branch_coverage.py --write" in err
+        assert err.index("pytest --cov") < err.index("--write")
+
+    def test_a_present_baseline_still_fails_on_growth(self, tmp_path, monkeypatch, capsys):
+        # The anti-fail-open control. "Missing" must be the only state that
+        # passes; a baseline that exists and says zero still ratchets, or this
+        # fix would have quietly switched the gate off everywhere.
+        baseline = tmp_path / "baseline.json"
+        baseline.write_text(json.dumps({"total": 0, "branches": []}))
+        assert self._run(tmp_path, monkeypatch, baseline) == 1
+        assert "added with no test exercising them" in capsys.readouterr().err
 
 
 def test_the_analyser_refuses_to_pass_without_coverage_data(tmp_path, monkeypatch, capsys):

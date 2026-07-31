@@ -122,7 +122,11 @@ def test_every_registered_event_describes_its_payload():
             f"{event.source}/{event.detail_type} is in the event registry but declares "
             f"neither a payload_model nor explicit fields, so it reaches the trigger "
             f"catalog with nothing to filter on. Add a payload_model (preferred), or "
-            f"list it in FIELDLESS_EVENTS if it genuinely has no filterable payload."
+            f"list it in FIELDLESS_EVENTS if it genuinely has no filterable payload.\n"
+            f"If this event is an INSTANCE's, both of those live in template-owned "
+            f"files and the next core upgrade would revert your edit (#983): declare "
+            f"the payload_model beside the event's own register_event() call, in the "
+            f"instance domain module that raises it (ADR-0022)."
         )
 
 

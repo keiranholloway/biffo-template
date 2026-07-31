@@ -13,8 +13,8 @@ deactivation gate must apply on both transports.
 import api.middleware.auth as auth_module
 import pytest
 from api.config import settings
-from api.middleware.principal import Principal, require_principal
-from api.middleware.service_auth import ServicePrincipal
+from api.middleware.principal import Principal, require_principal, require_signed_principal
+from api.middleware.service_auth import ServicePrincipal, require_service_principal
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from starlette.requests import Request
@@ -199,3 +199,62 @@ async def test_a_non_host_service_cannot_assert_another_plugins_identity(allowli
 
     assert principal.service is not None
     assert principal.service.logical_names == frozenset({"system:ideation"})
+
+
+# ── require_signed_principal: the internal routes' extra requirement (#621) ─────
+#
+# The internal families (ADR-0017 §3/§5) were dual-authenticated before the
+# migration by naming two dependencies. They now name one; these assert the
+# service half did not get lost in the consolidation, because losing it would
+# make every internal route reachable with a bare Cognito token.
+
+
+async def _signed(*, arn: str | None, forwarded: str | None = "founder-token"):
+    """Resolve the way FastAPI would: the service gate first, then the principal."""
+    request = _request(arn)
+    service = await require_service_principal(request)
+    principal = await require_principal(
+        request,
+        credentials=None,
+        forwarded_token=forwarded,
+        db=None,  # type: ignore[arg-type]
+    )
+    return await require_signed_principal(service=service, principal=principal)
+
+
+async def test_a_signed_caller_gets_a_principal_carrying_its_service(allowlist, _stub_identity):
+    principal = await _signed(arn=IDEATION_ARN)
+
+    assert principal.is_service_call is True
+    assert principal.service is not None
+    assert principal.service.logical_names == frozenset({"system:ideation"})
+    assert principal.user.sub == "sub-1"
+
+
+async def test_an_unsigned_caller_is_refused_before_any_token_is_verified(_stub_identity):
+    """A browser holding a valid Cognito token must not reach an internal route.
+
+    The service gate runs first — as it did when these routes named
+    ``require_service_principal`` themselves — so the refusal is 401 and no
+    identity lookup happens on an unauthenticated request.
+    """
+    with pytest.raises(HTTPException) as exc:
+        await _signed(arn=None)
+
+    assert exc.value.status_code == 401
+    assert "token" not in _stub_identity  # nothing was verified
+
+
+async def test_a_non_allowlisted_signed_caller_is_403(allowlist, _stub_identity):
+    with pytest.raises(HTTPException) as exc:
+        await _signed(arn=STRANGER_ARN)
+
+    assert exc.value.status_code == 403
+
+
+async def test_a_signed_caller_with_no_forwarded_user_is_401(allowlist, _stub_identity):
+    """Signing proves which machine is calling, never who it acts for."""
+    with pytest.raises(HTTPException) as exc:
+        await _signed(arn=IDEATION_ARN, forwarded=None)
+
+    assert exc.value.status_code == 401

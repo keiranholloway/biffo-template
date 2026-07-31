@@ -1,9 +1,9 @@
 """Owner-scoped service data access (ADR-0017 §5).
 
 Covers the manifest opt-in (owner_scoped_service) and the security properties of
-the mounted routes: dual auth (service principal + forwarded founder), owner
-scoping taken from the token and never the request, cross-owner isolation, and the
-allowed-principals gate.
+the mounted routes: dual auth (service principal + forwarded founder, now one
+`Principal` — #621), owner scoping taken from the token and never the request,
+cross-owner isolation, and the allowed-principals gate.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from collections.abc import AsyncGenerator
 import pytest
 from api.database import get_db  # noqa: E402  (grouped with app deps)
 from api.middleware.auth import AuthenticatedUser
-from api.middleware.forwarded_user import require_forwarded_user
+from api.middleware.principal import Principal, require_principal
 from api.middleware.service_auth import ServicePrincipal, require_service_principal
 from api.models.base import Base
 from api.models.plugin_table import PluginTableDefinition
@@ -127,7 +127,10 @@ class _Harness:
         app = FastAPI()
         app.include_router(self.router, prefix="/api/v1")
         app.dependency_overrides[get_db] = override_get_db
-        app.dependency_overrides[require_forwarded_user] = lambda: founder
+        # The route resolves both facets through require_signed_principal; these
+        # two overrides stand in for its halves — the verified user, and the
+        # SigV4 service that carried the request.
+        app.dependency_overrides[require_principal] = lambda: Principal(user=founder)
         app.dependency_overrides[require_service_principal] = lambda: ServicePrincipal(
             principal_arn=principal_arn
         )

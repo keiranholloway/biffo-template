@@ -286,9 +286,35 @@ describe('isRunnerKill', () => {
   })
 
   /**
+   * The second kill signature, missed by the first cut (#982) and found while
+   * diagnosing biffo-platform's red branch. Its run 30450084952 died 64 seconds
+   * in with "Type check" and "Lint" `cancelled` and every later step `skipped`
+   * — no failing step anywhere, yet the run concluded `failure`.
+   *
+   * This is not laundering a cancellation: a real cancellation, whether by hand
+   * or by `cancel-in-progress`, concludes the *run* `cancelled`, which
+   * FAILING_CONCLUSIONS already excludes before this function is reached.
+   */
+  it('calls a job stopped mid-step with cancelled steps a runner kill', () => {
+    expect(isRunnerKill([job('failure', ['success', 'success', 'cancelled', 'skipped'])])).toBe(
+      true,
+    )
+  })
+
+  /**
+   * `skipped` alone is not evidence of anything — it is what every step after a
+   * verdict reads. Without a step that actually stopped short, there is no kill
+   * to infer, and guessing would make the metric unable to refute.
+   */
+  it('does not call a run with only skipped steps a kill', () => {
+    expect(isRunnerKill([job('failure', ['success', 'skipped', 'skipped'])])).toBe(false)
+  })
+
+  /**
    * The other half of the estate's red: a step genuinely rejected the change.
    * biffo-template run 30555489992 failed on "Sync and audit core-v<version>",
-   * which is a real defect and must stay counted.
+   * which is a real defect and must stay counted. biffo-platform's terraform
+   * failures are the same shape and must survive this change.
    */
   it('does not launder a real failing step', () => {
     expect(isRunnerKill([job('failure', ['success', 'failure'])])).toBe(false)

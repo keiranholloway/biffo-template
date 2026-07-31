@@ -97,6 +97,36 @@ export const REPOS = [
 export const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out', 'startup_failure'])
 
 /**
+ * Step conclusions that mean the step **stopped without a verdict**.
+ *
+ * A dying runner produces two different signatures and #982 caught only the
+ * first, so `biffo-platform` kept two failures it had not earned:
+ *
+ * - `null` — the step was still executing when the lights went out. A deploy
+ *   frozen on "Package and deploy Lambda", six steps left `pending`.
+ * - `cancelled` — the step was stopped, and every later step reads `skipped`.
+ *   Two `biffo-platform` CI runs died 64 seconds in this way, on "Type check"
+ *   and "Lint".
+ *
+ * ## Why `cancelled` here is not an ordinary cancellation
+ *
+ * The obvious objection is that this launders someone hitting cancel, or a
+ * `cancel-in-progress` supersession. It does not, and the reason is structural:
+ * **those conclude the run `cancelled`**, which `FAILING_CONCLUSIONS` already
+ * excludes. This function is only ever reached for a run that concluded
+ * `failure`. A run that concluded `failure` while no step ever returned a
+ * verdict was therefore stopped by something that is not a cancellation.
+ *
+ * The evidence agreed rather than merely permitting it: neither run was
+ * superseded — the next CI run came 32 minutes later, long after both had died.
+ *
+ * A step that hits `timeout-minutes` (20 since #980) is expected to be marked
+ * `failure` and so stays a real failure. No timed-out run exists in the corpus
+ * yet to confirm that from data rather than from documentation.
+ */
+const STOPPED_SHORT = new Set([null, undefined, 'cancelled'])
+
+/**
  * Did this run fail because a **runner died**, rather than because a gate
  * rejected the change? (#982)
  *
@@ -126,9 +156,11 @@ export const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out', 'startup_fai
  * ## The rule, and why it errs the way it does
  *
  * A failed run is a runner kill when **no job reports a failing step** and **at
- * least one failed job has a step that never completed**. Both halves matter:
- * the first says nothing rejected the change, the second says work was still
- * outstanding when the lights went out.
+ * least one failed job has a step that stopped without a verdict** — see
+ * {@link STOPPED_SHORT} for the two signatures that means, and why `cancelled`
+ * among them is not an ordinary cancellation. Both halves matter: the first
+ * says nothing rejected the change, the second says work was still outstanding
+ * when the lights went out.
  *
  * A failed run with no steps recorded at all is deliberately **not** classified
  * as a kill. It stays a failure. That is the conservative direction for a
@@ -148,8 +180,10 @@ export function isRunnerKill(jobs) {
   const steps = failed.flatMap((job) => job.steps ?? [])
   if (steps.length === 0) return false
   if (steps.some((step) => step.conclusion === 'failure')) return false
-  return steps.some((step) => step.conclusion === null || step.conclusion === undefined)
+  return steps.some((step) => STOPPED_SHORT.has(step.conclusion))
 }
+
+
 
 /**
  * Longest gap between pushes that still counts as a red branch blocking someone

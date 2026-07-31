@@ -23,6 +23,13 @@ jobs:
   lint:
     name: Lint
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    # A self-hosted spot runner that is reclaimed mid-job leaves the job hanging
+    # rather than failing: on 2026-07-30 five jobs across two PRs died with
+    # "The runner has received a shutdown signal", and without a timeout a job
+    # whose runner simply vanishes burns the 360-minute default before anyone
+    # is told. 20m is ~4x the slowest job observed across this repo and
+    # biffo-platform (JS, 5.4m), so a cold cache or a large PR will not trip it.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: astral-sh/setup-uv@v5
@@ -35,6 +42,7 @@ jobs:
   typecheck:
     name: Type Check
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: astral-sh/setup-uv@v5
@@ -46,6 +54,7 @@ jobs:
   test:
     name: Test
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: astral-sh/setup-uv@v5
@@ -61,6 +70,7 @@ jobs:
   validate-manifest:
     name: Validate biffo.plugin.json
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: astral-sh/setup-uv@v5
@@ -101,6 +111,7 @@ jobs:
   security-secrets:
     name: Secret Scan
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: read
@@ -142,6 +153,7 @@ jobs:
   security-deps:
     name: Dependency Audit
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: astral-sh/setup-uv@v5

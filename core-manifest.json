@@ -55,6 +55,8 @@
     "modules/plugins/",
     "infra/",
     "apps/",
+    "apps/portal/src/app/admin/(instance)/",
+    "apps/portal/src/instance-nav.ts",
     "db/",
     "docs/ADR/",
     "README.md",

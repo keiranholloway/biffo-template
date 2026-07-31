@@ -71,6 +71,13 @@ TIMEOUT_CEILING_ENV = "AGENT_RUNTIME_MAX_SECONDS"
 # reporting is the stranded-run failure §5 warns about.
 DEFAULT_TIMEOUT_CEILING = 240.0
 
+# The share of its wall clock a run may consume before finishing is worth
+# saying out loud (issue #937). A run at 98% of its limit and one at 20% both
+# report "completed", so a whole class of agent drifted to one slow generation
+# from failing without anything noticing. Everything above this is reported at
+# warning level rather than info: the margin is the signal, not the duration.
+NEAR_LIMIT_SHARE = 0.8
+
 # How many tool calls one turn may actually run. A model can ask for arbitrarily
 # many in a single message, and each is a paid outbound request whose result then
 # re-enters the next turn's input tokens — so the §8 posture ("make an unbounded
@@ -140,6 +147,32 @@ class RunOutcome:
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
+    # How much of the run's wall clock it actually used (issue #937). Carried on
+    # the outcome rather than only inside the loop so the caller can report it
+    # once, next to the tokens and cost it already reports.
+    elapsed_seconds: float | None = None
+    timeout_seconds: float | None = None
+    wall_clock_share: float | None = None
+
+    @property
+    def near_wall_clock_limit(self) -> bool:
+        """Whether this run finished inside :data:`NEAR_LIMIT_SHARE` of its limit.
+
+        A run that *exceeded* the limit is near it too: its share is >= 1.0.
+        """
+        return self.wall_clock_share is not None and self.wall_clock_share >= NEAR_LIMIT_SHARE
+
+    def wall_clock_report(self) -> dict[str, Any]:
+        """The margin, as structured log fields — empty when it is unknown."""
+        if self.wall_clock_share is None:
+            return {}
+        return {
+            "elapsed_seconds": self.elapsed_seconds,
+            "timeout_seconds": self.timeout_seconds,
+            "wall_clock_share": self.wall_clock_share,
+            "wall_clock_pct": round(self.wall_clock_share * 100, 1),
+            "near_wall_clock_limit": self.near_wall_clock_limit,
+        }
 
     def to_completion_body(self) -> dict[str, Any]:
         """The body for ``POST /api/v1/internal/agent-runs/{id}/complete``.
@@ -147,6 +180,11 @@ class RunOutcome:
         A failure reports the same way a success does — status, transcript, cost
         — because §5 requires a subscriber to distinguish "failed" from "still
         running", and because the tokens a failed run burned were still billed.
+
+        The wall-clock margin is deliberately **not** in this body: Core's
+        completion schema has no field for it, so sending it would be dropped at
+        best. It is reported through the runtime's own structured logs instead
+        (see :meth:`wall_clock_report`); persisting it is a Core-side change.
         """
         return {
             "status": self.status,
@@ -210,13 +248,32 @@ class AgentLoop:
         for message in messages:
             yield TurnEvent(MESSAGE, 0, {"message": message})
 
-        deadline = self._clock() + limits.timeout_seconds
+        started = self._clock()
+        deadline = started + limits.timeout_seconds
+
+        def _end(
+            turn: int,
+            status: str,
+            *,
+            result: dict[str, Any] | None = None,
+            error: str | None = None,
+        ) -> TurnEvent:
+            """Terminate, reporting how much of the wall clock the run used."""
+            return _finished(
+                turn,
+                status,
+                result=result,
+                error=error,
+                elapsed=max(0.0, self._clock() - started),
+                timeout_seconds=limits.timeout_seconds,
+            )
+
         turn = 0
         while turn < limits.max_turns:
             turn += 1
             remaining = deadline - self._clock()
             if remaining <= 0:
-                yield _finished(
+                yield _end(
                     turn,
                     FAILED,
                     error=(
@@ -238,7 +295,7 @@ class AgentLoop:
                     timeout=remaining,
                 )
             except TimeoutError:
-                yield _finished(
+                yield _end(
                     turn,
                     FAILED,
                     error=(
@@ -248,7 +305,7 @@ class AgentLoop:
                 )
                 return
             except LLMError as exc:
-                yield _finished(turn, FAILED, error=f"LLM call failed on turn {turn}: {exc}")
+                yield _end(turn, FAILED, error=f"LLM call failed on turn {turn}: {exc}")
                 return
 
             message = assistant_message(
@@ -302,7 +359,7 @@ class AgentLoop:
                     messages.append(rejection)
                     yield TurnEvent(MESSAGE, turn, {"message": rejection})
                     continue
-                yield _finished(
+                yield _end(
                     turn,
                     COMPLETED,
                     result={
@@ -323,7 +380,7 @@ class AgentLoop:
                 yield TurnEvent(MESSAGE, turn, {"message": result})
 
             if not _wants_another_turn(response):
-                yield _finished(
+                yield _end(
                     turn,
                     COMPLETED,
                     result={
@@ -335,7 +392,7 @@ class AgentLoop:
                 )
                 return
 
-        yield _finished(
+        yield _end(
             turn,
             FAILED,
             error=(
@@ -404,6 +461,9 @@ async def collect(events: AsyncIterator[TurnEvent]) -> RunOutcome:
             outcome.status = str(event.data.get("status"))
             outcome.result = event.data.get("result")
             outcome.error = event.data.get("error")
+            outcome.elapsed_seconds = _as_optional_float(event.data.get("elapsed_seconds"))
+            outcome.timeout_seconds = _as_optional_float(event.data.get("timeout_seconds"))
+            outcome.wall_clock_share = _as_optional_float(event.data.get("wall_clock_share"))
 
     outcome.messages = messages
     outcome.input_tokens = _as_optional_int(input_tokens)
@@ -482,8 +542,30 @@ def _finished(
     *,
     result: dict[str, Any] | None = None,
     error: str | None = None,
+    elapsed: float,
+    timeout_seconds: float,
 ) -> TurnEvent:
-    return TurnEvent(RUN_FINISHED, turn, {"status": status, "result": result, "error": error})
+    """The single terminal event, carrying the run's wall-clock margin (#937).
+
+    Every way out of the loop comes through here — success, a blown limit, a
+    provider outage — so the margin is reported for *all* of them rather than
+    only the ones somebody remembered to instrument. ``wall_clock_share`` is the
+    number that matters: the same 100 seconds is comfortable against a 240s
+    limit and one bad generation away from failing against a 120s one.
+    """
+    share = elapsed / timeout_seconds if timeout_seconds > 0 else None
+    return TurnEvent(
+        RUN_FINISHED,
+        turn,
+        {
+            "status": status,
+            "result": result,
+            "error": error,
+            "elapsed_seconds": round(elapsed, 3),
+            "timeout_seconds": timeout_seconds,
+            "wall_clock_share": None if share is None else round(share, 4),
+        },
+    )
 
 
 def _add(total: float | None, value: Any) -> float | None:
@@ -494,6 +576,12 @@ def _add(total: float | None, value: Any) -> float | None:
 
 def _as_optional_int(value: float | None) -> int | None:
     return None if value is None else int(value)
+
+
+def _as_optional_float(value: Any) -> float | None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    return float(value)
 
 
 def _positive_int(value: Any, fallback: int) -> int:

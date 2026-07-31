@@ -14,6 +14,7 @@ from agent_runtime.loop import (
     TURN_STARTED,
     AgentLoop,
     RunLimits,
+    TurnEvent,
     collect,
 )
 from agent_runtime.messages import TOOL, UNTRUSTED_TOOL_CLOSE, UNTRUSTED_TOOL_OPEN
@@ -515,3 +516,136 @@ async def test_persistently_invalid_submissions_fail_at_max_turns_not_forever():
     )
 
     assert outcome.status == FAILED  # never a COMPLETED-with-junk
+
+
+# --- The wall-clock margin (issue #937) ---------------------------------------
+#
+# Duration alone is not a signal: the same 100 seconds is comfortable against a
+# 240s limit and one slow generation from failing against a 120s one. Every way
+# out of the loop must therefore report elapsed *against* the limit, or drift
+# toward the ceiling stays invisible until a run crosses it.
+
+
+async def test_a_completed_run_reports_how_much_of_its_wall_clock_it_used():
+    # FakeClock advances 45s per read: one read to open the run, one per turn
+    # check, one to close it — so this run finishes at 90s of its 100s limit.
+    loop = AgentLoop(FakeLLM(), clock=FakeClock(step=45.0))
+
+    outcome = await collect(
+        loop.stream(
+            model="m",
+            instructions="Go",
+            input_payload={},
+            limits=_limits(timeout=100.0),
+        )
+    )
+
+    assert outcome.status == COMPLETED
+    assert outcome.elapsed_seconds == 90.0
+    assert outcome.timeout_seconds == 100.0
+    assert outcome.wall_clock_share == 0.9
+    # 90% of the limit is the thing nobody could see before.
+    assert outcome.near_wall_clock_limit is True
+
+
+async def test_a_run_with_plenty_of_headroom_is_not_flagged():
+    loop = AgentLoop(FakeLLM(), clock=FakeClock(step=5.0))
+
+    outcome = await collect(
+        loop.stream(
+            model="m",
+            instructions="Go",
+            input_payload={},
+            limits=_limits(timeout=100.0),
+        )
+    )
+
+    assert outcome.wall_clock_share == 0.1
+    assert outcome.near_wall_clock_limit is False
+    assert outcome.wall_clock_report()["wall_clock_pct"] == 10.0
+
+
+async def test_the_terminal_event_carries_the_margin_not_just_the_outcome():
+    # The margin rides the same terminal event as status/result, so a streaming
+    # consumer (§6.3) sees it without folding the whole run.
+    events = await _stream(
+        AgentLoop(FakeLLM(), clock=FakeClock(step=15.0)), limits=_limits(timeout=60.0)
+    )
+
+    finished = events[-1]
+    assert finished.kind == RUN_FINISHED
+    assert finished.data["elapsed_seconds"] == 30.0
+    assert finished.data["timeout_seconds"] == 60.0
+    assert finished.data["wall_clock_share"] == 0.5
+
+
+async def test_a_run_that_blew_its_wall_clock_reports_a_share_over_one():
+    # The failure paths report the margin too — a timeout is the one run where
+    # "how far past the limit" is most worth knowing.
+    always_more = LLMResponse(content="thinking", model="m", finish_reason="tool_calls")
+    loop = AgentLoop(FakeLLM(always_more), clock=FakeClock(step=40.0))
+
+    outcome = await collect(
+        loop.stream(
+            model="m",
+            instructions="Go",
+            input_payload={},
+            limits=_limits(max_turns=10, timeout=100.0),
+        )
+    )
+
+    assert outcome.status == FAILED
+    assert outcome.wall_clock_share is not None and outcome.wall_clock_share > 1.0
+    assert outcome.near_wall_clock_limit is True
+
+
+async def test_an_llm_failure_still_reports_the_margin():
+    outcome = await collect(
+        AgentLoop(FakeLLM(error=llm_error("502 from provider")), clock=FakeClock(step=10.0)).stream(
+            model="m", instructions="Go", input_payload={}, limits=_limits(timeout=100.0)
+        )
+    )
+
+    assert outcome.status == FAILED
+    assert outcome.elapsed_seconds == 20.0
+    assert outcome.wall_clock_share == 0.2
+
+
+async def test_the_margin_is_not_sent_to_core_which_has_no_field_for_it():
+    # Deliberate: Core's completion schema has no wall-clock field, so the margin
+    # is reported through the runtime's logs instead of being silently dropped.
+    outcome = await collect(
+        AgentLoop(FakeLLM(), clock=FakeClock(step=10.0)).stream(
+            model="m", instructions="Go", input_payload={}, limits=_limits(timeout=100.0)
+        )
+    )
+
+    body = outcome.to_completion_body()
+
+    assert outcome.wall_clock_share is not None
+    assert "wall_clock_share" not in body
+    assert "elapsed_seconds" not in body
+
+
+async def test_a_terminal_event_without_a_margin_folds_to_no_margin():
+    """An event shape carrying no usable margin must fold to "unknown", not crash.
+
+    The loop always reports one, but :func:`collect` is a public fold over an
+    event stream (§6.3 anticipates other producers), and "no margin recorded"
+    must never read as "0% of the limit used" — which is why the fields stay
+    ``None`` and nothing is flagged as near its ceiling.
+    """
+
+    async def _events():
+        yield TurnEvent(RUN_FINISHED, 1, {"status": COMPLETED, "wall_clock_share": "soon"})
+
+    outcome = await collect(_events())
+
+    assert outcome.status == COMPLETED
+    assert (outcome.elapsed_seconds, outcome.timeout_seconds, outcome.wall_clock_share) == (
+        None,
+        None,
+        None,
+    )
+    assert outcome.near_wall_clock_limit is False
+    assert outcome.wall_clock_report() == {}

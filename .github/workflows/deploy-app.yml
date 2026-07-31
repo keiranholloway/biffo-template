@@ -85,6 +85,23 @@ jobs:
   build-dev:
     name: Build (dev)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    # Every job here is bounded (#973). Without a job-level timeout a job
+    # inherits GitHub's 360-minute default, and on a self-hosted fleet a
+    # reclaimed runner does not fail — it stops answering, so the job sits
+    # there for six hours with its step conclusions reporting `null`, which is
+    # indistinguishable from "still running" and eventually from success. That
+    # is how tabsii-platform's core Lambda sat ~21 hours behind `dev` while
+    # every visible signal (green PR, merged issue, green CI) said shipped.
+    #
+    # Values are observed-runtime + generous headroom, not guesses. Across
+    # tabsii-platform and biffo-platform deploys on 2026-07-30/31, `Build (env)`
+    # ran 2m01s–3m00s and `Deploy to <env>` ran 2m43s–3m58s (the one outlier
+    # being the killed run in #973, which hung ~10m before being reported).
+    # 20 minutes for a build and 45 for a deploy leave ~7x and ~11x headroom
+    # while cutting the silent-hang window from 6 hours to under one. 20 also
+    # matches every job in ci.yml (#980) and 45 the terraform-apply steps in
+    # deploy-infra.yml, so the file is consistent with its siblings.
+    timeout-minutes: 20
     environment: dev
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/dev') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev'))
     steps:
@@ -142,6 +159,9 @@ jobs:
   deploy-dev:
     name: Deploy to dev
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    # Bounded per #973 — see the note on build-dev for why and how the value
+    # was chosen.
+    timeout-minutes: 45
     needs: build-dev
     environment: dev
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/dev'
@@ -858,6 +878,8 @@ jobs:
   build-staging:
     name: Build (staging)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    # Bounded per #973 — see the note on build-dev.
+    timeout-minutes: 20
     environment: staging
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/staging') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging'))
     steps:
@@ -915,6 +937,8 @@ jobs:
   deploy-staging:
     name: Deploy to staging
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    # Bounded per #973 — see the note on build-dev.
+    timeout-minutes: 45
     needs: build-staging
     environment: staging
     if: vars.BIFFO_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/staging'
@@ -1632,6 +1656,8 @@ jobs:
   build-prod:
     name: Build (prod)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    # Bounded per #973 — see the note on build-dev.
+    timeout-minutes: 20
     environment: prod
     # prod deploys always require an explicit workflow_dispatch, never a push
     # side effect — BIFFO_DEPLOY_ENABLED is a single repo-wide flag set true
@@ -1696,6 +1722,8 @@ jobs:
   deploy-prod:
     name: Deploy to prod
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    # Bounded per #973 — see the note on build-dev.
+    timeout-minutes: 45
     needs: build-prod
     environment: prod
     # See build-prod above — prod always requires an explicit workflow_dispatch.
@@ -2409,3 +2437,96 @@ jobs:
             sleep 5
           done
           echo "::warning::CloudFront invalidation did not succeed; deploy continues (cache self-heals via TTL)."
+
+  # ─── FAILURE VISIBILITY ──────────────────────────────────────────────────────
+  # A failed deploy used to be exactly as visible as a failed CI run on a branch
+  # nobody is watching — i.e. invisible (#973). Nothing on the PR page, the issue,
+  # or `dev`'s CI status distinguishes "deployed" from "merged, CI green, deploy
+  # quietly died", so the environment silently falls behind every later merge.
+
+  report-deploy-failure:
+    name: Report a failed deploy
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    needs: [build-dev, deploy-dev, build-staging, deploy-staging, build-prod, deploy-prod]
+    # This is deliberately a JOB, not an `if: failure()` step inside the deploy
+    # jobs. The failure mode being reported is the runner going away: when that
+    # happens no further step in that job runs at all, because there is no
+    # longer a machine to run it on. Only a separate job, scheduled onto a
+    # different runner, survives it.
+    #
+    # `always()` is what makes this run — the implicit `success()` would skip it
+    # in precisely the case it exists for. `cancelled` sits alongside `failure`
+    # on purpose: a reclaimed self-hosted runner reports its job `cancelled`
+    # rather than `failure`, and a job stopped by the `timeout-minutes` added
+    # above lands there too. A human cancelling the whole run cancels this job
+    # with it, so that does not page anyone.
+    if: ${{ always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    timeout-minutes: 10
+    # Job-level permissions REPLACE the workflow-level block rather than extend
+    # it, so `contents` is restated. There is deliberately no `id-token` here:
+    # this job never assumes an AWS role.
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Annotate the run and write a summary
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          failed=$(printf '%s' "$NEEDS" | jq -r '
+            to_entries
+            | map(select(.value.result == "failure" or .value.result == "cancelled"))
+            | map("\(.key) (\(.value.result))")
+            | join(", ")')
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          echo "::error title=Deploy failed — ${GITHUB_REF_NAME} is now stale::${failed}. ${GITHUB_REF_NAME} is NOT deployed at ${GITHUB_SHA}. See ${run_url}"
+          {
+            echo "## ❌ Deploy failed — \`${GITHUB_REF_NAME}\` is now stale"
+            echo
+            echo "Failed jobs: **${failed}**"
+            echo
+            echo "The environment is still running whatever was deployed *before* \`${GITHUB_SHA}\`,"
+            echo "and will keep falling further behind with every later merge until this is re-run."
+            echo
+            echo '```bash'
+            echo "gh run rerun ${GITHUB_RUN_ID} --repo ${GITHUB_REPOSITORY} --failed"
+            echo "# or, for a clean run from the branch tip:"
+            echo "gh workflow run 'Deploy Application' --repo ${GITHUB_REPOSITORY} --ref ${GITHUB_REF_NAME} -f environment=<env>"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Open or update a tracking issue
+        # Never let the notifier's own failure be the loudest thing in the log —
+        # the annotation and summary above have already landed, and an instance
+        # with Issues disabled must not turn a deploy failure into two.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          failed=$(printf '%s' "$NEEDS" | jq -r '
+            to_entries
+            | map(select(.value.result == "failure" or .value.result == "cancelled"))
+            | map("\(.key) (\(.value.result))")
+            | join(", ")')
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          title="Deploy Application failed on ${GITHUB_REF_NAME} — the environment is stale"
+          body=$(printf '%s\n' \
+            "\`${GITHUB_REF_NAME}\` is **not** deployed at \`${GITHUB_SHA}\`." \
+            "" \
+            "- Failed jobs: ${failed}" \
+            "- Run: ${run_url}" \
+            "" \
+            "Recover with \`gh run rerun ${GITHUB_RUN_ID} --repo ${GITHUB_REPOSITORY} --failed\`, then" \
+            "confirm the deployed artifact — not just a green run — before closing this.")
+          # Match on the exact title among open issues rather than `--search`:
+          # the search index lags by minutes, which would file a duplicate for
+          # every consecutive failure. One open issue per branch, commented on.
+          existing=$(gh issue list --state open --limit 100 --json number,title \
+            --jq "map(select(.title == \"${title}\")) | .[0].number // empty")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

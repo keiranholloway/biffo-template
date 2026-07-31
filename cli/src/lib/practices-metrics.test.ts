@@ -2277,6 +2277,40 @@ describe('cross-repo time-to-feature (#767)', () => {
     const out = crossRepoTimeToFeature([upgradePr(marker('746'))], idx(), opened, [])
     expect(out).toMatchObject({ awaitingDeploy: 1, measured: 0, hoursP50: null })
   })
+
+  it('reports an EMPTY template index as unattributable, never as "closed no issue"', () => {
+    // The defect this pins cost two triages. `closingIssues` is built from the
+    // TEMPLATE repo's PRs; `--repo <instance>` filtered the fetch to the
+    // instance, so that map was empty and every carried PR fell through to
+    // `carriedWithoutIssue`. The metric then read "12 PRs carried, none closed an
+    // issue, measured 0" when the truth was "I never loaded the side of the join
+    // that would know". #776's own verification command was the one that could
+    // not work, and it was quoted as evidence the metric was unproven.
+    const out = crossRepoTimeToFeature(
+      [upgradePr(marker('746,747,770'))],
+      new Map(), // nothing fetched from the template
+      opened,
+      deploys,
+    )
+    expect(out).toMatchObject({
+      carriedPrs: 3,
+      unattributable: 3,
+      carriedWithoutIssue: 0, // NOT 3 — there is no basis for that claim
+      measured: 0,
+      hoursP50: null,
+    })
+  })
+
+  it('does not report unattributable when the index is present but the PR closes nothing', () => {
+    // The counterpart: a real "closed no issue" must stay distinguishable from
+    // "could not look". Same call, populated index — #770 genuinely closes none.
+    const out = crossRepoTimeToFeature([upgradePr(marker('770'))], idx(), opened, deploys)
+    expect(out).toMatchObject({
+      carriedPrs: 1,
+      carriedWithoutIssue: 1,
+      unattributable: 0,
+    })
+  })
 })
 
 describe('estate headline is capability, not the proving ground (#768)', () => {

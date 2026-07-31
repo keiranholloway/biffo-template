@@ -5,19 +5,14 @@ buffered chat turn **on behalf of a founder**. This is how a marketplace module
 (which runs in its own Lambda, never inside Core) rents the chat spine. Two
 independent checks must BOTH pass:
 
-1. **SigV4 service principal** (ADR-0009) — a known Biffo service is calling,
-   proven by IAM, not by anything in the request body.
+1. **SigV4 service principal** (``require_service_principal``, ADR-0009) — a known
+   Biffo service is calling, proven by IAM, not by anything in the request body.
 2. **The founder's Cognito token, forwarded and re-verified here.** The plugin
    forwards the founder's access token in the ``X-Biffo-User-Token`` header; Core
    re-verifies it with the shared verifier (``packages/cognito-auth``, #492). So
    **Core, not the plugin, is the authority on who the user is** — the plugin
    cannot assert an identity it has not been given a valid token for. The run's
    ``run_as_user_id`` is that verified subject.
-
-Both arrive as one :class:`~api.middleware.principal.Principal` from
-``require_signed_principal`` (#621) — one authorization model over two transports,
-so the forwarded token runs the same post-verification checks (deactivation,
-platform-admin sync, permissions) as a browser's bearer token.
 
 The verified founder must be in the agent's ``required_group`` (403 otherwise); an
 unknown ``agent_key`` is a 404. The turn itself runs through the shared
@@ -48,13 +43,17 @@ from ..chat_agents import (
 )
 from ..chat_engine import RuntimeInvoker
 from ..database import get_db
-from ..middleware.forwarded_user import FORWARDED_USER_HEADER  # re-exported for callers
-from ..middleware.principal import Principal, require_signed_principal
+from ..middleware.auth import AuthenticatedUser
+from ..middleware.forwarded_user import (  # re-exported: existing tests reference these here
+    FORWARDED_USER_HEADER,
+    require_forwarded_user,
+)
+from ..middleware.service_auth import ServicePrincipal, require_service_principal
 from ..schemas.agent_chat import AgentChatRequest, AgentChatResponse
 
 logger = Logger()
 
-__all__ = ["FORWARDED_USER_HEADER", "router"]
+__all__ = ["FORWARDED_USER_HEADER", "require_forwarded_user", "router"]
 
 router = APIRouter(prefix="/internal/agent-chat", tags=["internal:agents"])
 
@@ -63,12 +62,12 @@ router = APIRouter(prefix="/internal/agent-chat", tags=["internal:agents"])
 async def internal_agent_chat(
     agent_key: str,
     body: AgentChatRequest,
-    caller: Principal = Depends(require_signed_principal),
+    principal: ServicePrincipal = Depends(require_service_principal),
+    founder: AuthenticatedUser = Depends(require_forwarded_user),
     invoker: RuntimeInvoker = Depends(_get_runtime_invoker),
     db: AsyncSession = Depends(get_db),
 ) -> AgentChatResponse | JSONResponse:
     """Run one buffered turn for ``agent_key`` on behalf of the forwarded founder."""
-    founder = caller.user
     try:
         agent = get_chat_agent(agent_key)
     except UnknownChatAgentError as exc:

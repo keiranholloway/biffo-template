@@ -6,12 +6,9 @@ axes at once:
 
 - **Dual authentication.** Every handler requires a SigV4 service principal
   (ADR-0009) *and* a forwarded, re-verified founder (ADR-0017 §3). Neither alone
-  suffices, and both now arrive as one :class:`Principal` from
-  ``require_signed_principal`` (#621): a Cognito user with no IAM principal is
-  refused by its service gate, a service call with no forwarded user token is
-  refused by its user gate. The forwarded token is verified through the same
-  ``authenticated_identity`` as a browser's bearer token, so the deactivation
-  gate (#150) and permission resolution reach these routes by construction.
+  suffices: a Cognito user with no IAM principal is rejected by
+  ``require_service_principal``; a service call with no forwarded token is rejected
+  by ``require_forwarded_user``.
 - **Owner scoping is not optional and not from the request.** The owner is the
   *verified founder's* subject, taken from the re-verified token and written to /
   filtered on the table's declared ``owner_column``. It is never read from the body
@@ -40,7 +37,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..middleware.auth import AuthenticatedUser
-from ..middleware.principal import Principal, require_signed_principal
+from ..middleware.forwarded_user import require_forwarded_user
+from ..middleware.service_auth import ServicePrincipal, require_service_principal
 from .crud_handlers import serialize
 
 Handler = Callable[..., Awaitable[Any]]
@@ -52,16 +50,10 @@ def _owner_id(founder: AuthenticatedUser) -> str:
     return founder.user_id or founder.sub
 
 
-def _authorize(caller: Principal, allowed: frozenset[str]) -> None:
-    """404 (not 403) when the calling service is not one this table named — an
-    ungranted table must look nonexistent (ADR-0004 §4 indistinguishability).
-
-    Reads the service off the principal. ``require_signed_principal`` guarantees
-    it is present, but the ``None`` branch is spelled out rather than asserted:
-    an absent service resolves to no logical names, which intersects nothing and
-    yields the same 404 — fail-closed if that guarantee ever weakens."""
-    logical_names = caller.service.logical_names if caller.service else frozenset()
-    if not logical_names & allowed:
+def _authorize(principal: ServicePrincipal, allowed: frozenset[str]) -> None:
+    """404 (not 403) when the calling principal is not one this table named — an
+    ungranted table must look nonexistent (ADR-0004 §4 indistinguishability)."""
+    if not principal.logical_names & allowed:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
 
@@ -73,11 +65,11 @@ def make_owner_create_handler(
 
     async def handler(
         payload: dict[str, Any] = Body(default_factory=dict),
-        caller: Principal = Depends(require_signed_principal),
+        principal: ServicePrincipal = Depends(require_service_principal),
+        founder: AuthenticatedUser = Depends(require_forwarded_user),
         db: AsyncSession = Depends(get_db),
     ) -> dict[str, Any]:
-        _authorize(caller, allowed)
-        founder = caller.user
+        _authorize(principal, allowed)
         fields = {k: v for k, v in payload.items() if k in settable}
         row = model(tenant_id=founder.tenant_id, **{owner_column: _owner_id(founder)}, **fields)
         db.add(row)
@@ -107,11 +99,11 @@ def make_owner_read_handler(
 ) -> Handler:
     async def handler(
         id: str,
-        caller: Principal = Depends(require_signed_principal),
+        principal: ServicePrincipal = Depends(require_service_principal),
+        founder: AuthenticatedUser = Depends(require_forwarded_user),
         db: AsyncSession = Depends(get_db),
     ) -> dict[str, Any]:
-        _authorize(caller, allowed)
-        founder = caller.user
+        _authorize(principal, allowed)
         row = (
             await db.execute(_owned(model, owner_column, founder).where(model.id == id))
         ).scalar_one_or_none()
@@ -127,11 +119,11 @@ def make_owner_list_handler(
 ) -> Handler:
     async def handler(
         request: Request,
-        caller: Principal = Depends(require_signed_principal),
+        principal: ServicePrincipal = Depends(require_service_principal),
+        founder: AuthenticatedUser = Depends(require_forwarded_user),
         db: AsyncSession = Depends(get_db),
     ) -> list[dict[str, Any]]:
-        _authorize(caller, allowed)
-        founder = caller.user
+        _authorize(principal, allowed)
         stmt = _owned(model, owner_column, founder)
         # Optional equality filters on user columns (e.g. by session_id). The owner
         # filter is always ANDed on top and can never be relaxed by a query param —
@@ -154,11 +146,11 @@ def make_owner_update_handler(
     async def handler(
         id: str,
         payload: dict[str, Any] = Body(default_factory=dict),
-        caller: Principal = Depends(require_signed_principal),
+        principal: ServicePrincipal = Depends(require_service_principal),
+        founder: AuthenticatedUser = Depends(require_forwarded_user),
         db: AsyncSession = Depends(get_db),
     ) -> dict[str, Any]:
-        _authorize(caller, allowed)
-        founder = caller.user
+        _authorize(principal, allowed)
         row = (
             await db.execute(_owned(model, owner_column, founder).where(model.id == id))
         ).scalar_one_or_none()

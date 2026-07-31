@@ -35,6 +35,7 @@ An ADR captures a significant architectural decision: the context that forced it
 | [ADR-0025](0025-orchestration-scoped-authorization-registry.md)     | Scoped workflow authorization — an authorizer-registry seam, checked against the submitted scope | Accepted | 2026-07-26 |
 | [ADR-0026](0026-trigger-scope-reachability.md)                      | Trigger scope-reachability — reject a scope a trigger's payload can never carry | Accepted | 2026-07-26 |
 | [ADR-0027](0027-agent-write-back-to-core-tables.md)                 | Agent write-back to Core tables — author-bound authority, re-checked under RLS (amends ADR-0014 §7) | Accepted | 2026-07-27 |
+| [ADR-0028](0028-instance-owned-portal-admin-surfaces.md)            | Instance admin surfaces are user-owned guests in the core portal (portal counterpart to ADR-0022) | Accepted | 2026-07-31 |
 
 ## Format
 

@@ -192,6 +192,14 @@ jobs:
           gh variable set PORTAL_BUCKET_NAME \
             --body "$(terraform output -raw portal_bucket_name)" \
             --env dev
+          # Consumed by deploy-app.yml to upload the Lambda package to S3 instead of
+          # inlining it against a ~70MB request cap (#994). deploy-app FALLS BACK to an
+          # inline upload when this is unset, which is what makes the ordering safe: a
+          # core upgrade lands the workflow and the bucket in one PR, and nothing orders
+          # Deploy Application after Deploy Infrastructure.
+          gh variable set ARTIFACTS_BUCKET_NAME \
+            --body "$(terraform output -raw artifacts_bucket_name)" \
+            --env dev
           gh variable set CLOUDFRONT_DISTRIBUTION_ID \
             --body "$(terraform output -raw cloudfront_distribution_id)" \
             --env dev
@@ -350,6 +358,14 @@ jobs:
             --env staging
           gh variable set PORTAL_BUCKET_NAME \
             --body "$(terraform output -raw portal_bucket_name)" \
+            --env staging
+          # Consumed by deploy-app.yml to upload the Lambda package to S3 instead of
+          # inlining it against a ~70MB request cap (#994). deploy-app FALLS BACK to an
+          # inline upload when this is unset, which is what makes the ordering safe: a
+          # core upgrade lands the workflow and the bucket in one PR, and nothing orders
+          # Deploy Application after Deploy Infrastructure.
+          gh variable set ARTIFACTS_BUCKET_NAME \
+            --body "$(terraform output -raw artifacts_bucket_name)" \
             --env staging
           gh variable set CLOUDFRONT_DISTRIBUTION_ID \
             --body "$(terraform output -raw cloudfront_distribution_id)" \
@@ -512,6 +528,14 @@ jobs:
             --env prod
           gh variable set PORTAL_BUCKET_NAME \
             --body "$(terraform output -raw portal_bucket_name)" \
+            --env prod
+          # Consumed by deploy-app.yml to upload the Lambda package to S3 instead of
+          # inlining it against a ~70MB request cap (#994). deploy-app FALLS BACK to an
+          # inline upload when this is unset, which is what makes the ordering safe: a
+          # core upgrade lands the workflow and the bucket in one PR, and nothing orders
+          # Deploy Application after Deploy Infrastructure.
+          gh variable set ARTIFACTS_BUCKET_NAME \
+            --body "$(terraform output -raw artifacts_bucket_name)" \
             --env prod
           gh variable set CLOUDFRONT_DISTRIBUTION_ID \
             --body "$(terraform output -raw cloudfront_distribution_id)" \

@@ -474,19 +474,48 @@ jobs:
           # real fix (that is an S3-based update, which lifts the ceiling to 250MB
           # unzipped and needs an artifacts bucket that does not exist yet); it is
           # what stops a size ceiling being an outage in the meantime.
-          if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
+          # Prefer S3 (#994). update-function-code --zip-file sends the package INLINE,
+          # base64-encoded at ~1.33x against a ~70MB request cap; via S3 the ceiling is
+          # 250MB unzipped and bytecode never has to be sacrificed to fit.
+          #
+          # Gated on the bucket EXISTING, not merely on the variable being set, and
+          # that is the whole ordering story: a core upgrade lands this workflow and
+          # the bucket's Terraform in one PR, and nothing orders Deploy Application
+          # after Deploy Infrastructure. Without the head-bucket probe the first
+          # upgrade would trade a size failure for a missing-bucket failure. Same
+          # shape as the plugin frontend loop below, for the same reason.
+          artifacts_bucket="${{ vars.ARTIFACTS_BUCKET_NAME }}"
+          if [ -n "$artifacts_bucket" ] && aws s3api head-bucket --bucket "$artifacts_bucket" 2>/dev/null; then
+            key="core-api/${GITHUB_SHA}.zip"
+            echo "Uploading via s3://$artifacts_bucket/$key (bytecode kept)"
+            aws s3 cp lambda.zip "s3://$artifacts_bucket/$key" --only-show-errors
+            use_s3=1
+          else
+            use_s3=""
+            if [ -n "$artifacts_bucket" ]; then
+              echo "::warning::ARTIFACTS_BUCKET_NAME is set but $artifacts_bucket does not exist yet — run Deploy Infrastructure. Falling back to an inline upload." >&2
+            else
+              echo "ARTIFACTS_BUCKET_NAME unset; inline upload. Run Deploy Infrastructure to enable S3 (#994)."
+            fi
+          fi
+
+          # Inline only: degrade before failing. Bytecode is an optimisation, and a
+          # slower cold start beats an instance that cannot deploy at all -- the
+          # deployed code is byte-for-byte identical either way. Not reached on the
+          # S3 path, which is the point of doing this at all.
+          if [ -z "$use_s3" ] && awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
             echo "::warning::~${request_mb}MB exceeds the inline cap; dropping bytecode and retrying." >&2
             find package -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
             rm -f lambda.zip
             zipped=$(cd package && zip -qr ../lambda.zip . && stat -c%s ../lambda.zip)
             request_mb=$(awk -v b="$zipped" 'BEGIN{printf "%.1f", b*1.33/1048576}')
             echo "Without bytecode: $(awk -v b="$zipped" 'BEGIN{printf "%.1f", b/1048576}')MB zipped, ~${request_mb}MB as a request body"
-            echo "::warning::Cold start is ~2.5s slower until this moves to an S3-based update (#724)." >&2
+            echo "::warning::Cold start is ~2.5s slower until Deploy Infrastructure provisions the artifacts bucket (#994)." >&2
           fi
           # Still over without bytecode means the package itself is too big, and no
           # amount of not-precompiling saves it. Fail loudly rather than let
           # update-function-code reject it opaquely after the upload.
-          if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
+          if [ -z "$use_s3" ] && awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
             echo "::error::Lambda package is ~${request_mb}MB as a base64 request body even without bytecode, against a ~70MB cap." >&2
             echo "Move this function to an S3-based update (250MB unzipped) or drop a heavy" >&2
             echo "dependency. Do not raise this threshold without measuring the real cap." >&2
@@ -499,10 +528,17 @@ jobs:
           # DB credentials into the Actions log (#334). The response is unused —
           # the wait below is what gates progress — so narrowing it to the status
           # string loses nothing.
-          aws lambda update-function-code \
-            --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
-            --zip-file fileb://lambda.zip \
-            --output text --query 'LastUpdateStatus'
+          if [ -n "$use_s3" ]; then
+            aws lambda update-function-code \
+              --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
+              --s3-bucket "$artifacts_bucket" --s3-key "$key" \
+              --output text --query 'LastUpdateStatus'
+          else
+            aws lambda update-function-code \
+              --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
+              --zip-file fileb://lambda.zip \
+              --output text --query 'LastUpdateStatus'
+          fi
       - name: Initialise database schema
         run: |
           aws lambda wait function-updated \
@@ -1211,19 +1247,48 @@ jobs:
           # real fix (that is an S3-based update, which lifts the ceiling to 250MB
           # unzipped and needs an artifacts bucket that does not exist yet); it is
           # what stops a size ceiling being an outage in the meantime.
-          if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
+          # Prefer S3 (#994). update-function-code --zip-file sends the package INLINE,
+          # base64-encoded at ~1.33x against a ~70MB request cap; via S3 the ceiling is
+          # 250MB unzipped and bytecode never has to be sacrificed to fit.
+          #
+          # Gated on the bucket EXISTING, not merely on the variable being set, and
+          # that is the whole ordering story: a core upgrade lands this workflow and
+          # the bucket's Terraform in one PR, and nothing orders Deploy Application
+          # after Deploy Infrastructure. Without the head-bucket probe the first
+          # upgrade would trade a size failure for a missing-bucket failure. Same
+          # shape as the plugin frontend loop below, for the same reason.
+          artifacts_bucket="${{ vars.ARTIFACTS_BUCKET_NAME }}"
+          if [ -n "$artifacts_bucket" ] && aws s3api head-bucket --bucket "$artifacts_bucket" 2>/dev/null; then
+            key="core-api/${GITHUB_SHA}.zip"
+            echo "Uploading via s3://$artifacts_bucket/$key (bytecode kept)"
+            aws s3 cp lambda.zip "s3://$artifacts_bucket/$key" --only-show-errors
+            use_s3=1
+          else
+            use_s3=""
+            if [ -n "$artifacts_bucket" ]; then
+              echo "::warning::ARTIFACTS_BUCKET_NAME is set but $artifacts_bucket does not exist yet — run Deploy Infrastructure. Falling back to an inline upload." >&2
+            else
+              echo "ARTIFACTS_BUCKET_NAME unset; inline upload. Run Deploy Infrastructure to enable S3 (#994)."
+            fi
+          fi
+
+          # Inline only: degrade before failing. Bytecode is an optimisation, and a
+          # slower cold start beats an instance that cannot deploy at all -- the
+          # deployed code is byte-for-byte identical either way. Not reached on the
+          # S3 path, which is the point of doing this at all.
+          if [ -z "$use_s3" ] && awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
             echo "::warning::~${request_mb}MB exceeds the inline cap; dropping bytecode and retrying." >&2
             find package -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
             rm -f lambda.zip
             zipped=$(cd package && zip -qr ../lambda.zip . && stat -c%s ../lambda.zip)
             request_mb=$(awk -v b="$zipped" 'BEGIN{printf "%.1f", b*1.33/1048576}')
             echo "Without bytecode: $(awk -v b="$zipped" 'BEGIN{printf "%.1f", b/1048576}')MB zipped, ~${request_mb}MB as a request body"
-            echo "::warning::Cold start is ~2.5s slower until this moves to an S3-based update (#724)." >&2
+            echo "::warning::Cold start is ~2.5s slower until Deploy Infrastructure provisions the artifacts bucket (#994)." >&2
           fi
           # Still over without bytecode means the package itself is too big, and no
           # amount of not-precompiling saves it. Fail loudly rather than let
           # update-function-code reject it opaquely after the upload.
-          if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
+          if [ -z "$use_s3" ] && awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
             echo "::error::Lambda package is ~${request_mb}MB as a base64 request body even without bytecode, against a ~70MB cap." >&2
             echo "Move this function to an S3-based update (250MB unzipped) or drop a heavy" >&2
             echo "dependency. Do not raise this threshold without measuring the real cap." >&2
@@ -1236,10 +1301,17 @@ jobs:
           # DB credentials into the Actions log (#334). The response is unused —
           # the wait below is what gates progress — so narrowing it to the status
           # string loses nothing.
-          aws lambda update-function-code \
-            --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
-            --zip-file fileb://lambda.zip \
-            --output text --query 'LastUpdateStatus'
+          if [ -n "$use_s3" ]; then
+            aws lambda update-function-code \
+              --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
+              --s3-bucket "$artifacts_bucket" --s3-key "$key" \
+              --output text --query 'LastUpdateStatus'
+          else
+            aws lambda update-function-code \
+              --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
+              --zip-file fileb://lambda.zip \
+              --output text --query 'LastUpdateStatus'
+          fi
       - name: Initialise database schema
         run: |
           aws lambda wait function-updated \
@@ -1960,19 +2032,48 @@ jobs:
           # real fix (that is an S3-based update, which lifts the ceiling to 250MB
           # unzipped and needs an artifacts bucket that does not exist yet); it is
           # what stops a size ceiling being an outage in the meantime.
-          if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
+          # Prefer S3 (#994). update-function-code --zip-file sends the package INLINE,
+          # base64-encoded at ~1.33x against a ~70MB request cap; via S3 the ceiling is
+          # 250MB unzipped and bytecode never has to be sacrificed to fit.
+          #
+          # Gated on the bucket EXISTING, not merely on the variable being set, and
+          # that is the whole ordering story: a core upgrade lands this workflow and
+          # the bucket's Terraform in one PR, and nothing orders Deploy Application
+          # after Deploy Infrastructure. Without the head-bucket probe the first
+          # upgrade would trade a size failure for a missing-bucket failure. Same
+          # shape as the plugin frontend loop below, for the same reason.
+          artifacts_bucket="${{ vars.ARTIFACTS_BUCKET_NAME }}"
+          if [ -n "$artifacts_bucket" ] && aws s3api head-bucket --bucket "$artifacts_bucket" 2>/dev/null; then
+            key="core-api/${GITHUB_SHA}.zip"
+            echo "Uploading via s3://$artifacts_bucket/$key (bytecode kept)"
+            aws s3 cp lambda.zip "s3://$artifacts_bucket/$key" --only-show-errors
+            use_s3=1
+          else
+            use_s3=""
+            if [ -n "$artifacts_bucket" ]; then
+              echo "::warning::ARTIFACTS_BUCKET_NAME is set but $artifacts_bucket does not exist yet — run Deploy Infrastructure. Falling back to an inline upload." >&2
+            else
+              echo "ARTIFACTS_BUCKET_NAME unset; inline upload. Run Deploy Infrastructure to enable S3 (#994)."
+            fi
+          fi
+
+          # Inline only: degrade before failing. Bytecode is an optimisation, and a
+          # slower cold start beats an instance that cannot deploy at all -- the
+          # deployed code is byte-for-byte identical either way. Not reached on the
+          # S3 path, which is the point of doing this at all.
+          if [ -z "$use_s3" ] && awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
             echo "::warning::~${request_mb}MB exceeds the inline cap; dropping bytecode and retrying." >&2
             find package -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
             rm -f lambda.zip
             zipped=$(cd package && zip -qr ../lambda.zip . && stat -c%s ../lambda.zip)
             request_mb=$(awk -v b="$zipped" 'BEGIN{printf "%.1f", b*1.33/1048576}')
             echo "Without bytecode: $(awk -v b="$zipped" 'BEGIN{printf "%.1f", b/1048576}')MB zipped, ~${request_mb}MB as a request body"
-            echo "::warning::Cold start is ~2.5s slower until this moves to an S3-based update (#724)." >&2
+            echo "::warning::Cold start is ~2.5s slower until Deploy Infrastructure provisions the artifacts bucket (#994)." >&2
           fi
           # Still over without bytecode means the package itself is too big, and no
           # amount of not-precompiling saves it. Fail loudly rather than let
           # update-function-code reject it opaquely after the upload.
-          if awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
+          if [ -z "$use_s3" ] && awk -v m="$request_mb" 'BEGIN{exit !(m > 60)}'; then
             echo "::error::Lambda package is ~${request_mb}MB as a base64 request body even without bytecode, against a ~70MB cap." >&2
             echo "Move this function to an S3-based update (250MB unzipped) or drop a heavy" >&2
             echo "dependency. Do not raise this threshold without measuring the real cap." >&2
@@ -1985,10 +2086,17 @@ jobs:
           # DB credentials into the Actions log (#334). The response is unused —
           # the wait below is what gates progress — so narrowing it to the status
           # string loses nothing.
-          aws lambda update-function-code \
-            --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
-            --zip-file fileb://lambda.zip \
-            --output text --query 'LastUpdateStatus'
+          if [ -n "$use_s3" ]; then
+            aws lambda update-function-code \
+              --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
+              --s3-bucket "$artifacts_bucket" --s3-key "$key" \
+              --output text --query 'LastUpdateStatus'
+          else
+            aws lambda update-function-code \
+              --function-name ${{ vars.CORE_API_LAMBDA_NAME }} \
+              --zip-file fileb://lambda.zip \
+              --output text --query 'LastUpdateStatus'
+          fi
       - name: Initialise database schema
         run: |
           aws lambda wait function-updated \

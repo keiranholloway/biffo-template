@@ -14,6 +14,7 @@ from agent_runtime.loop import (
     TURN_STARTED,
     AgentLoop,
     RunLimits,
+    TurnEvent,
     collect,
 )
 from agent_runtime.messages import TOOL, UNTRUSTED_TOOL_CLOSE, UNTRUSTED_TOOL_OPEN
@@ -624,3 +625,27 @@ async def test_the_margin_is_not_sent_to_core_which_has_no_field_for_it():
     assert outcome.wall_clock_share is not None
     assert "wall_clock_share" not in body
     assert "elapsed_seconds" not in body
+
+
+async def test_a_terminal_event_without_a_margin_folds_to_no_margin():
+    """An event shape carrying no usable margin must fold to "unknown", not crash.
+
+    The loop always reports one, but :func:`collect` is a public fold over an
+    event stream (§6.3 anticipates other producers), and "no margin recorded"
+    must never read as "0% of the limit used" — which is why the fields stay
+    ``None`` and nothing is flagged as near its ceiling.
+    """
+
+    async def _events():
+        yield TurnEvent(RUN_FINISHED, 1, {"status": COMPLETED, "wall_clock_share": "soon"})
+
+    outcome = await collect(_events())
+
+    assert outcome.status == COMPLETED
+    assert (outcome.elapsed_seconds, outcome.timeout_seconds, outcome.wall_clock_share) == (
+        None,
+        None,
+        None,
+    )
+    assert outcome.near_wall_clock_limit is False
+    assert outcome.wall_clock_report() == {}

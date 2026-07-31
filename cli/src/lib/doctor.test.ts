@@ -174,6 +174,21 @@ describe('checkFossilCoreVersion', () => {
   it('says nothing when there is no core.version at all', () => {
     expect(checkFossilCoreVersion(healthy({ fossilCoreVersion: null }))).toEqual([])
   })
+
+  it('describes both deletions the upgrade actually performs (#842)', () => {
+    // The remedy used to promise only the `inherited` deletion, which is the
+    // case that CANNOT reach this check — an equal copy does not disagree with
+    // the authority, so it never warns. Every finding this check emits is a
+    // disagreement, and since #842 the behind-the-authority half of that is
+    // deleted too. Asserted so the advice cannot silently drift from the
+    // behaviour again, the way it did between #842's first three asks landing
+    // and this line being read.
+    const found = checkFossilCoreVersion(
+      healthy({ fossilCoreVersion: '0.41.17', localCoreVersion: '0.155.0' }),
+    )
+    expect(found[0]?.remedy).toContain('stale')
+    expect(found[0]?.remedy).toContain('biffo core upgrade')
+  })
 })
 
 describe('checkStaleBranches', () => {

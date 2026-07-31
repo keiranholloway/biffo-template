@@ -154,7 +154,13 @@ class OrchestratorPlugin(BiffoPluginBase):
     ) -> None:
         manifest = load_manifest(MANIFEST_PATH)
         super().__init__(manifest, api=api if api is not None else SignedCoreClient())
-        self._ses = ses_client if ses_client is not None else boto3.client("ses")
+        # SESv2, not classic SES: only SESv2's `send_email` can set custom
+        # headers (`Content.Simple.Headers`), which is what lets the `email`
+        # action attach RFC 8058 `List-Unsubscribe`/`List-Unsubscribe-Post`
+        # (see `SesClient` in actions.py). The IAM action names are unchanged
+        # (`ses:SendEmail`/`ses:SendRawEmail` cover both API generations), so
+        # no Terraform change accompanies this.
+        self._ses = ses_client if ses_client is not None else boto3.client("sesv2")
         # Plain (unsigned) HTTP client for webhook actions — distinct from the
         # IAM-signed Core client. Reused across warm invocations to pool connections.
         self._http = http_client if http_client is not None else httpx.Client(timeout=10)

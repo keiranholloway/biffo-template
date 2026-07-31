@@ -32,7 +32,14 @@ from .email_branding import EmailBranding, build_source, build_subject, render_e
 
 
 class SesClient(Protocol):
-    """The slice of the boto3 SES client the email action uses."""
+    """The slice of the boto3 **SESv2** client the email action uses.
+
+    ``send_email`` here is SESv2's request shape (``FromEmailAddress``,
+    ``Content.Simple``) — not SES v1's (``Source``, ``Message``). SES v1's
+    ``send_email`` has no way to attach custom headers at all; SESv2's does
+    (``Content.Simple.Headers``), which is what makes RFC 8058 one-click
+    unsubscribe (``List-Unsubscribe`` / ``List-Unsubscribe-Post``) possible.
+    """
 
     def send_email(self, **kwargs: Any) -> dict[str, Any]: ...
 
@@ -223,23 +230,36 @@ def send_email(
     branding: EmailBranding | None = None,
     **_: Any,
 ) -> dict[str, Any]:
-    """Send a templated, branded HTML email via SES (issue tabsii-platform#378).
+    """Send a templated, branded HTML email via SESv2 (issue tabsii-platform#378,
+    RFC 8058 one-click unsubscribe).
 
     ``config`` keys: ``from`` (verified SES sender, required), ``to`` (address,
     address list, or a ``{field}`` template filled from the event payload —
     e.g. ``{email}`` to notify whoever triggered the run — required), ``subject``
     and ``body`` (optional ``{field}`` templates filled from the event payload).
 
-    Sends ``multipart/alternative`` — SES's ``send_email`` builds that MIME
-    structure automatically whenever ``Message.Body`` carries both ``Text``
-    and ``Html`` keys, so no separate raw-MIME path is needed. The ``Text``
-    part is exactly ``body`` rendered, unchanged from before this issue — the
-    plain-text fallback a spam filter or text-only client sees is never a
-    stripped-down version of the HTML, it is the same string the HTML is
-    *built from*. ``branding`` (the shared, instance-configurable layout —
-    see ``email_branding.py``) supplies the header/footer/colours/sender/
-    subject conventions; a caller that passes none gets ``EmailBranding()``'s
-    generic defaults rather than an unbranded or broken email.
+    Sends ``multipart/alternative`` — SESv2's ``send_email`` builds that MIME
+    structure automatically whenever ``Content.Simple.Body`` carries both
+    ``Text`` and ``Html`` keys, so no separate raw-MIME path is needed. The
+    ``Text`` part is exactly ``body`` rendered (plus, only when an unsubscribe
+    link is present, one short appended line — see below) — the plain-text
+    fallback a spam filter or text-only client sees is never a stripped-down
+    version of the HTML, it is the same string the HTML is *built from*.
+    ``branding`` (the shared, instance-configurable layout — see
+    ``email_branding.py``) supplies the header/footer/colours/sender/subject
+    conventions; a caller that passes none gets ``EmailBranding()``'s generic
+    defaults rather than an unbranded or broken email.
+
+    **One-click unsubscribe (RFC 8058).** When the triggering event's payload
+    carries a truthy ``unsubscribe_url``, the send gets both the
+    ``List-Unsubscribe`` and ``List-Unsubscribe-Post`` headers (only SESv2's
+    ``send_email`` can set custom headers at all — v1's cannot), the branded
+    HTML footer gets an "Unsubscribe" link alongside any configured footer
+    links, and the plain-text part gets one appended unsubscribe line. When
+    the payload carries no ``unsubscribe_url`` — e.g. an internal staff
+    notification workflow — none of that happens: no ``Headers`` key, no
+    footer link, no text line, byte-identical to a plain notification. A
+    workflow never advertises an unsubscribe it has no way to honour.
     """
     source = _require(config, "email", "from")
     to = _render_recipient("email", "to", _require(config, "email", "to"), payload)
@@ -247,23 +267,37 @@ def send_email(
     recipients = [to] if isinstance(to, str) else list(to)
     subject = _render(config.get("subject", "Notification"), payload)
     body = _render(config.get("body", ""), payload)
+    unsubscribe_url = payload.get("unsubscribe_url") or None
 
     active_branding = branding or EmailBranding()
     full_subject = build_subject(active_branding, subject)
     full_source = build_source(active_branding, source)
-    html_body = render_email_html(active_branding, subject=full_subject, text_body=body)
+    html_body = render_email_html(
+        active_branding,
+        subject=full_subject,
+        text_body=body,
+        unsubscribe_url=unsubscribe_url,
+    )
+    text_body = f"{body}\n\nUnsubscribe: {unsubscribe_url}" if unsubscribe_url else body
+
+    content: dict[str, Any] = {
+        "Subject": {"Data": full_subject},
+        "Body": {
+            "Text": {"Data": text_body},
+            "Html": {"Data": html_body},
+        },
+    }
+    if unsubscribe_url:
+        content["Headers"] = [
+            {"Name": "List-Unsubscribe", "Value": f"<{unsubscribe_url}>"},
+            {"Name": "List-Unsubscribe-Post", "Value": "List-Unsubscribe=One-Click"},
+        ]
 
     try:
         response = ses_client.send_email(
-            Source=full_source,
+            FromEmailAddress=full_source,
             Destination={"ToAddresses": recipients},
-            Message={
-                "Subject": {"Data": full_subject},
-                "Body": {
-                    "Text": {"Data": body},
-                    "Html": {"Data": html_body},
-                },
-            },
+            Content={"Simple": content},
         )
     except Exception as exc:  # noqa: BLE001 — classified, then recorded or retried
         raise _aws_failure("SES send", exc) from exc

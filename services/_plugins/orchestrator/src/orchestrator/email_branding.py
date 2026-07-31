@@ -138,7 +138,8 @@ def build_subject(branding: EmailBranding, subject: str) -> str:
 
 
 def build_source(branding: EmailBranding, address: str) -> str:
-    """Compose SES's ``Source`` header with a consistent display name.
+    """Compose the sender address (SESv2's ``FromEmailAddress``) with a
+    consistent display name.
 
     Only applied when ``address`` doesn't already carry its own display name
     (no ``<`` in it) and a ``from_name`` is actually configured — an explicit
@@ -150,17 +151,30 @@ def build_source(branding: EmailBranding, address: str) -> str:
     return f"{branding.from_name} <{address}>"
 
 
-def render_email_html(branding: EmailBranding, *, subject: str, text_body: str) -> str:
+def render_email_html(
+    branding: EmailBranding,
+    *,
+    subject: str,
+    text_body: str,
+    unsubscribe_url: str | None = None,
+) -> str:
     """Render ``text_body`` into the shared branded HTML layout.
 
     ``subject`` and ``text_body`` are the already-rendered strings (event
     payload ``{field}`` templates already filled in by
     ``orchestrator.actions._render``) — this function only escapes and lays
     them out, it does not template.
+
+    ``unsubscribe_url`` (RFC 8058 one-click unsubscribe, tabsii-platform#378
+    follow-on) is optional and, when given, rendered through
+    :func:`_footer_block` alongside any configured ``footer_links`` — same
+    styling, same ``html.escape`` treatment, not a separate bolted-on
+    element. ``None`` (the default) leaves the footer exactly as it was
+    before this parameter existed.
     """
     header_html = _logo_block(branding) if branding.logo_url else _title_block(branding)
     body_html = _text_to_html_paragraphs(text_body)
-    footer_html = _footer_block(branding)
+    footer_html = _footer_block(branding, unsubscribe_url=unsubscribe_url)
     escaped_subject = html.escape(subject)
     primary = html.escape(branding.primary_color, quote=True)
     background = html.escape(branding.background_color, quote=True)
@@ -243,16 +257,21 @@ def _title_block(branding: EmailBranding) -> str:
     )
 
 
-def _footer_block(branding: EmailBranding) -> str:
+def _footer_block(branding: EmailBranding, *, unsubscribe_url: str | None = None) -> str:
     parts: list[str] = []
     if branding.footer_text:
         parts.append(html.escape(branding.footer_text))
-    if branding.footer_links:
+    links = list(branding.footer_links)
+    if unsubscribe_url:
+        # Appended last, not configured, so a one-click-unsubscribe send always
+        # carries it regardless of what an instance has set as its footer links.
+        links.append(("Unsubscribe", unsubscribe_url))
+    if links:
         muted = html.escape(_DEFAULT_MUTED_COLOR, quote=True)
         links_html = " &nbsp;|&nbsp; ".join(
             f'<a href="{html.escape(url, quote=True)}" style="color:{muted}; '
             f'text-decoration:underline;">{html.escape(label)}</a>'
-            for label, url in branding.footer_links
+            for label, url in links
         )
         parts.append(links_html)
     if not parts:

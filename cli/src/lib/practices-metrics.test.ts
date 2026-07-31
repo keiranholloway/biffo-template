@@ -525,7 +525,7 @@ describe('mergeContention', () => {
   })
 
   /**
-   * H3's counter-metric (#973). `strict: false` buys back the rebase race by
+   * H3's counter-metric (#977). `strict: false` buys back the rebase race by
    * allowing exactly this: B goes green at 10:00 against a `dev` that A then
    * moves at 10:30, and B merges at 11:00 in a combination no run ever tested.
    * Under `strict: true` that merge is refused until B rebases.

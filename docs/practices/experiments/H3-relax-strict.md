@@ -6,7 +6,7 @@
 which the original could not see. Adds a way to refute; removes none. See
 [Amendment](#amendment--2026-07-28-hours-after-pre-registration).
 **Extended:** 2026-07-31 — `tabsii-platform` joins the treatment arm, and the
-content-loss counter-metric becomes measurable rather than anecdotal (#973).
+content-loss counter-metric becomes measurable rather than anecdotal (#977).
 Adds no way to refute; removes none.
 **Review on:** 2026-08-04 (**7 days** — cut from 14 on 2026-07-29, #850)
 
@@ -200,7 +200,7 @@ left it detectable **only by a human noticing a count had gone down**. That is
 not a measurement, and a condition nobody can evaluate is one that will read as
 "did not occur" at review time.
 
-`contention.staleMergeShare` (#973) now counts merges whose base moved between
+`contention.staleMergeShare` (#977) now counts merges whose base moved between
 the PR's first green and its merge — the population content loss is drawn from,
 collected for every repo at no extra API cost. It **adds no refuting condition**;
 the three above stand exactly as written. It makes the third one checkable

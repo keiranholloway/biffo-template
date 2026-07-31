@@ -818,7 +818,7 @@ export const RACE_THRESHOLD_MINUTES = 10
  * ## The counter-metric: `staleMergeShare`
  *
  * Everything above prices the cost of `strict: true`. Relaxing it buys that
- * cost back and sells something else, and until #973 nothing measured what:
+ * cost back and sells something else, and until #977 nothing measured what:
  * the practices corpus recorded the trade as *"a stale whole-file rewrite is
  * now more likely to land silently — the experiment's falsification criteria
  * measure merge friction and say nothing about content loss"* and left it
@@ -928,7 +928,7 @@ export function mergeContention(prs, runsByBranch) {
     // forced to repush. tabsii-crm scores 0% here and biffo-template 13.9%,
     // which is the difference a busy shared integration branch makes.
     racedShare: rate(raced, measured),
-    // H3's counter-metric (#973): the share of merges whose base moved between
+    // H3's counter-metric (#977): the share of merges whose base moved between
     // first green and merge, so the landed combination was never tested. Reads
     // as exposure, not damage — see the note above before quoting it.
     staleMergeShare: rate(stale, greenToMerge.length),

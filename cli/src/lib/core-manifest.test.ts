@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -206,6 +207,40 @@ describe('listTemplateOwnedFiles + computeCoreDiff', () => {
     write(template, 'node_modules/foo/index.js', 'z') // hard-excluded
     const files = listTemplateOwnedFiles(template, MANIFEST)
     expect(files).toEqual(['services/api/main.py'])
+  })
+
+  it('trackedOnly drops gitignored and untracked files inside a template-owned prefix (#1006)', () => {
+    execFileSync('git', ['-C', template, 'init', '--quiet'], { stdio: 'ignore' })
+    write(template, '.gitignore', '*.tsbuildinfo\n')
+    write(template, 'services/api/main.py', 'x')
+    execFileSync('git', ['-C', template, 'add', '-A'], { stdio: 'ignore' })
+    // Left behind by a local build and by an editor scratch file respectively.
+    write(template, 'services/api/tsconfig.tsbuildinfo', 'BUILD ARTIFACT')
+    write(template, 'services/api/scratch.py', 'never committed')
+
+    expect(listTemplateOwnedFiles(template, MANIFEST, { trackedOnly: true })).toEqual([
+      'services/api/main.py',
+    ])
+    // Without the flag the listing is whatever is on disk — which is right for
+    // an instance's own working tree, and wrong for a template at a version.
+    expect(listTemplateOwnedFiles(template, MANIFEST)).toEqual([
+      'services/api/main.py',
+      'services/api/scratch.py',
+      'services/api/tsconfig.tsbuildinfo',
+    ])
+  })
+
+  it('computeCoreDiff does not report a gitignored template artifact as added (#1006)', () => {
+    execFileSync('git', ['-C', template, 'init', '--quiet'], { stdio: 'ignore' })
+    write(template, '.gitignore', '*.tsbuildinfo\n')
+    write(template, 'services/api/main.py', 'x')
+    execFileSync('git', ['-C', template, 'add', '-A'], { stdio: 'ignore' })
+    write(template, 'services/api/tsconfig.tsbuildinfo', 'BUILD ARTIFACT')
+    write(instance, 'services/api/main.py', 'x')
+
+    const diff = computeCoreDiff(template, instance, MANIFEST)
+    expect(diff.added).toEqual([])
+    expect(diff.unchanged).toBe(1)
   })
 
   it('never descends into .terraform (a terraform init leaves huge provider binaries there)', () => {

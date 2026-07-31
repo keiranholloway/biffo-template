@@ -3,6 +3,7 @@ import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { INSTANCE_CORE_FILE } from './core-version.js'
+import { type GitRunner, gitTrackedFiles } from './git-tracked-files.js'
 
 /**
  * The ADR-0006 core-owned path boundary (`core-manifest.json` at the template
@@ -165,12 +166,44 @@ function toPosix(p: string): string {
   return sep === '/' ? p : p.split(sep).join('/')
 }
 
+export interface ListTemplateOwnedFilesOptions {
+  /**
+   * Restrict the listing to files git tracks at `root` (#1006).
+   *
+   * Set this for every tree that is meant to represent *the template at a
+   * version*. Without it the listing is whatever is on disk, so a gitignored
+   * build artifact inside a `templateOwned` prefix — `apps/portal/
+   * tsconfig.tsbuildinfo` after a build, `.terraform.lock.hcl` after a
+   * `terraform init` — is enumerated as part of the core and proposed for
+   * commit into instances, and the change set an instance receives depends on
+   * what the operator happened to have built locally.
+   *
+   * It is deliberately NOT set for an instance's own working tree: the
+   * three-way merge is supposed to see the instance exactly as it is.
+   *
+   * No-op when `root` is not the top level of a git worktree — notably a
+   * `git archive <tag>` extraction, which holds only tracked files anyway.
+   */
+  trackedOnly?: boolean
+  /** Injectable git runner, for tests. */
+  git?: GitRunner
+}
+
 /**
  * All template-owned files under `root`, as sorted repo-relative posix paths.
  * Hard-excluded directories are never descended into.
  */
-export function listTemplateOwnedFiles(root: string, manifest: CoreManifest): string[] {
+export function listTemplateOwnedFiles(
+  root: string,
+  manifest: CoreManifest,
+  options: ListTemplateOwnedFilesOptions = {},
+): string[] {
   const out: string[] = []
+  const tracked = options.trackedOnly
+    ? options.git
+      ? gitTrackedFiles(root, options.git)
+      : gitTrackedFiles(root)
+    : null
 
   function walk(dir: string): void {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -180,6 +213,7 @@ export function listTemplateOwnedFiles(root: string, manifest: CoreManifest): st
         walk(abs)
       } else if (entry.isFile()) {
         const rel = toPosix(relative(root, abs))
+        if (tracked && !tracked.has(rel)) continue
         if (isTemplateOwned(rel, manifest)) out.push(rel)
       }
     }
@@ -238,14 +272,24 @@ export function computeCoreDiff(
   instanceRoot: string,
   manifest: CoreManifest,
   baseRoot?: string,
+  options: { git?: GitRunner } = {},
 ): CoreDiff {
-  const templateFiles = new Set(listTemplateOwnedFiles(templateRoot, manifest))
+  const trackedOnly: ListTemplateOwnedFilesOptions = options.git
+    ? { trackedOnly: true, git: options.git }
+    : { trackedOnly: true }
+  // Both template-side trees list tracked files only (#1006) — a gitignored
+  // build artifact in the operator's checkout is not part of the core, and
+  // reporting it as `added` invents a difference that does not exist upstream.
+  // The instance tree is read as-is: the whole point is to see it as it is.
+  const templateFiles = new Set(listTemplateOwnedFiles(templateRoot, manifest, trackedOnly))
   const instanceFiles = new Set(listTemplateOwnedFiles(instanceRoot, manifest))
   // The template at the instance's CURRENT version — the same merge base
   // `planCoreUpgrade` uses. Without it we cannot tell "the template dropped
   // this" from "the instance added this", so everything absent upstream is
   // reported as instance-only, which is the answer that never overstates.
-  const baseFiles = baseRoot ? new Set(listTemplateOwnedFiles(baseRoot, manifest)) : undefined
+  const baseFiles = baseRoot
+    ? new Set(listTemplateOwnedFiles(baseRoot, manifest, trackedOnly))
+    : undefined
 
   const diff: CoreDiff = {
     added: [],

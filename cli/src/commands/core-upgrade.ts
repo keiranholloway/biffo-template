@@ -410,6 +410,12 @@ async function runCoreUpgradeResolved(
       // Fast path: the checkout is exactly the target tag's commit with a clean
       // tracked tree, so its working files ARE the tagged tree — use them
       // directly and skip the extract.
+      //
+      // "Tracked" is load-bearing and used not to be true: the planner walked
+      // the directory, so gitignored build output in the operator's checkout
+      // rode along as files to commit into the instance (#1006). It now reads
+      // this tree through the git index, which is what makes the fast path
+      // equivalent to the extract rather than merely faster than it.
       theirsDir = templateRepo
     } else {
       // The target isn't the latest, OR the checkout has drifted from the tag

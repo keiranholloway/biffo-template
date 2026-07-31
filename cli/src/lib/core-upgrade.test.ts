@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -431,5 +432,114 @@ describe('carried template PRs (#767)', () => {
     // An upgrade that cannot read the template history must add no noise, and
     // must not emit an empty marker that a parser would read as "carried none".
     expect(carriedPrsSection([])).toEqual([])
+  })
+})
+
+describe('planCoreUpgrade reads the template as a git tree, not a directory (#1006)', () => {
+  let base: string
+  let ours: string
+  let theirs: string
+
+  function git(repo: string, args: string[]): void {
+    execFileSync('git', ['-C', repo, ...args], { stdio: 'ignore' })
+  }
+  function w(root: string, rel: string, content: string): void {
+    const p = join(root, rel)
+    mkdirSync(dirname(p), { recursive: true })
+    writeFileSync(p, content)
+  }
+
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), 'base-'))
+    ours = mkdtempSync(join(tmpdir(), 'ours-'))
+    // The target tree is a live template checkout, which is what the fast path
+    // ("the target IS this checkout's latest tag") and --to-template both hand
+    // the planner.
+    theirs = mkdtempSync(join(tmpdir(), 'theirs-'))
+    git(theirs, ['init', '--quiet'])
+  })
+  afterEach(() => {
+    for (const d of [base, ours, theirs]) rmSync(d, { recursive: true, force: true })
+  })
+
+  function plan() {
+    return planCoreUpgrade({
+      baseDir: base,
+      oursDir: ours,
+      theirsDir: theirs,
+      manifest: MANIFEST,
+      mergeFile: fakeMerge,
+    })
+  }
+
+  it('does not propose a gitignored build artifact under a template-owned prefix', async () => {
+    // Exactly the report: `core upgrade` against biffo-platform proposed
+    // `added apps/portal/tsconfig.tsbuildinfo` and two `.terraform.lock.hcl`
+    // files. All three are gitignored and absent from origin/dev — they exist
+    // only because the operator had run a build and a `terraform init`.
+    w(theirs, '.gitignore', '*.tsbuildinfo\n.terraform.lock.hcl\n')
+    w(theirs, 'services/api/real.py', 'shipped upstream')
+    git(theirs, ['add', '-A'])
+    w(theirs, 'services/api/tsconfig.tsbuildinfo', 'LOCAL BUILD OUTPUT')
+    w(theirs, 'services/api/.terraform.lock.hcl', 'LOCAL TERRAFORM INIT')
+
+    const p = await plan()
+    expect(p.changes.map((c) => c.path)).toEqual(['services/api/real.py'])
+  })
+
+  it('does not propose an untracked file even when nothing ignores it', async () => {
+    w(theirs, 'services/api/real.py', 'shipped upstream')
+    git(theirs, ['add', '-A'])
+    w(theirs, 'services/api/scratch.py', 'never committed')
+
+    const p = await plan()
+    expect(p.changes.map((c) => c.path)).toEqual(['services/api/real.py'])
+  })
+
+  it('still carries every tracked template-owned file', async () => {
+    // The filter must narrow to the git tree, not to the diff — a genuinely
+    // new upstream file has to keep arriving.
+    w(theirs, 'services/api/a.py', 'v2')
+    w(theirs, 'services/api/new.py', 'brand new')
+    git(theirs, ['add', '-A'])
+    w(base, 'services/api/a.py', 'v1')
+    w(ours, 'services/api/a.py', 'v1')
+
+    const p = await plan()
+    expect(p.changes.map((c) => c.path).sort()).toEqual([
+      'services/api/a.py',
+      'services/api/new.py',
+    ])
+  })
+
+  it('ignores untracked files in the merge base tree too', async () => {
+    // A stale artifact in the BASE checkout is just as fabricated: it makes a
+    // file look like something upstream deleted, so the upgrade proposes a
+    // deletion the instance never asked for.
+    git(base, ['init', '--quiet'])
+    w(base, 'services/api/a.py', 'v1')
+    git(base, ['add', '-A'])
+    w(base, 'services/api/tsconfig.tsbuildinfo', 'LOCAL BUILD OUTPUT')
+    w(ours, 'services/api/a.py', 'v1')
+    w(ours, 'services/api/tsconfig.tsbuildinfo', 'instance build output')
+    w(theirs, 'services/api/a.py', 'v1')
+    git(theirs, ['add', '-A'])
+
+    const p = await plan()
+    expect(p.changes).toEqual([])
+  })
+
+  it('leaves the instance tree unfiltered — the merge sees it as it is', async () => {
+    // The instance is a git repo too, but its working tree is the one thing the
+    // three-way merge must read literally, so an instance-side edit still wins
+    // as keep-ours rather than being invisible.
+    git(ours, ['init', '--quiet'])
+    w(base, 'services/api/a.py', 'v1')
+    w(theirs, 'services/api/a.py', 'v1')
+    git(theirs, ['add', '-A'])
+    w(ours, 'services/api/a.py', 'local edit, never committed')
+
+    const p = await plan()
+    expect(p.entries.find((e) => e.path === 'services/api/a.py')?.status).toBe('keep-ours')
   })
 })

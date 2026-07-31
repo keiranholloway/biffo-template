@@ -415,12 +415,39 @@ class BiffoPluginBase(ABC):
       in tests — never share event registrations. ``subscribe()`` is a thin
       decorator wrapping ``self.events.register()``.
 
-    The CLI calls ``on_install()``, ``on_uninstall()``, and ``on_upgrade()``
-    during ``biffo plugin install`` / ``uninstall`` / upgrade (ADR-0003
-    section 9). ``on_install`` and ``on_uninstall`` are abstract because
-    every plugin must define its own setup/teardown; ``on_upgrade`` defaults
-    to a no-op since most upgrades need no bespoke migration logic beyond
-    what the CLI already generates.
+    **The lifecycle hooks are not invoked.** ``on_install()``,
+    ``on_uninstall()`` and ``on_upgrade()`` are declared here and implemented
+    by every plugin, and nothing anywhere calls them: ADR-0003 section 9
+    described a ``biffo plugin install`` that would, and that call site was
+    never built — ``cli/src`` does not reference the names at all. Putting
+    seeding or teardown in one produces work that silently never happens, and
+    the symptom surfaces far from the cause: the plugin deploys clean, its
+    tables are empty, and whatever validates against those rows rejects
+    everything (biffo-template#709). They stay declared, as no-ops, only so
+    existing plugins keep type-checking. Do not build on them.
+
+    What actually runs, if you need baseline data:
+
+    - **Self-seeding at startup.** A plugin that contributes an ASGI app to
+      the shared plugin host (``api_ingress`` in the manifest, ADR-0021) has
+      its ASGI *lifespan* driven by the host — but only because the host
+      performs the handshake itself: Starlette's ``Mount`` never delivers the
+      lifespan scope, so a mounted plugin's own ``@app.on_event("startup")``
+      was equally dead until biffo-template#948. Startup runs once per
+      process, i.e. on every cold start, so the work must be idempotent.
+      Core's ``POST /api/v1/internal/plugins/me/config/seed`` is the endpoint
+      built for that path; it was itself not idempotent until
+      biffo-template#1000, so treat this route as young and verify your own
+      seed rather than assuming it is a finished story.
+    - **Out-of-band seeding.** A SQL module in the instance's
+      ``db/imports/<name>/``, applied by ``biffo data apply`` on every deploy.
+      This is what the first-party plugins use, and it needs no credentials
+      and no running plugin. An event-only plugin — one with no ASGI app, such
+      as the skeleton's ``example_plugin`` — has no startup to hang seeding on
+      at all, so this is its only option.
+    - **Teardown: nothing.** ADR-0003 section 9 is explicit that
+      ``biffo plugin uninstall`` leaves the plugin's tables in place and
+      generates no drop migration. There is no teardown hook to miss.
     """
 
     def __init__(self, manifest: PluginManifest, api: BiffoAPIClient | None = None) -> None:
@@ -430,17 +457,30 @@ class BiffoPluginBase(ABC):
 
     @abstractmethod
     def on_install(self) -> None:
-        """Called by the CLI when the plugin is installed."""
+        """**Not invoked.** Nothing calls this — implement it as a no-op.
+
+        ``biffo plugin install`` does not run it (ADR-0003 section 9 describes
+        an install flow that would, which was never built), so seeding placed
+        here silently never happens. See the class docstring for the two paths
+        that do run: startup self-seeding for a plugin with an ASGI app, and a
+        ``db/imports/`` module for everything else.
+        """
 
     @abstractmethod
     def on_uninstall(self) -> None:
-        """Called by the CLI when the plugin is uninstalled."""
+        """**Not invoked.** Nothing calls this — implement it as a no-op.
+
+        ``biffo plugin uninstall`` removes the plugin's code and Terraform and
+        deliberately leaves its tables alone (ADR-0003 section 9), so there is
+        no teardown moment for this to be part of.
+        """
 
     def on_upgrade(self, from_version: str) -> None:
-        """Called by the CLI when the plugin is upgraded from *from_version*.
+        """**Not invoked.** Nothing calls this, from *from_version* or otherwise.
 
-        No-op by default — override to run bespoke migration logic when a
-        version bump needs more than the CLI's generated Alembic migrations.
+        Kept as a concrete no-op so a plugin that overrode it still imports.
+        Migration work belongs in the Alembic revisions the CLI generates from
+        the manifest, which do run.
         """
         return None
 

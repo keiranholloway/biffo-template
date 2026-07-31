@@ -55,8 +55,35 @@ engine** (`services/_plugins/orchestrator/` in the biffo-template monorepo) — 
 class, same layout, and it ships a real `terraform/` too. It has considerably
 more moving parts (workflow definitions, actions, SigV4 calls into the Core
 API); this template's `example_plugin` is deliberately the smallest version of
-the same shape: one table (`example_widgets`), four routes, one `on_install`
+the same shape: one table (`example_widgets`), four routes, one idempotent
 seed, one `@subscribe` handler.
+
+### Seeding: not from `on_install()`
+
+`BiffoPluginBase` requires `on_install()`, `on_uninstall()` and `on_upgrade()`,
+and they are **not invoked** — ADR-0003 §9 described a `biffo plugin install`
+that would call them and the call site was never built. Define them as no-ops,
+as `plugin.py` does. An earlier revision of this skeleton seeded through
+`on_install()`; anyone who copied it got a seed that silently never ran, the
+plugin deploying clean with empty tables and the symptom surfacing wherever
+those rows were read
+([#709](https://github.com/keiranholloway/biffo-template/issues/709)).
+
+Baseline data goes in one of two places instead, and `seed_default_widget()` in
+`plugin.py` documents both at the call site:
+
+- **If your plugin declares an `api_ingress` ASGI app** (ADR-0021), seed from
+  that app's lifespan. The shared plugin host runs each mounted app's lifespan
+  itself, because Starlette's `Mount` never delivers the lifespan scope — until
+  [#948](https://github.com/keiranholloway/biffo-template/pull/948) a plugin's
+  own `@app.on_event("startup")` was equally dead. It fires on every cold start,
+  so the seed must be idempotent; Core's own
+  `POST /api/v1/internal/plugins/me/config/seed` was not idempotent until
+  [#1000](https://github.com/keiranholloway/biffo-template/pull/1000), so treat
+  this route as new and check your own.
+- **If it doesn't** — like `example_plugin`, which is event-only — there is no
+  startup to hang anything on. Put the rows in a SQL module in the instance's
+  `db/imports/<name>/`, applied by `biffo data apply` on every deploy.
 
 > Earlier revisions of this README pointed at an RBAC reference plugin at
 > `services/rbac/`. That plugin was removed by

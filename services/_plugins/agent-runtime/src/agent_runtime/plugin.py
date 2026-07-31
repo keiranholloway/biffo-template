@@ -109,11 +109,14 @@ class AgentRuntimePlugin(BiffoPluginBase):
             await self.reap_stale_runs()
 
     def on_install(self) -> None:
-        """No-op: this plugin declares no tables and seeds nothing. Workers are
-        rows in Core authored through the portal (§2), not install-time data."""
+        """No-op, and **not invoked** — nothing calls the lifecycle hooks
+        (biffo-template#709). Nothing would need it here anyway: this plugin
+        declares no tables and seeds nothing. Workers are rows in Core authored
+        through the portal (§2), not install-time data."""
         return None
 
     def on_uninstall(self) -> None:
+        """No-op, and not invoked (see :meth:`on_install`)."""
         return None
 
     async def process_event(self, event: BiffoEvent) -> None:

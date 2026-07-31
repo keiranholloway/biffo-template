@@ -116,6 +116,7 @@ class TestCreateCoreClient:
         manifest = PluginManifest(name="example", version="0.1.0", description="d", author="a")
 
         class _Plugin(BiffoPluginBase):
+            # Required by the ABC and not invoked by anything (#709) — no-ops.
             def on_install(self) -> None: ...
             def on_uninstall(self) -> None: ...
 

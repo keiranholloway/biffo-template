@@ -1,5 +1,9 @@
-"""Tests for ExamplePlugin: manifest loading, lifecycle hooks, and the
-UserCreated event subscription.
+"""Tests for ExamplePlugin: manifest loading, the seed, and the UserCreated
+event subscription.
+
+`on_install()` / `on_uninstall()` are asserted to be no-ops, not to seed:
+they are **not invoked** by anything (biffo-template#709), so a test that
+proved seeding through them would be proving something that never happens.
 
 Modelled on the RBAC reference plugin's
 `services/rbac/tests/test_rbac_plugin.py` (PR #76) in the biffo-template
@@ -48,7 +52,7 @@ class TestSubscription:
         assert plugin.events.has_subscription("UserCreated")
 
 
-class TestOnInstall:
+class TestSeeding:
     async def test_seeds_default_widget(self) -> None:
         plugin, fake = _make_plugin()
 
@@ -73,22 +77,29 @@ class TestOnInstall:
         widget = fake.tables["widgets"][0]
         assert widget["is_active"] is True
 
+
+class TestLifecycleHooksAreNoOps:
+    """The ABC's hooks are **not invoked** by anything (biffo-template#709).
+
+    So the contract worth asserting is that they do nothing — in particular
+    that neither of them seeds. A plugin whose baseline data depends on one
+    of these ships a seed that never runs.
+    """
+
+    def test_on_install_is_a_noop_and_seeds_nothing(self) -> None:
+        plugin, fake = _make_plugin()
+
+        assert plugin.on_install() is None
+        assert fake.tables["widgets"] == []
+
     def test_on_uninstall_is_a_noop(self) -> None:
         plugin, _ = _make_plugin()
         assert plugin.on_uninstall() is None
 
-    def test_on_install_sync_bridge_seeds_widget(self) -> None:
-        """The public, ABC-compliant on_install() entrypoint (a plain sync
-        function calling asyncio.run(seed_default_widget()) internally) —
-        exercised from a genuinely synchronous test function, the same kind
-        of context the CLI would call it from, since asyncio.run() cannot be
-        nested inside pytest-asyncio's already-running loop."""
+    def test_on_upgrade_is_a_noop(self) -> None:
         plugin, fake = _make_plugin()
-
-        plugin.on_install()
-
-        names = {r["name"] for r in fake.tables["widgets"]}
-        assert names == {_DEFAULT_WIDGET["name"]}
+        assert plugin.on_upgrade("0.0.1") is None
+        assert fake.tables["widgets"] == []
 
 
 class TestUserCreatedLogsEvent:

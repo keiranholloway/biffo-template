@@ -206,12 +206,14 @@ class OrchestratorPlugin(BiffoPluginBase):
             await self.deliver_on_completion(event)
 
     def on_install(self) -> None:
-        """No-op: workflow definitions are seeded out-of-band (DDL import), not
-        via an API this plugin owns — orchestration tables are Core-owned and not
-        exposed as generic CRUD."""
+        """No-op, and **not invoked** — nothing calls the lifecycle hooks
+        (biffo-template#709). Workflow definitions are seeded out-of-band (DDL
+        import) regardless, not via an API this plugin owns — orchestration
+        tables are Core-owned and not exposed as generic CRUD."""
         return None
 
     def on_uninstall(self) -> None:
+        """No-op, and not invoked (see :meth:`on_install`)."""
         return None
 
     async def process_event(self, event: BiffoEvent) -> None:

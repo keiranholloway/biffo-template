@@ -146,6 +146,12 @@ jobs:
           NEXT_PUBLIC_COGNITO_CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
           NEXT_PUBLIC_COGNITO_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
           NEXT_PUBLIC_API_URL: ${{ vars.API_GATEWAY_URL }}
+          # Instance branding (#389/#964). Unset is the normal case and the
+          # portal falls back to 'Biffo Portal' on an empty string, so this
+          # needs no default here — but without the line the documented
+          # mechanism does not exist at all: setting the repo variable did
+          # nothing, because the value never reached the build.
+          NEXT_PUBLIC_PORTAL_TITLE: ${{ vars.PORTAL_TITLE }}
         run: pnpm run build
       - uses: actions/upload-artifact@v5
         with:
@@ -924,6 +930,12 @@ jobs:
           NEXT_PUBLIC_COGNITO_CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
           NEXT_PUBLIC_COGNITO_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
           NEXT_PUBLIC_API_URL: ${{ vars.API_GATEWAY_URL }}
+          # Instance branding (#389/#964). Unset is the normal case and the
+          # portal falls back to 'Biffo Portal' on an empty string, so this
+          # needs no default here — but without the line the documented
+          # mechanism does not exist at all: setting the repo variable did
+          # nothing, because the value never reached the build.
+          NEXT_PUBLIC_PORTAL_TITLE: ${{ vars.PORTAL_TITLE }}
         run: pnpm run build
       - uses: actions/upload-artifact@v5
         with:
@@ -1709,6 +1721,12 @@ jobs:
           NEXT_PUBLIC_COGNITO_CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
           NEXT_PUBLIC_COGNITO_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
           NEXT_PUBLIC_API_URL: ${{ vars.API_GATEWAY_URL }}
+          # Instance branding (#389/#964). Unset is the normal case and the
+          # portal falls back to 'Biffo Portal' on an empty string, so this
+          # needs no default here — but without the line the documented
+          # mechanism does not exist at all: setting the repo variable did
+          # nothing, because the value never reached the build.
+          NEXT_PUBLIC_PORTAL_TITLE: ${{ vars.PORTAL_TITLE }}
         run: pnpm run build
       - uses: actions/upload-artifact@v5
         with:

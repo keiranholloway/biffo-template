@@ -35,13 +35,49 @@
 # tooling did it and nothing would have said if they hadn't. This is the thing
 # that says.
 #
+# ## Protection that binds nobody
+#
+# The audit above answers "is there protection". It does NOT answer "does the
+# protection bind anyone", and for ~3 weeks those were different facts on 11 of
+# 12 repos: `enforce_admins: false` makes every rule advisory for a repo admin,
+# and the only human who merges here is an admin everywhere. A repo can show a
+# full required-check list, report `ok` on this very line, and still be one where
+# any of it can be walked past without a trace.
+#
+# This is not drift. It is written that way, twice, on purpose:
+#
+#   - `configureBranchProtection` (cli/src/adapters/source-control/github/index.ts)
+#     sets it at scaffold time so a RESUMED `biffo init` can still commit to an
+#     already-protected branch. That reason is real and it is scaffold-shaped --
+#     it expires the moment init finishes, and nothing ever closes it again.
+#   - `protectionParamsFor` (cli/src/lib/branch-protection-apply.ts) hardcodes it
+#     into the BACKFILL payload too, so the command that exists to close
+#     protection gaps writes the bypass back in every time it runs.
+#
+# Meanwhile `modules/source-control/github/main.tf` sets `enforce_admins = true`.
+# The Terraform module and the CLI disagree about the intended steady state, and
+# nothing has ever reported the difference -- so the CLI's temporary, init-time
+# value has been the estate's permanent one.
+#
+# It surfaced only because an unrelated metric disagreed with a setting:
+# `staleMergeShare` counted merges that were not up to date on three repos
+# carrying `strict: true`, which that gate makes impossible by construction.
+# The explanation was that the gate binds nobody.
+#
+# So this reports it, and FAILS on it. Reporting it while exiting 0 would repeat
+# the exact defect described below at the `n=` line -- an audit that prints a
+# problem and returns success gets wired into a pipeline that ignores it.
+#
+# Expect this to be red until each repo is decided rather than defaulted. That
+# is the point: nobody has yet chosen the bypass, they inherited it.
+#
 # Usage:
 #   sh scripts/protection-audit.sh                     # repos under ~/code
 #   sh scripts/protection-audit.sh --estate <dir>
 #
-# Exits non-zero if any integration branch is unprotected or has no required
-# checks. Needs `gh` authenticated; without it, exits 2 rather than reporting
-# health it cannot see.
+# Exits non-zero if any integration branch is unprotected, has no required
+# checks, or has protection that does not bind admins. Needs `gh`
+# authenticated; without it, exits 2 rather than reporting health it cannot see.
 
 set -uo pipefail
 
@@ -60,9 +96,11 @@ gh auth status >/dev/null 2>&1 || {
 }
 
 bad=0
+unbound=0
 checked=0
 seen_slugs=""
 unprotected_list=""
+unbound_list=""
 
 printf '\nbranch protection - is every integration branch actually gated?\n\n'
 
@@ -115,12 +153,29 @@ for d in "$ESTATE"/*/; do
     # check built to catch exactly that is the reason this comment is long. It
     # was caught by running it and reading every line, not by trusting the
     # summary.
-    n=$(gh api "repos/$slug/branches/$br/protection" -q '.required_status_checks.contexts | length' 2>/dev/null)
+    # Both facts come from ONE call: whether the branch requires checks, and
+    # whether any of it binds an admin. Two calls would double a daily API cost
+    # for no gain, and could straddle a change and report a branch that never
+    # existed in that state.
+    raw=$(gh api "repos/$slug/branches/$br/protection" \
+      -q '"\(.required_status_checks.contexts | length) \(.enforce_admins.enabled)"' 2>/dev/null)
     rc=$?
-    case "$n" in
-      ''|*[!0-9]* ) n="" ;;
-    esac
-    [ "$rc" -ne 0 ] && n=""
+    n=""
+    admins=""
+    if [ "$rc" -eq 0 ]; then
+      n="${raw%% *}"
+      admins="${raw##* }"
+      case "$n" in
+        ''|*[!0-9]* ) n="" ;;
+      esac
+      # Anything that is not literally `true`/`false` is UNKNOWN, not `false`.
+      # A missing field, a null, or a jq error must never read as a definite
+      # answer in either direction -- see the fail-open note above.
+      case "$admins" in
+        true|false ) ;;
+        * ) admins="" ;;
+      esac
+    fi
     case "${n:-none}" in
       none )
         bad=$((bad + 1))
@@ -135,17 +190,60 @@ for d in "$ESTATE"/*/; do
 "
         printf '  \033[31mNO CHECKS\033[0m    %-38s %s\n' "$slug" "$br" ;;
       * )
-        printf '  \033[32mok\033[0m           %-38s %-6s %s required checks\n' "$slug" "$br" "$n" ;;
+        case "$admins" in
+          true )
+            printf '  \033[32mok\033[0m           %-38s %-6s %s required checks, binds admins\n' \
+              "$slug" "$br" "$n" ;;
+          false )
+            unbound=$((unbound + 1))
+            unbound_list="$unbound_list  $slug ($br) - $n required checks, none of which bind an admin
+"
+            printf '  \033[31mADVISORY\033[0m     %-38s %-6s %s required checks, \033[31mdoes NOT bind admins\033[0m\n' \
+              "$slug" "$br" "$n" ;;
+          * )
+            unbound=$((unbound + 1))
+            unbound_list="$unbound_list  $slug ($br) - could not read enforce_admins
+"
+            printf '  \033[31mUNKNOWN\033[0m      %-38s %-6s %s required checks, enforce_admins unreadable\n' \
+              "$slug" "$br" "$n" ;;
+        esac ;;
     esac
   done
 done
 
+# The summary line must keep saying "branches checked": scripts/practices-daily.sh
+# greps for exactly that to pull this audit's one-line result onto the dashboard,
+# and a summary it cannot match reports "no summary line" every morning.
 printf '\n%s branches checked, ' "$checked"
-if [ "$bad" -eq 0 ]; then
-  printf '\033[32mall protected\033[0m\n\n'
+if [ "$bad" -eq 0 ] && [ "$unbound" -eq 0 ]; then
+  printf '\033[32mall protected and binding\033[0m\n\n'
   exit 0
 fi
-printf '\033[31m%s unprotected or ungated\033[0m\n\n%s\n' "$bad" "$unprotected_list"
-printf 'AGENTS.md section 2 asserts "Branch protection stays on". Where this fails, that\n'
-printf 'sentence is untrue and the only gate is whoever happens to be watching.\n\n'
+if [ "$bad" -gt 0 ]; then
+  printf '\033[31m%s unprotected or ungated\033[0m' "$bad"
+  [ "$unbound" -gt 0 ] && printf ', '
+fi
+[ "$unbound" -gt 0 ] && printf '\033[31m%s not binding admins\033[0m' "$unbound"
+printf '\n\n'
+
+[ "$bad" -gt 0 ] && printf '%s\n' "$unprotected_list"
+if [ "$unbound" -gt 0 ]; then
+  printf '%s\n' "$unbound_list"
+  # Say what to DO, because the remedy is a decision and not a command. Both
+  # writers of this value are named so the next person does not rediscover that
+  # `--fix` puts it back.
+  printf 'These branches have protection that does not bind a repo admin, so every rule\n'
+  printf 'above is advisory for the only people who merge. Decide it per repo rather than\n'
+  printf 'inheriting it:\n\n'
+  printf '  gh api -X PUT repos/<slug>/branches/<br>/protection/enforce_admins   # bind\n'
+  printf '  gh api -X DELETE repos/<slug>/branches/<br>/protection/enforce_admins # bypass, deliberately\n\n'
+  printf 'Note that `biffo doctor --fix` re-applies the bypass: protectionParamsFor() in\n'
+  printf 'cli/src/lib/branch-protection-apply.ts hardcodes enforce_admins: false, as does\n'
+  printf 'configureBranchProtection() at scaffold time. modules/source-control/github\n'
+  printf 'sets it true. Binding a repo by hand does not survive either of those.\n\n'
+fi
+if [ "$bad" -gt 0 ]; then
+  printf 'AGENTS.md section 2 asserts "Branch protection stays on". Where this fails, that\n'
+  printf 'sentence is untrue and the only gate is whoever happens to be watching.\n\n'
+fi
 exit 1

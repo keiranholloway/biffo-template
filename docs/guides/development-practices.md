@@ -57,6 +57,7 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | `pytest` was excluded from the gate by a blanket rule with a manual opt-in **nobody ever issued**. Measured: 51.2s / 57.4s / 85.6s in the template and instances, but **1.7–2.7s in every sibling**. The exclusion was correct for the three repos it was written against and wrong for the four it was applied to — so **the fastest suites in the estate were the ones not being run** | **drift** | tabsii-crm + 3 siblings | biffo-template | **fixed** ([#871](https://github.com/keiranholloway/biffo-template/pull/871)) — included wherever it measures under budget |
 | — | **Two findings nearly reported from tool output that was itself wrong.** A conventional-commit audit measured 12% violations in `tabsii-platform` using a regex that rejected `feat(db,api):` — commas are legal in a scope, so the tool was wrong and the repo was fine. Separately `biffo.sh check release-subject` printed `No base ref` and looked like a fail-open until its exit code was read: it exits **2**, loudly | **process** · visibility | biffo-template (measurement) | diagnostic practice | **corrected before shipping** — each disproved by checking the instrument before believing its output |
 | — | Auto-merge **does not update a head branch that falls behind** under `strict` protection. Armed, green, one commit behind, it simply waits — three PRs in one session merged only after a manual `gh pr update-branch` plus a full CI re-run | **process** | biffo-platform#84, biffo-template #742/#720 | biffo-template (merge queue, or relax `strict`) | **open** — pre-registered as H1's likely refutation, recorded before the review date |
+| — | **A scoped role's already-granted permission was dead on arrival for any query joining through it, and the RLS satisfiability guard caught the exact instance it was built for.** Fixing tabsii-platform's onboarding dashboard needed a `kpi_values -> kpi_definitions` join (to scope a stalled-flag reading by brand+code) under a real Unit Owner session. Unit Owner already held `kpi_values.read` — genuinely usable standalone, since that table's RLS policy passes `unit_id` — but granting `kpi_definitions.read` alongside it still wasn't enough: `kpi_definitions` is brand-scoped with no `unit_id` column, so a unit-scoped role assignment can never match its policy directly, only an ancestor-visibility carve-out (module 024, previously covering only `brands.read`/`regions.read`) can satisfy it. `test_rls_grant_satisfiability_pg.py`'s `test_no_new_unsatisfiable_scoped_grants` failed on the **first CI push**, correctly, on a permission code the guard's own author had never anticipated when writing it — and the same push also revealed a **second, pre-existing, unrelated instance** of the identical shape already sitting in `KNOWN_UNSATISFIABLE` (Regional HQ's `kpi_definitions.read`/`region` grant, unsatisfiable since the day it was first granted, via the broad `%.read` provisioning rule) | **boundary** | tabsii-platform (0011 M8 follow-up) | tabsii-platform [#476](https://github.com/tabsii-com/tabsii-platform/pull/476) — `fn_authorized` ancestor-visibility extended to `kpi_definitions.read` (module 076), guard's `ANCESTOR_READABLE`/`KNOWN_UNSATISFIABLE` updated to match | **fixed** — proved with a real-Postgres test that returned `NULL` before the fix and a real value after |
 | [#749](https://github.com/keiranholloway/biffo-template/issues/749) | The workflow builder's **"Test workflow" gate omits the write-back contract entirely** — `start_dry_run` builds its own snapshot from four keys, so `apply_writeback_output_tool` never fires and the model is never given the generated submit tool. It answers in prose, and the builder renders that run-metadata envelope under a heading reading **"Would write"**. A passing test is what *unlocks* enabling the workflow, so the one gate an author sees before going live proves nothing about the only thing that could silently write nothing | **fail-open** · visibility | tabsii-platform (dev, authoring a real write-back) | biffo-template `services/api/` + `apps/portal/` | **open** — filed with the reproduction; `cost 25m` to find, and it made M4 unverifiable by any route except a real stage move |
 | — | A frontend PR pointed two call sites at a **new core route the sibling never proxied**. The CRM never calls core directly (ADR-0002/ADR-0007), so every stage move returned `{"detail":"Not Found"}` on dev while both repos' suites stayed green — the component tests mock the api client, so they assert the URL *asked for* and cannot assert that anything answers | **boundary** | tabsii-crm [#113](https://github.com/tabsii-com/tabsii-crm/pull/113) | tabsii-crm [#114](https://github.com/tabsii-com/tabsii-crm/pull/114) | **fixed** — `cost 20m`; the follow-up test pins the forwarded core path too, because proxying a domain route to the generic CRUD address would return 200 and emit the *wrong event*, which nothing would report |
 | — | A shared test fixture **added its target to the registry instead of replacing it**, and cleared the whole registry on teardown. Every assertion naming the catalog's contents exactly (`== ["leads"]`) therefore held only while the instance registered exactly one target — the day tabsii registered a second, the module failed there while passing upstream. The teardown was the mirror image, discarding the instance's real registrations for every later test in the process | **fail-open** · drift | tabsii-platform (registering a 2nd write-back target) | biffo-template [#766](https://github.com/keiranholloway/biffo-template/pull/766) | **fixed** — `cost 35m` including one blocked instance PR; the isolating pattern was already written eight lines above, with a comment explaining exactly this failure |
@@ -476,6 +477,64 @@ there. Neither is evidence about the estate.
 
 
 ## Where the cycles go
+
+### Measured: a local RLS container two days stale cost two baseline checks, ~20m (2026-08-01, part 3)
+
+Extending tabsii-platform's onboarding dashboard needed a `fn_authorized`
+change, and the local `tabsii-rls-local` container (left running for
+verification convenience) had been up for two days against a `dev` that had
+moved. Two separate full-suite runs against it produced failures that were not
+mine: `audit_logs.read`/`brand` (a case the guard's own docstring says should
+be **absent** — its presence means the container predates the module that
+fixed it) and `lead_unsubscribe_tokens.read`/`region`. Rather than chase either,
+built a throwaway worktree at clean `origin/dev` and re-ran the same test file
+against the *same* container twice — once before my change, once after — which
+is what actually separated "pre-existing drift" from "my regression" in each
+case. **~10 minutes per baseline check, twice.** The container was right to
+reuse (starting Postgres+PostGIS fresh is the slower path), but nothing about
+it announces its own staleness, so every session that reuses it needs to budget
+this. See *what needs more thought* below — this is the same finding as the
+existing "**a long-lived local database drifts in two directions at once**"
+entry, recurring on a *different* container, on a *different* day.
+
+### Measured: a background CI-status poller with a name typo burned its own 20-minute timeout doing nothing (2026-08-01, part 3)
+
+After merging two PRs, wrote a background script polling `gh run list --limit
+1 --json name,status,conclusion --jq 'select(.name=="Deploy Application")'`
+for both repos, to confirm the post-merge deploys succeeded before doing a live
+click-through. tabsii-crm's deploy workflow is named **`Deploy`**, not `Deploy
+Application` — so the filter matched nothing, every poll printed empty, and the
+script correctly reported `TIMEOUT` after the full 20 minutes. Both deploys had
+in fact already succeeded within ~30 seconds of their respective merges;
+`gh run list` with no name filter showed this immediately once checked by
+hand. Functionally harmless (the live click-through still happened and still
+would have caught a real failure), but it is exactly the shape of a **fail-open
+verification tool**: a filter that can silently match nothing looks identical,
+from the caller's side, to "still running" — there is no distinguishing signal
+between *matches nothing, ever* and *matches, still pending*. **~20 minutes of
+wall-clock spent waiting on a check that could never have succeeded.**
+
+### Measured: two silent `git commit` no-ops, from the same husky/lint-staged interaction, cost a wrong commit message and a re-run (2026-08-01, part 3)
+
+Twice in one session, `git commit -m "..."` was chained with `git push` in the
+same tool call and appeared to complete normally, but the commit itself never
+landed: once, a subsequent `git commit --amend --no-edit` silently amended the
+**previous** commit (origin/dev's actual tip) rather than creating a new one,
+so the pushed commit carried an unrelated prior commit's subject line even
+though its tree correctly contained only the intended diff (caught by `git
+diff origin/dev --stat` before the PR was opened, then fixed with a second
+`--amend -m`); once, `gh pr create` failed outright with "No commits between
+dev and \<branch\>" because the file was staged but the commit had silently
+not happened at all. Both times `lint-staged`'s own hook output looked
+identical to a successful run. **Cost: one wrong-message force-push-and-fix,
+one full re-commit-and-push cycle — call it 10–15 minutes combined**, plus the
+much larger risk that the wrong-message commit's *content* could have gone
+unnoticed (it did not, only because the diff was checked before opening the
+PR — see §4/§7 discipline). The root cause was never isolated (a race between
+the hook's own backup-stash/restore cycle and the commit object being
+written is the leading theory), so this is recorded as a symptom pattern to
+watch for, not a fix: **after any `git commit`, check `git log -1
+--format=%H` actually changed before trusting the next step.**
 
 ### Measured: twelve milestones, and the machine took most of it (2026-08-01, part 2)
 
@@ -1646,6 +1705,24 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**A satisfiability guard caught a permission grant that was structurally dead
+on arrival, on a permission code its author never wrote it for.**
+`test_rls_grant_satisfiability_pg.py` (tabsii-platform #440) exists to catch
+exactly one shape: a scoped role holding a permission whose RLS policy passes
+`NULL` for that scope, so the grant can never be exercised. Extending the
+onboarding dashboard to join `kpi_values` through `kpi_definitions` under a
+real Unit Owner session tripped it on the **first CI push** — `kpi_definitions
+.read` at `unit` scope, a pair nobody had reasoned about when the guard was
+written months earlier. Fixing the RLS policy's own ancestor-visibility
+coverage (not the grant) then surfaced a **second**, entirely independent,
+pre-existing instance of the identical shape that had been sitting unnoticed
+in `KNOWN_UNSATISFIABLE` since Regional HQ's broad `%.read` provisioning rule
+first granted it. Neither instance was anticipated; the guard found both
+because it checks the *relationship* between a role's scope and a policy's
+argument list, not a fixed list of known-bad pairs. This is the guard working
+exactly as designed, on a case its own docstring's "measured 2026-07-31" list
+could not have included.
 
 **The click-through is not a formality, and this is the number.** LMS v1 shipped M1–M5 with
 every gate green — ruff, pyright, bandit, gitleaks, the real-Postgres RLS lane, 3064 tests,
@@ -3475,6 +3552,7 @@ assumed.
 
 ## What needs more thought
 
+| — | **A repo's real TypeScript/CSS convention (single-quote, no semicolons) is enforced by nobody — not ESLint, not a `.prettierrc`, not CI — so it exists only as an unwritten habit every file happens to follow.** Neither tabsii-platform's nor tabsii-crm's frontend carries a `.prettierrc`; `prettier --write` therefore falls back to its own defaults (double quotes, semicolons), which is the *opposite* of the house style every existing file demonstrates. Running it on a single changed file — a completely ordinary "let me format this" reflex — whole-file-reformatted every unrelated line in `globals.css` (3000+ lines) to the wrong style, twice in one session, once each in two different repos. Caught both times only by reading the diff before pushing, never by any tool. The gap: nothing stops the *next* agent from doing the same thing and not catching it, since the failure mode produces a large, plausible-looking, green diff | **visibility** | tabsii-platform, tabsii-crm (0011 M8 follow-up) | not fixed — candidates: commit a `.prettierrc` matching the actual house style so the tool's defaults stop disagreeing with the codebase, or add a `format:check` step that would catch a whole-file reformat before push | **unfiled** |
 | — | **No lane in the estate instantiates a `tabsii` CHECK constraint, an RLS policy and the app together, so a whole defect class is only reachable by a human.** The real-Postgres lane (`test_*_pg.py`) carries the policies and is genuinely good, but it exercises **SQL directly** — it never runs a request through the handler that builds the INSERT. The handler tests run on SQLite, which has neither the CHECKs nor the policies. So a defect that needs *both* the real schema and the real code path has no home: `ck_lessons_has_content` sat through M2, M3, M4 and M5, all green, and was found by clicking. The gap is not a missing assertion, it is a missing **combination** — and it is invisible precisely because both halves look well covered. Candidates: point the existing SQLite handler tests at the RLS lane's Postgres when `TABSII_TEST_PG_DSN` is set, or add a thin end-to-end lane that drives a handful of real handler calls against the real schema. Worth sizing before the next module lands, because every new CHECK inherits this | **visibility** · boundary | tabsii-platform, both test lanes | not fixed — no issue yet; needs a decision on which lane grows | **unfiled** |
 | — | **A new guard's ZERO is a claim about the world, and the first version of this one was structurally incapable of finding the defect it was written for.** The class is *"an RLS-gated row is invisible on this session, and invisible is indistinguishable from absent"* — this page's own most-repeated finding. The obvious check is *does a policy pass NULL for a scope the TABLE has a column for*, and it reported **0 of 152 policies**. Not a clean bill of health: `media_assets` has no `brand_id` column **at all**, so it could never have caught `media_assets.create`, the known-true case that motivated it. Reported rather than interrogated, a guard that finds nothing would have shipped as proof the class was closed — a fail-open in the very mechanism built to end fail-opens. The working relationship is one level up: between the `scope_level` of the **roles** holding a permission and the scope arguments its **policies** pass. **The rule this suggests: a new guard is not trusted until it has been run against a known-true instance and failed.** Both guards in #440 were finally proven by mutation, not by passing | **fail-open** · visibility | tabsii-platform, building the guard itself | tabsii-platform [#440](https://github.com/tabsii-com/tabsii-platform/pull/440) — rewritten and mutation-tested | **fixed** |
 | — | **A long-lived local database drifts in two directions at once, and neither is visible from a query.** The RLS grant sweep was first run against a lane container left up for 33 hours. It predated `063_audit_logs_brand_scoping.sql` — the module that *fixed* `audit_logs.read` — so the audit reported a defect that had already shipped a fix, and the whole 49-item baseline described a schema that no longer existed. Caught only by reading `db/imports/` and noticing a filename that described the finding being reported. **Then the opposite:** verifying the guard against that same database took it from **5 seeded roles to 148**, because the DDL seeds exactly one tenant and every other role is created by a *test*. So the same query before and after the suite gives different answers, with nothing indicating why. Behind the DDL, and ahead of it by residue. Nothing stamps a lane database with the DDL revision it was built from | **drift** · visibility | tabsii-platform local RLS lane | not fixed — candidates: build into a throwaway database per run, or record the highest applied module and refuse a stale one | **unfiled** |
@@ -5089,6 +5167,9 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `claude-in-chrome` | **worked — it was the only thing that found any of the five** | Driving the deployed authoring surface end to end: create course, add lesson, upload a real mp4, play it back, reorder, publish, build a path. Every defect this session came from here and none from CI. Two harness notes worth carrying: `read_network_requests`/`read_console_messages` only capture from the moment they are first called, so a page load has to be repeated after enabling them; and **coordinate clicking is unreliable on a page that re-lays-out** — see the phantom-defect row in the scoreboard. Prefer `find` + click-by-`ref`. |
 | `biffo-verify` | **worked — §4 twice, on two different artefacts** | 'Verify the deployed artifact, not the source' settled two things a green run could not. The IAM grant was read back from the **live** role policy (`course_materials/*` present) rather than from the Terraform meant to produce it; and the DDL fix was confirmed from the deploy's own `"applied": ["075_..."]` payload rather than from the workflow's green tick. Both took one command and both were the actual proof. |
 | `biffo-verify` | **partial — §6 has no case for 'the instrument is right and the code is right'** | The error-branch gate reported four unverified branches. §6's 'suspect the ruler' was the correct instinct and found the cause quickly, but the gate was **not** wrong — the branches genuinely had no coverage evidence, because coverage cannot observe lines after an `await` against a real aiosqlite engine. The resolution was neither 'fix the code' nor 'fix the gate' but 'change how the test exercises it', and the skill points at neither. |
+| `biffo-verify` | **worked — §4 twice, distinguishing "deployed" from "actually firing"** | A `WorkflowDefinition` and its M7 rollup endpoint both reported green CI and successful deploys, which proves nothing about a scheduled job that has not fired yet. Confirmed the real thing instead: read CloudWatch logs for the next real hourly `orchestrator.tick` invocation (duration jumped from ~1.6s to ~7.5s, consistent with a real signed HTTP call) and then read `GET /api/v1/data/kpi_values` directly to see real rows with a `recorded_at` seconds after the tick. Neither check was a formality — the first attempt at each (a stale-token 401, a filter matching the wrong log line) would have looked like "verified" if not read carefully. |
+| `biffo-verify` | **worked — §3, in two languages** | Reverted the response field just added (Python) and separately the rendered cell just added (TSX), ran each new test, watched both fail for the stated reason (`KeyError`, then a missing-element assertion), restored, confirmed green again. Cheap, and it is what makes the corresponding scoreboard row's "proved with a real-Postgres test that failed before the fix" claim true rather than assumed. |
+| `biffo-verify` | **partial — §8 reached only once the operator invoked `/biffo-verify` explicitly, after the work had already merged and deployed** | Sections 1–7 ran continuously and unprompted across the whole session — reproduce-by-the-real-route, verify-the-deployed-artifact, and fail-first all fired without being asked for. §8's write-up (this row, the scoreboard entry, the cost entries) happened only after the skill was invoked by name, well after every PR was already merged. This is now well past a double-digit count of the identical finding on this page; not re-argued as new, recorded as one more data point that the skill's own step-8 ordering has not been fixed despite the recommendation being logged repeatedly. |
 
 ## Adding a row
 

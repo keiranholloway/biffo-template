@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CognitoUserSession } from 'amazon-cognito-identity-js'
 import LoginPage from './page'
 
@@ -26,8 +26,16 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => ({ get: () => null }),
 }))
 
+const logoutMock = vi.fn()
+// A session here means "already signed in", which is the forward path.
+let currentSession: unknown = null
 vi.mock('@/context/auth-context', () => ({
-  useAuth: () => ({ login: loginMock, setSession: setSessionMock }),
+  useAuth: () => ({
+    login: loginMock,
+    setSession: setSessionMock,
+    session: currentSession,
+    logout: logoutMock,
+  }),
 }))
 
 vi.mock('@/lib/auth', () => ({
@@ -311,5 +319,55 @@ describe('LoginPage role-based routing', () => {
     await waitFor(() => {
       expect(assignMock).toHaveBeenCalledWith('/login/no-access/')
     })
+  })
+})
+
+describe('LoginPage — arriving already signed in', () => {
+  // Sign-in is shared across every surface on this origin, so landing here with
+  // a live session is ordinary (a bookmark, a stale link), not a sign someone
+  // wants to switch account. Re-presenting the password form is noise.
+  afterEach(() => {
+    currentSession = null
+    logoutMock.mockClear()
+  })
+
+  it('routes an already-authenticated visitor instead of asking again', async () => {
+    currentSession = mockSession()
+    fetchWhoamiMock.mockResolvedValue({
+      sub: 's',
+      email: 'e',
+      username: 'u',
+      user_id: 'u1',
+      is_platform_admin: false,
+      permissions: [],
+      marketplace_role: null,
+      roles: [{ role: 'HQ Admin', scope_level: 'tenant' }],
+    })
+
+    render(<LoginPage />)
+
+    await waitFor(() => {
+      expect(assignMock).toHaveBeenCalledWith('/crm/')
+    })
+  })
+
+  it('offers a way out, because signing out is shared across every surface', async () => {
+    currentSession = mockSession()
+    fetchWhoamiMock.mockResolvedValue({
+      sub: 's',
+      email: 'e',
+      username: 'u',
+      user_id: 'u1',
+      is_platform_admin: false,
+      permissions: [],
+      marketplace_role: null,
+      roles: [{ role: 'HQ Admin', scope_level: 'tenant' }],
+    })
+
+    render(<LoginPage />)
+
+    const signOut = await screen.findByRole('button', { name: 'Not you? Sign out' })
+    fireEvent.click(signOut)
+    expect(logoutMock).toHaveBeenCalled()
   })
 })

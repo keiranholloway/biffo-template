@@ -1,8 +1,8 @@
 'use client'
 
-import { Suspense, useState } from 'react'
+import { Suspense, useCallback, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import type { CognitoUser } from 'amazon-cognito-identity-js'
+import type { CognitoUser, CognitoUserSession } from 'amazon-cognito-identity-js'
 import { useAuth } from '@/context/auth-context'
 import { completeNewPassword, confirmPasswordReset, requestPasswordReset } from '@/lib/auth'
 import { isWithinPortal, sanitizeReturnTo } from '@/lib/return-to'
@@ -54,7 +54,7 @@ function requestResetOutcome(err: unknown): { notice: string; sent: boolean } {
 }
 
 function LoginForm() {
-  const { login, setSession } = useAuth()
+  const { login, setSession, session, logout } = useAuth()
   const router = useRouter()
   // Set by a sibling app (ADR-0007) when it finds no shared session and
   // bounces here — e.g. /login?return_to=/my-sibling/. Sanitised to a
@@ -82,6 +82,46 @@ function LoginForm() {
   const [resetNewPassword, setResetNewPassword] = useState('')
   const [resetConfirmPassword, setResetConfirmPassword] = useState('')
 
+  // One place that decides where an authenticated caller goes, used by all
+  // three routes into this page: sign-in, first-password, and arriving already
+  // signed in. Takes the session in hand rather than reading it from context —
+  // `useAuth().getIdToken()` closes over state that has not re-rendered yet
+  // when an await resumes, and returns null.
+  const routeAfterAuth = useCallback(
+    async (session: CognitoUserSession) => {
+      const idToken = session.getIdToken().getJwtToken()
+      const whoami = await fetchWhoami(createApiClient(() => idToken))
+      const groups = session.getIdToken().decodePayload()['cognito:groups'] as string[] | undefined
+      const destination = resolveDestination(whoami, groups, returnTo || null)
+      // Cross-app destinations leave the portal, so they need a full page load;
+      // a client-side push would land on a route this app does not have.
+      if (isWithinPortal(destination)) {
+        router.push(destination)
+      } else {
+        window.location.assign(destination)
+      }
+    },
+    [returnTo, router],
+  )
+
+  // Someone who already has a live session does not need to be asked for a
+  // password again — sign-in is shared across every surface on this origin, so
+  // arriving here signed in is ordinary (a bookmark, a stale link) rather than
+  // a sign they want to switch account. Route them instead of re-presenting the
+  // form; `pendingUser` and `resetMode` keep this out of the way of the
+  // first-password and forgot-password flows, which run against a session that
+  // may already exist.
+  const [forwarding, setForwarding] = useState(false)
+  useEffect(() => {
+    if (!session || pendingUser || resetMode || forwarding) return
+    setForwarding(true)
+    void routeAfterAuth(session).catch(() => {
+      // If we cannot resolve a destination, fall back to showing the form
+      // rather than trapping them on a blank page.
+      setForwarding(false)
+    })
+  }, [session, pendingUser, resetMode, forwarding, routeAfterAuth])
+
   const handleSignIn = async (e: React.SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault()
     setError(null)
@@ -90,24 +130,7 @@ function LoginForm() {
     try {
       const result = await login(email, password)
       if (result.kind === 'success') {
-        // Fetch user's identity and roles to determine the correct destination
-        const idToken = result.session.getIdToken().getJwtToken()
-        const client = createApiClient(() => idToken)
-        const whoami = await fetchWhoami(client)
-
-        // Extract Cognito groups from the ID token
-        const groups = result.session.getIdToken().decodePayload()['cognito:groups'] as
-          string[] | undefined
-
-        // Determine destination based on roles
-        const destination = resolveDestination(whoami, groups, returnTo || null)
-
-        // Navigate to the determined destination
-        if (isWithinPortal(destination)) {
-          router.push(destination)
-        } else {
-          window.location.assign(destination)
-        }
+        await routeAfterAuth(result.session)
       } else {
         setPendingUser(result.user)
         setPendingAttributes(result.userAttributes)
@@ -134,23 +157,7 @@ function LoginForm() {
       const session = await completeNewPassword(pendingUser, newPassword, pendingAttributes)
       setSession(session)
 
-      // Fetch user's identity and roles to determine the correct destination
-      const idToken = session.getIdToken().getJwtToken()
-      const client = createApiClient(() => idToken)
-      const whoami = await fetchWhoami(client)
-
-      // Extract Cognito groups from the ID token
-      const groups = session.getIdToken().decodePayload()['cognito:groups'] as string[] | undefined
-
-      // Determine destination based on roles
-      const destination = resolveDestination(whoami, groups, returnTo || null)
-
-      // Navigate to the determined destination
-      if (isWithinPortal(destination)) {
-        router.push(destination)
-      } else {
-        window.location.assign(destination)
-      }
+      await routeAfterAuth(session)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to set password')
     } finally {
@@ -435,7 +442,24 @@ function LoginForm() {
 
   return (
     <div className="w-full max-w-sm rounded-xl border bg-white p-8 shadow-sm">
-      <h1 className="mb-6 text-2xl font-bold text-gray-900">Sign in</h1>
+      <h1 className="mb-2 text-2xl font-bold text-gray-900">Sign in</h1>
+      {session ? (
+        <p className="mb-6 text-sm text-gray-600">
+          Signing you in&hellip;{' '}
+          <button
+            type="button"
+            onClick={() => {
+              setForwarding(false)
+              logout()
+            }}
+            className="underline hover:text-gray-900"
+          >
+            Not you? Sign out
+          </button>
+        </p>
+      ) : (
+        <div className="mb-6" />
+      )}
 
       <form
         onSubmit={(e) => {

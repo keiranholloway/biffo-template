@@ -7,10 +7,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { type CoreManifest, readCoreManifest } from './core-manifest.js'
 import {
   type MergeFileFn,
+  type OrphanBaseline,
   type UpgradePlan,
+  ORPHAN_BASELINE_FILE,
   applyUpgradePlan,
+  checkOrphanRatchet,
   gitMergeFile,
   planCoreUpgrade,
+  readOrphanBaseline,
+  writeOrphanBaseline,
 } from './core-upgrade.js'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
@@ -80,6 +85,9 @@ describe('planCoreUpgrade (classification)', () => {
     expect(statusOf(p.entries, 'services/api/a.py')).toBe('keep-ours')
     // keep-ours is not a "change"
     expect(p.changes).toHaveLength(0)
+    // This keep-ours has a template counterpart (both base and theirs ship the
+    // file) — it is ordinary drift, not the #1026 orphan case below.
+    expect(p.orphaned).toHaveLength(0)
   })
 
   it('keep-ours (no crash) when a template-owned path exists only in the instance', async () => {
@@ -90,6 +98,9 @@ describe('planCoreUpgrade (classification)', () => {
     expect(statusOf(p.entries, 'services/api/instance_only.py')).toBe('keep-ours')
     expect(p.changes).toHaveLength(0)
     expect(p.conflicts).toHaveLength(0)
+    // #1026: no base, no theirs — this IS the unsanctioned-orphan case the
+    // upgrade report exists to surface.
+    expect(p.orphaned.map((e) => e.path)).toEqual(['services/api/instance_only.py'])
   })
 
   it('unchanged when ours and theirs made the identical change', async () => {
@@ -579,5 +590,146 @@ describe('planCoreUpgrade reads the template as a git tree, not a directory (#10
 
     const p = await plan()
     expect(p.entries.find((e) => e.path === 'services/api/a.py')?.status).toBe('keep-ours')
+  })
+})
+
+describe('planCoreUpgrade orphan report (#1026)', () => {
+  let base: string
+  let ours: string
+  let theirs: string
+
+  function git(repo: string, args: string[]): void {
+    execFileSync('git', ['-C', repo, ...args], { stdio: 'ignore' })
+  }
+  function w(root: string, rel: string, content: string): void {
+    const p = join(root, rel)
+    mkdirSync(dirname(p), { recursive: true })
+    writeFileSync(p, content)
+  }
+
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), 'base-'))
+    ours = mkdtempSync(join(tmpdir(), 'ours-'))
+    theirs = mkdtempSync(join(tmpdir(), 'theirs-'))
+  })
+  afterEach(() => {
+    for (const d of [base, ours, theirs]) rmSync(d, { recursive: true, force: true })
+  })
+
+  function plan() {
+    return planCoreUpgrade({
+      baseDir: base,
+      oursDir: ours,
+      theirsDir: theirs,
+      manifest: MANIFEST,
+      mergeFile: fakeMerge,
+    })
+  }
+
+  it('excludes a gitignored file from the orphan report', async () => {
+    // A build artifact left inside a template-owned prefix (#1006's exact
+    // shape, applied to the orphan report) — it must not inflate the count an
+    // instance is ratcheted against.
+    git(ours, ['init', '--quiet'])
+    w(ours, '.gitignore', '*.tsbuildinfo\n')
+    w(ours, 'services/api/real_instance_file.py', 'a genuinely orphaned file')
+    git(ours, ['add', '-A'])
+    w(ours, 'services/api/build.tsbuildinfo', 'BUILD ARTIFACT')
+
+    const p = await plan()
+    expect(p.orphaned.map((e) => e.path)).toEqual(['services/api/real_instance_file.py'])
+  })
+
+  it('excludes an untracked-but-not-ignored file too', async () => {
+    git(ours, ['init', '--quiet'])
+    w(ours, 'services/api/real_instance_file.py', 'a genuinely orphaned file')
+    git(ours, ['add', '-A'])
+    w(ours, 'services/api/scratch.py', 'never committed')
+
+    const p = await plan()
+    expect(p.orphaned.map((e) => e.path)).toEqual(['services/api/real_instance_file.py'])
+  })
+
+  it('does not filter anything when oursDir is not a git repo', async () => {
+    // The fail-open contract `gitTrackedFiles` already has: unable to answer
+    // the question means nothing is excluded, matching the merge's own
+    // unfiltered read of `oursDir` (#1006's comment on `planCoreUpgrade`).
+    w(ours, 'services/api/whatever.py', 'not even a repo here')
+    const p = await plan()
+    expect(p.orphaned.map((e) => e.path)).toEqual(['services/api/whatever.py'])
+  })
+
+  it('carves an instance-sanctioned path out of the report entirely, via the real manifest', async () => {
+    // End-to-end proof of the #1026 manifest change: a test the instance
+    // writes under the sanctioned carve-out never even reaches classify() as
+    // template-owned, so it cannot appear as an orphan.
+    const manifest = readCoreManifest(repoRoot)
+    w(ours, 'services/api/tests/instance/test_tabsii_router.py', 'def test(): pass')
+    const p = await planCoreUpgrade({
+      baseDir: base,
+      oursDir: ours,
+      theirsDir: theirs,
+      manifest,
+      mergeFile: fakeMerge,
+    })
+    expect(p.orphaned).toEqual([])
+    expect(p.entries.map((e) => e.path)).not.toContain(
+      'services/api/tests/instance/test_tabsii_router.py',
+    )
+  })
+})
+
+describe('orphan baseline (#1026)', () => {
+  let instance: string
+
+  beforeEach(() => {
+    instance = mkdtempSync(join(tmpdir(), 'orphan-baseline-'))
+  })
+  afterEach(() => {
+    rmSync(instance, { recursive: true, force: true })
+  })
+
+  it('reads null when no baseline file exists yet', () => {
+    expect(readOrphanBaseline(instance)).toBeNull()
+  })
+
+  it('round-trips a written baseline', () => {
+    writeOrphanBaseline(instance, 18)
+    const baseline: OrphanBaseline | null = readOrphanBaseline(instance)
+    expect(baseline).toEqual({ count: 18 })
+  })
+
+  it('throws on a malformed baseline file rather than silently treating it as absent', () => {
+    writeFileSync(join(instance, ORPHAN_BASELINE_FILE), 'not json at all')
+    expect(() => readOrphanBaseline(instance)).toThrow(/not valid JSON/)
+  })
+
+  it('throws when the shape is wrong (negative count)', () => {
+    writeFileSync(join(instance, ORPHAN_BASELINE_FILE), JSON.stringify({ count: -1 }))
+    expect(() => readOrphanBaseline(instance)).toThrow(/invalid/)
+  })
+})
+
+describe('checkOrphanRatchet (#1026)', () => {
+  it('never fails when no baseline has been established yet', () => {
+    const r = checkOrphanRatchet(45, null)
+    expect(r).toEqual({ count: 45, baseline: null, increased: false })
+  })
+
+  it('does not fail when the count matches the baseline', () => {
+    const r = checkOrphanRatchet(18, { count: 18 })
+    expect(r.increased).toBe(false)
+  })
+
+  it('does not fail when the count dropped below the baseline', () => {
+    // Cleanup is credited automatically here — the ratchet just never fails,
+    // it does not require re-recording a lower baseline to stay green.
+    const r = checkOrphanRatchet(10, { count: 18 })
+    expect(r.increased).toBe(false)
+  })
+
+  it('fails when the count exceeds the baseline', () => {
+    const r = checkOrphanRatchet(19, { count: 18 })
+    expect(r).toEqual({ count: 19, baseline: 18, increased: true })
   })
 })

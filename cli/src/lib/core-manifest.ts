@@ -136,13 +136,45 @@ export function readCoreManifest(templateRoot: string): CoreManifest {
  * crosses a `/`. Deliberately narrower than a shell glob: a narrower carve-out
  * leaves MORE paths on the template-owned side, which is the direction that
  * blocks rather than the direction that quietly widens (issue #755).
+ *
+ * `**` (a whole path segment of its own, e.g. the middle segment of
+ * `modules/**\/instance/`) is the one deliberate exception: it matches zero or
+ * more WHOLE segments, crossing `/` freely. It exists for a carve-out that must
+ * apply at any depth under a fixed prefix — `modules/` nests plugin/provider
+ * subtrees to an unpredictable depth, so a single-segment `*` cannot name
+ * "an `instance/` directory, however deep" the way it can name "a `*.yml`
+ * file in one known directory" (#1026). A lone `*` elsewhere in the same
+ * pattern is unaffected and still segment-local.
+ *
+ * A pattern ending in `/` is a **subtree** glob (matches the directory named
+ * by the rest of the pattern, and everything under it) — the glob analogue of
+ * a plain prefix entry like `services/api/`. Without a trailing `/` it is a
+ * **whole-path** glob, matched against the complete path and never a subtree
+ * (`.github/workflows/*.instance.yml`); see `matchLength` for why.
  */
 function globToRegExp(pattern: string): RegExp {
-  const source = pattern
-    .split('*')
-    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
-    .join('[^/]*')
-  return new RegExp(`^${source}$`)
+  const isSubtree = pattern.endsWith('/')
+  const body = isSubtree ? pattern.slice(0, -1) : pattern
+  const segments = body.split('/')
+  let source = ''
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i]
+    if (seg === '**') {
+      // Each repetition supplies its own trailing '/', so zero repetitions
+      // correctly collapses to "nothing between the fixed separators either
+      // side of this segment" rather than leaving a dangling slash.
+      source += '(?:[^/]+/)*'
+      continue
+    }
+    source += (seg ?? '')
+      .split('*')
+      .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+      .join('[^/]*')
+    // The separator belongs to the segment BEFORE it, always — including
+    // right before a '**' segment, whose own expansion never supplies one.
+    if (i < segments.length - 1) source += '/'
+  }
+  return isSubtree ? new RegExp(`^${source}(?:/.*)?$`) : new RegExp(`^${source}$`)
 }
 
 /** Compiled once per pattern; the manifest is tiny and read repeatedly. */
@@ -163,9 +195,12 @@ function globMatches(relPath: string, pattern: string): boolean {
  *
  *   - **prefix** — trailing `/`, matches the whole subtree (`services/api/`)
  *   - **exact file** — no `*`, matches that one path (`.gitleaks.toml`)
- *   - **glob** — contains `*`, matched against the WHOLE path, never a subtree
- *     (`.github/workflows/*.instance.yml`). A trailing `/` on a glob therefore
- *     means nothing: no file path ends in `/`, so such an entry matches nothing.
+ *   - **glob** — contains `*`. A trailing `/` makes it a **subtree** glob,
+ *     matching the directory the rest of the pattern names (at whatever depth
+ *     a `**` segment resolves to) and everything beneath it — the glob
+ *     analogue of a plain prefix (`modules/**\/instance/`, #1026). Without a
+ *     trailing `/` it is a **whole-path** glob, matched against the complete
+ *     path and never a subtree (`.github/workflows/*.instance.yml`).
  *
  * ## How a glob ranks against a prefix and against an exact file (issue #755)
  *

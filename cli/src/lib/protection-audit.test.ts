@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -46,13 +46,30 @@ console.log(value)
   return bin
 }
 
-function estateWith(slugs: string[]) {
+interface RepoSpec {
+  slug: string
+  /** Which `origin/<branch>` refs exist. Defaults to dev only. */
+  branches?: string[]
+  /** A repo with a deploy workflow is "deployable" — staging/main are required. */
+  deployable?: boolean
+}
+
+function estateWith(specs: (string | RepoSpec)[]) {
   const estate = mkdtempSync(join(tmpdir(), 'protaudit-'))
-  for (const slug of slugs) {
-    const dir = join(estate, slug.split('/')[1])
+  for (const raw of specs) {
+    const spec: RepoSpec = typeof raw === 'string' ? { slug: raw } : raw
+    const branches = spec.branches ?? ['dev']
+    const dir = join(estate, spec.slug.split('/')[1])
     mkdirSync(dir, { recursive: true })
     execFileSync('git', ['-C', dir, 'init', '-q', '-b', 'dev'])
-    execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', `https://github.com/${slug}.git`])
+    execFileSync('git', [
+      '-C',
+      dir,
+      'remote',
+      'add',
+      'origin',
+      `https://github.com/${spec.slug}.git`,
+    ])
     execFileSync('git', [
       '-C',
       dir,
@@ -66,7 +83,15 @@ function estateWith(slugs: string[]) {
       '-m',
       'init',
     ])
-    execFileSync('git', ['-C', dir, 'update-ref', 'refs/remotes/origin/dev', 'HEAD'])
+    for (const br of branches) {
+      execFileSync('git', ['-C', dir, 'update-ref', `refs/remotes/origin/${br}`, 'HEAD'])
+    }
+    if (spec.deployable) {
+      // The audit derives deployability from the repo's own shape: does it have
+      // a workflow whose filename mentions "deploy"?
+      mkdirSync(join(dir, '.github', 'workflows'), { recursive: true })
+      writeFileSync(join(dir, '.github', 'workflows', 'deploy-app.yml'), 'name: Deploy\n')
+    }
   }
   return estate
 }
@@ -142,6 +167,73 @@ describe('protection-audit: does the protection bind anyone', () => {
     expect(stdout).not.toContain('ok  ')
     expect(stdout).not.toContain('Branch not protected')
     expect(code).toBe(1)
+  })
+
+  /**
+   * The blind spot (#1057). `staging` was absent from the loop, so 8 unbound
+   * promotion targets — one per deployable repo, 4-6 required checks each —
+   * were never looked at while the audit printed `all protected and binding`.
+   * A branch the loop does not name cannot fail.
+   */
+  it('checks staging in a deployable repo', () => {
+    const estate = estateWith([
+      { slug: 'acme/svc', branches: ['dev', 'staging', 'main'], deployable: true },
+    ])
+    const { code, stdout } = audit(estate, {
+      'acme/svc#dev': '4 true',
+      'acme/svc#main': '4 true',
+      'acme/svc#staging': '4 false',
+    })
+
+    expect(stdout).toContain('staging')
+    expect(stdout).toContain('does NOT bind admins')
+    expect(stdout).toMatch(/3 branches checked/)
+    expect(code).toBe(1)
+  })
+
+  it('does not require staging or main where the repo never deploys', () => {
+    // The scroll-past rule: an audit that fails every day on a condition
+    // everyone has accepted is worth nothing on the day it reports something
+    // real. A runner fleet's `main` deploys nothing.
+    const estate = estateWith([
+      { slug: 'acme/runners', branches: ['dev', 'staging', 'main'], deployable: false },
+    ])
+    const { code, stdout } = audit(estate, { 'acme/runners#dev': '2 true' })
+
+    expect(stdout).toContain('not deployable, staging not required')
+    expect(stdout).toContain('not deployable, main not required')
+    expect(stdout).toMatch(/1 branches checked/)
+    expect(code).toBe(0)
+  })
+
+  it('requires dev even in a repo that never deploys', () => {
+    // dev is the integration branch in EVERY Biffo repo (AGENTS.md §2), so the
+    // deployability exemption must never be able to skip it.
+    const estate = estateWith([{ slug: 'acme/lib', branches: ['dev'], deployable: false }])
+    const { code, stdout } = audit(estate, {})
+
+    expect(stdout).toContain('UNPROTECTED')
+    expect(code).toBe(1)
+  })
+
+  /**
+   * Two lists name the estate's branch roles — this script's loop and BRANCHES
+   * in check-branch-protection.ts — and they silently disagreed, which is how
+   * `staging` went unaudited. They must move together.
+   */
+  it('audits the same branch roles as the TypeScript guard', () => {
+    const shell = readFileSync(script, 'utf8')
+    const guard = readFileSync(
+      join(import.meta.dirname, '..', 'scripts', 'check-branch-protection.ts'),
+      'utf8',
+    )
+    const roles = /const BRANCHES = \[([^\]]+)\]/.exec(guard)?.[1]
+    expect(roles).toBeDefined()
+    const guardBranches = [...(roles as string).matchAll(/'([^']+)'/g)].map((m) => m[1])
+    expect(guardBranches.length).toBeGreaterThan(1)
+
+    const loop = /for br in ([a-z ]+); do/.exec(shell)?.[1]?.trim().split(/\s+/)
+    expect(loop).toEqual(guardBranches)
   })
 
   it('still catches the cases it caught before', () => {

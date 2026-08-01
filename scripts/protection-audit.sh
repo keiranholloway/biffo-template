@@ -118,13 +118,30 @@ for d in "$ESTATE"/*/; do
   # WHICH branches must be protected is derived from the repo's own shape, not a
   # list somebody maintains:
   #
-  #   dev   the integration branch in every Biffo repo (AGENTS.md section 2).
-  #         Required wherever it exists.
-  #   main  PRODUCTION, and only in a DEPLOYABLE repo -- instances and sibling
-  #         apps, identified by having a deploy workflow. In a non-deployable
-  #         repo (runner fleets, a docs repo, a published package) `main` is just
-  #         the default branch of something that never deploys, and demanding
-  #         protection there buys nothing.
+  #   dev      the integration branch in every Biffo repo (AGENTS.md section 2).
+  #            Required wherever it exists.
+  #   staging  a PROMOTION TARGET, and only in a DEPLOYABLE repo. Same rule as
+  #            `main` below and for the same reason.
+  #   main     PRODUCTION, and only in a DEPLOYABLE repo -- instances and sibling
+  #            apps, identified by having a deploy workflow. In a non-deployable
+  #            repo (runner fleets, a docs repo, a published package) `main` is just
+  #            the default branch of something that never deploys, and demanding
+  #            protection there buys nothing.
+  #
+  # `staging` was MISSING from this list until #1057, and the omission was
+  # invisible in the worst way: the audit reported `19 branches checked, all
+  # protected and binding` while 8 `staging` branches -- one in every deployable
+  # repo, each a real promotion target with 4-6 required checks -- were never
+  # looked at, and every one of them was unbound. A branch this loop does not
+  # name cannot fail, so the audit's own green was understating its scope by a
+  # third. `cli/src/scripts/check-branch-protection.ts` had `staging` in its
+  # BRANCHES list all along; the two disagreed and nothing compared them.
+  #
+  # That is the same defect the enforce_admins finding was about (#1052), one
+  # level up: not "the check passes when it should fail" but "the check never
+  # ran on this input and said nothing". When adding a branch role to the estate,
+  # this list and BRANCHES in check-branch-protection.ts must move together --
+  # asserted by cli/src/lib/protection-audit.test.ts.
   #
   # This matters more than it looks. An audit that fails every single day on a
   # condition everyone has accepted is an audit people learn to scroll past --
@@ -134,10 +151,11 @@ for d in "$ESTATE"/*/; do
   deployable=no
   ls "$d/.github/workflows/" 2>/dev/null | grep -q "deploy" && deployable=yes
 
-  for br in dev main; do
+  for br in dev staging main; do
     git -C "$d" rev-parse --verify --quiet "origin/$br" >/dev/null 2>&1 || continue
-    if [ "$br" = "main" ] && [ "$deployable" = "no" ]; then
-      printf '  \033[90m--           %-38s %-6s not deployable, main not required\033[0m\n' "$slug" "$br"
+    if [ "$br" != "dev" ] && [ "$deployable" = "no" ]; then
+      printf '  \033[90m--           %-38s %-6s not deployable, %s not required\033[0m\n' \
+        "$slug" "$br" "$br"
       continue
     fi
     checked=$((checked + 1))

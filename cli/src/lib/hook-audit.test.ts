@@ -144,10 +144,20 @@ describe('protection-audit', () => {
    * Derived from the repo's own shape (does it have a deploy workflow?), not a
    * skip list somebody has to maintain and will forget to prune.
    */
-  it('requires main only where the repo actually deploys', () => {
+  it('requires promotion branches only where the repo actually deploys', () => {
+    // Deployability is still derived from the repo's own shape rather than a
+    // skip list. The literal message this used to assert ('not deployable, main
+    // not required') is now built per branch, because `staging` joined `main`
+    // (#1057) -- so asserting the string broke on a legitimate change, the third
+    // grep-shaped guard to fire on its own subject in one session.
+    //
+    // The BEHAVIOUR -- which branches are exempt, in which repos -- is asserted
+    // by running the script in protection-audit.test.ts:
+    //   "does not require staging or main where the repo never deploys"
+    //   "requires dev even in a repo that never deploys"
     expect(script).toContain('deployable=no')
     expect(script).toMatch(/grep -q "deploy"/)
-    expect(script).toContain('not deployable, main not required')
+    expect(script).toMatch(/not deployable, %s not required/)
   })
 
   it('still requires dev wherever it exists', () => {

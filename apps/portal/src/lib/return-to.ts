@@ -42,7 +42,7 @@ function withTrailingSlash(path: string): string {
   return `${pathname}/${suffix}`
 }
 
-export function sanitizeReturnTo(raw: string | null, fallback = '/admin/'): string {
+export function sanitizeReturnTo(raw: string | null, fallback = ''): string {
   if (!raw) return fallback
   // Must start with exactly one "/" — "//evil.com" is protocol-relative
   // (browsers treat it as an absolute URL to a different host), and

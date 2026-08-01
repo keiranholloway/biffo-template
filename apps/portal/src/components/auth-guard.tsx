@@ -10,7 +10,19 @@ export function AuthGuard({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!loading && session === null) {
-      router.push('/login/')
+      // Carry where they were trying to go, so signing in returns them there
+      // instead of dumping them on the portal's default landing.
+      //
+      // Read from `window.location` rather than `usePathname`/`useSearchParams`:
+      // this component wraps the entire /admin subtree, and `useSearchParams`
+      // opts its subtree out of static rendering and demands a Suspense
+      // boundary — the very constraint that already forced the login page to be
+      // split in two. This effect body only ever runs client-side.
+      //
+      // Pushed as an inline template literal, not via a variable, so the route
+      // target stays visible to internal-links.test.ts's scanner.
+      const returnTo = window.location.pathname + window.location.search
+      router.push(`/login/?return_to=${encodeURIComponent(returnTo)}`)
     }
   }, [session, loading, router])
 

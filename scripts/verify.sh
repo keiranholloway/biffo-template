@@ -518,7 +518,17 @@ if ci_has "gitleaks"; then
   if [ -n "$LIST" ] || command -v gitleaks >/dev/null 2>&1; then
     run_check gitleaks gitleaks detect --no-git --redact --exit-code=2
   else
-    skip gitleaks "gitleaks not installed - CI still runs both passes"
+    # Say how to close it, pinned to the version ci.yml installs. A skip that
+    # only reports its own absence stays skipped: this one sat `n/a` long
+    # enough for the `\b\d{12}\b` account-id rule to reach CI three times,
+    # most recently on two test UUIDs whose last segment happened to be
+    # twelve digits (tabsii-platform#446). Thirty seconds of install would
+    # have caught it before the push, and version parity matters — an older
+    # gitleaks disagreeing with CI reintroduces exactly the local/CI
+    # divergence this gate exists to remove.
+    skip gitleaks "not installed - CI still runs both passes. Install the version ci.yml pins:
+       curl -sSfL -o /tmp/gl.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \\
+         && tar -xzf /tmp/gl.tgz -C \"\$HOME/.local/bin\" gitleaks"
   fi
 fi
 

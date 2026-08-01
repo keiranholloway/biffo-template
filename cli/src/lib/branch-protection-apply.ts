@@ -121,14 +121,35 @@ export interface ProtectionParams {
  *     is #714/#715, the gap this command exists to close.
  *   - protection **present** with `strict: false` → somebody set that. Report it;
  *     do not silently overwrite a decision while claiming to backfill a gap.
+ *
+ * `enforce_admins` is a parameter for the identical reason, arrived at the hard
+ * way (#1052). It was a literal `false` here, and that literal was the estate's
+ * permanent state on **18 of 19 protected branches** — every `main` among them,
+ * which AGENTS.md §2 calls production. Protection that does not bind an admin is
+ * advisory for the only people who merge, so those branches carried a full
+ * required-check list that nothing had to satisfy.
+ *
+ * Nobody chose it. `configureBranchProtection` sets `false` at scaffold time for
+ * a real and strictly scaffold-shaped reason — a **resumed** `biffo init` must
+ * still be able to commit to an already-protected branch — and that value then
+ * never expires. This function copied it, so the one command that exists to
+ * CLOSE protection gaps re-opened this one on every run, including over a branch
+ * somebody had just bound by hand. Meanwhile `modules/source-control/github`
+ * sets `enforce_admins = true`: the Terraform module and the CLI disagreed about
+ * the intended steady state for weeks and nothing compared them.
+ *
+ * So the default is now `true` — bound — and the same absent/present split
+ * applies: an unprotected branch gets bound as part of the full policy, while a
+ * branch somebody has deliberately unbound keeps that, reported rather than
+ * silently reverted.
  */
 export function protectionParamsFor(
   contexts: string[],
-  options: { strict?: boolean } = {},
+  options: { strict?: boolean; enforceAdmins?: boolean } = {},
 ): ProtectionParams {
   return {
     required_status_checks: { strict: options.strict ?? true, contexts: [...contexts].sort() },
-    enforce_admins: false,
+    enforce_admins: options.enforceAdmins ?? true,
     required_pull_request_reviews: {
       required_approving_review_count: 0,
       dismiss_stale_reviews: false,

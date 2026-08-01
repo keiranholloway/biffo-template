@@ -752,8 +752,14 @@ async function buildCommitAndOpenPr(
   // `pnpm install --frozen-lockfile` outright in the instance's CI.
   const lockfiles = await refreshInstanceLockfiles(options.cwd, applied, deps)
 
+  // Read once and reused for both the commit message and the PR body (#1011):
+  // the commit is made here, before the push step that can fail and abort the
+  // PR-opening step below, so it is the one place this marker is guaranteed to
+  // land.
+  const carriedPrs = readCarriedPrs(options.templateRepo, fromVersion, toVersion)
+
   await git.add(options.cwd, ['-A'])
-  await git.commit(options.cwd, `chore(core): upgrade template core ${fromVersion} -> ${toVersion}`)
+  await git.commit(options.cwd, buildCommitMessage(fromVersion, toVersion, carriedPrs))
 
   log.step(3, 4, `Pushing ${branch}`)
   const pushOpts: { remote?: string; token: string } = { token }
@@ -792,7 +798,7 @@ async function buildCommitAndOpenPr(
       lockfiles,
       breaking,
       cleanedCoreVersion ? coreVersionCleanup : null,
-      readCarriedPrs(options.templateRepo, fromVersion, toVersion),
+      carriedPrs,
     ),
   })
 
@@ -854,6 +860,28 @@ export function carriedPrsSection(carriedPrs: number[]): string[] {
   if (carriedPrs.length === 0) return []
   const unique = [...new Set(carriedPrs)].sort((a, b) => a - b)
   return ['', `<!-- ${CARRIED_PRS_MARKER}${unique.join(',')} -->`]
+}
+
+/**
+ * The upgrade commit's message, marker included (#1011).
+ *
+ * `--apply` can complete this commit and then fail at the push step — a
+ * misconfigured remote, an SSH identity with no write access — which aborts
+ * the run before the PR-opening step that used to be the marker's only home.
+ * The operator then pushes and opens the PR by hand, and a hand-made PR is
+ * correct in every visible respect except this one invisible thing: no PR
+ * body, no marker, and `scripts/practices-metrics.mjs` can no longer join the
+ * upgrade to the template PRs it carried.
+ *
+ * The commit itself is made before that push, so writing the same marker into
+ * its message survives exactly the failure that loses the PR body. The
+ * collector reads the marker from either place (#1011); this is the one a
+ * hand-created PR still carries.
+ */
+export function buildCommitMessage(from: string, to: string, carriedPrs: number[]): string {
+  const subject = `chore(core): upgrade template core ${from} -> ${to}`
+  const marker = carriedPrsSection(carriedPrs)
+  return marker.length === 0 ? subject : [subject, ...marker].join('\n')
 }
 
 /**

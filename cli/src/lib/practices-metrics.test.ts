@@ -2235,6 +2235,36 @@ describe('cross-repo time-to-feature (#767)', () => {
     expect(parseCarriedPrs(null)).toEqual([])
   })
 
+  it('falls back to a commit message when the PR body has no marker (#1011)', () => {
+    // `--apply` can commit and then fail at the push step, aborting before it
+    // ever opens a PR. The operator pushes and opens the PR by hand, so the
+    // body never gets the marker `buildPrBody` would have written — but the
+    // commit made before that failed push still carries it, and `core-upgrade`
+    // now writes it there too. `gh pr list --json commits` is how the
+    // collector sees it.
+    const commits = [{ messageHeadline: 'chore(core): upgrade template core 0.1.0 -> 0.2.0' }]
+    expect(parseCarriedPrs(undefined, commits)).toEqual([])
+
+    const withBody = [
+      {
+        messageHeadline: 'chore(core): upgrade template core 0.1.0 -> 0.2.0',
+        messageBody: marker('746,747'),
+      },
+    ]
+    expect(parseCarriedPrs(null, withBody)).toEqual([746, 747])
+    // A hand-created PR has no body at all, not merely an empty string.
+    expect(parseCarriedPrs(undefined, withBody)).toEqual([746, 747])
+  })
+
+  it('prefers the PR body over commits when both are present', () => {
+    // A tool-created PR always has both — the marker was written to the commit
+    // first, then the same value into the PR body. Nothing should change for
+    // it: this path must never even look at commits when the body already
+    // answers.
+    const commits = [{ messageBody: marker('9999') }]
+    expect(parseCarriedPrs(marker('746,747'), commits)).toEqual([746, 747])
+  })
+
   it('IGNORES a PR that merely documents the marker', () => {
     // Fired on the very first real run: biffo-template reported an upgrade PR
     // carrying four template PRs, which is impossible — the template does not

@@ -51,7 +51,7 @@ function requestResetOutcome(err: unknown): { notice: string; sent: boolean } {
 }
 
 function LoginForm() {
-  const { login } = useAuth()
+  const { login, setSession } = useAuth()
   const router = useRouter()
   // Set by a sibling app (ADR-0007) when it finds no shared session and
   // bounces here — e.g. /login?return_to=/my-sibling/. Sanitised to a
@@ -127,7 +127,8 @@ function LoginForm() {
     setLoading(true)
     try {
       if (!pendingUser) return
-      await completeNewPassword(pendingUser, newPassword, pendingAttributes)
+      const session = await completeNewPassword(pendingUser, newPassword, pendingAttributes)
+      setSession(session)
       redirectAfterAuth()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to set password')

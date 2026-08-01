@@ -360,6 +360,41 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
         ],
     },
     {
+        # The generic escape hatch every other action here is a fixed-shape
+        # specialisation of (issue #1051) — including calling a deployment's
+        # own internal API, which is what makes a periodic tick (#1044)
+        # actually useful for anything beyond the notification channels
+        # above. Always POSTs (orchestrator/actions.py's send_http).
+        "type": "http",
+        "label": "Call a webhook (HTTP POST)",
+        "config_fields": [
+            {
+                "name": "url",
+                "label": "URL",
+                "type": "url",
+                "required": True,
+                "payload_template": True,
+            },
+            {
+                # The whole field is treated as a credential (#432), the same
+                # as the Slack/Google Chat webhook URL — this is where a
+                # bearer token or API key lives for a generic endpoint.
+                "name": "headers",
+                "label": "Headers (comma-separated, Name: Value — {field} allowed)",
+                "type": "text",
+                "required": False,
+                "secret": True,
+            },
+            {
+                "name": "body",
+                "label": "Body (JSON, {field} allowed — defaults to the trigger payload)",
+                "type": "textarea",
+                "required": False,
+                "payload_template": True,
+            },
+        ],
+    },
+    {
         # ADR-0014 §4: binding an agentic worker to a trigger is a workflow
         # definition, not a new trigger surface. The action creates a run in
         # Core and returns; the runtime executes it off `agent.run.requested`.

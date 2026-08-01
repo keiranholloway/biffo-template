@@ -87,13 +87,15 @@ describe('WORKFLOW_ACTIONS and ACTION_HANDLERS stay in step across the package b
     ).toEqual({ missingHandler: [], missingCatalog: [] })
   })
 
-  it('is the expected action set today (email, slack, google_chat, whatsapp, agent, agent_fan_in)', () => {
+  it('is the expected action set today (email, slack, google_chat, whatsapp, http, agent, agent_fan_in)', () => {
     // A change here is intentional and should move with a real action addition,
     // edited in lockstep across both files above. `slack` was added with the
     // deliver-on-completion work (ADR-0020, #527); `agent_fan_in` with the
     // multi-agent join (#657) — it runs an agent once a set of parallel agents
-    // have all finished, which `agent` alone could not express.
-    const expected = ['agent', 'agent_fan_in', 'email', 'google_chat', 'slack', 'whatsapp']
+    // have all finished, which `agent` alone could not express. `http` is the
+    // generic escape hatch every other action is a fixed-shape specialisation
+    // of — including calling a deployment's own internal API (#1051).
+    const expected = ['agent', 'agent_fan_in', 'email', 'google_chat', 'http', 'slack', 'whatsapp']
     expect(catalogActionTypes()).toEqual(expected)
     expect(handlerActionTypes()).toEqual(expected)
   })

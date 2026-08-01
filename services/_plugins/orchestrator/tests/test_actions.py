@@ -15,6 +15,7 @@ from orchestrator.actions import (
     request_agent_run,
     send_email,
     send_google_chat,
+    send_http,
     send_slack,
     send_whatsapp,
 )
@@ -345,6 +346,107 @@ def test_send_slack_non_2xx_is_action_error():
 
 def test_slack_is_a_registered_action():
     assert ACTION_HANDLERS["slack"] is send_slack
+
+
+# ── Generic HTTP action (#1051): the escape hatch every other action here is
+# a fixed-shape specialisation of.
+
+
+def test_send_http_posts_rendered_url_and_forwards_payload_by_default():
+    http = FakeHttp(status_code=200)
+
+    result = send_http(
+        {"url": "https://api.example.com/hooks/{kind}"},
+        {"kind": "sweep", "onboarding_id": "ob-1"},
+        http_client=http,
+    )
+
+    assert result == {"status_code": 200}
+    call = http.calls[0]
+    assert call["url"] == "https://api.example.com/hooks/sweep"
+    assert call["json"] == {"kind": "sweep", "onboarding_id": "ob-1"}
+    assert call["headers"] is None
+
+
+def test_send_http_renders_a_configured_json_body():
+    http = FakeHttp(status_code=200)
+
+    result = send_http(
+        {"url": "https://api.example.com/hooks", "body": '{"onboarding_id": "{onboarding_id}"}'},
+        {"onboarding_id": "ob-1"},
+        http_client=http,
+    )
+
+    assert result == {"status_code": 200}
+    assert http.calls[0]["json"] == {"onboarding_id": "ob-1"}
+
+
+def test_send_http_body_must_render_to_valid_json():
+    with pytest.raises(ActionError, match="did not render to valid JSON"):
+        send_http(
+            {"url": "https://api.example.com/hooks", "body": "not json"},
+            {},
+            http_client=FakeHttp(),
+        )
+
+
+def test_send_http_accepts_a_headers_mapping():
+    http = FakeHttp(status_code=200)
+
+    send_http(
+        {"url": "https://api.example.com/hooks", "headers": {"Authorization": "Bearer {token}"}},
+        {"token": "abc123"},
+        http_client=http,
+    )
+
+    assert http.calls[0]["headers"] == {"Authorization": "Bearer abc123"}
+
+
+def test_send_http_accepts_comma_separated_header_pairs():
+    http = FakeHttp(status_code=200)
+
+    send_http(
+        {
+            "url": "https://api.example.com/hooks",
+            "headers": "Authorization: Bearer {token}, X-Source: orchestrator",
+        },
+        {"token": "abc123"},
+        http_client=http,
+    )
+
+    assert http.calls[0]["headers"] == {
+        "Authorization": "Bearer abc123",
+        "X-Source": "orchestrator",
+    }
+
+
+def test_send_http_rejects_a_malformed_header_pair():
+    with pytest.raises(ActionError, match="is not 'Name: Value'"):
+        send_http(
+            {"url": "https://api.example.com/hooks", "headers": "not-a-header-pair"},
+            {},
+            http_client=FakeHttp(),
+        )
+
+
+def test_send_http_requires_url():
+    with pytest.raises(ActionError, match="missing required key"):
+        send_http({}, {}, http_client=FakeHttp())
+
+
+def test_send_http_blank_rendered_url_is_action_error():
+    with pytest.raises(ActionError, match="rendered empty"):
+        send_http({"url": "{missing}"}, {}, http_client=FakeHttp())
+
+
+def test_send_http_non_2xx_is_action_error():
+    http = FakeHttp(status_code=404, text="not found")
+    with pytest.raises(ActionError, match="HTTP action failed: 404"):
+        send_http({"url": "https://api.example.com/hooks"}, {}, http_client=http)
+
+
+def test_http_is_a_registered_action():
+    assert ACTION_HANDLERS["http"] is send_http
 
 
 # ── prepare_delivery (ADR-0020): render an agent result into a destination ───
@@ -797,6 +899,7 @@ async def test_agent_action_requires_agent_name():
 def test_every_catalog_action_type_has_a_handler():
     """The engine registry and the Core builder catalog must stay in step."""
     assert "agent" in ACTION_HANDLERS
+    assert "http" in ACTION_HANDLERS
 
 
 # ── Transient vs permanent classification ────────────────────────────────────

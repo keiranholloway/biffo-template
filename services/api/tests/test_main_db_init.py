@@ -72,9 +72,14 @@ class TestRunDbInitAppliesOnlyCommittedMigrations:
         # biffo_app role (#253). That is a Postgres-only concern -- roles,
         # schemas and GRANT do not exist in the SQLite this suite runs on --
         # so it reports itself as a deliberate no-op here.
+        # crud_schema: _run_db_init now also asserts every generic-CRUD table's
+        # real schema has the columns its model declares (#1018). No core table
+        # opts in via __crud_permissions__ in the base template, so there is
+        # nothing to check and it reports zero rather than skipping silently.
         assert result == {
             "ok": True,
             "app_role": {"bootstrapped": False, "reason": "not-postgres"},
+            "crud_schema": {"checked": 0, "drift": []},
         }
         # 0001_create_users_table.py, 0002_create_ddl_import_history_table.py --
         # both already committed in this repo; no plugin fixture needed since
@@ -91,6 +96,7 @@ class TestRunDbInitAppliesOnlyCommittedMigrations:
         noop = {
             "ok": True,
             "app_role": {"bootstrapped": False, "reason": "not-postgres"},
+            "crud_schema": {"checked": 0, "drift": []},
         }
         assert _run_db_init() == noop
         assert _run_db_init() == noop
@@ -159,8 +165,13 @@ class TestRunDbInitAppliesOnlyCommittedMigrations:
         # biffo_app role (#253). That is a Postgres-only concern -- roles,
         # schemas and GRANT do not exist in the SQLite this suite runs on --
         # so it reports itself as a deliberate no-op here.
+        # crud_schema: _run_db_init now also asserts every generic-CRUD table's
+        # real schema has the columns its model declares (#1018). No core table
+        # opts in via __crud_permissions__ in the base template, so there is
+        # nothing to check and it reports zero rather than skipping silently.
         assert result == {
             "ok": True,
             "app_role": {"bootstrapped": False, "reason": "not-postgres"},
+            "crud_schema": {"checked": 0, "drift": []},
         }
         assert "widgets" not in _table_names(db_init_env["db_path"])

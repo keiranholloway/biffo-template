@@ -325,6 +325,37 @@ export function closeLoop(last, snapshot) {
   if (!last.metric) {
     return { ...last, now: null, delta: null, verdict: 'no metric recorded' }
   }
+  // The baseline is READ FROM A SNAPSHOT. If that is the snapshot being scored,
+  // the comparison is a file against itself and the delta is 0 by construction
+  // -- which then prints as `did not move`, the vocabulary for "your fix
+  // missed" (#1037).
+  //
+  // This is not the failure the skill already warns about. That one is
+  // recording a choice AFTER building, which takes the post-fix value as the
+  // baseline; the rule against it was followed both times this fired. The tool
+  // closes the loop on any prior entry regardless of whether a NEW snapshot has
+  // been collected since, so a choice made the same morning as the snapshot it
+  // was read from is always scored against itself.
+  //
+  // It fired on two consecutive days, and on both the truth was interesting:
+  // 2026-07-31 reported `16.8 -> 16.8 did not move` while the metric had
+  // actually moved -43%, and 2026-08-01 reported `11 -> 11` for work that
+  // started 3.5 hours after the snapshot was collected. A `did not move` is
+  // meant to be the most valuable signal this process emits; two artefacts in a
+  // row teach the reader to skip it.
+  //
+  // `not yet measurable` is deliberately its own verdict. `did not move` claims
+  // the intervention missed and `unmeasurable today` claims the measurement
+  // broke. Neither is true here: the measurement is fine, it simply predates
+  // the work.
+  if (last.chosenAt && snapshot.collectedAt && last.chosenAt >= snapshot.collectedAt) {
+    return {
+      ...last,
+      now: readPath(snapshot, last.metric) ?? null,
+      delta: null,
+      verdict: 'not yet measurable',
+    }
+  }
   const now = readPath(snapshot, last.metric)
   if (now === undefined || now === null) {
     return { ...last, now: null, verdict: 'unmeasurable today', delta: null }
@@ -534,8 +565,12 @@ function main() {
 
   if (loop) {
     const colour = loop.verdict === 'improved' ? GREEN : loop.verdict === 'did not move' ? YELLOW : RED
+    // "Yesterday" was printed for a choice made ninety minutes earlier the same
+    // morning, which is how the self-comparison below stayed plausible for two
+    // days (#1037). Say when it was actually chosen.
+    const sameDay = loop.chosenAt && loop.chosenAt.slice(0, 10) === (snapshot.collectedAt ?? '').slice(0, 10)
     process.stdout.write(
-      `${BOLD}Yesterday you chose:${OFF} ${loop.label}${loop.kind === 'directed' ? ` ${DIM}(directed)${OFF}` : ''}\n`,
+      `${BOLD}${sameDay ? 'Earlier today you chose:' : 'Yesterday you chose:'}${OFF} ${loop.label}${loop.kind === 'directed' ? ` ${DIM}(directed)${OFF}` : ''}\n`,
     )
     if (loop.metric) {
       process.stdout.write(`  ${loop.metric}\n`)
@@ -554,6 +589,13 @@ function main() {
       process.stdout.write(
         `  ${YELLOW}Nothing to conclude either way. If work like this should be measurable,` +
           ` name a metric at choose time: --choose-directed "..." --metric <path>.${OFF}\n`,
+      )
+    } else if (loop.verdict === 'not yet measurable') {
+      process.stdout.write(
+        `  ${YELLOW}Chosen at ${loop.chosenAt} — AFTER this snapshot was collected at` +
+          ` ${snapshot.collectedAt}. The baseline and the reading are the same file, so any\n` +
+          `  delta would be 0 by construction. Not a verdict: the first honest reading is` +
+          ` tomorrow's snapshot, against ${loop.metricValue}.${OFF}\n`,
       )
     } else if (loop.verdict !== 'improved') {
       process.stdout.write(

@@ -154,6 +154,73 @@ describe('closeLoop', () => {
   it('returns null when there is no previous choice', () => {
     expect(closeLoop(null, snap)).toBeNull()
   })
+
+  /**
+   * #1037. The baseline is read FROM a snapshot; when that is the snapshot being
+   * scored, the comparison is a file against itself and the delta is 0 by
+   * construction — which printed as `did not move`, the vocabulary for "your fix
+   * missed".
+   *
+   * It fired on two consecutive days and on both the truth mattered: 2026-07-31
+   * reported `16.8 → 16.8 did not move` while the metric had moved **-43%**, and
+   * 2026-08-01 reported `11 → 11` for work that began 3.5 hours after collection.
+   *
+   * Note this is NOT the failure the skill already warns about (recording a
+   * choice after building, which banks the post-fix value as the baseline). That
+   * rule was followed both times. The tool closed the loop on any prior entry
+   * regardless of whether a new snapshot had been collected since.
+   */
+  describe('a choice made after the snapshot was collected (#1037)', () => {
+    const collected = { ...snap, collectedAt: '2026-08-01T03:38:38Z' }
+    const chosenAfter = { ...last, metricValue: 60, chosenAt: '2026-08-01T07:06:52Z' }
+
+    it('refuses to score it, rather than reporting a 0 delta as "did not move"', () => {
+      const loop = closeLoop(chosenAfter, collected)
+      expect(loop.verdict).toBe('not yet measurable')
+      expect(loop.delta).toBeNull()
+    })
+
+    it('is a distinct verdict from both "did not move" and "unmeasurable today"', () => {
+      // Each of those claims something untrue here: the first that the
+      // intervention missed, the second that the measurement broke. The
+      // measurement is fine — it simply predates the work.
+      const loop = closeLoop(chosenAfter, collected)
+      expect(loop.verdict).not.toBe('did not move')
+      expect(loop.verdict).not.toBe('unmeasurable today')
+    })
+
+    it('still reports the current value, so the baseline for tomorrow is visible', () => {
+      expect(closeLoop(chosenAfter, collected).now).toBe(60)
+    })
+
+    it('scores normally once a LATER snapshot exists', () => {
+      // The guard must not swallow real verdicts: same choice, next day's
+      // snapshot, and the delta is reported as usual.
+      const tomorrow = {
+        windows: { 1: { estate: { gates: { share: 40 } } } },
+        collectedAt: '2026-08-02T03:38:38Z',
+      }
+      expect(closeLoop(chosenAfter, tomorrow)).toMatchObject({
+        verdict: 'improved',
+        delta: -20,
+      })
+    })
+
+    it('scores normally when the choice predates the snapshot on the same day', () => {
+      // Timestamps, not dates: a choice made at 02:00 and a snapshot collected
+      // at 03:38 the same morning IS a legitimate comparison.
+      const early = { ...last, metricValue: 70, chosenAt: '2026-08-01T02:00:00Z' }
+      expect(closeLoop(early, collected).verdict).toBe('improved')
+    })
+
+    it('does not fire on entries recorded before chosenAt/collectedAt existed', () => {
+      // Older log lines have no `chosenAt`, and older snapshots no
+      // `collectedAt`. Refusing to score those would silently stop closing the
+      // loop at all — the opposite failure.
+      expect(closeLoop({ ...last, metricValue: 60 }, collected).verdict).toBe('did not move')
+      expect(closeLoop(chosenAfter, snap).verdict).toBe('did not move')
+    })
+  })
 })
 
 describe('buildFindings', () => {

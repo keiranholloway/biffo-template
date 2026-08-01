@@ -670,6 +670,13 @@ async function configureSiblingGithub(
 
   await github.configureBranchProtection(config)
   await github.createEnvironments(config)
+  // Bind it to admins as well (#1058). A sibling is a full deployable repo with
+  // the same three branches, so leaving it advisory would reintroduce the
+  // estate's #1052 state one sibling at a time — and siblings are the commonest
+  // thing this estate creates. Safe here rather than needing to be last: the
+  // sibling's only git write is `pushSkeleton`, which has already happened by
+  // the time this function runs, and everything below is repo settings.
+  await github.sealBranchProtection(org, repo)
 
   // Native GitHub security parity with the core project: Dependabot alerts
   // (the sibling skeleton ships the CI scanners + CodeQL + Renovate).

@@ -126,6 +126,17 @@ function setupStep5GithubHandlers() {
       HttpResponse.json({ name: 'main', commit: { sha: 'abc' } }),
     ),
     http.put(`${GH}/repos/acme/my-app/branches/main/protection`, () => HttpResponse.json({})),
+    // #1058: the scaffold seals the admin bypass as its last act, so the
+    // integration path exercises the real POST too rather than only the PUTs.
+    http.post(`${GH}/repos/acme/my-app/branches/dev/protection/enforce_admins`, () =>
+      HttpResponse.json({ enabled: true }),
+    ),
+    http.post(`${GH}/repos/acme/my-app/branches/staging/protection/enforce_admins`, () =>
+      HttpResponse.json({ enabled: true }),
+    ),
+    http.post(`${GH}/repos/acme/my-app/branches/main/protection/enforce_admins`, () =>
+      HttpResponse.json({ enabled: true }),
+    ),
     // createEnvironments
     http.put(`${GH}/repos/acme/my-app/environments/:env`, () => HttpResponse.json({})),
     // setRepoVariable DNS_MODE / DOMAIN: PATCH returns 404 (doesn't exist yet) → POST creates it
@@ -255,6 +266,7 @@ describe('runInit (integration — real adapters + HTTP mocks)', () => {
       'github_branches',
       'github_instance_files',
       'github_settings',
+      'github_protection_sealed',
     ])
     expect(session.outputs.cloneUrl).toBe('https://github.com/acme/my-app.git')
     expect(session.outputs.oidcRoleArn).toBe(
@@ -295,6 +307,7 @@ describe('runInit (integration — real adapters + HTTP mocks)', () => {
       'github_branches',
       'github_instance_files',
       'github_settings',
+      'github_protection_sealed',
     ])
   })
 

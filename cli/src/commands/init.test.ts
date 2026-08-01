@@ -93,6 +93,7 @@ function makeGithubMock() {
     createBranch: vi.fn().mockResolvedValue(undefined),
     setDefaultBranch: vi.fn().mockResolvedValue(undefined),
     configureBranchProtection: vi.fn().mockResolvedValue(undefined),
+    sealBranchProtection: vi.fn().mockResolvedValue(undefined),
     createEnvironments: vi.fn().mockResolvedValue(undefined),
     setRepoVariable: vi.fn().mockResolvedValue(undefined),
     setEnvVariable: vi.fn().mockResolvedValue(undefined),
@@ -230,6 +231,12 @@ describe('happy path', () => {
       'github_branches',
       'github_instance_files',
       'github_settings',
+      // Last, and load-bearing that it is last (#1058): the scaffold-time
+      // `enforce_admins: false` is what lets a resumed run's git writes land, so
+      // it can only be closed once nothing is left to write. See "seals only
+      // AFTER every git-object write" below, which asserts the ordering itself
+      // rather than this list's shape.
+      'github_protection_sealed',
     ])
   })
 
@@ -957,5 +964,92 @@ describe('resolveConfigFileSession', () => {
 
     expect(session.completedSteps).toEqual([])
     expect(deleteSession).toHaveBeenCalledWith('my-app')
+  })
+})
+
+// ─── #1058: the scaffold-time admin bypass must be closed before the run ends ──
+
+describe('sealing branch protection', () => {
+  it('binds protection to admins on the core repo', async () => {
+    const github = makeGithubMock()
+
+    await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
+
+    expect(github.sealBranchProtection).toHaveBeenCalledOnce()
+    expect(github.sealBranchProtection).toHaveBeenCalledWith('acme', 'my-app')
+  })
+
+  /**
+   * THE invariant, and the only reason this is safe.
+   *
+   * `configureBranchProtection` applies `enforce_admins: false` so that a
+   * RESUMED run's git writes can still land on branches an earlier attempt
+   * protected. Sealing is therefore only correct if nothing writes git objects
+   * after it — otherwise a resume hits a sealed branch and `biffo init` stops
+   * being resumable, which is worse than the bug being fixed.
+   *
+   * Asserted on call ORDER rather than on the step list's source, so inserting a
+   * new committing step after the seal fails here rather than in production on
+   * somebody's half-finished scaffold.
+   */
+  it('seals only AFTER every git-object write', async () => {
+    const github = makeGithubMock()
+    const order: string[] = []
+    for (const method of ['commitFiles', 'fastForwardBranch', 'sealBranchProtection'] as const) {
+      const original = github[method]
+      github[method] = vi.fn().mockImplementation(async (...args: unknown[]) => {
+        order.push(method)
+        return (original as (...a: unknown[]) => unknown)(...args)
+      }) as never
+    }
+
+    await runInit(github as never, makeAwsMock() as never, CONFIG, makeSession())
+
+    const seal = order.indexOf('sealBranchProtection')
+    expect(seal, 'the seal must actually run').toBeGreaterThanOrEqual(0)
+    expect(order.filter((c) => c !== 'sealBranchProtection').length).toBeGreaterThan(0)
+    expect(
+      order.lastIndexOf('commitFiles'),
+      'commitFiles must never run after the seal',
+    ).toBeLessThan(seal)
+    expect(
+      order.lastIndexOf('fastForwardBranch'),
+      'fastForwardBranch must never run after the seal',
+    ).toBeLessThan(seal)
+  })
+
+  it('does not re-seal a session that already sealed', async () => {
+    const github = makeGithubMock()
+    const session = makeSession()
+    session.completedSteps.push('github_protection_sealed')
+
+    await runInit(github as never, makeAwsMock() as never, CONFIG, session)
+
+    expect(github.sealBranchProtection).not.toHaveBeenCalled()
+  })
+
+  it('checkpoints the seal so a later resume skips it', async () => {
+    const github = makeGithubMock()
+    const session = makeSession()
+
+    await runInit(github as never, makeAwsMock() as never, CONFIG, session)
+
+    expect(session.completedSteps).toContain('github_protection_sealed')
+  })
+
+  /**
+   * A session written before #1058 has genuinely not sealed. The legacy
+   * `github_config` alias must NOT cover the seal, or every pre-existing
+   * session resumes into the old advisory state and says nothing — which is
+   * precisely how #1052 stayed invisible.
+   */
+  it('still seals a legacy session that predates the step', async () => {
+    const github = makeGithubMock()
+    const session = makeSession()
+    session.completedSteps.push('github_config')
+
+    await runInit(github as never, makeAwsMock() as never, CONFIG, session)
+
+    expect(github.sealBranchProtection).toHaveBeenCalledOnce()
   })
 })

@@ -43,6 +43,18 @@ export type CompletedStep =
    */
   | 'github_config'
   | 'app_sibling'
+  /**
+   * The scaffold-time admin bypass, closed (#1058). `github_settings` applies
+   * protection with `enforce_admins: false` so a resumed run can still commit;
+   * this is the step that binds it once nothing is left to write, and it is
+   * deliberately the LAST step for exactly that reason.
+   *
+   * Not aliased from `github_config`: a session written before this existed has
+   * genuinely NOT sealed, so replaying the seal on resume is correct and
+   * idempotent. Treating the legacy checkpoint as covering it would leave the
+   * repo the old way round and say nothing — the #1052 failure again.
+   */
+  | 'github_protection_sealed'
 
 /**
  * Steps a legacy checkpoint stands in for, so a session written by an older

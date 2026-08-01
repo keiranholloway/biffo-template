@@ -677,6 +677,89 @@ export class GitHubAdapter {
   }
 
   /**
+   * Bind the protection to admins too — the last thing a scaffolding run does
+   * to a repo (#1058).
+   *
+   * ## Why this is a separate call and not a field above
+   *
+   * `configureBranchProtection` deliberately applies `enforce_admins: false`,
+   * and that is **correct while the scaffold is still running**: `biffo init` is
+   * resumable and step-checkpointed, so a resumed run may need `commitFiles` to
+   * write to branches an earlier attempt already protected. The init token is
+   * the repo's own creator, so the bypass is what lets that succeed.
+   *
+   * The defect was never that value — it was that nothing ever *closed* it. A
+   * scaffold-time bypass with no expiry became the estate's permanent state on
+   * 26 of 27 branches, every one of them showing a full required-check list that
+   * bound nobody, and every audit calling them fine (#1052).
+   *
+   * So the lifetime is made explicit instead: open during the scaffold, closed
+   * at the end of it. Sealing is **the last thing the run does to the repo**,
+   * after every git-object write, which is the property that keeps resumability
+   * intact — a run interrupted before the seal leaves the branches unsealed and
+   * therefore still writable on resume, and a run that reached the seal has
+   * nothing left to write. `cli/src/commands/init.test.ts` asserts that
+   * ordering, because it is an invariant of the step list rather than of this
+   * function.
+   *
+   * Idempotent: `PUT .../enforce_admins` on an already-sealed branch is a no-op,
+   * so a resumed or re-run scaffold re-seals harmlessly.
+   *
+   * Failures are recorded, never thrown. A repo that ends the run protected but
+   * unsealed is a real finding and appears in the end-of-run summary as one —
+   * but it is strictly better than the pre-#1052 state, and aborting a completed
+   * scaffold over it would trade a reported weakness for an unreported mess.
+   */
+  async sealBranchProtection(
+    org: string,
+    repo: string,
+    branches: string[] = ['dev', 'staging', 'main'],
+  ): Promise<BranchProtectionOutcome> {
+    const sealed: string[] = []
+    const unsealed: string[] = []
+    let reason: string | undefined
+
+    for (const branch of branches) {
+      try {
+        await this.octokit.repos.setAdminBranchProtection({ owner: org, repo, branch })
+        sealed.push(branch)
+      } catch (err: unknown) {
+        const status = (err as { status?: number }).status
+        unsealed.push(branch)
+        // 404 means there is no protection on this branch to bind — the branch
+        // is unprotected, which configureBranchProtection has already recorded
+        // and reported. Saying it twice in different words would read as two
+        // problems. Anything else (403 on a plan that cannot protect private
+        // repos, a transient error) is worth naming here.
+        if (status !== 404) {
+          reason ??= (err as Error).message
+          log.warn(`Could not bind branch protection to admins on ${branch}: ${reason}`)
+        }
+      }
+    }
+
+    if (unsealed.length === 0) {
+      log.success(`Branch protection now binds admins on ${sealed.join(', ')}`)
+      return recordBranchProtectionOutcome({
+        status: 'applied',
+        org,
+        repo,
+        protectedBranches: sealed,
+        unprotectedBranches: [],
+      })
+    }
+
+    return recordBranchProtectionOutcome({
+      status: 'unsealed',
+      org,
+      repo,
+      protectedBranches: sealed,
+      unprotectedBranches: unsealed,
+      ...(reason ? { reason } : {}),
+    })
+  }
+
+  /**
    * Protect a single branch with caller-supplied required checks (#803).
    *
    * `configureBranchProtection` above exists for **deployable** repos and

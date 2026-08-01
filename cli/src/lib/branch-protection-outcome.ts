@@ -54,7 +54,19 @@ import { log } from './logger.js'
  *   aborts loudly; the outcome is recorded so the summary can say *which*
  *   branches were left behind when it did.
  */
-export type BranchProtectionStatus = 'applied' | 'skipped-403' | 'skipped-no-contexts' | 'failed'
+/**
+ * `unsealed` is protection that exists and binds nobody (#1058).
+ *
+ * It is a distinct status rather than a flavour of `applied` because the repo
+ * genuinely IS protected — every required check is listed, the GitHub UI shows a
+ * gated branch — and `enforce_admins: false` makes all of it advisory for a repo
+ * admin. On an estate where every merge is made by an admin, that is
+ * indistinguishable in effect from no protection, which is why `isUnprotected`
+ * counts it. 26 of 27 estate branches sat in exactly this state and every audit
+ * reported them fine.
+ */
+export type BranchProtectionStatus =
+  'applied' | 'skipped-403' | 'skipped-no-contexts' | 'failed' | 'unsealed'
 
 export interface BranchProtectionOutcome {
   status: BranchProtectionStatus
@@ -135,6 +147,17 @@ export function formatBranchProtectionSummary(
       'those branches right now.',
   )
 
+  // An unsealed branch is the one case where that sentence needs qualifying:
+  // the rules exist and hold for everyone EXCEPT an admin. Saying "unprotected"
+  // without that would misdescribe it, and the misdescription is the whole
+  // reason it went unnoticed for weeks (#1052).
+  if (unprotected.some((o) => o.status === 'unsealed')) {
+    lines.push(
+      '  An unsealed branch enforces its rules on everyone except a repo admin — which, on a ' +
+        'solo or agent-driven estate, is everyone who merges.',
+    )
+  }
+
   // The remedy is not the same for every cause, and saying so is the point of
   // having a fourth status at all (#1001). A 403 is fixed by the plan; an
   // undeterminable context list is fixed by the repo's CI reporting job names
@@ -168,6 +191,11 @@ function whyUnprotected(outcome: BranchProtectionOutcome): string {
       )
     case 'failed':
       return 'branch protection failed'
+    case 'unsealed':
+      return (
+        'protection was applied but does not bind admins, so every required check on it ' +
+        'is advisory for whoever merges'
+      )
     default:
       return 'branch protection incomplete'
   }

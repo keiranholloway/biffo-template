@@ -273,6 +273,9 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | [#431](https://github.com/tabsii-com/tabsii-platform/issues/431) | **A table's ORM model can silently disagree with its own DDL about which columns exist, and the unit-test lane cannot see the gap because it builds its schema from the ORM's metadata, not the DDL that runs in production.** Found live, twice, in one build: `onboarding_template_tasks` was opted into generic CRUD (which unconditionally filters every query by `model.tenant_id`, ADR-0004) without a `tenant_id` column existing on the real table — tenancy was only ever reachable via a join to its parent. SQLite's test schema already had the column (inherited from `ImportedTableModel`'s Python mixin), so 24 passing tests proved nothing about the mismatch; only the first live click-through 500'd. Fixed (module 068), then the **identical shape recurred independently** in two raw-SQL sites in a sibling milestone's document-signing code, selecting `tenant_id` off the same tenant-less table by hand. An audit of every other generic-CRUD-opted-in table in the codebase found no further instances — this was two occurrences of one root cause, not a spreading pattern, but nothing stops a third. Proposed fix: a real-Postgres-lane test that, for every model with non-empty `__crud_permissions__`, asserts its DDL actually has every column the ORM assumes, before a live click-through has to find it | **drift** · fail-open | tabsii-crm (first live click-through of the milestone, twice) | tabsii-platform ([#429](https://github.com/tabsii-com/tabsii-platform/pull/429), [#436](https://github.com/tabsii-com/tabsii-platform/pull/436)) | **2 of 2 known instances fixed**; the permanent guard is proposed in [#431](https://github.com/tabsii-com/tabsii-platform/issues/431), not yet built |
 | — | **A zero that means "I could not see the input" is reported identically to a zero that means "I looked and there was nothing" — FOUR fresh instances in one day, in four unrelated components.** This is now the estate's most repeated defect, and it is filed as a *class* rather than four rows because fixing the instances individually is what has already happened three times. **(1)** `crossRepoTimeToFeature` reported `carriedWithoutIssue: 172` — "172 carried PRs closed no issue" — having never fetched the template repo the join resolves against. **(2)** The same metric reported `measured: 0` because `--repo <instance>` narrowed the fetch to the instance, removing the join's own left-hand side; **#776's documented verification command was the one that could not work**. **(3)** `biffo core upgrade --apply` died at its push step, so the hand-made PR silently lacked the `carries-template-prs` marker — correct in every visible respect, green, merged, deployed, invisible. **(4)** `error_branch_coverage.py --check` read a *missing* baseline as `{"total": 0}`, so every branch looked newly added and every upgrading instance would have gone red regardless of #983's stated fix. **None of the four errored, went red, or looked like a failure**; two were quoted by two separate triages as evidence about the estate rather than about the query, and one nearly caused a wrong close. **The common structure: an aggregate whose "no data" branch and "no input" branch return the same value.** The fix is always to give absence its own name — `unattributable`, `None`, `unavailable` — never to fold it into the empty case. Distinct from the fail-open gate class (§6) and worse, because a gate at least looks like something that can fail | **visibility** · fail-open | biffo-template (`scripts/practices-metrics.mjs`, `scripts/error_branch_coverage.py`, `cli/` upgrade path) and my own hand-created upgrade PR | biffo-template — [#1023](https://github.com/keiranholloway/biffo-template/pull/1023) (`unattributable`), [#1022](https://github.com/keiranholloway/biffo-template/pull/1022) (`None` for never-measured), [#1011](https://github.com/keiranholloway/biffo-template/issues/1011) open for the marker; **plus a named check added to the `biffo-verify` skill so it is applied before the next one is written** | **3 of 4 fixed**, marker recovery open as [#1011](https://github.com/keiranholloway/biffo-template/issues/1011); the *class* is now a standing review question rather than a rediscovery |
 
+| — | **Five template-owned assertions about instance-owned things, in one day — and not one was catchable locally.** A guard, a test or a rule ships from the template, travels to an instance via `core upgrade`, and then judges something the **instance** owns and the upgrade deliberately never carries. Every local suite was green each time. The five: `test_error_branch_coverage` reading a baseline that is a measurement *of the instance*; the event-registry guard demanding a `payload_model` for an instance-owned event; ADR-0028 **requiring** a user-owned `instance-nav.ts` to exist, so every pre-ADR instance fails `module not found` on upgrade; `nav.test.tsx` asserting the **exact** nav label list, which biffo-platform's own `Early access` link breaks; and the lifecycle-hook guard walking the whole repo and failing on user-owned `docs/ADR/0003` and a vendored `services/idea-scout/README.md`. **The instance cannot fix any of them** — the judging file is template-owned, so the next upgrade reverts the edit. **The rule: a guard's scope must be the ownership boundary, not the repo root**, and a template-owned assertion may only constrain template-owned content. Reviewing each in isolation caught none of the pattern; three separate reviews passed the same error | **drift** · boundary | biffo-platform (all five, via real `core upgrade` runs) | biffo-template — [#1022](https://github.com/keiranholloway/biffo-template/pull/1022), [#1024](https://github.com/keiranholloway/biffo-template/pull/1024), [#1035](https://github.com/keiranholloway/biffo-template/pull/1035), [#1039](https://github.com/keiranholloway/biffo-template/pull/1039), [#1041](https://github.com/keiranholloway/biffo-template/pull/1041) | **all five fixed**; the *class* has no standing check — a guard that asserts about a user-owned path should itself fail review |
+| [#1040](https://github.com/keiranholloway/biffo-template/issues/1040) | **Three successive confident explanations for one intermittent failure, two of them wrong, and the wrong one was handed to ~12 sub-agents as a working instruction.** `core upgrade --apply` aborted at its push step. **(1)** *"The SSH remote authenticates as `keiran-tabsii`, which cannot write to `keiranholloway/*`."* Wrong: those remotes are **HTTPS**, and a credential helper was already configured. The `-c credential.helper=…` workaround appeared to fix it only because it was always run *after* a `pnpm install` — the install was doing the work and the override took the credit. **(2)** *"The tool pushes before installing dependencies, so the pre-push gate rejects it."* Filed as an issue, then contradicted an hour later: the tool completed all four steps in a fresh worktree with **no `node_modules`**, while a manual push in that same worktree still failed the gate. Both cannot be true. **(3)** Cause still not established; the issue is retitled to the symptom. **The tell was available from the start and skipped twice: an intermittent failure invites a story, and the cheap check — reproduce it deliberately in BOTH states before explaining it — is the one that gets skipped because a plausible cause is already in hand.** Cost beyond the wasted diagnosis: a wrong instruction propagated into a dozen agent prompts, where each one dutifully applied cargo | **visibility** · process | my own diagnosis, across biffo-template and biffo-platform | diagnostic practice — retitle to the symptom when the cause is unproven; never pass an unverified cause into a sub-agent prompt as fact | **corrected** — [#1040](https://github.com/keiranholloway/biffo-template/issues/1040) now states the symptom and records all three explanations |
+
 ### What the classes say
 
 > Generated from `docs/practices/evidence.jsonl` by
@@ -465,6 +468,40 @@ there. Neither is evidence about the estate.
 
 
 ## Where the cycles go
+
+### Measured: three upgrade attempts to prove one fix, and each found a new defect (2026-08-01)
+
+**Asked to "prove it" with a real `core upgrade` into biffo-platform. Three
+attempts, ~2h, and every one surfaced a defect no local run could.**
+
+| Attempt | Blocked by | Catchable locally? |
+| --- | --- | --- |
+| 1 (0.204.1) | `nav.test.tsx` asserted the exact nav labels; the instance has its own `Early access` link | **No** — needs an instance whose nav diverges |
+| 2 (0.204.2) | The lifecycle-hook guard failed on user-owned `docs/ADR/0003` and a vendored README | **No** — needs an instance's user-owned copies |
+| 3 (0.204.3) | — | |
+
+Each round trip is: fix upstream → merge → wait for the `core-v*` tag → re-run
+the upgrade → wait for instance CI. Roughly **35-40 minutes**, and the defects
+arrive **one per traversal** — the same "one traversal reveals one defect"
+shape already recorded for plugin deploys, now confirmed for core upgrades.
+
+**The value is not in dispute.** Two of these would have shipped as a broken
+upgrade for *every* instance, and the second one was introduced by the fix for
+the first. But the *cost structure* is: nothing between "template CI green" and
+"instance CI red" tells you anything, and the gap is ~35 minutes wide.
+
+**What would collapse it:** a template-side check that runs the template's own
+guards against a **synthetic instance** — a fixture with a `biffo.core.json`, a
+`core-manifest.json`, and a user-owned file each guard would judge. All five of
+today's failures are ownership-boundary violations, so a single fixture with one
+user-owned doc and one vendored README would have caught **four of them at
+template CI time**, before any upgrade. That is a cheap fixture against a
+recurring 35-minute loop.
+
+**Toil in this stretch: ~45 min**, and unusually it was almost all *diagnosis of
+my own wrong diagnosis* rather than tooling — see the scoreboard row on the
+three explanations. The tooling behaved consistently; the story about it did not.
+
 
 ### Measured: closing an issue properly cost 3 more defects (2026-07-31, part 2)
 
@@ -1558,6 +1595,24 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**Being challenged on a fix, and the challenge being right.** I proposed
+pre-seeding a four-line file into two instances to unblock an upgrade. The
+question back was *"why do we need this file?"* — and the honest answer was that
+we did not: it existed to satisfy a module resolver, carried no information, and
+seeding it would have recurred for every instance predating the change and every
+future template-owned import of a user-owned module. Treating the symptom was
+about to become the plan. The resulting fix removed the requirement instead, and
+found two more defects on the way.
+
+**Refusing to record an inconclusive check as a negative result.** Testing
+whether a webpack alias had applied, the first probe grepped the built HTML for
+the nav link and found nothing. That looked like "the alias failed" and was
+about to be written down as one — but the portal renders its nav client-side, so
+the HTML could never have contained it either way. The check was *inconclusive*,
+not negative. Grepping the JS bundle instead gave a real answer (and the alias
+genuinely had not applied, for a different reason). An inconclusive probe
+reported as a result is indistinguishable from evidence.
 
 **Refusing to believe a zero, three times in one session, on the session's own
 work.** Building the RLS grant-satisfiability guard produced three clean-looking
@@ -4644,6 +4699,10 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `biffo-verify` | **worked — §2's "verify in the environment that differs most" was the entire session** | Five defects, none reproducible in the template. Each needed a real `core upgrade` into an instance whose ownership boundary differs from the template's. The section is written about distributed *scripts*; it applies just as hard to distributed *guards*, and that generalisation is worth making explicit in the skill. |
+| `biffo-verify` | **worked — §4 caught a green build that proved nothing** | The first `@/instance-nav` webpack alias built successfully and silently emitted the empty default. Exit code 0, no warning. Only grepping the emitted bundle for a probe value showed the alias had never applied. "Verify the artifact, not the source" reads as being about deploys; here the artifact was a local `out/` directory ten seconds old. |
+| `biffo-verify` | **partial — it has no step for "my own diagnosis was wrong twice"** | Three successive explanations for one push failure, two wrong, and the wrong one was passed into ~12 sub-agent prompts as fact. §6's "suspect the ruler first" is adjacent but is about *instruments*, not about a **causal story** told from an intermittent symptom. The missing step: before putting a cause into anything durable — an issue, a prompt, a memory — reproduce it deliberately in both the failing and the passing state. I skipped that twice and it was cheap both times. |
+| `groom-backlog` | **worked, on its first real use — and the numbers were its own claim** | Written earlier the same session, then exercised: 38 → 26 open, 23 closed, and its central assertion held (6 of 38 issues did not describe reality). Its "partition sub-agents by file" rule produced five concurrent agents with zero merge conflicts. Its weakest step is ranking: the "highest impact" list it produced was reordered twice by things only a running system could tell me. |
 | `biffo-verify` | **worked — §1 prevented seven duplicate issues and one wrong fix** | §1 (establish current state before writing) was applied twice over: before filing each upstream issue, biffo-template's backlog was searched for an existing counterpart — none had one, which is itself the finding — and before acting on #406, its factual claims were checked against the code rather than trusted. The second check mattered: both `services/orchestrator` and `services/_plugins/orchestrator` exist, so "the path is wrong" was not self-evident. It was right (12 gitignored `.pyc` files versus 35 real ones), but a minute's checking was the difference between a correction and introducing the error being corrected. |
 | `biffo-verify` | **worked — §1 and §7 both changed the outcome** | §1 (establish current state first) meant checking `core-manifest.json` ownership before writing the Terraform output, which is the only reason the S3 feature actually reaches existing instances rather than silently never activating. §7 (say what you did not verify) was load-bearing separately: stating that biffo-platform's `/health` was unchecked prompted the operator to point out the credentials existed, turning a declared gap into a passing check. Both are cases where the skill produced evidence rather than merely documenting its absence. |
 | `biffo-verify` | **worked — §4 was the difference between two opposite wrong answers** | Backlog triage, two issues whose acceptance no checkout could settle. #724's source showed the fix present and §4's measurement showed it had **worked** (p50 4035ms → 2212ms) — closed. #924's source showed the mechanism landed and CloudWatch showed it **failing on every cold start** — kept open, with a named fix. **Two verification agents reading only code called #924 closable.** §4 is usually framed as a defence against the stale-deploy theory; here it was the only way to grade a backlog at all, and it failed in *both* directions, so reading source is not the conservative choice. |

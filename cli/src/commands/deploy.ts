@@ -6,7 +6,12 @@ import { Command } from 'commander'
 import { BiffoConfigSchema, resolveDnsConfig, type BiffoConfig } from '../config/schema.js'
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { GitHubAdapter } from '../adapters/source-control/github/index.js'
-import { promptOr } from '../lib/interactive.js'
+import {
+  NonInteractiveError,
+  isNonInteractive,
+  nonInteractiveMessage,
+  promptOr,
+} from '../lib/interactive.js'
 import { isTemplatePlaceholderConfig } from '../lib/local-config.js'
 import { log } from '../lib/logger.js'
 import { listProjectConfigs, loadProjectConfig } from '../lib/session.js'
@@ -43,6 +48,19 @@ export const deployCommand = new Command('deploy')
         yes?: boolean
       },
     ) => {
+      // Defensive default (issue #1066). Some failures on this path never reach
+      // any catch — not this action's, not the top-level one in index.ts. When
+      // inquirer's picker prompt has its stdin torn out from under it (closed /
+      // non-TTY stdin, e.g. a script or cron job), it rejects with
+      // `ExitPromptError` from *inside Node's own process-exit sequence*
+      // (`signal-exit`'s `onExit`, fired as the event loop drains). Node does not
+      // run further microtasks after that point, so that rejection never reaches
+      // any `.catch` — proven by instrumenting this exact path — and the process
+      // exits 0 despite having failed. Arming a non-zero exit code up front, and
+      // clearing it only on a confirmed outcome below, is the one thing that
+      // survives that path: it needs no callback to run at exit time.
+      process.exitCode = 1
+
       const validEnvs = ['dev', 'staging', 'prod']
       if (!validEnvs.includes(environment)) {
         log.error(`Unknown environment: ${environment}. Must be one of: ${validEnvs.join(', ')}`)
@@ -54,6 +72,7 @@ export const deployCommand = new Command('deploy')
       console.log(chalk.bold(`\n  Biffo — Deploy to ${environment}\n`))
       if (!options.yes && !(await confirmDeployTarget(config, environment))) {
         log.warn('Deploy cancelled')
+        process.exitCode = 0 // an intentional cancel is not a failure
         return
       }
 
@@ -62,6 +81,7 @@ export const deployCommand = new Command('deploy')
       const aws = new AwsAdapter(config)
 
       await runDeploy(github, aws, config, environment, { ...options, token })
+      process.exitCode = 0
     },
   )
 
@@ -156,21 +176,52 @@ export function describeProject(config: BiffoConfig): string {
  * saved project it auto-selects, so a script that worked on a one-project
  * machine hung on a two-project machine, at deploy time.
  *
+ * `--non-interactive` is one way to ask for that; the absence of a real
+ * terminal is another, and `promptOr`'s own guard (`assertInteractive`) cannot
+ * see it — it only reads the flag/env, not stdin. Without a check here, a
+ * script or cron job that never passed the flag still reaches
+ * `inquirer.prompt`, whose stdin then hits immediate EOF. That does not fail
+ * like a normal rejection: inquirer's `create-prompt` rejects with
+ * `ExitPromptError` from *inside Node's own process-exit sequence*
+ * (`signal-exit`'s `onExit`), a point after which Node runs no further
+ * microtasks — so neither this function's caller nor `index.ts`'s top-level
+ * `.catch` ever observes it, and the process exits 0 despite failing (issue
+ * #1066). The fix is to never create that prompt in the first place when
+ * nothing could answer it.
+ *
+ * `isTTY` defaults to the real terminal state and exists as a parameter only
+ * so tests can drive both branches deterministically.
+ *
  * Exported for testing.
  */
-export async function chooseProject(projects: BiffoConfig[]): Promise<BiffoConfig> {
+export async function chooseProject(
+  projects: BiffoConfig[],
+  isTTY: boolean = Boolean(process.stdin.isTTY),
+): Promise<BiffoConfig> {
+  const question = 'Which project do you want to deploy?'
+  const remedy =
+    'Pass --project <name> to choose one. Available:\n' +
+    projects.map((p) => `    ${describeProject(p)}`).join('\n')
+
+  if (isNonInteractive()) {
+    throw new NonInteractiveError(nonInteractiveMessage(question, remedy))
+  }
+  if (!isTTY) {
+    throw new NonInteractiveError(
+      `Refusing to prompt for "${question}" — no interactive terminal is attached.\n  ${remedy}`,
+    )
+  }
+
   const { chosen } = await promptOr<{ chosen: string }>(
     {
-      question: 'Which project do you want to deploy?',
-      remedy:
-        'Pass --project <name> to choose one. Available:\n' +
-        projects.map((p) => `    ${describeProject(p)}`).join('\n'),
+      question,
+      remedy,
     },
     [
       {
         type: 'list',
         name: 'chosen',
-        message: 'Which project do you want to deploy?',
+        message: question,
         choices: projects.map((p) => ({ name: describeProject(p), value: p.project.name })),
       },
     ],

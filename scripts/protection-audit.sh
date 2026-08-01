@@ -110,8 +110,8 @@ for d in "$ESTATE"/*/; do
   slug=$(git -C "$d" remote get-url origin 2>/dev/null | sed -E 's#.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
   [ -n "$slug" ] || continue
   label=$(basename "$d")
-  # Two local clones can share a remote (biffo-template and biffo-template-fresh),
-  # and auditing a GitHub repo twice reports the same branch twice.
+  # Two local directories can share a remote, and auditing a GitHub repo twice
+  # reports the same branch twice.
   case " $seen_slugs " in *" $slug "*) continue ;; esac
   seen_slugs="$seen_slugs $slug"
 

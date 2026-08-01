@@ -11,8 +11,10 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { execa } from 'execa'
+import { z } from 'zod'
 import { type CoreManifest, listTemplateOwnedFiles } from './core-manifest.js'
 import { readDivergenceConfig } from './core-ownership-guard.js'
+import { type GitRunner, gitTrackedFiles } from './git-tracked-files.js'
 
 /**
  * The three-way merge engine for `biffo core upgrade` (ADR-0006 Phase 3).
@@ -49,6 +51,26 @@ export interface MergeEntry {
    * (take-theirs / merged / conflict / added / add-conflict / restored). Undefined
    * for unchanged / keep-ours (leave the instance file as-is) and removed (delete). */
   content?: string
+  /**
+   * True only for the subset of `keep-ours` entries produced when a
+   * template-owned path exists SOLELY in the instance — no base, no theirs
+   * (#1026). That is the unsanctioned-drift case the orphan report exists
+   * for: an instance file with no template counterpart at all, sitting under
+   * a path the manifest says the template owns. A `keep-ours` produced
+   * because the instance merely edited a file the template still ships
+   * unchanged (the other origin of this status, below) has a template
+   * counterpart and is never flagged — it is ordinary drift the next upstream
+   * change will three-way-merge normally, not an orphan.
+   *
+   * A legitimate instance file under a sanctioned carve-out (e.g.
+   * `services/api/tests/instance/`) never reaches `classify()` at all: it
+   * resolves user-owned via the manifest's longest-prefix-wins, so it is
+   * never enumerated as one of `ours`'s template-owned paths in the first
+   * place. This flag is reused, not re-derived, by `planCoreUpgrade`'s
+   * `orphaned` list — see there for the gitignore/untracked filter applied on
+   * top of it.
+   */
+  orphaned?: boolean
 }
 
 export interface UpgradePlan {
@@ -61,6 +83,16 @@ export interface UpgradePlan {
    * (#395) but were left absent because the instance declared the path an
    * intentional divergence in `biffo.divergence.json`. Reported, not acted on. */
   divergenceSkips?: string[]
+  /**
+   * Unsanctioned instance files under a template-owned path with no template
+   * counterpart (#1026): the `orphaned` `keep-ours` entries, minus any path
+   * that is gitignored or untracked in the instance tree (a build artifact
+   * inside a template-owned prefix is not a classification target — same
+   * reasoning as the tracked-only filter #1006 applies to the merge itself).
+   * Reported by `biffo core upgrade` and ratcheted against a per-instance
+   * baseline (`ORPHAN_BASELINE_FILE`); never acted on here.
+   */
+  orphaned: MergeEntry[]
 }
 
 /** Runs a three-way merge of three file contents, returning the merged text and
@@ -120,6 +152,9 @@ export interface PlanCoreUpgradeOptions {
   theirsDir: string
   manifest: CoreManifest
   mergeFile?: MergeFileFn
+  /** Injectable git runner, for tests — used only to filter `oursDir` for the
+   * `orphaned` report (#1026), never to change what the merge itself sees. */
+  git?: GitRunner
 }
 
 const EMPTY_SUMMARY: () => Record<MergeStatus, number> = () => ({
@@ -188,7 +223,19 @@ export async function planCoreUpgrade(options: PlanCoreUpgradeOptions): Promise<
 
   const changes = entries.filter((e) => e.status !== 'unchanged' && e.status !== 'keep-ours')
   const conflicts = entries.filter((e) => e.conflicted)
-  return { entries, changes, conflicts, summary, divergenceSkips }
+
+  // #1026: the orphan report. `oursTracked` is null for a tree git cannot
+  // answer the question for (not a repo, not the worktree top) — the same
+  // fail-open `gitTrackedFiles` contract `listTemplateOwnedFiles`'s
+  // `trackedOnly` option already relies on — in which case nothing is
+  // filtered out, matching the "classify everything on disk" behavior the
+  // merge itself uses for `oursDir`.
+  const oursTracked = gitTrackedFiles(options.oursDir, options.git)
+  const orphaned = entries.filter(
+    (e) => e.orphaned === true && (oursTracked === null || oursTracked.has(e.path)),
+  )
+
+  return { entries, changes, conflicts, summary, divergenceSkips, orphaned }
 }
 
 async function classify(
@@ -210,7 +257,7 @@ async function classify(
   // is no base or upstream version to merge against, so leave it untouched
   // rather than trying to read a non-existent base/theirs copy.
   if (!inBase && !inTheirs) {
-    return { path, status: 'keep-ours', conflicted: false }
+    return { path, status: 'keep-ours', conflicted: false, orphaned: true }
   }
 
   // Added upstream (not in base).
@@ -320,6 +367,85 @@ export function applyUpgradePlan(
     }
   }
   return { written, deleted }
+}
+
+/**
+ * Per-instance baseline for the #1026 orphan ratchet.
+ *
+ * Lives in the instance's own tree, and is `userOwned` (see
+ * `core-manifest.json`) for the same reason `biffo.divergence.json` is: a file
+ * that records THIS instance's own state must never itself be blocked from
+ * being written by the guard it feeds, and it must survive `biffo core
+ * upgrade` — which only ever touches template-owned paths — rather than being
+ * silently reset by one.
+ */
+export const ORPHAN_BASELINE_FILE = 'biffo.orphan-baseline.json'
+
+const OrphanBaselineSchema = z.object({
+  count: z.number().int().min(0),
+})
+
+export type OrphanBaseline = z.infer<typeof OrphanBaselineSchema>
+
+/**
+ * Read `biffo.orphan-baseline.json` from an instance root. Absent means no
+ * baseline has been recorded yet — the normal state before this instance's
+ * first upgrade with this feature — and yields `null`, not a default of `0`:
+ * `checkOrphanRatchet` treats `null` as "establish, don't fail" specifically
+ * so the pre-existing residue this ratchet was built to tolerate is never
+ * hard-blocked (issue #1026's decision).
+ *
+ * A malformed file THROWS, same as `readDivergenceConfig`: silently treating
+ * broken config as "no baseline" would make every future count read as an
+ * increase over nothing, turning a config error into a surprise hard block.
+ */
+export function readOrphanBaseline(instanceRoot: string): OrphanBaseline | null {
+  const path = join(instanceRoot, ORPHAN_BASELINE_FILE)
+  if (!existsSync(path)) return null
+
+  let raw: unknown
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'))
+  } catch (err) {
+    throw new Error(`${ORPHAN_BASELINE_FILE} is not valid JSON: ${(err as Error).message}`)
+  }
+  const parsed = OrphanBaselineSchema.safeParse(raw)
+  if (!parsed.success) {
+    throw new Error(
+      `${ORPHAN_BASELINE_FILE} is invalid: ${parsed.error.issues[0]?.message ?? 'unexpected shape'}`,
+    )
+  }
+  return parsed.data
+}
+
+/** Write (or overwrite) the instance's recorded baseline. Only ever called
+ * with `--apply`, alongside the rest of an upgrade's writes, so a dry run
+ * changes nothing on disk — same convention as every other write this planner
+ * feeds (#1026). */
+export function writeOrphanBaseline(instanceRoot: string, count: number): void {
+  writeFileSync(join(instanceRoot, ORPHAN_BASELINE_FILE), `${JSON.stringify({ count }, null, 2)}\n`)
+}
+
+export interface OrphanRatchet {
+  /** Live count of unsanctioned instance files this run found. */
+  count: number
+  /** Recorded baseline, or null when none has been established yet. */
+  baseline: number | null
+  /** True once a baseline exists AND the live count exceeds it. Ratchet, not a
+   * gate: a count that stayed flat or dropped never fails, and neither does
+   * the very first run that establishes the baseline (issue #1026's decision
+   * — "fail only when the count increases", never on the pre-existing set). */
+  increased: boolean
+}
+
+/** Compare a live orphan count against the recorded baseline. Pure so the
+ * pass/fail decision is unit-testable without touching a filesystem. */
+export function checkOrphanRatchet(count: number, baseline: OrphanBaseline | null): OrphanRatchet {
+  return {
+    count,
+    baseline: baseline?.count ?? null,
+    increased: baseline !== null && count > baseline.count,
+  }
 }
 
 /** Parse a GitHub owner/repo from an SSH or HTTPS remote URL (tokenised HTTPS

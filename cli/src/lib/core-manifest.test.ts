@@ -125,6 +125,59 @@ describe('isTemplateOwned (glob entries, #755)', () => {
   })
 })
 
+/**
+ * `**` as a subtree glob (issue #1026): the one place `*` is allowed to cross
+ * a `/`, and only when it is a whole segment on its own. Exists so a carve-out
+ * like `modules/**\/instance/` can name "an `instance/` directory, however
+ * deep under modules/" — `modules/` nests provider/module subtrees to an
+ * unpredictable depth, so a single-segment `*` cannot express it the way it
+ * expresses "a `*.yml` file in one known directory" (#755's glob).
+ */
+describe('isTemplateOwned (** subtree glob, #1026)', () => {
+  const DEEP: CoreManifest = {
+    version: 1,
+    templateOwned: ['modules/'],
+    userOwned: ['modules/**/instance/'],
+    released: [],
+  }
+
+  it('matches an instance/ directory at any depth under the fixed prefix', () => {
+    expect(isTemplateOwned('modules/cloud/aws/networking/instance/test_foo.tf', DEEP)).toBe(false)
+    expect(isTemplateOwned('modules/source-control/github/instance/x.tf', DEEP)).toBe(false)
+    // Deeper still — ** has no fixed depth.
+    expect(isTemplateOwned('modules/a/b/c/d/instance/x.tf', DEEP)).toBe(false)
+  })
+
+  it('matches with zero segments between the fixed prefix and the carve-out', () => {
+    expect(isTemplateOwned('modules/instance/x.tf', DEEP)).toBe(false)
+  })
+
+  it('does not match a directory that merely contains "instance" as a substring', () => {
+    // A directory named instance-utils is not an instance/ directory — the
+    // segment must match exactly, the same discipline a plain prefix entry
+    // already has (services/api/ does not match services/api-gateway/).
+    expect(isTemplateOwned('modules/cloud/aws/instance-utils/x.tf', DEEP)).toBe(true)
+  })
+
+  it('everything else under modules/ stays template-owned', () => {
+    expect(isTemplateOwned('modules/cloud/aws/networking/main.tf', DEEP)).toBe(true)
+    expect(
+      isTemplateOwned('modules/cloud/aws/networking/tests/nat_instance.tftest.hcl', DEEP),
+    ).toBe(true)
+  })
+
+  it('a lone * elsewhere in the same manifest is still segment-local', () => {
+    // Regression fence: adding ** support must not widen plain *.
+    const mixed: CoreManifest = {
+      version: 1,
+      templateOwned: ['.github/'],
+      userOwned: ['.github/workflows/*.instance.yml', 'modules/**/instance/'],
+      released: [],
+    }
+    expect(isTemplateOwned('.github/workflows/nested/foo.instance.yml', mixed)).toBe(true)
+  })
+})
+
 describe('real repo core-manifest.json', () => {
   it('parses and classifies core vs user paths as expected', () => {
     const manifest = readCoreManifest(repoRoot)
@@ -213,6 +266,24 @@ describe('real repo core-manifest.json', () => {
     // never overwritten by an upgrade. Where it lives is what decides.
     expect(isTemplateOwned('services/foo/biffo.plugin.json', manifest)).toBe(false)
     expect(isTemplateOwned('services/acme-crm/terraform/main.tf', manifest)).toBe(false)
+  })
+
+  it('carves out services/api/tests/instance/ and modules/**/instance/ as a home for instance-written tests (#1026)', () => {
+    const manifest = readCoreManifest(repoRoot)
+    // A test the instance itself writes has a sanctioned home now, instead of
+    // resolving template-owned and showing up as unsanctioned drift on every
+    // `biffo core upgrade`.
+    expect(isTemplateOwned('services/api/tests/instance/test_tabsii_router.py', manifest)).toBe(
+      false,
+    )
+    expect(isTemplateOwned('modules/cloud/aws/networking/instance/main.tf', manifest)).toBe(false)
+    expect(isTemplateOwned('modules/instance/main.tf', manifest)).toBe(false)
+    // A test the TEMPLATE ships stays template-owned — the carve-out is the
+    // instance/ subdirectory, not the whole tests/ tree.
+    expect(isTemplateOwned('services/api/tests/test_ddl_import.py', manifest)).toBe(true)
+    expect(
+      isTemplateOwned('modules/cloud/aws/networking/tests/nat_instance.tftest.hcl', manifest),
+    ).toBe(true)
   })
 
   it('carves out migrations/versions (append-only per-instance chain) but keeps the framework', () => {

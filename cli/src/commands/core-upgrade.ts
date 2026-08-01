@@ -26,11 +26,17 @@ import {
 } from '../lib/core-migrations.js'
 import {
   type ApplyResult,
+  type MergeEntry,
+  type OrphanRatchet,
   type UpgradePlan,
+  ORPHAN_BASELINE_FILE,
   applyUpgradePlan,
+  checkOrphanRatchet,
   parseGitHubRepo,
   planCoreUpgrade,
+  readOrphanBaseline,
   upgradeBranchName,
+  writeOrphanBaseline,
 } from '../lib/core-upgrade.js'
 import {
   type MaterializedTree,
@@ -458,11 +464,27 @@ async function runCoreUpgradeResolved(
     manifest,
   })
 
+  // #1026: computed before anything else can short-circuit (e.g. "nothing to
+  // upgrade" below), so a regression here is reported and enforced on every
+  // invocation, not just the ones that also carry a template-owned change.
+  const orphanRatchet = checkOrphanRatchet(plan.orphaned.length, readOrphanBaseline(options.cwd))
+
   const heading = options.apply ? 'Biffo core upgrade' : 'Biffo core upgrade (dry run)'
   console.log(chalk.bold(`\n  ${heading}\n`))
   console.log(`  instance core:   ${instanceVersion ?? chalk.dim('(unrecorded)')}`)
   console.log(`  merge base:      ${fromVersion}`)
   console.log(`  target:          ${toVersion}\n`)
+
+  printOrphanReport(plan.orphaned, orphanRatchet)
+  if (orphanRatchet.increased) {
+    throw new Error(
+      `${String(plan.orphaned.length)} unsanctioned instance file(s) under a template-owned ` +
+        `path (baseline ${String(orphanRatchet.baseline)}) — see the list above (#1026). Move ` +
+        'new instance-written files under a sanctioned carve-out ' +
+        '(services/api/tests/instance/, modules/**/instance/) or otherwise reduce the count, ' +
+        'then re-run.',
+    )
+  }
 
   // Core migrations are carried separately from the merge (issue #198): the
   // versions/ directory is user-owned and must never be merged, but new core
@@ -540,6 +562,7 @@ async function runCoreUpgradeResolved(
     breaking,
     theirsDir,
     coreVersionCleanup,
+    orphanRatchet,
   )
 }
 
@@ -555,6 +578,9 @@ async function applyAndOpenPr(
   theirsDir: string,
   /** Orphaned `core.version` cleanup decision, if the instance has one (#434). */
   coreVersionCleanup: CoreVersionCleanup | null,
+  /** #1026 orphan ratchet outcome — carried through so a first-ever baseline
+   * can be recorded alongside the rest of this upgrade's writes. */
+  orphanRatchet: OrphanRatchet,
 ): Promise<void> {
   if (breaking.length > 0 && !options.acknowledgeBreaking) {
     throw new Error(
@@ -609,6 +635,7 @@ async function applyAndOpenPr(
       breaking,
       theirsDir,
       coreVersionCleanup,
+      orphanRatchet,
       branch,
       token,
     )
@@ -667,6 +694,7 @@ async function buildCommitAndOpenPr(
   breaking: BreakingChange[],
   theirsDir: string,
   coreVersionCleanup: CoreVersionCleanup | null,
+  orphanRatchet: OrphanRatchet,
   branch: string,
   /** Resolved by the caller, before the branch exists, so a missing token fails
    * the run without having moved HEAD first. */
@@ -677,6 +705,22 @@ async function buildCommitAndOpenPr(
   const applied = applyUpgradePlan(options.cwd, plan, theirsDir)
   const carried = applyMigrationCarry(options.cwd, migrations)
   writeInstanceCoreVersion(options.cwd, toVersion)
+
+  // #1026: the FIRST upgrade this instance runs after the ratchet exists has
+  // no baseline yet — record the live count now rather than leaving the
+  // instance permanently unable to fail (`checkOrphanRatchet` treats a
+  // missing baseline as "establish, don't fail" every single time, not just
+  // once). Staged by the `git add -A` below, so it lands in this same PR —
+  // the same convention `writeInstanceCoreVersion` above already follows.
+  const establishedOrphanBaseline = orphanRatchet.baseline === null
+  if (establishedOrphanBaseline) {
+    writeOrphanBaseline(options.cwd, orphanRatchet.count)
+    log.info(
+      `Recorded ${ORPHAN_BASELINE_FILE} with a baseline of ${String(orphanRatchet.count)} ` +
+        'unsanctioned instance file(s) under template-owned paths. Future upgrades fail only ' +
+        'if this count increases (#1026).',
+    )
+  }
 
   // Remove the core.version file when it is provably inherited (#434) or provably
   // stale (#842). Staged by the `git add -A` below and surfaced in the PR body. A
@@ -1127,6 +1171,47 @@ function printCoreVersionCleanup(cleanup: CoreVersionCleanup | null, applying: b
       ? `does not match biffo.core.json — looks repurposed, keeping ${CORE_VERSION_FILE}`
       : `biffo.core.json absent or unparseable — no authority to check, keeping ${CORE_VERSION_FILE}`
   console.log(`  ${chalk.dim('cleanup'.padEnd(15))} ${chalk.dim(`${cleanup.found}: ${why}`)}`)
+}
+
+/**
+ * Report the #1026 orphan ratchet: template-owned paths present only in the
+ * instance, with no sanctioned carve-out. Printed on every run, not just an
+ * `--apply` — a ratchet nobody sees is one nobody fixes before it fails.
+ *
+ * Never itself decides pass/fail; the caller throws on `ratchet.increased`.
+ * Kept a pure formatter of already-computed data so the decision logic stays
+ * in the unit-tested `checkOrphanRatchet` (lib/core-upgrade.ts).
+ */
+function printOrphanReport(orphaned: MergeEntry[], ratchet: OrphanRatchet): void {
+  if (orphaned.length === 0 && ratchet.baseline === null) return
+
+  console.log(
+    chalk.bold(
+      `  ${String(orphaned.length)} unsanctioned instance file(s) under a template-owned path (#1026):`,
+    ),
+  )
+  for (const e of orphaned) console.log(`    ${chalk.yellow(e.path)}`)
+
+  if (ratchet.baseline === null) {
+    console.log(
+      chalk.dim(
+        `  No ${ORPHAN_BASELINE_FILE} yet — an --apply run will record ${String(ratchet.count)} as the baseline.`,
+      ),
+    )
+  } else if (ratchet.increased) {
+    console.log(
+      chalk.red(
+        `  Baseline is ${String(ratchet.baseline)} — this run found ${String(ratchet.count)}, an increase.`,
+      ),
+    )
+  } else {
+    console.log(
+      chalk.dim(
+        `  Baseline is ${String(ratchet.baseline)} — no increase (${String(ratchet.count)} now).`,
+      ),
+    )
+  }
+  console.log()
 }
 
 function printPlan(plan: UpgradePlan): void {

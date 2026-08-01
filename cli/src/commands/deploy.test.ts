@@ -1,3 +1,8 @@
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BiffoConfig } from '../config/schema.js'
 import type { GitHubAdapter } from '../adapters/source-control/github/index.js'
@@ -57,14 +62,17 @@ describe('chooseProject', () => {
   it('prompts and returns the chosen project when interactive', async () => {
     promptMock.mockResolvedValue({ chosen: 'tabsii-platform' })
 
-    await expect(chooseProject(PROJECTS)).resolves.toBe(PROJECTS[1])
+    // A real TTY is asserted explicitly — vitest's own process.stdin is never
+    // a TTY, so the default parameter would trip the no-TTY guard below and
+    // this test would stop testing the interactive branch at all.
+    await expect(chooseProject(PROJECTS, true)).resolves.toBe(PROJECTS[1])
     expect(promptMock).toHaveBeenCalledOnce()
   })
 
   it('errors instead of prompting when non-interactive', async () => {
     process.argv = ['node', 'biffo', 'deploy', 'dev', '-y', NON_INTERACTIVE_FLAG]
 
-    await expect(chooseProject(PROJECTS)).rejects.toThrow(NonInteractiveError)
+    await expect(chooseProject(PROJECTS, true)).rejects.toThrow(NonInteractiveError)
     expect(promptMock).not.toHaveBeenCalled()
   })
 
@@ -72,11 +80,37 @@ describe('chooseProject', () => {
     process.argv = ['node', 'biffo', 'deploy', 'dev', NON_INTERACTIVE_FLAG]
 
     // A script's operator has to be able to fix this from the error text alone.
-    const error = await chooseProject(PROJECTS).catch((e: unknown) => e as Error)
+    const error = await chooseProject(PROJECTS, true).catch((e: unknown) => e as Error)
     expect(error.message).toContain('--project <name>')
     for (const project of PROJECTS) {
       expect(error.message).toContain(describeProject(project))
     }
+  })
+
+  // Issue #1066 — the actual reported bug. `--non-interactive` was never
+  // passed here; the flag alone was never the whole story. A script whose
+  // stdin has no TTY attached (closed, /dev/null, piped) must be refused the
+  // same way, because `promptOr`'s own guard cannot see stdin at all — it
+  // only reads argv/env.
+  it('errors instead of prompting when there is no interactive terminal, even without --non-interactive', async () => {
+    process.argv = ['node', 'biffo', 'deploy', 'dev'] // deliberately no flag
+
+    await expect(chooseProject(PROJECTS, false)).rejects.toThrow(NonInteractiveError)
+    expect(promptMock).not.toHaveBeenCalled()
+  })
+
+  it('names --project and lists every candidate for the no-TTY case too', async () => {
+    process.argv = ['node', 'biffo', 'deploy', 'dev']
+
+    const error = await chooseProject(PROJECTS, false).catch((e: unknown) => e as Error)
+    expect(error.message).toContain('--project <name>')
+    for (const project of PROJECTS) {
+      expect(error.message).toContain(describeProject(project))
+    }
+    // The reason given must be honest — the flag was never set here, so
+    // claiming it was would send an operator chasing the wrong cause.
+    expect(error.message).not.toContain(`${NON_INTERACTIVE_FLAG} is set`)
+    expect(error.message).toContain('no interactive terminal is attached')
   })
 })
 
@@ -225,4 +259,92 @@ describe('warnIfDispatchRefStale (issue #328)', () => {
     ).resolves.toBeUndefined()
     expect(log.warn).not.toHaveBeenCalled()
   })
+})
+
+/**
+ * End-to-end reproduction of issue #1066, run as a real subprocess.
+ *
+ * Everything above exercises `chooseProject` in isolation, mocking inquirer
+ * and reading `process.argv` directly — that proves the guard logic but
+ * cannot prove the actual process exit code, because vitest's own process is
+ * not the process under test. The reported bug was specifically that a
+ * *real* `biffo deploy` process exits 0 despite failing: `inquirer`'s
+ * `ExitPromptError`, once the picker's stdin hits EOF, is thrown from inside
+ * Node's own process-exit sequence (`signal-exit`), a point after which no
+ * further microtasks run — so no `.catch` anywhere, including the mocked one
+ * a unit test would use, ever observes it. Only spawning the real CLI and
+ * reading its real `$?` can catch a regression in that mechanism.
+ *
+ * Uses `tsx` against source directly (as `cli/package.json`'s own
+ * `check:*` scripts already do) so this does not depend on a fresh `dist/`
+ * build being present.
+ */
+describe('deploy — project-picker fallback under automation (issue #1066, real subprocess)', () => {
+  const CLI_DIR = fileURLToPath(new URL('../../', import.meta.url))
+  const TSX_BIN = join(CLI_DIR, 'node_modules', '.bin', 'tsx')
+  const ENTRY = join(CLI_DIR, 'src', 'index.ts')
+
+  let projectsDir: string
+  let cwd: string
+
+  function rawConfig(name: string, org: string, repo: string, accountId: string) {
+    return {
+      project: { name, description: '' },
+      dns: { mode: 'none' },
+      source_control: { provider: 'github', config: { org, repo } },
+      cloud: { provider: 'aws', config: { account_id: accountId, region: 'us-east-1' } },
+      environments: ['dev'],
+      admin: { email: 'a@example.com', username: 'admin' },
+    }
+  }
+
+  beforeEach(() => {
+    projectsDir = mkdtempSync(join(tmpdir(), 'biffo-1066-projects-'))
+    // A biffo.config.json-free cwd — resolveConfig must fall through to
+    // BIFFO_PROJECTS_DIR without ever finding a local config to short-circuit on.
+    cwd = mkdtempSync(join(tmpdir(), 'biffo-1066-cwd-'))
+    writeFileSync(
+      join(projectsDir, 'biffo-platform.json'),
+      JSON.stringify(
+        rawConfig('biffo-platform', 'keiranholloway', 'biffo-platform', '123456789012'),
+      ),
+    )
+    writeFileSync(
+      join(projectsDir, 'tabsii-platform.json'),
+      JSON.stringify(rawConfig('tabsii-platform', 'tabsii-com', 'tabsii-platform', '999999999999')),
+    )
+  })
+
+  afterEach(() => {
+    rmSync(projectsDir, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  it('exits non-zero, names --project, and never renders the picker, with closed stdin and no flag', () => {
+    const result = spawnSync(TSX_BIN, [ENTRY, 'deploy', 'dev'], {
+      cwd,
+      env: { ...process.env, BIFFO_PROJECTS_DIR: projectsDir },
+      input: '', // closed stdin — no TTY, exactly the automation scenario in #1066
+      encoding: 'utf8',
+      timeout: 30_000,
+    })
+
+    const output = `${result.stdout}\n${result.stderr}`
+
+    // The core assertion the bug report was actually about: a caller checking
+    // $? must see failure, not success.
+    expect(result.status).not.toBe(0)
+    expect(result.status).not.toBeNull()
+
+    expect(output).toContain('--project <name>')
+    expect(output).toContain('biffo-platform (keiranholloway/biffo-platform)')
+    expect(output).toContain('tabsii-platform (tabsii-com/tabsii-platform)')
+
+    // The interactive list-picker must never actually render — only its
+    // navigation chrome could produce these markers.
+    expect(output).not.toContain('navigate')
+    expect(output).not.toContain('❯')
+    // ...and the raw inquirer crash trace must be gone too.
+    expect(output).not.toContain('ExitPromptError')
+  }, 35_000)
 })

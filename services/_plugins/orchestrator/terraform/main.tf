@@ -229,6 +229,56 @@ resource "aws_lambda_permission" "subscription" {
   source_arn    = aws_cloudwatch_event_rule.subscription[0].arn
 }
 
+# ── Periodic tick, domain-agnostic (issue #1044) ─────────────────────────────
+#
+# Opt-in (empty schedule = no rule at all): this plugin has no periodic work
+# of its own, unlike agent-runtime's reap sweep. What it offers instead is a
+# generic trigger any deployment's own workflow definitions can subscribe to
+# — mirrors agent-runtime's reap_schedule exactly, targeting the Lambda
+# directly on the DEFAULT bus (EventBridge only supports schedule_expression
+# there), with `input` synthesising the same BiffoEvent envelope
+# create_event_handler expects, so the tick arrives through the identical
+# dispatch path a real subscribed bus event takes and needs no second
+# entrypoint in main.py. tenant_id is the ADR-0001 single-tenant sentinel,
+# not a variable here (unlike agent-runtime's own tenant-scoped sweep): the
+# tick itself is not tenant-scoped work, only whatever a subscribing
+# definition chooses to do with it is, and that definition supplies its own
+# tenant/brand scope via its own trigger config.
+resource "aws_cloudwatch_event_rule" "tick_schedule" {
+  count               = var.tick_schedule_expression == "" ? 0 : 1
+  name                = "${local.function_name}-tick"
+  description         = "Periodic domain-agnostic tick for ${var.plugin_name} (issue #1044)"
+  schedule_expression = var.tick_schedule_expression
+
+  tags = var.tags
+}
+
+resource "aws_cloudwatch_event_target" "tick_schedule" {
+  count     = var.tick_schedule_expression == "" ? 0 : 1
+  rule      = aws_cloudwatch_event_rule.tick_schedule[0].name
+  target_id = "${var.plugin_name}-tick"
+  arn       = module.function.function_arn
+
+  input = jsonencode({
+    source        = "biffo.orchestrator"
+    "detail-type" = "orchestrator.tick"
+    detail = {
+      schema_version = "1.0"
+      tenant_id      = "default"
+      payload        = {}
+    }
+  })
+}
+
+resource "aws_lambda_permission" "tick_schedule" {
+  count         = var.tick_schedule_expression == "" ? 0 : 1
+  statement_id  = "AllowEventBridgeTickInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = module.function.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.tick_schedule[0].arn
+}
+
 # ── Scheduled workflow actions (docs/implementation/0002-scheduled-workflow-actions, ADR-0023) ──
 #
 # One EventBridge Scheduler one-time schedule per delayed run, created by the

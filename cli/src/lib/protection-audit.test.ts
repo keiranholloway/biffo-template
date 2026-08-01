@@ -128,6 +128,22 @@ describe('protection-audit: does the protection bind anyone', () => {
     expect(stdout).toContain('not binding admins')
   })
 
+  it('believes the exit status, not the 404 JSON gh prints to stdout', () => {
+    // The original fail-open, now asserted by BEHAVIOUR rather than by grepping
+    // the script for a literal line. The literal (`[ "$rc" -ne 0 ] && n=""`) was
+    // asserted in hook-audit.test.ts and broke the moment the fetch was
+    // legitimately refactored to read two fields -- a guard firing on its own
+    // fix. The stub reproduces what GitHub really does: exit non-zero AND print
+    // `{"message":"Branch not protected"}` on stdout.
+    const estate = estateWith(['acme/open'])
+    const { code, stdout } = audit(estate, {})
+
+    expect(stdout).toContain('UNPROTECTED')
+    expect(stdout).not.toContain('ok  ')
+    expect(stdout).not.toContain('Branch not protected')
+    expect(code).toBe(1)
+  })
+
   it('still catches the cases it caught before', () => {
     const estate = estateWith(['acme/open', 'acme/gateless'])
     const { code, stdout } = audit(estate, { 'acme/gateless#dev': '0 true' })

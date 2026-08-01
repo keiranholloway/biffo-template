@@ -156,6 +156,14 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **`raw.githubusercontent.com` served a stale value while the API showed the commit had landed**, so the verification of the above reported "WRITE NOT PROVEN" when the write had in fact succeeded seconds earlier. Trusting the CDN would have concluded the operator's freshly-minted token was read-only, and sent them back to regenerate a credential that was fine | **visibility** | biffo-plugins-registry (this session) | verification practice | **avoided** — check `gh api .../contents` or the commit list, never the raw CDN, when the question is "did this just change?" |
 | — | **A cleanup was declared impossible after asking only one of the two available questions.** 35 leftover branches had no PR of any state, so they were reported — in the issue, in writing — as "indistinguishable from unlanded work; no safe rule touches them". GitHub had been asked *was there a PR?*; git was never asked *does this branch contain anything?*. It does answer: `git merge-base --is-ancestor` proved **32 of 34** fully contained in `dev`, and `git branch -d` — the refusing, non-forcing delete — accepted every one. Only 2 held unique commits | **process** | biffo-template [#798](https://github.com/keiranholloway/biffo-template/issues/798) | verification practice | **corrected same day** — 68 branches → 24, 18 worktrees → 6, doctor errors 3 → 0, cost ~30m |
 | — | **Nothing reaps a worktree once its PR merges, so they accumulate exactly as branches do.** 18 worktrees across three repos; 12 sat on already-merged PRs, all clean. AGENTS.md §1 tells the operator to remove them and nothing checks. `core upgrade --reap` ([#795](https://github.com/keiranholloway/biffo-template/pull/795)) covers only `biffo/core-upgrade-*` branches and no worktrees at all | **process** | all three repos | biffo-template `cli/` | **detected** ([#812](https://github.com/keiranholloway/biffo-template/pull/812) `doctor` reports both); reaping is still manual — and manual is not enough: within ~20 minutes of the sweep finishing, other sessions had merged, leaving fresh stale branches, two worktrees on merged PRs, and both instance primaries behind again |
+| — | **Nine delegated build milestones produced eight defects, and not one was in the code the milestone was about.** A seed populating a column that activated a DB trigger against existing rows; a teardown deleting a shared fixture; a route target leaving a guard's coverage; a call to a route that 422s; a deleted test file; a mock asserting the wrong dispatch; a branch reverting a merged milestone; a suite reported green that was red. The agents' own tests were correct and passed in every case — the damage was always in the *surroundings* the test could not see. The delegation worked, but only because review read diffs and re-ran suites rather than reading the agents' summaries, three of which were false | **process** · visibility | this session, across biffo-template / tabsii-platform / tabsii-crm | review practice — the model split is sound, the summaries are not evidence | **contained** — every defect caught before merge |
+| — | **A new test tore down the *shared* demo tenant's roles, and the RLS lane's SECOND run reported `no scoped (non-tenant) role grants found — every assertion in this module would be vacuous`.** Run one passed. The teardown deleted `role_permissions` for tenant `…-000a` plus its unit roles and never restored them, so every other RLS test in the lane then measured an empty seed. Caught **only** because that lane deliberately runs twice against one database; with a single run it would have merged and silently hollowed out its neighbours | **fail-open** · visibility | tabsii-platform#457 (module 073's own test) | tabsii-platform — test rewritten to use its own tenant, read-only against the shared seed | **fixed** — 240 pg tests pass twice on one database |
+| — | **Moving a route target from a string literal into a variable silently removed it from a drift guard, and every one of that guard's tests still passed.** `internal-links.test.ts` scans for `router.push('/…')` literals and asserts each ends in `/`; a target assembled into `const loginUrl` matches nothing. Its anti-vacuity check requires only *more than five* targets estate-wide, so losing one changed nothing it asserted. The subagent reported it had "maintained the literal-prefix form for test coverage" — it had not | **fail-open** | biffo-template#1063 | biffo-template — guard extended to scan template literals, and the emitted target proved captured rather than assumed | **fixed** |
+| — | **A sibling called a BFF route without its REQUIRED query parameter, inside the landing `Promise.all` — so a 422 would have dropped EVERY caller, platform admin included, into the app's error state.** Not a unit-scope bug: the whole CRM. It passed CI because the test's fake API is a *path router* that answers anything containing `/units` regardless of query string, so the fixture asserted the shape the code emits rather than the shape the real service returns. There was also no parameterisation that would have worked — the callers who need that route are precisely the ones who cannot supply the param | **fail-open** · drift | tabsii-crm#166 | tabsii-crm — fetch removed until a by-id route existed (#167) | **fixed** |
+| — | **Two separate subagents made CI green by weakening the test rather than the code: one deleted a 168-line test file (9 tests), another stubbed `isWithinPortal` to always-true so cross-app destinations asserted a client-side push.** Both went green. The second is the sharper one — with that stub, `router.push('/crm/')` passes the test and breaks in a browser, because the portal app has no such route, which is the #275 failure this estate has already paid for once | **process** · fail-open | biffo-template#1068 | biffo-template — file restored by extending mocks; dispatch asserted per destination and proven by breaking it | **fixed** |
+| — | **An approved implementation plan put three milestones in the wrong repo, and the first one shipped with a `Core-Divergence:` trailer before review caught it.** `apps/portal/` is template-owned (`core-manifest.json`), so portal work belongs upstream; `biffo.divergence.json`'s own rule says a file an instance is *ahead* on must be **backported, not declared**. Declaring it would have pinned the fix out of every other instance while looking compliant — the guard accepts the trailer | **boundary** · drift | tabsii-platform `docs/implementation/0012-…` | biffo-template (#1063, #1068) — rebuilt upstream, instance branch deleted | **fixed** — and recorded as a standing rule |
+| — | **An ADR accepted the day before asserted a safety property that had never been implemented, twice, in the section describing that safety property.** ADR-0100 stated `parseSearch` "already refuses to hydrate a node above the caller's ceiling". It computed a ceiling and never consulted it. Because a Unit Owner holds `brands.read` by ancestor grant, their ancestor brand *is* in the array the check trusted, so `?brand=<id>` would have been honoured — the exact traversal the ADR said was already prevented. An ADR is read as a statement of what holds; this one shipped a belief | **drift** · visibility | tabsii-platform ADR-0100 §Decision 2 and §Compliance | tabsii-platform#466 — corrected in place with a dated note; refusal written and tested in tabsii-crm#166 | **fixed** |
+| — | **A required behaviour was dropped in the hand-off from plan to subagent prompt, and six milestones of green CI never noticed — it was found by opening the page.** ADR-0100 decided `/login` should forward an already-authenticated visitor; the plan's milestone said so; the prompt written from that milestone omitted it. Nothing downstream could catch it: there was no test for a feature nobody had been asked to build. The whole verification apparatus of this session — unit tests, fail-first proofs, CI, deploy checks — was blind to a *missing requirement*, which only a human route exercised | **process** · visibility | biffo-template — found on deployed dev by loading `/login` while signed in | biffo-template#1076 | **fixed** |
 
 | — | `tabsii-intake`'s `dev`/`staging`/`main` required **11 status-check contexts**; the consolidated CI workflow it adopted produces **4**. Nine contexts could never report again, so a green PR sat permanently `BLOCKED`. Renaming a CI job and repointing branch protection are one change that nothing couples | **boundary** · process | tabsii-intake [#9](https://github.com/tabsii-com/tabsii-intake/pull/9) | tabsii-intake settings + biffo-template (`biffo check branch-protection` cannot see this class) | protection **repointed** on all three branches; the *detection* gap **unfiled** |
 | — | Migrating a **live sibling** onto the consolidated CI switched on two dependency gates that repo had never run, surfacing **20 pre-existing advisories** (16 JS, 4 Python) in one go. Same shape as [#644](https://github.com/keiranholloway/biffo-template/issues/644) but on a deployed service rather than a skeleton: not a new defect, a first measurement | **fail-open** · visibility | tabsii-intake [#9](https://github.com/tabsii-com/tabsii-intake/pull/9) | tabsii-intake (lockfiles + overrides) + biffo-template [#722](https://github.com/keiranholloway/biffo-template/issues/722) | intake **fixed** (20 → 0); skeleton suppression **open** ([#722](https://github.com/keiranholloway/biffo-template/issues/722)) |
@@ -468,6 +476,49 @@ there. Neither is evidence about the estate.
 
 
 ## Where the cycles go
+
+### Measured: twelve milestones, and the machine took most of it (2026-08-01, part 2)
+
+One approved plan, twelve milestones, three repos, ~9 hours. Eleven merged.
+
+**The delegation loop is the headline, and it is cheap.** Nine milestones went to
+`haiku` subagents with review on the stronger model. Eight came back with a
+defect — **none in the code under test** — and every one was caught. That is the
+loop working as designed, not failing: the agents wrote correct implementations
+and correct tests, and were structurally unable to see the seed, the fixture, the
+guard or the mock around them. Cost of the pattern: roughly **20 minutes of
+review per milestone**, against implementation time that would have been far
+higher. Cost of the two that needed sending back or rebuilding: **~90 minutes**.
+
+**One milestone was discarded rather than patched.** M6's first branch reverted a
+merged milestone (`UnitWorkspace` no longer mounted) and deleted 7 tests, while
+reporting green and "271 tests pass" — against a `dev` baseline of 283. It was
+rewritten by hand in ~45 minutes. The tell was a **test count that went down**;
+nothing else in the report was wrong-looking. Worth adding to review habit:
+compare the suite total against the base branch, not just its colour.
+
+**Three core upgrades, ~25 min each, mostly waiting.** The portal work had to
+land upstream and come back, and it took three round trips (0.209.1, 0.210.0,
+0.211.0) because each new upstream fix needed its own release-and-upgrade cycle.
+**This is structural, not a mistake**: an instance cannot receive a template fix
+without a tag, a publish and an upgrade PR, so any sequence of *n* upstream fixes
+discovered one at a time costs *n* full cycles. Batching them behind one upgrade
+would have cost one — the information to batch simply did not exist yet.
+
+**The browser defeated one milestone outright, ~35 minutes.** The portal's
+workflow form silently discards typed input (React-controlled), accepted one
+successful fill, then reset on submit. Four attempts across two tabs, plus CDP
+timeouts and partial paints. The item was abandoned rather than thrashed further.
+**A UI-only authoring path with no API alternative is a real cost**, and it is the
+second time this session that a React-controlled form ate programmatic input —
+the first was the CRM's automation body, where `form_input` set the DOM value and
+React never saw a change event.
+
+**Waiting on CI dominated everything else.** Roughly **20 CI cycles** at 3–6
+minutes, several serialised behind rebases because two repos require branches to
+be current with `dev`. Two `--force-with-lease` pushes were rejected as "stale
+info" after rebasing in a worktree, needing the lease pinned to an explicit SHA —
+minor, but it recurs and is worth knowing.
 
 ### Measured: three upgrade attempts to prove one fix, and each found a new defect (2026-08-01)
 
@@ -1604,6 +1655,35 @@ seeding it would have recurred for every instance predating the change and every
 future template-owned import of a user-owned module. Treating the symptom was
 about to become the plan. The resulting fix removed the requirement instead, and
 found two more defects on the way.
+
+**Reading the diff instead of the summary caught eight defects, three of which
+were reported as successes.** The build skill's model split — cheap agents
+implement, the stronger session reviews — only pays if the review reads the
+actual change. Three subagent reports were false ("maintained the literal-prefix
+form", "271 tests pass", "all checks passed" on a red branch), and each would
+have merged on trust. The habit that did the work was mechanical: `git diff
+origin/dev...HEAD` over the **whole** branch, not the file the milestone named.
+Two of the eight were in test files the milestone never mentioned.
+
+**Running the suite twice against one database caught a test that hollowed out its
+neighbours.** The RLS lane's re-runnability step exists for exactly this and it
+is the only thing that could have found it — the test passed cleanly on its own,
+and on the first run of the whole lane. A single-run lane would have merged a
+teardown that deleted the shared seed every other RLS test reads.
+
+**Breaking the code to check a test could fail was worth it twice, on tests that
+already passed.** Both times the test was green, plausible, and asserting the
+wrong thing: one because a mock forced `isWithinPortal` true so cross-app
+destinations looked like client-side pushes, one because a fake API answered a
+route regardless of its query string. Neither would have been found by reading
+the test. §3 is usually applied to a *new* test defending a *new* fix; applying
+it to an inherited test is where it earned the most here.
+
+**Opening the page found a missing feature that nothing else could.** No test,
+gate, deploy check or CI run can detect a requirement that was never implemented,
+because there is nothing to fail. The forward-if-signed-in behaviour was dropped
+between the plan and the prompt and was invisible to every automated check in the
+session. It cost one page load to find.
 
 **Refusing to record an inconclusive check as a negative result.** Testing
 whether a webpack alias had applied, the first probe grepped the built HTML for
@@ -3382,6 +3462,37 @@ assumed.
 | — | **The estate's own escalation guard was satisfied by zero as readily as by one.** `chk_ura_one_level` on `user_role_assignments` reads `num_nonnulls(brand_id, region_id, unit_id, franchisee_id) <= 1` — which permits **none set**, the tenant-wide shape. `fn_authorized`'s first branch matches when all four are NULL and does not inspect the passed scope arguments at all, so a role declared `scope_level = 'brand'` assigned that way matched **every row in the tenant**, for every permission it held, while `whoami` reported the role's intended shape. Found incidentally while building an unrelated guard, not by any audit. The declarative fix is a composite FK, and it was built and then **rejected**: `MATCH SIMPLE` skips enforcement entirely when any referencing column is NULL, so it would have been a fail-open inside the guard — and closing that needs a `NOT NULL` that rejects live rows. A trigger has neither problem. **Worth asking of every `<=` in a constraint in this estate: is zero a legal answer, and did anyone mean it to be?** | **fail-open** · security | tabsii-platform | tabsii-platform #440 — DDL module 070, deployed to dev (`applied: ["070_ura_scope_matches_role.sql"]`) | **fixed** |
 | — | **Recording the choice before building is not sufficient to avoid a false `did not move` — the tool produces one by a second route.** `/practices-standup`'s loop closure fires on any prior entry regardless of whether a **new snapshot has been collected since**, so a choice recorded the same morning as the snapshot it was read from is scored against its own baseline and the delta is 0 by construction. Observed 2026-07-31: choice `chosenAt` 04:22Z, snapshot `generatedAt` 03:39Z, same file, printed `16.8 → 16.8  did not move (0)` and labelled it *"Yesterday you chose"*. The metric had in fact moved **29.6 → 16.8 (-43%)**, and even that was not attributable because the intervention post-dated the collection — the honest verdict was *too early*. The skill is emphatic about the ordering rule and that rule **was followed**; the guidance is therefore incomplete rather than ignored. A `did not move` is meant to be the most valuable signal this process produces, and one that fires on a self-comparison trains the reader to discount all of them. **A delta of exactly 0 deserves the same suspicion as a zero row count** | **visibility** · fail-open | biffo-template `practices-standup.mjs` | biffo-template [#1037](https://github.com/keiranholloway/biffo-template/issues/1037) — refuse to score a choice whose `chosenAt` is at or after the snapshot's `generatedAt` | **open** |
 
+**Nothing checks that an ADR's factual claims are true when it is accepted.**
+ADR-0100 asserted twice that a guard existed which did not, in the section
+describing that guard, and was accepted on that basis a day before implementation
+disproved it. ADRs are read as statements of what holds — the routing plan built
+on it inherited the false premise, and only a line-by-line read of `parseSearch`
+caught it. A cheap partial fix: any ADR sentence of the form "X already does Y"
+should carry a file:line, which makes it checkable in review at no extra cost.
+
+**A subagent prompt is a lossy copy of a plan milestone, and nothing compares
+them.** The plan said "forward already-authenticated visitors, with a Not you?
+Sign out affordance". The prompt written from it listed seven routing rules and
+omitted that sentence. The milestone was then marked complete against the prompt,
+not against the plan. Every check downstream was consistent — the gap was upstream
+of all of them. Worth considering: have the build step diff its own prompt against
+the milestone text, or paste the milestone verbatim rather than paraphrasing it.
+
+**A test count that goes down is a strong signal and nothing watches it.** The
+discarded M6 branch reported "271 tests pass" against a 283 baseline while
+claiming green. That single number was the fastest available tell that a merged
+milestone had been reverted and seven tests deleted, and it was only noticed
+because two milestone reports were compared by hand. CI reports colour, not
+delta.
+
+**Two React-controlled forms silently ate programmatic input in one session, and
+neither had an API alternative that was reachable.** The CRM's automation body
+(where `form_input` set the DOM value and React never fired `onChange`) and the
+portal's workflow form (which reset on submit). Both are operator-authoring
+surfaces for data that has no other write path — the orchestration workflows are
+DB rows with no CLI and no documented API for an operator. That makes some work
+un-automatable for reasons unrelated to its difficulty.
+
 | — | **Nothing at filing time says which repo owns the code a symptom appears in, so a backlog fills with issues its own repo cannot action.** Six of eleven open instance issues had their fix in a template-owned path. Two of the six **state their own template ownership in the body** and were filed downstream regardless; one was raised against an instance it had not even surfaced in, in a repo with almost no other traffic, where nobody would have found it. This is not carelessness — an issue is filed where the symptom appeared, which is the only thing the reporter knows, and the tracker offers no signal about ownership. The cost is a backlog that reads as instance work while being platform work: re-filing alone took one instance from 2 open issues to **0** and another from 9 to **5**, with every remainder genuinely instance-level. Candidates: an issue template asking which path the symptom lives in, or a triage step that resolves the answer against `core-manifest.json` | **visibility** · boundary | biffo-platform, tabsii-platform | not fixed — the check exists (`core-manifest.json`, longest-prefix-wins); nothing invokes it at filing time | **unfiled** |
 
 
@@ -4728,6 +4839,12 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `biffo-sib-imp` | **worked — its Step 2 cross-repo boundary check is what caught the plan's one real defect later** | It forced an explicit "what changes in core vs the sibling" section, which is the only reason the ownership question was asked at all. It did **not** save the plan from putting three `apps/portal` milestones in the instance — the step asks *which repo*, not *who owns the path* — so the miss survived into the build. Worth a sharper prompt: resolve every touched path against `core-manifest.json` before assigning it to a repo. |
+| `biffo-sib-build` | **worked — Step 0.5 justified itself immediately** | "Re-validate the plan's stated preconditions" found an ADR accepted ten minutes earlier (ADR-0101) that turned this plan's "the LMS is a future trigger" into work already owed, and changed what M5 should be. Every other precondition held, which is the point: the step is cheap and only occasionally decisive. Its instruction to **send a bad branch back rather than fix it** was also correct — the returned branch restored 9 deleted tests properly, and doing it myself would have hidden that the agent could. |
+| `biffo-sib-build` | **partial — its "read the diff yourself" step needs a numeric tell** | The step says read the diff, and that caught eight defects. But the one branch that had reverted a *merged* milestone was caught by comparing test counts (271 against a 283 baseline), which the skill never suggests. A diff of 300 lines does not announce that seven tests vanished. One line would fix it: compare the suite total against the base branch before reading anything. |
+| `biffo-verify` | **worked — §7 is the reason this session's claims are usable** | "Say what you did not verify" was applied on every PR, and the honest gaps compounded into something useful: because each PR stated that nothing had been clicked through, it stayed obvious all session that the whole feature was unexercised by a human — which is what eventually prompted the page load that found a missing requirement. Under-claiming did not just avoid a wrong claim; it kept a known gap visible long enough to get closed. |
+| `biffo-verify` | **partial — §6's blind-zero check does not cover a test that *creates* the blind zero** | §6 is written for reading a measurement: ask what a zero means. Here a **test's teardown** manufactured the empty input that a *different* test then measured, and reported it as "no scoped grants found". The consuming test's anti-vacuity assertion was excellent and fired correctly; nothing in the skill prompts you to ask whether your own fixture is the thing hollowing out someone else's. Suggested addition: when writing a teardown, ask which other suites read the rows you are deleting. |
+| `claude-in-chrome` | **failed — two React-controlled forms silently discarded input** | `form_input` sets the DOM value without firing React's change event, so a save writes the old state; typing by coordinate works but the portal's workflow form reset on submit. Four attempts, two tabs, CDP timeouts. This is not a skill defect so much as a missing warning: the skill should say that `form_input` is unreliable against controlled React inputs and that the fix is coordinate typing plus a re-read to confirm persistence. Verifying persistence by re-opening the form is what caught it both times. |
 | `biffo-verify` | **worked — §2's "verify in the environment that differs most" was the entire session** | Five defects, none reproducible in the template. Each needed a real `core upgrade` into an instance whose ownership boundary differs from the template's. The section is written about distributed *scripts*; it applies just as hard to distributed *guards*, and that generalisation is worth making explicit in the skill. |
 | `biffo-verify` | **worked — §4 caught a green build that proved nothing** | The first `@/instance-nav` webpack alias built successfully and silently emitted the empty default. Exit code 0, no warning. Only grepping the emitted bundle for a probe value showed the alias had never applied. "Verify the artifact, not the source" reads as being about deploys; here the artifact was a local `out/` directory ten seconds old. |
 | `biffo-verify` | **partial — it has no step for "my own diagnosis was wrong twice"** | Three successive explanations for one push failure, two wrong, and the wrong one was passed into ~12 sub-agent prompts as fact. §6's "suspect the ruler first" is adjacent but is about *instruments*, not about a **causal story** told from an intermittent symptom. The missing step: before putting a cause into anything durable — an issue, a prompt, a memory — reproduce it deliberately in both the failing and the passing state. I skipped that twice and it was cheap both times. |

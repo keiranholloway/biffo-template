@@ -183,7 +183,9 @@ async function runSiblingCreateCommand(name: string, options: CommandOptions): P
       '     this sibling automatically: the SIBLING_GITHUB_TOKEN secret, the CORE_* identity variables,\n' +
       '     and — once the registration PR has merged and the core has redeployed —\n' +
       '     PARENT_CLOUDFRONT_DISTRIBUTION_ARN. No manual variable/secret setup is needed (issue #337).\n' +
-      "  3. Push to `dev` (or run the Deploy workflow manually) to provision this sibling's own AWS resources.\n",
+      "  3. This sibling's first Deploy has already been dispatched (step 9) — watch it rather than\n" +
+      '     pushing to trigger one. If it was reported as not dispatched above, run it by hand:\n' +
+      '     `gh workflow run deploy.yml --ref dev -f environment=dev`\n',
   )
 }
 
@@ -244,7 +246,7 @@ export async function runSiblingCreate(
   session: SiblingSession,
   options: SiblingCreateOptions,
 ): Promise<void> {
-  const totalSteps = 8
+  const totalSteps = 9
   const { org, repo } = githubRepo(config)
   const pathPrefix = resolvePathPrefix(config)
 
@@ -401,6 +403,50 @@ export async function runSiblingCreate(
     markSiblingStepComplete(session, 'register_with_core')
   } else {
     log.step(8, totalSteps, 'Already registered with the core project — skipping')
+  }
+
+  // Step 9: Dispatch the sibling's first deploy, deliberately.
+  //
+  // The scaffold push in step 4 carries `[skip ci]` precisely so this is the
+  // FIRST Deploy run the repo ever has (#1065). Everything it needs now exists:
+  // OIDC trust (5), the Terraform backend (6) and `SIBLING_DEPLOY_ENABLED` (7).
+  // Dispatching here also means the run the operator is told to watch is the
+  // run that actually deploys, rather than an earlier one that silently did
+  // nothing.
+  //
+  // Best-effort: the sibling is fully provisioned by this point, so a dispatch
+  // failure must not fail the whole create — but it must be said out loud
+  // rather than swallowed, which is the defect class this issue belongs to.
+  if (!session.completedSteps.includes('trigger_first_deploy')) {
+    // The sibling's FIRST configured environment, not a hardcoded 'dev': step 7
+    // creates GitHub Environments from `config.environments`, so a sibling
+    // declaring only `['staging']` has no `dev` Environment to deploy into and
+    // a hardcoded input would fail the run it exists to make trustworthy.
+    // The `ref` is always `dev` — that is the only branch the skeleton push
+    // creates — and the workflow takes its target from the input on a
+    // workflow_dispatch, not from the branch.
+    const firstEnvironment = config.environments[0] ?? 'dev'
+    log.step(9, totalSteps, `Dispatching the first deploy (${firstEnvironment})...`)
+    try {
+      await github.triggerWorkflow(
+        org,
+        repo,
+        'deploy.yml',
+        { environment: firstEnvironment },
+        'dev',
+      )
+      log.info(`  Watch it: https://github.com/${org}/${repo}/actions/workflows/deploy.yml`)
+      markSiblingStepComplete(session, 'trigger_first_deploy')
+    } catch (err) {
+      log.warn(
+        `  Could not dispatch the first deploy: ${err instanceof Error ? err.message : String(err)}`,
+      )
+      log.warn(
+        `  Run it by hand: gh workflow run deploy.yml --repo ${org}/${repo} --ref dev -f environment=dev`,
+      )
+    }
+  } else {
+    log.step(9, totalSteps, 'First deploy already dispatched — skipping')
   }
 
   // See the identical call in `runInit`: the run must not end quietly with an
@@ -573,7 +619,23 @@ async function pushSkeleton(
     await git.init(workDir, 'dev')
     await git.addRemote(workDir, 'origin', cloneUrl)
     await git.add(workDir, ['.'])
-    await git.commit(workDir, `feat: scaffold ${config.project.name} sibling app (ADR-0007)`)
+    // `[skip ci]` is deliberate. This push lands on `dev`, which is a trigger
+    // branch for the skeleton's own Deploy workflow — but OIDC trust (step 5),
+    // the Terraform backend (step 6) and `SIBLING_DEPLOY_ENABLED` (step 7) do
+    // not exist yet, so the run cannot deploy anything whatever it does.
+    //
+    // It used to fire anyway, evaluate `if: vars.SIBLING_DEPLOY_ENABLED ==
+    // 'true'` against an unset (empty) variable, skip both deploy jobs and
+    // conclude **success** — so every sibling was born with a green Deploy run
+    // that had created nothing, and nothing distinguished it from a real one
+    // (#1065). Suppressing the run is the fix rather than racing to set the
+    // variable first: the deploy genuinely cannot succeed until steps 5-7 have
+    // run, so an earlier variable would only convert a false green into a real
+    // failure. Step 9 dispatches the deploy deliberately once it can work.
+    await git.commit(
+      workDir,
+      `feat: scaffold ${config.project.name} sibling app (ADR-0007)\n\n[skip ci]`,
+    )
     await git.push(workDir, 'dev', { token: githubToken })
   } finally {
     git.cleanup(workDir)

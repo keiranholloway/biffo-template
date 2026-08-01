@@ -36,6 +36,7 @@ export type CompletedSiblingStep =
   | 'terraform_backend'
   | 'github_config'
   | 'register_with_core'
+  | 'trigger_first_deploy'
 
 export interface CoreIdentity {
   cognitoUserPoolId: string

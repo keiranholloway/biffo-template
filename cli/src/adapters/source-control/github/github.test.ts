@@ -31,6 +31,7 @@ function makeOctokitMock() {
       delete: vi.fn(),
       getBranch: vi.fn(),
       updateBranchProtection: vi.fn(),
+      setAdminBranchProtection: vi.fn(),
       createOrUpdateEnvironment: vi.fn(),
       getContent: vi.fn(),
       listCommits: vi.fn(),
@@ -1205,5 +1206,79 @@ describe('getEnvVariable', () => {
     await expect(
       adapter().getEnvVariable('acme', 'crm', 'dev', 'CORE_COGNITO_USER_POOL_ID'),
     ).rejects.toThrow('boom')
+  })
+})
+
+// ─── #1058: the scaffold-time admin bypass, closed ───────────────────────────
+
+describe('sealBranchProtection', () => {
+  const err = (status: number) => Object.assign(new Error(`http ${status}`), { status })
+
+  it('binds admins on every branch', async () => {
+    octokitMock.repos.setAdminBranchProtection = vi.fn().mockResolvedValue({})
+
+    const outcome = await adapter().sealBranchProtection('acme', 'my-app')
+
+    expect(outcome.status).toBe('applied')
+    expect(outcome.protectedBranches).toEqual(['dev', 'staging', 'main'])
+    for (const branch of ['dev', 'staging', 'main']) {
+      expect(octokitMock.repos.setAdminBranchProtection).toHaveBeenCalledWith({
+        owner: 'acme',
+        repo: 'my-app',
+        branch,
+      })
+    }
+  })
+
+  /**
+   * The scaffold must not die here. A repo that ends the run protected but
+   * advisory is a real finding and is reported as one — but it is strictly
+   * better than the pre-#1052 state, and throwing would trade a reported
+   * weakness for a half-built repo nobody has a record of.
+   */
+  it('records rather than throws when it cannot bind', async () => {
+    octokitMock.repos.setAdminBranchProtection = vi.fn().mockRejectedValue(err(403))
+
+    const outcome = await adapter().sealBranchProtection('acme', 'my-app')
+
+    expect(outcome.status).toBe('unsealed')
+    expect(outcome.unprotectedBranches).toEqual(['dev', 'staging', 'main'])
+    expect(outcome.reason).toContain('403')
+  })
+
+  it('reports a partial seal per branch, not as one boolean', async () => {
+    octokitMock.repos.setAdminBranchProtection = vi
+      .fn()
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(err(403))
+      .mockRejectedValueOnce(err(403))
+
+    const outcome = await adapter().sealBranchProtection('acme', 'my-app')
+
+    expect(outcome.status).toBe('unsealed')
+    expect(outcome.protectedBranches).toEqual(['dev'])
+    expect(outcome.unprotectedBranches).toEqual(['staging', 'main'])
+  })
+
+  /**
+   * A 404 means the branch carries no protection to bind. That is already
+   * recorded and reported by configureBranchProtection, so naming it again in
+   * different words would read as two separate problems.
+   */
+  it('does not invent a second reason for a branch that was never protected', async () => {
+    octokitMock.repos.setAdminBranchProtection = vi.fn().mockRejectedValue(err(404))
+
+    const outcome = await adapter().sealBranchProtection('acme', 'my-app')
+
+    expect(outcome.status).toBe('unsealed')
+    expect(outcome.reason).toBeUndefined()
+  })
+
+  it('seals only the branches it is given', async () => {
+    octokitMock.repos.setAdminBranchProtection = vi.fn().mockResolvedValue({})
+
+    await adapter().sealBranchProtection('acme', 'plugin', ['dev'])
+
+    expect(octokitMock.repos.setAdminBranchProtection).toHaveBeenCalledOnce()
   })
 })

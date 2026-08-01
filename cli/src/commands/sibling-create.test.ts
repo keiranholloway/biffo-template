@@ -72,6 +72,7 @@ function makeGithubMock() {
     createBranch: vi.fn().mockResolvedValue(undefined),
     setDefaultBranch: vi.fn().mockResolvedValue(undefined),
     configureBranchProtection: vi.fn().mockResolvedValue(undefined),
+    sealBranchProtection: vi.fn().mockResolvedValue(undefined),
     createEnvironments: vi.fn().mockResolvedValue(undefined),
     enableVulnerabilityAlerts: vi.fn().mockResolvedValue(undefined),
     setRepoVariable: vi.fn().mockResolvedValue(undefined),

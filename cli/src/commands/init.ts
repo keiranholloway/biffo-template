@@ -254,7 +254,7 @@ export async function runInit(
    */
   appSibling?: AppSiblingDeps,
 ): Promise<void> {
-  const totalSteps = appSibling ? 6 : 5
+  const totalSteps = appSibling ? 7 : 6
 
   // Step 1: Verify AWS credentials
   if (!session.completedSteps.includes('verify_credentials')) {
@@ -436,8 +436,42 @@ export async function runInit(
     }
   }
 
+  // Step 7: close the scaffold-time admin bypass (#1058).
+  //
+  // `configureBranchProtection` (step 5c) applies `enforce_admins: false` on
+  // purpose, so that a RESUMED run's `writeInstanceFiles` can still commit to
+  // branches an earlier attempt already protected. That is right for the
+  // duration of the scaffold and wrong for ever after — and "for ever after" is
+  // what it used to mean, because nothing closed it. 26 of 27 estate branches
+  // ran advisory-only on the strength of it (#1052).
+  //
+  // **This must stay last, after every git-object write.** That single ordering
+  // fact is what preserves resumability, and it is worth stating as an
+  // invariant rather than a hope:
+  //
+  //   - interrupted BEFORE the seal → branches are still unsealed, so a resumed
+  //     run's writes succeed exactly as they do today;
+  //   - interrupted AFTER the seal → every write step is already checkpointed,
+  //     so a resumed run has nothing left to write.
+  //
+  // The only git-object write in this command is step 5b, which carries its own
+  // checkpoint precisely because it is the only one. `init.test.ts` asserts the
+  // ordering so a future step inserted after this one cannot quietly break it.
+  //
+  // Checkpointed like any other step: sealing is idempotent, but a resumed run
+  // that has already sealed should say "skipping" rather than re-issuing three
+  // API calls and re-reporting a summary for work it did not do.
+  if (!hasCompleted(session, 'github_protection_sealed')) {
+    log.step(7, totalSteps, 'Binding branch protection to admins...')
+    await github.sealBranchProtection(org, repo)
+    markStepComplete(session, 'github_protection_sealed')
+  } else {
+    log.step(7, totalSteps, 'Branch protection already binds admins — skipping')
+  }
+
   // The last thing the run does, and deliberately not a step: a scaffolding run
-  // must not be able to finish quietly having left a repo unprotected (#715).
+  // must not be able to finish quietly having left a repo unprotected (#715) or
+  // protected-but-advisory (#1058).
   // No-op when the nested `runSiblingCreate` above already drained it.
   reportBranchProtectionSummary()
 

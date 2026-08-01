@@ -93,6 +93,29 @@ variable "email_branding" {
   }
 }
 
+# Domain-agnostic periodic trigger for the orchestrator (biffo-template#1044/
+# #1049): an EventBridge schedule expression, empty by default (no rule
+# created, the tick stays fully off). The orchestrator module's own
+# tick_schedule_expression variable already carries this — it ships with no
+# opinion on whether any deployment needs a tick at all. This is the
+# pass-through that makes it settable per instance without editing this
+# template-owned file directly, the same reasoning as email_branding above:
+# a variable this file references must be one it also declares, so an
+# instance supplies the value from its own tfvars rather than a hand-edit
+# that `biffo core upgrade` would only fight on the next run.
+variable "orchestrator_tick_schedule_expression" {
+  description = <<-EOT
+    How often to invoke the orchestrator with a periodic "tick" event, purely
+    as a trigger any deployment's own workflow definitions can subscribe to.
+    Empty (default) leaves the tick disabled. Reacting to it is entirely a
+    matter of authoring a WorkflowDefinition (subscribed to
+    source=biffo.orchestrator, detail_type=orchestrator.tick) — never a
+    Terraform or plugin-code change.
+  EOT
+  type        = string
+  default     = ""
+}
+
 locals {
   # Empty attributes are dropped rather than passed as empty env vars, so an
   # unset field falls through to the Python default by absence. That matters for
@@ -129,6 +152,8 @@ module "plugin_orchestrator" {
   event_bus_name         = module.events.event_bus_name
   core_api_url           = module.api_gateway.api_endpoint
   core_api_execution_arn = module.api_gateway.execution_arn
+
+  tick_schedule_expression = var.orchestrator_tick_schedule_expression
 
   environment_variables = local.email_branding_env
 

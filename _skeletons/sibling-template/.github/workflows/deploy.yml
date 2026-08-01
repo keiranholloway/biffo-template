@@ -285,3 +285,68 @@ jobs:
             echo "::error::Health check failed after deploy — the Lambda uploaded but isn't serving requests. Check CloudWatch logs for ${{ vars.LAMBDA_FUNCTION_NAME }}."
             exit 1
           fi
+
+  # A Deploy run that deploys NOTHING must not report success (#1065).
+  #
+  # `deploy-infra` and `deploy-app` are both gated on
+  # `vars.SIBLING_DEPLOY_ENABLED == 'true'`. GitHub evaluates an unset variable
+  # to the empty string, so before that variable exists both jobs are simply
+  # SKIPPED — and a workflow whose every job skipped concludes **success**.
+  # Every sibling was therefore born with a green Deploy run that had created
+  # no bucket, no Lambda, no route, and nothing distinguished it from a real
+  # deploy: it was found only by opening the run and reading the job list.
+  #
+  # `biffo sibling create` no longer triggers that premature run at all, but
+  # ordering alone only fixes the instance of the bug we saw. This job fixes
+  # the CLASS: any future run in which the deploy jobs do not actually run is
+  # red, whatever the reason.
+  #
+  # The three states are deliberately distinguished, because "deliberately off"
+  # and "never configured" are different facts and only one of them is a defect:
+  deploy-status:
+    name: Deploy status
+    needs: [resolve-environment, deploy-infra, deploy-app]
+    if: always()
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    steps:
+      - name: Fail a run that deployed nothing
+        env:
+          ENABLED: ${{ vars.SIBLING_DEPLOY_ENABLED }}
+          INFRA: ${{ needs.deploy-infra.result }}
+          APP: ${{ needs.deploy-app.result }}
+        run: |
+          echo "SIBLING_DEPLOY_ENABLED='${ENABLED}'  deploy-infra=${INFRA}  deploy-app=${APP}"
+
+          if [ "${ENABLED}" = "false" ]; then
+            echo "::notice::Deploys are deliberately disabled for this repo (SIBLING_DEPLOY_ENABLED=false). Nothing was deployed, by choice."
+            exit 0
+          fi
+
+          if [ -z "${ENABLED}" ]; then
+            echo "::error::SIBLING_DEPLOY_ENABLED is not set, so every deploy job skipped and this run created nothing. A repo variable named SIBLING_DEPLOY_ENABLED must be set to 'true'; \`biffo sibling create\` sets it in step 7."
+            exit 1
+          fi
+
+          # A real failure already makes the run red for the right reason, and
+          # `deploy-app` needs `deploy-infra` — so a failed infra job SKIPS the
+          # app job. Reporting that skip as "deployed nothing" would bury the
+          # actual cause under a second, wrong error. Defer to the real one.
+          case "${INFRA}:${APP}" in
+            *failure*|*cancelled*)
+              echo "A deploy job failed or was cancelled; that failure is the run's result. Not adding a second error."
+              exit 0
+              ;;
+          esac
+
+          # Enabled — the jobs were meant to run. 'skipped' here means a gate
+          # upstream of them suppressed the work while the run still went green.
+          for pair in "deploy-infra:${INFRA}" "deploy-app:${APP}"; do
+            job="${pair%%:*}"
+            result="${pair#*:}"
+            if [ "${result}" = "skipped" ]; then
+              echo "::error::${job} was skipped although deploys are enabled — this run reported success while deploying nothing."
+              exit 1
+            fi
+          done
+
+          echo "Deploy jobs ran (infra=${INFRA}, app=${APP})."

@@ -83,6 +83,7 @@ function makeGithubMock() {
       .fn()
       .mockResolvedValue({ url: 'https://github.com/acme/core-app/pull/1', number: 1 }),
     getRepoIds: vi.fn().mockResolvedValue({ ownerId: 42, repoId: 99 }),
+    triggerWorkflow: vi.fn().mockResolvedValue(undefined),
   }
 }
 
@@ -332,7 +333,7 @@ describe('runSiblingCreate', () => {
     )
   })
 
-  it('runs all 8 steps in order on a fresh session', async () => {
+  it('runs all 9 steps in order on a fresh session', async () => {
     const github = makeGithubMock()
     const aws = makeAwsMock()
     const coreAws = makeAwsMock()
@@ -412,6 +413,9 @@ describe('runSiblingCreate', () => {
       'terraform_backend',
       'github_config',
       'register_with_core',
+      // #1065: the deploy is dispatched deliberately, last, once OIDC trust,
+      // the Terraform backend and SIBLING_DEPLOY_ENABLED all exist.
+      'trigger_first_deploy',
     ])
   })
 
@@ -1064,6 +1068,9 @@ describe('root sibling mode', () => {
       'terraform_backend',
       'github_config',
       'register_with_core',
+      // #1065: a root sibling gets its first deploy dispatched too — it is the
+      // same scaffold path, and was born with the same misleading green run.
+      'trigger_first_deploy',
     ])
     // The empty identity map is still populated, so the invariant that step 2
     // fills session.outputs.coreIdentity holds and step 7 sets no CORE_* vars.
@@ -1093,5 +1100,194 @@ describe('assertGitIdentity (#737)', () => {
 
   it('treats an empty string as unset — git resolves it to nothing usable', () => {
     expect(() => assertGitIdentity({ name: '', email: 'dev@example.com' })).toThrow(/user\.name/)
+  })
+})
+
+// ─── #1065: a sibling's first deploy must not no-op and report success ───────
+//
+// `sibling create` pushed the skeleton in step 4, which fired the new repo's
+// Deploy workflow, and set SIBLING_DEPLOY_ENABLED in step 7 about a second
+// later. Measured on tabsii-lms: run started 10:01:14, variable landed
+// 10:01:15. Both deploy jobs evaluated their gate against an empty string,
+// skipped, and the run concluded SUCCESS having created nothing — so every
+// sibling was born with a green Deploy that looked exactly like a real one.
+describe("the sibling's first deploy (#1065)", () => {
+  let skeletonRoot: string
+
+  beforeEach(() => {
+    skeletonRoot = mkdtempSync(join(tmpdir(), 'sibling-skeleton-'))
+    writeFileSync(join(skeletonRoot, 'biffo.sibling.json'), '{}')
+    resetBranchProtectionOutcomes()
+  })
+
+  afterEach(() => {
+    rmSync(skeletonRoot, { recursive: true, force: true })
+  })
+
+  // The core's Terraform outputs are what `resolveCoreIdentity` reads; without
+  // them the run dies at step 2 and never reaches anything this block is about.
+  function makeCoreAwsMock() {
+    const m = makeAwsMock()
+    m.readTerraformOutputs.mockResolvedValue(CORE_OUTPUTS)
+    return m
+  }
+
+  it('suppresses CI on the scaffold push, so no run happens before it can succeed', async () => {
+    const github = makeGithubMock()
+    const git = makeGitMock()
+
+    await runSiblingCreate(
+      github as never,
+      makeAwsMock() as never,
+      makeCoreAwsMock() as never,
+      git,
+      SIBLING_CONFIG,
+      makeSession(),
+      { coreConfig: CORE_CONFIG, skeletonRoot, githubToken: 'gh-token' },
+    )
+
+    // Two commits happen in a full run — the skeleton, and the core-repo
+    // registration PR. Only the skeleton's push can fire the sibling's Deploy.
+    const skeletonCommit = (git.commit.mock.calls as [string, string][]).find(([, m]) =>
+      m.startsWith('feat: scaffold'),
+    )
+    expect(skeletonCommit).toBeDefined()
+    const [, message] = skeletonCommit as [string, string]
+    // Without this the push triggers Deploy before OIDC trust, the Terraform
+    // backend and the enable-flag exist — none of which it can do anything
+    // without.
+    expect(message).toContain('[skip ci]')
+    // The subject must still be a valid Conventional Commit.
+    expect(message.split('\n')[0]).toMatch(/^feat: scaffold reports sibling app/)
+  })
+
+  it('dispatches the deploy itself, AFTER the flag that gates it is set', async () => {
+    const github = makeGithubMock()
+
+    await runSiblingCreate(
+      github as never,
+      makeAwsMock() as never,
+      makeCoreAwsMock() as never,
+      makeGitMock(),
+      SIBLING_CONFIG,
+      makeSession(),
+      { coreConfig: CORE_CONFIG, skeletonRoot, githubToken: 'gh-token' },
+    )
+
+    expect(github.triggerWorkflow).toHaveBeenCalledWith(
+      'acme',
+      'reports',
+      'deploy.yml',
+      { environment: 'dev' },
+      'dev',
+    )
+
+    // The ordering IS the fix. A dispatch that raced the variable would
+    // reproduce the original defect exactly, and a test that only asserted
+    // "was dispatched" would pass while it did.
+    const enableCall = github.setRepoVariable.mock.calls.findIndex(
+      (c: unknown[]) => c[2] === 'SIBLING_DEPLOY_ENABLED',
+    )
+    expect(enableCall).toBeGreaterThanOrEqual(0)
+    const enableOrder = github.setRepoVariable.mock.invocationCallOrder[enableCall]
+    const dispatchOrder = github.triggerWorkflow.mock.invocationCallOrder[0]
+    expect(dispatchOrder).toBeGreaterThan(enableOrder)
+  })
+
+  it('does not dispatch before the Terraform backend it needs exists', async () => {
+    const github = makeGithubMock()
+    const aws = makeAwsMock()
+
+    await runSiblingCreate(
+      github as never,
+      aws as never,
+      makeCoreAwsMock() as never,
+      makeGitMock(),
+      SIBLING_CONFIG,
+      makeSession(),
+      { coreConfig: CORE_CONFIG, skeletonRoot, githubToken: 'gh-token' },
+    )
+
+    expect(github.triggerWorkflow.mock.invocationCallOrder[0]).toBeGreaterThan(
+      aws.bootstrapTerraformBackend.mock.invocationCallOrder[0],
+    )
+  })
+
+  it("dispatches into the sibling's own first environment, not a hardcoded dev", async () => {
+    const github = makeGithubMock()
+    // A sibling that never declares a `dev` environment. Step 7 creates GitHub
+    // Environments from this list, so dispatching `dev` would target one that
+    // does not exist and fail the very run this fix exists to make trustworthy.
+    const stagingOnly = SiblingConfigSchema.parse({
+      ...SIBLING_CONFIG,
+      environments: ['staging'],
+    })
+    const session = makeSession()
+    session.config = stagingOnly
+
+    await runSiblingCreate(
+      github as never,
+      makeAwsMock() as never,
+      makeCoreAwsMock() as never,
+      makeGitMock(),
+      stagingOnly,
+      session,
+      { coreConfig: CORE_CONFIG, skeletonRoot, githubToken: 'gh-token' },
+    )
+
+    expect(github.triggerWorkflow).toHaveBeenCalledWith(
+      'acme',
+      'reports',
+      'deploy.yml',
+      { environment: 'staging' },
+      // `dev` is still the ref: it is the only branch the skeleton push makes.
+      'dev',
+    )
+  })
+
+  it('survives a dispatch failure — the sibling is already provisioned by then', async () => {
+    const github = makeGithubMock()
+    github.triggerWorkflow.mockRejectedValue(new Error('workflow not found'))
+
+    // Best-effort by design: everything that creates real resources has already
+    // succeeded, so failing the whole create here would be worse than saying so.
+    await expect(
+      runSiblingCreate(
+        github as never,
+        makeAwsMock() as never,
+        makeCoreAwsMock() as never,
+        makeGitMock(),
+        SIBLING_CONFIG,
+        makeSession(),
+        { coreConfig: CORE_CONFIG, skeletonRoot, githubToken: 'gh-token' },
+      ),
+    ).resolves.not.toThrow()
+  })
+
+  it('does not re-dispatch on a resumed run', async () => {
+    const github = makeGithubMock()
+    const session = makeSession()
+    session.completedSteps = [
+      'create_repo',
+      'push_skeleton',
+      'oidc_trust',
+      'terraform_backend',
+      'github_config',
+      'register_with_core',
+      'trigger_first_deploy',
+    ]
+    session.outputs.cloneUrl = 'https://github.com/acme/reports.git'
+
+    await runSiblingCreate(
+      github as never,
+      makeAwsMock() as never,
+      makeCoreAwsMock() as never,
+      makeGitMock(),
+      SIBLING_CONFIG,
+      session,
+      { coreConfig: CORE_CONFIG, skeletonRoot, githubToken: 'gh-token' },
+    )
+
+    expect(github.triggerWorkflow).not.toHaveBeenCalled()
   })
 })

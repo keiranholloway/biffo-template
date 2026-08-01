@@ -44,10 +44,23 @@ vi.mock('@/lib/whoami-api', () => ({
   fetchWhoami: fetchWhoamiMock,
 }))
 
-vi.mock('@/lib/return-to', () => ({
-  isWithinPortal: () => true,
-  sanitizeReturnTo: (val: string | null) => val || '',
-}))
+// Cross-app destinations leave the portal, so the page uses a full page load
+// (window.location.assign) rather than the client-side router — see
+// isWithinPortal. jsdom implements no navigation, so it has to be stubbed, and
+// asserting on the RIGHT one of the two is the point: a client-side push to
+// /crm/ would look fine in a test that stubbed isWithinPortal to true, and
+// break in a browser, because the portal app has no such route.
+const assignMock = vi.fn()
+beforeEach(() => {
+  assignMock.mockClear()
+  // Built explicitly rather than spread from window.location: that is a class
+  // instance, and spreading it drops its prototype (@typescript-eslint/no-misused-spread).
+  Object.defineProperty(window, 'location', {
+    value: { href: '', pathname: '/login/', search: '', assign: assignMock },
+    writable: true,
+    configurable: true,
+  })
+})
 
 // Cognito surfaces failures as Error instances whose `name` is the exception code.
 function cognitoError(name: string): Error {
@@ -231,7 +244,7 @@ describe('LoginPage role-based routing', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
 
     await waitFor(() => {
-      expect(pushMock).toHaveBeenCalledWith('/crm/')
+      expect(assignMock).toHaveBeenCalledWith('/crm/')
     })
   })
 
@@ -296,7 +309,7 @@ describe('LoginPage role-based routing', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
 
     await waitFor(() => {
-      expect(pushMock).toHaveBeenCalledWith('/login/no-access/')
+      expect(assignMock).toHaveBeenCalledWith('/login/no-access/')
     })
   })
 })

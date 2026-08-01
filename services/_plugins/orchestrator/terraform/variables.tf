@@ -100,6 +100,28 @@ variable "cloudwatch_kms_key_id" {
   default = ""
 }
 
+variable "tick_schedule_expression" {
+  description = <<-EOT
+    How often to invoke the engine with a periodic "tick" event, purely as a
+    trigger any deployment's own workflow definitions can subscribe to. An
+    EventBridge schedule expression; empty (default) disables it entirely —
+    this plugin ships with no opinion on whether any deployment needs one.
+
+    The tick is delivered as an ordinary source=biffo.orchestrator,
+    detail-type=orchestrator.tick BiffoEvent, through the exact same
+    create_event_handler -> EventSubscriber.dispatch path a real subscribed
+    bus event takes (main.py's docstring) — so subscribing to it is only ever
+    a workflow definition, never a Terraform or plugin-code change. This
+    plugin does nothing with a tick itself beyond dispatching it; what (if
+    anything) reacts to it is entirely up to the definitions an instance
+    authors. Mirrors agent-runtime's own reap_schedule_expression, which
+    established the same direct-invoke-on-a-schedule shape for a
+    domain-specific sweep — this is the domain-agnostic version of it.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

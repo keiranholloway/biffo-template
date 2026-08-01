@@ -449,6 +449,107 @@ def test_http_is_a_registered_action():
     assert ACTION_HANDLERS["http"] is send_http
 
 
+# ── send_http against the orchestrator's own Core API (issue #1071): SigV4- ──
+# signed automatically, the only way to reach an IAM-gated /internal/* route.
+
+
+def _aws_credentials_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIDTEST")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "SECRETTEST")
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    monkeypatch.setenv("AWS_REGION", "eu-west-1")
+
+
+def test_send_http_signs_a_call_to_its_own_core_api(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("BIFFO_CORE_API_URL", "https://core.example.com")
+    _aws_credentials_env(monkeypatch)
+    http = FakeHttp(status_code=200)
+
+    result = send_http(
+        {"url": "https://core.example.com/api/v1/internal/onboarding/kpi-rollup"},
+        {"kind": "tick"},
+        http_client=http,
+    )
+
+    assert result == {"status_code": 200}
+    call = http.calls[0]
+    # Signed: raw bytes via `content`, not re-serialised via `json` (a
+    # signature covers an exact payload; letting the client re-serialise
+    # could produce different bytes than what was signed).
+    assert call["json"] is None
+    assert call["content"] == b'{"kind": "tick"}'
+    auth = call["headers"]["Authorization"]
+    assert auth.startswith("AWS4-HMAC-SHA256")
+    assert "Credential=AKIDTEST/" in auth
+    assert "SignedHeaders=" in auth
+    assert call["headers"]["X-Amz-Date"]
+
+
+def test_send_http_does_not_sign_a_call_to_a_different_host(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("BIFFO_CORE_API_URL", "https://core.example.com")
+    _aws_credentials_env(monkeypatch)
+    http = FakeHttp(status_code=200)
+
+    send_http({"url": "https://hooks.slack.com/services/x"}, {"a": 1}, http_client=http)
+
+    call = http.calls[0]
+    assert call["content"] is None
+    assert call["json"] == {"a": 1}
+    assert call["headers"] is None
+
+
+def test_send_http_does_not_sign_when_core_api_url_is_unset(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("BIFFO_CORE_API_URL", raising=False)
+    http = FakeHttp(status_code=200)
+
+    send_http({"url": "https://internal.example.com/api/v1/internal/x"}, {}, http_client=http)
+
+    call = http.calls[0]
+    assert call["content"] is None
+    assert (call["headers"] or {}).get("Authorization") is None
+
+
+def test_send_http_signing_still_carries_configured_headers(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("BIFFO_CORE_API_URL", "https://core.example.com")
+    _aws_credentials_env(monkeypatch)
+    http = FakeHttp(status_code=200)
+
+    send_http(
+        {
+            "url": "https://core.example.com/api/v1/internal/onboarding/kpi-rollup",
+            "headers": {"X-Source": "orchestrator-tick"},
+        },
+        {},
+        http_client=http,
+    )
+
+    headers = http.calls[0]["headers"]
+    assert headers["X-Source"] == "orchestrator-tick"
+    assert headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+
+
+def test_send_http_signing_without_credentials_is_action_error(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("BIFFO_CORE_API_URL", "https://core.example.com")
+
+    class _NoCredsSession:
+        def get_credentials(self) -> None:
+            return None
+
+    # Mocked rather than relying on a credential-free environment: this
+    # machine (and possibly CI) may have ambient AWS credentials
+    # (~/.aws/credentials, an instance role, ...) that botocore's default
+    # session picks up regardless of which env vars a test clears — this
+    # test needs "no credentials resolve", not "no env vars are set".
+    monkeypatch.setattr("botocore.session.get_session", lambda: _NoCredsSession(), raising=True)
+
+    with pytest.raises(ActionError, match="no AWS credentials available"):
+        send_http(
+            {"url": "https://core.example.com/api/v1/internal/x"},
+            {},
+            http_client=FakeHttp(),
+        )
+
+
 # ── prepare_delivery (ADR-0020): render an agent result into a destination ───
 
 

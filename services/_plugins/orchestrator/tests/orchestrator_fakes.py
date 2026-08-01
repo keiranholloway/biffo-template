@@ -189,9 +189,10 @@ class FakeHttp:
         url: str,
         *,
         json: Any = None,
+        content: bytes | None = None,
         headers: dict[str, str] | None = None,
     ) -> FakeHttpResponse:
-        self.calls.append({"url": url, "json": json, "headers": headers})
+        self.calls.append({"url": url, "json": json, "content": content, "headers": headers})
         return FakeHttpResponse(self._status, self._json, self._text)
 
 
@@ -221,9 +222,10 @@ class FlakyHttp(FakeHttp):
         url: str,
         *,
         json: Any = None,
+        content: bytes | None = None,
         headers: dict[str, str] | None = None,
     ) -> FakeHttpResponse:
-        self.calls.append({"url": url, "json": json, "headers": headers})
+        self.calls.append({"url": url, "json": json, "content": content, "headers": headers})
         if len(self.calls) <= self._failures:
             if self._mode == "raise":
                 raise ConnectionError("connection reset")

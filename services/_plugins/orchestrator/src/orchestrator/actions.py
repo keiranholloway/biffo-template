@@ -21,6 +21,7 @@ registered identically.
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections import defaultdict
 from collections.abc import Iterable
@@ -55,13 +56,21 @@ class HttpResponse(Protocol):
 
 
 class HttpClient(Protocol):
-    """The slice of an HTTP client the webhook actions use (e.g. httpx.Client)."""
+    """The slice of an HTTP client the webhook actions use (e.g. httpx.Client).
+
+    ``content`` (raw bytes) is used only by the ``http`` action's SigV4-signed
+    path: a signature covers an exact byte payload, so it must be the exact
+    bytes sent on the wire — passing the same value through ``json=`` would
+    let the client re-serialise it, which could produce different bytes than
+    what was signed and invalidate the signature.
+    """
 
     def post(
         self,
         url: str,
         *,
         json: Any = None,
+        content: bytes | None = None,
         headers: dict[str, str] | None = None,
     ) -> HttpResponse: ...
 
@@ -172,6 +181,7 @@ def _post(
     url: str,
     *,
     json: Any = None,
+    content: bytes | None = None,
     headers: dict[str, str] | None = None,
 ) -> HttpResponse:
     """POST, treating any transport-level failure as transient.
@@ -181,7 +191,7 @@ def _post(
     exception out of the client almost always means here.
     """
     try:
-        return http_client.post(url, json=json, headers=headers)
+        return http_client.post(url, json=json, content=content, headers=headers)
     except Exception as exc:  # noqa: BLE001 — no answer from the far end is transient
         raise TransientActionError(f"{action} request failed: {exc}") from exc
 
@@ -422,6 +432,53 @@ def _http_body(config: dict[str, Any], payload: dict[str, Any]) -> Any:
         raise ActionError(f"http action_config 'body' did not render to valid JSON: {exc}") from exc
 
 
+def _core_api_url() -> str:
+    """The orchestrator's own Core API base — same env var, same lazy read,
+    as ``biffo_plugin_sdk.BiffoAPIClient`` uses. Not cached at import time:
+    the engine's own tests construct a fresh environment per case."""
+    return os.environ.get("BIFFO_CORE_API_URL", "")
+
+
+def _sigv4_headers(
+    method: str, url: str, body: bytes, *, extra_headers: dict[str, str] | None = None
+) -> dict[str, str]:
+    """SigV4-sign a request to the orchestrator's own Core API (issue #1071).
+
+    The orchestrator Lambda's role already has ``execute-api:Invoke`` granted
+    on ``/api/v1/internal/*`` (used today by the ``agent`` action's
+    ``SignedCoreClient`` — ``CoreClient`` in this file). This reuses the exact
+    same recipe (``botocore.auth.SigV4Auth`` over a ``botocore.awsrequest.
+    AWSRequest``, service ``execute-api``) rather than that class itself:
+    ``SignedCoreClient`` is ``httpx.AsyncClient``-only end to end, while
+    ``send_http`` is synchronous — the signing step alone has no I/O and no
+    async dependency, so it is lifted out rather than wrapped.
+
+    Credentials resolve via ``botocore.session.get_session().get_credentials()``
+    — the Lambda's own execution-role credentials at runtime, the same
+    resolution ``SignedCoreClient`` falls back to when none is injected.
+    ``botocore`` is imported lazily so a deployment that never calls its own
+    Core API from this action pays nothing for it.
+    """
+    from botocore.auth import SigV4Auth
+    from botocore.awsrequest import AWSRequest
+    from botocore.session import get_session
+
+    region = os.environ.get("AWS_REGION", "")
+    credentials = get_session().get_credentials()
+    if credentials is None:
+        raise ActionError(
+            "http action could not sign a call to the internal Core API: "
+            "no AWS credentials available"
+        )
+
+    headers = {"Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
+    aws_request = AWSRequest(method=method, url=url, data=body, headers=headers)
+    SigV4Auth(credentials, "execute-api", region).add_auth(aws_request)
+    return dict(aws_request.headers)
+
+
 def send_http(
     config: dict[str, Any],
     payload: dict[str, Any],
@@ -448,6 +505,15 @@ def send_http(
     inherently a trigger/write call — a method selector is a documented,
     deferred follow-up if a GET/read use case ever needs one.
 
+    **SigV4-signed automatically when the URL targets this deployment's own
+    Core API** (``url`` starts with ``BIFFO_CORE_API_URL``, issue #1071) —
+    the only way to reach an IAM-gated ``/api/v1/internal/*`` route (ADR-0009),
+    which a plain unsigned POST cannot pass no matter what ``headers`` a
+    workflow author supplies. Any other URL is posted exactly as before,
+    unsigned, with ``headers``/``body`` as configured. Signing changes nothing
+    for a route that doesn't require it — the extra headers are simply
+    ignored — so this never needs to be an opt-in.
+
     A non-2xx response is recorded as a failed run, transient for 429/5xx —
     the same classification :func:`_http_failure` gives every webhook action
     here.
@@ -456,7 +522,15 @@ def send_http(
     headers = _http_headers(config, payload)
     body = _http_body(config, payload)
 
-    response = _post(http_client, "HTTP action", url, json=body, headers=headers or None)
+    core_api_url = _core_api_url()
+    if core_api_url and url.startswith(core_api_url):
+        body_bytes = json.dumps(body).encode("utf-8")
+        signed_headers = _sigv4_headers("POST", url, body_bytes, extra_headers=headers or None)
+        response = _post(
+            http_client, "HTTP action", url, content=body_bytes, headers=signed_headers
+        )
+    else:
+        response = _post(http_client, "HTTP action", url, json=body, headers=headers or None)
     if response.status_code >= 400:
         raise _http_failure("HTTP action", response)
     return {"status_code": response.status_code}

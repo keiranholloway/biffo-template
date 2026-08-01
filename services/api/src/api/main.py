@@ -241,6 +241,21 @@ def _run_db_init() -> dict:
         extra={"crud_permissions": serialize_registry(registry)},
     )
 
+    # The step above proves the declared CRUD surface is well-formed; this one
+    # proves it is *real* (#1018). A DDL-imported table's schema is written by
+    # hand, outside the model, so a model can declare `tenant_id` — which
+    # generic CRUD filters every query by, unconditionally — against a table
+    # that has no such column. Nothing compared the two, and the API test lane
+    # structurally cannot: it builds its schema from the same ORM metadata, so
+    # the column is present *because the model declared it*. The mismatch
+    # therefore surfaced on a live click-through, twice.
+    #
+    # Runs after the upgrade, so it sees the schema at head, and fails the
+    # deploy rather than letting the first real request 500.
+    from .crud_schema_guard import assert_crud_schema_matches
+
+    crud_schema = assert_crud_schema_matches()
+
     # Create/refresh the least-privilege `biffo_app` role the request path
     # connects as (#253). Runs *after* the upgrade, so the grants cover every
     # table the migrations just created. This connection is the master user —
@@ -250,7 +265,7 @@ def _run_db_init() -> dict:
 
     app_role = bootstrap_app_role()
 
-    return {"ok": True, "app_role": app_role}
+    return {"ok": True, "app_role": app_role, "crud_schema": crud_schema}
 
 
 def _run_ddl_import(directory: str | None) -> dict:

@@ -54,6 +54,18 @@ function internalTargets(source: string): string[] {
     const target = m[1]
     if (target !== undefined) targets.push(target)
   }
+  // Template-literal pushes, e.g. router.push(`/login/?return_to=${x}`).
+  // Only the literal prefix is captured — up to the first interpolation — which
+  // is all this guard needs, since it asserts on the *pathname* and stops at the
+  // query string anyway. Without this, a push whose target is built rather than
+  // written silently leaves the guard's coverage while every assertion still
+  // passes: the count check only requires more than five targets overall, so
+  // losing one is invisible. That is exactly what happened when AuthGuard
+  // started carrying a return_to.
+  for (const m of source.matchAll(/router\.push\(`(\/[^`$]*)/g)) {
+    const target = m[1]
+    if (target !== undefined) targets.push(target)
+  }
   return targets
 }
 

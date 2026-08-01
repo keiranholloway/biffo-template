@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { isWithinPortal, sanitizeReturnTo } from './return-to'
 
 describe('sanitizeReturnTo', () => {
-  it('returns the default when null', () => {
-    expect(sanitizeReturnTo(null)).toBe('/admin/')
+  it('returns an empty string when null and no fallback provided', () => {
+    expect(sanitizeReturnTo(null)).toBe('')
   })
 
-  it('returns the default when empty', () => {
-    expect(sanitizeReturnTo('')).toBe('/admin/')
+  it('returns an empty string when empty and no fallback provided', () => {
+    expect(sanitizeReturnTo('')).toBe('')
   })
 
   it('accepts a same-origin relative path', () => {
@@ -19,29 +19,29 @@ describe('sanitizeReturnTo', () => {
   })
 
   it('rejects an absolute http(s) URL', () => {
-    expect(sanitizeReturnTo('https://evil.com/')).toBe('/admin/')
-    expect(sanitizeReturnTo('http://evil.com/')).toBe('/admin/')
+    expect(sanitizeReturnTo('https://evil.com/')).toBe('')
+    expect(sanitizeReturnTo('http://evil.com/')).toBe('')
   })
 
   it('rejects a protocol-relative URL', () => {
-    expect(sanitizeReturnTo('//evil.com/')).toBe('/admin/')
+    expect(sanitizeReturnTo('//evil.com/')).toBe('')
   })
 
   it('rejects a path without a leading slash', () => {
-    expect(sanitizeReturnTo('admin')).toBe('/admin/')
+    expect(sanitizeReturnTo('admin')).toBe('')
   })
 
   it('rejects a value containing "://" anywhere', () => {
-    expect(sanitizeReturnTo('/redirect?to=https://evil.com')).toBe('/admin/')
+    expect(sanitizeReturnTo('/redirect?to=https://evil.com')).toBe('')
   })
 
   /**
-   * The default used to be `/dashboard`, which is not a route this portal has —
-   * the dashboard lives at `/admin/`. A user completing first login was sent
-   * straight to a 404. Observed on a live deployment (issue #275).
+   * The caller (login page, now using resolveDestination) is responsible for
+   * determining the default destination when no returnTo is provided — the
+   * sanitizer's job is only to validate and normalize, not to choose a route.
    */
-  it('defaults to a route that actually exists', () => {
-    expect(sanitizeReturnTo(null)).toBe('/admin/')
+  it('returns empty string as a fallback, delegating destination choice to caller', () => {
+    expect(sanitizeReturnTo(null)).toBe('')
   })
 
   /**
@@ -85,8 +85,8 @@ describe('sanitizeReturnTo', () => {
    * rejected value into an accepted one.
    */
   it('normalises only values that already passed the origin checks', () => {
-    expect(sanitizeReturnTo('//evil.com')).toBe('/admin/')
-    expect(sanitizeReturnTo('https://evil.com')).toBe('/admin/')
+    expect(sanitizeReturnTo('//evil.com')).toBe('')
+    expect(sanitizeReturnTo('https://evil.com')).toBe('')
   })
 })
 

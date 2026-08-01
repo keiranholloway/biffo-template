@@ -6,6 +6,9 @@ import type { CognitoUser } from 'amazon-cognito-identity-js'
 import { useAuth } from '@/context/auth-context'
 import { completeNewPassword, confirmPasswordReset, requestPasswordReset } from '@/lib/auth'
 import { isWithinPortal, sanitizeReturnTo } from '@/lib/return-to'
+import { createApiClient } from '@/lib/api-client'
+import { fetchWhoami } from '@/lib/whoami-api'
+import { resolveDestination } from '@/lib/login-routing'
 import { Button } from '@biffo/ui'
 
 // useSearchParams() requires a Suspense boundary in the App Router (it opts
@@ -51,29 +54,13 @@ function requestResetOutcome(err: unknown): { notice: string; sent: boolean } {
 }
 
 function LoginForm() {
-  const { login } = useAuth()
+  const { login, setSession } = useAuth()
   const router = useRouter()
   // Set by a sibling app (ADR-0007) when it finds no shared session and
   // bounces here — e.g. /login?return_to=/my-sibling/. Sanitised to a
   // same-origin relative path only; see sanitizeReturnTo's own comment for
   // why an absolute URL here would be an open-redirect risk.
   const returnTo = sanitizeReturnTo(useSearchParams().get('return_to'))
-
-  // Send the user back to where they came from after auth succeeds. The portal
-  // is a standalone Next.js app mounted at /admin, so its client router can
-  // only resolve in-portal routes; `returnTo` may instead point at a SIBLING
-  // (e.g. `/`, ADR-0007), which lives on a different app/origin. A
-  // client-side `router.push` there fetches the sibling's RSC flight payload
-  // (`/index.txt`) and strands the browser on raw serialised React — the #275
-  // failure class across the app boundary (issue #351). Cross a boundary only
-  // with a full page load. See isWithinPortal for the boundary test.
-  const redirectAfterAuth = () => {
-    if (isWithinPortal(returnTo)) {
-      router.push(returnTo)
-    } else {
-      window.location.assign(returnTo)
-    }
-  }
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -103,7 +90,24 @@ function LoginForm() {
     try {
       const result = await login(email, password)
       if (result.kind === 'success') {
-        redirectAfterAuth()
+        // Fetch user's identity and roles to determine the correct destination
+        const idToken = result.session.getIdToken().getJwtToken()
+        const client = createApiClient(() => idToken)
+        const whoami = await fetchWhoami(client)
+
+        // Extract Cognito groups from the ID token
+        const groups = result.session.getIdToken().decodePayload()['cognito:groups'] as
+          string[] | undefined
+
+        // Determine destination based on roles
+        const destination = resolveDestination(whoami, groups, returnTo || null)
+
+        // Navigate to the determined destination
+        if (isWithinPortal(destination)) {
+          router.push(destination)
+        } else {
+          window.location.assign(destination)
+        }
       } else {
         setPendingUser(result.user)
         setPendingAttributes(result.userAttributes)
@@ -127,8 +131,26 @@ function LoginForm() {
     setLoading(true)
     try {
       if (!pendingUser) return
-      await completeNewPassword(pendingUser, newPassword, pendingAttributes)
-      redirectAfterAuth()
+      const session = await completeNewPassword(pendingUser, newPassword, pendingAttributes)
+      setSession(session)
+
+      // Fetch user's identity and roles to determine the correct destination
+      const idToken = session.getIdToken().getJwtToken()
+      const client = createApiClient(() => idToken)
+      const whoami = await fetchWhoami(client)
+
+      // Extract Cognito groups from the ID token
+      const groups = session.getIdToken().decodePayload()['cognito:groups'] as string[] | undefined
+
+      // Determine destination based on roles
+      const destination = resolveDestination(whoami, groups, returnTo || null)
+
+      // Navigate to the determined destination
+      if (isWithinPortal(destination)) {
+        router.push(destination)
+      } else {
+        window.location.assign(destination)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to set password')
     } finally {

@@ -1,15 +1,25 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { CognitoUserSession } from 'amazon-cognito-identity-js'
 import LoginPage from './page'
 
-const { pushMock, loginMock, requestPasswordReset, confirmPasswordReset, completeNewPassword } =
-  vi.hoisted(() => ({
-    pushMock: vi.fn(),
-    loginMock: vi.fn(),
-    requestPasswordReset: vi.fn(),
-    confirmPasswordReset: vi.fn(),
-    completeNewPassword: vi.fn(),
-  }))
+const {
+  pushMock,
+  loginMock,
+  requestPasswordReset,
+  confirmPasswordReset,
+  completeNewPassword,
+  setSessionMock,
+  fetchWhoamiMock,
+} = vi.hoisted(() => ({
+  pushMock: vi.fn(),
+  loginMock: vi.fn(),
+  requestPasswordReset: vi.fn(),
+  confirmPasswordReset: vi.fn(),
+  completeNewPassword: vi.fn(),
+  setSessionMock: vi.fn(),
+  fetchWhoamiMock: vi.fn(),
+}))
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: pushMock }),
@@ -17,7 +27,7 @@ vi.mock('next/navigation', () => ({
 }))
 
 vi.mock('@/context/auth-context', () => ({
-  useAuth: () => ({ login: loginMock }),
+  useAuth: () => ({ login: loginMock, setSession: setSessionMock }),
 }))
 
 vi.mock('@/lib/auth', () => ({
@@ -25,6 +35,32 @@ vi.mock('@/lib/auth', () => ({
   confirmPasswordReset,
   completeNewPassword,
 }))
+
+vi.mock('@/lib/api-client', () => ({
+  createApiClient: () => ({ get: vi.fn() }),
+}))
+
+vi.mock('@/lib/whoami-api', () => ({
+  fetchWhoami: fetchWhoamiMock,
+}))
+
+// Cross-app destinations leave the portal, so the page uses a full page load
+// (window.location.assign) rather than the client-side router — see
+// isWithinPortal. jsdom implements no navigation, so it has to be stubbed, and
+// asserting on the RIGHT one of the two is the point: a client-side push to
+// /crm/ would look fine in a test that stubbed isWithinPortal to true, and
+// break in a browser, because the portal app has no such route.
+const assignMock = vi.fn()
+beforeEach(() => {
+  assignMock.mockClear()
+  // Built explicitly rather than spread from window.location: that is a class
+  // instance, and spreading it drops its prototype (@typescript-eslint/no-misused-spread).
+  Object.defineProperty(window, 'location', {
+    value: { href: '', pathname: '/login/', search: '', assign: assignMock },
+    writable: true,
+    configurable: true,
+  })
+})
 
 // Cognito surfaces failures as Error instances whose `name` is the exception code.
 function cognitoError(name: string): Error {
@@ -48,6 +84,17 @@ function submitNewPassword(code: string, pw: string, confirm = pw) {
   fireEvent.change(screen.getByLabelText('New password'), { target: { value: pw } })
   fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: confirm } })
   fireEvent.click(screen.getByRole('button', { name: 'Reset password' }))
+}
+
+/** Mock session with ID token that can be read */
+function mockSession(overrides?: Partial<CognitoUserSession>): CognitoUserSession {
+  return {
+    getIdToken: () => ({
+      getJwtToken: () => 'mock-token',
+      decodePayload: () => ({ 'cognito:groups': [] }),
+    }),
+    ...overrides,
+  } as unknown as CognitoUserSession
 }
 
 describe('LoginPage password reset', () => {
@@ -164,5 +211,105 @@ describe('LoginPage password reset', () => {
     openResetFlow()
     fireEvent.click(screen.getByRole('button', { name: 'Back to sign in' }))
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
+  })
+})
+
+describe('LoginPage role-based routing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('routes to /crm/ for users with tenant-level roles', async () => {
+    const whoami = {
+      sub: 'sub-123',
+      email: 'founder@example.com',
+      username: 'founder@example.com',
+      user_id: 'user-123',
+      is_platform_admin: false,
+      permissions: [],
+      marketplace_role: null,
+      roles: [{ role: 'manager', scope_level: 'tenant' }],
+    }
+
+    loginMock.mockResolvedValue({
+      kind: 'success',
+      session: mockSession(),
+    })
+
+    fetchWhoamiMock.mockResolvedValue(whoami)
+
+    render(<LoginPage />)
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'founder@example.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    await waitFor(() => {
+      expect(assignMock).toHaveBeenCalledWith('/crm/')
+    })
+  })
+
+  it('routes to /admin/ for users in the admin Cognito group', async () => {
+    const whoami = {
+      sub: 'sub-123',
+      email: 'admin@example.com',
+      username: 'admin@example.com',
+      user_id: 'user-123',
+      is_platform_admin: false,
+      permissions: [],
+      marketplace_role: null,
+      roles: [],
+    }
+
+    const sessionWithAdminGroup: CognitoUserSession = {
+      getIdToken: () => ({
+        getJwtToken: () => 'mock-token',
+        decodePayload: () => ({ 'cognito:groups': ['admin'] }),
+      }),
+    } as unknown as CognitoUserSession
+
+    loginMock.mockResolvedValue({
+      kind: 'success',
+      session: sessionWithAdminGroup,
+    })
+
+    fetchWhoamiMock.mockResolvedValue(whoami)
+
+    render(<LoginPage />)
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'admin@example.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    await waitFor(() => {
+      expect(pushMock).toHaveBeenCalledWith('/admin/')
+    })
+  })
+
+  it('routes to /login/no-access/ for users with no roles or access', async () => {
+    const whoami = {
+      sub: 'sub-123',
+      email: 'user@example.com',
+      username: 'user@example.com',
+      user_id: 'user-123',
+      is_platform_admin: false,
+      permissions: [],
+      marketplace_role: null,
+      roles: [],
+    }
+
+    loginMock.mockResolvedValue({
+      kind: 'success',
+      session: mockSession(),
+    })
+
+    fetchWhoamiMock.mockResolvedValue(whoami)
+
+    render(<LoginPage />)
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'user@example.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    await waitFor(() => {
+      expect(assignMock).toHaveBeenCalledWith('/login/no-access/')
+    })
   })
 })

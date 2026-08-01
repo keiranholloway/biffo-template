@@ -14,6 +14,7 @@ interface AuthContextValue {
   loading: boolean
   login: (username: string, password: string) => Promise<SignInResult>
   logout: () => void
+  setSession: (session: CognitoUserSession | null) => void
   getIdToken: () => string | null
 }
 
@@ -46,8 +47,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const getIdToken = useCallback(() => session?.getIdToken().getJwtToken() ?? null, [session])
 
+  const setSessFn = useCallback((newSession: CognitoUserSession | null) => {
+    setSession(newSession)
+  }, [])
+
   return (
-    <AuthContext.Provider value={{ session, loading, login, logout, getIdToken }}>
+    <AuthContext.Provider
+      value={{ session, loading, login, logout, setSession: setSessFn, getIdToken }}
+    >
       {children}
     </AuthContext.Provider>
   )

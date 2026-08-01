@@ -21,6 +21,7 @@ registered identically.
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -352,6 +353,112 @@ def send_slack(
     response = _post(http_client, "Slack webhook", url, json={"text": text})
     if response.status_code >= 400:
         raise _http_failure("Slack webhook", response)
+    return {"status_code": response.status_code}
+
+
+_FIELD_PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+
+def _render_json_safe(template: str, payload: dict[str, Any]) -> str:
+    """Fill ``{field}`` placeholders in a JSON-shaped template.
+
+    :func:`_render` uses ``str.format_map``, which treats every ``{...}`` as a
+    replacement field — fine for a plain message string, fatal for a JSON
+    object template, whose own structural braces (``{"key": "value"}``) it
+    cannot tell apart from a placeholder and raises on. This only touches a
+    brace pair that is exactly ``{word}`` — a bare field-name placeholder —
+    so JSON's own braces pass through untouched (issue #1051). A field the
+    payload doesn't carry renders as an empty string, same as :func:`_render`.
+    """
+    return _FIELD_PLACEHOLDER_RE.sub(lambda m: str(payload.get(m.group(1), "")), template)
+
+
+def _http_headers(config: dict[str, Any], payload: dict[str, Any]) -> dict[str, str]:
+    """The ``headers`` config field, rendered into a plain string->string map.
+
+    Accepts either a mapping (an API caller's natural shape) or the portal's
+    single-line text input — comma-separated ``Name: Value`` pairs, the same
+    duality :func:`_template_params` already establishes for a list field.
+    Each value is ``{field}``-templated; names are not.
+    """
+    raw = config.get("headers") or {}
+    if isinstance(raw, str):
+        parsed: dict[str, str] = {}
+        for pair in raw.split(","):
+            pair = pair.strip()
+            if not pair:
+                continue
+            if ":" not in pair:
+                raise ActionError(
+                    f"http action_config 'headers' entry {pair!r} is not 'Name: Value'"
+                )
+            name, _, value = pair.partition(":")
+            parsed[name.strip()] = value.strip()
+        raw = parsed
+    if not isinstance(raw, dict):
+        raise ActionError("http action_config 'headers' must be a mapping or 'Name: Value' pairs")
+    return {str(key): _render(str(value), payload) for key, value in raw.items()}
+
+
+def _http_body(config: dict[str, Any], payload: dict[str, Any]) -> Any:
+    """The JSON body to send.
+
+    A configured ``body`` is a ``{field}``-templated string (see
+    :func:`_render_json_safe` — JSON-safe, unlike the plain :func:`_render`
+    every other action's message templates use), rendered and then parsed as
+    JSON — the author writes exactly the JSON they want sent, with
+    placeholders filled first. A body that fails to parse after rendering is a
+    permanent config error, not a request sent broken. Leaving ``body`` unset
+    forwards the triggering event's payload verbatim, so calling an internal
+    endpoint from a periodic tick (#1044) needs no body configuration at all.
+    """
+    raw = config.get("body")
+    if not isinstance(raw, str) or not raw.strip():
+        return payload
+    rendered = _render_json_safe(raw, payload)
+    try:
+        return json.loads(rendered)
+    except json.JSONDecodeError as exc:
+        raise ActionError(f"http action_config 'body' did not render to valid JSON: {exc}") from exc
+
+
+def send_http(
+    config: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    http_client: HttpClient,
+    **_: Any,
+) -> dict[str, Any]:
+    """POST to an arbitrary HTTP endpoint (issue #1051).
+
+    Every other action here is a fixed-shape specialisation of one external
+    service; this is the generic escape hatch — including calling a
+    deployment's own internal API, which is what makes #1044's periodic tick
+    actually useful for anything beyond the notification channels above.
+
+    ``config`` keys: ``url`` (required, ``{field}``-templated), ``headers``
+    (optional — see :func:`_http_headers`; marked ``secret`` in the Core
+    catalog since this is where a bearer token or API key lives, the same
+    treatment the Slack/Google Chat webhook URL gets — #432), ``body``
+    (optional — see :func:`_http_body`; omitted forwards the triggering
+    event's payload verbatim).
+
+    Always POSTs. Every other action here is one fixed HTTP verb too, and the
+    driving use case (a periodic tick invoking a sweep/rollup endpoint) is
+    inherently a trigger/write call — a method selector is a documented,
+    deferred follow-up if a GET/read use case ever needs one.
+
+    A non-2xx response is recorded as a failed run, transient for 429/5xx —
+    the same classification :func:`_http_failure` gives every webhook action
+    here.
+    """
+    url = _render_recipient("http", "url", _require(config, "http", "url"), payload)
+    headers = _http_headers(config, payload)
+    body = _http_body(config, payload)
+
+    response = _post(http_client, "HTTP action", url, json=body, headers=headers or None)
+    if response.status_code >= 400:
+        raise _http_failure("HTTP action", response)
     return {"status_code": response.status_code}
 
 
@@ -838,6 +945,7 @@ ACTION_HANDLERS: dict[str, Any] = {
     "google_chat": send_google_chat,
     "slack": send_slack,
     "whatsapp": send_whatsapp,
+    "http": send_http,
     "agent": request_agent_run,
     "agent_fan_in": fan_in_agent_runs,
 }

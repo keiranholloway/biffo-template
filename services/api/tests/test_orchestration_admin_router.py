@@ -1558,6 +1558,91 @@ def test_slack_rejects_non_https_webhook(client: TestClient):
     assert resp.status_code == 422
 
 
+# ── Generic HTTP action (#1051): the escape hatch every other action here is
+# a fixed-shape specialisation of.
+
+_REAL_HTTP_HEADERS = "Authorization: Bearer REAL-SECRET-TOKEN"
+
+
+def test_create_http_workflow(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="http",
+            action_config={"url": "https://internal.example.com/hooks/sweep"},
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["action_type"] == "http"
+
+
+def test_http_requires_url(client: TestClient):
+    resp = client.post(_BASE, json=_valid_body(action_type="http", action_config={}))
+    assert resp.status_code == 422
+
+
+def test_http_rejects_non_https_url(client: TestClient):
+    resp = client.post(
+        _BASE,
+        json=_valid_body(action_type="http", action_config={"url": "http://insecure/x"}),
+    )
+    assert resp.status_code == 422
+
+
+def test_http_headers_secret_redacted_on_read(client: TestClient):
+    created = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="http",
+            action_config={
+                "url": "https://internal.example.com/hooks/sweep",
+                "headers": _REAL_HTTP_HEADERS,
+            },
+        ),
+    )
+    assert created.status_code == 201, created.text
+    row = created.json()
+    assert row["action_config"]["headers"] == SECRET_SENTINEL
+    assert row["action_config"]["url"] == "https://internal.example.com/hooks/sweep"
+
+    got = client.get(f"{_BASE}/{row['id']}").json()
+    assert got["action_config"]["headers"] == SECRET_SENTINEL
+
+
+def test_http_unchanged_update_keeps_stored_headers(app):
+    fastapi, session_factory = app
+    client = TestClient(fastapi)
+    row = client.post(
+        _BASE,
+        json=_valid_body(
+            action_type="http",
+            action_config={
+                "url": "https://internal.example.com/hooks/sweep",
+                "headers": _REAL_HTTP_HEADERS,
+            },
+        ),
+    ).json()
+    updated = client.put(
+        f"{_BASE}/{row['id']}",
+        json=_valid_body(
+            action_type="http",
+            action_config={
+                "url": "https://internal.example.com/hooks/sweep",
+                "headers": SECRET_SENTINEL,
+            },
+        ),
+    )
+    assert updated.status_code == 200, updated.text
+
+    async def _read() -> str | None:
+        async with session_factory() as session:
+            stored = await session.get(WorkflowDefinition, row["id"])
+            assert stored is not None
+            return stored.action_config.get("headers")
+
+    assert asyncio.run(_read()) == _REAL_HTTP_HEADERS
+
+
 # ── Agent-action delivery sub-config (ADR-0020, #527) ────────────────────────
 #
 # `delivery` is an optional `{ type, config }` on the agent action. Absent ⇒ no

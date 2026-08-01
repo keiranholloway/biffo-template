@@ -72,15 +72,26 @@ describe('deriveRequiredContexts', () => {
 
 describe('protectionParamsFor', () => {
   /**
-   * Backfilled protection must be indistinguishable from protection applied at
-   * scaffold time, or the repo ends up on a second policy that drifts from the
-   * first.
+   * Backfilled protection matches protection applied at scaffold time in every
+   * field but ONE, and the exception is the point (#1052).
+   *
+   * `configureBranchProtection` sets `enforce_admins: false` so a **resumed**
+   * `biffo init` can still commit to an already-protected branch. That is a
+   * scaffold-time need with a scaffold-time lifetime. Copying it into the
+   * backfill made it permanent, on 18 of 19 estate branches, so the command that
+   * exists to CLOSE protection gaps re-opened this one every time it ran —
+   * including over a branch somebody had just bound by hand.
+   *
+   * "Indistinguishable from scaffold time" was the right rule when every field
+   * was a steady-state policy. It is the wrong rule for a field that is
+   * deliberately temporary at scaffold time, and following it anyway is how the
+   * estate ran with advisory protection for weeks.
    */
-  it('matches what configureBranchProtection applies at scaffold time', () => {
+  it('matches scaffold-time policy except enforce_admins, which it binds', () => {
     const params = protectionParamsFor(['CI'])
     expect(params).toEqual({
       required_status_checks: { strict: true, contexts: ['CI'] },
-      enforce_admins: false,
+      enforce_admins: true,
       required_pull_request_reviews: {
         required_approving_review_count: 0,
         dismiss_stale_reviews: false,
@@ -118,6 +129,40 @@ describe('protectionParamsFor', () => {
       return params
     }
     expect(withoutChecks(['CI'], { strict: false })).toEqual(withoutChecks(['CI']))
+  })
+
+  /**
+   * The defect, stated as a property: a backfill must never be the reason a
+   * branch stops binding its admins. It was, on every run, for every repo.
+   */
+  it('binds admins by default, so a backfill cannot re-open the bypass', () => {
+    expect(protectionParamsFor(['CI']).enforce_admins).toBe(true)
+    expect(protectionParamsFor(['CI'], { strict: false }).enforce_admins).toBe(true)
+  })
+
+  it('can preserve a deliberately unbound branch (#1052)', () => {
+    // Same split as strict: an absent protection gets the full policy, but a
+    // branch somebody has deliberately unbound keeps that rather than being
+    // silently re-bound while the command claims to be backfilling a gap.
+    expect(protectionParamsFor(['CI'], { enforceAdmins: false }).enforce_admins).toBe(false)
+  })
+
+  it('changes nothing else when enforce_admins is relaxed', () => {
+    const withoutAdmins = (options?: { strict?: boolean; enforceAdmins?: boolean }) => {
+      const params: Record<string, unknown> = { ...protectionParamsFor(['CI'], options) }
+      delete params.enforce_admins
+      return params
+    }
+    expect(withoutAdmins({ enforceAdmins: false })).toEqual(withoutAdmins())
+  })
+
+  it('carries strict and enforce_admins independently', () => {
+    // They are separate decisions. Passing one must not move the other -- the
+    // exact coupling that made `enforce_admins` invisible was it riding along
+    // with settings nobody was inspecting.
+    const params = protectionParamsFor(['CI'], { strict: false, enforceAdmins: true })
+    expect(params.required_status_checks.strict).toBe(false)
+    expect(params.enforce_admins).toBe(true)
   })
 })
 

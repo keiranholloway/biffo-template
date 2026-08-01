@@ -109,6 +109,8 @@ export async function runBranchProtectionCheck(
   const audited: string[] = []
   /** Branch → the `strict` already in force, for branches that ARE protected (#808). */
   const observedStrict = new Map<string, boolean>()
+  /** Branch → the `enforce_admins` already in force, same reasoning (#1052). */
+  const observedEnforceAdmins = new Map<string, boolean>()
 
   for (const branch of BRANCHES) {
     // Skip branches this repo does not have, rather than reporting them.
@@ -127,6 +129,7 @@ export async function runBranchProtectionCheck(
       // Absent protection leaves this unset, which is what makes the backfill
       // still apply the full policy.
       observedStrict.set(branch, data.required_status_checks?.strict ?? false)
+      observedEnforceAdmins.set(branch, data.enforce_admins?.enabled ?? false)
     } catch (err) {
       // 404 here means "branch exists, protection does not" — the state the
       // 403 skip leaves behind, and the whole reason this guard exists.
@@ -167,7 +170,8 @@ export async function runBranchProtectionCheck(
     console.log(formatPlans(plans))
 
     let applied = 0
-    let preserved = 0
+    let preservedStrict = 0
+    let preservedAdmins = 0
     for (const plan of plans.filter((p) => p.action === 'apply')) {
       // Preserve a `strict: false` that is ALREADY in force (#808). An absent
       // protection leaves `observedStrict` unset and gets the full policy, which
@@ -177,17 +181,30 @@ export async function runBranchProtectionCheck(
       const existing = observedStrict.get(plan.branch)
       const strict = existing ?? true
       if (existing === false) {
-        preserved += 1
+        preservedStrict += 1
         console.log(
           `  ${plan.branch}: keeping strict=false — already set on this branch, so it is a\n` +
             '      decision rather than a gap. Change it deliberately with `gh api`, not here.',
+        )
+      }
+      // Same split for enforce_admins (#1052). Absent protection gets the full
+      // policy, which now BINDS — this function used to write `false` here and
+      // re-open the bypass over a branch somebody had just bound by hand.
+      const existingAdmins = observedEnforceAdmins.get(plan.branch)
+      const enforceAdmins = existingAdmins ?? true
+      if (existingAdmins === false) {
+        preservedAdmins += 1
+        console.log(
+          `  ${plan.branch}: keeping enforce_admins=false — already set on this branch, so it\n` +
+            '      is a decision rather than a gap. Note that protection which does not bind an\n' +
+            '      admin is advisory for whoever merges; scripts/protection-audit.sh fails on it.',
         )
       }
       await octokit.repos.updateBranchProtection({
         owner,
         repo,
         branch: plan.branch,
-        ...protectionParamsFor(plan.contexts, { strict }),
+        ...protectionParamsFor(plan.contexts, { strict, enforceAdmins }),
       })
       applied += 1
     }
@@ -203,7 +220,10 @@ export async function runBranchProtectionCheck(
 
     console.log(
       `\n✓ protection applied to ${applied} branch(es)` +
-        (preserved > 0 ? `, ${preserved} keeping an existing strict=false` : '') +
+        (preservedStrict > 0 ? `, ${preservedStrict} keeping an existing strict=false` : '') +
+        (preservedAdmins > 0
+          ? `, ${preservedAdmins} keeping an existing enforce_admins=false`
+          : '') +
         '. Re-run without --fix to verify.',
     )
     return

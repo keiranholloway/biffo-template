@@ -31,7 +31,36 @@ interface Run {
   status: number
 }
 
-function runIn(files: Record<string, string>): Run {
+/**
+ * A PATH carrying only what `verify.sh` itself needs to run — `sh`, `git` and
+ * the coreutils it shells out to — and none of the OPTIONAL tools it probes for.
+ *
+ * Without this the suite asserts a property that holds only where a tool is
+ * ABSENT, so its verdict depends on the machine. `gitleaks` is the one that
+ * bit: it is not installed on the CI runner, so `verify.sh` skips it, `PASSED`
+ * stays empty and the "ran NOTHING" branch prints. On a workstation that HAS
+ * gitleaks the check runs, passes, and that branch becomes unreachable — the
+ * test fails locally and passes in CI, for no reason connected to the change
+ * under test.
+ *
+ * That cost real time and, worse, real trust: it was diagnosed as a red `dev`,
+ * blamed on an innocent PR, and led to a docs PR being pushed with
+ * `--no-verify`. A local gate people learn to bypass is the counter-metric H4
+ * pre-registered as refuting itself, so a flaky local-only failure is
+ * expensive out of proportion to the test it lives in.
+ *
+ * `/usr/bin` and `/bin` are kept because `verify.sh` is a shell script; the
+ * point is to exclude `~/.local/bin` and friends, where the optional tools land.
+ */
+const MINIMAL_PATH = '/usr/bin:/bin'
+
+/**
+ * @param files fixture contents, repo-relative
+ * @param withoutOptionalTools pin PATH so `verify.sh` finds none of the tools
+ *   it merely PROBES for. Required by any assertion about the "ran NOTHING"
+ *   branch, and wrong for assertions that need a check to actually run.
+ */
+function runIn(files: Record<string, string>, withoutOptionalTools = false): Run {
   const dir = mkdtempSync(join(tmpdir(), 'biffo-verify-'))
   try {
     execFileSync('git', ['init', '-q'], { cwd: dir })
@@ -40,7 +69,12 @@ function runIn(files: Record<string, string>): Run {
       mkdirSync(dirname(full), { recursive: true })
       writeFileSync(full, body)
     }
-    const opts: ExecFileSyncOptions = { cwd: dir, encoding: 'utf8', stdio: 'pipe' }
+    const opts: ExecFileSyncOptions = {
+      cwd: dir,
+      encoding: 'utf8',
+      stdio: 'pipe',
+      env: withoutOptionalTools ? { ...process.env, PATH: MINIMAL_PATH } : process.env,
+    }
     try {
       return { stdout: String(execFileSync('sh', [SCRIPT], opts)), status: 0 }
     } catch (err) {
@@ -81,7 +115,9 @@ describe('verify.sh tells you WHICH question it answered', () => {
 
 describe('verify.sh keeps the two ran-NOTHING cases distinct', () => {
   it('a repo with CI that mirrored nothing BLOCKS — the #855 bug', () => {
-    const run = runIn({ '.github/workflows/ci.yml': CI_YML })
+    // Optional tools pinned out: this asserts the "ran NOTHING" branch, which
+    // any tool that happens to be installed would make unreachable.
+    const run = runIn({ '.github/workflows/ci.yml': CI_YML }, true)
 
     expect(run.stdout).toContain('verify ran NOTHING')
     expect(run.stdout).toContain('This repo HAS CI')
@@ -91,7 +127,7 @@ describe('verify.sh keeps the two ran-NOTHING cases distinct', () => {
   it('a repo with no CI at all says so loudly and does NOT block', () => {
     // Blocking here is friction with no benefit, and friction is what drives
     // BIFFO_SKIP_VERIFY — a counter-metric H4 pre-registered as refuting itself.
-    const run = runIn({})
+    const run = runIn({}, true)
 
     expect(run.stdout).toContain('verify ran NOTHING')
     expect(run.stdout).toContain('no CI for the gate to mirror')

@@ -234,24 +234,51 @@ export function isUpgradePr(pr) {
 }
 
 /**
- * Template PR numbers an instance's upgrade PR carries (#767).
+ * Extracts the marker's PR list from one piece of text. Shared by the PR body
+ * and commit-message paths in {@link parseCarriedPrs} — same regex, same
+ * validation, so the two can never quietly diverge.
  *
- * Returns `[]` for any body without the marker, which is every PR except an
- * upgrade — and every upgrade opened before the marker shipped. That is a
- * *coverage* fact, not an error: the metric simply has nothing to say about
- * those, and says nothing rather than guessing.
- *
- * @param {string | null | undefined} body
+ * @param {string | null | undefined} text
  */
-export function parseCarriedPrs(body) {
-  if (typeof body !== 'string') return []
-  const match = new RegExp(`${CARRIED_PRS_MARKER}([0-9,]+)`).exec(body)
+function extractCarriedPrs(text) {
+  if (typeof text !== 'string') return []
+  const match = new RegExp(`${CARRIED_PRS_MARKER}([0-9,]+)`).exec(text)
   if (!match?.[1]) return []
   const numbers = match[1]
     .split(',')
     .map((n) => Number(n.trim()))
     .filter((n) => Number.isInteger(n) && n > 0)
   return [...new Set(numbers)].sort((a, b) => a - b)
+}
+
+/**
+ * Template PR numbers an instance's upgrade PR carries (#767).
+ *
+ * Reads the marker from the PR body — where `biffo core upgrade` has always
+ * put it — or, failing that, from any of the PR's commit messages (#1011).
+ * `--apply` writes the same marker into the upgrade commit before the push
+ * step that can fail and abort the run before a PR ever gets opened. When the
+ * operator then pushes and opens the PR by hand, the body never gets written,
+ * but the commit — and its marker — survived. Checking commits is a pure
+ * fallback: a tool-created PR always matches on the body first and never
+ * touches this path.
+ *
+ * Returns `[]` when neither place has the marker, which is every PR except an
+ * upgrade — and every upgrade opened before the marker shipped. That is a
+ * *coverage* fact, not an error: the metric simply has nothing to say about
+ * those, and says nothing rather than guessing.
+ *
+ * @param {string | null | undefined} body
+ * @param {Array<{messageBody?: string, messageHeadline?: string}> | null | undefined} [commits]
+ */
+export function parseCarriedPrs(body, commits) {
+  const fromBody = extractCarriedPrs(body)
+  if (fromBody.length > 0) return fromBody
+  for (const commit of commits ?? []) {
+    const fromCommit = extractCarriedPrs(commit?.messageBody ?? commit?.messageHeadline)
+    if (fromCommit.length > 0) return fromCommit
+  }
+  return []
 }
 
 /**
@@ -306,7 +333,7 @@ export function indexClosingIssues(templateSlug, templatePrs) {
  * A zero that means "I could not see the input" must never be reported as a zero
  * that means "I looked and there was nothing".
  *
- * @param {Array<Record<string, any>>} instancePrs merged, with `body`
+ * @param {Array<Record<string, any>>} instancePrs merged, with `body` and `commits`
  * @param {Map<number, string[]>} closingIssues template PR → issue keys
  * @param {Map<string, string>} issueOpenedAt issue key → ISO createdAt
  * @param {Array<{startedAt: number, finishedAt: number}>} deploys instance deploys
@@ -325,7 +352,7 @@ export function crossRepoTimeToFeature(instancePrs, closingIssues, issueOpenedAt
     // upgrade, and counting one as such is how the template reported carrying
     // its own PRs on the first real run.
     if (!isUpgradePr(pr)) continue
-    const carried = parseCarriedPrs(pr.body)
+    const carried = parseCarriedPrs(pr.body, pr.commits)
     if (carried.length === 0) continue
     upgradePrs += 1
     carriedPrs += carried.length
@@ -1884,12 +1911,16 @@ function fetchPrs(slug, since) {
     // extra: it rides along on a fetch that already happens. The alternative —
     // one timeline API call per closed issue — is O(issues) requests for the
     // same answer.
-    // `body` carries the core-upgrade marker (#767). Same request, one more field.
+    // `body` carries the core-upgrade marker (#767) when the PR was opened by
+    // the tool. `commits` is the fallback: a hand-created PR (the push step
+    // failed before the tool could open one) never gets a body, but the
+    // upgrade commit — made before that failed push — still carries the same
+    // marker in its message, and `commits` is how it survives the fetch (#1011).
     // `reviews` rides along too (#952). Review coverage is otherwise unknowable:
     // nothing anywhere records whether a merged change was read by a second
     // pass, so "do we review?" had no answer but memory — and memory said yes
     // while a session shipping ~20 PRs reviewed almost none of them.
-    'number,title,createdAt,mergedAt,headRefName,baseRefName,closingIssuesReferences,body,reviews',
+    'number,title,createdAt,mergedAt,headRefName,baseRefName,closingIssuesReferences,body,commits,reviews',
   ])
   return prs.filter((pr) => pr.mergedAt >= since)
 }

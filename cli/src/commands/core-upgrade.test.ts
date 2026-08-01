@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -125,6 +126,39 @@ describe('runCoreUpgrade --apply', () => {
       }),
     )
     expect(log.success).toHaveBeenCalledWith(expect.stringContaining('pull/7'))
+  })
+
+  it('embeds the carried-PR marker in the COMMIT message, not only the PR body (#1011)', async () => {
+    // `--apply` can commit and then fail at the push step (e.g. an SSH remote
+    // with no write access), aborting before the PR is ever opened. The
+    // operator then pushes and opens the PR by hand, and a hand-made PR never
+    // gets the marker `buildPrBody` writes into the PR body. The commit made
+    // here, before that failing push, is the one place guaranteed to survive —
+    // so it must carry the same marker.
+    const { deps, git } = fakeDeps()
+
+    // Give `theirs` real template history to read: two tags with one squash
+    // commit between them, the shape `readCarriedPrs` parses.
+    execFileSync('git', ['init'], { cwd: theirs })
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: theirs })
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: theirs })
+    execFileSync('git', ['add', '-A'], { cwd: theirs })
+    execFileSync('git', ['commit', '-m', 'chore: base'], { cwd: theirs })
+    execFileSync('git', ['tag', 'core-v0.1.0'], { cwd: theirs })
+    w(theirs, 'services/api/note.py', 'note')
+    execFileSync('git', ['add', '-A'], { cwd: theirs })
+    execFileSync('git', ['commit', '-m', 'feat(api): add a note (#42)'], { cwd: theirs })
+    execFileSync('git', ['tag', 'core-v0.2.0'], { cwd: theirs })
+
+    await runCoreUpgrade(
+      { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs, apply: true },
+      deps,
+    )
+
+    expect(git.commit).toHaveBeenCalledWith(
+      instance,
+      expect.stringContaining('<!-- biffo:carries-template-prs:42 -->'),
+    )
   })
 
   it('honors an explicit --base over the repo default', async () => {

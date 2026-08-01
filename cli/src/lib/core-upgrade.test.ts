@@ -447,6 +447,7 @@ describe('upgradeBranchName', () => {
 
 import {
   CARRIED_PRS_MARKER,
+  buildCommitMessage,
   carriedPrNumbers,
   carriedPrsSection,
 } from '../commands/core-upgrade.js'
@@ -481,6 +482,33 @@ describe('carried template PRs (#767)', () => {
     // An upgrade that cannot read the template history must add no noise, and
     // must not emit an empty marker that a parser would read as "carried none".
     expect(carriedPrsSection([])).toEqual([])
+  })
+})
+
+describe('buildCommitMessage carries the same marker as the PR body (#1011)', () => {
+  it('embeds the marker in the commit message when PRs were carried', () => {
+    const message = buildCommitMessage('0.152.0', '0.155.0', [750, 746])
+    expect(message).toContain(`<!-- ${CARRIED_PRS_MARKER}746,750 -->`)
+  })
+
+  it('keeps the subject as the first line, blank line, then the marker', () => {
+    // `--apply` can commit and then fail at the push step, aborting before the
+    // PR is ever opened (#1011). This commit is made first, so a hand-created
+    // PR from it still carries the marker only if it survives being embedded
+    // in the message itself — not appended after it in some form a hand-made
+    // PR wouldn't reproduce.
+    const message = buildCommitMessage('0.1.0', '0.2.0', [5])
+    expect(message.split('\n')).toEqual([
+      'chore(core): upgrade template core 0.1.0 -> 0.2.0',
+      '',
+      `<!-- ${CARRIED_PRS_MARKER}5 -->`,
+    ])
+  })
+
+  it('adds no marker at all when nothing was carried', () => {
+    const message = buildCommitMessage('0.1.0', '0.2.0', [])
+    expect(message).toBe('chore(core): upgrade template core 0.1.0 -> 0.2.0')
+    expect(message).not.toContain(CARRIED_PRS_MARKER)
   })
 })
 

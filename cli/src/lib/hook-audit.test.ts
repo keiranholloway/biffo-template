@@ -110,8 +110,16 @@ describe('protection-audit', () => {
   )
 
   it('believes the exit status, not the text gh printed', () => {
+    // Was `expect(script).toMatch(/\[ "\$rc" -ne 0 \] && n=""/)`. That literal
+    // broke when the fetch was legitimately refactored to read enforce_admins in
+    // the same call -- the guard fired on its own subject being improved, which
+    // is the failure mode of asserting on source text instead of behaviour.
+    //
+    // The exit status must still be consulted, so that much is kept. What the
+    // status is USED for is now proved by running the script against a `gh` that
+    // exits non-zero while printing 404 JSON to stdout, in
+    // protection-audit.test.ts -> "believes the exit status, not the 404 JSON".
     expect(script).toMatch(/rc=\$\?/)
-    expect(script).toMatch(/\[ "\$rc" -ne 0 \] && n=""/)
   })
 
   it('rejects a non-numeric response rather than treating it as a count', () => {

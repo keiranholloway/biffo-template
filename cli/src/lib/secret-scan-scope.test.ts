@@ -69,3 +69,61 @@ describe.each(WORKFLOWS)('Secret Scan scope — %s', (workflow) => {
     for (const line of invocations) expect(line).toContain('--exit-code=2')
   })
 })
+
+/**
+ * The filesystem pass walks the working DIRECTORY, not the index, so it reads
+ * files git never sees.
+ *
+ * `.terraform/` is gitignored in every Biffo repo but a real `terraform.tfstate`
+ * lives there once anyone runs `terraform init`/`apply`, carrying the real AWS
+ * account id — which `biffo-aws-account-id` (`\b\d{12}\b`) matches correctly.
+ * In CI that is invisible (a fresh checkout has no `.terraform/`); on a
+ * workstation it failed `verify.sh` every run, for a file the developer is not
+ * pushing and cannot remove.
+ *
+ * A gate that fails on something unfixable and unrelated to the change is how
+ * `BIFFO_SKIP_VERIFY` gets set, and its usage rate is the H4 counter-metric
+ * pre-registered as refuting the shift-left hypothesis. Surfaced the day
+ * gitleaks was first installed locally across the estate; this template had
+ * escaped it only because nobody had applied Terraform from this checkout.
+ *
+ * Asserted on the config's SHAPE rather than by running gitleaks: the JS test
+ * job does not install it (only the Secret Scan job does), so a behavioural
+ * assertion here would pass or fail depending on the machine — the exact trap
+ * `verify-no-ci.test.ts` already documents.
+ */
+describe('gitleaks filesystem pass ignores gitignored local state', () => {
+  const config = readFileSync(join(repoRoot, '.gitleaks.toml'), 'utf8')
+
+  it('allowlists .terraform/', () => {
+    expect(config).toContain('".terraform/"')
+  })
+
+  it('keeps the account-id rule itself intact', () => {
+    // The allowlist narrows WHERE the rule looks. If it ever narrows WHAT it
+    // matches, this is a suppression rather than a scope correction — the
+    // distinction AGENTS.md §7 turns on.
+    expect(config).toContain("regex = '''\\b\\d{12}\\b'''")
+  })
+
+  it('allowlists no account id beyond the three with a written justification', () => {
+    // Adding a literal 12-digit value to the allowlist is how a real finding
+    // gets made to pass, which §7 forbids outright. Pinning the count means a
+    // fourth cannot arrive without this test failing and someone reading why.
+    //
+    // The three are: two canonical placeholders used by fixtures, and fck-nat's
+    // PUBLIC vendor account id — an `aws_ami` data source filters by `owners`,
+    // so the publisher's id must appear literally. That one is published in
+    // fck-nat's own docs and is identical in every deployment worldwide; it is
+    // a bare-heuristic carve-out, not a secret.
+    //
+    // Written first as "exactly two" on the assumption that placeholders were
+    // all there could be. The third was already there, correctly, with its
+    // reasoning in the config — a reminder to read the file before asserting
+    // what it ought to contain.
+    expect(config).toContain('"123456789012"')
+    expect(config).toContain('"999999999999"')
+    expect(config).toContain('"568608671756"')
+    expect(config.match(/"\d{12}"/g)).toHaveLength(3)
+  })
+})

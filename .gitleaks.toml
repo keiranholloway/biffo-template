@@ -56,6 +56,27 @@ paths = [
   "docs/",
   ".github/",
   "scripts/setup-oidc.sh",
+  # Local Terraform state, and it is a SCOPE correction rather than a
+  # suppression -- the distinction AGENTS.md §7 turns on when it says never to
+  # fix a scan failure by editing the allowlist.
+  #
+  # `.terraform/` is gitignored in every Biffo repo, so nothing here can ever be
+  # committed and the history pass could not see it either way. What CAN be here
+  # is a real `terraform.tfstate` containing the real AWS account id, which the
+  # `biffo-aws-account-id` rule (`\b\d{12}\b`) matches correctly.
+  #
+  # The filesystem pass (`--no-git`) walks the working directory rather than the
+  # index, so it reads that state. In CI that is invisible: a fresh checkout has
+  # no `.terraform/`. On a workstation that has ever run `terraform init` it
+  # fails every single time, for a file the developer cannot remove and is not
+  # pushing. This template escaped it only by luck -- it carries provider
+  # plugins but no state, because nobody has applied from this checkout.
+  #
+  # A gate that fails on something unfixable and unrelated to the change is how
+  # `BIFFO_SKIP_VERIFY` gets set, and its usage rate is an H4 counter-metric
+  # pre-registered as refuting the whole shift-left hypothesis. Surfaced the day
+  # gitleaks was first installed locally across the estate.
+  ".terraform/",
 ]
 regexes = [
   "EXAMPLE",

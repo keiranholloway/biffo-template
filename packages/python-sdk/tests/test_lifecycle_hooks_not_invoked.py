@@ -77,6 +77,12 @@ _SKIP_DIRS = {
     ".git",
     ".venv",
     ".worktrees",
+    # Bare basename, not just ".worktrees": agent checkouts land in a
+    # "worktrees" subdirectory of a tool's own hidden config dir —
+    # ".claude/worktrees", ".codex/worktrees", etc. — and this walk matches
+    # by directory name only, so one entry covers all of them regardless of
+    # which hidden dotted directory holds it (biffo-template#1062).
+    "worktrees",
     "node_modules",
     "dist",
     "build",

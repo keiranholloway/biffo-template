@@ -59,9 +59,8 @@ export const DEFAULT_WINDOWS = [1, 7, 90]
  * from git rather than paying one API call per pull request. A repo with no
  * local clone still gets every other metric; its rework rate reports `null`.
  *
- * `biffo-template-fresh` is deliberately absent: it is a second checkout of
- * `keiranholloway/biffo-template`, and counting it would double every
- * template row.
+ * This list is explicit rather than derived from what happens to be on disk:
+ * a second checkout of a repo already here would double every one of its rows.
  */
 export const REPOS = [
   { slug: 'keiranholloway/biffo-template', path: 'biffo-template', role: 'template', side: 'platform' },

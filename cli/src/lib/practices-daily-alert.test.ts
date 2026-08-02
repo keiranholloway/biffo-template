@@ -16,7 +16,15 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -42,12 +50,45 @@ beforeAll(() => {
 interface Result {
   page: string
   strays: number
+  /** One entry per `notify-send` the run actually invoked, argv joined. */
+  notifications: string[]
+}
+
+/**
+ * A fake `notify-send`, first on PATH.
+ *
+ * This is the whole reason the file was revised. These tests used to blank
+ * `DBUS_SESSION_BUS_ADDRESS` to "simulate cron" and then call the real binary —
+ * but an empty bus address is exactly the case `_notify` reconstructs from
+ * /run/user/<uid>/bus, so on any developer workstation the suite fired eight
+ * genuine `-u critical` desktop notifications per run, none of which expire.
+ * A day of `pnpm test` buried the machine, and the alert people then learned to
+ * dismiss was the same one a real 04:30 outage would use.
+ *
+ * Stubbing also turns the notification from an invisible side effect into an
+ * assertable one, which is what lets the replace-don't-stack test below exist.
+ * It emulates the two libnotify flags `_notify` depends on: `--print-id` writes
+ * an id to stdout, and `--replace-id` is recorded so a test can prove the second
+ * alert reuses the first one's id rather than opening another card.
+ */
+const STUB_ID = '4242'
+function installNotifyStub(dir: string): { bin: string; log: string } {
+  const bin = join(dir, 'bin')
+  mkdirSync(bin, { recursive: true })
+  const log = join(dir, 'notify-calls.log')
+  writeFileSync(
+    join(bin, 'notify-send'),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >>"${log}"\necho ${STUB_ID}\n`,
+    { mode: 0o755 },
+  )
+  return { bin, log }
 }
 
 /** Run `n` aborting "collections" against a throwaway dashboard file. */
 function abortRuns(
   n: number,
   initialPage = '<html><body><h1>Dashboard</h1></body></html>\n',
+  extraEnv: Record<string, string> = {},
 ): Result {
   const dir = mkdtempSync(join(tmpdir(), 'practices-alert-'))
   try {
@@ -55,14 +96,27 @@ function abortRuns(
     writeFileSync(page, initialPage)
     const script = join(dir, 'run.sh')
     writeFileSync(script, `${harness}false\n`)
+    const { bin, log } = installNotifyStub(dir)
     for (let i = 0; i < n; i++) {
       try {
         execFileSync('bash', [script], {
           cwd: dir,
           stdio: 'pipe',
-          // No session bus: this is what cron looks like, and the notify path
-          // must degrade to nothing rather than taking the trap down with it.
-          env: { ...process.env, PRACTICES_PAGE: page, DBUS_SESSION_BUS_ADDRESS: '' },
+          env: {
+            ...process.env,
+            PRACTICES_PAGE: page,
+            PATH: `${bin}:${process.env.PATH ?? ''}`,
+            // Non-empty, so `_notify` takes the inherited-address path and never
+            // probes the real session socket. Blanking it here is what made the
+            // suite spam the developer's desktop; the cron reconstruction is
+            // covered separately, below, without executing it.
+            DBUS_SESSION_BUS_ADDRESS: 'unix:path=/dev/null',
+            // Each run gets its own id file, so "did the second call reuse the
+            // first id?" is a question about this test and not about whatever
+            // the real collector last wrote into the session runtime dir.
+            XDG_RUNTIME_DIR: dir,
+            ...extraEnv,
+          },
         })
       } catch {
         /* the run is meant to fail; the trap is what is under test */
@@ -71,6 +125,7 @@ function abortRuns(
     return {
       page: readFileSync(page, 'utf8'),
       strays: readdirSync(dir).filter((f) => f.includes('.tmp.')).length,
+      notifications: existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : [],
     }
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -108,6 +163,7 @@ describe('a failed collection marks the dashboard stale', () => {
     try {
       const script = join(dir, 'run.sh')
       writeFileSync(script, `${harness}false\n`)
+      const { bin } = installNotifyStub(dir)
       let stderr = ''
       try {
         execFileSync('bash', [script], {
@@ -116,7 +172,9 @@ describe('a failed collection marks the dashboard stale', () => {
           env: {
             ...process.env,
             PRACTICES_PAGE: join(dir, 'absent.html'),
-            DBUS_SESSION_BUS_ADDRESS: '',
+            PATH: `${bin}:${process.env.PATH ?? ''}`,
+            DBUS_SESSION_BUS_ADDRESS: 'unix:path=/dev/null',
+            XDG_RUNTIME_DIR: dir,
           },
         })
       } catch (err) {
@@ -126,6 +184,93 @@ describe('a failed collection marks the dashboard stale', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('the alert interrupts once, not once per failure', () => {
+  it('replaces the previous card instead of stacking a new one', () => {
+    // `-u critical` never auto-expires in GNOME. Without --replace-id, three
+    // dark days leave three identical permanent cards, and the pile is what
+    // trains someone to dismiss the alert that actually matters.
+    const { notifications } = abortRuns(3)
+
+    expect(notifications).toHaveLength(3)
+    // First run has no id on file yet, so it opens a card...
+    expect(notifications[0]).toContain('-r 0')
+    // ...and every later one reuses the id the stub handed back.
+    expect(notifications[1]).toContain(`-r ${STUB_ID}`)
+    expect(notifications[2]).toContain(`-r ${STUB_ID}`)
+  })
+
+  it('still asks for --print-id so there is an id to reuse', () => {
+    expect(abortRuns(1).notifications[0]).toContain('-p')
+  })
+
+  it('keeps alerting when libnotify is too old for those flags', () => {
+    // Fail-open: a notification that stacks is worth more than one that never
+    // appears. This is the shape of the bug the function's own comment records
+    // -- a guard that reads as coverage and silently suppresses the alert.
+    const dir = mkdtempSync(join(tmpdir(), 'practices-alert-'))
+    try {
+      const page = join(dir, 'dashboard.html')
+      writeFileSync(page, '<html><body><h1>Dashboard</h1></body></html>\n')
+      const script = join(dir, 'run.sh')
+      writeFileSync(script, `${harness}false\n`)
+      const bin = join(dir, 'bin')
+      mkdirSync(bin, { recursive: true })
+      const log = join(dir, 'legacy.log')
+      // Rejects -p/-r the way a pre-0.7.7 notify-send does, accepts the plain form.
+      writeFileSync(
+        join(bin, 'notify-send'),
+        `#!/bin/sh\ncase "$*" in *-p*) exit 1 ;; esac\nprintf '%s\\n' "$*" >>"${log}"\n`,
+        { mode: 0o755 },
+      )
+      try {
+        execFileSync('bash', [script], {
+          cwd: dir,
+          stdio: 'pipe',
+          env: {
+            ...process.env,
+            PRACTICES_PAGE: page,
+            PATH: `${bin}:${process.env.PATH ?? ''}`,
+            DBUS_SESSION_BUS_ADDRESS: 'unix:path=/dev/null',
+            XDG_RUNTIME_DIR: dir,
+          },
+        })
+      } catch {
+        /* the run is meant to fail */
+      }
+      expect(existsSync(log)).toBe(true)
+      expect(readFileSync(log, 'utf8')).toContain('Practices collection FAILED')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('a driven run can decline to alert a human', () => {
+  it('sends nothing when PRACTICES_NO_DESKTOP_ALERT is set', () => {
+    const { notifications } = abortRuns(3, undefined, { PRACTICES_NO_DESKTOP_ALERT: '1' })
+
+    expect(notifications).toEqual([])
+  })
+
+  it('still stamps the dashboard when the desktop alert is suppressed', () => {
+    // Suppression must silence the interruption, never the record. The banner
+    // is the artefact people actually look at; muting it would restore the
+    // silent-stale-numbers failure this whole file exists to prevent.
+    const { page } = abortRuns(1, undefined, { PRACTICES_NO_DESKTOP_ALERT: '1' })
+
+    expect(page).toContain('COLLECTION FAILED')
+    expect(page).toContain('STALE')
+  })
+
+  it('does not suppress on an empty value, which is how cron looks', () => {
+    // `env -u` and an unset variable both arrive as ''. Treating that as "be
+    // quiet" would silently disarm the 04:30 alert.
+    const { notifications } = abortRuns(1, undefined, { PRACTICES_NO_DESKTOP_ALERT: '' })
+
+    expect(notifications).toHaveLength(1)
   })
 })
 

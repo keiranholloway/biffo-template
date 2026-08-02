@@ -314,10 +314,11 @@ def _may_write_target(caller: AuthenticatedUser, target: WriteBackTarget) -> boo
     could never write is refused on save rather than hours later on a completion.
 
     Platform admins and the Cognito ``admin`` group pass, consistent with every
-    other gate in this router and with ADR-0010's platform short-circuit — and
-    harmlessly, because this is only the *authoring* check: the write itself
-    still runs under the instance's row policies as the stored author, so an
-    admin gets exactly what an admin would get by hand.
+    other gate in this router: a platform admin short-circuits every
+    authorization check this deployment defines — and harmlessly, because this
+    is only the *authoring* check: the write itself still runs under the
+    instance's row policies as the stored author, so an admin gets exactly
+    what an admin would get by hand.
     """
     if caller.is_platform_admin or ADMIN_GROUP in caller.roles:
         return True

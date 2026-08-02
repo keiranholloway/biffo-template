@@ -5,10 +5,10 @@ import { ADMIN_GROUP } from '@/lib/cognito-groups'
 
 /**
  * Every route in this subtree is an infrastructure console: microservices,
- * plugins, endpoints, users, workflows, agent runs. ADR-0100 is explicit that
- * /admin/ is the wrong destination for anyone who is not an administrator, so
- * the requirement is declared once here rather than per page — a new page
- * dropped under /admin/ inherits it and cannot forget to ask (#1104).
+ * plugins, endpoints, users, workflows, agent runs. Only Cognito ``admin``
+ * group members belong here, so the requirement is declared once here rather
+ * than per page — a new page dropped under /admin/ inherits it and cannot
+ * forget to ask (#1104).
  */
 export default function AdminLayout({ children }: { children: ReactNode }) {
   return (

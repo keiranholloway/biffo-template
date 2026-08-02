@@ -132,6 +132,18 @@ describe('verify.sh reports a lane it cannot run as a GAP, not as inapplicable',
   it('names the variable that fixes it', () => {
     expect(runIn(withLane).stdout).toContain('BIFFO_TEST_PG_DSN')
   })
+
+  it('warns even on a machine with no uv, which is what CI runners are', () => {
+    // Pins the ordering. The first version checked `uv not installed` BEFORE the
+    // DSN, so a runner without uv skipped quietly and the gap warning never
+    // printed: these tests passed on a workstation and failed in CI, for a
+    // reason unconnected to the change under test. `uv` is needed to RUN the
+    // lane, not to know the repo has one and nothing is checking it.
+    const run = runIn(withLane, { PATH: '/usr/bin:/bin' })
+
+    expect(run.stdout).toContain('NOT RUN')
+    expect(run.stdout).not.toContain('uv not installed')
+  })
 })
 
 describe('verify.sh ignores nested checkouts when counting the lane', () => {

@@ -478,10 +478,15 @@ pg_test_run() {
 }
 
 _pg_modules=$(pg_test_modules)
+# Order matters, and getting it wrong made these very tests machine-dependent:
+# with `uv not installed` checked FIRST, a runner without uv skipped quietly and
+# the gap warning never printed -- green on a workstation, red on CI, for a
+# reason unconnected to the change. "This repo has a lane and nothing local is
+# checking it" is true whether or not uv is installed, and it is the more
+# actionable of the two, so it is reported first. `uv` is only required to
+# actually RUN the lane.
 if [ -z "$_pg_modules" ]; then
   skip pg-test "no Postgres-dependent tests (test_*_pg.py) in this repo"
-elif ! command -v uv >/dev/null 2>&1; then
-  skip pg-test "uv not installed"
 elif [ -z "$PG_TEST_DSN" ]; then
   # NOT a quiet `--`. Every other skip in this file means "this repo does not
   # have the thing"; this one means "this repo HAS the thing and the gate is
@@ -498,6 +503,8 @@ elif [ -z "$PG_TEST_DSN" ]; then
     printf '       \033[90m%s\033[0m\n' \
       "set BIFFO_TEST_PG_DSN, or run scripts/pg-test-db.sh if this repo ships one"
   fi
+elif ! command -v uv >/dev/null 2>&1; then
+  skip pg-test "uv not installed"
 else
   # Run from the uv project that owns the modules, with paths relative to it, so
   # this works wherever a repo keeps its API (root here, services/api in every

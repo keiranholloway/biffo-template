@@ -81,6 +81,11 @@ LIST=""
 FAILED=""
 PASSED=""
 SKIPPED=""
+# Checks that were APPLICABLE and did not run. Kept apart from SKIPPED because
+# the summary must not print "not applicable here: pg-test" about a lane this
+# repo demonstrably has -- absence and blindness reading identically is the
+# defect, not a formatting nit.
+NOT_RUN=""
 # Defined up here, not inside run_check. `run_check` returns EARLY in --list
 # mode, before it would set this -- so `pytest_record "$d" "$LAST_CHECK_SECONDS"`
 # read an unset variable and `set -u` killed the script silently, mid-list.
@@ -404,6 +409,113 @@ else
   skip python "no pyproject.toml anywhere in this repo"
 fi
 
+# Postgres-dependent tests -- the lane a SQLite suite cannot stand in for.
+#
+# Tests that assert on row-level security, real DDL, or anything the app leaves
+# to Postgres only mean something against Postgres. They are selected by the
+# same CONVENTION their CI lane uses -- a module needing real Postgres is named
+# `test_*_pg.py` -- rather than a hand-maintained list, which is a fail-open
+# waiting to happen: add a Postgres test, forget the list, and it skips locally
+# and runs nowhere.
+#
+# Why this is here at all. On 2026-08-02 **9 of 13** locally-catchable failing
+# CI steps across the estate were this lane, every one of them a genuine
+# assertion failure on a feature branch that a local run would have caught. The
+# gate simply did not run it: `verify.sh` had no reference to Postgres in any
+# form, so a required check that costs a full CI round trip had no local
+# counterpart. Measured on tabsii-platform: schema build ~2s, 310 tests ~28s.
+#
+# The budget is deliberately its own, and larger than pytest's. `pytest_is_fast`
+# excludes a suite over 15s because a slow unit suite slows every push for a
+# class of failure the fast checks mostly catch first; this lane is the opposite
+# trade -- it is the ONLY local sight of a required check, and 30s against a
+# ~7-minute CI round trip pays for itself the first time it fires.
+PG_TEST_BUDGET_SECONDS="${BIFFO_VERIFY_PG_BUDGET:-120}"
+PG_TEST_DSN="${BIFFO_TEST_PG_DSN:-${TABSII_TEST_PG_DSN:-}}"
+
+# `.claude/worktrees` is excluded alongside `.worktrees`, and finding out why
+# cost a wrong answer: tabsii-platform reported **66** modules where its CI lane
+# runs 40, because an agent tool keeps its worktrees INSIDE the repo under
+# `.claude/`. A gate that runs a stale nested checkout's copy of a test would
+# fail a push over code that is not being pushed -- and the first such false
+# positive is what teaches people to reach for BIFFO_SKIP_VERIFY.
+pg_test_modules() {
+  find . -name 'test_*_pg.py' \
+    -not -path "*/node_modules/*" -not -path "*/.venv/*" \
+    -not -path "*/.worktrees/*" -not -path "*/.claude/*" -not -path "*/.git/*" 2>/dev/null | sort
+}
+
+# Assert the lane EXERCISED something, not merely that pytest exited 0.
+#
+# Both inputs degrade to empty silently: a DSN pointing at a database whose
+# schema never built makes every module skip, and pytest reports "0 passed" as
+# success. A green gate that ran nothing is the exact shape this whole lane
+# exists to end, so the summary line is asserted rather than trusted -- the same
+# assertions its CI workflow makes, for the same reason.
+pg_test_run() {
+  _out="/tmp/biffo-verify-pg.$$"
+  if ! TABSII_TEST_PG_DSN="$PG_TEST_DSN" BIFFO_TEST_PG_DSN="$PG_TEST_DSN" \
+    timeout "$PG_TEST_BUDGET_SECONDS" uv run --directory "$1" pytest -q $2 >"$_out" 2>&1; then
+    cat "$_out"
+    rm -f "$_out"
+    return 1
+  fi
+  if grep -qiE '[0-9]+ skipped' "$_out"; then
+    echo "A Postgres module reported skips -- the lane exercised nothing."
+    echo "The DSN is set but the database is probably missing its schema."
+    tail -5 "$_out"
+    rm -f "$_out"
+    return 1
+  fi
+  if ! grep -qE '[0-9]+ passed' "$_out"; then
+    echo "No tests passed -- the lane did not run."
+    tail -5 "$_out"
+    rm -f "$_out"
+    return 1
+  fi
+  rm -f "$_out"
+  return 0
+}
+
+_pg_modules=$(pg_test_modules)
+if [ -z "$_pg_modules" ]; then
+  skip pg-test "no Postgres-dependent tests (test_*_pg.py) in this repo"
+elif ! command -v uv >/dev/null 2>&1; then
+  skip pg-test "uv not installed"
+elif [ -z "$PG_TEST_DSN" ]; then
+  # NOT a quiet `--`. Every other skip in this file means "this repo does not
+  # have the thing"; this one means "this repo HAS the thing and the gate is
+  # blind to it", which is the fail-open shape, and printing the two the same
+  # way is how a gap gets read as coverage. It stays a skip rather than a
+  # failure because a push must not be blocked by a database being down -- but
+  # it says so where it cannot be missed, and names the command that fixes it.
+  if [ -z "$LIST" ]; then
+    NOT_RUN="$NOT_RUN pg-test"
+    printf '  \033[33mWARN\033[0m %-16s NOT RUN - %s Postgres module(s) present, no DSN set\n' \
+      "pg-test" "$(echo "$_pg_modules" | wc -l | tr -d ' ')"
+    printf '       \033[33m%s\033[0m\n' \
+      "CI runs these as a required check; nothing local is checking them."
+    printf '       \033[90m%s\033[0m\n' \
+      "set BIFFO_TEST_PG_DSN, or run scripts/pg-test-db.sh if this repo ships one"
+  fi
+else
+  # Run from the uv project that owns the modules, with paths relative to it, so
+  # this works wherever a repo keeps its API (root here, services/api in every
+  # instance and sibling).
+  _pg_dir=$(echo "$_pg_modules" | head -1)
+  while [ "$_pg_dir" != "." ] && [ "$_pg_dir" != "/" ]; do
+    _pg_dir=$(dirname "$_pg_dir")
+    [ -f "$_pg_dir/pyproject.toml" ] && break
+  done
+  if [ ! -f "$_pg_dir/pyproject.toml" ]; then
+    skip pg-test "no pyproject.toml above the Postgres modules"
+  else
+    _pg_rel=$(echo "$_pg_modules" | sed "s|^$_pg_dir/||" | tr '\n' ' ')
+    # shellcheck disable=SC2086
+    run_check pg-test pg_test_run "$_pg_dir" "$_pg_rel"
+  fi
+fi
+
 # Terraform, wherever this repo keeps it: modules/ in the template and
 # instances, infra/ and modules/ in siblings.
 if [ -n "$LIST" ] || command -v terraform >/dev/null 2>&1; then
@@ -602,6 +714,7 @@ if [ -z "$PASSED" ]; then
 fi
 printf '\033[32mverify passed\033[0m -%s\n' "$PASSED"
 [ -n "$SKIPPED" ] && printf '\033[90mnot applicable here:%s\033[0m\n' "$SKIPPED"
+[ -n "$NOT_RUN" ] && printf '\033[33mAPPLICABLE BUT NOT RUN:%s - CI checks this and the gate did not\033[0m\n' "$NOT_RUN"
 # Say which question was answered. Without this, a repo whose ci.yml was deleted
 # prints exactly what a fully-mirrored repo prints (#942).
 [ -n "${NO_CI:-}" ] && printf '\033[33mno ci.yml - nothing to mirror, so every applicable check ran as\nbest-effort. This is NOT evidence that CI requires them. If this repo is\nmeant to have CI, its workflow is missing.\033[0m\n'

@@ -56,8 +56,26 @@ def db_init_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, An
             "database_url",
             f"sqlite+aiosqlite:///{db_path}",
         )
+    # Pin the DDL-import root to an empty directory, so these tests state the
+    # assumption they have always silently relied on: this instance is
+    # SINGLE-phase, its schema is complete once Alembic has run, and so
+    # `_run_db_init` performs the generic-CRUD check itself rather than
+    # deferring it to a DDL import (#1018).
+    #
+    # Pinned rather than left to the ambient default, because the default is
+    # resolved from `settings` at call time and these tests would otherwise
+    # depend on what an earlier test file left behind — which is exactly what
+    # they did: running test_main_ddl_import.py first made three of them fail,
+    # and running them first made all nine pass.
+    empty_imports = tmp_path / "no-imports"
+    empty_imports.mkdir()
+    monkeypatch.setenv("BIFFO_DDL_IMPORT_ROOT", str(empty_imports))
+    if "src.api.config" in sys.modules:
+        monkeypatch.setattr(
+            sys.modules["src.api.config"].settings, "ddl_import_root", str(empty_imports)
+        )
     monkeypatch.chdir(_SERVICES_API_DIR)
-    return {"db_path": db_path}
+    return {"db_path": db_path, "empty_imports": empty_imports}
 
 
 class TestRunDbInitAppliesOnlyCommittedMigrations:
@@ -175,3 +193,54 @@ class TestRunDbInitAppliesOnlyCommittedMigrations:
             "crud_schema": {"checked": 0, "drift": []},
         }
         assert "widgets" not in _table_names(db_init_env["db_path"])
+
+
+class TestCrudSchemaCheckRunsInTheLastSchemaPhase:
+    """Where the generic-CRUD schema check happens, and why it moves (#1018).
+
+    Alembic is not always the whole schema. An ADR-0005 instance creates most
+    of its generic-CRUD tables from `db/imports/<name>/*.sql`, applied by
+    `_run_ddl_import` in a LATER, separate Lambda invocation. Checking at the
+    end of `_run_db_init` therefore compares the models against a deliberately
+    half-built schema, reports every imported table as missing, and fails a
+    deploy that should have passed — which is what happened to
+    tabsii-platform, whose own #499 disabled the check entirely to get deploys
+    moving again.
+    """
+
+    def test_defers_when_the_instance_ships_a_ddl_import(
+        self, db_init_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Patch the discovery function itself rather than the settings it reads.
+        # This suite loads the API under two module identities (`api.*` from
+        # some files, `src.api.*` from others), each with its own `settings`
+        # singleton, so a fixture that patches one of them is a no-op when the
+        # other is the one in play — which made an earlier version of this test
+        # pass alone and fail in the full run. Patching the callee is identity-
+        # agnostic and states exactly what the branch under test depends on.
+        import src.api.ddl_import as ddl_import
+
+        monkeypatch.setattr(ddl_import, "discover_ddl_import_dirs", lambda *_: ["widgets"])
+
+        from src.api.main import _run_db_init
+
+        result = _run_db_init()
+
+        # Deferred, and says so — a deploy log that simply omitted the check
+        # would be indistinguishable from the check silently not running.
+        assert result["crud_schema"] == {"checked": 0, "deferred": "ddl-import"}
+
+    def test_runs_here_when_there_is_no_ddl_import(
+        self, db_init_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The single-phase case, unchanged: Alembic is the whole schema, so
+        this IS the last phase and the check belongs here."""
+        import src.api.ddl_import as ddl_import
+
+        monkeypatch.setattr(ddl_import, "discover_ddl_import_dirs", lambda *_: [])
+
+        from src.api.main import _run_db_init
+
+        result = _run_db_init()
+
+        assert "deferred" not in result["crud_schema"]

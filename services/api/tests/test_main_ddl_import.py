@@ -164,11 +164,20 @@ class TestRunDdlImportSkipsAlreadyApplied:
         result = _run_ddl_import("widgets")
         # app_role: a DDL import can create new schemas/tables, so it re-runs
         # the biffo_app grants afterwards (#253). Postgres-only; a no-op here.
+        #
+        # crud_schema: for a two-phase instance the schema is only complete
+        # once this import has run, so the generic-CRUD check (#1018) happens
+        # here rather than in `_run_db_init`, which defers to it. `checked: 0`
+        # with no `reason` because the template itself ships no product domain,
+        # so no model opts into generic CRUD and the check returns before it
+        # ever looks at the database — an instance with domains sees a real
+        # count here.
         assert result == {
             "ok": True,
             "applied": [],
             "skipped": ["000_widgets.sql"],
             "app_role": {"bootstrapped": False, "reason": "not-postgres"},
+            "crud_schema": {"checked": 0, "drift": []},
         }
 
     def test_changed_already_applied_file_raises_and_halts(

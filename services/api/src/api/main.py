@@ -252,9 +252,32 @@ def _run_db_init() -> dict:
     #
     # Runs after the upgrade, so it sees the schema at head, and fails the
     # deploy rather than letting the first real request 500.
+    #
+    # ...unless this instance builds its schema in TWO phases. Alembic is only
+    # the first: an ADR-0005 instance creates most of its generic-CRUD tables
+    # from `db/imports/<name>/*.sql`, applied by `_run_ddl_import` in a LATER,
+    # separate Lambda invocation. Checking here would then compare the models
+    # against a schema that is deliberately half-built, report every imported
+    # table as missing, and fail the deploy on a schema that is entirely
+    # correct — which is what happened to tabsii-platform, whose own #499
+    # switched the check off altogether to get deploys moving again.
+    #
+    # So the guard runs at the end of whichever phase is LAST. If this instance
+    # ships any DDL import, defer to `_run_ddl_import`; otherwise this is the
+    # last phase and it runs now.
     from .crud_schema_guard import assert_crud_schema_matches
+    from .ddl_import import _configured_ddl_import_root, discover_ddl_import_dirs
 
-    crud_schema = assert_crud_schema_matches()
+    pending_imports = discover_ddl_import_dirs(_configured_ddl_import_root())
+    if pending_imports:
+        logger.info(
+            "CRUD schema check deferred to the DDL import — this instance's "
+            f"schema is not complete until {pending_imports} is applied",
+            extra={"deferred_to": "ddl-import", "imports": pending_imports},
+        )
+        crud_schema: dict = {"checked": 0, "deferred": "ddl-import"}
+    else:
+        crud_schema = assert_crud_schema_matches()
 
     # Create/refresh the least-privilege `biffo_app` role the request path
     # connects as (#253). Runs *after* the upgrade, so the grants cover every
@@ -336,6 +359,20 @@ def _run_ddl_import(directory: str | None) -> dict:
         from .db_app_role import bootstrap_app_role_async
 
         result["app_role"] = await bootstrap_app_role_async()
+
+        # NOW the schema is complete, so this is where the generic-CRUD check
+        # belongs for a two-phase instance (#1018, and see the deferral note in
+        # `_run_db_init`). Alembic ran in the earlier invocation; the `.sql`
+        # files above created the rest. Checking any earlier compares the
+        # models against a half-built schema and fails a deploy that should
+        # have passed.
+        #
+        # It still FAILS the deploy — that is the whole point of the guard, and
+        # the DDL import is the last thing standing between a declared CRUD
+        # surface and a live request that would 500 on it.
+        from .crud_schema_guard import assert_crud_schema_matches_async
+
+        result["crud_schema"] = await assert_crud_schema_matches_async()
         return result
 
     async def _apply_batch(engine: AsyncEngine, session_factory: async_sessionmaker) -> dict:

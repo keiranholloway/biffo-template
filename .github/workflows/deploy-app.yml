@@ -125,14 +125,20 @@ jobs:
       # registry so the static portal can list siblings without a server. Link is
       # /<name> (no trailing slash — CloudFront path routing is exact).
       #
-      # It lives under public/admin/ so it publishes at /admin/siblings.json:
-      # the portal owns the /admin prefix and only that prefix (issue #306), so
-      # a manifest at the root would be served by whatever owns `/` — the
-      # user-application sibling — and the tab would 404.
+      # It lives under public/.well-known/ so it publishes at
+      # /.well-known/siblings.json: the portal owns only the /admin and /login
+      # prefixes (issue #306), so a manifest at the bare root would be served
+      # by whatever owns `/` — the user-application sibling — and the tab
+      # would 404. /.well-known/* is its own CDN behaviour (modules/cloud/aws/
+      # cdn/main.tf), built for the runtime identity document (#403) and
+      # reused here for the same reason: it points at the portal's own S3
+      # origin, is excluded from the SPA rewrite, and gets a short TTL rather
+      # than the portal's normal immutable asset caching, so a sibling
+      # registration change propagates in ~a minute (tabsii-platform#508).
       - name: Generate siblings manifest
         run: |
           SRC=infra/environments/dev/siblings.auto.tfvars.json
-          OUT=apps/portal/public/admin/siblings.json
+          OUT=apps/portal/public/.well-known/siblings.json
           mkdir -p "$(dirname "$OUT")"
           if [ -f "$SRC" ]; then
             jq '{ siblings: [.sibling_origins[] | { name, description: (.description // ""), routes: (.routes // []) }] }' "$SRC" > "$OUT"
@@ -930,14 +936,20 @@ jobs:
       # registry so the static portal can list siblings without a server. Link is
       # /<name> (no trailing slash — CloudFront path routing is exact).
       #
-      # It lives under public/admin/ so it publishes at /admin/siblings.json:
-      # the portal owns the /admin prefix and only that prefix (issue #306), so
-      # a manifest at the root would be served by whatever owns `/` — the
-      # user-application sibling — and the tab would 404.
+      # It lives under public/.well-known/ so it publishes at
+      # /.well-known/siblings.json: the portal owns only the /admin and /login
+      # prefixes (issue #306), so a manifest at the bare root would be served
+      # by whatever owns `/` — the user-application sibling — and the tab
+      # would 404. /.well-known/* is its own CDN behaviour (modules/cloud/aws/
+      # cdn/main.tf), built for the runtime identity document (#403) and
+      # reused here for the same reason: it points at the portal's own S3
+      # origin, is excluded from the SPA rewrite, and gets a short TTL rather
+      # than the portal's normal immutable asset caching, so a sibling
+      # registration change propagates in ~a minute (tabsii-platform#508).
       - name: Generate siblings manifest
         run: |
           SRC=infra/environments/staging/siblings.auto.tfvars.json
-          OUT=apps/portal/public/admin/siblings.json
+          OUT=apps/portal/public/.well-known/siblings.json
           mkdir -p "$(dirname "$OUT")"
           if [ -f "$SRC" ]; then
             jq '{ siblings: [.sibling_origins[] | { name, description: (.description // ""), routes: (.routes // []) }] }' "$SRC" > "$OUT"
@@ -1742,14 +1754,20 @@ jobs:
       # registry so the static portal can list siblings without a server. Link is
       # /<name> (no trailing slash — CloudFront path routing is exact).
       #
-      # It lives under public/admin/ so it publishes at /admin/siblings.json:
-      # the portal owns the /admin prefix and only that prefix (issue #306), so
-      # a manifest at the root would be served by whatever owns `/` — the
-      # user-application sibling — and the tab would 404.
+      # It lives under public/.well-known/ so it publishes at
+      # /.well-known/siblings.json: the portal owns only the /admin and /login
+      # prefixes (issue #306), so a manifest at the bare root would be served
+      # by whatever owns `/` — the user-application sibling — and the tab
+      # would 404. /.well-known/* is its own CDN behaviour (modules/cloud/aws/
+      # cdn/main.tf), built for the runtime identity document (#403) and
+      # reused here for the same reason: it points at the portal's own S3
+      # origin, is excluded from the SPA rewrite, and gets a short TTL rather
+      # than the portal's normal immutable asset caching, so a sibling
+      # registration change propagates in ~a minute (tabsii-platform#508).
       - name: Generate siblings manifest
         run: |
           SRC=infra/environments/prod/siblings.auto.tfvars.json
-          OUT=apps/portal/public/admin/siblings.json
+          OUT=apps/portal/public/.well-known/siblings.json
           mkdir -p "$(dirname "$OUT")"
           if [ -f "$SRC" ]; then
             jq '{ siblings: [.sibling_origins[] | { name, description: (.description // ""), routes: (.routes // []) }] }' "$SRC" > "$OUT"

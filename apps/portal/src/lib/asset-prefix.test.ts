@@ -44,8 +44,15 @@ describe('portal asset prefix', () => {
     expect(() => read('apps/portal/src/app/page.tsx')).toThrow()
   })
 
-  it('serves the siblings manifest from under /admin', () => {
-    expect(SIBLINGS_MANIFEST_PATH.startsWith('/admin/')).toBe(true)
+  it('does not serve the siblings manifest from the bare root', () => {
+    // Not `/admin` any more (tabsii-platform#508 — every sibling depends on
+    // this, not just the portal's own Microservices tab, so it moved to the
+    // neutral /.well-known/* CDN behaviour instead). What still matters for
+    // this drift guard is the same thing #306 always cared about: the manifest
+    // must not resolve to the bare root, which the root sibling's own bucket
+    // answers.
+    expect(SIBLINGS_MANIFEST_PATH).not.toMatch(/^\/[^/]*\.json$/)
+    expect(SIBLINGS_MANIFEST_PATH.startsWith('/.well-known/')).toBe(true)
   })
 })
 

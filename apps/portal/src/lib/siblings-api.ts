@@ -4,10 +4,19 @@
  * `siblings.auto.tfvars.json` (see .github/workflows/deploy-app.yml), so the
  * static portal can render the Microservices tab without a server round-trip.
  *
- * It is served from `/admin/siblings.json`, not the root. The portal owns the
- * `/admin` and `/login` prefixes and nothing else (issue #306) — `/` belongs to
- * the user-application sibling — so a manifest at the root would be answered by
- * a different origin entirely.
+ * It is served from `/.well-known/siblings.json`, not the root and not
+ * `/admin` (tabsii-platform#508). The portal owns only the `/admin` and
+ * `/login` prefixes (issue #306) — `/` belongs to the user-application
+ * sibling, so a manifest at the bare root would be answered by a different
+ * origin entirely. `/admin` would work (the portal owns it) but makes this a
+ * portal-private file in name only: every other sibling is meant to depend on
+ * this manifest too, not just the portal's own Microservices tab, so it needs
+ * a path that reads as a stable cross-app contract rather than an admin
+ * implementation detail. `/.well-known/*` already exists as its own CDN
+ * behaviour (modules/cloud/aws/cdn/main.tf), built for the runtime identity
+ * document (#403) and reused here for the same reason: it points at the
+ * portal's own S3 origin, is excluded from the SPA rewrite, and gets a short
+ * TTL rather than the portal's normal immutable asset caching.
  */
 
 /** A notable route a sibling exposes, declared in its `biffo.sibling.json`. */
@@ -30,8 +39,8 @@ export interface Sibling {
   routes?: SiblingRoute[]
 }
 
-/** Path the deploy workflow publishes the manifest to. Must stay under `/admin`. */
-export const SIBLINGS_MANIFEST_PATH = '/admin/siblings.json'
+/** Path the deploy workflow publishes the manifest to (tabsii-platform#508). */
+export const SIBLINGS_MANIFEST_PATH = '/.well-known/siblings.json'
 
 /**
  * The reserved registry name for the ROOT application sibling (issue #306),

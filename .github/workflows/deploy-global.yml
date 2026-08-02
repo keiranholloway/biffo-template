@@ -136,14 +136,35 @@ jobs:
             echo "Found untracked existing ACM certificate $CERT_ARN for $DOMAIN — importing it instead of creating a new one."
             terraform import -input=false aws_acm_certificate.wildcard "$CERT_ARN"
           fi
-      - name: Apply hosted zone
+      - name: Plan hosted zone
         if: vars.DNS_MODE == '' || vars.DNS_MODE == 'managed-route53'
         timeout-minutes: 20
-        run: terraform apply -input=false -auto-approve -target='aws_route53_zone.main[0]'
+        # Targeted, to match the targeted apply below. A broader plan would not
+        # be the plan that actually gets applied, and the guard must read the
+        # plan that is applied, not a wider one (#1130).
+        run: terraform plan -input=false -no-color -out=tfplan-zone -target='aws_route53_zone.main[0]'
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_domain: ${{ vars.DOMAIN }}
           TF_VAR_dns_mode: ${{ vars.DNS_MODE || 'managed-route53' }}
+      # Refuse a plan that destroys stateful infrastructure without saying so
+      # (#387; aws_route53_zone added by #1129). Apply is --auto-approve, so
+      # this is the only point a human decision can still be required before a
+      # zone replacement issues new nameservers. Same shape as
+      # deploy-infra.yml's plan-job guard.
+      - name: Destructive-plan guard (hosted zone)
+        if: vars.DNS_MODE == '' || vars.DNS_MODE == 'managed-route53'
+        run: |
+          terraform show -json tfplan-zone > plan-zone.json
+          node "$GITHUB_WORKSPACE/scripts/check-destructive-plan.mjs" plan-zone.json
+        env:
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+      - name: Apply hosted zone
+        if: vars.DNS_MODE == '' || vars.DNS_MODE == 'managed-route53'
+        timeout-minutes: 20
+        # Applies the plan just checked above, not a fresh one — a re-plan
+        # here could differ from what the guard actually saw.
+        run: terraform apply -input=false -auto-approve tfplan-zone
       - name: Delegate domain to hosted zone
         if: vars.DNS_MODE == '' || vars.DNS_MODE == 'managed-route53'
         run: |
@@ -195,17 +216,32 @@ jobs:
 
           echo "::error::Nameserver update for $DOMAIN (operation $OPERATION_ID) did not reach a terminal status within 60s."
           exit 1
-      - name: Apply certificate
+      - name: Plan certificate
         # aws_acm_certificate_validation waits out DNS delegation propagation,
         # which is legitimately tens of minutes — hence the 2h STS session
         # above. Generous, but bounded: a stuck step must not run to the job
-        # limit with no signal.
-        timeout-minutes: 60
-        run: terraform apply -input=false -auto-approve
+        # limit with no signal. This step is the plan itself, not the wait;
+        # the wait is in "Apply certificate" below.
+        timeout-minutes: 20
+        run: terraform plan -input=false -no-color -out=tfplan-cert
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_domain: ${{ vars.DOMAIN }}
           TF_VAR_dns_mode: ${{ vars.DNS_MODE || 'managed-route53' }}
+      # Same guard as the hosted-zone plan above. Untargeted here, matching the
+      # untargeted apply below — the zone itself was already applied by the
+      # targeted step, so in the normal case this plan has nothing stateful
+      # left to flag, but a config edit that forces the zone to replace would
+      # still show up here too if the earlier targeted apply were ever removed.
+      - name: Destructive-plan guard (certificate)
+        run: |
+          terraform show -json tfplan-cert > plan-cert.json
+          node "$GITHUB_WORKSPACE/scripts/check-destructive-plan.mjs" plan-cert.json
+        env:
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+      - name: Apply certificate
+        timeout-minutes: 60
+        run: terraform apply -input=false -auto-approve tfplan-cert
       - name: Export outputs
         env:
           GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}

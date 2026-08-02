@@ -1,0 +1,65 @@
+name: Infra Environments Validate
+
+# Every instance's own gate for `infra/environments/` (tabsii-platform#521).
+#
+# ci.yml's own `infra-validate` job deliberately scopes to `modules/` only --
+# `infra/` is user-owned, so validating it there would red a template-shipped
+# check on content the template does not own (see that job's own comment). It
+# says "an instance validates its own infra composition in its own gate" --
+# this is that gate, seeded here so every instance is born with it rather than
+# discovering the gap the way tabsii-platform did: neither its `staging` nor
+# `prod` branch had moved since its initial commit, and nothing had ever run
+# `terraform fmt`/`validate` against either environment, in CI or locally. A
+# variable rename or a removed module output in `modules/` could silently
+# break either one with zero feedback until the first real deploy attempt.
+#
+# `*.instance.yml` is the sanctioned user-owned carve-out (core-manifest.json)
+# for exactly this: a CI workflow each instance owns, that `biffo core
+# upgrade` never touches or reverts once an instance has its own copy. Living
+# at the repo root (not `_skeletons/`) because `biffo init` clones this
+# template's whole tree via GitHub's own template-repository API -- there is
+# no per-instance skeleton step for a brand-new instance the way `sibling
+# create`/`plugin create` have one, so a root-level file is what every new
+# instance actually inherits.
+
+on:
+  push:
+    branches: [main, dev, staging]
+  pull_request:
+    branches: [main, dev, staging]
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  infra-environments-validate:
+    name: Terraform Validate (infra/environments)
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: '~> 1.9'
+      - name: Terraform fmt check (infra/environments)
+        run: terraform fmt -check -recursive infra/environments/
+      - name: Validate every environment
+        env:
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/tf-plugin-cache
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          # -backend=false: no AWS credentials or real state needed, this is
+          # syntax/schema validation only, the same shape ci.yml's own
+          # infra-validate job uses for modules/. One directory per
+          # environment (dev, staging, prod, ...), not per .tf file -- an
+          # environment's files are one Terraform root together.
+          rc=0
+          for dir in infra/environments/*/; do
+            echo "== validating $dir =="
+            terraform -chdir="$dir" init -backend=false -input=false >/dev/null || { rc=1; continue; }
+            terraform -chdir="$dir" validate || rc=1
+          done
+          exit $rc

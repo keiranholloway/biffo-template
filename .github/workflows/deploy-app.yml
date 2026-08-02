@@ -302,14 +302,25 @@ jobs:
           #
           # Hashed assets under _next/static are genuinely immutable and keep
           # the long cache; HTML and RSC payloads must not.
-          # `.well-known/*` is EXCLUDED from this --delete pass. The runtime
-          # identity document (.well-known/biffo-identity.json, #403) is written to
-          # this same bucket by Deploy Infrastructure, NOT by the portal build — so
-          # it is absent from portal-dist/, and without this exclude the --delete
-          # here removes it. That strands every ROOT sibling (which resolves Cognito
-          # only from that document, no baked fallback) in a sign-in redirect loop.
-          # An App-only deploy (no concurrent Infra run to re-publish it) makes the
-          # deletion permanent. Excluding the prefix keeps the doc across syncs.
+          # `.well-known/*` is EXCLUDED from this --delete pass, for two reasons:
+          #
+          #   - The runtime identity document (.well-known/biffo-identity.json,
+          #     #403) is written to this same bucket by Deploy Infrastructure, NOT
+          #     by the portal build — so it is absent from portal-dist/, and
+          #     without this exclude the --delete here removes it. That strands
+          #     every ROOT sibling (which resolves Cognito only from that
+          #     document, no baked fallback) in a sign-in redirect loop. An
+          #     App-only deploy (no concurrent Infra run to re-publish it) makes
+          #     the deletion permanent.
+          #   - The siblings manifest (.well-known/siblings.json, #508) IS part of
+          #     portal-dist/, but must not get this pass's year-long immutable
+          #     cache-control — its content changes on every deploy exactly like
+          #     the HTML does. It gets its own no-cache pass below instead, the
+          #     same way *.html and *.txt do.
+          #
+          # Excluding the whole prefix here (rather than naming each file) means a
+          # future .well-known/ addition fails safe — dropped from this pass, not
+          # silently cached for a year — until it gets its own pass.
           aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
             --delete \
             --cache-control "public, max-age=31536000, immutable" \
@@ -332,6 +343,14 @@ jobs:
             --content-type "text/x-component" \
             --exclude "*" \
             --include "*.txt"
+          # The siblings manifest is the one .well-known/ file the portal build
+          # itself owns (see the "Generate siblings manifest" step above) — sync
+          # just that key, never --delete, so this pass can never touch the
+          # identity document that the previous pass deliberately protects.
+          aws s3 sync portal-dist/.well-known/ s3://${{ vars.PORTAL_BUCKET_NAME }}/.well-known/ \
+            --cache-control "no-cache" \
+            --exclude "*" \
+            --include "siblings.json"
       - name: Invalidate CloudFront
         # A cache invalidation must never block or abort the functional deploy
         # (Lambda / DB schema / DDL imports) that follows. create-invalidation is
@@ -1112,14 +1131,25 @@ jobs:
           #
           # Hashed assets under _next/static are genuinely immutable and keep
           # the long cache; HTML and RSC payloads must not.
-          # `.well-known/*` is EXCLUDED from this --delete pass. The runtime
-          # identity document (.well-known/biffo-identity.json, #403) is written to
-          # this same bucket by Deploy Infrastructure, NOT by the portal build — so
-          # it is absent from portal-dist/, and without this exclude the --delete
-          # here removes it. That strands every ROOT sibling (which resolves Cognito
-          # only from that document, no baked fallback) in a sign-in redirect loop.
-          # An App-only deploy (no concurrent Infra run to re-publish it) makes the
-          # deletion permanent. Excluding the prefix keeps the doc across syncs.
+          # `.well-known/*` is EXCLUDED from this --delete pass, for two reasons:
+          #
+          #   - The runtime identity document (.well-known/biffo-identity.json,
+          #     #403) is written to this same bucket by Deploy Infrastructure, NOT
+          #     by the portal build — so it is absent from portal-dist/, and
+          #     without this exclude the --delete here removes it. That strands
+          #     every ROOT sibling (which resolves Cognito only from that
+          #     document, no baked fallback) in a sign-in redirect loop. An
+          #     App-only deploy (no concurrent Infra run to re-publish it) makes
+          #     the deletion permanent.
+          #   - The siblings manifest (.well-known/siblings.json, #508) IS part of
+          #     portal-dist/, but must not get this pass's year-long immutable
+          #     cache-control — its content changes on every deploy exactly like
+          #     the HTML does. It gets its own no-cache pass below instead, the
+          #     same way *.html and *.txt do.
+          #
+          # Excluding the whole prefix here (rather than naming each file) means a
+          # future .well-known/ addition fails safe — dropped from this pass, not
+          # silently cached for a year — until it gets its own pass.
           aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
             --delete \
             --cache-control "public, max-age=31536000, immutable" \
@@ -1142,6 +1172,14 @@ jobs:
             --content-type "text/x-component" \
             --exclude "*" \
             --include "*.txt"
+          # The siblings manifest is the one .well-known/ file the portal build
+          # itself owns (see the "Generate siblings manifest" step above) — sync
+          # just that key, never --delete, so this pass can never touch the
+          # identity document that the previous pass deliberately protects.
+          aws s3 sync portal-dist/.well-known/ s3://${{ vars.PORTAL_BUCKET_NAME }}/.well-known/ \
+            --cache-control "no-cache" \
+            --exclude "*" \
+            --include "siblings.json"
       - name: Invalidate CloudFront
         # A cache invalidation must never block or abort the functional deploy
         # (Lambda / DB schema / DDL imports) that follows. create-invalidation is
@@ -1934,14 +1972,25 @@ jobs:
           #
           # Hashed assets under _next/static are genuinely immutable and keep
           # the long cache; HTML and RSC payloads must not.
-          # `.well-known/*` is EXCLUDED from this --delete pass. The runtime
-          # identity document (.well-known/biffo-identity.json, #403) is written to
-          # this same bucket by Deploy Infrastructure, NOT by the portal build — so
-          # it is absent from portal-dist/, and without this exclude the --delete
-          # here removes it. That strands every ROOT sibling (which resolves Cognito
-          # only from that document, no baked fallback) in a sign-in redirect loop.
-          # An App-only deploy (no concurrent Infra run to re-publish it) makes the
-          # deletion permanent. Excluding the prefix keeps the doc across syncs.
+          # `.well-known/*` is EXCLUDED from this --delete pass, for two reasons:
+          #
+          #   - The runtime identity document (.well-known/biffo-identity.json,
+          #     #403) is written to this same bucket by Deploy Infrastructure, NOT
+          #     by the portal build — so it is absent from portal-dist/, and
+          #     without this exclude the --delete here removes it. That strands
+          #     every ROOT sibling (which resolves Cognito only from that
+          #     document, no baked fallback) in a sign-in redirect loop. An
+          #     App-only deploy (no concurrent Infra run to re-publish it) makes
+          #     the deletion permanent.
+          #   - The siblings manifest (.well-known/siblings.json, #508) IS part of
+          #     portal-dist/, but must not get this pass's year-long immutable
+          #     cache-control — its content changes on every deploy exactly like
+          #     the HTML does. It gets its own no-cache pass below instead, the
+          #     same way *.html and *.txt do.
+          #
+          # Excluding the whole prefix here (rather than naming each file) means a
+          # future .well-known/ addition fails safe — dropped from this pass, not
+          # silently cached for a year — until it gets its own pass.
           aws s3 sync portal-dist/ s3://${{ vars.PORTAL_BUCKET_NAME }}/ \
             --delete \
             --cache-control "public, max-age=31536000, immutable" \
@@ -1964,6 +2013,14 @@ jobs:
             --content-type "text/x-component" \
             --exclude "*" \
             --include "*.txt"
+          # The siblings manifest is the one .well-known/ file the portal build
+          # itself owns (see the "Generate siblings manifest" step above) — sync
+          # just that key, never --delete, so this pass can never touch the
+          # identity document that the previous pass deliberately protects.
+          aws s3 sync portal-dist/.well-known/ s3://${{ vars.PORTAL_BUCKET_NAME }}/.well-known/ \
+            --cache-control "no-cache" \
+            --exclude "*" \
+            --include "siblings.json"
       - name: Invalidate CloudFront
         # A cache invalidation must never block or abort the functional deploy
         # (Lambda / DB schema / DDL imports) that follows. create-invalidation is

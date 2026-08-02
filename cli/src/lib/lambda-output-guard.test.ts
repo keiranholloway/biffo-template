@@ -160,7 +160,15 @@ describe('scan scope stays inside the template-owned boundary (#325)', () => {
   })
 
   it('scans only template-owned paths, so every instance can receive the fix', () => {
-    const unowned = findWorkflowFiles(repoRoot).filter((f) => !isTemplateOwned(f, manifest))
+    // `*.instance.yml` is a deliberate exception, not the #325 trap: it is
+    // user-owned BY DESIGN from the moment it exists (tabsii-platform#521 is
+    // the first real one), so whoever owns it can fix any real finding
+    // directly, with no upstream release required. See
+    // terraform-input-guard.test.ts's identical exception for the full
+    // reasoning.
+    const unowned = findWorkflowFiles(repoRoot).filter(
+      (f) => !isTemplateOwned(f, manifest) && !f.endsWith('.instance.yml'),
+    )
     expect(unowned).toEqual([])
   })
 })

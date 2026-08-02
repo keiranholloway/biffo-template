@@ -146,7 +146,17 @@ describe('scan scope stays inside the template-owned boundary (#325)', () => {
   })
 
   it('scans only template-owned paths, so every instance can receive the fix', () => {
-    const unowned = findWorkflowFiles(repoRoot).filter((f) => !isTemplateOwned(f, manifest))
+    // `*.instance.yml` is a deliberate exception, not the #325 trap: that trap
+    // was a guard reaching a path with NO owner at all, so an instance received
+    // an assertion on a file it could not receive or repair. A `.instance.yml`
+    // is user-owned BY DESIGN from the moment it exists (tabsii-platform#521 is
+    // the first real one) -- whoever owns it can fix any real finding directly,
+    // no upstream release required. Excluding it here is about scope, not about
+    // disabling the underlying scan: `checkTerraformInput` above still runs
+    // against these files and would still catch a genuine violation in one.
+    const unowned = findWorkflowFiles(repoRoot).filter(
+      (f) => !isTemplateOwned(f, manifest) && !f.endsWith('.instance.yml'),
+    )
     expect(unowned).toEqual([])
   })
 

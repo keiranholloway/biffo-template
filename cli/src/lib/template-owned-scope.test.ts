@@ -41,13 +41,26 @@ describe('META: template-owned checks must not assert over unowned paths (#325/#
    * template but not in an instance. That is not a violation of the rule above —
    * such a scanner carries its own ownership filter — but the raw-reach
    * assertion cannot express it, so it is skipped there (#367).
+   *
+   * `allowedUnowned` names specific user-owned paths a scanner's raw reach may
+   * legitimately include, individually, without weakening the rule for
+   * everything else it finds. `*.instance.yml` (tabsii-platform#521) is the
+   * first case: it is user-owned BY DESIGN the moment it exists, so whoever
+   * owns it can fix any real finding directly, with no upstream release
+   * required — unlike the #325 trap, where the instance had no way to receive
+   * or repair what the guard flagged.
    */
   const rawTreeScanners: {
     name: string
     scan: (root: string) => string[]
     templateOnly?: boolean
+    allowedUnowned?: (path: string) => boolean
   }[] = [
-    { name: 'terraform-input-guard.findWorkflowFiles', scan: findWorkflowFiles },
+    {
+      name: 'terraform-input-guard.findWorkflowFiles',
+      scan: findWorkflowFiles,
+      allowedUnowned: (path) => path.endsWith('.instance.yml'),
+    },
     // plugin-terraform-guard additionally self-filters through isTemplateOwned
     // for instances (see plugin-terraform-guard.test.ts). In the TEMPLATE its
     // raw reach is already entirely template-owned, which this asserts; in an
@@ -68,14 +81,19 @@ describe('META: template-owned checks must not assert over unowned paths (#325/#
 
   const applicableScanners = rawTreeScanners.filter((s) => !(s.templateOnly && runningInInstance))
 
-  it.each(applicableScanners)('$name reaches only template-owned paths', ({ scan }) => {
-    const reached = scan(repoRoot)
-    // The guard must actually reach something — a scanner that finds nothing
-    // would pass this vacuously and hide a broken walk.
-    expect(reached.length).toBeGreaterThan(0)
-    const unowned = reached.filter((p) => !isTemplateOwned(p, manifest))
-    expect(unowned).toEqual([])
-  })
+  it.each(applicableScanners)(
+    '$name reaches only template-owned paths',
+    ({ scan, allowedUnowned }) => {
+      const reached = scan(repoRoot)
+      // The guard must actually reach something — a scanner that finds nothing
+      // would pass this vacuously and hide a broken walk.
+      expect(reached.length).toBeGreaterThan(0)
+      const unowned = reached.filter(
+        (p) => !isTemplateOwned(p, manifest) && !(allowedUnowned && allowedUnowned(p)),
+      )
+      expect(unowned).toEqual([])
+    },
+  )
 
   it('negative control: the assertion FAILS when a scan reaches an unowned path', () => {
     // Proof the mechanism above can fail — otherwise it proves nothing. These

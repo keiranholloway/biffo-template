@@ -3979,6 +3979,24 @@ read" assertions.
 > its own fix. Only reverting the guard and watching the suite stay green caught
 > it. Prove the test fails, and prove it fails *for the reason you think*.
 
+**An error that names the last step attempted manufactures wrong fixes.**
+`shared-sync`'s ship phase ran four `git -C "$wt"` calls against a staged
+worktree that had vanished, and reported `push failed: fatal: cannot change to
+'<path>'`. The headline said *push*; the detail said *directory*; the actual
+condition was a phase-1/phase-2 lifecycle problem in neither. Two fixes were
+written on that reading — an existence check on `git worktree add`, a
+missing-ref check in the base resolver — and both landed on things that were
+**provably not the cause** (the add has been checked since #856; the ship path
+takes its base from `gh repo view`, not the resolver). Both were thrown away.
+What worked was reproducing the clone shape end to end in a temp estate instead
+of reasoning from the message.
+
+Two rules worth generalising, because nothing in the estate enforces either:
+**an error should name the precondition that failed, not the operation that
+noticed it**; and **when a message has sent you to the wrong layer twice, stop
+fixing and start reproducing.** The guard that shipped (#1161) only makes the
+failure state its own name — the cause is still open in #1160.
+
 **A sweep test proving a property does not prove the file parses.** The new apply
 sweep passed against a `deploy.yml` that had just been broken into invalid YAML —
 an edit orphaned four `TF_VAR` lines — because the parser is deliberately

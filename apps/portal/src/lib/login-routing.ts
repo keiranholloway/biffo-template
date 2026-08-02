@@ -9,7 +9,7 @@
  * 2. User is in the 'admin' Cognito group -> '/admin/'
  * 3. User is marked as a platform admin -> '/crm/'
  * 4. User has any role with scope_level 'tenant'|'brand'|'region' -> '/crm/'
- * 5. User has any role with scope_level 'unit' -> '/crm/'
+ * 5. User has any role with scope_level 'unit' -> '/lms/'
  * 6. User has marketplace_role set and no roles -> '/marketplace/'
  * 7. Otherwise -> '/login/no-access/'
  */
@@ -69,9 +69,21 @@ export function resolveDestination(
     return '/crm/'
   }
 
-  // Rule 5: any role whose scope_level is 'unit'
+  // Rule 5: any role whose scope_level is 'unit' -> the LMS.
+  //
+  // This returned '/crm/' until tabsii's 0013-lms-v1 M12, and tabsii ADR-0100
+  // said so at the time: the unit surface was built in the CRM as an explicitly
+  // interim arrangement, because unit-scoped users could not otherwise sign in
+  // to anything useful, and "the arrival of the LMS is the trigger to move
+  // unit-scoped users onto a dedicated surface". A unit worker doing training is
+  // not doing customer relationship management.
+  //
+  // Note this whole table names instance surfaces ('/crm/', '/marketplace/',
+  // now '/lms/') from template-owned code, which is why the change had to be
+  // made here rather than in the instance that wanted it. That is a real seam
+  // problem and it predates this change — see the issue raised alongside it.
   if (whoami.roles.some((r) => r.scope_level === 'unit')) {
-    return '/crm/'
+    return '/lms/'
   }
 
   // Rule 6: whoami.marketplace_role is set and there are no roles

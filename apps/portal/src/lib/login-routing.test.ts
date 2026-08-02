@@ -91,7 +91,7 @@ describe('resolveDestination', () => {
     expect(result).toBe('/crm/')
   })
 
-  it('rule 5: routes to /crm/ when user has a unit-level role', () => {
+  it('rule 5: routes to /lms/ when user has a unit-level role', () => {
     const whoami: WhoamiResponse = {
       ...baseWhoami,
       roles: [
@@ -103,7 +103,22 @@ describe('resolveDestination', () => {
       ],
     }
     const result = resolveDestination(whoami, [], null)
-    expect(result).toBe('/crm/')
+    expect(result).toBe('/lms/')
+  })
+
+  it('rule 4 still wins over rule 5 for a user holding both', () => {
+    // An administrator who also holds a unit role is not a learner and must not
+    // be dropped into the LMS. Worth asserting now because the ordering was
+    // previously UNOBSERVABLE — both rules returned '/crm/', so nothing could
+    // have caught them being swapped.
+    const whoami: WhoamiResponse = {
+      ...baseWhoami,
+      roles: [
+        { role: 'store_manager', scope_level: 'unit', unit_id: 'unit-1' },
+        { role: 'brand_hq', scope_level: 'brand', brand_id: 'brand-1' },
+      ],
+    }
+    expect(resolveDestination(whoami, [], null)).toBe('/crm/')
   })
 
   it('rule 6: routes to /marketplace/ when user has marketplace_role and no roles', () => {
@@ -181,8 +196,10 @@ describe('resolveDestination', () => {
         },
       ],
     }
-    // Unit role (rule 5) takes precedence over marketplace_role (rule 6)
+    // Unit role (rule 5) takes precedence over marketplace_role (rule 6).
+    // The assertion is the PRECEDENCE; the destination changed to '/lms/' and
+    // is incidental to what this test is about.
     const result = resolveDestination(whoami, [], null)
-    expect(result).toBe('/crm/')
+    expect(result).toBe('/lms/')
   })
 })

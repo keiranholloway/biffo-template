@@ -88,8 +88,20 @@ printf 'gate coverage\\n\\nfixture 3/3\\n'
 exit 0
 `
 
+interface SatelliteOpts {
+  gateFails?: boolean
+  /**
+   * The flavour marker this repo carries, or `null` for a repo with none —
+   * the runner repos, `tabsii-map` and `tabsii-data-model-design` are selected
+   * by `applies()` for holding `scripts/verify.sh` alone.
+   */
+  marker?: 'biffo.sibling.json' | 'biffo.plugin.json' | null
+  /** Extra files to commit before the run, as `path -> contents`. */
+  seedFiles?: Record<string, string>
+}
+
 /** A bare origin plus a clone on `dev`, holding a stale copy of the shared set. */
-function makeSatellite(estate: string, name: string, opts: { gateFails?: boolean } = {}): string {
+function makeSatellite(estate: string, name: string, opts: SatelliteOpts = {}): string {
   const origin = join(estate, `${name}.git`)
   mkdirSync(origin, { recursive: true })
   execFileSync('git', ['init', '--bare', '--initial-branch=dev', origin], { stdio: 'pipe' })
@@ -101,8 +113,14 @@ function makeSatellite(estate: string, name: string, opts: { gateFails?: boolean
   git(dir, 'config', 'commit.gpgsign', 'false')
 
   // A sibling marker, so `applies()` selects it for the same reason a real
-  // sibling is selected.
-  writeFileSync(join(dir, 'biffo.sibling.json'), '{}\n')
+  // sibling is selected. `null` drops it, leaving the repo selected only by
+  // `scripts/verify.sh` below — which is how four real estate repos qualify.
+  const marker = opts.marker === undefined ? 'biffo.sibling.json' : opts.marker
+  if (marker) writeFileSync(join(dir, marker), '{}\n')
+  for (const [rel, contents] of Object.entries(opts.seedFiles ?? {})) {
+    mkdirSync(dirname(join(dir, rel)), { recursive: true })
+    writeFileSync(join(dir, rel), contents)
+  }
   writeFileSync(join(dir, '.gitignore'), '.worktrees/\n')
   mkdirSync(join(dir, 'scripts'), { recursive: true })
   // Deliberately STALE — a previous generation of the shared file, so the repo
@@ -120,20 +138,36 @@ function makeSatellite(estate: string, name: string, opts: { gateFails?: boolean
  * A synthetic template: this repo's real `shared-sync.sh`, a manifest naming
  * only the fixture's own shared files, and the candidate copies of them.
  */
-function makeTemplate(dir: string): void {
+function makeTemplate(dir: string, opts: { withSkeletons?: boolean } = {}): void {
   mkdirSync(join(dir, 'scripts'), { recursive: true })
-  writeFileSync(
-    join(dir, 'shared-files.json'),
-    JSON.stringify(
-      {
-        version: 1,
-        files: ['scripts/verify.sh', 'scripts/gate-coverage.sh'],
-        appliesTo: ['biffo.sibling.json', 'biffo.plugin.json'],
-      },
-      null,
-      2,
-    ),
-  )
+  const manifest: Record<string, unknown> = {
+    version: 1,
+    files: ['scripts/verify.sh', 'scripts/gate-coverage.sh'],
+    appliesTo: ['biffo.sibling.json', 'biffo.plugin.json'],
+  }
+  if (opts.withSkeletons) {
+    // The two skeleton rulesets differ ON PURPOSE — that is the whole reason
+    // `filesFromSkeleton` resolves its source per repo instead of `files`
+    // learning a single `target -> source` remap.
+    for (const [skeleton, flavour] of [
+      ['sibling-template', 'SIBLING'],
+      ['plugin-template', 'PLUGIN'],
+    ]) {
+      mkdirSync(join(dir, '_skeletons', skeleton), { recursive: true })
+      writeFileSync(join(dir, '_skeletons', skeleton, 'AGENTS.md'), `${flavour} RULES v2\n`)
+      writeFileSync(
+        join(dir, '_skeletons', skeleton, 'CLAUDE.md'),
+        `# ${flavour} context\n\n@AGENTS.md\n`,
+      )
+    }
+    manifest.filesFromSkeleton = { 'AGENTS.md': 'sync', 'CLAUDE.md': 'seed' }
+    manifest.skeletonForMarker = {
+      'biffo.sibling.json': 'sibling-template',
+      'biffo.plugin.json': 'plugin-template',
+    }
+    manifest.skeletonDefault = 'sibling-template'
+  }
+  writeFileSync(join(dir, 'shared-files.json'), JSON.stringify(manifest, null, 2))
   writeFileSync(join(dir, 'scripts/shared-sync.sh'), readFileSync(join(root, scriptUnderTest)))
   chmodSync(join(dir, 'scripts/shared-sync.sh'), 0o755)
   writeFileSync(join(dir, 'scripts/verify.sh'), candidateVerify)
@@ -180,7 +214,12 @@ afterEach(() => {
 
 function runSync(
   args: string[],
-  opts: { failingSatellite?: boolean; fromWorktree?: boolean } = {},
+  opts: {
+    failingSatellite?: boolean
+    fromWorktree?: boolean
+    withSkeletons?: boolean
+    satellites?: Array<[string, SatelliteOpts]>
+  } = {},
 ): {
   run: Run
   estate: string
@@ -196,12 +235,14 @@ function runSync(
   // does in ~/code. That is what makes the "do not target yourself" exclusion
   // load-bearing rather than incidental.
   const template = join(estate, 'biffo-template')
-  makeTemplate(template)
+  makeTemplate(template, { withSkeletons: opts.withSkeletons })
 
-  const satellites = [
-    makeSatellite(estate, 'sat-alpha'),
-    makeSatellite(estate, 'sat-beta', { gateFails: opts.failingSatellite }),
-  ]
+  const satellites = (
+    opts.satellites ?? [
+      ['sat-alpha', {}],
+      ['sat-beta', { gateFails: opts.failingSatellite }],
+    ]
+  ).map(([name, satOpts]) => makeSatellite(estate, name, satOpts))
 
   const logFile = join(base, 'gh-calls.log')
   writeFileSync(logFile, '')
@@ -333,6 +374,90 @@ describe('shared-sync rehearsal', () => {
     expect(run.out).not.toMatch(/biffo-template/)
     expect(run.out).toMatch(/rehearsing 2 repos/)
     expect(run.status).toBe(0)
+  }, 120_000)
+
+  it('backfills a missing file, from the skeleton matching the repo, without clobbering a seeded one', () => {
+    // #1150: eleven of seventeen estate repos held NEITHER `AGENTS.md` NOR
+    // `CLAUDE.md` — not a stale copy, nothing — so an agent opening `tabsii-crm`
+    // got no worktree discipline, no honest-push rule and no never-merge-red.
+    // `files` creates but cannot remap a path; `filesIfPresent` remaps but never
+    // creates. This asserts the third list does all four things at once, because
+    // the whole point is that no single existing list could.
+    const { estate } = runSync(['--rehearse'], {
+      withSkeletons: true,
+      satellites: [
+        // A sibling with neither file — the six wave-1 repos.
+        ['sat-sibling', {}],
+        // A plugin repo, which must NOT receive the sibling ruleset.
+        ['sat-plugin', { marker: 'biffo.plugin.json' }],
+        // A repo with no marker at all, holding a stale ruleset and a CLAUDE.md
+        // it has made its own. Selected only by `scripts/verify.sh`.
+        [
+          'sat-bare',
+          {
+            marker: null,
+            seedFiles: {
+              'AGENTS.md': 'ANCIENT RULES v1\n',
+              'CLAUDE.md': '# This repo is a Terraform runner fleet\n\n@AGENTS.md\n',
+            },
+          },
+        ],
+      ],
+    })
+    const staged = (name: string, file: string) =>
+      readFileSync(join(estate, name, '.worktrees', 'shared-sync', file), 'utf8')
+
+    // Created where absent, from the flavour's own skeleton.
+    expect(staged('sat-sibling', 'AGENTS.md')).toBe('SIBLING RULES v2\n')
+    expect(staged('sat-sibling', 'CLAUDE.md')).toContain('@AGENTS.md')
+    expect(staged('sat-plugin', 'AGENTS.md')).toBe('PLUGIN RULES v2\n')
+    expect(staged('sat-plugin', 'CLAUDE.md')).toContain('# PLUGIN context')
+
+    // `sync` overwrites a stale copy — AGENTS.md drifting 68 lines behind in
+    // tabsii (#559) is the injury this mechanism exists for. A marker-less repo
+    // resolves through `skeletonDefault`.
+    expect(staged('sat-bare', 'AGENTS.md')).toBe('SIBLING RULES v2\n')
+
+    // `seed` does not. Four of the repos being backfilled are not sibling apps,
+    // so overwriting CLAUDE.md would assert in each of them that they are one.
+    expect(staged('sat-bare', 'CLAUDE.md')).toBe(
+      '# This repo is a Terraform runner fleet\n\n@AGENTS.md\n',
+    )
+  }, 120_000)
+
+  it('reports a missing seeded file as drift, and a divergent one as the repo’s business', () => {
+    const { run } = runSync(['--check'], {
+      withSkeletons: true,
+      satellites: [
+        ['sat-missing', {}],
+        [
+          'sat-owned',
+          {
+            seedFiles: {
+              'AGENTS.md': 'SIBLING RULES v2\n',
+              'CLAUDE.md': '# Locally written context\n\n@AGENTS.md\n',
+            },
+          },
+        ],
+      ],
+    })
+
+    // Both fixtures hold a stale `scripts/verify.sh`, so both are DRIFTED; the
+    // assertion is about WHICH paths each is reported behind on.
+    const line = (name: string) =>
+      // eslint-disable-next-line no-control-regex
+      (run.out.split('\n').find((l) => l.startsWith(name)) ?? '').replace(/\[[0-9;]*m/g, '')
+
+    expect(line('sat-missing')).toContain('AGENTS.md(missing)')
+    expect(line('sat-missing')).toContain('CLAUDE.md(missing)')
+
+    // The point of `seed`: a repo that wrote its own copy is not behind on
+    // anything. Reporting it as drift would make --check permanently red in
+    // exactly the repos that did the right thing.
+    expect(line('sat-owned')).toContain('scripts/verify.sh')
+    expect(line('sat-owned')).not.toContain('CLAUDE.md')
+    expect(line('sat-owned')).not.toContain('AGENTS.md')
+    expect(run.status).toBe(1)
   }, 120_000)
 
   it('--no-rehearse says so on the way past, rather than skipping quietly', () => {

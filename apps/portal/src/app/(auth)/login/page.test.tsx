@@ -456,10 +456,16 @@ describe('LoginPage — return_to must not outlive the user it belonged to', () 
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'pw' } })
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
 
-    // A unit-scoped role lands on /lms/ (rule 5 in login-routing.ts), which
+    // A unit-scoped role lands on /crm/ (rule 5 in login-routing.ts), which
     // is a sibling app, so it leaves the portal with a full page load.
+    //
+    // This expectation was '/lms/' when the test was written earlier today.
+    // ADR-0105 moved training into the CRM's unit workspace, so a unit worker's
+    // home is /crm/ again. What this test is actually about is unchanged: the
+    // next person to sign in must be routed by THEIR role, not to the previous
+    // user's destination.
     await waitFor(() => {
-      expect(assignMock).toHaveBeenCalledWith('/lms/')
+      expect(assignMock).toHaveBeenCalledWith('/crm/')
     })
     expect(pushMock).not.toHaveBeenCalledWith('/admin/')
   })

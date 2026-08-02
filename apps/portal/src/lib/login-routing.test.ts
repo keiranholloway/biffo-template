@@ -91,7 +91,7 @@ describe('resolveDestination', () => {
     expect(result).toBe('/crm/')
   })
 
-  it('rule 5: routes to /lms/ when user has a unit-level role', () => {
+  it('rule 5: routes to /crm/ when user has a unit-level role', () => {
     const whoami: WhoamiResponse = {
       ...baseWhoami,
       roles: [
@@ -102,14 +102,17 @@ describe('resolveDestination', () => {
         },
       ],
     }
+    // ADR-0105: training is a section of /crm/, not a destination of its own.
+    // This row was briefly '/lms/'; see the module docstring before changing it.
     const result = resolveDestination(whoami, [], null)
-    expect(result).toBe('/lms/')
+    expect(result).toBe('/crm/')
   })
 
-  it('rule 5: a unit role does not send an above-unit colleague to /lms/', () => {
+  it('rule 5: a unit role does not send an above-unit colleague anywhere else', () => {
     // Rule 4 is checked first, so someone holding both a brand role and a unit
-    // role still lands on /crm/. Without this the /lms/ row would quietly
-    // relocate every brand manager who also runs a location.
+    // role still lands on /crm/. It is the same answer as rule 5 gives now,
+    // so this case no longer discriminates on destination — it is kept because
+    // it pins the ORDER, which is what would break if rule 5 ever moves again.
     const whoami: WhoamiResponse = {
       ...baseWhoami,
       roles: [
@@ -193,8 +196,8 @@ describe('resolveDestination', () => {
       ],
     }
     // Both rules match but platform_admin (rule 3) is checked first — and
-    // since rule 5 now yields '/lms/', the two answers differ, so this case
-    // actually discriminates rather than agreeing by coincidence.
+    // Rule 5 yields '/crm/' again under ADR-0105, so this agrees by
+    // coincidence rather than discriminating. Kept for the ordering it pins.
     const result = resolveDestination(whoami, [], null)
     expect(result).toBe('/crm/')
   })
@@ -223,6 +226,6 @@ describe('resolveDestination', () => {
     }
     // Unit role (rule 5) takes precedence over marketplace_role (rule 6)
     const result = resolveDestination(whoami, [], null)
-    expect(result).toBe('/lms/')
+    expect(result).toBe('/crm/')
   })
 })

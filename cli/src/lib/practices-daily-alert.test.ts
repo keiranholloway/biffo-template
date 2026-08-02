@@ -44,7 +44,18 @@ beforeAll(() => {
     const end = src.indexOf('\n}\n', start)
     return src.slice(start, end + 3)
   }
-  harness = `set -euo pipefail\n${grab('_notify')}\n${grab('_stamp_stale')}\n${grab('_finish')}\ntrap _finish EXIT\n`
+  // `_stamp_stale` and `_finish` both read `$PRACTICES_LOG` (#1126) rather than
+  // the string it used to hardcode, and that assignment lives at top level, not
+  // inside either function -- `grab()` only lifts function bodies, so without
+  // this line the harness ran `set -u` against a variable nothing had ever set,
+  // and the trap aborted mid-`_stamp_stale` before writing the banner it was
+  // meant to prove. Deliberately NOT pulling in the `exec > >(tee ...) 2>&1`
+  // line a few lines below it: that redirects the running script's own stderr
+  // into the tee pipe, which would starve the "stderr contains ABORTED" test
+  // below of anything to read on the child process's fd 2.
+  const logAssignment = src.match(/^PRACTICES_LOG=.*$/m)?.[0]
+  if (!logAssignment) throw new Error('PRACTICES_LOG assignment not found in practices-daily.sh')
+  harness = `set -euo pipefail\n${logAssignment}\n${grab('_notify')}\n${grab('_stamp_stale')}\n${grab('_finish')}\ntrap _finish EXIT\n`
 })
 
 interface Result {

@@ -7,9 +7,13 @@
 # job would have to clone all fifteen repos to produce the same number, and
 # would otherwise report `unavailable` — which is honest, but useless daily.
 #
-# Install (daily at 07:30):
+# Install (daily at 04:30):
 #   crontab -e
-#   30 7 * * * /home/keiran/code/biffo-template/scripts/practices-daily.sh >> /tmp/practices-daily.log 2>&1
+#   30 4 * * * /home/keiran/code/biffo-template/scripts/practices-daily.sh >> /home/keiran/.practices-daily.log 2>&1
+#
+# That redirect is now a harmless duplicate, not the log's only source (#1126,
+# below) — the script writes ${PRACTICES_LOG:-~/.practices-daily.log} itself,
+# so every invocation path lands there, not just cron's.
 #
 # The snapshot and the rendered page are committed on a branch and pushed, so
 # the series is version-controlled and a bad day cannot be quietly revised. The
@@ -17,6 +21,43 @@
 # would add fifteen merges a month to the very metrics it is measuring.
 
 set -euo pipefail
+
+# Write the log itself, so every invocation path is recorded regardless of
+# caller (#1126). Before this, `~/.practices-daily.log` had exactly one
+# writer — the crontab's `>> ... 2>&1` — so it recorded cron runs and ONLY
+# cron runs, and nothing said so. Read during #1121 it answered "one failure
+# today", true and 25 minutes in the wrong direction: hundreds of alerts had
+# fired from a path the log could not see. The general shape: whenever the
+# writer of a log is not the thing being logged, the log silently carries an
+# invocation-path filter and every reader treats it as complete.
+#
+# `exec > >(tee -a ...) 2>&1` needs bash's process substitution, which is why
+# this script's shebang is `#!/usr/bin/env bash` and not `sh`. `tee -a` rather
+# than a plain redirect so a caller still sees output on its own stdout/stderr
+# — cron's redirect becomes a harmless duplicate write to the same file, not a
+# second source of truth.
+PRACTICES_LOG="${PRACTICES_LOG:-$HOME/.practices-daily.log}"
+exec > >(tee -a "$PRACTICES_LOG") 2>&1
+
+# Record which invocation path a run came from — the thing a reader of the
+# log could not previously see, because every line looked like cron. A
+# heuristic, not exact: a cron child's parent process is `cron`/`crond`;
+# failing that, a TTY on stdin or stdout means a human typed the command;
+# anything else (an agent, a test harness, CI) is "non-interactive". Purely
+# informational — unlike the `[ -t 1 ]` guard tried and discarded during
+# #1121 (which gated whether a notification fired, and would have fired for
+# none of the real events since vitest also runs `stdio: 'pipe'`), nothing
+# here changes behaviour based on the result.
+_invocation_source() {
+  if [ -r "/proc/$PPID/comm" ] && grep -qi '^cron' "/proc/$PPID/comm" 2>/dev/null; then
+    echo "cron"
+  elif [ -t 0 ] || [ -t 1 ]; then
+    echo "interactive"
+  else
+    echo "non-interactive"
+  fi
+}
+echo "practices-daily: START $(date -u +%FT%TZ) via $(_invocation_source) (pid $$ ppid $PPID)"
 
 # Desktop notification that actually fires FROM CRON.
 #
@@ -99,8 +140,8 @@ _stamp_stale() {
   grep -v '^<!--practices-stale-->' "$_page" >"$_tmp" 2>/dev/null || return 0
   {
     printf '<!--practices-stale--><div style="position:sticky;top:0;z-index:99999;background:#b3261e;color:#fff;font:600 15px/1.5 system-ui,sans-serif;padding:14px 18px">'
-    printf 'COLLECTION FAILED %s (rc=%s) &mdash; these numbers are STALE, not today&rsquo;s. See ~/.practices-daily.log' \
-      "$(date -u +%F\ %H:%MZ)" "$1"
+    printf 'COLLECTION FAILED %s (rc=%s) &mdash; these numbers are STALE, not today&rsquo;s. See %s' \
+      "$(date -u +%F\ %H:%MZ)" "$1" "$PRACTICES_LOG"
     printf '</div>\n'
     cat "$_tmp"
   } >"$_page" 2>/dev/null || true
@@ -110,9 +151,11 @@ _stamp_stale() {
 # Terminate the log deliberately, so a truncated run is distinguishable from a
 # complete one.
 #
-# `~/.practices-daily.log` is append-only across runs, and until now a run that
-# died in the middle looked exactly like one that finished: the last line was
-# whatever it happened to reach. A `set -e` abort printed nothing at all.
+# `$PRACTICES_LOG` is append-only across runs — now written by the script
+# itself (see the `exec > >(tee ...)` above, #1126), not solely by a caller's
+# redirect — and until this marker existed, a run that died in the middle
+# looked exactly like one that finished: the last line was whatever it
+# happened to reach. A `set -e` abort printed nothing at all.
 #
 # That ambiguity is not hypothetical — it cost real time on 2026-07-30, when a run
 # piped into `head` took SIGPIPE and its truncated log was misread as evidence of
@@ -137,7 +180,7 @@ _finish() {
     echo "practices-daily: ABORTED rc=$_rc $(date -u +%FT%TZ)" >&2
     _stamp_stale "$_rc"
     _notify critical "Practices collection FAILED" \
-      "rc=$_rc - the dashboard is stale. See ~/.practices-daily.log"
+      "rc=$_rc - the dashboard is stale. See $PRACTICES_LOG"
   fi
 }
 trap _finish EXIT

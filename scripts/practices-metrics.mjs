@@ -1895,34 +1895,84 @@ function fetchRework(repoPath, since, branch) {
   return { fixes, commits: commits.map((c) => ({ at: c.at, subject: c.subject })) }
 }
 
+/**
+ * `commits` cannot ride along on the bulk PR list (2026-08-02).
+ *
+ * GitHub's GraphQL node budget rejects it outright: `gh` expands `commits` to
+ * `commits(first: 100) { nodes { authors(first: 100) } }`, and against a page of
+ * 100 PRs that is 100 × 100 × 100 = **1,000,000** possible nodes, twice the
+ * 500,000 ceiling. The estimate is static — it is computed from the page size,
+ * not from what a repo actually holds — so lowering `--limit` does not help:
+ * 1000, 500, 250 and 100 all fail with the identical message, and every one of
+ * the 15 repos failed at once. `gh` itself is unchanged (2.96.0, Jul 2), and the
+ * same query minus `commits` still succeeds, so this was a server-side change
+ * rather than anything the estate did.
+ *
+ * The preflight guard (#917) did its job — it refused to write an empty snapshot
+ * rather than reporting a day of zeros — but the day still had no data at all.
+ *
+ * So the field is fetched **per PR**, where the same expansion is 1 × 100 × 100 =
+ * 10,000 nodes and well inside the budget. {@link parseCarriedPrs} reads the
+ * marker from the body first and only consults commits when it is absent, and
+ * the sole call site is already gated on {@link isUpgradePr}, so a normal PR and
+ * a tool-created upgrade both cost nothing extra.
+ *
+ * **The residual cost is not negligible, and the first draft of this comment
+ * guessed that it was.** Measured over 90 days: 107 extra requests across 1242
+ * PRs (8.6%) — `biffo-platform` 43 of 119, `tabsii-platform` 64 of 380,
+ * `biffo-template` 0 of 743. The template pays nothing because it is never the
+ * *instance* side of an upgrade; the instances pay because the marker only
+ * shipped with #767, so every upgrade PR predating it has the marker in neither
+ * place and buys a request to discover that. That tail is finite and ages out of
+ * the 90-day window. If it ever stops ageing out, cache the negative result
+ * rather than widening the bulk query back into the node budget.
+ */
+const PR_LIST_FIELDS =
+  // closingIssuesReferences is what makes time-to-feature (#767) cost nothing
+  // extra: it rides along on a fetch that already happens. The alternative —
+  // one timeline API call per closed issue — is O(issues) requests for the
+  // same answer.
+  // `body` carries the core-upgrade marker (#767) when the PR was opened by
+  // the tool. Its commit-message fallback (#1011) is fetched separately below.
+  // `reviews` rides along too (#952). Review coverage is otherwise unknowable:
+  // nothing anywhere records whether a merged change was read by a second
+  // pass, so "do we review?" had no answer but memory — and memory said yes
+  // while a session shipping ~20 PRs reviewed almost none of them.
+  'number,title,createdAt,mergedAt,headRefName,baseRefName,closingIssuesReferences,body,reviews'
+
+/**
+ * The commit-message fallback for one PR, or `[]` if it cannot be read.
+ *
+ * A failure here degrades to exactly what an upgrade PR with no marker anywhere
+ * already produces — no carried PRs, which {@link parseCarriedPrs} documents as
+ * a coverage fact rather than an error. It is warned about on stderr rather than
+ * thrown, because throwing would mark the *whole repo* unmeasured over one
+ * unreadable PR, which is a far larger blind spot than the one it reports.
+ *
+ * @param {string} slug @param {number} number
+ */
+function fetchPrCommits(slug, number) {
+  try {
+    return gh(['pr', 'view', String(number), '-R', slug, '--json', 'commits']).commits ?? []
+  } catch (error) {
+    process.stderr.write(
+      `  warn: ${slug}#${number} commits unreadable, carried-PR fallback skipped — ${String(error).split('\n')[0]}\n`,
+    )
+    return []
+  }
+}
+
 /** @param {string} slug @param {string} since */
 function fetchPrs(slug, since) {
-  const prs = gh([
-    'pr',
-    'list',
-    '-R',
-    slug,
-    '--state',
-    'merged',
-    '--limit',
-    '1000',
-    '--json',
-    // closingIssuesReferences is what makes time-to-feature (#767) cost nothing
-    // extra: it rides along on a fetch that already happens. The alternative —
-    // one timeline API call per closed issue — is O(issues) requests for the
-    // same answer.
-    // `body` carries the core-upgrade marker (#767) when the PR was opened by
-    // the tool. `commits` is the fallback: a hand-created PR (the push step
-    // failed before the tool could open one) never gets a body, but the
-    // upgrade commit — made before that failed push — still carries the same
-    // marker in its message, and `commits` is how it survives the fetch (#1011).
-    // `reviews` rides along too (#952). Review coverage is otherwise unknowable:
-    // nothing anywhere records whether a merged change was read by a second
-    // pass, so "do we review?" had no answer but memory — and memory said yes
-    // while a session shipping ~20 PRs reviewed almost none of them.
-    'number,title,createdAt,mergedAt,headRefName,baseRefName,closingIssuesReferences,body,commits,reviews',
-  ])
-  return prs.filter((pr) => pr.mergedAt >= since)
+  const prs = gh(['pr', 'list', '-R', slug, '--state', 'merged', '--limit', '1000', '--json', PR_LIST_FIELDS])
+  const recent = prs.filter((pr) => pr.mergedAt >= since)
+  for (const pr of recent) {
+    // Body first, so a tool-created upgrade PR never costs a request.
+    if (isUpgradePr(pr) && parseCarriedPrs(pr.body).length === 0) {
+      pr.commits = fetchPrCommits(slug, pr.number)
+    }
+  }
+  return recent
 }
 
 /**
@@ -2166,6 +2216,39 @@ export function isTotalFetchFailure(failed, attempted) {
 }
 
 /**
+ * Name the likely cause of a total fetch failure from the error itself.
+ *
+ * This used to assert, unconditionally, that the cause was credentials — true of
+ * the 401 that motivated the guard (#917), and confidently wrong on 2026-08-02,
+ * when GitHub's GraphQL node budget started rejecting the bulk PR fetch and the
+ * message sent the reader after a keyring that was working fine.
+ *
+ * A diagnostic that only ever prints one cause is not a diagnosis, and a
+ * *confident* wrong one is worse than none: it costs the reader the time it takes
+ * to disprove. So each branch is claimed only when the error says so, and the
+ * fallback admits it does not know.
+ *
+ * @param {string | undefined} error the first failure's message
+ */
+export function diagnoseTotalFetchFailure(error) {
+  const text = String(error ?? '')
+  if (/exceeds the maximum limit|node limit|too complex/i.test(text)) {
+    return (
+      'The cause is a GitHub GraphQL node-budget rejection, NOT credentials — the query asks for more\n' +
+      'nodes than the API allows, so it fails identically at every --limit and on every repo. Narrow the\n' +
+      'requested fields (a sub-connection like `commits` multiplies the estimate) rather than retrying.'
+    )
+  }
+  if (/HTTP 401|Bad credentials|authentication|gh auth login|not logged/i.test(text)) {
+    return 'The cause is credentials: gh stores its token in the keyring, which cron cannot read.'
+  }
+  if (/HTTP 403|rate limit|abuse detection|secondary rate/i.test(text)) {
+    return 'The cause is a GitHub rate limit or permissions refusal — check `gh api rate_limit` before retrying.'
+  }
+  return 'The cause is not one this script recognises; read the first failure below rather than assuming credentials.'
+}
+
+/**
  * How far back the per-run jobs fetch walks, in days (#914).
  *
  * 14 = the 7-day window H4 and H5 are both defined on, plus the equal-length
@@ -2334,7 +2417,7 @@ function main() {
   if (isTotalFetchFailure(failures.length, targets.length)) {
     process.stderr.write(
       `\nFATAL: all ${targets.length} repos failed to fetch — refusing to write an empty snapshot.\n` +
-        `The most likely cause is credentials: gh stores its token in the keyring, which cron cannot read.\n` +
+        `${diagnoseTotalFetchFailure(failures[0]?.error)}\n` +
         `First failure: ${failures[0]?.error}\n`,
     )
     process.exit(1)

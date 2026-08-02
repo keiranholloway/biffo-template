@@ -292,6 +292,9 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **A test blanked an env var to "simulate cron" and thereby activated the exact fallback it meant to disable, firing 8 REAL `-u critical` desktop notifications per `pnpm test`.** `_notify` treats an empty `DBUS_SESSION_BUS_ADDRESS` as the cron case and reconstructs the address from `/run/user/<uid>/bus`, so the test called the real binary. GNOME never auto-expires critical cards, so they accumulated — 214 in the tray when the operator finally asked. **The card misattributed itself** ("Practices collection FAILED — the dashboard is stale"), pointing the diagnosis at a collector that was healthy: the log held one real failure and the 05:53 run had succeeded, pushed, and cleared the banner. Green suite throughout; a notification is not an assertion, so nothing could see it. **cost ~2h 15m**, and it degraded a **7h 04m** window (test merged 05:45Z #1090 → fix merged 12:49Z #1121) covering **570 recorded minutes** of session work | **visibility** · fail-open | biffo-template `cli/src/lib/practices-daily-alert.test.ts` | biffo-template | **fixed** ([#1121](https://github.com/keiranholloway/biffo-template/pull/1121)) — tests stub `notify-send` on `PATH`; `_notify` replaces via `--replace-id`; `PRACTICES_NO_DESKTOP_ALERT` opt-out. Verified 8 → 0 ids, then against the real GNOME daemon and a real `env -i` cron shell |
 | — | **A log written by the *crontab redirect* rather than by the script records only cron runs, and reads as a complete history.** `~/.practices-daily.log` gets its content from `>> logfile 2>&1` in the crontab line, so every interactive, agent and test-harness invocation of the same code is structurally invisible to it. Asked why hundreds of alerts were firing it answered "one failure, at 03:30" — true, and not an answer to the question. **~25m** went into a theory built on it, and a proposed `[ -t 1 ]` TTY guard that would have caught **none** of the real events (vitest runs `stdio: 'pipe'` and is not a TTY either) — a guard that reads as protection while missing the measured cause. Dropped only because the operator said the alerts were still arriving. The measurement that settled it took **under 2 minutes** and was available from the first minute | **visibility** · process | biffo-template `~/.practices-daily.log` | biffo-template — the redirect still lives in the crontab; nothing marks the log cron-only | **not fixed** — recorded as a diagnostic rule: identify the writer before trusting a missing entry |
 | [#1114](https://github.com/keiranholloway/biffo-template/issues/1114) | **`pg-test-db.sh` binds a fixed port with no isolation between concurrent runs, cluster-wide or cross-repo, and the failures it produces look exactly like a real regression.** Verifying an unrelated DDL-checksum fix, `verify.sh`'s pg-test lane failed with `asyncpg.exceptions.InternalServerError: tuple concurrently updated` on `GRANT USAGE ON SCHEMA tabsii TO <role>` — a different set of tests every run (32, then 4, then 27), with every individual failing test passing 100% in isolation. Two wrong theories were tried first: system memory/swap (swap was full, but `vmstat`'s `si`/`so` showed ~0 active paging — a red herring from a long session, not the cause) and inherent Postgres flakiness. `ps aux` found the real cause: a **second `verify.sh`** running concurrently, first from another local worktree with uncommitted work, then — after that one finished and the failure recurred with yet another shifting error set — from a **completely different repo** (`biffo-template`, a different Claude Code session). `BIFFO_PG_PORT` defaults to `55432` everywhere with no per-repo or per-worktree scoping, and Postgres roles (`CREATE ROLE`/`GRANT`) are cluster-wide, so even separate logical databases in the same cluster race on shared catalogs like `pg_shdepend`. Concurrent agent sessions across the whole estate are exactly the working mode this project runs in, so this was never a rare collision — it was waiting to be hit | **boundary** | tabsii-platform pg-test lane, while landing an unrelated fix; root cause in biffo-template `scripts/pg-test-db.sh` | biffo-template `scripts/pg-test-db.sh` (shared to every instance/sibling/plugin via `core-manifest.json` + `shared-files.json`) | **open** — proposed fix is a machine-wide `flock` around the pg-test invocation, serializing concurrent runs rather than multiplying Postgres containers (which would add to memory pressure agents already create by running several worktrees at once) |
+| — | **A commit message that MENTIONS a CI-skip token skips CI.** GitHub scans the **whole** message, not the subject, so prose in a body explaining the marker suppresses every workflow for that push. The commit *implementing* the sibling scaffold's deliberate marker (#1075) described itself in its own body and **zero runs were created**. Nothing about the symptom points at the cause: the PR sat `BLOCKED` on required checks that could never arrive, `gh run list --branch <it>` was empty while every other branch got runs normally, and closing and reopening the PR did not help — only amending the message and force-pushing did. The estate is now more exposed to this, not less, because the #1065 fix deliberately puts that token in every sibling scaffold commit, so any future commit or PR body discussing it is a candidate. **cost ~25m** | **fail-open** · visibility | biffo-template [#1075](https://github.com/keiranholloway/biffo-template/pull/1075) | biffo-template (`commitlint.config.js`) | **fixed** ([#1082](https://github.com/keiranholloway/biffo-template/pull/1082)) — rejected in a body, still allowed in a subject where it is deliberate and visible in one line |
+| — | **A latent lint error on a file nobody had ever staged silently aborted the first commit that touched it — and `git push` then reported success having pushed nothing.** `commitlint.config.js` has failed eslint's `no-undef` on `module` since it was written: it is CommonJS by necessity, and the flat config had no override for it. That was invisible because `pnpm run lint` does not cover root tool configs, so the error only fires through **lint-staged**, which runs eslint on any staged `*.js` — and nobody had ever staged that file. The first editor inherits an abort they did not cause, from a rule they did not break, on a file the repo's own lint script calls clean. The abort was then masked exactly as AGENTS.md §4 describes: `git rev-list --count origin/dev..HEAD` said `0` while the push printed `[new branch]`. **The generalisation is the useful part: a check that only ever runs on changed files has never been run against the files nobody changes**, so its verdict on them is unknown rather than passing. **cost ~10m** | **fail-open** · process | biffo-template (editing `commitlint.config.js` for the first time) | biffo-template (`eslint.config.mjs`) | **fixed** ([#1082](https://github.com/keiranholloway/biffo-template/pull/1082)) — CommonJS override so the next editor does not inherit it |
+| — | **Two files named `core-upgrade.ts` made a `file:line` citation ambiguous, and the ambiguity was resolved wrongly — against the agent that was right.** A verification agent cited `core-upgrade.ts:212-214` for a `keep-ours` branch; spot-checking it against `cli/src/commands/core-upgrade.ts` found interface declarations there and I briefly concluded the citation was fabricated. The real target was `cli/src/lib/core-upgrade.ts:213`, which says exactly what was claimed. **The audit step worked and its conclusion was still wrong**, because the evidence it checked was the wrong file — and the failure direction is the dangerous one: it discredits a correct finding rather than accepting a false one. A repo with two files of the same basename cannot carry bare-basename citations; **the rule is that a `file:line` reference must be repo-relative whenever the basename is not unique** | **process** · visibility | biffo-template (my own spot-check of a sub-agent's report) | diagnostic practice — cite repo-relative paths; check `git ls-files \| grep <basename>` before disbelieving one | **corrected** — the agent's finding was reinstated and #1026 was built as filed |
 
 ### What the classes say
 
@@ -750,6 +753,41 @@ the hook's own backup-stash/restore cycle and the commit object being
 written is the leading theory), so this is recorded as a symptom pattern to
 watch for, not a fix: **after any `git commit`, check `git log -1
 --format=%H` actually changed before trusting the next step.**
+### Measured: the guard cost 35 minutes, and 25 of them were the guard's own subject (2026-08-01, part 3)
+
+Landing the CI-skip guard ([#1082](https://github.com/keiranholloway/biffo-template/pull/1082))
+cost **~35 minutes**, of which **~25 were spent being caught by the exact defect
+it now prevents** — and the loop is worth naming because none of its steps look
+wrong from inside.
+
+| Loop | Cost | Why it happened |
+| --- | --- | --- |
+| PR sits `BLOCKED`, no checks arrive | ~5m | Waited, assuming latency. AGENTS.md §6 documents GitHub sometimes creating no run, so waiting is defensible |
+| Close and reopen the PR to re-fire `pull_request` | ~5m | Correct remedy for the documented case; **wrong case**, so it changed nothing |
+| Check whether the repo produces runs at all | ~3m | The decisive step, and the one that should have been first: other branches had runs minutes earlier, so it was branch-specific, not GitHub-wide |
+| Find the token in my own commit body | ~2m | Once the question was "what is different about this branch", it was immediate |
+| Amend + force-push + re-verify | ~10m | Includes a second full CI cycle |
+
+**Structural, not carelessness.** The `[skip ci]` case is indistinguishable from
+the "GitHub created no run" case *by observation of the PR alone* — both present
+as required checks that never arrive. The distinguishing evidence is one command
+(`gh run list` on another branch) and nothing prompts it.
+
+Then the second loop, ~10m: the commit that added the guard **silently did not
+happen**. `lint-staged` aborted it on a pre-existing eslint error in the very
+file being edited, and `git push` printed `[new branch]` having pushed nothing.
+Caught by `git rev-list --count origin/dev..HEAD` returning `0` — the mechanical
+check — not by reading the output, because the output had been piped through
+`grep` and the error was filtered out. **I had filtered away the explanation
+while looking for confirmation.**
+
+**~20m** went to a third, unrelated loop: establishing that this workstation's
+AWS profiles cannot produce a Cognito user token. Four profiles, two accounts,
+Secrets Manager and SSM all checked before concluding the credential simply is
+not held anywhere. The decisive tell was cheap and found last —
+`admin-initiate-auth` returning `InvalidParameterException` rather than
+`AccessDenied` proves the permission exists and only the password is missing.
+Recorded so the next session starts there.
 
 ### Measured: twelve milestones, and the machine took most of it (2026-08-01, part 2)
 
@@ -3838,6 +3876,41 @@ that merged instantly were then confirmed green on their merged SHA rather than
 assumed.
 
 
+### A control experiment is what made a zero mean anything (2026-08-01)
+
+**Verifying #616 needed a negative result, and a negative result is exactly the
+thing this estate keeps misreading.** A brand-scoped workflow fired for its own
+brand's unit-onboarding event; a sibling brand's produced **zero** runs. That
+zero reads identically whether scope-matching correctly rejected the event or
+the event was never published at all.
+
+So it was resolved rather than assumed: a second, **unscoped** definition on the
+same trigger, then another unit onboarded under the sibling brand. The control
+fired. That — and only that — makes the scoped definition's silence mean
+*hierarchy matching works* instead of *nothing was listening*.
+
+The cost was one extra definition and one extra unit, perhaps four minutes. The
+same four minutes on #726 turned "no errors in seven days" from apparent
+evidence of a fix into its opposite: **no dry-run had been run at all**, so the
+quiet log said nothing. Both issues would have closed green on the unexamined
+zero.
+
+**Generalisable:** when a verification's key evidence is an absence, build the
+positive control that proves the input reached the thing under test. Without it
+you have not tested the system, you have tested whether anything was connected.
+
+### Mutation testing beat deleting the module (2026-08-01)
+
+§3 says prove the test fails without the fix. For a **new** module the obvious
+reading — delete it and watch the tests fail — proves only that an import
+breaks, which is worthless. Instead each half of #1018's guard was mutated in
+place: blinding the comparison (`missing = set()`) failed exactly the two drift
+tests, and making `declared_columns` read the class body instead of
+`__table__.columns` failed exactly the inherited-column test. That second
+mutation is the bug's real shape, since `tenant_id` arrives by inheritance.
+
+**Worth adding to §3:** for a new module, revert the *logic*, not the *file*.
+
 ## What needs more thought
 
 **Nothing tells you a deploy went red, and the obvious command hides it.** Five
@@ -5254,6 +5327,40 @@ one reached the scoreboard — because nothing about grepping HTML announces tha
 it cannot answer the question being asked.
 
 
+### The verification disciplines are internalised; the recording one is not (2026-08-01)
+
+Four of `biffo-verify`'s sections were applied this session without the skill
+being invoked, and they held up work that would otherwise have shipped wrong.
+§8 fired only when the operator asked — for at least the fourth recorded time.
+
+The asymmetry has an obvious explanation and it is not laziness: **§1–§7 pay the
+session that performs them**, immediately and visibly. §8 pays a session that
+has not happened yet, for a reader who is not present. Every incentive at the
+moment of writing points away from it.
+
+That means exhortation cannot fix it, and four recorded diagnoses saying the
+trigger is wrong — without the trigger changing — is the evidence. It needs a
+mechanical fire condition tied to something observable: an issue closed, a
+scoreboard-worthy defect found, a PR merged that fixed a bug rather than adding
+a feature. Any of those is detectable; "the session is ending" is not.
+
+### Five fail-opens shipped in one day against 121 recorded ones (2026-08-01)
+
+`fail-open` is 93 primary + 28 secondary corpus entries and `biffo-verify`'s own
+description calls it *"the estate's most repeated defect"* — and five instances
+shipped anyway. Where they escaped is the finding: **four at authoring or
+review, none at debugging**, which is the only phase where the existing guidance
+is written to fire.
+
+Filed as a measured experiment rather than more prose
+([#1083](https://github.com/keiranholloway/biffo-template/issues/1083)) with a
+baseline, a counter-metric, a review date, and a commitment to remove the prose
+if refuted. One half was made mechanical the same day
+([#1082](https://github.com/keiranholloway/biffo-template/pull/1082)); two more
+had already become machine guards earlier in the session (the sibling deploy's
+`deploy-status` job, and the CRUD schema check in `_run_db_init`). **The prose
+half is the part on trial.**
+
 ## Skills used
 
 Skills cannot be iterated on impressions. Every invocation, with an honest outcome.
@@ -5509,6 +5616,8 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **worked — §3 caught a false claim in my own module header** | Module 074 shipped a header asserting that two `FOR UPDATE` policies made `.update` insufficient to soft-delete. Writing the test that was supposed to demonstrate it produced `assert 1 == 0` instead: Postgres ORs permissive policies per action and RLS gates rows, not columns. The claim was plausible, internally consistent, and wrong. §3 (prove the test fails without the fix) is written about defending a fix; here it defended against a **false explanation**, which is the more expensive error because it propagates into every later reader. |
 | `biffo-verify` | **partial — §6 says suspect the ruler, but not what to do when the ruler is right and still unusable** | The error-branch gate reported four unverified branches. §6's instinct (suspect the instrument) was correct to apply and led to the real cause in about fifteen minutes — but the gate was *not* wrong: the branches genuinely had no coverage evidence. The missing guidance is the third case, where the instrument is accurate, the code is correct, and the **measurement apparatus** cannot observe one of them. The resolution there is neither "fix the code" nor "fix the gate" but "change how the test exercises it", and nothing in the skill points at that. |
 | `biffo-add-service` | **partial — its "most follow-up wiring is now automatic" is true, and the gap it leaves is the expensive one** | `biffo sibling create` set every repo variable correctly and the skill's known-gotcha list is genuinely obsolete (RUNNER_LABEL, CORS, PATH_PREFIX all handled). But the sibling's first Deploy fires from the skeleton push in step 4, ~1s **before** step 7 sets `SIBLING_DEPLOY_ENABLED` — so it skips both jobs and reports **success**. The skill says to "verify the result is genuinely live rather than merely green", which is exactly right and is the only reason it was caught; it does not warn that the first green run is *always* a lie. |
+| `groom-backlog` | **worked — and its "an open issue is a claim" rule paid twice in one run** | 28 open → 18. Its Step 1 fan-out (four read-only agents on a cheap model) verified 28 issues in one pass, and its **spot-check-the-surprising-verdicts** rule is what stopped the run's only irreversible mistake: the single `STALE/WRONG` verdict was right that #1019's premise was false (both CRUD guards use AND; ADR-0010 mentions neither "supersedes" nor "bypass") and wrong that the issue was therefore closable — its second ask, a test asserting the two guards agree, was real and unmet. Closing on the agent's summary would have discarded it. Its weakest point is the same as last time: **ranking**. The order it produced was reshuffled once real file-overlap constraints were applied, because two of the top items shared `cli/src/lib/core-upgrade.ts` and could not run concurrently. |
+| `biffo-verify` | **partial — §8 fired on operator prompt again; this file now records that same cause at least four times** | The diagnostic half of this skill was applied all session **without the skill being invoked at all**: §2 (reproduce by the reporter's route) on #726, §4 (verify the deployed artefact) on #1058 where `git tag --contains` disproved a scaffold's provenance that timestamps appeared to confirm, and §6's blind-zero check **twice decisively** — seven days of quiet logs meant "no dry-run was ever run", not "the fix works", and zero runs for a sibling brand needed an unscoped control before it meant anything. Those parts are internalised because **they pay the session that performs them**. §8 pays the *next* session, and it fired only when the operator asked — for at least the fourth consecutive recorded time, on top of an entry above that already concluded *"a section that keeps diagnosing its own non-use and does not change is evidence the trigger is wrong"*. That diagnosis has now been correct and inert for four sessions. **The parallel with this session's other finding is exact**: 121 corpus rows did not stop five fail-opens shipping, and four recorded diagnoses have not made §8 self-trigger. Documented is not prevented. The fix is mechanical or it is nothing — §8 should fire on *"a defect was found"*, which is observable, rather than on *"the session is ending"*, which nothing detects. |
 
 ## Adding a row
 

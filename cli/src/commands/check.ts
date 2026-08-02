@@ -1,4 +1,5 @@
 import { Command } from 'commander'
+import { runAdrNumberingCheck } from '../scripts/check-adr-numbering.js'
 import { runBranchProtectionCheck } from '../scripts/check-branch-protection.js'
 import { runOwnershipCheck } from '../scripts/check-core-ownership.js'
 import { runPluginCollisionCheck } from '../scripts/check-plugin-collisions.js'
@@ -63,6 +64,15 @@ checkCommand
   .description('Verify every template-owned plugin declaring infra ships a Terraform module')
   .action(async () => {
     await runPluginTerraformCheck()
+  })
+
+checkCommand
+  .command('adr-numbering')
+  .description(
+    "Refuse two ADRs in this repo's own docs/ADR/ claiming the same number (tabsii-platform#449)",
+  )
+  .action(async () => {
+    await runAdrNumberingCheck()
   })
 
 checkCommand

@@ -567,6 +567,7 @@ fi
 if [ -f scripts/biffo.sh ]; then
   run_check plugin-tf sh scripts/biffo.sh check plugin-terraform
   run_check plugin-names sh scripts/biffo.sh check plugin-collisions
+  run_check adr-numbering sh scripts/biffo.sh check adr-numbering
 else
   skip biffo-guards "no scripts/biffo.sh in this repo"
 fi

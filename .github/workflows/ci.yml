@@ -233,6 +233,15 @@ jobs:
       - name: Plugin collision guard
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/biffo.sh check plugin-collisions
+      # Two ADRs in this repo's own docs/ADR/ must not share a number — the
+      # instance's own series and the template's series both start at 0001 and
+      # are never synced against each other, so a collision is invisible until
+      # it has already happened (tabsii-platform#449). A no-op in the template
+      # (one series, no duplicates by construction) and load-bearing in every
+      # instance, which is where the two series actually meet.
+      - name: ADR numbering guard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check adr-numbering
 
   python:
     name: Python (lint, types, test, security)

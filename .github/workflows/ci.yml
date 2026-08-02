@@ -390,11 +390,13 @@ jobs:
         with:
           terraform_version: '~> 1.9'
       # Scoped to template-owned modules/ only (core-manifest.json). infra/ is
-      # user-owned: fmt-checking or validating it here would red this
-      # template-shipped gate on an instance's own Terraform, and the old
-      # `infra/environments/dev` target hardcoded an environment name an instance
-      # may rename or remove (issue #327). The template validates the modules it
-      # owns; an instance validates its own infra composition in its own gate.
+      # user-owned, so a check ASSERTING INSTANCE-SPECIFIC CORRECTNESS over it
+      # here would red a template-shipped gate on content the template does not
+      # own and cannot fix on an instance's behalf. `infra-environments-validate`
+      # below is a narrower, different claim -- syntax/schema validity, not
+      # correctness -- which every instance can fix itself with no upstream
+      # dependency, so it is safe to ship as a template-owned check (see that
+      # job's own comment for why this distinction holds).
       - name: Terraform fmt check (template-owned modules)
         run: terraform fmt -check -recursive modules/
       - name: Validate modules
@@ -419,3 +421,51 @@ jobs:
           quiet: true
           soft_fail: true
           framework: terraform
+
+  infra-environments-validate:
+    name: Terraform Validate (infra/environments)
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    # `infra/environments/` is user-owned (core-manifest.json) -- instance-
+    # specific resource naming, account config and customisation are the
+    # instance's own to get right, and this job asserts none of that.
+    #
+    # What it DOES assert -- does every environment directory still `fmt`
+    # and `validate` -- is a claim any instance can verify and fix itself,
+    # with no upstream dependency: unlike a check on instance-specific
+    # CORRECTNESS (the #327 trap this job's sibling avoids by staying
+    # scoped to modules/), "does this still parse" has one right answer
+    # regardless of which instance is asking, and template-owning the CHECK
+    # (not its subject) is exactly what lets `biffo core upgrade` keep this
+    # job current for every instance rather than freezing it at `biffo
+    # init` time (tabsii-platform#521 -- template-shipping a `.instance.yml`
+    # copy of this same job would have meant no instance could ever receive
+    # a fix to it again, the #755 trap).
+    #
+    # Generic on purpose: no hardcoded environment name (the old
+    # `infra/environments/dev`-only version was #327's actual bug) -- every
+    # directory under infra/environments/ gets fmt + validate, whatever an
+    # instance happens to have renamed, added, or removed.
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: '~> 1.9'
+      - name: Terraform fmt check (infra/environments)
+        run: terraform fmt -check -recursive infra/environments/
+      - name: Validate every environment
+        env:
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/tf-plugin-cache
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          # -backend=false: no cloud credentials or real state needed, this is
+          # syntax/schema validation only, the same shape as the modules/ job
+          # above. One directory per environment, not per .tf file -- an
+          # environment's files are one Terraform root together.
+          rc=0
+          for dir in infra/environments/*/; do
+            echo "== validating $dir =="
+            terraform -chdir="$dir" init -backend=false -input=false >/dev/null || { rc=1; continue; }
+            terraform -chdir="$dir" validate || rc=1
+          done
+          exit $rc

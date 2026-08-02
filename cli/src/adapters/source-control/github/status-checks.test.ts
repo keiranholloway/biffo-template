@@ -38,8 +38,14 @@ const SKELETON_CI = join(repoRoot, '_skeletons/sibling-template/.github/workflow
  *   (ADR-0006). It runs in instances but short-circuits to a pass as soon as it
  *   sees `biffo.core.json`, so making it a required context in a scaffolded repo
  *   would gate merges on a check that is meaningless there.
+ * - `Terraform Validate (infra/environments)` (tabsii-platform#521): exists only
+ *   in the core `ci.yml`, not the sibling skeleton. `infra/environments/` is an
+ *   instance's own dev/staging/prod layout (ADR-0005); a sibling owns one flat
+ *   `infra/` tree instead (ADR-0007) and already validates it via its own
+ *   `infra-validate` job, so this job has nothing to check there. Requiring a
+ *   context that never reports in a scaffolded sibling would BLOCK it forever.
  */
-const NOT_REQUIRED = new Set(['Release Guards'])
+const NOT_REQUIRED = new Set(['Release Guards', 'Terraform Validate (infra/environments)'])
 
 /**
  * Extract the `name:` of every top-level job in a GitHub Actions workflow.

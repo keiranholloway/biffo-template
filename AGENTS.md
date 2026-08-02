@@ -260,3 +260,55 @@ core-ownership guard would refuse the commit anyway.
 
 **Adding a file to the shared set is not done until `--check` is clean**, the
 same way a template-owned change is not done until the upgrade PRs merge.
+
+#### It is not only hooks and scripts
+
+The set began as governance plumbing — `.githooks/*`, `scripts/verify.sh`, the
+dependency audits — and for a long time that was all it held. That framing is
+part of why #1107 propagated: `handleResponse` threw the whole response body as
+the error message, a user saw `{"detail":"Administrator access required"}`
+where a page's content belonged, and the identical function sat in the skeleton
+and in **all seven** sibling repos with no channel to any of them. "Add it to
+the shared set" was never considered, because the shared set was understood to
+be about gates.
+
+**The test is not what kind of file it is. It is whether every repo's copy
+should be identical, and whether they diverge in practice.** Application source
+qualifies when both are true: `apps/frontend/src/lib/api-client.ts` is the
+first, and it is there now.
+
+#### Two lists, and the difference matters
+
+- **`files`** — distributed to every repo in scope, and **created where
+  absent**. Right for a gate every repo must run. Wrong for anything
+  layout-specific: it would write a frontend API client into plugin repos,
+  runner repos and a design repo that have no frontend at all.
+- **`filesIfPresent`** — a `target → canonical source` map, kept in step only
+  in repos that **already hold** the file, never created. The two paths differ
+  because a sibling's `apps/frontend/...` has no counterpart at this repo's
+  root, so the **skeleton** is the canonical copy.
+
+The mechanism can backfill — that is what `files` is. `filesIfPresent` is how
+you say a file must not be created, only kept current, because putting a file
+into a repo that never had one is a decision somebody should make rather than a
+side effect of adding a line to a manifest.
+
+#### Reconcile before you distribute
+
+A one-way overwrite destroys whatever it lands on. Before adding a path:
+
+1. **Diff every copy** and classify each difference — a fix the canonical copy
+   is missing, genuine per-repo customisation, or drift.
+2. **Fold the fixes upstream.** `tabsii-crm` had added a `patch` verb to its
+   client; the canonical copy took it, so crm converged with nothing lost.
+   `_extract_detail` was written twice in two siblings and never brought
+   upstream, which is why three more still ship the bug it fixes.
+3. **Do not add a path you have not reconciled.** `auth.ts` sits beside the
+   client in all seven siblings and diverges by 29–247 lines; adding it would
+   clobber six repos with the skeleton's copy on no evidence about which
+   behaviour is right (#1117).
+4. **Expect the rehearsal to find callers, not just the file.** Adding `patch`
+   broke the skeleton's own test mock, and `tabsii-geo` has the same uncast
+   mock in two places — so that repo needs a one-line fix landed _with_ the
+   file, not after it. Phase 1 runs each target's own gate before anything
+   ships, and refuses the whole round if any repo fails; that is the point.

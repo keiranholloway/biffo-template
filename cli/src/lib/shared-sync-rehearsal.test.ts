@@ -98,6 +98,16 @@ interface SatelliteOpts {
   marker?: 'biffo.sibling.json' | 'biffo.plugin.json' | null
   /** Extra files to commit before the run, as `path -> contents`. */
   seedFiles?: Record<string, string>
+  /**
+   * Write the CURRENT (candidate-matching) `scripts/verify.sh` and
+   * `scripts/gate-coverage.sh` instead of the deliberately-stale default, so
+   * this repo reports `current` on the `files` list. The mustBeUniform and
+   * `--candidates` tests want a repo whose ONLY interesting property is the
+   * unrelated path under test — leaving the default staleness in would fail
+   * `--check` for a reason those tests are not about, which is exactly the
+   * "names the wrong cause" defect AGENTS.md section 4 warns against.
+   */
+  filesUpToDate?: boolean
 }
 
 /** A bare origin plus a clone on `dev`, holding a stale copy of the shared set. */
@@ -123,10 +133,18 @@ function makeSatellite(estate: string, name: string, opts: SatelliteOpts = {}): 
   }
   writeFileSync(join(dir, '.gitignore'), '.worktrees/\n')
   mkdirSync(join(dir, 'scripts'), { recursive: true })
-  // Deliberately STALE — a previous generation of the shared file, so the repo
-  // reads as drifted and becomes a target.
-  writeFileSync(join(dir, 'scripts/verify.sh'), '#!/usr/bin/env bash\nexit 0\n')
-  writeFileSync(join(dir, 'scripts/gate-coverage.sh'), '#!/usr/bin/env bash\nexit 0\n')
+  if (opts.filesUpToDate) {
+    // Matches the template's candidate copies byte-for-byte, so this repo is
+    // `current` on the `files` list and the only signal left in `--check`'s
+    // output is whatever the test actually seeded.
+    writeFileSync(join(dir, 'scripts/verify.sh'), candidateVerify)
+    writeFileSync(join(dir, 'scripts/gate-coverage.sh'), candidateCoverage)
+  } else {
+    // Deliberately STALE — a previous generation of the shared file, so the
+    // repo reads as drifted and becomes a target.
+    writeFileSync(join(dir, 'scripts/verify.sh'), '#!/usr/bin/env bash\nexit 0\n')
+    writeFileSync(join(dir, 'scripts/gate-coverage.sh'), '#!/usr/bin/env bash\nexit 0\n')
+  }
   if (opts.gateFails) writeFileSync(join(dir, 'GATE-FAILS-HERE'), '')
   git(dir, 'add', '-A')
   git(dir, 'commit', '-m', 'chore: fixture')
@@ -138,13 +156,17 @@ function makeSatellite(estate: string, name: string, opts: SatelliteOpts = {}): 
  * A synthetic template: this repo's real `shared-sync.sh`, a manifest naming
  * only the fixture's own shared files, and the candidate copies of them.
  */
-function makeTemplate(dir: string, opts: { withSkeletons?: boolean } = {}): void {
+function makeTemplate(
+  dir: string,
+  opts: { withSkeletons?: boolean; mustBeUniform?: Record<string, number> } = {},
+): void {
   mkdirSync(join(dir, 'scripts'), { recursive: true })
   const manifest: Record<string, unknown> = {
     version: 1,
     files: ['scripts/verify.sh', 'scripts/gate-coverage.sh'],
     appliesTo: ['biffo.sibling.json', 'biffo.plugin.json'],
   }
+  if (opts.mustBeUniform) manifest.mustBeUniform = opts.mustBeUniform
   if (opts.withSkeletons) {
     // The two skeleton rulesets differ ON PURPOSE — that is the whole reason
     // `filesFromSkeleton` resolves its source per repo instead of `files`
@@ -218,6 +240,7 @@ function runSync(
     failingSatellite?: boolean
     fromWorktree?: boolean
     withSkeletons?: boolean
+    mustBeUniform?: Record<string, number>
     satellites?: Array<[string, SatelliteOpts]>
   } = {},
 ): {
@@ -235,7 +258,7 @@ function runSync(
   // does in ~/code. That is what makes the "do not target yourself" exclusion
   // load-bearing rather than incidental.
   const template = join(estate, 'biffo-template')
-  makeTemplate(template, { withSkeletons: opts.withSkeletons })
+  makeTemplate(template, { withSkeletons: opts.withSkeletons, mustBeUniform: opts.mustBeUniform })
 
   const satellites = (
     opts.satellites ?? [
@@ -284,6 +307,19 @@ function originHasSyncBranch(satellite: string): boolean {
     },
   )
   return (res.stdout ?? '').trim().length > 0
+}
+
+/**
+ * Strip ANSI colour codes so a multi-field report line can be matched with a
+ * single `\s+`-joined regex. The mustBeUniform/--candidates report colours
+ * only the verdict WORD (`WORSENED`, `at baseline`, ...), so an escape
+ * sequence sits directly between it and the padding that follows -- `\s+`
+ * does not span it, and a naive regex fails against real, correct output for
+ * a reason that has nothing to do with what the test is asserting.
+ */
+function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex -- \x1b IS the control character being stripped.
+  return s.replace(/\x1b\[[0-9;]*m/g, '')
 }
 
 describe('shared-sync rehearsal', () => {
@@ -466,5 +502,152 @@ describe('shared-sync rehearsal', () => {
 
     expect(run.out).toMatch(/--no-rehearse: shipping 2 repos unproven/)
     expect(run.ghCalls.filter((c) => c.startsWith('pr create'))).toHaveLength(2)
+  }, 120_000)
+})
+
+/**
+ * `mustBeUniform` (#1108): the fourth list, and the only one that never
+ * writes. It asserts that a path should read identically across every repo
+ * that holds it, and `--check` fails a path only when its LIVE variant count
+ * EXCEEDS the baseline recorded for it — the same posture
+ * `biffo.orphan-baseline.json` established for the core-upgrade orphan
+ * ratchet (`cli/src/lib/core-upgrade.ts`): pre-existing residue never
+ * hard-blocks, only a NEW regression does.
+ *
+ * These fixtures use `filesUpToDate: true` so `scripts/verify.sh` /
+ * `scripts/gate-coverage.sh` are current in every satellite — the ONLY signal
+ * left in `--check`'s output is whatever each test seeds under
+ * `mustBeUniform`, so a passing assertion here means the ratchet passed, not
+ * that an unrelated `files` entry happened to as well.
+ */
+describe('mustBeUniform ratchet (#1108)', () => {
+  it('reports a path at its recorded baseline, and does not fail --check', () => {
+    const { run } = runSync(['--check'], {
+      mustBeUniform: { 'shared/thing.txt': 2 },
+      satellites: [
+        ['sat-alpha', { filesUpToDate: true, seedFiles: { 'shared/thing.txt': 'content-A\n' } }],
+        ['sat-beta', { filesUpToDate: true, seedFiles: { 'shared/thing.txt': 'content-B\n' } }],
+      ],
+    })
+
+    expect(run.out).toMatch(
+      /at baseline\s+shared\/thing\.txt\s+2 variants across 2 repos \(baseline 2\)/,
+    )
+    expect(run.status).toBe(0)
+  }, 120_000)
+
+  it('fails --check when a path is one variant worse than its baseline', () => {
+    // This is the test that must fail against the UNMODIFIED script, and for
+    // the right reason: not because of a crash or a missing flag, but because
+    // nothing recognises `mustBeUniform` at all, so no WORSENED verdict is
+    // ever printed and `--check` exits 0. Proven by hand before implementing
+    // (see the PR body); this is the regression guard for that proof.
+    const { run } = runSync(['--check'], {
+      mustBeUniform: { 'shared/thing.txt': 2 },
+      satellites: [
+        ['sat-alpha', { filesUpToDate: true, seedFiles: { 'shared/thing.txt': 'content-A\n' } }],
+        ['sat-beta', { filesUpToDate: true, seedFiles: { 'shared/thing.txt': 'content-B\n' } }],
+        ['sat-gamma', { filesUpToDate: true, seedFiles: { 'shared/thing.txt': 'content-C\n' } }],
+      ],
+    })
+
+    // stripAnsi: the verdict word alone is colour-wrapped, and the escape
+    // sequence sits directly between it and the padding, which `\s+` cannot
+    // span.
+    expect(stripAnsi(run.out)).toMatch(
+      /WORSENED\s+shared\/thing\.txt\s+3 variants across 3 repos \(baseline 2\)/,
+    )
+    expect(run.out).toMatch(/mustBeUniform path exceeded its baseline/)
+    expect(run.status).toBe(1)
+  }, 120_000)
+
+  it('reports a path that converged, and says the baseline can be lowered', () => {
+    // Baseline recorded at 3; the estate has since converged to a single
+    // variant. A ratchet that only ever tightens on failure and never notices
+    // improvement is a number nobody trusts enough to lower by hand.
+    const { run } = runSync(['--check'], {
+      mustBeUniform: { 'shared/thing.txt': 3 },
+      satellites: [
+        ['sat-alpha', { filesUpToDate: true, seedFiles: { 'shared/thing.txt': 'same-content\n' } }],
+        ['sat-beta', { filesUpToDate: true, seedFiles: { 'shared/thing.txt': 'same-content\n' } }],
+      ],
+    })
+
+    expect(run.out).toMatch(
+      /uniform\s+shared\/thing\.txt\s+uniform across 2 repos \(baseline 3 -- lower it to 1\)/,
+    )
+    // Converging is not a failure — only EXCEEDING the baseline is.
+    expect(run.status).toBe(0)
+  }, 120_000)
+
+  it('does not count a repo missing the path as a holder or a variant', () => {
+    const { run } = runSync(['--check'], {
+      mustBeUniform: { 'shared/thing.txt': 1 },
+      satellites: [
+        ['sat-alpha', { filesUpToDate: true, seedFiles: { 'shared/thing.txt': 'same-content\n' } }],
+        ['sat-beta', { filesUpToDate: true, seedFiles: { 'shared/thing.txt': 'same-content\n' } }],
+        // Holds neither the marker path's content nor is excluded from
+        // `applies()` — it is a real applicable repo that simply never
+        // received this particular file, exactly like a repo `files` has not
+        // reached yet. It must not inflate the holder count to 3.
+        ['sat-gamma', { filesUpToDate: true }],
+      ],
+    })
+
+    expect(run.out).toMatch(/uniform\s+shared\/thing\.txt\s+uniform across 2 repos/)
+    expect(run.out).not.toMatch(/across 3 repos/)
+    expect(run.status).toBe(0)
+  }, 120_000)
+})
+
+/**
+ * `--candidates` (#1108): advisory discovery, never the guard. It walks every
+ * applicable repo's full tree — not just paths already in shared-files.json —
+ * and reports unlisted paths held in >=5 repos, bucketed by variant count.
+ * Unlike `--check`, it exits 0 unconditionally: it is a question for a human
+ * to triage, not a build failure.
+ */
+describe('--candidates (#1108)', () => {
+  it('reports an unlisted path present in >=5 repos, and exits 0 regardless', () => {
+    const satellites: Array<[string, SatelliteOpts]> = Array.from({ length: 5 }, (_, i) => [
+      `sat-${i}`,
+      {
+        filesUpToDate: true,
+        seedFiles: { 'apps/frontend/src/lib/mystery.ts': 'export const mystery = 1\n' },
+      },
+    ])
+    const { run } = runSync(['--candidates'], { satellites })
+
+    expect(run.out).toMatch(/shared-set candidates/)
+    expect(run.out).toMatch(/uniform but unlisted/)
+    expect(run.out).toMatch(/apps\/frontend\/src\/lib\/mystery\.ts\s+1 variant\(s\) across 5 repos/)
+    expect(run.out).toMatch(/advisory only/)
+    // The mode's entire point: a candidate list outstanding must not fail
+    // the build, or every estate would redden on the first run.
+    expect(run.status).toBe(0)
+  }, 120_000)
+
+  it('does not report a path held in fewer than 5 repos', () => {
+    const { run } = runSync(['--candidates'], {
+      satellites: [
+        [
+          'sat-alpha',
+          {
+            filesUpToDate: true,
+            seedFiles: { 'apps/frontend/src/lib/too-rare.ts': 'export const x = 1\n' },
+          },
+        ],
+        [
+          'sat-beta',
+          {
+            filesUpToDate: true,
+            seedFiles: { 'apps/frontend/src/lib/too-rare.ts': 'export const x = 1\n' },
+          },
+        ],
+      ],
+    })
+
+    expect(run.out).not.toMatch(/too-rare\.ts/)
+    expect(run.status).toBe(0)
   }, 120_000)
 })

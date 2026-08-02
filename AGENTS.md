@@ -283,8 +283,9 @@ Files every sibling and plugin must hold verbatim are listed in
 `shared-files.json` and distributed by `scripts/shared-sync.sh`:
 
 ```bash
-sh scripts/shared-sync.sh --check --estate ~/code   # report drift, exit 1 if any
-sh scripts/shared-sync.sh --estate ~/code           # open a PR per drifted repo
+sh scripts/shared-sync.sh --check --estate ~/code        # report drift, exit 1 if any
+sh scripts/shared-sync.sh --estate ~/code                # open a PR per drifted repo
+sh scripts/shared-sync.sh --candidates --estate ~/code   # unlisted paths worth triaging; always exits 0
 ```
 
 It is a **one-way overwrite**, not a merge, so only add a file whose copy should
@@ -312,7 +313,7 @@ should be identical, and whether they diverge in practice.** Application source
 qualifies when both are true: `apps/frontend/src/lib/api-client.ts` is the
 first, and it is there now.
 
-#### Three lists, and the difference matters
+#### Four lists, and the difference matters
 
 - **`files`** — a plain list of paths, distributed to every repo in scope and
   **created where absent**, from this repo's copy at the **same path**. Right
@@ -329,11 +330,18 @@ first, and it is there now.
   by the `scripts/verify.sh` clause, fall back to `skeletonDefault`). The
   policy says what happens to a copy the repo **already has**: `sync`
   overwrites it, `seed` leaves it alone forever. Both create where absent.
+- **`mustBeUniform`** — a `path → baseline variant count` map for paths that
+  should read **identically** across every repo that holds them, and the only
+  list that **never writes**. `scripts/shared-sync.sh --check` only measures
+  it and reports; nothing is copied or overwritten. See below for why.
 
 The mechanism can backfill — that is what `files` and `filesFromSkeleton` are.
 `filesIfPresent` is how you say a file must not be created, only kept current,
 because putting a file into a repo that never had one is a decision somebody
 should make rather than a side effect of adding a line to a manifest.
+`mustBeUniform` is how you say a file's copies must converge, without deciding
+_to_ which one — a one-way overwrite cannot do that safely, and pretending it
+can is how a fix gets clobbered by the copy that lacks it.
 
 #### Why the third list exists, and when to reach for it
 
@@ -373,9 +381,62 @@ diverge. Note what `seed` does to `--check`: a **missing** copy is drift, a
 otherwise would redden the check permanently in the repos that did the right
 thing.
 
+#### Why the fourth list exists, and when to reach for it
+
+`_extract_detail` was written twice, independently, in two different siblings,
+fixing the same bug — because the second author had no way to discover the
+first had already solved it (#1107, closed; the class issue is #1108). A sweep
+alone cannot fix this: variant count alone cannot tell "should be uniform" from
+"legitimately per-repo". `apps/frontend/src/lib/auth.ts` sits beside
+`api-client.ts` at 6 variants across 7 repos, and `apps/frontend/src/app/page.tsx`
+sits at 7 variants across 7 repos — the first is a defect (#1117), the second is
+every sibling's product surface working as intended. The discriminator is
+semantic, not statistical, so it has to be **declared** — which is what
+`mustBeUniform` is for.
+
+It cannot be `files` or `filesIfPresent`: both are one-way overwrites, and a
+file that has already diverged has no channel to record that divergence short
+of destroying five-sixths of it on no evidence about which copy is correct.
+`mustBeUniform` tracks the debt so it can be reconciled deliberately, rather
+than either staying invisible or getting clobbered by accident.
+
+`--check` fails a path only when its **live** variant count **exceeds** the
+baseline recorded for it — never on the pre-existing residue. This is the same
+posture `biffo.orphan-baseline.json` established for the core-upgrade orphan
+ratchet (`cli/src/lib/core-upgrade.ts`, `checkOrphanRatchet`): a guard that is
+red on day-one residue every morning trains people to stop reading it
+(`scripts/protection-audit.sh` makes this case at length), and `--check` feeds
+exactly that daily dashboard (`scripts/practices-daily.sh`). A path whose
+variants drop _below_ baseline is reported as improved and told to lower the
+baseline — a ratchet that never tightens stops meaning anything.
+
+**It reads `origin/<base>` refs, never a working tree.** The first pass at
+measuring the estate for this feature read `api-client.ts` at 4 variants from
+local working trees and 1 from remote refs — the difference was a stale
+`git pull` on the measuring machine, not anything real in the estate. A guard
+that fails on somebody's stale checkout is a fail-closed nuisance people learn
+to ignore, which is the opposite of the point.
+
+`auth.ts` is declared on **security grounds**, not merely because it differs:
+seven divergent authentication implementations are seven surfaces to audit
+independently. Its job is entirely plumbing — Cognito pool resolution, session
+retrieval, credential hygiene, sign-in/out mechanics — with no app-specific
+policy in it, so there is no category of legitimate per-app difference for it
+to hold. Per-app variation belongs in `auth-gate.tsx` instead (present in 3 of
+7 siblings, deliberately **not** in `mustBeUniform` — declaring it would be the
+opposite error, since gating which Cognito groups an app admits is exactly
+where apps are meant to differ). Any future reconciliation of `auth.ts` must
+converge to the **superset** of exports, never the intersection: some siblings
+export only `getCurrentSession`, others add `signIn`/`signOut`, and
+`tabsii-marketplace` adds `signUp`/`confirmSignUp` for public self-service
+registration — collapsing to the smallest copy would delete that feature
+outright. See `mustBeUniformNote` in `shared-files.json` for the full evidence
+trail and the rest of the seeded entries.
+
 #### Reconcile before you distribute
 
-A one-way overwrite destroys whatever it lands on. Before adding a path:
+A one-way overwrite destroys whatever it lands on. Before adding a path to
+`files` or `filesFromSkeleton`:
 
 1. **Diff every copy** and classify each difference — a fix the canonical copy
    is missing, genuine per-repo customisation, or drift.
@@ -383,10 +444,11 @@ A one-way overwrite destroys whatever it lands on. Before adding a path:
    client; the canonical copy took it, so crm converged with nothing lost.
    `_extract_detail` was written twice in two siblings and never brought
    upstream, which is why three more still ship the bug it fixes.
-3. **Do not add a path you have not reconciled.** `auth.ts` sits beside the
-   client in all seven siblings and diverges by 29–247 lines; adding it would
-   clobber six repos with the skeleton's copy on no evidence about which
-   behaviour is right (#1117).
+3. **Do not add a path you have not reconciled — declare it in
+   `mustBeUniform` instead.** `auth.ts` sits beside the client in all seven
+   siblings and diverges 29–247 lines; a one-way overwrite would clobber six
+   repos with one copy on no evidence about which behaviour is right (#1117).
+   It is tracked, not distributed, until someone has actually reconciled it.
 4. **Expect the rehearsal to find callers, not just the file.** Adding `patch`
    broke the skeleton's own test mock, and `tabsii-geo` has the same uncast
    mock in two places — so that repo needs a one-line fix landed _with_ the

@@ -3963,9 +3963,21 @@ existing fail-open guards can see it. The correct condition requires a
 **positive** signal (at least one check present *and* every check concluded),
 which is exactly the rule `workflow-toolchain.test.ts` and
 `workflow-apply-guard.test.ts` apply to themselves via their "is actually being
-read" assertions. The rule is understood; it is simply not available as
-something to call. A `scripts/wait-for-checks.sh` in the shared set, or a
-`biffo pr wait` verb, would close it — neither is built.
+read" assertions.
+
+> **Closed 2026-08-02 (#1155).** `scripts/wait-for-checks.sh` is now in the
+> shared set and referenced from AGENTS.md §5 in this repo and both skeletons.
+> It waits on required contexts where branch protection is readable and on
+> count-stability where it is not, and it exits **2** for "cannot tell" — a
+> timeout or an empty rollup is never a pass.
+>
+> Writing it reproduced the defect one level up, which is the part worth
+> keeping: the first version of its own test asserted the empty-rollup case with
+> `--timeout 0`, so the deadline fired before the condition was ever evaluated
+> and **all nine tests passed against a deliberately broken script**. A test for
+> a fail-open that is itself vacuous is the same defect wearing the costume of
+> its own fix. Only reverting the guard and watching the suite stay green caught
+> it. Prove the test fails, and prove it fails *for the reason you think*.
 
 **A sweep test proving a property does not prove the file parses.** The new apply
 sweep passed against a `deploy.yml` that had just been broken into invalid YAML —

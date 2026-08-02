@@ -185,6 +185,22 @@ origin/<branch>:<path>` for a specific change. A green PR page is not proof
 - Get CI green yourself and confirm it — run `gh pr checks <N>` and wait for all
   required checks to pass. A green local run is not sufficient evidence; the
   agent verifies the actual PR checks.
+- **Wait with `scripts/wait-for-checks.sh`, not a hand-rolled loop:**
+
+  ```bash
+  sh scripts/wait-for-checks.sh <N> [-R owner/repo]   # 0 green · 1 failed · 2 cannot tell
+  ```
+
+  Do not write your own `until … grep -c pending … done`. That polls for the
+  **absence** of pending checks, so the empty window right after
+  `gh pr update-branch` — superseded runs dropped, new ones not yet registered —
+  reads as "all green" and merges a PR whose CI has not started. It is the
+  estate's dominant failure shape (a gate passing because it cannot run) in the
+  agent's own tooling, and it happened here on 2026-08-02. The script waits on a
+  **positive** signal instead: every required context concluded, or (where
+  protection is unreadable) at least one check present, all concluded, and the
+  count stable across two polls. **Exit 2 is "cannot tell" and is never a pass.**
+
 - **Squash-merge** by default:
 
   ```bash

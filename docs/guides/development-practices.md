@@ -527,6 +527,65 @@ or the environment's static resources. That signature should have pointed at
 "what else is touching this" before either memory or flakiness was
 entertained.
 
+### Measured: a comment edit in applied DDL cost 2h25m and five failed deploys, and the only system that could see it was the one being deployed to (2026-08-02, part 4)
+
+**The fix was 21 reverted lines. The window was 2 hours 25 minutes, and it
+stopped every other developer.** Ranking this by the size of the fix would
+misfile it completely.
+
+An ADR renumbering did a repo-wide find-and-replace of `ADR-0010` -> `ADR-0103`.
+That rewrote **comments inside 21 `db/imports/tabsii/*.sql` modules that had
+already been applied**. `_run_ddl_import` records a sha256 per applied file in
+`ddl_import_history` and hard-fails on any change, so the next deploy died:
+
+```
+DDL file '012_rbac_legacy_cleanup.sql' has changed since it was applied
+(checksum d6ff242e... -> 17e5611f...)
+```
+
+**Editing a comment is enough** — the hash is over the whole file. The natural
+model, "it is only a comment, the SQL is unchanged", is wrong here and nothing
+in the tooling said so.
+
+The loop, and why it was long rather than merely annoying:
+
+| | |
+| --- | --- |
+| Time to write the defect | seconds (one `str.replace` over 69 files) |
+| Gates that could have caught it | **none** — `verify.sh`, 3136 pytest, the 367-test real-Postgres RLS lane and every CI check were green |
+| Time until anyone noticed | **1h53m** |
+| Deploys failed before the cause was found | **5** |
+| Of those, innocent PRs by other people | **4** |
+| Time to diagnose once looked at | ~10 min |
+| Time to fix | ~15 min |
+
+**Three separate failures compounded, and only the first is about DDL.**
+
+1. **The source of truth is a running database.** The checksums live in the
+   deployed instance. No local gate and no CI job can read them, so this class
+   is structurally invisible before merge. That is now guarded
+   (`test_ddl_import_immutability.py`) by proxying "applied" as "present on the
+   base branch".
+
+2. **A poisoned integration branch fails other people's deploys.** Four
+   subsequent merges each saw *their* deploy fail. Anyone diagnosing from their
+   own PR would start in the wrong place — the damage was five merges upstream.
+   This is the deploy-path analogue of a red `dev`, and it is worse, because a
+   failing deploy looks attributable to the change that triggered it.
+
+3. **The red deploy was invisible for two hours, and the tooling helped hide
+   it.** Five workflows run on a merge to `dev`, and `gh run list --limit 3`
+   returns `CodeQL`, `Core Version Tag`, `RLS Tests` — **not** `Deploy
+   Application`. "dev CI green" was reported truthfully and repeatedly while the
+   deploy was red. AGENTS.md section 6 says to confirm "the integration branch's
+   CI **(and any deploy workflow)**"; the parenthetical is the entire
+   instruction and it was read past.
+
+**Structural, not carelessness.** A person cannot hold "which of these 69 files
+are immutable" in their head during a mechanical rename, and the one system that
+knows is not consultable from a laptop. The fix is a guard, not more care.
+
+
 ### Measured: a test's side effect degraded a 7-hour working day, and the log that should have found it was structurally blind (2026-08-02, part 2)
 
 **This is the most disruptive item recorded today, and the fix was 75 minutes.**
@@ -1861,6 +1920,27 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**Assume it is yours, then check.** When the deploy failed on an unrelated PR
+(#513, the app-role seam), the first move was to treat it as that PR's fault and
+read the failing step rather than the PR. The step named a *different* file, from
+a merge five commits earlier. Starting from "what does the failure actually say"
+rather than "what did I just change" found a 2-hour-old latent defect in about
+ten minutes; starting from #513 would have found nothing, because #513 was clean.
+
+**Prove the guard catches the real defect, not a synthetic one.** The new
+immutability guard was validated by replaying the exact edit that caused the
+outage — re-applying the `ADR-0010` -> `ADR-0103` change to
+`012_rbac_legacy_cleanup.sql` in the real repo and watching the test fail with
+the intended message, then restoring. A hand-written fixture would have proven
+only that the test can fail, not that it fails on *this*.
+
+**Verify a revert byte-for-byte rather than by eye.** The fix had to restore 21
+files to the exact bytes their checksums were taken over. Each was diffed against
+its pre-change blob and confirmed identical before the PR was opened — because
+"looks reverted" and "hashes the same" are different claims, and only the second
+one unblocks the deploy.
+
 
 **A user contradiction beat a confident diagnosis, and the discipline was to
 re-measure rather than defend.** The first explanation of the notification spam
@@ -3759,6 +3839,30 @@ assumed.
 
 
 ## What needs more thought
+
+**Nothing tells you a deploy went red, and the obvious command hides it.** Five
+workflows run on a merge to `dev` in an instance; `gh run list --limit 3` shows
+three of them and `Deploy Application` is not among them. A red deploy therefore
+persists until someone merges again and happens to look, which on 2026-08-02 was
+**1h53m and four innocent merges** later. Candidates: raise the default `--limit`
+in the workflow's own guidance, or have the deploy failure notify the way the
+practices cron now does. Neither is built.
+
+**A poisoned integration branch attributes its damage to the next person.** A
+deploy failure is presented against the commit that triggered it, so four
+developers each saw *their* change fail. There is no signal distinguishing "your
+change broke the deploy" from "the deploy was already broken when you merged".
+The cheap version is for the deploy to report the first commit at which it
+started failing.
+
+**Applied-DDL immutability is now guarded by a proxy, and the proxy will get
+worse.** `test_ddl_import_immutability.py` treats "present on the base branch" as
+"already applied". That holds while `dev` is the only deployed environment. Once
+staging and prod exist, a module can be applied in one and not another, and the
+guard will be confidently wrong in both directions. The honest fix at that point
+is to read `ddl_import_history` per environment rather than to guess harder from
+git — recorded now so the limitation is not rediscovered as a surprise.
+
 
 | — | **Nothing sandboxes a test from the developer's live session, and one that escapes is invisible to every gate.** `execFileSync`/`spawn` inherit `process.env` and `PATH` by default, so any test that shells out can reach the real D-Bus session, desktop, keyring, `~/.ssh`, `~/.config/gh` or the network. The notification test did exactly this for seven hours while the suite stayed green, because **a side effect on the operator's desktop is not an assertion and nothing can fail on it**. `fail-open` — a gate that passes when it cannot run — is the second-largest class on this page. This is its **inverse** and has no coverage at all: a test that *does something real*, to something outside the repo, and passes. Note the near-miss shape: the fix works because the stub is first on `PATH`, which is a **convention held by each test author**, not a property of the harness. Candidates: a vitest `setupFiles` that prepends a stub-bin directory and strips `DBUS_SESSION_BUS_ADDRESS`/`XDG_RUNTIME_DIR` from the inherited env for the whole suite, so escaping is opt-in rather than default; or a guard asserting no test spawns a process with unmodified `process.env`. Neither is written | **visibility** · fail-open | biffo-template `cli/src/lib/` | not fixed — no mechanism proposed beyond the per-test stub | **unfiled** |
 | — | **A log's coverage is invisible at the point of reading it, and this estate has several logs whose writer is external to the thing logged.** `~/.practices-daily.log` is written by the crontab's `>>` redirect, so it records cron runs and only cron runs — but nothing at the top of that file, in the script, or in the crontab says so. Read during an incident it answered "one failure today", which was true and pointed 25 minutes in the wrong direction. **The general shape: whenever the writer of a log is not the thing being logged, the log silently has an invocation-path filter on it, and every reader will treat it as complete.** The same shape applies to anything whose output is captured by its *caller* rather than itself — a CI step's log, a redirected cron job, a piped script. Candidates: have the script write its own log (so every invocation path is recorded regardless of caller) and let cron's redirect be a duplicate; or a one-line banner the script emits naming which invocations reach this file. The first is strictly better and is roughly a five-line change | **visibility** · process | biffo-template `scripts/practices-daily.sh` + the crontab | not fixed | **unfiled** |

@@ -423,6 +423,104 @@ Note the consequence for H3's rollback rule: if H4's amendment confirms, turning
 `strict` back on is the *default* action for a refuted H3, and it should be done
 rather than quietly skipped because the race improved for another reason.
 
+## Interim observation — 2026-08-02, day 5
+
+Two days before review. Recorded now, **before** the verdict, so the analysis
+cannot be fitted to it — the same reason the 2026-07-28 amendment insists on.
+
+| `biffo-template` | baseline (2026-07-28) | 7d to 2026-07-29 | **7d to 2026-08-02** | target |
+| --- | ---: | ---: | ---: | ---: |
+| **`racedShare`** | 16.0% | 13.8% | **7.8%** | **<3%** |
+| `repushRate` | 43.6% | 39.2% | **23.8%** | <25% ✅ |
+| green-but-unmerged | 17.8 min/PR | — | **11.0 min/PR** | <8 |
+| merged PRs | 275 | — | **357** | — |
+| **`integration.failures`** | 0 | — | **2** | refutes at **>2** |
+| **`integration.redMinutes`** | 0 | — | **54.7** | refutes at **>60** |
+| `runnerKills` / `failuresUnclassified` | — | — | **0 / 0** | — |
+
+`racedShare` has more than halved under a **30% heavier merge load**, and
+`repushRate` has **met** its target. The primary is still missing its <3%.
+
+### The two `integration.failures` are attributed, and neither is a semantic conflict
+
+The counter-metric exists to detect **untested combinations** — two changes that
+each pass alone and break together, which is the only thing `strict` was buying.
+Both failures were inspected at the log, not inferred:
+
+1. **Run `30463621771`**, 2026-07-29, `CI` → *Terraform Validate & Security* →
+   *Validate modules*. **Transient network.** `Failed to query available
+   provider packages … could not connect to registry.terraform.io … read:
+   connection reset by peer`, and the same against `releases.hashicorp.com` for
+   the provider zip. Nothing to do with what merged; a docs-only commit could
+   not have caused it.
+
+2. **Run `30555489992`**, 2026-07-30, `Core Version Tag` → *Sync and audit
+   core-v\<version\>*. **A release-pipeline ordering race.**
+   `core-v0.190.1 points at a93bdbdc, which is not an ancestor of HEAD
+   (387eae54)`. Verified after the fact: `a93bdbdc` is genuinely **not** an
+   ancestor of `387eae54`, so the guard was right — and `a93bdbdc` **is** an
+   ancestor of `dev` today, so the tag pointed at work that had not yet reached
+   `dev` when the check ran. Adjacent to the `core.version` race class
+   (#293/#294/#342/#423), not a code-level conflict.
+
+**So the counter-metric stands at 2 of >2 and 54.7 of >60 — on two failures
+`strict` could not have prevented.** That is the runner-kill trap
+(`practices-metrics.mjs`, *"the experiment gets refuted for something it never
+touched"*) recurring one level up: the classifier now excludes killed **runs**,
+but nothing excludes failures whose **cause** is unrelated to the intervention.
+Worth considering whether the counter-metric should require a failure to be
+plausibly combination-shaped before it counts.
+
+### The treatment arm is asymmetric, and pooling it would refute H3 on pre-intervention data
+
+`tabsii-platform`, same 7-day window to 2026-08-02:
+
+| | value |
+| --- | ---: |
+| merged PRs | 222 |
+| `racedShare` | 27.9% |
+| `repushRate` | 35.1% |
+| green-but-unmerged | 46.4 min/PR |
+| `integration.failures` | **16** (of which `runnerKills` **8**) |
+| `integration.redMinutes` | **464.2** |
+
+Read naively that refutes H3 7.7× over on red minutes alone. It should not be
+read that way, for two independent reasons:
+
+1. **The window is mostly pre-treatment for that repo.** `tabsii-platform`
+   joined the arm on **2026-07-31**. A 7-day window ending 2026-08-02 is roughly
+   **five days of `strict: true` and two of `strict: false`** — about 71% of it
+   measures the regime H3 exists to replace, scored against H3.
+2. **Half its failures are the class already excluded.** `runnerKills: 8` of 16.
+
+Its 464 red minutes also include the 2026-08-02 deploy break — red at 10:43,
+unnoticed for 1h53m, with four subsequent merges failing on damage they had not
+caused (AGENTS.md §6). That is a **visibility** failure, not an untested
+combination.
+
+**Recommendation for the review:** judge H3 on `biffo-template` alone on
+2026-08-04, and give `tabsii-platform` its own review on **2026-08-07**, seven
+days after it actually joined. Scoring an intervention on days before it existed
+is not a conservative reading, it is a wrong one.
+
+### The partial-improvement case is undefined, and it is now the live case
+
+The prediction is a bright line (`<3%`) on a continuous metric. The reading is
+7.8% — from 16.0%, under heavier load, with one secondary target met and the
+counter-metric intact. Nothing in this file says what to do with that, and the
+rollback sentence in **Result** answers a different question: it governs a
+**refuted** H3, and refutation here is defined **entirely on the counter-metric**
+(*"regardless of what `racedShare` does"*).
+
+So a missed prediction with an intact counter-metric is **not** refutation, and
+reverting on it would discard a halved race for no measured safety gain. That
+decision should be made explicitly on 2026-08-04 rather than by default.
+
+One correction while here: the **8%** figure that circulates in the workflow
+guidance as H3's failure threshold is **[H4](./H4-shift-left-gates.md)'s
+prediction**, not H3's — H3 has no `racedShare` refutation clause at all. The
+same guidance also carries the review date as 2026-08-11; it is **2026-08-04**.
+
 ## Result
 
 _To be completed on 2026-08-04. Verdict: `confirmed` / `refuted` /

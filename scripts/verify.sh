@@ -478,6 +478,23 @@ pg_test_run() {
 }
 
 _pg_modules=$(pg_test_modules)
+
+# Provision the database rather than requiring the operator to remember.
+#
+# A gate that only runs when you exported the right variable is a gate that runs
+# on the days you did not need it. `scripts/pg-test-db.sh` is idempotent and
+# cheap when the schema is unchanged (~0.3s; ~4s when it genuinely has to
+# rebuild), so calling it is better than warning about it. Failure is silent
+# BECAUSE the WARN below is the honest report of it -- no Docker, no server, no
+# schema all end in the same place: the lane did not run, and the gate says so.
+if [ -z "$PG_TEST_DSN" ] && [ -n "$_pg_modules" ] && [ -z "$LIST" ] && [ -f scripts/pg-test-db.sh ]; then
+  PG_TEST_DSN=$(sh scripts/pg-test-db.sh 2>/dev/null | tail -1) || PG_TEST_DSN=""
+  case "$PG_TEST_DSN" in
+    postgres*) ;;
+    *) PG_TEST_DSN="" ;;
+  esac
+fi
+
 # Order matters, and getting it wrong made these very tests machine-dependent:
 # with `uv not installed` checked FIRST, a runner without uv skipped quietly and
 # the gap warning never printed -- green on a workstation, red on CI, for a

@@ -39,6 +39,7 @@ import {
   gatesForWindow,
   aggregateGates,
   isTotalFetchFailure,
+  diagnoseTotalFetchFailure,
   normaliseSubject,
   summariseAmplification,
   reviewCoverage,
@@ -2735,6 +2736,45 @@ describe('isTotalFetchFailure', () => {
     // `--repo <slug>` with a typo targets nothing. That deserves a different
     // message, not a claim that the credential broke.
     expect(isTotalFetchFailure(0, 0)).toBe(false)
+  })
+})
+
+describe('diagnoseTotalFetchFailure', () => {
+  // The message this replaced asserted "the cause is credentials" whatever the
+  // error said. On 2026-08-02 that was wrong: GitHub's GraphQL node budget
+  // started rejecting the bulk PR fetch, and the operator was sent after a
+  // keyring that was working. A confidently wrong diagnosis costs more than none.
+  const nodeLimit =
+    'GraphQL: By the time this query traverses to the authors connection, it is requesting up to 1,000,000 possible nodes which exceeds the maximum limit of 500,000.'
+
+  it('names the node budget, and explicitly rules out credentials', () => {
+    const message = diagnoseTotalFetchFailure(nodeLimit)
+    expect(message).toMatch(/node-budget/i)
+    expect(message).toMatch(/NOT credentials/)
+  })
+
+  it('says retrying at a lower limit will not help, because the estimate is static', () => {
+    expect(diagnoseTotalFetchFailure(nodeLimit)).toMatch(/every --limit/)
+  })
+
+  it('still names credentials for the 401 that motivated the guard', () => {
+    expect(diagnoseTotalFetchFailure('HTTP 401: Bad credentials')).toMatch(/keyring/)
+  })
+
+  it('distinguishes a rate limit from both', () => {
+    expect(diagnoseTotalFetchFailure('HTTP 403: API rate limit exceeded')).toMatch(/rate limit/i)
+  })
+
+  it('admits ignorance rather than guessing credentials', () => {
+    // The failure mode being fixed: a cause it has never seen must not be
+    // reported as the one cause it knows.
+    const message = diagnoseTotalFetchFailure('ECONNRESET: socket hang up')
+    expect(message).toMatch(/not one this script recognises/)
+    expect(message).not.toMatch(/keyring/)
+  })
+
+  it('does not claim a cause when there is no error to read', () => {
+    expect(diagnoseTotalFetchFailure(undefined)).toMatch(/not one this script recognises/)
   })
 })
 

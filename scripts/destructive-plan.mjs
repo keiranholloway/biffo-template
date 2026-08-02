@@ -55,6 +55,17 @@ export const STATEFUL_RESOURCE_TYPES = [
   // Objects. A bucket destroy takes its contents; for state and media buckets
   // that is the entire point of the bucket.
   'aws_s3_bucket',
+  // Delegation. A hosted zone's NS assignment is not in this repo — AWS
+  // assigns it at creation and the registrar is told about it out of band.
+  // Replacing the zone issues new nameservers, so recovery is a registrar
+  // change plus propagation, not a re-apply. The zone's records ARE
+  // Terraform-managed and would come back; the delegation is what would not.
+  //
+  // aws_acm_certificate was considered and rejected: a replacement re-issues
+  // and DNS-validates automatically while the zone underneath it stands, so
+  // it passes the same test that keeps this list small — Terraform rebuilds
+  // it from this repo, unattended.
+  'aws_route53_zone',
 ]
 
 /**

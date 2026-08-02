@@ -105,6 +105,22 @@ describe('checkDestructivePlan', () => {
     expect(result.blocked).toBe(false)
   })
 
+  /**
+   * #1129. A hosted zone's NS delegation is assigned by AWS at creation and
+   * registered at the registrar — it is not in this repo, so a replacement
+   * issues new nameservers and recovery is a registrar change plus
+   * propagation, not a re-apply. The zone's records are Terraform-managed and
+   * would come back on their own; the delegation would not.
+   */
+  it('blocks a REPLACEMENT of a Route 53 hosted zone', () => {
+    const result = checkDestructivePlan(
+      plan(change('aws_route53_zone.main[0]', 'aws_route53_zone', ['delete', 'create'])),
+    )
+    expect(result.blocked).toBe(true)
+    expect(result.destructive[0].address).toBe('aws_route53_zone.main[0]')
+    expect(result.destructive[0].replacement).toBe(true)
+  })
+
   it('reports every destructive change, not just the first', () => {
     const result = checkDestructivePlan(
       plan(
@@ -132,11 +148,23 @@ describe('checkDestructivePlan', () => {
   })
 
   it('covers the resources whose loss is unrecoverable', () => {
-    for (const type of ['aws_db_instance', 'aws_cognito_user_pool', 'aws_s3_bucket']) {
+    for (const type of [
+      'aws_db_instance',
+      'aws_cognito_user_pool',
+      'aws_s3_bucket',
+      'aws_route53_zone',
+    ]) {
       expect(STATEFUL_RESOURCE_TYPES).toContain(type)
     }
     // ...and not the ones an apply rebuilds, or the guard becomes noise.
-    for (const type of ['aws_lambda_function', 'aws_iam_role', 'aws_security_group']) {
+    // aws_acm_certificate is deliberately here: a replacement re-issues and
+    // DNS-validates automatically while the zone underneath it stands (#1129).
+    for (const type of [
+      'aws_lambda_function',
+      'aws_iam_role',
+      'aws_security_group',
+      'aws_acm_certificate',
+    ]) {
       expect(STATEFUL_RESOURCE_TYPES).not.toContain(type)
     }
   })

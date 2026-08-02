@@ -1960,6 +1960,25 @@ not for removing it.
 
 ## What went well — practices that earned their keep
 
+**Check whether the guard already exists before writing it.** Asked to build two
+guards, one was already built — `destructive-plan.mjs` (#387), wired, tested, and
+in production since long before. Two hours later the same check caught a second
+claim of mine: two issues I had filed that morning (#1129, #1130) had been
+resolved by somebody else's PR while I worked elsewhere, and the honest answer to
+"do these" was "they are done, here is the verification". Three separate wrong
+claims about the estate in one session, all caught by the same cheap move.
+Reading the repo first cost about two minutes each time; building a duplicate
+guard would have cost an afternoon and left two implementations of one concept to
+diverge.
+
+**Generalise the guard, then let it find the next instance.** The toolchain
+sweep (#1122) was written because `workflow-python-interpreter.test.ts` guarded
+one tool in one file. It found a live latent defect **on its first run** —
+`python -m zipfile` three times in `publish-sdk.yml`, two steps below a correct
+`python3` in the same file, passing only because both prior runs happened to be
+GitHub-hosted. No amount of re-reading the instance guard would have surfaced
+that; enumerating the candidates did it in one run.
+
 **Assume it is yours, then check.** When the deploy failed on an unrelated PR
 (#513, the app-role seam), the first move was to treat it as that PR's fault and
 read the failing step rather than the PR. The step named a *different* file, from
@@ -3914,6 +3933,31 @@ mutation is the bug's real shape, since `tenant_id` arrives by inheritance.
 
 ## What needs more thought
 
+**Nothing audits a guard's reach, and reach is where guards actually fail.**
+Every guard in this repo is trusted in proportion to its name rather than its
+coverage. `check-destructive-plan.mjs` was correct, tested and wired — and stood
+in front of **2 of 7** deploying repos, because it had been added to
+`deploy-infra.yml` and nothing ever asked which applies it did not cover. The
+same was true of the toolchain check (one tool, one file) and is now asserted for
+both by sweep tests — but only for workflows *this repo authors*. A guard's
+coverage across satellite repos is still unmeasured, and `ci-wiring-audit.sh`
+cannot express it: its `supersedes` map is fixed-string "raw command X was
+replaced", and a wired apply still contains the string `terraform apply`. So the
+one assertion that would have caught #1123 estate-wide is the one the existing
+mechanism cannot make. Candidates: a second check in `ci-wiring-audit.sh` keyed
+on "holds script, never invokes it", or making the daily collector report
+per-guard reach. Neither is built.
+
+**A sweep test proving a property does not prove the file parses.** The new apply
+sweep passed against a `deploy.yml` that had just been broken into invalid YAML —
+an edit orphaned four `TF_VAR` lines — because the parser is deliberately
+line-based and tolerant. `prettier --check` caught it. That is the correct
+division of labour, but it is undocumented and easy to mistake for redundancy:
+someone trimming gates could reasonably conclude the sweep covers the workflow
+files. Worth a sentence wherever these parsers are described, since the whole
+family (`workflow-check-contexts`, `workflow-run-commands`, `workflow-toolchain`)
+shares the property.
+
 **Nothing tells you a deploy went red, and the obvious command hides it.** Five
 workflows run on a merge to `dev` in an instance; `gh run list --limit 3` shows
 three of them and `Deploy Application` is not among them. A red deploy therefore
@@ -5368,6 +5412,9 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `biffo-workflow` | **worked — twice, and Step 1's fresh-fetch rule was the one that mattered** | Ran for #1122 and #1147. The estate sweep behind #1123 was first done against **local checkouts**, which turned out to be 1–11 commits behind their own `dev` (`tabsii-marketplace` by 11). Redoing it via `git show origin/dev:<path>` after a fetch is what made the 7-repo table trustworthy; §1's "a primary checkout 10 commits behind produced a whole audit against dead code" is exactly the failure that was about to be repeated. Step 4's honest-push rule also fired for real: a `pnpm run <gate> \| tail` chain masked a **prettier failure on YAML I had just broken**, and every subsequent gate in the `&&` chain still ran because the pipe's exit status is `tail`'s. Re-running each gate capturing `$?` found it. The trap is documented in AGENTS.md §4 for `git push`; it is the same trap for any gate. |
+| `biffo-verify` | **worked — §1 caught three false claims about the estate in one session** | "Establish the current state before writing anything" was the highest-value step by a distance. It found that (a) the destructive-plan guard I had been asked to write already existed, wired and tested; (b) two issues I filed that morning had been closed by someone else's PR while I worked elsewhere; (c) the sibling sweep I had reported was built on stale checkouts. Each check cost ~2 minutes. §3 (prove the test fails without the fix) fired cleanly for both guards — reverting only `publish-sdk.yml` failed exactly one case naming job, line and command, and reverting only the skeleton's `deploy.yml` did the same. |
+| `groom-backlog` | **worked, on its own updated rules** | The skill had been rewritten earlier the same session to treat an issue as one *instance* of a class. Applied to its own output: the three findings originally filed as one issue were split (#1123/#1129/#1130) once it was clear the shared title hid two of them, and the ordering dependency between #1129 and #1130 — each inert without the other — was recorded in both rather than left implicit. The "name the class, then sweep for its other instances" step is what turned "fix this workflow" into the two sweep tests. |
 | `biffo-workflow` | **worked** | Ran clean end to end on #1121: worktree off freshly-fetched `origin/dev`, `pnpm install`, `hook-audit.sh` confirming ARMED before any commit, honest push with `echo $?`, remote SHA compared to local, auto-merge, worktree reaped, `dev` CI watched to green. Two steps earned their place specifically. **Step 3's shell-injection rule**: the commit body and PR body both contained backticks and `$(`, and both went through `-F`/`--body-file` with quoted heredocs — the alternative was executing them. **The commit-before-revert ordering** (recorded as a `partial` on this skill in an earlier session, and since absorbed): committing first is what made it safe to `git checkout origin/dev -- scripts/practices-daily.sh` to prove the tests fail. That earlier `partial` has now paid for itself. |
 | `biffo-verify` | **worked — §3 gave the sharpest signal** | Reverting only the script and re-running produced **exactly** the three new behaviour tests failing, with the right messages (`expected '-u critical Practices…' to contain '-r 0'`), and the nine pre-existing ones still green. That is what established the tests defend the fix rather than being incidentally satisfied by it. §7 also fired usefully: it forced the admission that everything so far was stub-level, which produced the two real-daemon checks (GNOME reusing id `251`; `env -i` cron shell giving one card for three failures) that turned an unproven claim into a verified one. |
 | `biffo-verify` | **partial — it was invoked ~75 minutes too late, and nothing in the trigger wording would have caught it** | Its §2 ("reproduce by the reporter's route, before theorising") is precisely the step that was skipped, and skipping it cost ~25 minutes plus a wrong fix that was already written. The skill was only run *after* the change had shipped, as a capture exercise. **Why it was missed:** the request arrived as "why am I still getting hundreds of these" — phrased as a question about a notification, not as "debug this" or "is this actually fixed?", so none of the skill's listed triggers matched, and reading a log felt like answering a question rather than diagnosing a defect. The description does say "why is this failing?", but a user reporting a *symptom they are living with* does not use those words. Suggested trigger addition: a user reporting **repeated or ongoing noise** ("I keep getting…", "this keeps happening", "still seeing…") is a diagnosis request, and §2's instrument-before-theorise rule should be the first move — especially when the symptom is **directly countable**, as this one was. |

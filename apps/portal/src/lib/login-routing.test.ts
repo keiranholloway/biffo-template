@@ -91,7 +91,7 @@ describe('resolveDestination', () => {
     expect(result).toBe('/crm/')
   })
 
-  it('rule 5: routes to /crm/ when user has a unit-level role', () => {
+  it('rule 5: routes to /lms/ when user has a unit-level role', () => {
     const whoami: WhoamiResponse = {
       ...baseWhoami,
       roles: [
@@ -103,7 +103,45 @@ describe('resolveDestination', () => {
       ],
     }
     const result = resolveDestination(whoami, [], null)
+    expect(result).toBe('/lms/')
+  })
+
+  it('rule 5: a unit role does not send an above-unit colleague to /lms/', () => {
+    // Rule 4 is checked first, so someone holding both a brand role and a unit
+    // role still lands on /crm/. Without this the /lms/ row would quietly
+    // relocate every brand manager who also runs a location.
+    const whoami: WhoamiResponse = {
+      ...baseWhoami,
+      roles: [
+        {
+          role: 'store_manager',
+          scope_level: 'unit',
+          unit_id: 'unit-1',
+        },
+        {
+          role: 'brand_manager',
+          scope_level: 'brand',
+          brand_id: 'brand-1',
+        },
+      ],
+    }
+    const result = resolveDestination(whoami, [], null)
     expect(result).toBe('/crm/')
+  })
+
+  it('rule 5: returnTo still wins for a unit-level user', () => {
+    const whoami: WhoamiResponse = {
+      ...baseWhoami,
+      roles: [
+        {
+          role: 'store_manager',
+          scope_level: 'unit',
+          unit_id: 'unit-1',
+        },
+      ],
+    }
+    const result = resolveDestination(whoami, [], '/crm/onboarding/')
+    expect(result).toBe('/crm/onboarding/')
   })
 
   it('rule 6: routes to /marketplace/ when user has marketplace_role and no roles', () => {
@@ -154,7 +192,9 @@ describe('resolveDestination', () => {
         },
       ],
     }
-    // Both rules match but platform_admin (rule 3) is checked first
+    // Both rules match but platform_admin (rule 3) is checked first — and
+    // since rule 5 now yields '/lms/', the two answers differ, so this case
+    // actually discriminates rather than agreeing by coincidence.
     const result = resolveDestination(whoami, [], null)
     expect(result).toBe('/crm/')
   })
@@ -183,6 +223,6 @@ describe('resolveDestination', () => {
     }
     // Unit role (rule 5) takes precedence over marketplace_role (rule 6)
     const result = resolveDestination(whoami, [], null)
-    expect(result).toBe('/crm/')
+    expect(result).toBe('/lms/')
   })
 })

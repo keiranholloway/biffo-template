@@ -9,9 +9,16 @@
  * 2. User is in the 'admin' Cognito group -> '/admin/'
  * 3. User is marked as a platform admin -> '/crm/'
  * 4. User has any role with scope_level 'tenant'|'brand'|'region' -> '/crm/'
- * 5. User has any role with scope_level 'unit' -> '/crm/'
+ * 5. User has any role with scope_level 'unit' -> '/lms/'
  * 6. User has marketplace_role set and no roles -> '/marketplace/'
  * 7. Otherwise -> '/login/no-access/'
+ *
+ * Rule 5 used to send unit-scoped users to '/crm/' as well. That was recorded
+ * as interim when it shipped: a unit worker doing onboarding and training is
+ * not doing customer relationship management, and the arrival of a training
+ * surface was named as the trigger to move them off it (ADR-0100 / ADR-0101).
+ * '/crm/' stays reachable — this is a landing destination, not an entitlement,
+ * and the database decides what either surface will actually serve.
  */
 
 export interface WhoamiRole {
@@ -71,7 +78,7 @@ export function resolveDestination(
 
   // Rule 5: any role whose scope_level is 'unit'
   if (whoami.roles.some((r) => r.scope_level === 'unit')) {
-    return '/crm/'
+    return '/lms/'
   }
 
   // Rule 6: whoami.marketplace_role is set and there are no roles

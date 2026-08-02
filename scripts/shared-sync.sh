@@ -669,12 +669,38 @@ rehearse_repo() {
 
 # Phase 2: commit the already-staged worktree, push it, open the PR. Reached only
 # when phase 1 came back clean for EVERY repo in this run.
+# Phase 1 staged a worktree for this repo; refuse to run phase 2 without it.
+#
+# On 2026-08-02 two repos in a 13-repo round reached phase 2 with the staged
+# worktree gone. Every `git -C "$wt" ...` below then failed with
+# `fatal: cannot change to '<path>': No such file or directory`, twice, and the
+# run attributed those to the PUSH -- the last step it tried -- rather than to
+# the first thing that was wrong. The wording sent a whole session after
+# push and permissions problems before the real condition was noticed.
+#
+# The cause is still unknown and tracked in #1160. This does not fix it. It
+# makes the failure state its own name, which is worth having regardless of
+# which mechanism removes the worktree: a blunt diagnosis costs less than a
+# confident wrong one.
+require_staged_worktree() {
+  _wt="$1"
+  _label="$2"
+  [ -d "$_wt" ] && return 0
+  printf '%-26s \033[31mstaged worktree missing\033[0m at %s\n' "$_label" "$_wt" >&2
+  printf '%-26s   phase 1 staged it and it was gone by phase 2. Nothing was\n' '' >&2
+  printf '%-26s   pushed for this repo, and no PR was opened. Cause unknown -\n' '' >&2
+  printf '%-26s   see biffo-template#1160 before assuming it is the push.\n' '' >&2
+  return 1
+}
+
 ship_repo() {
   d="$1"
   label="$2"
   slug="$3"
   base="$4"
   wt="$d/.worktrees/shared-sync"
+
+  require_staged_worktree "$wt" "$label" || return 1
 
   git -C "$wt" -c commit.gpgsign=false commit -q --no-verify -m "chore(shared): sync template-shared files
 

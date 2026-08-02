@@ -182,9 +182,28 @@ origin/<branch>:<path>` for a specific change. A green PR page is not proof
 
 ## 6. Verify post-merge CI/CD
 
-- After merging, confirm the integration branch's CI (and any deploy workflow)
-  goes green: `gh run list --branch <default-branch>` and watch the run.
+- After merging, confirm the integration branch's CI goes green:
+  `gh run list --branch <default-branch>` and watch the run.
+- **Confirm the deploy separately, by name.** It is a different workflow and a
+  short run list does not show it — an instance runs five workflows on a merge
+  (`CI`, `CodeQL`, `Core Version Tag`, `Deploy Application`, `RLS Tests`), and
+  `gh run list --limit 3` returns three that are **not** the deploy:
+
+  ```bash
+  gh run list --workflow "Deploy Application" --branch <default-branch> --limit 1
+  ```
+
+  On 2026-08-02 this cost **2h25m**: a merge broke the deploy at 10:43, "dev CI
+  green" was reported truthfully several times from a short run list, and the
+  failure was found 1h53m later — after four further merges had each failed
+  their own deploy on damage they had not caused. A red deploy has no audience,
+  because the author who caused it has already moved on.
+
 - A red integration branch blocks everyone — treat fixing it as the next task.
+  That includes a red **deploy**: every subsequent merge fails too, and the
+  failure is attributed to whoever merged last rather than to whoever broke it,
+  so check whether the branch was already failing before diagnosing your own
+  change.
 - For **live** instances, a merge may deploy to production immediately. Verify
   the deploy succeeded.
 - **A run is not guaranteed to exist.** GitHub sometimes creates no

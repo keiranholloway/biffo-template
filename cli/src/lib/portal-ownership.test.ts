@@ -56,7 +56,7 @@ describe('portal ownership split', () => {
     'apps/portal/next.config.ts',
     'apps/portal/package.json',
     'apps/portal/src/app/layout.tsx',
-    'apps/portal/public/admin/siblings.json',
+    'apps/portal/public/.well-known/siblings.json',
   ])('template-owned: %s', (path) => {
     expect(isTemplateOwned(path, manifest)).toBe(true)
   })

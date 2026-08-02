@@ -32,15 +32,49 @@ set -euo pipefail
 # /run/user/<uid>/bus, so the address can be reconstructed rather than inherited.
 # Still fully guarded: no notify-send, no socket, or a failing call must never
 # fail the job.
+#
+# That reconstruction is load-bearing and also sharp, so note what it means for
+# anything that DRIVES this function rather than being alerted by it: blanking
+# `DBUS_SESSION_BUS_ADDRESS` does NOT disable the notification. An empty value is
+# precisely the cron case, so the address gets rebuilt from the live session
+# socket and the alert fires for real. A test that set it to '' to "simulate
+# cron" therefore put eight permanent cards on the developer's desktop on every
+# `pnpm test`, and hundreds over a working day -- the alert path was reaching a
+# person, just never the one it was written for. Suppression is
+# PRACTICES_NO_DESKTOP_ALERT, below; there is no way to do it via the bus address.
 _notify() {
   command -v notify-send >/dev/null 2>&1 || return 0
+  # The one honest way to run this script without alerting anybody: tests, and a
+  # hand-run collection whose failure the operator is already watching. Opt-OUT
+  # rather than opt-in, so a fresh cron install still alerts by default -- an
+  # opt-in marker is how this notification spent months existing and never firing.
+  if [ -n "${PRACTICES_NO_DESKTOP_ALERT:-}" ]; then
+    return 0
+  fi
   if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
     _bus="/run/user/$(id -u)/bus"
     [ -S "$_bus" ] || return 0
     DBUS_SESSION_BUS_ADDRESS="unix:path=$_bus"
     export DBUS_SESSION_BUS_ADDRESS
   fi
-  notify-send -u "$1" "$2" "$3" >/dev/null 2>&1 || true
+  # Replace the previous card instead of stacking a new one. `-u critical` never
+  # auto-expires in GNOME, so three dark days used to mean three permanent cards
+  # saying the same thing, and the pile is what made the real alert easy to
+  # ignore. The id lives in the runtime dir so it dies with the session -- a
+  # stale id from a previous boot would just fail to match and open a new card.
+  _id_file="${XDG_RUNTIME_DIR:-/tmp}/practices-daily.notify-id"
+  _id=$(cat "$_id_file" 2>/dev/null || true)
+  # -r wants an integer; anything else (empty file, truncated write) means "new".
+  case "$_id" in
+  '' | *[!0-9]*) _id=0 ;;
+  esac
+  if _new=$(notify-send -u "$1" -p -r "$_id" "$2" "$3" 2>/dev/null); then
+    printf '%s' "$_new" >"$_id_file" 2>/dev/null || true
+  else
+    # libnotify too old for --print-id/--replace-id. Still alert, even though it
+    # will stack: an alert that shows beats one that is tidy and absent.
+    notify-send -u "$1" "$2" "$3" >/dev/null 2>&1 || true
+  fi
 }
 
 # Stamp the bookmarked dashboard with a failure banner.

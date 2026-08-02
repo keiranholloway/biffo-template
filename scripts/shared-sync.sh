@@ -113,6 +113,26 @@ done
 FILES=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).files.join('\n'))")
 MARKERS=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).appliesTo.join(' '))")
 
+# `filesIfPresent`: files kept in step ONLY in the repos that already hold them,
+# never created in the ones that do not. Emitted as `target<TAB>source`, because
+# unlike `files` the template's copy does not live at the same path -- the
+# canonical copy of a sibling's `apps/frontend/...` is in the SKELETON, since
+# this repo has `apps/portal/` and no `apps/frontend/` at all.
+#
+# Why a second list rather than more entries in `files`:
+#
+#   - `files` CREATES what is absent (`mkdir -p` + `cp` in stage_repo, and
+#     diff_files reports a missing copy as drift). That is right for a gate
+#     every repo must run, and wrong for frontend source: it would write
+#     `apps/frontend/src/lib/api-client.ts` into two plugin repos, two runner
+#     repos and a design repo that have no frontend at all.
+#   - Backfilling a file into a repo that never had one is a materially
+#     different and riskier operation than keeping existing copies in step, and
+#     it should be a decision somebody makes, not a side effect of adding a line
+#     to a manifest. The mechanism CAN do it -- that is what `files` is -- so
+#     this list exists to say when it must not.
+CONDITIONAL=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).filesIfPresent||{};console.log(Object.entries(m).map(([t,s])=>t+'\t'+s).join('\n'))")
+
 drifted=0
 synced=0
 current=0
@@ -180,6 +200,20 @@ diff_files() {
       out="$out $f"
     fi
   done
+  # Conditional files: absent is NOT drift. A repo with no frontend is not
+  # behind on a frontend file, and reporting it as such would make `--check`
+  # permanently red in five repos that can never satisfy it.
+  if [ -n "$CONDITIONAL" ]; then
+    # Captured rather than printed: the `while` runs in a subshell (it is on the
+    # right of a pipe), so it cannot append to `$out` directly, and printing
+    # straight to stdout would interleave ahead of the line below.
+    out="$out$(printf '%s\n' "$CONDITIONAL" | while IFS="$TAB" read -r target source; do
+      [ -n "$target" ] || continue
+      remote=$(git -C "$d" show "origin/$base:$target" 2>/dev/null)
+      [ -n "$remote" ] || continue
+      [ "$remote" = "$(cat "$TEMPLATE_ROOT/$source")" ] || printf ' %s' "$target"
+    done)"
+  fi
   echo "$out"
 }
 
@@ -220,6 +254,18 @@ stage_repo() {
     cp "$TEMPLATE_ROOT/$f" "$wt/$f"
     chmod +x "$wt/$f" 2>/dev/null
   done
+
+  # Conditional files: overwrite where the repo already has one, never create.
+  # No `mkdir -p` and no `chmod +x` -- the directory existing IS the condition,
+  # and marking a TypeScript module executable would put a spurious mode change
+  # in every sync PR.
+  if [ -n "$CONDITIONAL" ]; then
+    printf '%s\n' "$CONDITIONAL" | while IFS="$TAB" read -r target source; do
+      [ -n "$target" ] || continue
+      [ -f "$wt/$target" ] || continue
+      cp "$TEMPLATE_ROOT/$source" "$wt/$target"
+    done
+  fi
 
   # Stamp the version these files CAME FROM, so a repo can say which template
   # its gate is, without a template clone or a network call (#869, H5 gap 1).
@@ -335,6 +381,20 @@ this mechanism exists.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>" >/dev/null 2>&1
 
+  # The PR's file list, built here rather than inline in the --body heredoc:
+  # a conditional entry only appears for a repo that actually holds it, and
+  # nesting that loop inside an already-interpolated double-quoted string is
+  # three levels of escaping nobody should have to read.
+  body_files=$(for f in $FILES; do printf -- '- `%s`\n' "$f"; done)
+  if [ -n "$CONDITIONAL" ]; then
+    body_files="$body_files
+$(printf '%s\n' "$CONDITIONAL" | while IFS="$TAB" read -r t s; do
+      [ -n "$t" ] || continue
+      [ -f "$wt/$t" ] || continue
+      printf -- '- `%s` (kept in step only where it already exists; canonical copy is `%s`)\n' "$t" "$s"
+    done)"
+  fi
+
   # --force-with-lease: this branch is regenerated from origin/<base> on every
   # run, so a previous sync's branch is legitimately replaced -- but the lease
   # still refuses if someone else has pushed to it.
@@ -381,7 +441,7 @@ Sibling and plugin repos are separate repositories with no \`core-manifest.json\
 
 Files synced verbatim from the template (see \`shared-files.json\` there):
 
-$(for f in $FILES; do echo "- \`$f\`"; done)
+$body_files
 
 Run \`sh scripts/gate-coverage.sh\` after merging to see this repo's gate measured against its own CI.
 

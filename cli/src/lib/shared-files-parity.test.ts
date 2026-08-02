@@ -49,9 +49,12 @@ function repoRoot(): string {
 }
 
 const root = repoRoot()
-const sharedFiles: string[] = JSON.parse(
-  readFileSync(join(root, 'shared-files.json'), 'utf8'),
-).files
+const manifest = JSON.parse(readFileSync(join(root, 'shared-files.json'), 'utf8')) as {
+  files: string[]
+  filesIfPresent?: Record<string, string>
+}
+const sharedFiles: string[] = manifest.files
+const conditionalFiles: Record<string, string> = manifest.filesIfPresent ?? {}
 
 /** Every `_skeletons/<name>` directory, discovered rather than listed. */
 const skeletons = readdirSync(join(root, '_skeletons'), { withFileTypes: true })
@@ -84,5 +87,39 @@ describe('shared-files.json parity with the skeletons', () => {
       `_skeletons/${skeleton} must hold shared-files.json's entries verbatim, or every repo ` +
         `scaffolded from it is born drifted (#743). Copy them from the repo root.`,
     ).toEqual({ missing: [], differing: [] })
+  })
+})
+
+/**
+ * `filesIfPresent` is the OTHER half of the shared set: files kept in step only
+ * where they already exist, never created (#1107).
+ *
+ * The parity rule above cannot apply to them, and asserting it would be wrong
+ * rather than merely strict. Their canonical copy IS a skeleton file — a
+ * sibling's `apps/frontend/...` has no counterpart at this repo's root — and
+ * `plugin-template` has no frontend at all, so demanding every skeleton hold
+ * one would make the list unusable for exactly the content it was added for.
+ *
+ * What must hold instead: the source each entry names actually exists. A typo
+ * there is silent — `shared-sync.sh` would `cp` a nonexistent path, `cp`
+ * prints to stderr which the script discards, and the repo would receive an
+ * empty file or none at all while the run reported success.
+ */
+describe('shared-files.json filesIfPresent', () => {
+  const entries = Object.entries(conditionalFiles)
+
+  it('is a non-empty mapping, so the assertions below are not vacuous', () => {
+    expect(entries.length).toBeGreaterThan(0)
+  })
+
+  it.each(entries)('%s has a canonical source that exists (%s)', (_target, source) => {
+    expect(existsSync(join(root, source)), `${source} does not exist in this repo`).toBe(true)
+  })
+
+  it.each(entries)('%s is not also in `files` (%s)', (target) => {
+    // Both lists write the same path, with opposite rules about creating it.
+    // Whichever ran second would win, and which that is depends on the order of
+    // two loops in a shell script.
+    expect(sharedFiles).not.toContain(target)
   })
 })

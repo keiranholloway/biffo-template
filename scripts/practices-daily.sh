@@ -18,6 +18,61 @@
 
 set -euo pipefail
 
+# Desktop notification that actually fires FROM CRON.
+#
+# The three `notify-send` calls this replaces were each guarded on
+# `[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]`, which is correct-looking and, under
+# cron, always false: this crontab exports `PATH` and nothing else, so a cron
+# child has no session bus in its environment. Every estate-audit alert since
+# that guard was written has therefore been a no-op on the only schedule that
+# matters -- a notification path that exists, reads as coverage, and has never
+# once fired.
+#
+# systemd gives every user session a well-known bus socket at
+# /run/user/<uid>/bus, so the address can be reconstructed rather than inherited.
+# Still fully guarded: no notify-send, no socket, or a failing call must never
+# fail the job.
+_notify() {
+  command -v notify-send >/dev/null 2>&1 || return 0
+  if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    _bus="/run/user/$(id -u)/bus"
+    [ -S "$_bus" ] || return 0
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$_bus"
+    export DBUS_SESSION_BUS_ADDRESS
+  fi
+  notify-send -u "$1" "$2" "$3" >/dev/null 2>&1 || true
+}
+
+# Stamp the bookmarked dashboard with a failure banner.
+#
+# The notification is best-effort; this is not. On 2026-08-02 the collector died
+# at 04:30 and the ONLY record was a line in a log nobody opens -- the outage was
+# found at 05:11 because a human happened to run the standup, and three quiet
+# days would have been three days dark. The bookmarked page is where this
+# project's numbers are actually looked at, so a run that failed has to say so
+# THERE, on the artefact, rather than in a channel that has to be checked.
+#
+# Deliberately does not rewrite the data: the page keeps showing the last good
+# snapshot, with a banner saying it is stale and why. Blanking it would trade a
+# silent wrong answer for no answer, and the last good numbers are still useful
+# as long as nobody mistakes them for today's.
+_stamp_stale() {
+  _page="${PRACTICES_PAGE:-$HOME/practices-dashboard.html}"
+  [ -f "$_page" ] || return 0
+  # Idempotent: strip any previous banner first, so consecutive failures leave
+  # one accurate banner rather than a stack of them.
+  _tmp="$_page.tmp.$$"
+  grep -v '^<!--practices-stale-->' "$_page" >"$_tmp" 2>/dev/null || return 0
+  {
+    printf '<!--practices-stale--><div style="position:sticky;top:0;z-index:99999;background:#b3261e;color:#fff;font:600 15px/1.5 system-ui,sans-serif;padding:14px 18px">'
+    printf 'COLLECTION FAILED %s (rc=%s) &mdash; these numbers are STALE, not today&rsquo;s. See ~/.practices-daily.log' \
+      "$(date -u +%F\ %H:%MZ)" "$1"
+    printf '</div>\n'
+    cat "$_tmp"
+  } >"$_page" 2>/dev/null || true
+  rm -f "$_tmp"
+}
+
 # Terminate the log deliberately, so a truncated run is distinguishable from a
 # complete one.
 #
@@ -46,6 +101,9 @@ _finish() {
     echo "practices-daily: DONE $(date -u +%FT%TZ)"
   else
     echo "practices-daily: ABORTED rc=$_rc $(date -u +%FT%TZ)" >&2
+    _stamp_stale "$_rc"
+    _notify critical "Practices collection FAILED" \
+      "rc=$_rc - the dashboard is stale. See ~/.practices-daily.log"
   fi
 }
 trap _finish EXIT
@@ -258,9 +316,7 @@ FAILING=$(node -e '
 ' "$AUDITS")
 if [ -n "$FAILING" ]; then
   echo "practices-daily: ESTATE AUDIT FAILING - $FAILING" >&2
-  if command -v notify-send >/dev/null 2>&1 && [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
-    notify-send -u critical "Estate audit failing" "$FAILING" >/dev/null 2>&1 || true
-  fi
+  _notify critical "Estate audit failing" "$FAILING"
 fi
 
 # Copy the two external logs onto the snapshot branch BEFORE the commit (#940).
@@ -339,11 +395,9 @@ echo "practices-daily: pushed snapshot $(date -u +%F)"
 NUDGE="$(node scripts/practices-session.mjs --nudge --file "$EFFORT" || true)"
 if [ -n "$NUDGE" ]; then
   echo "$NUDGE"
-  # Desktop notification when a session bus is reachable. Fully optional: cron
-  # usually has no DISPLAY, and a failed notify must never fail the job.
-  if command -v notify-send >/dev/null 2>&1 && [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
-    notify-send "Practices" "$NUDGE" >/dev/null 2>&1 || true
-  fi
+  # Optional by nature -- a failed notify must never fail the job -- but no
+  # longer conditional on inheriting a session bus, which cron never provides.
+  _notify normal "Practices" "$NUDGE"
 fi
 
 # The rendered page lives in three places on purpose:

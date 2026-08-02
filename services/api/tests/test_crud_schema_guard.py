@@ -10,11 +10,13 @@ API's own lane builds its schema from ORM metadata, so it is structurally
 incapable of testing the real-database half. That half runs at deploy.
 """
 
+from api.config import settings
 from api.crud_schema_guard import (
     ColumnDrift,
     declared_columns,
     find_column_drift,
     format_drift_error,
+    resolve_search_schemas,
 )
 from api.models.base import Base
 from sqlalchemy import String
@@ -120,3 +122,40 @@ class TestFormatDriftError:
         assert "tenant_id" in msg
         # The fix must be obvious from the deploy log without reproducing it.
         assert "__crud_permissions__" in msg
+
+
+class TestResolveSearchSchemas:
+    """Which schemas the guard looks in.
+
+    This is the half that turned the guard into a deploy blocker on an
+    ADR-0005 instance: the guard opens its own engine, so falling back to that
+    connection's ``current_schemas(false)`` reported only ``public`` and every
+    imported table read as missing. The module's own docstring had named that
+    exact false positive as the worst possible failure for a check like this.
+    """
+
+    def test_an_explicit_allowlist_wins(self, monkeypatch):
+        monkeypatch.setattr(settings, "app_role_schemas", "public,pinned")
+        monkeypatch.setattr(settings, "db_search_path", "public,ignored")
+        assert resolve_search_schemas() == ["public", "pinned"]
+
+    def test_falls_back_to_the_request_paths_search_path(self, monkeypatch):
+        """The regression. `db_search_path` is what `database.py` gives the
+        engine that actually serves requests, so it is where generic CRUD will
+        really resolve a table — and an instance that sets it while leaving
+        `app_role_schemas` empty is the normal ADR-0005 arrangement."""
+        monkeypatch.setattr(settings, "app_role_schemas", "")
+        monkeypatch.setattr(settings, "db_search_path", "public,tabsii")
+        assert resolve_search_schemas() == ["public", "tabsii"]
+
+    def test_asks_the_connection_only_when_neither_is_configured(self, monkeypatch):
+        """None means "use current_schemas(false)" — still right for a plain
+        single-schema instance, which is the only case it was ever right for."""
+        monkeypatch.setattr(settings, "app_role_schemas", "")
+        monkeypatch.setattr(settings, "db_search_path", "")
+        assert resolve_search_schemas() is None
+
+    def test_whitespace_and_empty_entries_are_dropped(self, monkeypatch):
+        monkeypatch.setattr(settings, "app_role_schemas", "")
+        monkeypatch.setattr(settings, "db_search_path", " public , tabsii ,")
+        assert resolve_search_schemas() == ["public", "tabsii"]

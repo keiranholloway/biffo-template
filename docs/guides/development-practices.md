@@ -3948,6 +3948,25 @@ mechanism cannot make. Candidates: a second check in `ci-wiring-audit.sh` keyed
 on "holds script, never invokes it", or making the daily collector report
 per-guard reach. Neither is built.
 
+**Every session hand-rolls the wait-for-CI loop, and the failure direction is
+always "proceed early".** There is no shared helper — no script, no CLI verb —
+so each agent writes its own `until … gh pr checks … done`, and the natural
+formulation polls for the *absence* of pending work. That reads a transient
+empty set as success: right after `gh pr update-branch`, GitHub drops the
+superseded check runs before registering the new ones, so for a few seconds
+there are **zero** checks and "no pending" is indistinguishable from "all
+green". The loop exits and the caller merges a PR whose CI has not started.
+
+This is the estate's dominant shape — a gate passing because it cannot run —
+reproduced inside the agent's own tooling rather than in CI, where none of the
+existing fail-open guards can see it. The correct condition requires a
+**positive** signal (at least one check present *and* every check concluded),
+which is exactly the rule `workflow-toolchain.test.ts` and
+`workflow-apply-guard.test.ts` apply to themselves via their "is actually being
+read" assertions. The rule is understood; it is simply not available as
+something to call. A `scripts/wait-for-checks.sh` in the shared set, or a
+`biffo pr wait` verb, would close it — neither is built.
+
 **A sweep test proving a property does not prove the file parses.** The new apply
 sweep passed against a `deploy.yml` that had just been broken into invalid YAML —
 an edit orphaned four `TF_VAR` lines — because the parser is deliberately

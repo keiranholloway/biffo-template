@@ -142,7 +142,9 @@ _INTEGRITY_ERROR_MESSAGES: dict[str, str] = {
 _DEFAULT_INTEGRITY_MESSAGE = "That value conflicts with an existing record."
 
 
-def _integrity_error_response(exc: IntegrityError, *, model: type[Any], operation: str) -> HTTPException:
+def _integrity_error_response(
+    exc: IntegrityError, *, model: type[Any], operation: str
+) -> HTTPException:
     """Map a driver ``IntegrityError`` to a stable, generic 400.
 
     The raw driver exception (``exc.orig``) is schema reconnaissance handed to
@@ -156,7 +158,11 @@ def _integrity_error_response(exc: IntegrityError, *, model: type[Any], operatio
     """
     sqlstate = getattr(exc.orig, "sqlstate", None)
     constraint = getattr(exc.orig, "constraint_name", None)
-    message = _INTEGRITY_ERROR_MESSAGES.get(sqlstate, _DEFAULT_INTEGRITY_MESSAGE)
+    message = (
+        _INTEGRITY_ERROR_MESSAGES.get(sqlstate, _DEFAULT_INTEGRITY_MESSAGE)
+        if isinstance(sqlstate, str)
+        else _DEFAULT_INTEGRITY_MESSAGE
+    )
     logger.warning(
         f"IntegrityError on {operation} {model.__tablename__}",
         extra={

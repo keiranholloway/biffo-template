@@ -18,7 +18,7 @@ a stable generic message, with the real detail logged server-side at WARN), and
 an unwritable/unknown payload key now gets a 422 instead of a silent no-op.
 """
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from api.models.base import Base, TenantScopedModel
@@ -70,7 +70,8 @@ async def test_create_integrity_error_does_not_leak_driver_text(session):
     body = str(err.detail)
     # The generic message is present...
     assert isinstance(err.detail, dict)
-    assert err.detail["message"] == _DEFAULT_INTEGRITY_MESSAGE
+    detail = cast(dict[str, Any], err.detail)
+    assert detail["message"] == _DEFAULT_INTEGRITY_MESSAGE
     # ...and none of the driver's own vocabulary leaked into it.
     for leaky in ("sqlite3", "IntegrityError", "gizmos_boundary_test", "UNIQUE constraint"):
         assert leaky not in body, f"driver text {leaky!r} leaked into response body: {body!r}"
@@ -92,7 +93,8 @@ async def test_update_integrity_error_does_not_leak_driver_text(session):
     assert err.status_code == 400
     body = str(err.detail)
     assert isinstance(err.detail, dict)
-    assert err.detail["message"] == _DEFAULT_INTEGRITY_MESSAGE
+    detail = cast(dict[str, Any], err.detail)
+    assert detail["message"] == _DEFAULT_INTEGRITY_MESSAGE
     for leaky in ("sqlite3", "IntegrityError", "gizmos_boundary_test", "UNIQUE constraint"):
         assert leaky not in body, f"driver text {leaky!r} leaked into response body: {body!r}"
     assert first["id"] != second["id"]

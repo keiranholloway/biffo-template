@@ -40,7 +40,8 @@ function sourceFiles(dir: string): string[] {
 }
 
 /**
- * Internal navigation targets: `href="/..."` on a `Link`, and `router.push('/...')`.
+ * Internal navigation targets: `href="/..."` on a `Link`, and `router.push('/...')`
+ * or `router.replace('/...')` — both navigate, so both carry the #275 hazard.
  * Deliberately literal — a dynamic target cannot be checked here, which is why
  * `sanitizeReturnTo` normalises the one dynamic target this app has.
  */
@@ -50,7 +51,7 @@ function internalTargets(source: string): string[] {
     const target = m[1]
     if (target !== undefined) targets.push(target)
   }
-  for (const m of source.matchAll(/router\.push\('(\/[^']*)'\)/g)) {
+  for (const m of source.matchAll(/router\.(?:push|replace)\('(\/[^']*)'\)/g)) {
     const target = m[1]
     if (target !== undefined) targets.push(target)
   }
@@ -62,7 +63,7 @@ function internalTargets(source: string): string[] {
   // passes: the count check only requires more than five targets overall, so
   // losing one is invisible. That is exactly what happened when AuthGuard
   // started carrying a return_to.
-  for (const m of source.matchAll(/router\.push\(`(\/[^`$]*)/g)) {
+  for (const m of source.matchAll(/router\.(?:push|replace)\(`(\/[^`$]*)/g)) {
     const target = m[1]
     if (target !== undefined) targets.push(target)
   }
@@ -106,5 +107,14 @@ describe('internal navigation targets', () => {
   it('finds targets at all, so the guard cannot silently pass on a bad regex', () => {
     const all = sourceFiles(SRC).flatMap((f) => internalTargets(readFileSync(f, 'utf8')))
     expect(all.length).toBeGreaterThan(5)
+  })
+
+  it('scans router.replace as well as router.push', () => {
+    // `replace` navigates exactly like `push` and carries exactly the same
+    // hazard — an unslashed target resolves onto the route's index.txt RSC
+    // payload. It went unscanned only because nothing used it until #1106
+    // cleared a stale return_to out of the address bar.
+    expect(internalTargets("router.replace('/login/')")).toContain('/login/')
+    expect(internalTargets('router.replace(`/login/?x=${y}`)')).toContain('/login/?x=')
   })
 })

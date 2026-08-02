@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useCallback, useEffect, useState } from 'react'
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { CognitoUser, CognitoUserSession } from 'amazon-cognito-identity-js'
 import { useAuth } from '@/context/auth-context'
@@ -60,7 +60,18 @@ function LoginForm() {
   // bounces here — e.g. /login?return_to=/my-sibling/. Sanitised to a
   // same-origin relative path only; see sanitizeReturnTo's own comment for
   // why an absolute URL here would be an open-redirect risk.
-  const returnTo = sanitizeReturnTo(useSearchParams().get('return_to'))
+  const urlReturnTo = sanitizeReturnTo(useSearchParams().get('return_to'))
+
+  // A `return_to` belongs to ONE sign-in — the one that was interrupted. It
+  // stops being a deep link the moment the identity it was resolved for goes
+  // away, and becomes a leftover pointed at the next person (#1106).
+  //
+  // Held in state rather than only stripped from the URL because
+  // `router.replace` lands on a later render: the sign-in that follows a
+  // sign-out can otherwise read the old query string and route on it before
+  // the address bar catches up.
+  const [returnToDiscarded, setReturnToDiscarded] = useState(false)
+  const returnTo = returnToDiscarded ? '' : urlReturnTo
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -103,6 +114,26 @@ function LoginForm() {
     },
     [returnTo, router],
   )
+
+  // The identity a `return_to` was resolved for has gone. Discard it — for this
+  // render, and from the address bar so a reload or a restored tab cannot
+  // resurrect it.
+  //
+  // Keyed on the session disappearing rather than on the sign-out button, so it
+  // holds for every way an identity can end here: the button, a session
+  // expiring while this page is open, a sign-out in another tab. The button was
+  // simply the route the bug was reported by.
+  const hadSession = useRef(false)
+  useEffect(() => {
+    if (session) {
+      hadSession.current = true
+      return
+    }
+    if (!hadSession.current) return
+    hadSession.current = false
+    setReturnToDiscarded(true)
+    if (urlReturnTo) router.replace('/login/')
+  }, [session, urlReturnTo, router])
 
   // Someone who already has a live session does not need to be asked for a
   // password again — sign-in is shared across every surface on this origin, so

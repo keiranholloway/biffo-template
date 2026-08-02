@@ -21,9 +21,14 @@ const {
   fetchWhoamiMock: vi.fn(),
 }))
 
+// The query string the page is mounted with. Mutable so a test can put a
+// `return_to` in the URL the way AuthGuard's bounce does — the default of `{}`
+// keeps every existing test on the no-return_to path.
+let searchParams: Record<string, string> = {}
+const replaceMock = vi.fn()
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: pushMock }),
-  useSearchParams: () => ({ get: () => null }),
+  useRouter: () => ({ push: pushMock, replace: replaceMock }),
+  useSearchParams: () => ({ get: (key: string) => searchParams[key] ?? null }),
 }))
 
 const logoutMock = vi.fn()
@@ -61,6 +66,8 @@ vi.mock('@/lib/whoami-api', () => ({
 const assignMock = vi.fn()
 beforeEach(() => {
   assignMock.mockClear()
+  replaceMock.mockClear()
+  searchParams = {}
   // Built explicitly rather than spread from window.location: that is a class
   // instance, and spreading it drops its prototype (@typescript-eslint/no-misused-spread).
   Object.defineProperty(window, 'location', {
@@ -369,5 +376,121 @@ describe('LoginPage — arriving already signed in', () => {
     const signOut = await screen.findByRole('button', { name: 'Not you? Sign out' })
     fireEvent.click(signOut)
     expect(logoutMock).toHaveBeenCalled()
+  })
+})
+
+/**
+ * #1106 — a `return_to` that outlives the user it belonged to is not a deep
+ * link, it is a leftover.
+ *
+ * Reproduced by the reporter's route: an admin is forwarded to /admin/; the
+ * browser is bounced back to /login/?return_to=%2Fadmin%2F; "Not you? Sign
+ * out" is clicked; a unit-scoped learner signs in. `resolveDestination`'s rule
+ * 1 — "a valid returnTo wins" — outranks every role rule, so the learner
+ * inherited the admin's destination and landed in the infrastructure console.
+ *
+ * Rule 1 is right in general. What was wrong is that nothing invalidated the
+ * destination when the identity it was resolved for went away.
+ */
+describe('LoginPage — return_to must not outlive the user it belonged to', () => {
+  const ADMIN = {
+    sub: 'a',
+    email: 'admin@example.com',
+    username: 'a',
+    user_id: 'u1',
+    is_platform_admin: true,
+    permissions: [],
+    marketplace_role: null,
+    roles: [],
+  }
+  const LEARNER = {
+    sub: 's',
+    email: 'learner@demo.example.com',
+    username: 'u',
+    user_id: 'u2',
+    is_platform_admin: false,
+    permissions: [],
+    marketplace_role: null,
+    roles: [{ role: 'Unit Staff', scope_level: 'unit' }],
+  }
+
+  beforeEach(() => {
+    // The real `logout()` drops the session from context, which re-renders this
+    // page with `session === null`. The mock must do the same or the test is
+    // exercising a sign-out that never happened.
+    logoutMock.mockImplementation(() => {
+      currentSession = null
+    })
+  })
+
+  afterEach(() => {
+    currentSession = null
+    logoutMock.mockReset()
+  })
+
+  /** Arrive signed in as the admin, with the bounce's return_to in the URL. */
+  function arriveAsAdminBouncedFromAdminConsole() {
+    searchParams = { return_to: '/admin/' }
+    currentSession = mockSession()
+    fetchWhoamiMock.mockResolvedValue(ADMIN)
+    render(<LoginPage />)
+  }
+
+  it('routes the next person by role, not to the previous user’s destination', async () => {
+    arriveAsAdminBouncedFromAdminConsole()
+
+    const signOut = await screen.findByRole('button', { name: 'Not you? Sign out' })
+    fireEvent.click(signOut)
+
+    // The admin's own forward to /admin/ was legitimate — it is the next
+    // person's destination this is about.
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Not you? Sign out' })).not.toBeInTheDocument()
+    })
+    pushMock.mockClear()
+    assignMock.mockClear()
+
+    fetchWhoamiMock.mockResolvedValue(LEARNER)
+    loginMock.mockResolvedValue({ kind: 'success', session: mockSession() })
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: LEARNER.email } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'pw' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    // A unit-scoped role lands on /lms/ (ADR-0100 as amended by ADR-0101),
+    // which is a sibling app, so it leaves the portal with a full page load.
+    await waitFor(() => {
+      expect(assignMock).toHaveBeenCalledWith('/lms/')
+    })
+    expect(pushMock).not.toHaveBeenCalledWith('/admin/')
+  })
+
+  it('strips return_to from the address bar, so a reload cannot resurrect it', async () => {
+    arriveAsAdminBouncedFromAdminConsole()
+
+    const signOut = await screen.findByRole('button', { name: 'Not you? Sign out' })
+    fireEvent.click(signOut)
+
+    await waitFor(() => {
+      expect(replaceMock).toHaveBeenCalledWith('/login/')
+    })
+  })
+
+  it('still honours a deep link for someone who never signed out', async () => {
+    // The legitimate case rule 1 exists for (ADR-0007): a sibling app found no
+    // session, bounced here with return_to, and the person who signs in is the
+    // person who was sent.
+    searchParams = { return_to: '/lms/course/abc/' }
+    loginMock.mockResolvedValue({ kind: 'success', session: mockSession() })
+    fetchWhoamiMock.mockResolvedValue(LEARNER)
+
+    render(<LoginPage />)
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: LEARNER.email } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'pw' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    await waitFor(() => {
+      expect(assignMock).toHaveBeenCalledWith('/lms/course/abc/')
+    })
+    expect(replaceMock).not.toHaveBeenCalled()
   })
 })

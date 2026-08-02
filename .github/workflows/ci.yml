@@ -154,6 +154,21 @@ jobs:
         run: node scripts/practices-monotonic.mjs
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
+      # `Closes #N` closes the issue the instant this merges — before it is
+      # deployed, and before anyone has seen it work. For a change whose
+      # behaviour only appears once running (Terraform, workflows, DDL imports,
+      # the portal's auth/routing/CDN), that is the moment the LEAST is known.
+      # tabsii-platform#511 closed ten minutes before the deploy that proved it;
+      # #275 closed on a wrong cause and survived a teardown before a human
+      # clicked the link. Ask for `Refs #N` instead, or for the evidence.
+      #
+      # Bare node like the step above, so it does not depend on the install.
+      - name: Closing keywords on deploy-only paths
+        if: ${{ github.event_name == 'pull_request' && !cancelled() }}
+        run: node scripts/check-closing-keywords.mjs
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
 
   js:
     name: JS (lint, types, test, audit)

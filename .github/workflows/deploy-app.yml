@@ -163,6 +163,14 @@ jobs:
         with:
           name: portal-build-dev
           path: apps/portal/out/
+          # actions/upload-artifact excludes dotfiles/dot-directories by
+          # default. apps/portal/out/.well-known/ (the identity doc's CDN
+          # behaviour, #403, and the siblings manifest, #508) silently never
+          # reached the Deploy job without this — the Build job's own build
+          # step produced it, but "the user-provided path .../.well-known/
+          # does not exist" is what the Deploy job saw downstream, discovered
+          # only once #1159's sync-exclude fix stopped masking it.
+          include-hidden-files: true
       - uses: actions/upload-artifact@v5
         with:
           name: api-service-dev
@@ -993,6 +1001,14 @@ jobs:
         with:
           name: portal-build-staging
           path: apps/portal/out/
+          # actions/upload-artifact excludes dotfiles/dot-directories by
+          # default. apps/portal/out/.well-known/ (the identity doc's CDN
+          # behaviour, #403, and the siblings manifest, #508) silently never
+          # reached the Deploy job without this — the Build job's own build
+          # step produced it, but "the user-provided path .../.well-known/
+          # does not exist" is what the Deploy job saw downstream, discovered
+          # only once #1159's sync-exclude fix stopped masking it.
+          include-hidden-files: true
       - uses: actions/upload-artifact@v5
         with:
           name: api-service-staging
@@ -1830,6 +1846,14 @@ jobs:
         with:
           name: portal-build-prod
           path: apps/portal/out/
+          # actions/upload-artifact excludes dotfiles/dot-directories by
+          # default. apps/portal/out/.well-known/ (the identity doc's CDN
+          # behaviour, #403, and the siblings manifest, #508) silently never
+          # reached the Deploy job without this — the Build job's own build
+          # step produced it, but "the user-provided path .../.well-known/
+          # does not exist" is what the Deploy job saw downstream, discovered
+          # only once #1159's sync-exclude fix stopped masking it.
+          include-hidden-files: true
       - uses: actions/upload-artifact@v5
         with:
           name: api-service-prod

@@ -66,6 +66,32 @@
 #   sh scripts/shared-sync.sh --estate ~/code            # rehearse, then open a PR per repo
 #   sh scripts/shared-sync.sh --estate ~/code --repo tabsii-crm
 #   sh scripts/shared-sync.sh --estate ~/code --no-rehearse  # ship unproven, loudly
+#   sh scripts/shared-sync.sh --candidates --estate ~/code   # unlisted paths worth triaging (#1108)
+#
+# ## `mustBeUniform` and `--candidates` (#1108)
+#
+# `files` / `filesIfPresent` / `filesFromSkeleton` all WRITE. `mustBeUniform` is
+# the fourth list and the only one that does not: it asserts that a path should
+# read identically across the repos that hold it, without ever overwriting any
+# of them. `_extract_detail` was written twice, independently, in two different
+# siblings, for the same defect -- because nothing said "this shape already
+# exists elsewhere, go look". A one-way overwrite cannot be the answer for a
+# path that has not been reconciled (see "Reconcile before you distribute" in
+# AGENTS.md section 9 -- `auth.ts` alone diverges 29-247 lines across seven
+# repos); `mustBeUniform` is how the debt gets TRACKED before it can be paid
+# down. `--check` fails only when a path's variant count exceeds the baseline
+# recorded for it in shared-files.json -- copying the posture
+# `biffo.orphan-baseline.json` established for the orphan ratchet
+# (cli/src/lib/core-upgrade.ts): pre-existing residue never hard-blocks, only a
+# regression does. It always reads `origin/<base>`, never a working tree --
+# measuring from a stale local clone once reported api-client.ts at 4 variants
+# when the estate, from its remote refs, was actually at 1.
+#
+# `--candidates` is a SEPARATE, advisory-only mode: it walks every applicable
+# repo's tree and reports unlisted paths held in 5+ repos, bucketed by variant
+# count, so a human can triage them into `mustBeUniform` (divergent) or `files`
+# / `filesIfPresent` (uniform). It never fails -- always exits 0 -- because it is
+# a question for a human, not a gate.
 
 set -u
 # `pipefail` is not POSIX, and this file is documented and invoked as
@@ -93,6 +119,7 @@ ESTATE=""
 ONLY=""
 REHEARSE_ONLY=""
 NO_REHEARSE=""
+CANDIDATES=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --check) CHECK=1; shift ;;
@@ -101,6 +128,8 @@ while [ $# -gt 0 ]; do
     # is not a gate. This prints the reason on every line it lets through, so a
     # transcript shows what was shipped unproven.
     --no-rehearse) NO_REHEARSE=1; shift ;;
+    # Advisory discovery, not the guard (#1108) -- see the block comment above.
+    --candidates) CANDIDATES=1; shift ;;
     --estate) ESTATE="$2"; shift 2 ;;
     --repo) ONLY="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -168,6 +197,13 @@ CONDITIONAL=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST'
 FROM_SKELETON=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).filesFromSkeleton||{};console.log(Object.entries(m).map(([p,mode])=>p+'='+mode).join('\n'))")
 SKELETON_FOR=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).skeletonForMarker||{};console.log(Object.entries(m).map(([mk,sk])=>mk+'='+sk).join('\n'))")
 SKELETON_DEFAULT=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8'));console.log(m.skeletonDefault||'')")
+
+# `mustBeUniform`: the FOURTH list (#1108), and the only one that never writes.
+# `path<TAB>baseline` lines -- a path this repo asserts should read identically
+# across every repo that holds it, plus the variant count it was measured at
+# when declared. See the block comment near the top of this file for why a
+# baselined ratchet rather than a hard "must be 1" gate.
+UNIFORM=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).mustBeUniform||{};console.log(Object.entries(m).map(([p,b])=>p+'\t'+b).join('\n'))")
 
 drifted=0
 synced=0
@@ -251,6 +287,28 @@ if [ -n "$FROM_SKELETON" ]; then
   done
 fi
 
+# Which branch a repo's shared-set comparisons read against: `dev` if it has
+# one, else whatever `origin/HEAD` resolves to, else whatever the clone
+# happens to be on. `dev` first, per AGENTS.md section 2 -- it is the
+# integration branch in every Biffo repo. `origin/HEAD` is NOT a substitute:
+# it points at `main` in several clones, and `main` is a stale release branch
+# that legitimately does not carry these files.
+#
+# Factored out of `diff_files` so `applicable_repo_list` below -- which the
+# mustBeUniform ratchet and --candidates both need, and neither of which is
+# the drift check -- resolves the SAME branch the same way, rather than a
+# second copy of this logic drifting from the first.
+resolve_base() {
+  d="$1"
+  if git -C "$d" rev-parse --verify --quiet origin/dev >/dev/null 2>&1; then
+    echo dev
+    return
+  fi
+  b=$(git -C "$d" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+  [ -n "$b" ] || b=$(git -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  echo "$b"
+}
+
 # Which of the shared files differ in this repo. Missing counts as drifted: a
 # repo that never received a file is exactly as unprotected as one holding a
 # stale copy, and reporting them differently invites triaging only the second.
@@ -273,17 +331,7 @@ diff_files() {
   # until pruned. Success was self-limiting -- the first merge poisoned the next
   # sync.
   git -C "$d" fetch origin --prune --quiet 2>/dev/null
-  # `dev` first, per AGENTS.md section 2: it is the integration branch in every
-  # Biffo repo. origin/HEAD is NOT a substitute -- it points at `main` in
-  # several clones, and `main` is a stale release branch that legitimately does
-  # not carry these files, so resolving through it reported three repos as
-  # missing everything.
-  if git -C "$d" rev-parse --verify --quiet origin/dev >/dev/null 2>&1; then
-    base=dev
-  else
-    base=$(git -C "$d" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
-    [ -n "$base" ] || base=$(git -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null)
-  fi
+  base=$(resolve_base "$d")
   for f in $FILES; do
     remote=$(git -C "$d" show "origin/$base:$f" 2>/dev/null)
     if [ -z "$remote" ]; then
@@ -341,6 +389,121 @@ repo_dir() {
 
 TEMPLATE_REPO=$(repo_dir "$TEMPLATE_ROOT")
 [ -n "$TEMPLATE_REPO" ] || { echo "$TEMPLATE_ROOT is not a git repository" >&2; exit 2; }
+
+# The repos this run's scope reaches: same selection as the drift survey below
+# (applies(), template excluded, --repo honoured), fetched and resolved to
+# their base branch. Emitted as `label<TAB>dir<TAB>base`.
+#
+# A second walk of $ESTATE rather than reusing the drift survey's, because
+# neither of this function's two callers -- the mustBeUniform ratchet and
+# --candidates -- write anything or open a PR, and both need to run whether or
+# not any `files`/`filesIfPresent`/`filesFromSkeleton` entry drifted. The
+# repeated `fetch --prune` per repo is a no-op in the common case (the main
+# survey below just did it) and cheap in the uncommon one.
+applicable_repo_list() {
+  for d in "$ESTATE"/*/; do
+    d="${d%/}"
+    [ -e "$d/.git" ] || continue
+    [ "$(repo_dir "$d")" = "$TEMPLATE_REPO" ] && continue
+    [ -n "$ONLY" ] && [ "$(basename "$d")" != "$ONLY" ] && continue
+    applies "$d" || continue
+    git -C "$d" fetch origin --prune --quiet 2>/dev/null
+    printf '%s\t%s\t%s\n' "$(basename "$d")" "$d" "$(resolve_base "$d")"
+  done
+}
+
+# --candidates: advisory discovery, never the guard (#1108). Walks every
+# applicable repo's FULL tree at its base branch -- not just the paths already
+# in shared-files.json -- and reports paths held in >=5 repos that are not
+# listed anywhere in the manifest, bucketed by how far apart the copies are.
+# Exits 0 unconditionally: this is a question for a human to triage into
+# `mustBeUniform` (diverging) or `files`/`filesIfPresent` (already uniform),
+# never a build failure.
+if [ -n "$CANDIDATES" ]; then
+  repos=$(applicable_repo_list)
+  if [ -z "$repos" ]; then
+    printf '\nno applicable repos found under %s\n\n' "$ESTATE"
+    exit 0
+  fi
+
+  rows=$(mktemp)
+  trap 'rm -f "$rows"' EXIT
+  printf '%s\n' "$repos" | while IFS="$TAB" read -r label d base; do
+    [ -n "$d" ] || continue
+    # `ls-tree -r` lines are `<mode> <type> <sha><TAB><path>`. The sed rewrites
+    # that to `<sha><TAB><path>` -- BRE, no `-E`, for the same portability
+    # reason the rest of this file avoids GNU-only sed flags -- then a second
+    # pass prepends the repo label. The blob SHA is the content identity: two
+    # repos holding byte-identical bytes at a path always share it, so
+    # counting DISTINCT shas per path is exactly counting variants, without
+    # ever reading a file's bytes into this shell.
+    git -C "$d" ls-tree -r "origin/$base" 2>/dev/null |
+      sed "s/^[0-9]* [a-z]* \([0-9a-f]*\)${TAB}/\1${TAB}/" |
+      sed "s/^/${label}${TAB}/"
+  done > "$rows"
+
+  node -e '
+    const fs = require("fs")
+    const [manifestPath, rowsPath, thresholdArg] = process.argv.slice(1)
+    const threshold = Number(thresholdArg)
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+    // Anything already governed by one of the other three lists is not a
+    // candidate -- it has already been triaged, one way or the other.
+    const known = new Set([
+      ...(manifest.files || []),
+      ...Object.keys(manifest.filesIfPresent || {}),
+      ...Object.keys(manifest.filesFromSkeleton || {}),
+      ...Object.keys(manifest.mustBeUniform || {}),
+    ])
+
+    const byPath = new Map() // path -> Map(repoLabel -> blobSha)
+    for (const line of fs.readFileSync(rowsPath, "utf8").split("\n")) {
+      if (!line) continue
+      const t1 = line.indexOf("\t")
+      const t2 = line.indexOf("\t", t1 + 1)
+      if (t1 < 0 || t2 < 0) continue
+      const repo = line.slice(0, t1)
+      const sha = line.slice(t1 + 1, t2)
+      const path = line.slice(t2 + 1)
+      if (!path) continue
+      if (!byPath.has(path)) byPath.set(path, new Map())
+      byPath.get(path).set(repo, sha)
+    }
+
+    const uniform = []
+    const low = []
+    const high = []
+    for (const [path, repoMap] of byPath) {
+      if (known.has(path)) continue
+      const holders = repoMap.size
+      if (holders < threshold) continue
+      const variants = new Set(repoMap.values()).size
+      const entry = { path, holders, variants }
+      if (variants === 1) uniform.push(entry)
+      else if (variants <= 3) low.push(entry)
+      else high.push(entry)
+    }
+    const bySize = (a, b) => b.holders - a.holders || a.path.localeCompare(b.path)
+    for (const list of [uniform, low, high]) list.sort(bySize)
+
+    const total = uniform.length + low.length + high.length
+    console.log(`\nshared-set candidates -- unlisted paths in >=${threshold} repos (advisory only, #1108)\n`)
+    const section = (label, list) => {
+      console.log(`${label} (${list.length})`)
+      for (const e of list) {
+        console.log(`  ${e.path.padEnd(60)} ${e.variants} variant(s) across ${e.holders} repos`)
+      }
+      console.log("")
+    }
+    section("uniform but unlisted -- candidates for `files`/`filesIfPresent`", uniform)
+    section("2-3 variants -- reconcile before listing, then a `mustBeUniform` candidate", low)
+    section("4+ variants -- likely per-repo by design; read each before assuming otherwise", high)
+    console.log(`${total} unlisted candidate path(s) total.`)
+    console.log("Nothing here fails the build -- triage by hand into shared-files.json, see AGENTS.md section 9.")
+  ' "$MANIFEST" "$rows" 5
+  printf '\n'
+  exit 0
+fi
 
 # Phase 1: put the candidate files in place and make the repo ready to run its
 # own gate against them. Deliberately stops short of committing anything -- a
@@ -650,8 +813,88 @@ done
 
 if [ -n "$CHECK" ]; then
   printf '\n%s current, %s drifted\n' "$current" "$drifted"
-  if [ "$drifted" -gt 0 ]; then
-    printf '\033[31mShared files have drifted.\033[0m Run without --check to open sync PRs.\n\n'
+
+  # `mustBeUniform`: the baselined ratchet (#1108). Report EVERY entry every
+  # run, passing or not, so the debt stays visible even on a green morning --
+  # `scripts/protection-audit.sh` makes the case at length that a guard red
+  # every day trains people to stop reading it, and the drift check above feeds
+  # exactly that daily dashboard (scripts/practices-daily.sh line ~355).
+  #
+  # Verdicts are written to a file rather than tracked in a shell variable
+  # because the `while read` below is on the right of a pipe and therefore runs
+  # in a subshell -- the same reason $VERDICTS exists further down for the
+  # rehearsal loop. `uniform_worsened` is read back OUTSIDE that subshell.
+  uniform_worsened=0
+  if [ -n "$UNIFORM" ]; then
+    printf '\nmustBeUniform -- baselined ratchet, asserts without writing (shared-files.json)\n\n'
+    repos=$(applicable_repo_list)
+    uverdicts=$(mktemp)
+    printf '%s\n' "$UNIFORM" | while IFS="$TAB" read -r path baseline; do
+      [ -n "$path" ] || continue
+      blobs=$(mktemp)
+      printf '%s\n' "$repos" | while IFS="$TAB" read -r label d base; do
+        [ -n "$d" ] || continue
+        # The blob SHA at this path in this repo's base branch IS its content
+        # identity -- two repos share a SHA iff their bytes are identical, so
+        # counting distinct SHAs across holders is exactly counting variants,
+        # with no file ever read into this shell. A repo with no entry here
+        # simply never holds the path; that is what `files` is for, not this.
+        blob=$(git -C "$d" rev-parse -q --verify "origin/$base:$path" 2>/dev/null)
+        [ -n "$blob" ] && echo "$blob"
+      done > "$blobs"
+      holders=$(wc -l < "$blobs" | tr -d ' ')
+      variants=$(sort -u "$blobs" | wc -l | tr -d ' ')
+      rm -f "$blobs"
+
+      # A path held by fewer than two repos has nothing to be uniform ACROSS --
+      # reporting a verdict on it would be noise, not a measurement.
+      if [ "$holders" -lt 2 ]; then
+        printf '  %-12s %-42s only %s holder(s) -- need >=2 to be meaningful\n' \
+          'skipped' "$path" "$holders"
+        printf 'skipped\n' >> "$uverdicts"
+        continue
+      fi
+
+      if [ "$variants" -gt "$baseline" ]; then
+        printf '  \033[31m%-12s\033[0m %-42s %s variants across %s repos (baseline %s)\n' \
+          'WORSENED' "$path" "$variants" "$holders" "$baseline"
+        printf 'WORSENED\n' >> "$uverdicts"
+      elif [ "$variants" -eq 1 ]; then
+        # Fully converged. Called out on its own regardless of what the
+        # baseline says -- a ratchet that never tightens stops meaning
+        # anything, so this is also where a >1 baseline gets told to drop.
+        if [ "$baseline" -eq 1 ]; then
+          printf '  %-12s %-42s uniform across %s repos\n' 'uniform' "$path" "$holders"
+        else
+          printf '  %-12s %-42s uniform across %s repos (baseline %s -- lower it to 1)\n' \
+            'uniform' "$path" "$holders" "$baseline"
+        fi
+        printf 'uniform\n' >> "$uverdicts"
+      elif [ "$variants" -lt "$baseline" ]; then
+        printf '  %-12s %-42s %s variants across %s repos (baseline %s -- lower it)\n' \
+          'IMPROVED' "$path" "$variants" "$holders" "$baseline"
+        printf 'IMPROVED\n' >> "$uverdicts"
+      else
+        printf '  %-12s %-42s %s variants across %s repos (baseline %s)\n' \
+          'at baseline' "$path" "$variants" "$holders" "$baseline"
+        printf 'at-baseline\n' >> "$uverdicts"
+      fi
+    done
+    grep -q '^WORSENED$' "$uverdicts" 2>/dev/null && uniform_worsened=1
+    rm -f "$uverdicts"
+  fi
+
+  if [ "$drifted" -gt 0 ] || [ "$uniform_worsened" -gt 0 ]; then
+    if [ "$drifted" -gt 0 ]; then
+      printf '\n\033[31mShared files have drifted.\033[0m Run without --check to open sync PRs.\n'
+    fi
+    if [ "$uniform_worsened" -gt 0 ]; then
+      printf '\n\033[31mA mustBeUniform path exceeded its baseline.\033[0m That is a NEW divergence,\n'
+      printf 'not the pre-existing residue the baseline tolerates -- reconcile the copies by\n'
+      printf 'hand (see AGENTS.md section 9, "Reconcile before you distribute") rather than\n'
+      printf 'raising the baseline to match.\n'
+    fi
+    printf '\n'
     exit 1
   fi
   printf '\n'

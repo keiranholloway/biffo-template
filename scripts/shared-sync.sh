@@ -309,6 +309,10 @@ resolve_base() {
   echo "$b"
 }
 
+# Sentinel `diff_files` returns when the clone could not be fetched at all,
+# as distinct from its files having drifted. Deliberately not a valid path.
+UNFETCHABLE='__fetch-failed__'
+
 # Which of the shared files differ in this repo. Missing counts as drifted: a
 # repo that never received a file is exactly as unprotected as one holding a
 # stale copy, and reporting them differently invites triaging only the second.
@@ -330,7 +334,18 @@ diff_files() {
   # both had a tracking ref for a branch that was gone, and both failed every run
   # until pruned. Success was self-limiting -- the first merge poisoned the next
   # sync.
-  git -C "$d" fetch origin --prune --quiet 2>/dev/null
+  # `2>/dev/null` used to hide the one failure that matters here. A clone whose
+  # refspec is pinned to a branch the remote no longer has — a `--single-branch`
+  # clone of `main` after the `main` -> `dev` migration (#1145) — fails with
+  # `fatal: couldn't find remote ref refs/heads/main` and therefore **prunes
+  # nothing**, so the dead `refs/remotes/origin/main` survives. Everything
+  # downstream then reads a ref that no longer exists on the remote: the files
+  # are reported against a frozen commit, and phase 2 pushes toward a branch
+  # that is gone. Swallowing the error is what makes that silent.
+  if ! fetch_err=$(git -C "$d" fetch origin --prune 2>&1); then
+    echo "$UNFETCHABLE$(printf '\t')$(printf '%s' "$fetch_err" | tr '\n' ' ')"
+    return 0
+  fi
   base=$(resolve_base "$d")
   for f in $FILES; do
     remote=$(git -C "$d" show "origin/$base:$f" 2>/dev/null)
@@ -790,6 +805,16 @@ for d in "$ESTATE"/*/; do
   [ -n "$ONLY" ] && [ "$label" != "$ONLY" ] && continue
   applies "$d" || continue
   delta=$(diff_files "$d")
+  case "$delta" in
+    "$UNFETCHABLE"*)
+      # Not drift. This clone cannot see its own remote, so anything said about
+      # its files would be a statement about a frozen ref.
+      printf '%-26s \033[31mcannot fetch\033[0m - %s\n' "$label" "${delta#*	}"
+      printf '%-26s   this clone cannot reach its base branch; fix the clone at %s\n' '' "$d"
+      failed=$((failed + 1))
+      continue
+      ;;
+  esac
   if [ -z "$delta" ]; then
     current=$((current + 1))
     printf '%-26s \033[32mcurrent\033[0m\n' "$label"
@@ -882,6 +907,16 @@ if [ -n "$CHECK" ]; then
     done
     grep -q '^WORSENED$' "$uverdicts" 2>/dev/null && uniform_worsened=1
     rm -f "$uverdicts"
+  fi
+
+  # A repo whose clone could not be fetched was neither current nor drifted --
+  # it was unreadable, and exiting 0 over it is the fail-open this check exists
+  # to remove one level down. `--check` feeds the daily dashboard, where a 0
+  # renders as OK; a repo nobody could read must not be part of that OK.
+  if [ "${failed:-0}" -gt 0 ]; then
+    printf '\n\033[31m%s repo(s) could not be read.\033[0m Their drift is unknown, not clean.\n\n' \
+      "$failed"
+    exit 1
   fi
 
   if [ "$drifted" -gt 0 ] || [ "$uniform_worsened" -gt 0 ]; then

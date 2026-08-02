@@ -209,14 +209,17 @@ class TestTenantScoping:
     invariant #2) — a caller in one tenant must never see or mutate another
     tenant's rows, and can't override tenant_id via the request body."""
 
-    def test_create_ignores_tenant_id_in_request_body(self, client: TestClient):
+    def test_create_rejects_tenant_id_in_request_body(self, client: TestClient):
+        # tenant_id always comes from require_plugin_tenant_context, never the
+        # body — it is never settable, and since tabsii-platform#474 an
+        # attempt to set it is rejected outright (422) rather than silently
+        # ignored, so a caller never mistakes a dropped field for a write that
+        # took effect.
         resp = client.post(
             "/api/v1/plugins/notepad/notes",
             json={"title": "spoofed", "tenant_id": "attacker-tenant"},
         )
-        assert resp.status_code == 201
-        # tenant_id always comes from require_plugin_tenant_context, never the body.
-        assert resp.json()["tenant_id"] == "default"
+        assert resp.status_code == 422
 
     def test_other_tenant_cannot_see_or_mutate_row(self, plugin_app: FastAPI, client: TestClient):
         create_resp = client.post(

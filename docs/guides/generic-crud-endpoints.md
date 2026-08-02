@@ -96,9 +96,11 @@ Request/response shapes:
 
 - `list` → `200`, a JSON array of rows.
 - `read` → `200` with the row, or `404` if no such row in your tenant.
-- `create` → `201` with the created row (send a JSON object of the settable columns; unknown keys are ignored).
-- `update` → `200` with the updated row.
+- `create` → `201` with the created row (send a JSON object of the settable columns).
+- `update` → `200` with the updated row. A partial payload — only the fields you're changing — is fine; fields you omit are left untouched.
 - `delete` → `200`, `{ "deleted": true, "id": "..." }`.
+
+Both `create` and `update` **reject** (`422`) any payload key that isn't a settable column — including a typo'd field name or an attempt to set `id`/`tenant_id`/`created_at`/`updated_at`. Earlier versions silently dropped such keys and still returned success, which meant a caller checking only the status code could believe a write took effect when it had been discarded (tabsii-platform#474); an unknown/unwritable key is now a hard error instead. A constraint violation (e.g. a duplicate value on a unique column) returns `400` with a stable, generic message — never the raw database error, which would leak schema details and change wording across driver versions (tabsii-platform#473).
 
 ## Turning it on (the deploy)
 

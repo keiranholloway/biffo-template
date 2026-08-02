@@ -20,6 +20,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from aws_lambda_powertools import Logger
 from fastapi import Body, Depends, HTTPException, status
 from pydantic_core import to_jsonable_python
 from sqlalchemy import select
@@ -30,6 +31,8 @@ from ..database import get_db
 from ..dependencies import require_plugin_tenant_context
 from ..events import emit_event
 from ..events.registry import EventType
+
+logger = Logger()
 
 # Column names never put on the bus — credentials/secrets/PII. Matched
 # case-insensitively as substrings; a model may exclude more via a
@@ -106,6 +109,76 @@ def user_columns_from_model(model: type[Any]) -> frozenset[str]:
     return frozenset(c.name for c in model.__table__.columns if c.name not in AUTO_COLUMN_NAMES)
 
 
+def _reject_unwritable_fields(payload: dict[str, Any], user_columns: frozenset[str]) -> None:
+    """422 on any payload key that isn't a user-writable column, instead of the
+    old behaviour of silently ignoring it (``if key in user_columns`` with no
+    else). Silent drop is worse than a straightforward rejection: the handler
+    still returns 200/201 with the full serialized row, so a caller checking
+    only the status code concludes an unknown/unwritable field (a typo, or
+    ``id``/``tenant_id``/``deleted_at``) was written when it was dropped on the
+    floor (tabsii-platform#474). This only rejects keys NOT in ``user_columns``
+    — a partial payload that supplies a subset of writable fields is untouched.
+    """
+    unknown = sorted(set(payload) - user_columns)
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Unwritable or unknown field(s): {', '.join(unknown)}",
+        )
+
+
+# SQLSTATE class 23 = integrity constraint violation (PostgreSQL). asyncpg sets
+# ``.sqlstate`` on every ``PostgresError`` it raises, so this is driver-neutral
+# even though it's a Postgres code — it's what ``exc.orig`` carries in
+# production (postgresql+asyncpg). Other DBAPIs (e.g. the sqlite3 driver the
+# test suite runs against) won't have `.sqlstate`, hence the ``getattr`` below
+# and the generic fallback message — never `str(exc.orig)`.
+_INTEGRITY_ERROR_MESSAGES: dict[str, str] = {
+    "23505": "That value conflicts with an existing record.",
+    "23503": "This action references a record that does not exist.",
+    "23502": "A required value is missing.",
+    "23514": "That value does not satisfy a required condition.",
+}
+_DEFAULT_INTEGRITY_MESSAGE = "That value conflicts with an existing record."
+
+
+def _integrity_error_response(
+    exc: IntegrityError, *, model: type[Any], operation: str
+) -> HTTPException:
+    """Map a driver ``IntegrityError`` to a stable, generic 400.
+
+    The raw driver exception (``exc.orig``) is schema reconnaissance handed to
+    any authenticated caller — driver name, exception class, physical table
+    name, constraint name — and it's unstable, breaking whenever the
+    driver/constraint wording changes (tabsii-platform#473). None of that
+    reaches the response. The real detail is logged server-side at WARN
+    (correlated automatically via ``Logger.inject_lambda_context`` on the
+    Lambda entrypoint); the caller gets a stable, generic message and, when the
+    driver names one, a machine-readable ``constraint`` field.
+    """
+    sqlstate = getattr(exc.orig, "sqlstate", None)
+    constraint = getattr(exc.orig, "constraint_name", None)
+    message = (
+        _INTEGRITY_ERROR_MESSAGES.get(sqlstate, _DEFAULT_INTEGRITY_MESSAGE)
+        if isinstance(sqlstate, str)
+        else _DEFAULT_INTEGRITY_MESSAGE
+    )
+    logger.warning(
+        f"IntegrityError on {operation} {model.__tablename__}",
+        extra={
+            "table": model.__tablename__,
+            "operation": operation,
+            "sqlstate": sqlstate,
+            "constraint": constraint,
+            "driver_detail": str(exc.orig),
+        },
+    )
+    detail: dict[str, Any] = {"message": message}
+    if constraint:
+        detail["constraint"] = constraint
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+
 def make_list_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
     async def handler(
         tenant_id: str = Depends(require_plugin_tenant_context),
@@ -167,16 +240,13 @@ def make_create_handler(
         tenant_id: str = Depends(require_plugin_tenant_context),
         db: AsyncSession = Depends(get_db),
     ) -> dict[str, Any]:
-        fields = {k: v for k, v in payload.items() if k in user_columns}
-        row = model(tenant_id=tenant_id, **fields)
+        _reject_unwritable_fields(payload, user_columns)
+        row = model(tenant_id=tenant_id, **payload)
         db.add(row)
         try:
             await db.flush()
         except IntegrityError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Could not create {model.__tablename__} row: {exc.orig}",
-            ) from exc
+            raise _integrity_error_response(exc, model=model, operation="create") from exc
         await db.refresh(row)
         _emit_crud_event(db, model, "created", tenant_id, row=row)
         await _run_created_hook(model, db, row, tenant_id)
@@ -194,20 +264,17 @@ def make_update_handler(
         tenant_id: str = Depends(require_plugin_tenant_context),
         db: AsyncSession = Depends(get_db),
     ) -> dict[str, Any]:
+        _reject_unwritable_fields(payload, user_columns)
         result = await db.execute(select(model).where(model.id == id, model.tenant_id == tenant_id))
         row = result.scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
         for key, value in payload.items():
-            if key in user_columns:
-                setattr(row, key, value)
+            setattr(row, key, value)
         try:
             await db.flush()
         except IntegrityError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Could not update {model.__tablename__} row: {exc.orig}",
-            ) from exc
+            raise _integrity_error_response(exc, model=model, operation="update") from exc
         await db.refresh(row)
         _emit_crud_event(db, model, "updated", tenant_id, row=row)
         return serialize(row)

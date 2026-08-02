@@ -215,8 +215,11 @@ class TestTenantScoping:
         read_resp = other_client.get(f"{_BASE}/{gadget_id}")
         assert read_resp.status_code == 404
 
-    def test_create_ignores_tenant_id_in_request_body(self, client: TestClient):
+    def test_create_rejects_tenant_id_in_request_body(self, client: TestClient):
+        # tenant_id always comes from the verified caller, never the body
+        # (ADR-0001) — it is never settable, and since tabsii-platform#474 an
+        # attempt to set it is rejected outright (422) rather than silently
+        # ignored, so a caller never mistakes a dropped field for a write that
+        # took effect.
         resp = client.post(_BASE, json={"label": "spoofed", "tenant_id": "attacker"})
-        assert resp.status_code == 201
-        # tenant_id always comes from the verified caller, never the body.
-        assert resp.json()["tenant_id"] == "default"
+        assert resp.status_code == 422

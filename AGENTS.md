@@ -86,6 +86,22 @@ apps, and plugin repos alike. You always branch from and PR into `dev`.
 anything other than `dev` has not yet been migrated (issue #559) — flag it rather
 than working around it.
 
+**This is now enforced, not just asked for.** `scripts/protection-audit.sh` fails
+on a repo with no `dev` branch (#1145). It previously _skipped_ one, which is a
+different and worse thing: the repo left the denominator entirely, so
+`27 branches checked, all protected and binding` was a true statement about a set
+that silently excluded the repos least likely to be protected. Four — the two
+runner fleets, the data-model design repo and `tabsii-map` — sat on an
+unprotected `main` for weeks while two separate audits (#714, #1052) reported the
+estate fully bound, because both asked _"is `dev` protected here?"_ and a repo
+answering 404 was dropped rather than failed. All four were migrated in #1145 and
+the audit now reports **34** branches where it reported 27.
+
+The general shape, worth recognising elsewhere: **a check that skips an input it
+cannot evaluate is not neutral — it shrinks its own scope and reports the
+remainder as the whole.** That is the same defect as `staging` being absent from
+the audit's branch list (#1057), one level further out.
+
 Deployable repos (instances and sibling apps) additionally keep `staging` and
 `main` as promotion targets — `dev` → `staging` → `main`, where `main` is
 **production**. Production is not built yet, so `main` is **reserved and

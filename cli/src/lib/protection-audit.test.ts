@@ -217,6 +217,40 @@ describe('protection-audit: does the protection bind anyone', () => {
   })
 
   /**
+   * #1145. A repo with no `dev` did not FAIL this audit — it left the
+   * denominator. Four estate repos sat on an unprotected `main` for weeks while
+   * #714 and #1052 both reported the estate bound, because each asked "is `dev`
+   * protected here?" and a repo answering 404 was dropped rather than flagged.
+   *
+   * The bug and the deliberate scroll-past exemption for non-deployable
+   * `staging`/`main` were the same `continue`, and only one of them was meant.
+   */
+  it('FAILS a repo that has no dev branch at all, instead of skipping it', () => {
+    const estate = estateWith([{ slug: 'acme/runners', branches: ['main'], deployable: false }])
+    const { code, stdout } = audit(estate, {})
+
+    expect(stdout).toContain('NO DEV')
+    expect(stdout).toContain('acme/runners')
+    expect(code).toBe(1)
+  })
+
+  it('counts a missing dev in the denominator, so the summary cannot overstate its scope', () => {
+    // The actual defect was arithmetic, not presentation: the repo was absent
+    // from "N branches checked", so a green summary described a set chosen by
+    // the very condition that should have failed it.
+    const withDev = audit(estateWith([{ slug: 'acme/a', branches: ['dev'] }]), {
+      'acme/a#dev': '2 true',
+    })
+    const withoutDev = audit(estateWith([{ slug: 'acme/a', branches: ['main'] }]), {})
+
+    expect(withDev.stdout).toMatch(/1 branches checked/)
+    expect(withDev.code).toBe(0)
+    // Same repo count, same summary denominator — the missing dev is named, not dropped.
+    expect(withoutDev.stdout).toMatch(/1 branches checked/)
+    expect(withoutDev.code).toBe(1)
+  })
+
+  /**
    * Two lists name the estate's branch roles — this script's loop and BRANCHES
    * in check-branch-protection.ts — and they silently disagreed, which is how
    * `staging` went unaudited. They must move together.

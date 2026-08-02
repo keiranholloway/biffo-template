@@ -145,14 +145,43 @@ for d in "$ESTATE"/*/; do
   #
   # This matters more than it looks. An audit that fails every single day on a
   # condition everyone has accepted is an audit people learn to scroll past --
-  # and then it is worth nothing on the day it reports something real. Four
-  # repos here have zero deploy workflows AND no `dev` branch; flagging them
-  # daily forever would have trained exactly that reflex.
+  # and then it is worth nothing on the day it reports something real. That is
+  # why `staging` and `main` are required only where the repo deploys.
+  #
+  # It used to be why a MISSING `dev` was skipped too: four repos had zero
+  # deploy workflows and no `dev` branch, and flagging them daily forever would
+  # have trained exactly that reflex. That exemption is retired (#1145), because
+  # it hid the thing it was standing next to.
+  #
+  # A repo with no `dev` did not fail this audit -- it left the DENOMINATOR. It
+  # was never named, so `27 branches checked, all protected and binding` was a
+  # true statement about a set that silently excluded every repo most in need of
+  # checking. `biffo-runners`, `tabsii-runners`, `tabsii-data-model-design` and
+  # `tabsii-map` sat on an unprotected `main` for weeks while two separate
+  # audits (#714, #1052) reported the estate bound, because both asked "is `dev`
+  # protected here?" and a 404 dropped the repo rather than failing it.
+  #
+  # So the exemption and the blind spot were the same line of code, and only one
+  # of them was intended. `dev` missing is now a FAILURE: AGENTS.md section 2
+  # makes it the integration branch in EVERY repo, so its absence is a real
+  # defect, not a repo shape to tolerate. The scroll-past objection no longer
+  # applies -- all four were migrated in #1145 and every estate repo now has
+  # one, so this fires on a genuine regression rather than every morning.
   deployable=no
   ls "$d/.github/workflows/" 2>/dev/null | grep -q "deploy" && deployable=yes
 
   for br in dev staging main; do
-    git -C "$d" rev-parse --verify --quiet "origin/$br" >/dev/null 2>&1 || continue
+    if ! git -C "$d" rev-parse --verify --quiet "origin/$br" >/dev/null 2>&1; then
+      # Only `dev` is mandatory everywhere; a non-deployable repo legitimately
+      # has no `staging`/`main` to protect.
+      [ "$br" = dev ] || continue
+      checked=$((checked + 1))
+      bad=$((bad + 1))
+      unprotected_list="$unprotected_list  $slug (dev) - no dev branch exists (AGENTS.md section 2)
+"
+      printf '  \033[31mNO DEV\033[0m       %-38s %-6s branch does not exist\n' "$slug" "dev"
+      continue
+    fi
     if [ "$br" != "dev" ] && [ "$deployable" = "no" ]; then
       printf '  \033[90m--           %-38s %-6s not deployable, %s not required\033[0m\n' \
         "$slug" "$br" "$br"

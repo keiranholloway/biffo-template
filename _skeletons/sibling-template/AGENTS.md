@@ -60,6 +60,19 @@ This file is distributed by the template and kept in step by
 
 - Get CI green and confirm it: `gh pr checks <N>`. A green local run is not
   sufficient — verify the actual PR checks.
+- **Wait with `scripts/wait-for-checks.sh`, not a hand-rolled loop:**
+
+  ```bash
+  sh scripts/wait-for-checks.sh <N>   # 0 green · 1 failed · 2 cannot tell
+  ```
+
+  Do not write your own `until … grep -c pending … done`. That polls for the
+  **absence** of pending checks, so the empty window right after
+  `gh pr update-branch` — superseded runs dropped, new ones not yet registered —
+  reads as "all green" and merges a PR whose CI has not started. The script
+  waits on a **positive** signal instead, and its **exit 2 means "cannot tell",
+  which is never a pass**.
+
 - **Squash-merge, delete the branch, remove the worktree:**
   `gh pr merge <N> --squash --delete-branch`.
 

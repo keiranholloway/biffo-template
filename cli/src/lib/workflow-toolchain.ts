@@ -144,11 +144,35 @@ export interface WorkflowJob {
   id: string
   steps: WorkflowStep[]
   /**
+   * Job ids this job declares in `needs:`, in declaration order.
+   *
+   * Needed because a property can legitimately be satisfied by an *upstream*
+   * job rather than this one: `deploy-infra.yml` runs the destructive-plan
+   * guard in `plan-dev` and the apply in `apply-dev`, which `needs: plan-dev`.
+   * A per-job rule reports that correct arrangement as three defects, and a
+   * guard that fires on correct code is one that gets suppressed.
+   */
+  needs: string[]
+  /**
    * True for a job that calls a reusable workflow (`uses:` at job level). Such
    * a job has no `steps:` of its own and nothing here can see inside it, so it
    * is skipped rather than reported as clean.
    */
   reusable: boolean
+}
+
+/** Parse `needs:` in its scalar (`needs: a`) and inline-array (`needs: [a, b]`) forms. */
+function parseNeeds(value: string): string[] {
+  const trimmed = value.trim()
+  if (trimmed === '') return []
+  if (trimmed.startsWith('[')) {
+    return trimmed
+      .replace(/^\[|\]$/g, '')
+      .split(',')
+      .map((entry) => entry.trim().replace(/^['"]|['"]$/g, ''))
+      .filter((entry) => entry !== '')
+  }
+  return [trimmed.replace(/^['"]|['"]$/g, '')]
 }
 
 /** True for a line that is blank or a whole-line YAML comment. */
@@ -219,7 +243,7 @@ export function parseWorkflowJobs(workflow: string): WorkflowJob[] {
       const job = /^\s*([A-Za-z_][A-Za-z0-9_-]*):\s*(#.*)?$/.exec(line)
       if (job?.[1] !== undefined) {
         jobIndent = indent
-        current = { id: job[1], steps: [], reusable: false }
+        current = { id: job[1], steps: [], needs: [], reusable: false }
         jobs.push(current)
         inSteps = false
         stepIndent = null
@@ -228,6 +252,25 @@ export function parseWorkflowJobs(workflow: string): WorkflowJob[] {
     }
 
     if (current === null) continue
+
+    // `needs:` at job level, in either the scalar/inline form on this line or
+    // a block list on the lines below it.
+    if (!inSteps && jobIndent !== null && indent === jobIndent + 2) {
+      const needs = /^\s*needs:\s*(.*)$/.exec(line)
+      if (needs?.[1] !== undefined) {
+        current.needs.push(...parseNeeds(needs[1]))
+        for (let j = i + 1; j < lines.length; j += 1) {
+          const item = lines[j]
+          if (item === undefined) break
+          if (isSkippable(item)) continue
+          const entry = /^\s*-\s*(\S+)\s*$/.exec(item)
+          if (entry?.[1] === undefined || indentOf(item) <= indent) break
+          current.needs.push(entry[1].replace(/^['"]|['"]$/g, ''))
+          i = j
+        }
+        continue
+      }
+    }
 
     // Job-level `uses:` — a reusable workflow call, which has no steps.
     if (!inSteps && jobIndent !== null && indent === jobIndent + 2 && /^\s*uses:\s*\S/.test(line)) {

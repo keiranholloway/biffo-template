@@ -123,18 +123,48 @@ def format_drift_error(drift: list[ColumnDrift]) -> str:
     return "\n".join(lines)
 
 
+def resolve_search_schemas() -> list[str] | None:
+    """Which schemas to look in, or ``None`` to ask the connection.
+
+    Three sources, most explicit first:
+
+    1. ``app_role_schemas`` — the operator's own allowlist, the same contract
+       ``db_app_role`` uses.
+    2. ``db_search_path`` — the search_path the **request path's** engine is
+       built with (``database.py`` passes it to asyncpg as a server setting).
+       That is the resolution order the ORM will really use, so it is the right
+       answer to "where will generic CRUD find this table".
+    3. ``None`` — let the query fall back to the connection's own
+       ``current_schemas(false)``.
+
+    Source 2 exists because source 3 was not the safety net it was written to
+    be. This guard opens its **own** engine, with no ``search_path`` server
+    setting, so ``current_schemas(false)`` on that connection is whatever the
+    master role defaults to — ``public`` — regardless of where the instance
+    actually keeps its imported tables. An ADR-0005 instance therefore had
+    every imported table report as missing and its deploy fail on a schema that
+    was entirely correct: the exact false positive this module's own docstring
+    warned against. Note the asymmetry that hid it — ``db_app_role``'s fallback
+    discovers schemas by querying ``pg_namespace``, so it finds them; only this
+    one asked the session.
+    """
+    from .config import settings
+    from .db_app_role import configured_schemas
+
+    explicit = configured_schemas()
+    if explicit:
+        return explicit
+    from_search_path = [s.strip() for s in settings.db_search_path.split(",") if s.strip()]
+    return from_search_path or None
+
+
 async def _actual_columns(
     conn: Any, tables: set[str], schemas: list[str] | None
 ) -> dict[str, set[str]]:
     """Real column names per table, from ``information_schema``.
 
-    ``schemas`` is the explicit allowlist or ``None`` to auto-discover — the
-    same contract as ``db_app_role.configured_schemas``. When it is ``None`` we
-    fall back to the connection's own ``search_path`` rather than inventing a
-    default: an instance that puts its imported tables in a non-``public``
-    schema (ADR-0005, and tabsii does exactly this) would otherwise have every
-    table report as missing, turning this guard into a deploy-blocking false
-    positive — the worst possible failure for a check like this.
+    ``schemas`` is an explicit list (see ``resolve_search_schemas``) or ``None``
+    to use the connection's own ``search_path``.
     """
     from sqlalchemy import text
 
@@ -170,7 +200,7 @@ async def assert_crud_schema_matches_async() -> dict:
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from .database import resolve_master_database_url
-    from .db_app_role import configured_schemas, is_postgres
+    from .db_app_role import is_postgres
     from .permissions import iter_core_crud_models
 
     models = iter_core_crud_models()
@@ -193,7 +223,7 @@ async def assert_crud_schema_matches_async() -> dict:
     engine = create_async_engine(master_url, hide_parameters=True)
     try:
         async with engine.connect() as conn:
-            actual = await _actual_columns(conn, set(declared), configured_schemas())
+            actual = await _actual_columns(conn, set(declared), resolve_search_schemas())
     finally:
         await engine.dispose()
 

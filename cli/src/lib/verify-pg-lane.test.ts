@@ -146,6 +146,46 @@ describe('verify.sh reports a lane it cannot run as a GAP, not as inapplicable',
   })
 })
 
+describe('verify.sh provisions the database rather than asking you to remember', () => {
+  // A gate that only runs when you exported the right variable is a gate that
+  // runs on the days you did not need it. If the repo ships `pg-test-db.sh`,
+  // the gate calls it.
+  const lane = {
+    'package.json': PASSING,
+    'services/api/tests/test_rls_pg.py': PG_TEST,
+  }
+
+  it('uses the DSN the helper prints', () => {
+    const run = runIn({
+      ...lane,
+      // Stands in for the real helper: the contract is "last stdout line is a
+      // DSN", and that contract is what this pins.
+      'scripts/pg-test-db.sh': 'echo "postgresql+asyncpg://u:p@localhost:1/db"\n',
+    })
+
+    expect(run.stdout).not.toContain('NOT RUN')
+  })
+
+  it('falls back to the warning when the helper cannot provision one', () => {
+    // No Docker, no server, no schema all end here — and the gate must say the
+    // lane did not run rather than pretending a broken helper is a DSN.
+    const run = runIn({
+      ...lane,
+      'scripts/pg-test-db.sh': 'echo "pg-test-db: no Postgres and no docker" >&2\nexit 1\n',
+    })
+
+    expect(run.stdout).toContain('NOT RUN')
+  })
+
+  it('rejects helper output that is not a DSN', () => {
+    // A helper that logs to stdout instead of stderr would otherwise hand the
+    // gate a sentence and have it reported as a configured database.
+    const run = runIn({ ...lane, 'scripts/pg-test-db.sh': 'echo "ready"\n' })
+
+    expect(run.stdout).toContain('NOT RUN')
+  })
+})
+
 describe('verify.sh ignores nested checkouts when counting the lane', () => {
   it('skips agent worktrees kept inside the repo under .claude/', () => {
     // Measured wrong before this exclusion existed: tabsii-platform reported 66

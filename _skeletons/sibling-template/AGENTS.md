@@ -6,9 +6,16 @@ express everything as plain `git` / `gh` / `pnpm` / `uv` commands. Tool-specific
 guidance belongs in that tool's own file (e.g. `CLAUDE.md`), which imports this
 one rather than restating it.
 
-This is a **Biffo satellite repo** (a plugin or sibling app), separate from the
-core project it extends. It follows the same engagement rules as every Biffo
-repo; only its product differs.
+This is a **Biffo satellite repo** — a repository in the estate that is not a
+core project: a sibling app, a plugin, a shared package, a runner fleet, or a
+design/data repo. It follows the same engagement rules as every Biffo repo; only
+its product differs. `CLAUDE.md` says which one this is.
+
+This file is distributed by the template and kept in step by
+`scripts/shared-sync.sh` there (`shared-files.json`). Edit it **upstream in
+`biffo-template`**, not here: a local edit is overwritten by the next sync, and
+`AGENTS.md` silently drifting 68 lines behind is why that mechanism exists
+(biffo-template#559, #1150).
 
 ## 1. One integration branch: `dev`
 

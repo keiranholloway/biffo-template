@@ -133,6 +133,42 @@ MARKERS=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$MANIFEST'
 #     this list exists to say when it must not.
 CONDITIONAL=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).filesIfPresent||{};console.log(Object.entries(m).map(([t,s])=>t+'\t'+s).join('\n'))")
 
+# `filesFromSkeleton`: the THIRD list (#1150). Files whose canonical copy lives in
+# the SKELETON matching the receiving repo's flavour, emitted as `path=policy`
+# lines. Paths and policies never contain whitespace, so this is iterated with
+# plain word splitting exactly like $FILES.
+#
+# Why neither of the other two lists could do this job:
+#
+#   - `files` CREATES what is absent, which is precisely what backfilling eleven
+#     bare repos needs -- but it is a plain list, same path both sides, and the
+#     satellite ruleset is NOT this repo's root AGENTS.md. That one carries
+#     section 9's template->instance distribution, core-manifest.json and the
+#     upgrade flow; none of it applies to a satellite.
+#   - `filesIfPresent` takes exactly the target->source remap that is needed, and
+#     deliberately never creates. Creating is the whole job.
+#
+# And why this is a third list rather than teaching `files` the remap:
+#
+#   - THE SOURCE IS NOT ONE FILE. `_skeletons/plugin-template/AGENTS.md` differs
+#     from the sibling one by 50 lines of birth-time branch-protection and
+#     runner-grant checklist (#714, written because both plugin repos ran with no
+#     branch protection at all). A single-source remap would delete that from the
+#     plugin repos or force it into every sibling -- and
+#     shared-files-parity.test.ts requires every `files` entry byte-identical in
+#     EVERY skeleton, which these two must never be. So the source is resolved per
+#     repo, from its marker, through $SKELETON_FOR below.
+#   - THE TWO FILES NEED OPPOSITE POLICIES ON AN EXISTING COPY. See $FROM_SKELETON
+#     usage in diff_files/stage_repo: `sync` is one-way overwrite (AGENTS.md must
+#     not drift -- 68 lines behind in tabsii is #559, the injury this whole
+#     mechanism exists for); `seed` creates where absent and never touches it
+#     again (CLAUDE.md carries a per-repo "What this repo is" paragraph, and four
+#     of the repos being backfilled are not sibling apps at all, so overwriting it
+#     would assert in each of them that they are one).
+FROM_SKELETON=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).filesFromSkeleton||{};console.log(Object.entries(m).map(([p,mode])=>p+'='+mode).join('\n'))")
+SKELETON_FOR=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).skeletonForMarker||{};console.log(Object.entries(m).map(([mk,sk])=>mk+'='+sk).join('\n'))")
+SKELETON_DEFAULT=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8'));console.log(m.skeletonDefault||'')")
+
 drifted=0
 synced=0
 current=0
@@ -158,6 +194,62 @@ applies() {
   [ -f "$1/scripts/verify.sh" ] && return 0
   return 1
 }
+
+# Which skeleton is the canonical source of `filesFromSkeleton` entries for this
+# repo. Resolved from the repo's own marker, so a plugin repo gets the plugin
+# skeleton's ruleset and a sibling gets the sibling one.
+#
+#   $1  repo directory
+#   $2  optional git ref to read the markers from. diff_files must ask
+#       origin/<base> (there is no worktree yet, and the primary checkout may be
+#       parked anywhere); stage_repo asks the staged worktree, which IS
+#       origin/<base>. Reading markers off whichever branch a clone happens to be
+#       sitting on is how a drift report ends up describing a different repo than
+#       the one that ships.
+#
+# Repos with NEITHER marker fall through to $SKELETON_DEFAULT. They are in scope
+# via the `scripts/verify.sh` clause in applies() -- the runner repos, tabsii-map
+# and tabsii-data-model-design -- and the satellite ruleset applies to them
+# unchanged: it is dev-branch, worktrees, commits, PRs, never-merge-red, honest
+# pushes and security, with no deploy clause for a repo without a deploy to trim.
+skeleton_for() {
+  for _pair in $SKELETON_FOR; do
+    _marker=${_pair%%=*}
+    _skel=${_pair#*=}
+    if [ -n "${2:-}" ]; then
+      git -C "$1" cat-file -e "$2:$_marker" 2>/dev/null && { printf '%s' "$_skel"; return 0; }
+    else
+      [ -f "$1/$_marker" ] && { printf '%s' "$_skel"; return 0; }
+    fi
+  done
+  printf '%s' "$SKELETON_DEFAULT"
+}
+
+# Fail closed on a manifest that names a source which is not there. `cp` writes
+# its complaint to a stderr this script discards, so the repo would receive
+# nothing while the run reported success -- the silent-empty-copy failure
+# shared-files-parity.test.ts's `filesIfPresent` assertions were written for.
+# Checked here too, against every skeleton the marker table can select, because
+# the test proves the template's manifest and this proves whatever manifest is
+# actually being run.
+if [ -n "$FROM_SKELETON" ]; then
+  for _pair in $SKELETON_FOR $(printf 'x=%s' "$SKELETON_DEFAULT"); do
+    _skel=${_pair#*=}
+    [ -n "$_skel" ] || continue
+    for _entry in $FROM_SKELETON; do
+      _target=${_entry%%=*}
+      _mode=${_entry#*=}
+      case "$_mode" in
+        sync|seed) ;;
+        *) echo "filesFromSkeleton['$_target'] must be 'sync' or 'seed', got '$_mode'" >&2; exit 2 ;;
+      esac
+      [ -f "$TEMPLATE_ROOT/_skeletons/$_skel/$_target" ] || {
+        echo "filesFromSkeleton names _skeletons/$_skel/$_target, which does not exist" >&2
+        exit 2
+      }
+    done
+  done
+fi
 
 # Which of the shared files differ in this repo. Missing counts as drifted: a
 # repo that never received a file is exactly as unprotected as one holding a
@@ -214,6 +306,25 @@ diff_files() {
       [ "$remote" = "$(cat "$TEMPLATE_ROOT/$source")" ] || printf ' %s' "$target"
     done)"
   fi
+  # Skeleton-sourced files. `sync` behaves like `files` -- missing or differing is
+  # drift. `seed` reports ONLY missing: a differing copy is the repo exercising
+  # the ownership `seed` exists to grant it, and reporting that as drift would
+  # make --check permanently red in every repo that wrote its own identity
+  # paragraph, i.e. exactly the repos that did the right thing.
+  if [ -n "$FROM_SKELETON" ]; then
+    skel=$(skeleton_for "$d" "origin/$base")
+    for entry in $FROM_SKELETON; do
+      target=${entry%%=*}
+      mode=${entry#*=}
+      remote=$(git -C "$d" show "origin/$base:$target" 2>/dev/null)
+      if [ -z "$remote" ]; then
+        out="$out $target(missing)"
+      elif [ "$mode" = sync ] &&
+        [ "$remote" != "$(cat "$TEMPLATE_ROOT/_skeletons/$skel/$target")" ]; then
+        out="$out $target"
+      fi
+    done
+  fi
   echo "$out"
 }
 
@@ -264,6 +375,20 @@ stage_repo() {
       [ -n "$target" ] || continue
       [ -f "$wt/$target" ] || continue
       cp "$TEMPLATE_ROOT/$source" "$wt/$target"
+    done
+  fi
+
+  # Skeleton-sourced files, from the skeleton matching THIS repo's flavour.
+  # `sync` overwrites unconditionally; `seed` writes only where the file is
+  # absent, so a repo that has made its copy its own keeps it forever.
+  if [ -n "$FROM_SKELETON" ]; then
+    _skel=$(skeleton_for "$wt")
+    for _entry in $FROM_SKELETON; do
+      _target=${_entry%%=*}
+      _mode=${_entry#*=}
+      if [ "$_mode" = seed ] && [ -f "$wt/$_target" ]; then continue; fi
+      mkdir -p "$wt/$(dirname "$_target")"
+      cp "$TEMPLATE_ROOT/_skeletons/$_skel/$_target" "$wt/$_target"
     done
   fi
 
@@ -392,6 +517,24 @@ $(printf '%s\n' "$CONDITIONAL" | while IFS="$TAB" read -r t s; do
       [ -n "$t" ] || continue
       [ -f "$wt/$t" ] || continue
       printf -- '- `%s` (kept in step only where it already exists; canonical copy is `%s`)\n' "$t" "$s"
+    done)"
+  fi
+  if [ -n "$FROM_SKELETON" ]; then
+    _skel=$(skeleton_for "$wt")
+    body_files="$body_files
+$(for _entry in $FROM_SKELETON; do
+      _t=${_entry%%=*}
+      _m=${_entry#*=}
+      # Only what this PR actually carries: a `seed` entry the repo already held
+      # was not written, and listing it would claim a change that is not in the
+      # diff.
+      # Against origin/<base>, not `--cached`: the commit has already been made
+      # by the time this runs, so the index is clean.
+      git -C "$wt" diff --name-only "origin/$base" HEAD -- "$_t" | grep -q . || continue
+      case "$_m" in
+        sync) printf -- '- `%s` (kept in step; canonical copy is `_skeletons/%s/%s`)\n' "$_t" "$_skel" "$_t" ;;
+        *) printf -- '- `%s` (seeded from `_skeletons/%s/%s`; yours from now on, never overwritten again)\n' "$_t" "$_skel" "$_t" ;;
+      esac
     done)"
   fi
 

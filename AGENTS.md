@@ -312,21 +312,66 @@ should be identical, and whether they diverge in practice.** Application source
 qualifies when both are true: `apps/frontend/src/lib/api-client.ts` is the
 first, and it is there now.
 
-#### Two lists, and the difference matters
+#### Three lists, and the difference matters
 
-- **`files`** — distributed to every repo in scope, and **created where
-  absent**. Right for a gate every repo must run. Wrong for anything
-  layout-specific: it would write a frontend API client into plugin repos,
-  runner repos and a design repo that have no frontend at all.
+- **`files`** — a plain list of paths, distributed to every repo in scope and
+  **created where absent**, from this repo's copy at the **same path**. Right
+  for a gate every repo must run. Wrong for anything layout-specific: it would
+  write a frontend API client into plugin repos, runner repos and a design repo
+  that have no frontend at all.
 - **`filesIfPresent`** — a `target → canonical source` map, kept in step only
   in repos that **already hold** the file, never created. The two paths differ
   because a sibling's `apps/frontend/...` has no counterpart at this repo's
   root, so the **skeleton** is the canonical copy.
+- **`filesFromSkeleton`** — a `path → policy` map for files whose canonical
+  copy is in the **skeleton matching the receiving repo's flavour**, resolved
+  from its marker via `skeletonForMarker` (repos with neither marker, selected
+  by the `scripts/verify.sh` clause, fall back to `skeletonDefault`). The
+  policy says what happens to a copy the repo **already has**: `sync`
+  overwrites it, `seed` leaves it alone forever. Both create where absent.
 
-The mechanism can backfill — that is what `files` is. `filesIfPresent` is how
-you say a file must not be created, only kept current, because putting a file
-into a repo that never had one is a decision somebody should make rather than a
-side effect of adding a line to a manifest.
+The mechanism can backfill — that is what `files` and `filesFromSkeleton` are.
+`filesIfPresent` is how you say a file must not be created, only kept current,
+because putting a file into a repo that never had one is a decision somebody
+should make rather than a side effect of adding a line to a manifest.
+
+#### Why the third list exists, and when to reach for it
+
+`AGENTS.md` and `CLAUDE.md` were **absent from eleven of seventeen** estate
+repos — not a stale copy, nothing (#1150). An agent opening `tabsii-crm` got no
+worktree discipline, no honest-push rule, no never-merge-red and no
+reproduce-before-fixing; one merged three PRs there having read another repo's
+copy to find out the rules. Neither existing list could fix it: `files` creates
+but cannot remap a path, and the satellite ruleset is **not** this repo's root
+`AGENTS.md` (that one carries §9, `core-manifest.json` and the upgrade flow —
+none of which applies to a satellite); `filesIfPresent` remaps but never
+creates, which is the whole job.
+
+Teaching `files` the `target → source` map form would have been the smaller
+change, and it does not work here, for two reasons that are properties of the
+content rather than of the mechanism:
+
+1. **The source is not one file.** `_skeletons/plugin-template/AGENTS.md`
+   differs from the sibling one by 50 lines of birth-time branch-protection and
+   runner-grant checklist (#714, written because both plugin repos ran with no
+   branch protection at all). A single source would delete that from the plugin
+   repos or force it into every sibling — and `shared-files-parity.test.ts`
+   requires every `files` entry byte-identical in **every** skeleton, which
+   these two must never be.
+2. **The two files need opposite policies on an existing copy.** `AGENTS.md`
+   must be kept in step; it drifting 68 lines behind is #559. `CLAUDE.md` must
+   not be: its load-bearing content is the `@AGENTS.md` import, but it also
+   carries a per-repo "What this repo is" paragraph, and four of the repos
+   backfilled are not sibling apps at all — overwriting it would assert in each
+   of them that they are.
+
+So: reach for `filesFromSkeleton` when the canonical copy is a skeleton's rather
+than this repo's **and** the file must be created where absent. Use `seed` when
+the repo is expected to own the file after it arrives, `sync` when it must never
+diverge. Note what `seed` does to `--check`: a **missing** copy is drift, a
+**differing** one is not — that is the ownership `seed` grants, and reporting it
+otherwise would redden the check permanently in the repos that did the right
+thing.
 
 #### Reconcile before you distribute
 

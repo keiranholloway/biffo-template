@@ -32,6 +32,15 @@ describe('closing-keyword guard', () => {
       expect(closingReferences(body)).toEqual([])
     })
 
+    it('ignores a keyword inside an INLINE code span', () => {
+      // GitHub does not linkify `#12` in backticks, so it does not close
+      // anything there. Matching would make this guard stricter than the
+      // behaviour it models — and it is how the guard failed its own PR, whose
+      // body has to quote the pattern it forbids.
+      expect(closingReferences('The rule refuses `Closes #99` on deploy paths')).toEqual([])
+      expect(closingReferences('`Closes #99` here, but Closes #12 for real')).toEqual(['#12'])
+    })
+
     it('does not match a mere mention of an issue', () => {
       expect(closingReferences('Related to #12, see also #13')).toEqual([])
       expect(closingReferences('Refs #12')).toEqual([])

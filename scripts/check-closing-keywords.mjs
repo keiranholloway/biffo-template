@@ -78,17 +78,26 @@ export const DEPLOY_ONLY_PREFIXES = [
  * The issue references a body would close on merge.
  *
  * Matches `Closes #12`, `fixes owner/repo#12` and the `Closes: #12` colon
- * form. Deliberately ignores a keyword inside a fenced code block — a PR that
- * quotes a commit message in an example should not trip a gate.
+ * form. Deliberately ignores a keyword inside a fenced code block OR an inline
+ * code span — GitHub does not linkify a reference there, so it does not close
+ * anything there either, and a PR discussing the pattern must not trip a gate
+ * on the pattern.
  */
 export function closingReferences(body) {
   if (!body) return []
-  const withoutFences = body.replace(/```[\s\S]*?```/g, '')
+  const withoutCode = body
+    .replace(/```[\s\S]*?```/g, '')
+    // Inline code spans too, and not merely as a courtesy: GitHub does not
+    // linkify `#12` inside backticks, so it does not close anything either.
+    // Matching there would make this guard STRICTER than the behaviour it
+    // exists to model — and it is how the guard first failed its own PR, whose
+    // body necessarily quotes the very pattern it forbids.
+    .replace(/`[^`\n]*`/g, '')
   const pattern = new RegExp(
     `\\b(${CLOSING_KEYWORDS.join('|')})\\b:?\\s+((?:[\\w.-]+/[\\w.-]+)?#\\d+)`,
     'gi',
   )
-  return [...withoutFences.matchAll(pattern)].map((m) => m[2])
+  return [...withoutCode.matchAll(pattern)].map((m) => m[2])
 }
 
 /** Whether the author has claimed, in the body, to have verified this on a

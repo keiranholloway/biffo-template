@@ -37,6 +37,7 @@ describe('HomePage', () => {
       get: vi.fn().mockResolvedValueOnce({ username: 'keiran' }),
       post: vi.fn(),
       put: vi.fn(),
+      patch: vi.fn(),
       delete: vi.fn(),
     })
 

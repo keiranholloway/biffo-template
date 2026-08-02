@@ -21,6 +21,8 @@
  * and the database decides what either surface will actually serve.
  */
 
+import { ADMIN_GROUP } from './cognito-groups'
+
 export interface WhoamiRole {
   role: string
   scope_level: string
@@ -61,8 +63,10 @@ export function resolveDestination(
     return returnTo
   }
 
-  // Rule 2: groups includes 'admin'
-  if (groups?.includes('admin')) {
+  // Rule 2: groups includes 'admin'. The same constant `AuthGuard` gates
+  // /admin/ on (#1104) — routing someone to a destination that will then
+  // refuse them is the failure the two rules exist to avoid together.
+  if (groups?.includes(ADMIN_GROUP)) {
     return '/admin/'
   }
 

@@ -1,4 +1,5 @@
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 /**
  * Detect ADR numbering collisions in one repo's own `docs/ADR/` (tabsii-platform#449).
@@ -39,6 +40,27 @@ import { existsSync, readdirSync } from 'node:fs'
  * numbered (tabsii's own README documents "continue from ADR-0100") is
  * deliberately out of scope — that is a per-instance policy decision, not a
  * universal template rule.
+ *
+ * ## The allowlist
+ *
+ * tabsii-platform's own `0009` and `0010` are a *permanent* collision, not a
+ * bug to fix: renumbering touches ~45 code call-sites for "little gain"
+ * (`docs/ADR/README.md`), so the decision was to keep the numbers and cite
+ * upstream ADRs by title instead. A guard that cannot express "yes, this one
+ * is accepted" would either false-positive on every future PR forever, or —
+ * worse — get silently disabled, taking every other collision it would have
+ * caught down with it.
+ *
+ * `docs/ADR/.numbering-allowlist` (optional, one four-digit number per line,
+ * `#` comments and blank lines ignored) names numbers this check must not
+ * flag. It lives under `docs/ADR/` because that directory is user-owned —
+ * the allowlist is a per-instance policy decision, exactly like *where* new
+ * ADRs get numbered, and editing it never touches template-owned code.
+ * `findStaleAdrNumberingAllowlistEntries` is the other half: an allowlisted
+ * number that stops colliding (the duplicate was finally renumbered) should
+ * be removed, or the allowlist quietly accumulates entries nothing checks
+ * against — the same shape as this codebase's `KNOWN_UNSATISFIABLE` guard for
+ * RLS grants.
  */
 
 /** Two or more files in one `docs/ADR/` claiming the same numeric prefix. */
@@ -51,6 +73,26 @@ export interface AdrNumberCollision {
 
 /** Matches the documented convention: four digits, a hyphen, then the slug. */
 const ADR_FILENAME = /^(\d{4})-.+\.md$/
+
+export const ALLOWLIST_FILENAME = '.numbering-allowlist'
+
+/**
+ * Numbers `docs/ADR/.numbering-allowlist` names as accepted, permanent
+ * collisions — a number per line, `#` comments and blank lines ignored.
+ * Empty when the file does not exist, which is the common case: an allowlist
+ * is the exception, not something every repo needs.
+ */
+export function readAdrNumberingAllowlist(adrDir: string): Set<string> {
+  const path = join(adrDir, ALLOWLIST_FILENAME)
+  if (!existsSync(path)) return new Set()
+
+  const numbers = new Set<string>()
+  for (const rawLine of readFileSync(path, 'utf8').split('\n')) {
+    const line = rawLine.split('#')[0]!.trim()
+    if (line) numbers.add(line)
+  }
+  return numbers
+}
 
 /**
  * Every ADR filename's numeric prefix, mapped to the file(s) claiming it.
@@ -72,13 +114,31 @@ export function adrNumbersIn(adrDir: string): Map<string, string[]> {
   return claims
 }
 
-/** Every number claimed by more than one file, sorted. */
+/**
+ * Every number claimed by more than one file, sorted, minus anything
+ * `docs/ADR/.numbering-allowlist` names as an accepted, permanent collision.
+ */
 export function findAdrNumberCollisions(adrDir: string): AdrNumberCollision[] {
+  const allowlist = readAdrNumberingAllowlist(adrDir)
   const collisions: AdrNumberCollision[] = []
   for (const [number, files] of [...adrNumbersIn(adrDir).entries()].sort()) {
-    if (files.length > 1) collisions.push({ number, files: [...files].sort() })
+    if (files.length > 1 && !allowlist.has(number)) {
+      collisions.push({ number, files: [...files].sort() })
+    }
   }
   return collisions
+}
+
+/**
+ * Allowlisted numbers that are no longer actually colliding — the duplicate
+ * was renumbered or removed, and the entry should go with it. Without this,
+ * the allowlist only ever grows: nothing else notices when an exception stops
+ * being needed.
+ */
+export function findStaleAdrNumberingAllowlistEntries(adrDir: string): string[] {
+  const allowlist = readAdrNumberingAllowlist(adrDir)
+  const claims = adrNumbersIn(adrDir)
+  return [...allowlist].filter((number) => (claims.get(number)?.length ?? 0) < 2).sort()
 }
 
 /** Human-readable report. */

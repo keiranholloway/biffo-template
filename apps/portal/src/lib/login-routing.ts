@@ -15,10 +15,10 @@
  *
  * Rule 5 used to send unit-scoped users to '/crm/' as well. That was recorded
  * as interim when it shipped: a unit worker doing onboarding and training is
- * not doing customer relationship management, and the arrival of a training
- * surface was named as the trigger to move them off it (ADR-0100 / ADR-0101).
- * '/crm/' stays reachable — this is a landing destination, not an entitlement,
- * and the database decides what either surface will actually serve.
+ * not doing customer relationship management, and the arrival of the '/lms/'
+ * training surface was the trigger to move them off it. '/crm/' stays
+ * reachable — this is a landing destination, not an entitlement, and the
+ * database decides what either surface will actually serve.
  */
 
 import { ADMIN_GROUP } from './cognito-groups'

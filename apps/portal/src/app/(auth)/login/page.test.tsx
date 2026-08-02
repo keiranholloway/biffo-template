@@ -456,8 +456,8 @@ describe('LoginPage — return_to must not outlive the user it belonged to', () 
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'pw' } })
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
 
-    // A unit-scoped role lands on /lms/ (ADR-0100 as amended by ADR-0101),
-    // which is a sibling app, so it leaves the portal with a full page load.
+    // A unit-scoped role lands on /lms/ (rule 5 in login-routing.ts), which
+    // is a sibling app, so it leaves the portal with a full page load.
     await waitFor(() => {
       expect(assignMock).toHaveBeenCalledWith('/lms/')
     })

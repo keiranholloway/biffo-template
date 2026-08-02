@@ -9,16 +9,31 @@
  * 2. User is in the 'admin' Cognito group -> '/admin/'
  * 3. User is marked as a platform admin -> '/crm/'
  * 4. User has any role with scope_level 'tenant'|'brand'|'region' -> '/crm/'
- * 5. User has any role with scope_level 'unit' -> '/lms/'
+ * 5. User has any role with scope_level 'unit' -> '/crm/'
  * 6. User has marketplace_role set and no roles -> '/marketplace/'
  * 7. Otherwise -> '/login/no-access/'
  *
- * Rule 5 used to send unit-scoped users to '/crm/' as well. That was recorded
- * as interim when it shipped: a unit worker doing onboarding and training is
- * not doing customer relationship management, and the arrival of the '/lms/'
- * training surface was the trigger to move them off it. '/crm/' stays
- * reachable — this is a landing destination, not an entitlement, and the
- * database decides what either surface will actually serve.
+ * ## Rule 5 has been to '/lms/' and back, deliberately both times
+ *
+ * It briefly sent unit-scoped users to '/lms/', on the reasoning that a unit
+ * worker doing onboarding and training is not doing customer relationship
+ * management, and that the arrival of a training surface was the trigger to
+ * move them off the CRM.
+ *
+ * That was reversed by ADR-0105 after the surface existed and was used. The
+ * decisive evidence was the role's own permission set: a unit worker holds
+ * onboarding tasks, documents, escalations, shifts and the co-pilot — and no
+ * training permission at all — so every capability they have already lived in
+ * one place, and training was the single thing put somewhere else. Training is
+ * now a section of that same surface rather than a separate destination.
+ *
+ * **This is not a mistake being undone.** Both directions were reasoned; the
+ * second had evidence the first could not have had. If you are reading this
+ * because '/crm/' looks wrong for a unit role, read ADR-0105 before changing
+ * it back — the argument for '/lms/' is genuinely persuasive and was tried.
+ *
+ * The row remains a landing destination, not an entitlement: what either
+ * surface actually serves is decided by the database.
  */
 
 import { ADMIN_GROUP } from './cognito-groups'
@@ -80,9 +95,10 @@ export function resolveDestination(
     return '/crm/'
   }
 
-  // Rule 5: any role whose scope_level is 'unit'
+  // Rule 5: any role whose scope_level is 'unit'. ADR-0105 — training is a
+  // section of this surface, not a destination of its own.
   if (whoami.roles.some((r) => r.scope_level === 'unit')) {
-    return '/lms/'
+    return '/crm/'
   }
 
   // Rule 6: whoami.marketplace_role is set and there are no roles

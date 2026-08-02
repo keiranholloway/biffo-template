@@ -289,6 +289,8 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **A plugin Lambda's log silence is indistinguishable from "nothing matched", and a second signal corroborated the wrong reading.** Verifying a newly authored `user.invited` workflow, the orchestrator invocation logged `Received event` and returned in 612ms with no dispatch line — exactly what a workflow matching nothing looks like. A second observation appeared to confirm it: the event envelope's `tenant_id` is the tabsii tenant UUID while the definition's is `default`. Both readings were wrong. The plugin only forwards; **Core does the matching**, against the *service principal's* tenant. `GET /api/v1/orchestration/runs` showed the run **succeeded** with an SES `message_id`. A bug was one step from being filed against working code. **Absence of a log line is not absence of the behaviour — find the component that owns the decision and read its record** | **visibility** | tabsii-platform / orchestrator plugin | diagnostic practice; the run record is authoritative and nothing points you to it | **avoided** — caught before filing; recorded in `docs/implementation/0012-*` so the next verifier reads the runs endpoint first |
 | — | **A milestone's deliverable was a database row, and nothing in any repo recreates it.** 0012 M8 ("invitations actually arrive") has two halves: an `app_login_url` repoint that shipped as a normal PR, and the `user.invited` → email workflow, which is a **row in dev's database** — because that is what a workflow definition *is* under ADR-0010, live data managed from the product rather than config-as-code. The consequence is silent and total: a fresh staging, prod, or rebuilt dev has the invite path **sending nothing**, with no migration, no seed, and no test that fails. The milestone reads as complete in every artifact a reviewer would check. Deliberately **not** "fixed" by adding a seed: a seeding mechanism would become a second authority competing with the product surface, which is the tension worth deciding rather than papering over | **process** · visibility | tabsii-platform 0012 M8 | undecided — either a documented environment-standup step, or an ADR-0010 seeding path | **open** — recorded as an explicit open question in the implementation doc ([#485](https://github.com/tabsii-com/tabsii-platform/pull/485)) |
 | — | **A blocker was recorded as a skills failure on a premise nobody checked, and the recorded lesson argued for building the wrong thing.** A React-controlled portal form discards programmatically-set input — true, and a real browser-automation limit. It was written up as "the second React-controlled form this session with **no API alternative**", which turned a UI limitation into an argument for investing in browser tooling. The second half was never checked and was false: `routers/orchestration.py` exposes the full REST surface the form wraps (list/create/get/update/enabled/delete), and creating the workflow through it took one `curl`. **A wrong premise recorded as a lesson is worse than no lesson** — it outlives the session and directs future investment | **process** | practices capture itself, tabsii-platform | diagnostic practice — before recording a UI as the only route, grep the routers for the resource | **corrected** — premise disproved, capture rewritten, and the token recipe (throwaway pool user → `USER_PASSWORD_AUTH` → **IdToken**, verifier checks `audience=client_id`) recorded so the real obstacle stops recurring |
+| — | **A test blanked an env var to "simulate cron" and thereby activated the exact fallback it meant to disable, firing 8 REAL `-u critical` desktop notifications per `pnpm test`.** `_notify` treats an empty `DBUS_SESSION_BUS_ADDRESS` as the cron case and reconstructs the address from `/run/user/<uid>/bus`, so the test called the real binary. GNOME never auto-expires critical cards, so they accumulated — 214 in the tray when the operator finally asked. **The card misattributed itself** ("Practices collection FAILED — the dashboard is stale"), pointing the diagnosis at a collector that was healthy: the log held one real failure and the 05:53 run had succeeded, pushed, and cleared the banner. Green suite throughout; a notification is not an assertion, so nothing could see it. **cost ~2h 15m**, and it degraded a **7h 04m** window (test merged 05:45Z #1090 → fix merged 12:49Z #1121) covering **570 recorded minutes** of session work | **visibility** · fail-open | biffo-template `cli/src/lib/practices-daily-alert.test.ts` | biffo-template | **fixed** ([#1121](https://github.com/keiranholloway/biffo-template/pull/1121)) — tests stub `notify-send` on `PATH`; `_notify` replaces via `--replace-id`; `PRACTICES_NO_DESKTOP_ALERT` opt-out. Verified 8 → 0 ids, then against the real GNOME daemon and a real `env -i` cron shell |
+| — | **A log written by the *crontab redirect* rather than by the script records only cron runs, and reads as a complete history.** `~/.practices-daily.log` gets its content from `>> logfile 2>&1` in the crontab line, so every interactive, agent and test-harness invocation of the same code is structurally invisible to it. Asked why hundreds of alerts were firing it answered "one failure, at 03:30" — true, and not an answer to the question. **~25m** went into a theory built on it, and a proposed `[ -t 1 ]` TTY guard that would have caught **none** of the real events (vitest runs `stdio: 'pipe'` and is not a TTY either) — a guard that reads as protection while missing the measured cause. Dropped only because the operator said the alerts were still arriving. The measurement that settled it took **under 2 minutes** and was available from the first minute | **visibility** · process | biffo-template `~/.practices-daily.log` | biffo-template — the redirect still lives in the crontab; nothing marks the log cron-only | **not fixed** — recorded as a diagnostic rule: identify the writer before trusting a missing entry |
 
 ### What the classes say
 
@@ -482,6 +484,64 @@ there. Neither is evidence about the estate.
 
 
 ## Where the cycles go
+
+### Measured: a test's side effect degraded a 7-hour working day, and the log that should have found it was structurally blind (2026-08-02, part 2)
+
+**This is the most disruptive item recorded today, and the fix was 75 minutes.**
+Ranking it by the fix would bury it, so the window is the number that matters.
+
+| | |
+| --- | --- |
+| Defect introduced | **05:45Z** — #1090 merged, bringing the alert test |
+| Defect removed | **12:49Z** — #1121 merged |
+| **Exposure window** | **7h 04m** |
+| Session work inside it | **570 min** across five logged sessions (06:19, 06:20, 07:21, 08:14, 11:51) |
+| Interruptions | 8 permanent `-u critical` cards **per `pnpm test`**, none auto-expiring; **214** in the tray by the time it was reported |
+| Direct diagnosis + fix | **75 min** |
+| Attributed to interruption / lost focus | **~60 min** — an estimate, not a measurement |
+
+The operator's own description was "completely slowed me down", and the effort
+log agrees with it: every session after 05:45Z ran under the spam.
+
+**The loop, separated from the symptom.** There is one loop here, not hundreds
+of incidents. Every test run planted eight cards; the cards never expired; the
+pile grew monotonically all day. Nothing self-corrected and nothing went red.
+Shortening the loop once (stub the binary) removed every instance at a stroke —
+which is exactly why counting the cards was the wrong unit and the *window* is
+the right one.
+
+**Structural, not carelessness.** Three separate properties had to hold, and all
+three are design, not attention:
+
+1. A test inheriting `process.env` and `PATH` is **not sandboxed** — it can reach
+   the real session bus, desktop, keyring or network, and nothing in the repo
+   stops it.
+2. A desktop notification **is not an assertion**, so no gate could observe the
+   side effect. The suite was green for the entire seven hours.
+3. `-u critical` **never auto-expires in GNOME**, converting a transient side
+   effect into permanent accumulating state.
+
+**The 25 minutes that were avoidable, and why.** The log said "one failure, at
+03:30", which was true and was not an answer, because the crontab redirect — not
+the script — writes that log, so it can only ever see cron runs. Twenty-five
+minutes went into a theory built on it, and into a `[ -t 1 ]` TTY guard that
+would have prevented **none** of the real events (vitest runs `stdio: 'pipe'`;
+it is not a TTY either). It was dropped only because the operator pushed back
+that alerts were still arriving.
+
+The measurement that settled it — read the D-Bus notification id counter, run
+the suite, read it again — took **under two minutes** and was available from the
+first minute:
+
+```
+232 → 241   one run of the alert file      = 8 ids
+214 → 230   two runs                        = 8 each
+        0   after the fix, full pnpm test
+```
+
+**The generalisable rule, and it is cheap:** when a symptom is *observable
+directly*, measure it before reasoning about it. Reading a log about the thing is
+not the same as counting the thing. The log cost 25 minutes; the counter cost 2.
 
 ### Measured: an RBAC decision cost ~35m and was worth it; a two-word alias cost three corrections across two sessions (2026-08-02)
 
@@ -1759,6 +1819,30 @@ argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
 ## What went well — practices that earned their keep
+
+**A user contradiction beat a confident diagnosis, and the discipline was to
+re-measure rather than defend.** The first explanation of the notification spam
+was coherent, cited the log, and was wrong: it blamed interactive/agent runs
+tripping the EXIT trap, and proposed a `[ -t 1 ]` TTY guard. The only thing that
+broke it was the operator saying "I'm still getting them" — at which point the
+right move was to stop reasoning and instrument. `AGENTS.md` §4 already says
+this ("reproduce by the reporter's route"), and the instrument was trivial: the
+D-Bus notification id counter, read either side of a test run, gave `8` in about
+two minutes. **Worth stating because it nearly went the other way** — the wrong
+fix was already written and would have shipped a guard that read as protection
+while preventing none of the real events. The tell for next time: a proposed fix
+that cannot be shown to cover the *observed* instances is not a fix, however
+sound its reasoning.
+
+**Verifying against the stub, then refusing to stop there.** The fix's tests all
+ran against a stubbed `notify-send`, which proves the script *asks* for
+`--replace-id` — not that anything honours it. Two extra checks, ~30 seconds
+each, closed the gap: the real GNOME daemon reused id `251` for a second call
+(replacement genuinely works), and the real `_notify` under `env -i` with no
+`DBUS_SESSION_BUS_ADDRESS` and no `XDG_RUNTIME_DIR` — an actual cron shell —
+produced **one** card for three consecutive failures and wrote its id file to
+`/tmp` as designed. That is the difference between "the unit test passes" and
+"the thing that runs at 04:30 works".
 
 **Reading my own diff before pushing caught a false premise in my own commit
 message — and checking it produced a better finding than the one it replaced.**
@@ -3634,6 +3718,9 @@ assumed.
 
 ## What needs more thought
 
+| — | **Nothing sandboxes a test from the developer's live session, and one that escapes is invisible to every gate.** `execFileSync`/`spawn` inherit `process.env` and `PATH` by default, so any test that shells out can reach the real D-Bus session, desktop, keyring, `~/.ssh`, `~/.config/gh` or the network. The notification test did exactly this for seven hours while the suite stayed green, because **a side effect on the operator's desktop is not an assertion and nothing can fail on it**. `fail-open` — a gate that passes when it cannot run — is the second-largest class on this page. This is its **inverse** and has no coverage at all: a test that *does something real*, to something outside the repo, and passes. Note the near-miss shape: the fix works because the stub is first on `PATH`, which is a **convention held by each test author**, not a property of the harness. Candidates: a vitest `setupFiles` that prepends a stub-bin directory and strips `DBUS_SESSION_BUS_ADDRESS`/`XDG_RUNTIME_DIR` from the inherited env for the whole suite, so escaping is opt-in rather than default; or a guard asserting no test spawns a process with unmodified `process.env`. Neither is written | **visibility** · fail-open | biffo-template `cli/src/lib/` | not fixed — no mechanism proposed beyond the per-test stub | **unfiled** |
+| — | **A log's coverage is invisible at the point of reading it, and this estate has several logs whose writer is external to the thing logged.** `~/.practices-daily.log` is written by the crontab's `>>` redirect, so it records cron runs and only cron runs — but nothing at the top of that file, in the script, or in the crontab says so. Read during an incident it answered "one failure today", which was true and pointed 25 minutes in the wrong direction. **The general shape: whenever the writer of a log is not the thing being logged, the log silently has an invocation-path filter on it, and every reader will treat it as complete.** The same shape applies to anything whose output is captured by its *caller* rather than itself — a CI step's log, a redirected cron job, a piped script. Candidates: have the script write its own log (so every invocation path is recorded regardless of caller) and let cron's redirect be a duplicate; or a one-line banner the script emits naming which invocations reach this file. The first is strictly better and is roughly a five-line change | **visibility** · process | biffo-template `scripts/practices-daily.sh` + the crontab | not fixed | **unfiled** |
+
 | — | **A milestone can be "done" with half of it living only in a database, and every artifact a reviewer checks still reads complete.** 0012 M8's `app_login_url` repoint is a PR; its `user.invited` workflow is a **row**, because ADR-0010 deliberately makes workflow definitions live data rather than config-as-code. Both halves are correct. But there is no migration, no seed, no fixture and no test tied to the second one, so a fresh staging, prod or rebuilt dev has the invite path **silently sending nothing** — and the PR, the CI run, the implementation doc and the issue all look finished. The obvious fix (seed the definition) is not obviously right: a seeding mechanism becomes a second authority competing with the product surface the ADR made authoritative, and then the two drift. **The general shape is worth naming: any feature whose deliverable is data has no artifact for "did this land in environment X", and the estate has no convention for that at all.** Candidates: a per-environment smoke check that asserts the *behaviour* (invite → run record) rather than the row, or an explicit environment-standup checklist that is allowed to be manual but must exist | **process** · visibility | tabsii-platform 0012 M8 | undecided — the tension is the decision | **unfiled** |
 | — | **Nothing prices how far a wrong fact travels, so a sub-minute measurement error outranks a half-hour investigation and the page cannot show it.** This session's cost note records both: ~35 min of deliberate RBAC investigation producing one durable correct answer, and one mis-aliased `--query` field producing a wrong answer that reached a user-facing report, a durable memory file, a second session's contradiction and a third correction. The scoreboard gives each **one row**. Every field it has — class, surfaced-in, fix-repo, status — describes the defect; none describes the **blast radius of the belief**. That matters more here than in most codebases, because facts get written into agent memory and are then quoted by later sessions as established, which is a propagation channel with no review step and no expiry. Candidates: a `propagated-to` field on rows where a wrong fact was published before being caught, or a rule that any fact written to durable memory from a single command's output must name the command and the exact field | **visibility** · process | practices capture itself | not fixed — no mechanism proposed yet | **unfiled** |
 
@@ -5026,6 +5113,9 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `biffo-workflow` | **worked** | Ran clean end to end on #1121: worktree off freshly-fetched `origin/dev`, `pnpm install`, `hook-audit.sh` confirming ARMED before any commit, honest push with `echo $?`, remote SHA compared to local, auto-merge, worktree reaped, `dev` CI watched to green. Two steps earned their place specifically. **Step 3's shell-injection rule**: the commit body and PR body both contained backticks and `$(`, and both went through `-F`/`--body-file` with quoted heredocs — the alternative was executing them. **The commit-before-revert ordering** (recorded as a `partial` on this skill in an earlier session, and since absorbed): committing first is what made it safe to `git checkout origin/dev -- scripts/practices-daily.sh` to prove the tests fail. That earlier `partial` has now paid for itself. |
+| `biffo-verify` | **worked — §3 gave the sharpest signal** | Reverting only the script and re-running produced **exactly** the three new behaviour tests failing, with the right messages (`expected '-u critical Practices…' to contain '-r 0'`), and the nine pre-existing ones still green. That is what established the tests defend the fix rather than being incidentally satisfied by it. §7 also fired usefully: it forced the admission that everything so far was stub-level, which produced the two real-daemon checks (GNOME reusing id `251`; `env -i` cron shell giving one card for three failures) that turned an unproven claim into a verified one. |
+| `biffo-verify` | **partial — it was invoked ~75 minutes too late, and nothing in the trigger wording would have caught it** | Its §2 ("reproduce by the reporter's route, before theorising") is precisely the step that was skipped, and skipping it cost ~25 minutes plus a wrong fix that was already written. The skill was only run *after* the change had shipped, as a capture exercise. **Why it was missed:** the request arrived as "why am I still getting hundreds of these" — phrased as a question about a notification, not as "debug this" or "is this actually fixed?", so none of the skill's listed triggers matched, and reading a log felt like answering a question rather than diagnosing a defect. The description does say "why is this failing?", but a user reporting a *symptom they are living with* does not use those words. Suggested trigger addition: a user reporting **repeated or ongoing noise** ("I keep getting…", "this keeps happening", "still seeing…") is a diagnosis request, and §2's instrument-before-theorise rule should be the first move — especially when the symptom is **directly countable**, as this one was. |
 | `biffo-workflow` | **worked — §4.5 was the whole value, twice over** | Ran it for both PRs this session. On the guard fix it caught a **false premise in my own commit message** (the endpoint control plane "can add a `required_role` to a coded table" — it cannot; `registry-schema.json` is `additionalProperties: false` with no `permission_code`), and checking it produced a *stronger* finding than the wrong one. On the docs PR it caught an internal contradiction: the *Verified* section implied a click-through that the *Not verified* section denied. Neither is reachable by any test — both are arguments, which is exactly what §4.5 says it is for. The step should keep its emphasis on auditing the **justification**, not just the code. |
 | `biffo-workflow` | **partial — Step 3's shell-injection warning needs to cover the fail-first loop too** | Step 3 correctly warns that backticks in `-m` are executed and pushes you to `-F msg.txt`. What it does not cover is the neighbouring hazard it creates: to prove a test fails you revert the implementation, and the safe way to do that is `git checkout HEAD~1 -- <file>` **after committing** — which only works because the commit already happened. The skill has the commit step and (via `biffo-verify` §3) the fail-first step, but never states the ordering dependency between them, and getting it backwards destroys uncommitted work. One sentence in Step 3 would close it: commit before you revert anything to prove a failure. |
 | `biffo-verify` | **worked — §3 and §6 both fired, on different things** | §3 (prove the test fails without the fix) turned an assertion into a demonstration: reverting only the guard failed **exactly 4 of 14** cases and no others, which is what established that the fix was scoped to the defect rather than incidentally green. §6's "when a measurement surprises you, suspect the ruler first" is the section that should have run *before* the SES status was reported — it did not, and the recorded cost of that omission is this session's most expensive item. Running it retroactively is what found the aliased field. |

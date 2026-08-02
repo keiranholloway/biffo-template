@@ -48,15 +48,59 @@
 #
 # Overridable: BIFFO_PG_HOST, BIFFO_PG_PORT, BIFFO_PG_USER, BIFFO_PG_PASSWORD,
 # BIFFO_PG_DB, BIFFO_PG_CONTAINER, BIFFO_PG_IMAGE.
+#
+# ## Concurrency: derived, not coordinated
+#
+# The port, database name, and container name below default to values DERIVED
+# from this checkout's own path, not fixed constants. A fixed port
+# (`BIFFO_PG_PORT` used to default to `55432` everywhere) meant any two
+# checkouts running this script at the same time -- two worktrees of one repo,
+# or two entirely different repos on one machine -- attached to the SAME
+# Postgres cluster and raced on cluster-wide catalogs like `pg_shdepend`
+# (#1114). A fixed database name (`biffo_test`) meant they then shared one
+# database on top of that (#1120).
+#
+# The fix is not a lock: a machine-wide `flock` around this script would make
+# concurrent runs correct by serializing them, but that is coordination, and
+# this estate's shared-mutable-state defects have twice been solved instead by
+# making the value itself unique per user rather than making users take turns.
+# Deriving from `$REPO_ROOT` gets that for free -- it is already different for
+# every worktree and every repo -- and deterministically, so repeat runs
+# against the SAME checkout still land on the same port/db/container and reuse
+# the fingerprinted schema (see step 2 below) instead of rebuilding it under a
+# fresh identity every time. `BIFFO_PG_PORT`, `BIFFO_PG_DB`, and
+# `BIFFO_PG_CONTAINER` remain explicit overrides; only the *default* changed.
 
 set -eu
 
+REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+
+# sha256sum is already a dependency of this script (see `fingerprint` below),
+# so reusing it here for a deterministic, cheap per-checkout key adds nothing
+# new to install. 12 hex chars is ample to keep collisions between checkouts
+# on one machine practically impossible while staying short enough to read in
+# `docker ps` output and a psql prompt.
+_checkout_key=$(printf '%s' "$REPO_ROOT" | sha256sum | cut -c1-12)
+_checkout_suffix=$(printf '%s' "$_checkout_key" | cut -c1-8)
+# IANA's dynamic/private port range (49152-65535, 16384 ports) mapped from the
+# next 4 hex chars of the same hash -- an ephemeral port picked deterministically
+# rather than asked of the OS, because a freshly-random port on every invocation
+# would break the reuse this key is for (a second run against the same checkout
+# has to land back on the same container to find its existing database).
+_checkout_port=$((49152 + (0x$(printf '%s' "$_checkout_key" | cut -c9-12) % 16384)))
+
 HOST="${BIFFO_PG_HOST:-localhost}"
-PORT="${BIFFO_PG_PORT:-55432}"
+PORT="${BIFFO_PG_PORT:-$_checkout_port}"
 USER_="${BIFFO_PG_USER:-postgres}"
 PASS="${BIFFO_PG_PASSWORD:-postgres}"
-DB="${BIFFO_PG_DB:-biffo_test}"
-CONTAINER="${BIFFO_PG_CONTAINER:-biffo-pg-test}"
+DB="${BIFFO_PG_DB:-biffo_test_$_checkout_suffix}"
+# Keyed the same way as PORT and for the same reason: the container is where
+# the port mapping actually lives (`docker run -p "$PORT:5432"`), so if the
+# container name stayed fixed while the port became per-checkout, a second
+# checkout would find the first checkout's container already occupying that
+# name, "start" it rather than create its own, and then poll forever against a
+# port that container was never bound to.
+CONTAINER="${BIFFO_PG_CONTAINER:-biffo-pg-test-$_checkout_suffix}"
 
 RECREATE=0
 EXPORT=0
@@ -65,7 +109,7 @@ for arg in "$@"; do
     --recreate) RECREATE=1 ;;
     --export) EXPORT=1 ;;
     -h | --help)
-      sed -n '2,48p' "$0" | sed 's/^#\{1,2\} \{0,1\}//'
+      sed -n '2,72p' "$0" | sed 's/^#\{1,2\} \{0,1\}//'
       exit 0
       ;;
     *)
@@ -77,7 +121,6 @@ done
 
 say() { echo "pg-test-db: $*" >&2; }
 
-REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO_ROOT"
 
 # --- what this repo's schema is made of --------------------------------------

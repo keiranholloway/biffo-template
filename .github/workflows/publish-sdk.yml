@@ -131,12 +131,12 @@ jobs:
           set -euo pipefail
           wheel="$(ls dist/*.whl)"
           echo "--- wheel: ${wheel}"
-          python -m zipfile -l "${wheel}"
-          if python -m zipfile -l "${wheel}" | grep -qE '(^|/)(tests|services|apps|infra|cli)/'; then
+          python3 -m zipfile -l "${wheel}"
+          if python3 -m zipfile -l "${wheel}" | grep -qE '(^|/)(tests|services|apps|infra|cli)/'; then
             echo "::error::Wheel contains paths it should not."
             exit 1
           fi
-          if ! python -m zipfile -l "${wheel}" | grep -q 'biffo_plugin_sdk/__init__.py'; then
+          if ! python3 -m zipfile -l "${wheel}" | grep -q 'biffo_plugin_sdk/__init__.py'; then
             echo "::error::Wheel is missing biffo_plugin_sdk/__init__.py."
             exit 1
           fi

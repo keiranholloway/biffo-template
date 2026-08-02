@@ -85,8 +85,12 @@ jobs:
           EOF
       - run: terraform init -input=false -backend-config=backend.hcl
         timeout-minutes: 10
-      - run: terraform apply -input=false -auto-approve
-        timeout-minutes: 45
+      # Plan to a FILE so the guard below reads the plan that is actually
+      # applied. Variables belong here rather than on the apply: a saved plan
+      # has them baked in, and `terraform apply tfplan` takes no -var at all.
+      - name: Plan
+        run: terraform plan -input=false -no-color -out=tfplan
+        timeout-minutes: 20
         env:
           TF_VAR_project_name: ${{ vars.PROJECT_NAME }}
           TF_VAR_environment: ${{ needs.resolve-environment.outputs.environment }}
@@ -100,6 +104,25 @@ jobs:
           # variables.tf. Re-run this workflow (workflow_dispatch) once
           # that PR merges and this var is set, to add the bucket policy.
           TF_VAR_parent_cloudfront_distribution_arn: ${{ vars.PARENT_CLOUDFRONT_DISTRIBUTION_ARN || '' }}
+      # Refuse a plan that destroys stateful infrastructure without an
+      # `Infra-Destroy:` trailer authorising it (#387, reach fixed by #1123).
+      # Apply is --auto-approve and nobody reads the plan, so this is the only
+      # point at which a human decision can still be required — and it costs
+      # nothing when it fires, because no infrastructure has been touched yet.
+      #
+      # Runs on bare `node`: the script has no dependencies precisely so it can
+      # execute in a Terraform job that installs no JS toolchain. $GITHUB_WORKSPACE
+      # because this job's default working-directory is `infra/`.
+      - name: Destructive-plan guard
+        run: |
+          terraform show -json tfplan > plan.json
+          node "$GITHUB_WORKSPACE/scripts/check-destructive-plan.mjs" plan.json
+        env:
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+      # Applies the plan just checked, not a fresh one — a re-plan here could
+      # differ from what the guard saw.
+      - run: terraform apply -input=false -auto-approve tfplan
+        timeout-minutes: 45
       - name: Export outputs to GitHub Actions variables
         env:
           GH_TOKEN: ${{ secrets.SIBLING_GITHUB_TOKEN }}

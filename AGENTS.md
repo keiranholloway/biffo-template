@@ -216,10 +216,23 @@ origin/<branch>:<path>` for a specific change. A green PR page is not proof
 
 - After merging, confirm the integration branch's CI goes green:
   `gh run list --branch <default-branch>` and watch the run.
-- **Confirm the deploy separately, by name.** It is a different workflow and a
-  short run list does not show it — an instance runs five workflows on a merge
+- **Check the whole branch with `scripts/branch-health.sh`, not a run list:**
+
+  ```bash
+  sh scripts/branch-health.sh [-R owner/repo]   # 0 green · 1 red · 2 cannot tell
+  ```
+
+  It reports the latest run of **every** workflow on the integration branch, so
+  the deploy cannot fall off the bottom; and when something is red it names the
+  **first** failing commit, not the newest — see the attribution point below.
+  Exit 2 is "cannot tell" and is never a pass, same convention as
+  `wait-for-checks.sh`.
+
+- **Why a run list is not enough.** The deploy is a different workflow and a
+  short list does not show it — an instance runs five workflows on a merge
   (`CI`, `CodeQL`, `Core Version Tag`, `Deploy Application`, `RLS Tests`), and
-  `gh run list --limit 3` returns three that are **not** the deploy:
+  `gh run list --limit 3` returns three that are **not** the deploy. If you are
+  checking by hand, name the workflow:
 
   ```bash
   gh run list --workflow "Deploy Application" --branch <default-branch> --limit 1
@@ -233,9 +246,12 @@ origin/<branch>:<path>` for a specific change. A green PR page is not proof
 
 - A red integration branch blocks everyone — treat fixing it as the next task.
   That includes a red **deploy**: every subsequent merge fails too, and the
-  failure is attributed to whoever merged last rather than to whoever broke it,
-  so check whether the branch was already failing before diagnosing your own
-  change.
+  failure is attributed to whoever merged last rather than to whoever broke it.
+  **Check whether the branch was already failing before diagnosing your own
+  change** — `branch-health.sh` answers this directly, printing
+  `has been failing since <sha>` and telling you plainly when that is not your
+  commit. On 2026-08-02 four people each diagnosed their own innocent change
+  because nothing did.
 - For **live** instances, a merge may deploy to production immediately. Verify
   the deploy succeeded.
 - **A run is not guaranteed to exist.** GitHub sometimes creates no

@@ -136,6 +136,14 @@ describe('scripts/biffo.sh', () => {
         const shim = join(bin, name)
         writeFileSync(shim, `#!/bin/sh\necho "${name} $*"\n`, { mode: 0o755 })
       }
+      // The template branch execs tsx by ABSOLUTE path rather than resolving it
+      // on PATH (#1109), so it cannot be shimmed the way npx/pnpm are — stub it
+      // where the script actually looks. The absolute path is deliberate: a
+      // PATH-resolved `tsx` could pick up an unrelated global install, and this
+      // dispatcher runs in every guard invocation in every repo.
+      const tsxDir = join(dir, 'cli', 'node_modules', '.bin')
+      execFileSync('mkdir', ['-p', tsxDir])
+      writeFileSync(join(tsxDir, 'tsx'), `#!/bin/sh\necho "tsx $*"\n`, { mode: 0o755 })
       return execFileSync('sh', [script, 'check', 'ownership'], {
         cwd: dir,
         encoding: 'utf8',
@@ -155,8 +163,15 @@ describe('scripts/biffo.sh', () => {
 
   it('the template runs its working tree, not the last release', () => {
     const out = dispatchFor(null)
-    expect(out).toContain('pnpm')
+    // Asserts the INTENT — the working tree, not a published version — rather
+    // than the launcher. It used to require `pnpm`, and #1109 replaced
+    // `pnpm --filter @biffo/cli exec tsx` with tsx directly because `pnpm exec`
+    // normalises every non-zero exit to 1: verified, the CLI exits 2 and pnpm
+    // reports 1. The estate's wait/health scripts are three-valued (0 green,
+    // 1 failed, 2 cannot tell, where 2 is never a pass), so a wrapper that
+    // rewrites its child's status silently destroys that distinction.
     expect(out).toContain('src/index.ts')
+    expect(out).toContain('tsx')
     expect(out).not.toContain('npx')
   })
 })

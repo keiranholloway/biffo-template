@@ -93,6 +93,14 @@ jobs:
     # its payload carries `refs/heads/dev`, and `git diff origin/refs/heads/dev`
     # is not a ref. Both already passed before the entry was queued.
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    # `pull-requests: read` is what lets `gh pr view` in the closing-keywords
+    # step below read the PR's CURRENT body via the API instead of the
+    # `pull_request` event's frozen payload (#1174). Declared explicitly
+    # rather than relying on org/repo default token permissions, which are
+    # not guaranteed to include it.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       # Explicit rather than an empty run: a job whose every step skipped reads
       # as "did nothing, silently" in the log, which is the shape of a guard that
@@ -163,12 +171,23 @@ jobs:
       # clicked the link. Ask for `Refs #N` instead, or for the evidence.
       #
       # Bare node like the step above, so it does not depend on the install.
+      #
+      # Deliberately NOT `PR_BODY: ${{ github.event.pull_request.body }}`
+      # (#1174): that value is frozen at the moment the `pull_request` event
+      # fired, so neither editing the PR body nor re-running this job could
+      # ever turn a failure green — both of the guard's own documented
+      # remedies are body edits. GH_TOKEN/PR_NUMBER/GH_REPO instead let the
+      # script (`resolveBody` in check-closing-keywords.mjs) fetch the body
+      # LIVE via `gh pr view`, so a re-run now genuinely re-evaluates the PR
+      # as it is at run time — no forced empty commit needed to unblock it.
       - name: Closing keywords on deploy-only paths
         if: ${{ github.event_name == 'pull_request' && !cancelled() }}
         run: node scripts/check-closing-keywords.mjs
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
-          PR_BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
 
   js:
     name: JS (lint, types, test, audit)

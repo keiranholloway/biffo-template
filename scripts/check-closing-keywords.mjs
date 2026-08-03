@@ -48,6 +48,18 @@
  * environment, being landed after the fact — and it asks for the evidence in
  * the same breath, so the claim lands in the PR body where a reviewer sees it
  * rather than in someone's memory.
+ *
+ * ## Reading the body live (#1174)
+ *
+ * In CI the body is read live via the GitHub API (`resolveBody`,
+ * `fetchPrBodyViaGh`), not from `github.event.pull_request.body`. That value
+ * is frozen at the moment the `pull_request` event fired, so both of this
+ * guard's own documented remedies — edit the body to add `Refs #N`, or add a
+ * `Verified-on-deploy:` line — were unable to ever turn the check green: an
+ * edit does not re-trigger CI, and a re-run of the job replays the same
+ * stale payload. Verified stale on #1172. See `resolveBody` for the fallback
+ * to a direct `PR_BODY` (local runs and every test in this suite) and why an
+ * unreadable live body fails the guard rather than passing it.
  */
 
 /** Closing keywords GitHub actually acts on, per its own documentation. */
@@ -155,6 +167,63 @@ export function formatFailure({ references, paths }) {
   ].join('\n')
 }
 
+/**
+ * Fetch a PR's CURRENT body via the GitHub CLI. Broken out from
+ * `resolveBody` so tests can inject a fake instead of shelling out to `gh`
+ * (which needs a token and a network in real CI).
+ */
+export async function fetchPrBodyViaGh({ GH_TOKEN, PR_NUMBER, GH_REPO }) {
+  const { execFileSync } = await import('node:child_process')
+  return execFileSync(
+    'gh',
+    ['pr', 'view', String(PR_NUMBER), '--repo', GH_REPO, '--json', 'body', '--jq', '.body'],
+    { encoding: 'utf8', env: { ...process.env, GH_TOKEN } },
+  ).trim()
+}
+
+/**
+ * Resolve the PR body to assess. Two paths, not interchangeable — see #1174.
+ *
+ *   - `PR_BODY` set (including deliberately empty): used as-is, no network
+ *     involved. This is the local-run and test path — every existing test
+ *     constructs a body this way, and it must keep working with no `gh` CLI
+ *     and no token.
+ *   - `PR_BODY` unset, `GH_TOKEN`/`PR_NUMBER`/`GH_REPO` all set: the CI path.
+ *     `github.event.pull_request.body` is frozen at the moment the
+ *     `pull_request` event fired, so neither editing the PR body nor
+ *     re-running the job can ever pick up a later edit from that payload
+ *     (verified stale on #1172). Fetching live makes the guard see the PR body
+ *     as it is right now, including on a bare re-run with no new event.
+ *
+ * A failed live fetch is deliberately NOT treated as "no body" — that would
+ * make an API outage, a missing token, or a permissions refusal silently pass
+ * every PR, which is the exact `class:fail-open` shape #1174 is filed under.
+ * It throws instead; the caller must fail the check, not swallow it.
+ */
+export async function resolveBody({ env = process.env, fetchLiveBody = fetchPrBodyViaGh } = {}) {
+  if (env.PR_BODY !== undefined) return env.PR_BODY
+
+  const { GH_TOKEN, PR_NUMBER, GH_REPO } = env
+  const trio = [GH_TOKEN, PR_NUMBER, GH_REPO]
+  if (trio.some(Boolean) && !trio.every(Boolean)) {
+    // Only some of the three are set: a misconfigured workflow, not "not a
+    // PR". Falling through to an empty body here would be the same fail-open
+    // shape as swallowing a fetch error, just one step earlier.
+    throw new Error(
+      'GH_TOKEN, PR_NUMBER and GH_REPO must all be set together for the live PR-body fetch; got only some of them.',
+    )
+  }
+  if (!trio.every(Boolean)) return ''
+
+  try {
+    return await fetchLiveBody({ GH_TOKEN, PR_NUMBER, GH_REPO })
+  } catch (err) {
+    throw new Error(
+      `could not fetch the live body of PR #${PR_NUMBER} in ${GH_REPO}: ${err?.message ?? err}`,
+    )
+  }
+}
+
 // ── CLI ───────────────────────────────────────────────────────────────────
 // Bare node, no install, matching practices-monotonic.mjs — so this runs in
 // the Release Guards job without depending on the pnpm install step.
@@ -162,11 +231,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const { execSync } = await import('node:child_process')
 
   const base = process.env.GITHUB_BASE_REF
-  const body = process.env.PR_BODY ?? ''
 
   if (!base) {
     console.log('✓ closing-keyword guard: skipped — no GITHUB_BASE_REF (not a pull request).')
     process.exit(0)
+  }
+
+  let body
+  try {
+    body = await resolveBody()
+  } catch (err) {
+    // Fail closed (#1174): an unreadable body is an error, never a silent
+    // "no closing keyword found".
+    console.error(`✘ closing-keyword guard: ${err.message}`)
+    process.exit(1)
   }
 
   let changedFiles = []

@@ -62,10 +62,10 @@ export class GitAdapter {
    * `token`, when given, authenticates the clone against a private repo by
    * embedding it in the URL's userinfo (`https://x-access-token:<token>@...`
    * — the standard scheme for a GitHub PAT/App token over HTTPS) before
-   * handing it to `git clone`. The *rewritten* URL is only ever passed to
-   * `execa`, never logged or included in a thrown error message — errors
-   * reference the original `repoUrl` so a token can't leak into CLI output
-   * or a crash report.
+   * handing it to `git clone`. The failure path runs the underlying error
+   * through `redactSecrets` before reporting it: `execa` echoes the argv it
+   * ran, so the tokenized URL *is* present in that message and interpolating
+   * it raw leaked the token into CLI output and CI logs (#1169).
    */
   async cloneToTemp(repoUrl: string, namePrefix: string, token?: string): Promise<string> {
     const dir = mkdtempSync(join(tmpdir(), `${namePrefix}-${randomUUID().slice(0, 8)}-`))
@@ -74,7 +74,7 @@ export class GitAdapter {
       await execa('git', ['clone', '--depth', '1', cloneUrl, dir])
     } catch (err) {
       rmSync(dir, { recursive: true, force: true })
-      throw new Error(`Failed to clone ${repoUrl}: ${(err as Error).message}`)
+      throw gitFailure(`Failed to clone ${repoUrl}`, err, [token])
     }
 
     const gitDir = join(dir, '.git')
@@ -100,7 +100,7 @@ export class GitAdapter {
       await execa('git', ['clone', cloneUrl, dir])
     } catch (err) {
       rmSync(dir, { recursive: true, force: true })
-      throw new Error(`Failed to clone ${repoUrl}: ${(err as Error).message}`)
+      throw gitFailure(`Failed to clone ${repoUrl}`, err, [token])
     }
     return dir
   }
@@ -310,9 +310,15 @@ export class GitAdapter {
   /**
    * Push the current HEAD to `branch` on the remote. When `token` is given and
    * the remote is HTTPS, it's embedded in the push URL for auth (SSH/file
-   * remotes push with ambient credentials). The authenticated URL is never
-   * logged or included in a thrown error — a push failure references only the
-   * remote name, so a token can't leak into CLI output or a crash report.
+   * remotes push with ambient credentials).
+   *
+   * The failure path reports git's own error, redacted (#1135). It previously
+   * discarded it entirely — a defensible-looking choice, since the argv `execa`
+   * echoes contains the tokenized URL, but it made **every** push failure in
+   * the CLI indistinguishable: a rejected pre-push hook, an unresolvable
+   * remote and a bad token all produced the same sentence. That is why #1040
+   * ("`core upgrade --apply` aborts at the push step") survived two sessions of
+   * diagnosis without its cause ever being established.
    */
   async push(
     cwd: string,
@@ -328,10 +334,8 @@ export class GitAdapter {
     }
     try {
       await execa('git', ['push', target, `HEAD:refs/heads/${branch}`], { cwd })
-    } catch {
-      // Deliberately do NOT include the underlying error (it can contain the
-      // tokenized URL). Reference only the remote name.
-      throw new Error(`Failed to push branch '${branch}' to remote '${remote}'.`)
+    } catch (err) {
+      throw gitFailure(`Failed to push branch '${branch}' to remote '${remote}'`, err, [opts.token])
     }
     await this.setUpstreamAfterPush(cwd, branch, remote)
   }
@@ -407,4 +411,87 @@ function injectToken(repoUrl: string, token: string): string {
   parsed.username = 'x-access-token'
   parsed.password = token
   return parsed.toString()
+}
+
+/** What a redacted secret is replaced with. Exported so tests can assert on it. */
+export const REDACTED = '***'
+
+/**
+ * Replaces every occurrence of each secret in `text` with `***`, so a failure
+ * involving a credential can be **reported** rather than discarded.
+ *
+ * ## Why this exists
+ *
+ * Until #1135/#1169 there was no redaction helper anywhere in `cli/src`, so
+ * every author handling a credential-carrying failure faced a binary choice
+ * between leaking and blinding — and the two call sites in this file picked
+ * opposite wrong answers:
+ *
+ * - `push` discarded the underlying error entirely. Every push failure in the
+ *   CLI therefore collapsed to one contentless sentence, which is why #1040's
+ *   cause could not be established across two sessions of trying.
+ * - `cloneToTemp` / `cloneForEditing` interpolated it verbatim, **leaking the
+ *   token** into CLI output and CI logs (#1169) — under a docstring that
+ *   asserted the opposite.
+ *
+ * ## What actually leaks, which is not what it looks like
+ *
+ * `git` redacts credentials from the messages **it** generates: a failed
+ * authentication prints `fatal: Authentication failed for
+ * 'https://github.com/owner/repo.git/'`, with no token in it. Reading git's
+ * behaviour alone therefore suggests interpolation is safe, and that is
+ * precisely the trap the old docstring fell into.
+ *
+ * The leak is `execa`'s **command echo**. Its error message opens with the full
+ * argv it ran:
+ *
+ * ```
+ * Command failed with exit code 128: git clone --depth 1 'https://x-access-token:ghp_REAL@github.com/...'
+ * ```
+ *
+ * so the secret arrives via the command line, not via git's output. That is why
+ * redaction has to happen at *this* boundary rather than being delegated to git.
+ *
+ * ## Notes on the implementation
+ *
+ * `injectToken` builds the URL with `URL.toString()`, which percent-encodes the
+ * password — so a token containing URL-unsafe characters appears in the argv in
+ * its **encoded** form and would survive a naive search for the raw value. Both
+ * forms are redacted.
+ *
+ * Uses `split`/`join` rather than a `RegExp` so the secret never has to be
+ * regex-escaped; a token containing `.` or `+` would otherwise build a pattern
+ * matching far more than itself.
+ *
+ * Secrets shorter than `MIN_REDACTABLE` are ignored: redacting a 3-character
+ * string would punch holes through unrelated words and destroy the diagnostic
+ * value this function exists to preserve. Real GitHub tokens are far longer, so
+ * this only ever skips test stubs and empty strings.
+ */
+const MIN_REDACTABLE = 8
+
+export function redactSecrets(text: string, secrets: ReadonlyArray<string | undefined>): string {
+  let out = text
+  for (const secret of secrets) {
+    if (secret === undefined || secret.length < MIN_REDACTABLE) continue
+    // The raw value, and the percent-encoded form `URL.toString()` produces.
+    for (const form of new Set([secret, encodeURIComponent(secret)])) {
+      out = out.split(form).join(REDACTED)
+    }
+  }
+  return out
+}
+
+/**
+ * The message to throw for a failed git invocation that was handed a secret.
+ * Always prefer this to either extreme — a bare `catch {}` (undiagnosable) or a
+ * raw interpolation (leaky).
+ */
+function gitFailure(
+  summary: string,
+  err: unknown,
+  secrets: ReadonlyArray<string | undefined>,
+): Error {
+  const detail = redactSecrets((err as Error).message, secrets)
+  return new Error(`${summary}: ${detail}`)
 }

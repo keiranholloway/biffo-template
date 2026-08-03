@@ -111,8 +111,12 @@ const server = createServer((req, res) => {
       })
       res.end(body)
     } catch (err) {
+      // The detail goes to stderr, not to the caller: Playwright captures this
+      // webServer's output, so whoever is debugging still sees the whole error,
+      // and the response body stays bounded (js/stack-trace-exposure, #1223).
+      console.error('[e2e-static-server]', err)
       res.writeHead(500, { 'content-type': 'text/plain' })
-      res.end(String(err))
+      res.end('Internal error')
     }
   })()
 })

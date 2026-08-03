@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 // like every other script in scripts/. Tested from here so the logic has one home.
 import {
   assess,
+  assessDeletions,
   countEvidence,
   countTableRows,
   hasRemovalTrailer,
@@ -75,5 +76,35 @@ describe('practices corpus monotonicity guard', () => {
       true,
     )
     expect(hasRemovalTrailer('fix: thing\n\nno trailer here\n')).toBe(false)
+  })
+})
+
+describe('assessDeletions — the per-directory guard (#1132)', () => {
+  const A = 'docs/practices/evidence/2026-08-01-a.json'
+  const B = 'docs/practices/evidence/2026-08-02-b.json'
+  const C = 'docs/practices/evidence/2026-08-03-c.json'
+
+  it('fails when a file present at the base is missing now', () => {
+    const out = assessDeletions([A, B], [A])
+    expect(out.ok).toBe(false)
+    expect(out.deleted).toEqual([B])
+  })
+
+  it('passes when nothing is removed, even as the directory grows', () => {
+    // Growth is not the interesting property for a directory: two sessions
+    // can each add one file and never collide. Deletion is the only loss.
+    expect(assessDeletions([A], [A, B, C]).ok).toBe(true)
+  })
+
+  it('passes on an empty base — every PR predating #1132 has no directory yet', () => {
+    expect(assessDeletions([], [A]).ok).toBe(true)
+  })
+
+  it('passes on no change', () => {
+    expect(assessDeletions([A, B], [A, B]).ok).toBe(true)
+  })
+
+  it('reports every deleted path, not just the first', () => {
+    expect(assessDeletions([A, B, C], []).deleted).toEqual([A, B, C])
   })
 })

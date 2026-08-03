@@ -26,6 +26,7 @@
         "$TURBO_DEFAULT$",
         ".env.test*",
         "$TURBO_ROOT$/docs/practices/evidence.jsonl",
+        "$TURBO_ROOT$/docs/practices/evidence/**",
         "$TURBO_ROOT$/docs/guides/development-practices.md"
       ],
       "outputs": ["coverage/**"]

@@ -46,6 +46,9 @@
 
 import { readFileSync, writeFileSync, existsSync, readdirSync, appendFileSync } from 'node:fs'
 import { join } from 'node:path'
+// The evidence corpus is legacy `.jsonl` + one-file-per-entry directory,
+// merged and sorted (#1132) — never a single shared file to append to.
+import { readCorpus as readEvidenceCorpus } from './practices-corpus.mjs'
 
 /**
  * CI cost of one round trip, in minutes, by repo class.
@@ -424,7 +427,15 @@ function latestSnapshot(dir) {
   return { file: files[files.length - 1], data: JSON.parse(readFileSync(join(dir, files[files.length - 1]), 'utf8')) }
 }
 
-function readCorpus(file) {
+/**
+ * A generic newline-delimited-JSON reader — used for the standup's OWN choice
+ * log (`~/.practices-standup.jsonl`), a single file with a single writer
+ * (this script, run interactively, once a day). Not the evidence corpus:
+ * that reader is `readEvidenceCorpus`, imported above, and merges the
+ * directory in (#1132). Kept distinct so a rename of one never silently
+ * repoints the other.
+ */
+function readNdjson(file) {
   if (!existsSync(file)) return []
   return readFileSync(file, 'utf8')
     .split('\n')
@@ -441,7 +452,7 @@ function readCorpus(file) {
 
 function readLastChoice(file) {
   if (!existsSync(file)) return null
-  const rows = readCorpus(file)
+  const rows = readNdjson(file)
   return rows.length ? rows[rows.length - 1] : null
 }
 
@@ -489,7 +500,7 @@ function main() {
     )
     process.exit(1)
   }
-  const corpus = readCorpus(arg('--corpus') ?? 'docs/practices/evidence.jsonl')
+  const corpus = readEvidenceCorpus(arg('--corpus') ?? 'docs/practices/evidence.jsonl')
   const auditsFile = join(dataDir, 'estate-audits.json')
   const audits = existsSync(auditsFile) ? JSON.parse(readFileSync(auditsFile, 'utf8')).audits ?? [] : []
 

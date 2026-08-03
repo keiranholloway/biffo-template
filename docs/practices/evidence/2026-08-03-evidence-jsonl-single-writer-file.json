@@ -1,0 +1,15 @@
+{
+  "refs": [
+    "#1132"
+  ],
+  "summary": "A single append-only evidence.jsonl that every concurrent session writes to conflicts by construction — N writers, one path. On 2026-08-02 recording one incident produced a whole-file conflict, an append done as a full re-serialise that churned all 418 rows and nearly dropped another session's row, a duplicate section title in development-practices.md, a rebase and a manual three-way merge. The same class already fixed twice in this repo (core.version #423, the generated tally block #953): stop sharing the path. New findings are now written as their own file under docs/practices/evidence/, one per entry, so two sessions never touch the same path and cannot conflict. evidence.jsonl is frozen as a legacy file; the read side merges it with the directory, sorted by filename, and the append-only guard's per-directory equivalent is 'no file is deleted' rather than 'the count never shrinks'",
+  "class": "process",
+  "alsoClass": [
+    "fail-open"
+  ],
+  "surfacedIn": "biffo-template docs/practices/evidence.jsonl and its capture workflow",
+  "fixesIn": "biffo-template scripts/practices-corpus.mjs, practices-evidence.mjs, practices-monotonic.mjs, practices-standup.mjs, practices-metrics.mjs",
+  "status": "fixed",
+  "costMinutes": 145,
+  "date": "2026-08-03"
+}

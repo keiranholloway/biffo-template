@@ -82,10 +82,12 @@ export interface ResolveTemplateRootOptions {
   fromDir?: string
   /**
    * Command-specific guidance appended to the not-found error, telling the user
-   * how to point *this* command at a template checkout. Different commands
-   * expose different flags for it (`core diff` uses `--template`, `core upgrade`
-   * uses `--template-repo`), so the caller supplies the exact remedy — naming a
-   * flag the command does not have sends the user down a dead end (issue #324).
+   * how to point *this* command at a template checkout. Each command's canonical
+   * flag for it is spelled differently (`core diff` uses `--template`, `core
+   * upgrade` uses `--template-repo` — though `core upgrade` also accepts
+   * `--template` as an alias, #1138), so the caller supplies the exact remedy —
+   * naming a flag the command does not have sends the user down a dead end
+   * (issue #324).
    */
   guidance?: string
 }

@@ -61,12 +61,21 @@ describe('user-facing error strings only name flags the command actually has', (
     })
   }
 
-  it('core upgrade names --template-repo, not the non-existent --template (regression: #324)', () => {
+  it('core upgrade names --template-repo, its canonical flag (regression: #324)', () => {
     expect(UPGRADE_GUIDANCE).toContain('--template-repo')
     expect(longFlags(coreUpgradeCommand).has('--template-repo')).toBe(true)
-    // The original bug: the message named a bare --template, which this command
-    // does not have. --template-repo is correct; a bare --template is not.
+    // The original #324 bug: the message named a bare --template, which this
+    // command did not have at the time. The guidance still names only the
+    // fully-descriptive canonical spelling, --template-repo.
     expect(flagsNamed(UPGRADE_GUIDANCE)).not.toContain('--template')
-    expect(longFlags(coreUpgradeCommand).has('--template')).toBe(false)
+  })
+
+  it('core upgrade also accepts --template, as a real alias for --template-repo (#1138)', () => {
+    // Unlike #324 — where --template named in a message was a dead end because
+    // the command had no such option — this is now a genuine, working option:
+    // `core diff` and `core upgrade` used to name the same argument
+    // differently, so the natural preview-then-apply workflow failed on the
+    // second command with the flag that had just worked on the first.
+    expect(longFlags(coreUpgradeCommand).has('--template')).toBe(true)
   })
 })

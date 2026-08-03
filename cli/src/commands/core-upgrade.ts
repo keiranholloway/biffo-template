@@ -64,14 +64,54 @@ import { log } from '../lib/logger.js'
 /**
  * Guidance shown when `core upgrade` cannot find a template root — which is the
  * normal case from a published CLI, since `core-manifest.json` is excluded from
- * the npm package (issue #315). It names the flag this command actually exposes
- * (`--template-repo`) and shows a complete invocation, because that flag is
- * always required on this path. Every `--flag` it names must be a real option on
- * `coreUpgradeCommand`; `error-flag-consistency.test.ts` enforces that (#324).
+ * the npm package (issue #315). It names the fully-descriptive, canonical flag
+ * this command exposes (`--template-repo` — it says what it actually is, a git
+ * checkout whose tags matter, not just a directory) and shows a complete
+ * invocation, because that flag is always required on this path. `--template`
+ * works too as an alias (#1138, see `resolveTemplateRepoFlag` below), but the
+ * guidance keeps naming the longer, more descriptive spelling. Every `--flag`
+ * it names must be a real option on `coreUpgradeCommand`; `error-flag-
+ * consistency.test.ts` enforces that (#324).
  */
 export const MISSING_TEMPLATE_ROOT_GUIDANCE =
   'Pass --template-repo <path> to a biffo-template git checkout, e.g. ' +
   '`biffo core upgrade --template-repo /path/to/biffo-template`.'
+
+/**
+ * Merge `--template-repo` and its alias `--template` (#1138) into the single
+ * path `runCoreUpgrade` wants.
+ *
+ * `core diff` and `core upgrade` used to name this argument differently
+ * (`--template` vs `--template-repo`), so the natural preview-then-apply
+ * workflow failed on the second command with the flag that had just worked on
+ * the first — and commander's own "did you mean" suggestion made it worse,
+ * pointing at `--to-template`, a flag with different semantics (an override
+ * for the TARGET tree, not the tag source) that silently changes what the
+ * command does rather than failing loudly. `--template-repo` stays the
+ * documented, canonical name; `--template` is now accepted here too so the
+ * flag that just worked on `core diff` keeps working on `core upgrade`.
+ *
+ * Throws when both are given and disagree: silently preferring one over the
+ * other would change what the command does without saying so, which is a
+ * worse failure than an error naming both values.
+ */
+export function resolveTemplateRepoFlag(
+  templateRepo: string | undefined,
+  template: string | undefined,
+): string | undefined {
+  if (
+    templateRepo !== undefined &&
+    template !== undefined &&
+    resolve(templateRepo) !== resolve(template)
+  ) {
+    throw new Error(
+      `Both --template-repo (${templateRepo}) and --template (${template}) were given, with ` +
+        'different paths. They are the same argument — --template is an alias for ' +
+        '--template-repo (#1138) — so pass only one.',
+    )
+  }
+  return templateRepo ?? template
+}
 
 export const coreUpgradeCommand = new Command('upgrade')
   .description('Three-way-merge template-owned files for a core upgrade; preview it or open a PR')
@@ -79,6 +119,10 @@ export const coreUpgradeCommand = new Command('upgrade')
   .option(
     '--template-repo <path>',
     'Path to a biffo-template git checkout whose core-v* tags supply the base/target trees (defaults to the template this CLI ships with)',
+  )
+  .option(
+    '--template <path>',
+    'Alias for --template-repo, so the flag that works on `core diff` also works here (#1138). Errors if both are given with different paths.',
   )
   .option('--to <version>', 'Target core version (defaults to the template’s latest core.version)')
   .option(
@@ -109,6 +153,7 @@ export const coreUpgradeCommand = new Command('upgrade')
     async (options: {
       cwd?: string
       templateRepo?: string
+      template?: string
       to?: string
       fromTemplate?: string
       toTemplate?: string
@@ -120,22 +165,26 @@ export const coreUpgradeCommand = new Command('upgrade')
       remote?: string
       reap?: boolean
     }) => {
-      const cwd = options.cwd ? resolve(options.cwd) : process.cwd()
-      const runOptions: CoreUpgradeOptions = {
-        cwd,
-        apply: options.apply ?? false,
-        allowConflicts: options.allowConflicts ?? false,
-        acknowledgeBreaking: options.acknowledgeBreaking ?? false,
-        allowDirty: options.allowDirty ?? false,
-      }
-      if (options.templateRepo) runOptions.templateRepo = resolve(options.templateRepo)
-      if (options.to) runOptions.toVersion = options.to
-      if (options.fromTemplate) runOptions.baseDir = resolve(options.fromTemplate)
-      if (options.toTemplate) runOptions.theirsDir = resolve(options.toTemplate)
-      if (options.base) runOptions.base = options.base
-      if (options.remote) runOptions.remote = options.remote
-      if (options.reap) runOptions.reap = true
       try {
+        const cwd = options.cwd ? resolve(options.cwd) : process.cwd()
+        const runOptions: CoreUpgradeOptions = {
+          cwd,
+          apply: options.apply ?? false,
+          allowConflicts: options.allowConflicts ?? false,
+          acknowledgeBreaking: options.acknowledgeBreaking ?? false,
+          allowDirty: options.allowDirty ?? false,
+        }
+        // Can throw (--template-repo and --template both given, disagreeing) —
+        // inside the try so it reports the same way as any other user-facing
+        // error, not an uncaught stack trace (#1138).
+        const templateRepoFlag = resolveTemplateRepoFlag(options.templateRepo, options.template)
+        if (templateRepoFlag) runOptions.templateRepo = resolve(templateRepoFlag)
+        if (options.to) runOptions.toVersion = options.to
+        if (options.fromTemplate) runOptions.baseDir = resolve(options.fromTemplate)
+        if (options.toTemplate) runOptions.theirsDir = resolve(options.toTemplate)
+        if (options.base) runOptions.base = options.base
+        if (options.remote) runOptions.remote = options.remote
+        if (options.reap) runOptions.reap = true
         await runCoreUpgrade(runOptions)
       } catch (err) {
         log.error((err as Error).message)

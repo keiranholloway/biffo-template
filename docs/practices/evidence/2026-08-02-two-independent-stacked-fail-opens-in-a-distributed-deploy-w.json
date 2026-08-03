@@ -1,0 +1,22 @@
+{
+  "refs": [
+    "tabsii-platform#508",
+    "keiranholloway/biffo-template#1157",
+    "keiranholloway/biffo-template#1159",
+    "keiranholloway/biffo-template#1162",
+    "tabsii-platform#530",
+    "tabsii-platform#531",
+    "tabsii-platform#532"
+  ],
+  "summary": "Two independent, stacked fail-opens in a distributed deploy workflow kept a manifest file 403ing in production through THREE green core-upgrade cycles before either was found, because each one masked the next. Repointing the sibling-registry manifest from /admin/siblings.json to /.well-known/siblings.json (tabsii-platform#508) merged clean in biffo-template (#1157), tagged, carried into tabsii-platform via a core-upgrade PR, deployed green -- and the live URL still 403'd. Cause #1: the portal's S3 sync step excludes '.well-known/*' wholesale from its immutable-asset pass, a rule written years earlier to stop --delete from removing a DIFFERENT file (the runtime Cognito identity doc, published by a separate workflow) -- it correctly protected that file and, as a side effect nobody noticed because nothing tests the exclusion's BREADTH, silently excluded the new manifest from EVERY sync pass too, so it built successfully in CI and never once reached S3. Fixed (#1159): scope the exclude to biffo-identity.json by name, add a dedicated no-cache pass for the manifest. Tagged, carried, deployed again -- still 403, DIFFERENT error this time (a genuine S3 AccessDenied via CloudFront's error-page substitution, confirmed by matching etag/last-modified against a stale error document rather than the real object). Cause #2: actions/upload-artifact excludes dotfiles and dot-directories BY DEFAULT (a documented but easy-to-forget behaviour change from v3), and '.well-known/' is a dot-directory -- so the Build job's own artifact upload silently dropped the entire directory before the Deploy job ever downloaded it, and the deploy log's real error ('the user-provided path .../.well-known/ does not exist') was sitting in a step nobody reads when the pipeline is green. Fixed (#1162): include-hidden-files: true. THIRD tag/carry/deploy cycle, and only THEN did a live curl -D - plus grep-checking the actual served CSS for --primary/--font-heading confirm the manifest was finally real. Each of the three deploys reported success; none proved the feature worked, because 'the pipeline is green' and 'the file is reachable' are different claims and every automated check in the chain (CI, the core-upgrade PR's own checks, the deploy workflow) only asserts the first.",
+  "class": "fail-open",
+  "alsoClass": [
+    "visibility",
+    "boundary"
+  ],
+  "surfacedIn": "tabsii-platform (dev.tabsii.com/.well-known/siblings.json, live)",
+  "fixesIn": "keiranholloway/biffo-template #1159 and #1162, carried via tabsii-platform #530/#531/#532",
+  "status": "fixed",
+  "costMinutes": 90,
+  "date": "2026-08-02"
+}

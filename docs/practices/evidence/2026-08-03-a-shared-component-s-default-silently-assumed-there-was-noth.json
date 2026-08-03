@@ -1,0 +1,20 @@
+{
+  "refs": [
+    "tabsii-com/tabsii-ui#4",
+    "tabsii-com/tabsii-ui#3",
+    "tabsii-com/tabsii-lms#25",
+    "tabsii-com/tabsii-geo#49",
+    "tabsii-platform#508",
+    "tabsii-platform#534"
+  ],
+  "summary": "A shared component's default silently assumed there was nothing to prefix, and shipped to two live repos before a THIRD consumer's own code comments were the thing that surfaced it. @tabsii-com/ui's <TopBar> renders a plain <a href> for its brand link (no framework dependency, so no next/link) and defaulted brand.href to '/'. Every real consumer is a Next.js static export with a build-time basePath baked in via NEXT_PUBLIC_BASE_PATH (e.g. /lms, /geo) -- the CDN routes <basePath>/* to that sibling's own S3 origin and bare / to a DIFFERENT sibling entirely (the root app). So the default navigated a user who clicked the wordmark clean off the app they were looking at, silently -- no error, no broken link, just the wrong page. It shipped in tabsii-lms's PR #24 and tabsii-geo's PR #47, both green (typecheck/lint/test/build all pass on a literal string default -- nothing about '/' looks wrong in isolation), and was only caught building the THIRD pilot (tabsii-marketplace) when its existing NavBar.tsx's own code comments explained exactly why it mixed next/link Link (for internal routes, which Next auto-prefixes) with a plain <a> (for one deliberately cross-sibling link) -- reading that comment is what revealed TopBar's plain-<a> rendering couldn't possibly get the prefix right by accident. Confirmed live before fixing: curl https://dev.tabsii.com/geo/ showed href=\"/\" verbatim in the prerendered HTML. Fixed at the source rather than by documenting the requirement: brand.href now reads NEXT_PUBLIC_BASE_PATH itself and resolves to this app's own root by default (unambiguous case, so no consumer code needed), and a new withBasePath() export handles navLinks/crumbs, which genuinely can't be automatic since some deliberately point at a DIFFERENT sibling (marketplace's own 'List your brand' -> /intake/demo/) and only the consumer knows which. The near-repeat this avoided: documenting 'pass an already-prefixed href' instead of fixing the default would have left every future consumer to hand-write the same process.env read themselves -- exactly the duplication that produced two live copies of the bug in the first place.",
+  "class": "boundary",
+  "alsoClass": [
+    "visibility"
+  ],
+  "surfacedIn": "tabsii-com/tabsii-ui (TopBar component); live on tabsii-lms and tabsii-geo before the fix",
+  "fixesIn": "tabsii-com/tabsii-ui #4 (v0.2.2); carried into tabsii-lms #25 and tabsii-geo #49",
+  "status": "fixed",
+  "costMinutes": 45,
+  "date": "2026-08-03"
+}

@@ -9,6 +9,7 @@ import {
   applyMigrationCarry,
   findMigrationTestPairings,
   migrationBodyHash,
+  parseBodyChangeDeclaration,
   parseCarriedFrom,
   stampCarriedFrom,
   parseMigration,
@@ -619,6 +620,113 @@ describe('planMigrationCarry — recognising an already-carried migration', () =
       expect(plan.entries.map((e) => e.file)).toEqual(['0010_orgs.py'])
       expect(plan.divergedBodies).toEqual([])
     })
+
+    // #751. A declaration changes what the operator reads, not what the carry
+    // does — the file stays exactly as untouched as an undeclared drift.
+    describe('a declared classification (#751)', () => {
+      it('attaches a replay-safe declaration to the reported drift', () => {
+        write(templateDir, '0001_base.py', migration('0001', null))
+        write(
+          templateDir,
+          '0010_orgs.py',
+          migration(
+            '0010',
+            '0001',
+            `# biffo:body-change: replay-safe — guards a table Core doesn't always own\n${ddl('with_guard')}`,
+          ),
+        )
+        write(instanceDir, '0001_base.py', migration('0001', null))
+        write(
+          instanceDir,
+          '0010_orgs.py',
+          stampCarriedFrom(migration('0010', '0001', ddl('no_guard')), '0010_orgs.py'),
+        )
+
+        const plan = planMigrationCarry({ templateDir, instanceDir })
+
+        // Reported exactly as before, plus the declaration — not carried,
+        // not re-issued, not written anywhere.
+        expect(plan.skipped).toContain('0010_orgs.py')
+        expect(plan.entries).toEqual([])
+        expect(plan.divergedBodies).toEqual([
+          {
+            file: '0010_orgs.py',
+            instanceFile: '0010_orgs.py',
+            how: 'provenance',
+            declared: {
+              classification: 'replay-safe',
+              reason: "guards a table Core doesn't always own",
+            },
+          },
+        ])
+      })
+
+      it('attaches an outcome-changing declaration to the reported drift', () => {
+        write(templateDir, '0001_base.py', migration('0001', null))
+        write(
+          templateDir,
+          '0010_orgs.py',
+          migration(
+            '0010',
+            '0001',
+            `# biffo:body-change: outcome-changing — corrected a wrong column type\n${ddl('with_guard')}`,
+          ),
+        )
+        write(instanceDir, '0001_base.py', migration('0001', null))
+        write(
+          instanceDir,
+          '0010_orgs.py',
+          stampCarriedFrom(migration('0010', '0001', ddl('no_guard')), '0010_orgs.py'),
+        )
+
+        const plan = planMigrationCarry({ templateDir, instanceDir })
+
+        expect(plan.divergedBodies).toEqual([
+          {
+            file: '0010_orgs.py',
+            instanceFile: '0010_orgs.py',
+            how: 'provenance',
+            declared: {
+              classification: 'outcome-changing',
+              reason: 'corrected a wrong column type',
+            },
+          },
+        ])
+      })
+
+      it('omits `declared` when nobody has classified the edit', () => {
+        write(templateDir, '0001_base.py', migration('0001', null))
+        write(templateDir, '0010_orgs.py', migration('0010', '0001', ddl('with_guard')))
+        write(instanceDir, '0001_base.py', migration('0001', null))
+        write(
+          instanceDir,
+          '0010_orgs.py',
+          stampCarriedFrom(migration('0010', '0001', ddl('no_guard')), '0010_orgs.py'),
+        )
+
+        const plan = planMigrationCarry({ templateDir, instanceDir })
+        expect(plan.divergedBodies[0]).not.toHaveProperty('declared')
+      })
+
+      it('aborts loudly on a malformed marker rather than silently ignoring it', () => {
+        write(templateDir, '0001_base.py', migration('0001', null))
+        write(
+          templateDir,
+          '0010_orgs.py',
+          migration('0010', '0001', `# biffo:body-change: not-a-real-class\n${ddl('with_guard')}`),
+        )
+        write(instanceDir, '0001_base.py', migration('0001', null))
+        write(
+          instanceDir,
+          '0010_orgs.py',
+          stampCarriedFrom(migration('0010', '0001', ddl('no_guard')), '0010_orgs.py'),
+        )
+
+        expect(() => planMigrationCarry({ templateDir, instanceDir })).toThrow(
+          /Malformed # biffo:body-change: marker/,
+        )
+      })
+    })
   })
 
   it('provenance survives a renumber that also changes the revision id', () => {
@@ -717,6 +825,54 @@ describe('planMigrationCarry — recognising an already-carried migration', () =
       expect(plan.declined).toEqual([])
       expect(plan.staleDeclines).toEqual([])
     })
+  })
+})
+
+describe('parseBodyChangeDeclaration (#751)', () => {
+  it('returns null when the migration carries no declaration', () => {
+    expect(parseBodyChangeDeclaration(migration('0010', '0001', 'pass'))).toBeNull()
+  })
+
+  it('parses a replay-safe declaration, whatever its indentation', () => {
+    const content = migration(
+      '0010',
+      '0001',
+      '# biffo:body-change: replay-safe — no-op against an already-migrated database\npass',
+    )
+    expect(parseBodyChangeDeclaration(content)).toEqual({
+      classification: 'replay-safe',
+      reason: 'no-op against an already-migrated database',
+    })
+  })
+
+  it('parses an outcome-changing declaration', () => {
+    const content = migration(
+      '0010',
+      '0001',
+      '# biffo:body-change: outcome-changing — fixes a wrong default value\npass',
+    )
+    expect(parseBodyChangeDeclaration(content)).toEqual({
+      classification: 'outcome-changing',
+      reason: 'fixes a wrong default value',
+    })
+  })
+
+  it('accepts a plain colon separator, not only an em dash', () => {
+    expect(
+      parseBodyChangeDeclaration('# biffo:body-change: replay-safe: idempotent guard\n'),
+    ).toEqual({ classification: 'replay-safe', reason: 'idempotent guard' })
+  })
+
+  it('throws on an unrecognised classification word', () => {
+    expect(() =>
+      parseBodyChangeDeclaration('# biffo:body-change: sort-of-safe — a reason\n'),
+    ).toThrow(/Malformed # biffo:body-change: marker/)
+  })
+
+  it('throws when the marker has a classification but no reason', () => {
+    expect(() => parseBodyChangeDeclaration('# biffo:body-change: replay-safe\n')).toThrow(
+      /Malformed # biffo:body-change: marker/,
+    )
   })
 })
 

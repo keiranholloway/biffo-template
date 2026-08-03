@@ -86,11 +86,11 @@ function unguardedApplies(file: string): UnguardedApply[] {
    * `needs: plan-dev` — and that is a correct arrangement, so the rule has to
    * follow the dependency edges rather than stopping at the job boundary.
    *
-   * Note what this does NOT prove: those apply jobs re-plan rather than
-   * applying the plan the guard inspected, so the two are the same plan only in
-   * practice, not by construction. That is a narrower, pre-existing gap of the
-   * same class this assertion exists for, and it is filed separately rather
-   * than quietly blessed here — see the PR that added this file.
+   * On its own this proves only that a guard ran *somewhere upstream*, which is
+   * necessary and not sufficient: the apply must also execute the very plan
+   * that guard inspected. That second half is asserted separately below
+   * ("applies the plan the guard inspected"), and it was a real defect rather
+   * than a theoretical one — see #1148.
    */
   const guardedUpstream = (job: WorkflowJob, seen = new Set<string>()): boolean => {
     for (const id of job.needs) {
@@ -172,6 +172,121 @@ describe('every terraform apply is preceded by the destructive-plan guard', () =
         .join('\n')
 
       expect(findings, findings.length === 0 ? '' : `\n${report}\n`).toEqual([])
+    },
+  )
+})
+
+/**
+ * Every `terraform apply` must execute a **saved plan file**, and where the
+ * guard runs in a different job the plan must be transported to it.
+ *
+ * ## Why the guard above is not enough on its own
+ *
+ * `terraform apply` with no plan-file argument **recomputes a plan** and
+ * applies that. In `deploy-infra.yml` the phases were split across jobs on
+ * separate runners with `tfplan` never uploaded, so the file did not even exist
+ * where the apply ran. `check-destructive-plan.mjs` inspected plan P1; plan P2
+ * was applied. The guard could not gate what shipped — not as a race window,
+ * but by construction, in all three environments at once (#1148).
+ *
+ * The previous assertion was fully green throughout, because "a guard ran
+ * upstream" was true. That is the shape worth remembering: a gate can be
+ * correctly wired and still stand in front of nothing.
+ *
+ * ## Why this enumerates rather than pinning the three known sites
+ *
+ * `deploy-global.yml` and the sibling skeleton's `deploy.yml` already applied
+ * saved plans correctly, so a test written against the broken file alone would
+ * have encoded the bug as the norm. Sweeping every workflow the template
+ * authors means the next environment block — or the next skeleton — cannot
+ * introduce the same gap.
+ */
+describe('every terraform apply executes the plan the guard inspected', () => {
+  const files = workflowFiles()
+
+  /** Tokens after `terraform apply`, minus flags. A saved plan is a bare argument. */
+  function planFileArgument(command: string): string | null {
+    const match = /\bterraform\s+apply\b(.*)$/.exec(command)
+    if (match === null) return null
+    const rest = (match[1] ?? '').split('#')[0] ?? ''
+    const bare = rest
+      .trim()
+      .split(/\s+/)
+      .filter((token) => token.length > 0 && !token.startsWith('-'))
+    return bare[0] ?? null
+  }
+
+  it.each(files.map((file) => [relative(repoRoot, file), file]))(
+    'passes a saved plan to every apply: %s',
+    (_label, file) => {
+      const jobs = parseWorkflowJobs(readFileSync(file, 'utf8'))
+      const naked: string[] = []
+
+      for (const job of jobs) {
+        if (job.reusable) continue
+        for (const step of job.steps) {
+          for (const line of step.runLines) {
+            if (!APPLIES.test(line)) continue
+            if (planFileArgument(line) === null) {
+              naked.push(
+                `  job "${job.id}" line ${step.line}: \`${line.trim()}\`\n` +
+                  '    no plan file argument, so this RECOMPUTES a plan and applies that —\n' +
+                  '    whatever the destructive-plan guard inspected is discarded (#1148).\n' +
+                  '    fix: `terraform apply -input=false -auto-approve tfplan`',
+              )
+            }
+          }
+        }
+      }
+
+      expect(naked, naked.length === 0 ? '' : `\n${naked.join('\n')}\n`).toEqual([])
+    },
+  )
+
+  /**
+   * A saved plan is only the plan the guard saw if it survived the trip between
+   * jobs. When the guard is upstream rather than in the applying job, require
+   * an explicit hand-off: the guarding job uploads an artifact, the applying
+   * job downloads one. Without it the apply job's `tfplan` is either absent or,
+   * worse, a stale file from its own checkout.
+   */
+  it.each(files.map((file) => [relative(repoRoot, file), file]))(
+    'transports the plan when the guard runs in another job: %s',
+    (_label, file) => {
+      const jobs = parseWorkflowJobs(readFileSync(file, 'utf8'))
+      const byId = new Map(jobs.map((job) => [job.id, job]))
+      const runsGuard = (job: WorkflowJob): boolean =>
+        job.steps.some((step) => step.runLines.some((line) => line.includes(GUARD)))
+      const usesAction = (job: WorkflowJob, action: string): boolean =>
+        job.steps.some((step) => step.uses?.includes(action) === true)
+
+      const broken: string[] = []
+
+      for (const job of jobs) {
+        if (job.reusable) continue
+        const applies = job.steps.some((step) => step.runLines.some((line) => APPLIES.test(line)))
+        if (!applies || runsGuard(job)) continue
+
+        const guardians = job.needs.map((id) => byId.get(id)).filter((j) => j !== undefined)
+        if (!guardians.some((j) => runsGuard(j))) continue // the other test owns this case
+
+        if (!usesAction(job, 'download-artifact')) {
+          broken.push(
+            `  job "${job.id}" applies a plan guarded in ${job.needs.join(', ')},\n` +
+              '    but downloads no artifact — the plan cannot have reached this runner (#1148).',
+          )
+        }
+        for (const guardian of guardians.filter((j) => runsGuard(j))) {
+          if (!usesAction(guardian, 'upload-artifact')) {
+            broken.push(
+              `  job "${guardian.id}" guards a plan that "${job.id}" applies,\n` +
+                '    but uploads no artifact — nothing carries the plan across (#1148).',
+            )
+          }
+        }
+      }
+
+      expect(broken, broken.length === 0 ? '' : `\n${broken.join('\n')}\n`).toEqual([])
     },
   )
 })

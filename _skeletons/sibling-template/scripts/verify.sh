@@ -78,6 +78,162 @@ set -u
 LIST=""
 [ "${1:-}" = "--list" ] && LIST=1
 
+# Checkout health -- is the tree a command is about to trust stale or dirty in
+# the ONE place that matters: the PRIMARY checkout. (#1196)
+#
+# AGENTS.md SS1/SS2 already say the primary must stay on the integration
+# branch, no more than a `git fetch` behind, and that real work happens in
+# worktrees instead -- but nothing checked it, and it happened again. An agent
+# asked to migrate tabsii-crm's `auth.ts` read an 80-line file exporting five
+# extra functions and built a whole, internally consistent, WRONG analysis on
+# it: `origin/dev` held 36 lines and one export. The primary checkout it read
+# was 16 commits behind, 1 ahead, dirty. The agent's reasoning was sound; its
+# input was not, and nothing said so.
+#
+# This does not naturally belong to a PRE-PUSH file -- the incident above
+# never touched git at all, it was a pure read, so a gate that only runs at
+# push time could never have caught it by running later. It is here anyway,
+# not in `scripts/hook-audit.sh` as the issue itself proposed, for a
+# mechanical reason recorded rather than argued away: #1194 (gitleaks scope)
+# and this were required to land in the same PR, in this file. Two things
+# follow from that:
+#
+#   `--checkout-health` is the part meant to answer #1196's actual question --
+#   run it BEFORE trusting a read, standalone, any time:
+#     sh scripts/verify.sh --checkout-health
+#
+#   The WARN folded into the ordinary run further down is defence in depth for
+#   the one case an ordinary PUSH-TIME run can still see: a push attempted
+#   FROM the primary, which SS1 forbids outright regardless of staleness.
+#   It does not, and cannot, cover the read-only case the issue was filed for.
+#
+# Scope is deliberately narrow. A WORKTREE being behind `origin/dev` is normal
+# mid-work -- that is what branching for a unit of work looks like -- so this
+# never evaluates one. It only evaluates the ONE checkout AGENTS.md says must
+# always mirror the integration branch: a non-worktree working tree whose
+# CURRENT branch IS that branch. A worktree, a detached HEAD, or some other
+# branch checked out at a repo root are all out of scope, and reported as
+# such (`n/a`) rather than silently read as healthy for a question they were
+# never asked.
+CHECKOUT_HEALTH_BRANCH="${BIFFO_INTEGRATION_BRANCH:-dev}"
+
+# A linked worktree's git-dir lives under the primary's `.git/worktrees/`; the
+# primary's own git-dir does not. That is the one property distinguishing them
+# regardless of where either happens to be checked out on disk.
+_is_linked_worktree() {
+  case "$(git rev-parse --git-dir 2>/dev/null)" in
+    */worktrees/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Verdict in CHECKOUT_HEALTH_VERDICT: healthy | stale | n/a | detached | unknown.
+# Detail (the "why", for stale/unknown) in CHECKOUT_HEALTH_DETAIL.
+#
+# Sets globals rather than echoing the verdict for `$(...)` capture on
+# purpose: `_v=$(checkout_health)` runs the function in a SUBSHELL, and any
+# variable it assigns -- CHECKOUT_HEALTH_DETAIL included -- dies with that
+# subshell. The first version did exactly that and every non-trivial verdict
+# crashed the caller under `set -u` reading a detail that command substitution
+# had already thrown away. Caught by the fail-first rehearsal below, not by
+# the happy-path `healthy` case, which never touches DETAIL and looked fine.
+checkout_health() {
+  CHECKOUT_HEALTH_VERDICT=""
+  CHECKOUT_HEALTH_DETAIL=""
+  if _is_linked_worktree; then
+    CHECKOUT_HEALTH_VERDICT="n/a"
+    return 0
+  fi
+  _ch_branch=$(git symbolic-ref --short -q HEAD) || {
+    CHECKOUT_HEALTH_VERDICT="detached"
+    return 0
+  }
+  if [ "$_ch_branch" != "$CHECKOUT_HEALTH_BRANCH" ]; then
+    CHECKOUT_HEALTH_VERDICT="n/a"
+    return 0
+  fi
+  _ch_dirty=""
+  [ -n "$(git status --porcelain 2>/dev/null)" ] && _ch_dirty=1
+
+  if ! git remote get-url origin >/dev/null 2>&1; then
+    CHECKOUT_HEALTH_VERDICT="unknown"
+    CHECKOUT_HEALTH_DETAIL="no 'origin' remote configured"
+    return 0
+  fi
+
+  # A fetch may be the only way to know staleness -- do not hard-fail an
+  # offline machine over a question it structurally cannot answer. Bounded so
+  # a dead network cannot hang the gate the way an unbounded fetch could; a
+  # stale-but-cached remote-tracking ref is still evidence, just older.
+  _ch_fetched=1
+  timeout 10 git fetch --quiet origin "$CHECKOUT_HEALTH_BRANCH" 2>/dev/null || _ch_fetched=""
+  if [ -z "$_ch_fetched" ] && ! git rev-parse -q --verify "origin/$CHECKOUT_HEALTH_BRANCH" >/dev/null 2>&1; then
+    CHECKOUT_HEALTH_VERDICT="unknown"
+    CHECKOUT_HEALTH_DETAIL="could not reach origin, and no cached origin/$CHECKOUT_HEALTH_BRANCH to fall back on"
+    return 0
+  fi
+
+  _ch_behind=$(git rev-list --count "HEAD..origin/$CHECKOUT_HEALTH_BRANCH" 2>/dev/null || echo 0)
+  _ch_ahead=$(git rev-list --count "origin/$CHECKOUT_HEALTH_BRANCH..HEAD" 2>/dev/null || echo 0)
+
+  if [ -n "$_ch_dirty" ] || [ "${_ch_behind:-0}" -gt 0 ] || [ "${_ch_ahead:-0}" -gt 0 ]; then
+    CHECKOUT_HEALTH_VERDICT="stale"
+    _ch_bits=""
+    [ "${_ch_behind:-0}" -gt 0 ] && _ch_bits="$_ch_bits ${_ch_behind} behind"
+    [ "${_ch_ahead:-0}" -gt 0 ] && _ch_bits="$_ch_bits ${_ch_ahead} ahead"
+    [ -n "$_ch_dirty" ] && _ch_bits="$_ch_bits dirty"
+    CHECKOUT_HEALTH_DETAIL="${_ch_bits# }"
+    return 0
+  fi
+
+  CHECKOUT_HEALTH_VERDICT="healthy"
+  return 0
+}
+
+# Standalone entry point. Exits before any of the slower checks below run --
+# answering "can I trust this tree" is the whole job, not a side effect of a
+# full gate run. FAILS CLOSED on a confirmed-stale tree (exit 1) and on a tree
+# it could not evaluate (exit 2) -- "cannot tell" is never a pass, the same
+# convention `wait-for-checks.sh` and `branch-health.sh` already use for
+# exactly this reason. It does not fail merely for BEING the primary: a clean,
+# up-to-date primary on the integration branch is the correct, expected state,
+# not a violation -- only staleness and dirt are.
+if [ "${1:-}" = "--checkout-health" ]; then
+  checkout_health
+  case "$CHECKOUT_HEALTH_VERDICT" in
+    healthy)
+      printf 'checkout-health: OK - on %s, clean, matches origin/%s\n' \
+        "$CHECKOUT_HEALTH_BRANCH" "$CHECKOUT_HEALTH_BRANCH"
+      exit 0
+      ;;
+    n/a)
+      printf 'checkout-health: n/a - not the primary checkout parked on %s (worktree, detached HEAD, or another branch)\n' \
+        "$CHECKOUT_HEALTH_BRANCH"
+      exit 0
+      ;;
+    detached)
+      printf 'checkout-health: n/a - detached HEAD, not evaluated\n'
+      exit 0
+      ;;
+    stale)
+      printf 'checkout-health: STALE - this checkout is %s\n' "$CHECKOUT_HEALTH_DETAIL"
+      printf 'AGENTS.md SS1/SS2: keep the primary on %s, no more than a git fetch\n' "$CHECKOUT_HEALTH_BRANCH"
+      printf 'behind, and do real work in a worktree instead. Do not trust anything\n'
+      printf 'read from this tree until: git fetch origin && git status\n'
+      exit 1
+      ;;
+    unknown)
+      printf 'checkout-health: CANNOT TELL - %s\n' "$CHECKOUT_HEALTH_DETAIL"
+      printf 'Not a pass -- reconnect and re-run before trusting this tree.\n'
+      exit 2
+      ;;
+    *)
+      printf 'checkout-health: CANNOT TELL - unexpected verdict "%s"\n' "$CHECKOUT_HEALTH_VERDICT"
+      exit 2
+      ;;
+  esac
+fi
+
 FAILED=""
 PASSED=""
 SKIPPED=""
@@ -339,6 +495,25 @@ if [ -z "$LIST" ]; then
   _stamp=""
   [ -f .biffo-shared-version ] && _stamp=" (template $(cat .biffo-shared-version))"
   printf '\nverify - the checks CI runs, before the push%s\n\n' "$_stamp"
+
+  # Defence in depth (#1196): the ordinary run only reaches the ONE case it
+  # can, a push attempted straight from the primary checkout -- see the long
+  # comment above `checkout_health` for why this is a WARN, not a FAIL, and
+  # why it does not (cannot) cover the read-only case the issue was filed for.
+  # A worktree -- the normal place this script runs -- returns `n/a` here
+  # before any git command runs, so this costs nothing on the common path.
+  checkout_health
+  case "$CHECKOUT_HEALTH_VERDICT" in
+    stale)
+      printf '  \033[33mWARN\033[0m %-16s this is the primary checkout on %s and it is %s\n' \
+        "checkout-health" "$CHECKOUT_HEALTH_BRANCH" "$CHECKOUT_HEALTH_DETAIL"
+      printf '       \033[33mAGENTS.md SS1/SS2: never edit or push from the primary -- do the work in a worktree instead.\033[0m\n'
+      NOT_RUN="$NOT_RUN checkout-health"
+      ;;
+    unknown)
+      printf '  \033[33mWARN\033[0m %-16s could not verify - %s\n' "checkout-health" "$CHECKOUT_HEALTH_DETAIL"
+      ;;
+  esac
 fi
 
 # Python first: ruff is near-instant, so the cheapest feedback on the largest
@@ -640,6 +815,59 @@ fi
 # does nothing and lets the gate print `verify passed` is the precise failure this
 # whole file exists to prevent, and it would be worse here than elsewhere: the
 # thing not being checked is credentials.
+#
+# Scoped to TRACKED files only (#1194). `--no-git` walks the filesystem, not the
+# index, and does not honour `.gitignore` -- so anything a build leaves behind
+# gets scanned too. An agent in tabsii-crm ran `pnpm run build`, then hit this
+# gate scanning 218MB of `.next/`/`out/` and got 30 phantom leaks, none in a
+# tracked file, none of them committable. A scanner that cries wolf is worse
+# than a slow one: the second time 30 leaks turn out to be bundle noise, people
+# stop reading gitleaks output, which is exactly the day a real one hides in it.
+#
+# The fix is not a broader `.gitleaks.toml` allowlist -- that has to be kept in
+# step with `.gitignore` by hand, in every repo this file runs in, forever, and
+# it is the wrong shape besides: AGENTS.md SS7 says never fix a scan failure by
+# editing the allowlist, and a path-list that grows to cover every build tool's
+# output directory is that same fix wearing a different hat. It is narrowed to
+# what the gate is actually FOR instead: nothing untracked can reach the remote
+# a push sends to, so nothing untracked needs to be able to fail a push.
+# `gitleaks_tracked_only` (below) mirrors `git ls-files` into a scratch
+# directory -- current on-disk content, not HEAD, so a secret staged into an
+# already-tracked file is still caught before the commit that would push it --
+# and scans that copy. Relative paths inside the copy match the repo, so the
+# existing path-based `.gitleaks.toml` allowlist entries keep working unchanged.
+gitleaks_tracked_only() {
+  _gl_dir=$(mktemp -d "${TMPDIR:-/tmp}/biffo-gitleaks.XXXXXX") || return 1
+  _gl_root=$(git rev-parse --show-toplevel) || {
+    rm -rf "$_gl_dir"
+    return 1
+  }
+  # Newline-delimited, not `git ls-files -z` + `read -d ''`: `-d` is a bashism
+  # dash does not implement, and this file runs under `sh`
+  # (shell-portability.test.ts enforces it). The `plan_artefacts` loop above
+  # already made this exact call for the same reason.
+  ( cd "$_gl_root" && git ls-files ) | while IFS= read -r _f; do
+    [ -f "$_gl_root/$_f" ] || continue
+    mkdir -p "$_gl_dir/$(dirname "$_f")"
+    cp -p "$_gl_root/$_f" "$_gl_dir/$_f" 2>/dev/null
+  done
+  # No explicit `--config`, deliberately. gitleaks' own default resolution
+  # looks for `.gitleaks.toml` at "(target path)", which is `--source` -- i.e.
+  # the mirrored copy, where the file already sits at its usual relative path
+  # if this repo tracks one. A first cut passed `--config "$_gl_root/.gitleaks.toml"`
+  # to remove any doubt about that resolution, and it was a regression:
+  # against a repo with NO `.gitleaks.toml` at all -- a real, valid state,
+  # since gitleaks otherwise falls back to its built-in default ruleset --
+  # a literal `--config` path that does not exist is FATAL ("unable to load
+  # gitleaks config"), where the flagless form degrades gracefully to
+  # defaults, identical to what this repo ran before #1194. Verified by
+  # running both forms against a `--source` with no config file present.
+  gitleaks detect --no-git --redact --exit-code=2 --source "$_gl_dir"
+  _gl_status=$?
+  rm -rf "$_gl_dir"
+  return $_gl_status
+}
+
 if ci_has "gitleaks"; then
   # The installation check gates EXECUTION only, never `--list`.
   #
@@ -653,7 +881,7 @@ if ci_has "gitleaks"; then
   # `terraform-fmt` above has the same shape and is only unexposed because
   # terraform happens to be installed here. Recorded, not fixed in this change.
   if [ -n "$LIST" ] || command -v gitleaks >/dev/null 2>&1; then
-    run_check gitleaks gitleaks detect --no-git --redact --exit-code=2
+    run_check gitleaks gitleaks_tracked_only
   else
     # Say how to close it, pinned to the version ci.yml installs. A skip that
     # only reports its own absence stays skipped: this one sat `n/a` long

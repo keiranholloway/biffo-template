@@ -36,6 +36,35 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const SCRIPT = join(repoRoot, 'scripts/verify.sh')
 const GITLEAKS_TOML = join(repoRoot, '.gitleaks.toml')
 
+/**
+ * Whether the `gitleaks` binary exists here at all.
+ *
+ * `verify.sh` runs its gitleaks lane only `if command -v gitleaks` succeeds
+ * (scripts/verify.sh, the LIST/`command -v` guard), so on a machine without it
+ * the lane is skipped and these assertions have nothing to observe.
+ *
+ * That is the real situation in this repo's CI: `.github/workflows/ci.yml`
+ * installs gitleaks in the **Secret Scan** job only (`Install gitleaks`, ~L388),
+ * not in **JS (lint, types, test, audit)** where vitest runs. The first version
+ * of these tests asserted unconditionally and failed there — reading exactly
+ * like "the scan was weakened", which it was not.
+ *
+ * The two cases that need the binary are therefore skipped explicitly, with the
+ * reason in the test name, rather than being made to pass by loosening the
+ * assertion. A test that quietly stops exercising a secret scanner is the same
+ * fail-open shape #1194 is about — so this must be VISIBLE in the run output,
+ * not silent. The remaining cases assert on argument shape and config
+ * resolution and run everywhere.
+ */
+const HAS_GITLEAKS = (() => {
+  try {
+    execFileSync('gitleaks', ['version'], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+})()
+
 function fakeToken(seed: number): string {
   // A small deterministic PRNG, not Math.random(), so failures are
   // reproducible without needing to capture the generated value.
@@ -122,38 +151,44 @@ describe("verify.sh's gitleaks pass scans tracked files only", () => {
     }
   })
 
-  it('still fails on a leak in a TRACKED file -- the scan is scoped, not weakened', () => {
-    const dir = minimalRepo()
-    try {
-      writeFileSync(join(dir, 'leak.txt'), `token=${fakeToken(2)}\n`)
-      execFileSync('git', ['add', '-f', 'leak.txt'], { cwd: dir })
-      const run = runVerify(dir)
-      expect(run.stdout).toContain('leaks found')
-      expect(run.stdout).toContain('verify failed')
-      expect(run.status).toBe(1)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
+  it.skipIf(!HAS_GITLEAKS)(
+    'still fails on a leak in a TRACKED file -- the scan is scoped, not weakened [needs gitleaks]',
+    () => {
+      const dir = minimalRepo()
+      try {
+        writeFileSync(join(dir, 'leak.txt'), `token=${fakeToken(2)}\n`)
+        execFileSync('git', ['add', '-f', 'leak.txt'], { cwd: dir })
+        const run = runVerify(dir)
+        expect(run.stdout).toContain('leaks found')
+        expect(run.stdout).toContain('verify failed')
+        expect(run.status).toBe(1)
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    },
+  )
 
-  it('still fails on a leak STAGED but not yet committed to a tracked file', () => {
-    // `git ls-files` lists the index, and the mirror copies CURRENT on-disk
-    // content -- not `git show HEAD:<path>` -- so a secret added to an
-    // already-tracked file is caught before the commit that would push it,
-    // not only after.
-    const dir = minimalRepo()
-    try {
-      writeFileSync(
-        join(dir, 'package.json'),
-        `{"name":"p","token":"${fakeToken(3)}","scripts":{"lint":"true"}}\n`,
-      )
-      const run = runVerify(dir)
-      expect(run.stdout).toContain('leaks found')
-      expect(run.status).toBe(1)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
+  it.skipIf(!HAS_GITLEAKS)(
+    'still fails on a leak STAGED but not yet committed to a tracked file [needs gitleaks]',
+    () => {
+      // `git ls-files` lists the index, and the mirror copies CURRENT on-disk
+      // content -- not `git show HEAD:<path>` -- so a secret added to an
+      // already-tracked file is caught before the commit that would push it,
+      // not only after.
+      const dir = minimalRepo()
+      try {
+        writeFileSync(
+          join(dir, 'package.json'),
+          `{"name":"p","token":"${fakeToken(3)}","scripts":{"lint":"true"}}\n`,
+        )
+        const run = runVerify(dir)
+        expect(run.stdout).toContain('leaks found')
+        expect(run.status).toBe(1)
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    },
+  )
 
   it('does not hard-fail a repo with no .gitleaks.toml at all', () => {
     // Regression guard: a first cut of the fix passed an explicit

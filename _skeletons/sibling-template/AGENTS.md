@@ -48,7 +48,7 @@ This file is distributed by the template and kept in step by
 **Before starting work on an issue, run:**
 
 ```bash
-sh scripts/claim.sh <issue-number> [-R owner/repo]   # 0 free · 1 taken · 2 cannot tell
+sh scripts/biffo.sh claim <issue-number> [-R owner/repo]   # 0 free · 1 taken · 2 cannot tell
 ```
 
 Several agent sessions run against this estate at once. The script asks four
@@ -127,7 +127,25 @@ it deliberately and say so in a comment; never steal a fresh one.
   before merge: `git log origin/<branch> -1`. A green PR page is not proof your
   latest local commit reached it.
 
-## 7. Security
+## 7. Verify post-merge
+
+- A merge is not done when the PR closes. **Check the whole branch:**
+
+  ```bash
+  sh scripts/biffo.sh branch-health [-R owner/repo]   # 0 green · 1 red · 2 cannot tell
+  ```
+
+  It reports the latest run of **every** workflow on the integration branch, so
+  the deploy cannot fall off the bottom of a short `gh run list` — and when
+  something is red it names the **first** failing commit, not the newest.
+
+- **Check whether the branch was already failing before diagnosing your own
+  change.** A red deploy has no audience: the author who broke it has moved on,
+  and every later merge fails on damage it did not cause. On 2026-08-02 that
+  cost 2h25m and four people each diagnosed their own innocent change.
+- Exit 2 is "cannot tell" and is never a pass.
+
+## 8. Security
 
 - **Never commit secrets** (keys, tokens, credentials, `.env` values).
 - **Never silently disable a security gate.** If one must be loosened, do it in

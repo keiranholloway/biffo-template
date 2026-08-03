@@ -24,7 +24,9 @@
     "dist",
     "schemas",
     "_skeletons",
-    "scripts/wait-for-checks.sh"
+    "scripts/wait-for-checks.sh",
+    "scripts/branch-health.sh",
+    "scripts/claim.sh"
   ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",

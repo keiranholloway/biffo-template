@@ -12,6 +12,18 @@ const sharedFiles = JSON.parse(readFileSync(join(repoRoot, 'shared-files.json'),
 const SKELETONS = ['_skeletons/sibling-template', '_skeletons/plugin-template']
 
 /**
+ * Every script that has left the shared set, with the subcommand that replaced
+ * it. Parameterised rather than written out per script: this suite guards the
+ * mechanism that removes duplication, so duplicating it per entry would be the
+ * defect it exists to catch.
+ */
+const RETIRED = [
+  { script: 'scripts/wait-for-checks.sh', subcommand: 'wait-for-checks' },
+  { script: 'scripts/branch-health.sh', subcommand: 'branch-health' },
+  { script: 'scripts/claim.sh', subcommand: 'claim' },
+]
+
+/**
  * Phase 0b of #1109: the first path ever to LEAVE the shared set.
  *
  * `shared-files.json` copied 16 files into 15 repos — roughly 240 copies kept
@@ -24,24 +36,38 @@ const SKELETONS = ['_skeletons/sibling-template', '_skeletons/plugin-template']
  * unwatched, which is worse than the state being fixed.
  */
 describe('wait-for-checks has left the shared set', () => {
-  it('is no longer distributed', () => {
-    expect(sharedFiles.files).not.toContain('scripts/wait-for-checks.sh')
+  it.each(RETIRED)('$script is no longer distributed', ({ script }) => {
+    expect(sharedFiles.files).not.toContain(script)
   })
 
-  it('is gone from both skeletons, so new repos are not born with a copy', () => {
+  it.each(RETIRED)('$script is gone from both skeletons', ({ script }) => {
     for (const skeleton of SKELETONS) {
-      expect(
-        existsSync(join(repoRoot, skeleton, 'scripts/wait-for-checks.sh')),
-        `${skeleton} still ships a copy`,
-      ).toBe(false)
+      expect(existsSync(join(repoRoot, skeleton, script)), `${skeleton} still ships a copy`).toBe(
+        false,
+      )
     }
+  })
+
+  it.each(RETIRED)('$script is reachable as `biffo $subcommand`', async ({ subcommand }) => {
+    // Registered on the root program, or the published binary does not carry it
+    // and every satellite loses the guard at once.
+    const index = readFileSync(join(repoRoot, 'cli/src/index.ts'), 'utf8')
+    expect(index).toContain(`${subcommand}Command`.replace(/-([a-z])/g, (_, c) => c.toUpperCase()))
+  })
+
+  it.each(RETIRED)('$script is packaged, or it breaks only on a real npm install', async () => {
+    const { PACKAGED_ROOT_ASSETS } = (await import(
+      join(repoRoot, 'cli/scripts/packaged-root-assets.mjs')
+    )) as { PACKAGED_ROOT_ASSETS: { path: string }[] }
+    const packaged = PACKAGED_ROOT_ASSETS.map((a) => a.path)
+    for (const { script } of RETIRED) expect(packaged).toContain(script)
   })
 
   it('survives in the template, because that copy is the packaged source', () => {
     // NOT a leftover. `cli/scripts/packaged-root-assets.mjs` copies this file
     // into the tarball at prepack; deleting it would empty the package and
     // break every satellite at once.
-    expect(existsSync(join(repoRoot, 'scripts/wait-for-checks.sh'))).toBe(true)
+    for (const { script } of RETIRED) expect(existsSync(join(repoRoot, script))).toBe(true)
   })
 })
 
@@ -56,7 +82,11 @@ describe('the instructions moved before the files did', () => {
     '%s tells agents to use the bridge',
     (path) => {
       const body = readFileSync(join(repoRoot, path), 'utf8')
-      expect(body).toContain('sh scripts/biffo.sh wait-for-checks')
+      for (const { subcommand } of RETIRED) {
+        expect(body, `${path} does not route ${subcommand} through the bridge`).toContain(
+          `sh scripts/biffo.sh ${subcommand}`,
+        )
+      }
     },
   )
 
@@ -64,7 +94,7 @@ describe('the instructions moved before the files did', () => {
     '%s no longer tells agents to run a script the repo does not have',
     (path) => {
       const body = readFileSync(join(repoRoot, path), 'utf8')
-      expect(body).not.toContain('sh scripts/wait-for-checks.sh')
+      for (const { script } of RETIRED) expect(body).not.toContain(`sh ${script}`)
     },
   )
 })

@@ -475,11 +475,24 @@ policy in it, so there is no category of legitimate per-app difference for it
 to hold. Per-app variation belongs in `auth-gate.tsx` instead (present in 3 of
 7 siblings, deliberately **not** in `mustBeUniform` — declaring it would be the
 opposite error, since gating which Cognito groups an app admits is exactly
-where apps are meant to differ). Any future reconciliation of `auth.ts` must
-converge to the **superset** of exports, never the intersection: some siblings
-export only `getCurrentSession`, others add `signIn`/`signOut`, and
-`tabsii-marketplace` adds `signUp`/`confirmSignUp` for public self-service
-registration — collapsing to the smallest copy would delete that feature
+where apps are meant to differ).
+
+**Reconciled 2026-08-03 (#1117), and the superset rule needs a correction.** It
+said any reconciliation must converge to the **superset** of exports, on the
+grounds that collapsing to the smallest copy would delete
+`tabsii-marketplace`'s registration. That is right about marketplace and wrong
+about everyone else: `tabsii-geo` and `tabsii-intake` also exported
+`signIn`/`signOut`/`completeNewPassword`, and **nothing called them** — no
+page, component, hook or e2e test, verified repo-wide at `origin/dev`. They
+were a second login path in the security-critical file, which the skeleton's
+own docstring forbids, kept alive only by the tests written for them.
+
+So the answer was neither superset nor intersection. Six repos converged to the
+**skeleton's** shape (the dead exports deleted, and #1190 bringing runtime
+identity resolution to the five that lacked it), and marketplace keeps a
+**declared, permanent divergence** because its `signIn`/`signUp`/`confirmSignUp`
+are live behind a public self-service flow — collapsing to the smallest copy
+would delete that feature
 outright. See `mustBeUniformNote` in `shared-files.json` for the full evidence
 trail and the rest of the seeded entries.
 
@@ -495,10 +508,15 @@ A one-way overwrite destroys whatever it lands on. Before adding a path to
    `_extract_detail` was written twice in two siblings and never brought
    upstream, which is why three more still ship the bug it fixes.
 3. **Do not add a path you have not reconciled — declare it in
-   `mustBeUniform` instead.** `auth.ts` sits beside the client in all seven
-   siblings and diverges 29–247 lines; a one-way overwrite would clobber six
-   repos with one copy on no evidence about which behaviour is right (#1117).
-   It is tracked, not distributed, until someone has actually reconciled it.
+   `mustBeUniform` instead.** `auth.ts` was the worked example: it sat in all
+   seven siblings diverging 29–247 lines, and a one-way overwrite would have
+   clobbered six repos on no evidence about which behaviour was right (#1117).
+   Tracking it rather than distributing it is what made the reconciliation
+   possible. It is now **2 variants across 7 repos** — six byte-identical to
+   the skeleton, plus `tabsii-marketplace`'s declared divergence — and it
+   **still is not distributed**, because `filesIfPresent` is a one-way
+   overwrite with no per-repo exclusion and would delete marketplace's public
+   registration. A reconciled path is not automatically a distributable one.
 4. **Expect the rehearsal to find callers, not just the file.** Adding `patch`
    broke the skeleton's own test mock, and `tabsii-geo` has the same uncast
    mock in two places — so that repo needs a one-line fix landed _with_ the

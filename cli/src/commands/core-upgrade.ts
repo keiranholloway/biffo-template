@@ -961,10 +961,47 @@ function readCarriedPrs(templateRepo: string | undefined, from: string, to: stri
  * Rendered inside an HTML comment: it is provenance for tooling, not something
  * a reviewer needs to read past on every upgrade.
  */
+/**
+ * commitlint's `body-max-line-length` / `footer-max-line-length`, from
+ * `@commitlint/config-conventional`. The marker goes into a COMMIT MESSAGE as
+ * well as a PR body (#1011), so it is bound by this.
+ */
+const COMMIT_BODY_MAX_LINE = 100
+
 export function carriedPrsSection(carriedPrs: number[]): string[] {
   if (carriedPrs.length === 0) return []
   const unique = [...new Set(carriedPrs)].sort((a, b) => a - b)
-  return ['', `<!-- ${CARRIED_PRS_MARKER}${unique.join(',')} -->`]
+
+  // One line for a short list — the overwhelmingly common case, and the form
+  // every existing upgrade PR already carries.
+  const single = `<!-- ${CARRIED_PRS_MARKER}${unique.join(',')} -->`
+  if (single.length <= COMMIT_BODY_MAX_LINE) return ['', single]
+
+  // Wrapped, because a long list otherwise makes the commit unmakeable (#1198).
+  // `--apply` could not commit at all against biffo-platform: 99 carried PRs is
+  // a ~1000-character line and commitlint rejects it, so the mechanism that
+  // exists to preserve provenance destroyed the commit that carries it —
+  // failing hardest on exactly the upgrades with the most provenance to record.
+  //
+  // The numbers are split across lines INSIDE the comment. `parseCarriedPrs`
+  // in scripts/practices-metrics.mjs tolerates whitespace between them; the two
+  // must change together, and `carried-prs-marker.test.ts` round-trips this
+  // output through that parser so a silent truncation cannot ship.
+  const lines: string[] = [`<!-- ${CARRIED_PRS_MARKER}`]
+  let current = ''
+  for (const n of unique) {
+    const token = `${n},`
+    if (current.length + token.length > COMMIT_BODY_MAX_LINE) {
+      lines.push(current)
+      current = ''
+    }
+    current += token
+  }
+  // Drop the trailing comma from the final chunk, then close the comment. The
+  // closer gets its own line so it can never push a number line over the limit.
+  lines.push(current.replace(/,$/, ''))
+  lines.push('-->')
+  return ['', ...lines]
 }
 
 /**

@@ -247,10 +247,16 @@ export function isUpgradePr(pr) {
  */
 function extractCarriedPrs(text) {
   if (typeof text !== 'string') return []
-  const match = new RegExp(`${CARRIED_PRS_MARKER}([0-9,]+)`).exec(text)
+  // `[\s0-9,]`, not `[0-9,]`: since #1198 the writer WRAPS a long list across
+  // lines so the commit message can satisfy commitlint's 100-character body
+  // limit. A parser that stopped at the first newline would still match, still
+  // return numbers, and silently return only the first line of them — under-
+  // reporting provenance while looking like it worked. It stops at the `-` of
+  // the closing `-->` either way, so the wrapped form is unambiguous.
+  const match = new RegExp(`${CARRIED_PRS_MARKER}([\\s0-9,]+)`).exec(text)
   if (!match?.[1]) return []
   const numbers = match[1]
-    .split(',')
+    .split(/[,\s]+/)
     .map((n) => Number(n.trim()))
     .filter((n) => Number.isInteger(n) && n > 0)
   return [...new Set(numbers)].sort((a, b) => a - b)

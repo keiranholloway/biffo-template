@@ -402,6 +402,20 @@ audit_json() {
   # split #884 records. Looped here rather than teaching the script an
   # --estate mode, because it already takes -R and needs only `gh`.
   audit_json deploy "_bh=0; for _d in '$ESTATE'/*/; do [ -d \"\$_d/.git\" ] || continue; _slug=\$(git -C \"\$_d\" remote get-url origin 2>/dev/null | sed -e 's#.*github.com[:/]##' -e 's#\.git\$##'); [ -n \"\$_slug\" ] || continue; sh scripts/branch-health.sh -R \"\$_slug\" --quiet >/dev/null 2>&1; _rc=\$?; [ \$_rc -eq 0 ] || { _bh=1; echo \"  \$_slug rc=\$_rc\"; }; done; [ \$_bh -eq 0 ] && echo 'every integration branch green' || echo 'an integration branch is failing'; exit \$_bh" 'integration branch'
+  printf ','
+  # Ninth audit (#1110). Which Core API routes does nothing in the estate call?
+  #
+  # Plan 0013 recorded two milestones complete when only the CORE half had
+  # merged: 550 lines of tested, deployed, unreachable code, with both boards
+  # green the whole time. Found by hand weeks later while writing an "as built"
+  # section. The milestone was marked done because its PR merged -- a fair proxy
+  # for a single-repo milestone and not for a cross-repo one, and nothing
+  # compared the two repos.
+  #
+  # Baselined rather than advisory: without a number this shows OK every morning
+  # whatever it finds, which is how a detector stops being read. Lower --max when
+  # the list shrinks; the script says so itself and fails if you do not.
+  audit_json deadsurface "node scripts/dead-surface.mjs --estate '$ESTATE' --max 23" 'uncalled route'
   printf ']}\n'
 } > "$AUDITS"
 

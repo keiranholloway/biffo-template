@@ -381,7 +381,46 @@ pytest_is_fast() {
 # "Yes, CI runs this" and "there is no CI to ask" are not the same claim, and a
 # repo that LOST its ci.yml must not read as maximally covered. The summary
 # below says which one produced the run.
-[ -f .github/workflows/ci.yml ] || NO_CI=1
+#
+# ABSENT and UNREADABLE are not the same claim either, and collapsing them is
+# #1218. `[ -f ]` is true for a file that exists but cannot be opened, so a
+# `ci.yml` present-but-unreadable (a permissions oddity, a partial checkout) was
+# falling into the same branch as "no CI to mirror" -- except it then made
+# EVERY `ci_has()` call answer `grep`'s "cannot open" exit (2) exactly as it
+# answers a genuine "not found" (1), because the `&&` every call site gates on
+# does not distinguish them. Unlike a repo with no `ci.yml` at all, this repo
+# LOOKS like it has CI (`NO_CI` never gets set), so the best-effort fallback
+# never fires either -- every ci_has()-gated check just silently vanishes from
+# the run, with nothing in the summary naming what went missing. That is worse
+# than "ran nothing": checks that do not gate on `ci_has` (JS lint/format among
+# them) still run and pass, so the gate does not even reach the "ran NOTHING"
+# branch below -- it prints `verify passed` having covered less than it claims.
+#
+# So this is decided ONCE, here, before a single check runs -- not rediscovered
+# independently at each of the eight `ci_has()` call sites, where a per-site fix
+# is exactly the kind of second copy that drifts (AGENTS.md's `_extract_detail`
+# point). "Cannot tell what CI requires" fails the whole gate immediately, in
+# the estate's three-valued convention (0 green, 1 failed, 2 cannot tell --
+# wait-for-checks.sh, branch-health.sh, claim.sh): 2 is never a pass, and
+# letting the rest of the gate run anyway would produce a partial,
+# misleadingly-labelled PASS on top of a question it already could not answer.
+CI_YML_UNREADABLE=""
+if [ -f .github/workflows/ci.yml ]; then
+  [ -r .github/workflows/ci.yml ] || CI_YML_UNREADABLE=1
+else
+  NO_CI=1
+fi
+
+if [ -n "$CI_YML_UNREADABLE" ]; then
+  printf '\n\033[31mverify: CANNOT TELL - .github/workflows/ci.yml exists but could not be read\033[0m\n'
+  printf 'Permissions, a partial checkout, or a filesystem error -- not "no CI to\n'
+  printf 'mirror" (that is a missing ci.yml, handled separately, and does not\n'
+  printf 'block). Every check gated on ci_has() would silently be skipped and the\n'
+  printf 'gate would still report an unqualified pass, having covered less than it\n'
+  printf 'claims (biffo-template#1218).\n'
+  printf 'Fix the permissions (or the checkout) and re-run.\n\n'
+  exit 2
+fi
 
 ci_has() {
   [ -n "${NO_CI:-}" ] && return 0

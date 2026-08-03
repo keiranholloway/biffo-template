@@ -139,6 +139,20 @@ it deliberately and say so in a comment; never steal a fresh one.
   the deploy cannot fall off the bottom of a short `gh run list` — and when
   something is red it names the **first** failing commit, not the newest.
 
+- **When a check dies without a failure, adjudicate it before you re-run:**
+
+  ```bash
+  sh scripts/biffo.sh runner-drop-forensics --repo <owner/repo> --run <run-id>
+  ```
+
+  The self-hosted fleet runs on spot capacity, so a job can be killed mid-step
+  and report `failure` with every remaining step at `conclusion: null` — which
+  reads exactly like a real defect and sends you diagnosing your own change.
+  This matches the run against the fleet's eviction record and tells you which
+  it was. Of the 22 runner-killed jobs it was validated against, **17 were in
+  satellites** — which is why it ships in the CLI rather than only upstream
+  (#1240).
+
 - **Check whether the branch was already failing before diagnosing your own
   change.** A red deploy has no audience: the author who broke it has moved on,
   and every later merge fails on damage it did not cause. On 2026-08-02 that

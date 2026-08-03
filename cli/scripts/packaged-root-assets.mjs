@@ -84,6 +84,40 @@ export const PACKAGED_ROOT_ASSETS = [
     why: 'The local gate, 978 lines that existed 15 times over (#1109). Which version a repo runs is now its .biffo-shared-version rather than whenever it last received a copy -- the #855 class, closed structurally.',
   },
   {
+    path: 'scripts/runner-drop-forensics.mjs',
+    kind: 'file',
+    sentinel: 'scripts/runner-drop-forensics.mjs',
+    resolvedBy: 'src/lib/packaged-scripts.ts — findPackagedScript()',
+    why:
+      'Adjudicates a red check against the fleet spot-eviction record (#1238). Of the 22 ' +
+      'runner-killed jobs it was validated against, 17 were in satellites -- the repos that ' +
+      'could not reach it until #1240 taught packagedScriptCommand to run a .mjs via node ' +
+      'instead of sh.',
+  },
+  {
+    path: 'scripts/practices-metrics.mjs',
+    kind: 'file',
+    sentinel: 'scripts/practices-metrics.mjs',
+    resolvedBy: 'scripts/runner-drop-forensics.mjs — relative import of isRunnerKill()',
+    why:
+      'Not reached through findPackagedScript() itself, but runner-drop-forensics.mjs imports ' +
+      "it by relative path (\"./practices-metrics.mjs\"), which Node resolves against the " +
+      'FILE that ships next to it rather than the upward walk. Registered here so it travels ' +
+      'to the same directory in the tarball -- omitting it leaves the checkout working (the ' +
+      'sibling is right there on disk) while a real npm install throws ERR_MODULE_NOT_FOUND, ' +
+      'the exact "invisible in CI, breaks only on install" shape #259 and #315 already are.',
+  },
+  {
+    path: 'scripts/practices-corpus.mjs',
+    kind: 'file',
+    sentinel: 'scripts/practices-corpus.mjs',
+    resolvedBy: 'scripts/practices-metrics.mjs — relative import of readCorpusStrict()',
+    why:
+      'The next link in the same chain: practices-metrics.mjs imports this by relative path too. ' +
+      'Its own imports are Node built-ins only, so the closure ends here -- verified by running ' +
+      'the packaged script from a directory holding nothing but these three files plus node_modules.',
+  },
+  {
     path: 'scripts/branch-health.sh',
     kind: 'file',
     sentinel: 'scripts/branch-health.sh',

@@ -33,6 +33,38 @@ import { findPackagedScript, packagedScriptMissing } from './packaged-scripts.js
  * (`scripts/biffo.sh` had this bug: `pnpm exec` normalises every non-zero exit
  * to 1.)
  */
+
+/**
+ * Picks the interpreter a packaged script runs under, from its extension.
+ *
+ * `.sh` -> `sh`, unchanged since this factory's first script — six commands
+ * depend on that today and none of them may see a different interpreter.
+ * `.mjs` -> `node`, added for `scripts/runner-drop-forensics.mjs` (#1240): a
+ * `.mjs` cannot go through `sh` unmodified, and #1238 rejected rewriting its
+ * JSON-shaped CloudTrail-matching logic in shell to avoid that — the same
+ * "rewriting working logic to prove a distribution point" trade this file's
+ * own docstring already argues against.
+ */
+export function interpreterFor(script: string): string {
+  return script.endsWith('.mjs') ? 'node' : 'sh'
+}
+
+/**
+ * Spawns a packaged script and returns the exit code the CLI should report.
+ *
+ * Split out from the `Command` action so the interpreter dispatch and the
+ * exit-code contract — 0/1/2 passed through unchanged, a signal-killed child
+ * (`status === null`) mapped to 2 rather than reported as a pass — can be
+ * tested directly against a mocked `spawnSync`, without also reproducing
+ * commander's argument parsing.
+ */
+export function runPackagedScript(script: string, args: string[], cwd: string): number {
+  const result = spawnSync(interpreterFor(script), [script, ...args], { stdio: 'inherit', cwd })
+  // A signal-terminated child has a null status. Reporting 0 there would be a
+  // pass earned by being killed.
+  return result.status === null ? 2 : result.status
+}
+
 export function packagedScriptCommand(spec: {
   name: string
   script: string
@@ -65,9 +97,6 @@ export function packagedScriptCommand(spec: {
     // working directory (the dependency audits, invoked from a CI job's
     // `working-directory:`) would otherwise audit the wrong tree and pass.
     const cwd = process.env['BIFFO_ORIGINAL_CWD'] || process.cwd()
-    const result = spawnSync('sh', [script, ...args], { stdio: 'inherit', cwd })
-    // A signal-terminated child has a null status. Reporting 0 there would be a
-    // pass earned by being killed.
-    process.exit(result.status === null ? 2 : result.status)
+    process.exit(runPackagedScript(script, args, cwd))
   })
 }

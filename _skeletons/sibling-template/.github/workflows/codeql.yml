@@ -18,7 +18,9 @@ jobs:
     # repos — the analysis runs but the SARIF upload fails without it. So this
     # is opt-in: enable GHAS on the repo, then set the repo variable
     # ENABLE_CODE_SCANNING=true. Left dormant (not failing) otherwise.
-    if: vars.ENABLE_CODE_SCANNING == 'true'
+    # See biffo-template's codeql.yml for the full reasoning (#1214): a public
+    # repo can scan for free, so it does; a private one still needs the opt-in.
+    if: github.event.repository.private == false || vars.ENABLE_CODE_SCANNING == 'true'
     timeout-minutes: 15
     permissions:
       # Required for CodeQL to upload SARIF results.

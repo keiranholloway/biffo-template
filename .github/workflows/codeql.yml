@@ -13,12 +13,26 @@ on:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    # CodeQL's SARIF upload needs GitHub Advanced Security, which is a paid add-on
-    # on private repos. Without it the analysis still runs (burning minutes) but
-    # the upload fails, so gate the whole job behind an opt-in variable — set
-    # `ENABLE_CODE_SCANNING=true` once GHAS is enabled. Dormant (0 minutes) by
-    # default. Mirrors the sibling-template gate.
-    if: vars.ENABLE_CODE_SCANNING == 'true'
+    # Scan wherever scanning is actually possible, and be honest where it is not.
+    #
+    # CodeQL's SARIF upload needs Code Security, which is free on PUBLIC repos
+    # and a paid add-on on private ones. The old gate was a bare
+    # `vars.ENABLE_CODE_SCANNING == 'true'`, and that variable was set nowhere in
+    # the estate — so every repo carrying this workflow reported `Analyze
+    # (…) skipped` on every run and had no SAST at all, while looking like it
+    # did (#1214). Nine repos, months.
+    #
+    # `github.event.repository.private == false` fixes that for free and without
+    # per-repo configuration: a public repo scans automatically, because it can.
+    # A private repo still needs the opt-in, because there the upload genuinely
+    # fails without a purchase.
+    #
+    # Note what this does NOT claim. On a private repo under a *user* account
+    # rather than an organisation, GitHub offers no `code_security` setting at
+    # all — the API returns no such key, where an org repo returns
+    # `code_security: disabled`. Setting ENABLE_CODE_SCANNING there cannot help.
+    # That is a hosting decision, not a workflow one; see #1214.
+    if: github.event.repository.private == false || vars.ENABLE_CODE_SCANNING == 'true'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 15
     permissions:

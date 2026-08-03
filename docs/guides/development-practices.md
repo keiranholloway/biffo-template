@@ -295,6 +295,12 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | — | **A commit message that MENTIONS a CI-skip token skips CI.** GitHub scans the **whole** message, not the subject, so prose in a body explaining the marker suppresses every workflow for that push. The commit *implementing* the sibling scaffold's deliberate marker (#1075) described itself in its own body and **zero runs were created**. Nothing about the symptom points at the cause: the PR sat `BLOCKED` on required checks that could never arrive, `gh run list --branch <it>` was empty while every other branch got runs normally, and closing and reopening the PR did not help — only amending the message and force-pushing did. The estate is now more exposed to this, not less, because the #1065 fix deliberately puts that token in every sibling scaffold commit, so any future commit or PR body discussing it is a candidate. **cost ~25m** | **fail-open** · visibility | biffo-template [#1075](https://github.com/keiranholloway/biffo-template/pull/1075) | biffo-template (`commitlint.config.js`) | **fixed** ([#1082](https://github.com/keiranholloway/biffo-template/pull/1082)) — rejected in a body, still allowed in a subject where it is deliberate and visible in one line |
 | — | **A latent lint error on a file nobody had ever staged silently aborted the first commit that touched it — and `git push` then reported success having pushed nothing.** `commitlint.config.js` has failed eslint's `no-undef` on `module` since it was written: it is CommonJS by necessity, and the flat config had no override for it. That was invisible because `pnpm run lint` does not cover root tool configs, so the error only fires through **lint-staged**, which runs eslint on any staged `*.js` — and nobody had ever staged that file. The first editor inherits an abort they did not cause, from a rule they did not break, on a file the repo's own lint script calls clean. The abort was then masked exactly as AGENTS.md §4 describes: `git rev-list --count origin/dev..HEAD` said `0` while the push printed `[new branch]`. **The generalisation is the useful part: a check that only ever runs on changed files has never been run against the files nobody changes**, so its verdict on them is unknown rather than passing. **cost ~10m** | **fail-open** · process | biffo-template (editing `commitlint.config.js` for the first time) | biffo-template (`eslint.config.mjs`) | **fixed** ([#1082](https://github.com/keiranholloway/biffo-template/pull/1082)) — CommonJS override so the next editor does not inherit it |
 | — | **Two files named `core-upgrade.ts` made a `file:line` citation ambiguous, and the ambiguity was resolved wrongly — against the agent that was right.** A verification agent cited `core-upgrade.ts:212-214` for a `keep-ours` branch; spot-checking it against `cli/src/commands/core-upgrade.ts` found interface declarations there and I briefly concluded the citation was fabricated. The real target was `cli/src/lib/core-upgrade.ts:213`, which says exactly what was claimed. **The audit step worked and its conclusion was still wrong**, because the evidence it checked was the wrong file — and the failure direction is the dangerous one: it discredits a correct finding rather than accepting a false one. A repo with two files of the same basename cannot carry bare-basename citations; **the rule is that a `file:line` reference must be repo-relative whenever the basename is not unique** | **process** · visibility | biffo-template (my own spot-check of a sub-agent's report) | diagnostic practice — cite repo-relative paths; check `git ls-files \| grep <basename>` before disbelieving one | **corrected** — the agent's finding was reinstated and #1026 was built as filed |
+| [#1021](https://github.com/keiranholloway/biffo-template/issues/1021) | **An issue asked for new observability to answer a question two existing systems already answered between them.** #1021 held that a dropped self-hosted job could never be diagnosed until instance logs were retained, and made durable log shipping the prerequisite for any root cause. Both premises were false: a job's **`runner_name` IS the EC2 instance ID** (GitHub's API hands you the fleet's primary key, and every prior investigation had already fetched it), and **CloudTrail already retained 90 days of `BidEvictedEvent`** — management events are on by default, nothing had to be enabled. Joined across both fleets and all twelve measured repos: **22 of 22 runner-killed jobs matched a spot eviction, zero unexplained.** Reclamation, not starvation, not network — which moves the fix from a log pipeline to one fleet setting. **The missing evidence was a missing query.** The expensive counterfactual is real: building the pipeline the issue asked for would have cost days and still not answered it | **visibility** | tabsii-platform + biffo-platform red checks; premise recorded in #1021 | biffo-template [#1238](https://github.com/keiranholloway/biffo-template/pull/1238) `scripts/runner-drop-forensics.mjs` | **fixed** — `fleet-fault-unexplained` kept as a distinct verdict, so the deferred log-retention checkbox has a mechanised trigger (currently zero) rather than a note |
+| — | **A fix proven on one runner fleet was never carried to the other, and no mechanism in the estate could have noticed.** `biffo-runners` set `instance_allocation_strategy = price-capacity-optimized` on 2026-07-30 after AWS reclaimed all seventeen of its `t3a.large` runners at once, killing five jobs across three workflows in the same second. `tabsii-runners` — same module, same version, same spot posture — was still on the module default `lowest-price` four days later, which piles **every** runner into whichever single pool is cheapest, so a four-entry `instance_types` list buys no diversification and one reclamation takes the whole fleet. Measured: **tabsii 141 evictions vs biffo 43**, including 109 in one day and clusters of eight and twelve instances sharing a timestamp. The two fleets are separate repos with **no shared-file channel between them** — `shared-sync` distributes template files, not fleet Terraform — so a lesson learned in one is structurally invisible to the other | **drift** · visibility | tabsii-runners live fleet | tabsii-runners [#41](https://github.com/tabsii-com/tabsii-runners/pull/41) | **partly fixed** — applied and confirmed on the live Lambda, but the *outcome* is unproven until the rate is re-checked ([#1242](https://github.com/keiranholloway/biffo-template/issues/1242)); the fleets carry different loads, so each must be compared against its own before/after |
+| [#1239](https://github.com/keiranholloway/biffo-template/issues/1239) | **`verify.sh` printed `n/a - no terraform in this repo` in the two repos that are nothing but Terraform.** Detection considered only `modules/` and (for siblings) `infra/`; both fleets keep every `.tf` in `terraform/`, so `tf_dirs` came out empty and the gate skipped. A third repo, `biffo-plugin-idea-scout`, had the same layout and was unknown until the estate was swept. Local-only in severity — both fleets' CI does check it — but that is exactly this gate's job, and its own failure text promises to catch things before "three minutes and a merge race later". **The message was the worse half:** "no terraform in this repo" is a false claim *about the repo*, where the truth was "none in the two directories I look in" — the same scope-shrinking shape as `protection-audit.sh` dropping repos with no `dev` ([#1145](https://github.com/keiranholloway/biffo-template/issues/1145)) | **fail-open** · visibility | tabsii-runners, while making tabsii-runners#41 | biffo-template [#1243](https://github.com/keiranholloway/biffo-template/pull/1243) | **fixed** — detects `terraform/`; stray `.tf` outside every known directory is now a **WARN/NOT RUN**, the posture `pg-test` already takes. Proven both ways on a scratch repo: old gate `verify passed`, new gate fails |
+| [#1244](https://github.com/keiranholloway/biffo-template/issues/1244) | **The plugin skeleton ships a `terraform/` module and a `ci.yml` with no terraform step, so every plugin repo is born with Terraform nothing checks.** `biffo-plugin-idea-scout` is the live instance: 3 `.tf` files, zero terraform references across all three workflows. **#1239 cannot cover this**, and correctly does not try — the local check is guarded by `ci_has "terraform fmt"` so a template-shipped gate never asserts over more than the repo's own CI (the #325 trap), so a repo whose CI checks nothing gets nothing locally either and the hole stays open. The two halves must move together. Also not a copy problem: `ci.yml` is deliberately outside the one-way-overwrite set because the path depends on each step's `working-directory`, so the mechanism has to be a **`ci-wiring-audit` assertion** — *a repo holding `terraform/*.tf` must have a `terraform fmt` step* — rather than a file | **fail-open** · drift | biffo-plugin-idea-scout, found sweeping for #1239 | biffo-template `_skeletons/` + `ci-wiring-audit`; backfill [biffo-plugin-idea-scout#101](https://github.com/keiranholloway/biffo-plugin-idea-scout/issues/101) | **open** |
+| [#1245](https://github.com/keiranholloway/biffo-template/issues/1245) | **FOURTH occurrence of the lexical-closing-keyword trap — and the finding is no longer the trap, it is that the recorded remedy was a _practice_ and a practice did not hold.** A PR body reading `**Does not close #1021.**` closed #1021 on merge. Proved, not assumed: squash commit `a7797a5` contains only `Refs #1021`, and the timeline attributes the close to that commit, so it came from the **body**; a later deliberate `gh issue close` reported "already closed". This is mechanically identical to the `tabsii-crm#133` row above — same denial-shaped phrase, same `Refs`-only commit, same outcome — which was itself logged as the *third* vector after tabsii-platform#76. **That row's recorded fix reads `practice — never write a closing keyword in prose`.** Today an agent with this very page available did it again. `check-closing-keywords.mjs` is **not** at fault and correctly stayed silent: it asks whether a PR closes an issue only provable on deploy, and fires only on `infra/`, `.github/workflows/`, `apps/portal/` etc., none of which #1238 touched | **process** · drift | biffo-template [#1238](https://github.com/keiranholloway/biffo-template/pull/1238) PR body | biffo-template — extend the guard with a **negated-keyword** check on *every* path | **open** — detection needs no intent inference and is false-positive-free: a negation immediately before a closing keyword means the prose asserts the opposite of what GitHub will do |
+| [#1246](https://github.com/keiranholloway/biffo-template/issues/1246) | **`wait-for-checks` waited out ten-plus minutes on a PR whose checks could never appear.** #1243 was pushed while #1241 was merging a restructure of the same file; the PR went `mergeable=CONFLICTING`, and **GitHub creates no check runs for a PR it cannot compute a merge commit for**. `gh pr checks` reported "no checks reported"; the script printed "Waiting on 5 required check(s)" indefinitely — output identical to the legitimate "CI has not started yet" case. One field settles it. **Worse than the wasted wait:** AGENTS.md §6 documents the superficially similar "GitHub sometimes creates no run" case and prescribes `workflow_dispatch`, which is *actively wrong* here — the problem is an uncomputable merge, not a missing trigger, so following the documented remedy costs more time | **visibility** · process | biffo-template #1243, while landing #1239 | biffo-template `scripts/wait-for-checks.sh` + AGENTS.md §6 | **open** — the script is *right* to wait on a positive signal; the fix is to fail **fast** with the reason (exit 2 on `CONFLICTING`, keep waiting on `UNKNOWN`, which GitHub returns transiently) |
 
 ### What the classes say
 
@@ -488,6 +494,68 @@ there. Neither is evidence about the estate.
 
 
 ## Where the cycles go
+
+### Measured: the diagnosis was ~10 minutes of querying; the issue had budgeted days of infrastructure (2026-08-03)
+
+`#1021` had been open since it was filed, blocked on a stated prerequisite:
+retain self-hosted job logs, because "everything else is guesswork until a
+dropped job leaves a readable trace". That is a real piece of work — an agent on
+every ephemeral runner, shipping somewhere durable, for hosts that live minutes.
+
+**What it actually took: four commands and about ten minutes.**
+
+| Step | Cost |
+| --- | --- |
+| Notice `runner_name` on a self-hosted job is the instance ID | one `gh api .../jobs` — already in every prior investigation's output |
+| Find `BidEvictedEvent` in CloudTrail | one `lookup-events`, no setup, already retained |
+| Join them across 12 repos and both fleets | one script, ~90s of API calls |
+| Result | **22 of 22 matched, zero unexplained** |
+
+The rest of the session — ~95 minutes — was writing the tool, its tests and its
+docs so the answer stays available. That split is the point: **the diagnosis was
+cheap and the issue had priced it as expensive**, because it had reasoned about
+what evidence *was not being captured* rather than what evidence *already
+existed*.
+
+**The generalisable move is to inventory before you build.** Ask what systems
+already record something about the failing thing, and whether any two of them
+share a key. Here the key was in the API response every investigation had
+already fetched and nobody had looked at twice. The counterfactual cost is the
+number worth remembering: had the issue been worked as written, it would have
+spent days building a log pipeline and *still* arrived at "spot reclamation" —
+which one CloudTrail query answers for free.
+
+Not a criticism of the issue, which was written honestly from what was visible
+at the time. It is an argument for a specific question in the checklist: **before
+building observability, list what is already observable.**
+
+### Measured: a concurrent restructure cost one rebase and ~15m, and ten of those minutes were the tool not saying why (2026-08-03)
+
+Landing #1239, PR #1243 sat with **zero checks** for over ten minutes.
+`wait-for-checks` reported `Waiting on 5 required check(s)` throughout, which is
+exactly what it prints when CI simply has not started.
+
+The actual cause: #1241 merged a restructure of `verify.sh` — the same file —
+while #1243 was open. The PR went `CONFLICTING`, and **GitHub creates no check
+runs for a PR whose merge commit it cannot compute.** The checks were never
+coming.
+
+Cost breakdown, and only one line of it is unavoidable:
+
+| | |
+| --- | --- |
+| Rebase onto the restructure, drop the now-deleted skeleton copies, re-verify, force-push | **~5m — unavoidable**, and correct: two sessions legitimately touched one file |
+| Waiting on checks that could never appear, then diagnosing why | **~10m — entirely avoidable**, one API field away |
+
+**The collision itself is not the finding.** Concurrent work on a shared file is
+normal here and the rebase was clean once the cause was known. The finding is
+that the estate's own waiting tool cannot distinguish *"not yet"* from *"never"*,
+and that AGENTS.md §6's documented remedy for the look-alike case
+(`workflow_dispatch`) would have made it worse. Filed as
+[#1246](https://github.com/keiranholloway/biffo-template/issues/1246).
+
+**Structural, not careless** — the rebase was unwinnable by attention. What was
+winnable was knowing *within seconds* which of the two situations I was in.
 
 ### Measured: two wrong theories (~15m) before `ps aux` found the real one in under a minute (2026-08-02, part 3)
 
@@ -2011,6 +2079,51 @@ such days in a row is a pattern worth naming out loud rather than discovering in
 a quarterly.
 
 ## What went well — practices that earned their keep
+
+**"When a measurement surprises you, suspect the ruler first" downgraded a
+finding I was one command from filing wrongly (2026-08-03).** Sweeping for
+#1239, `ls .github/workflows/` in both runner-fleet checkouts returned **nothing**
+— which reads as "these repos have no CI at all", and I had begun drafting an
+issue saying their Terraform was completely unguarded. It was not: **both local
+checkouts were parked on `main`**, and the workflows live on `dev`. Asking GitHub
+instead of the disk (`gh api repos/<r>/contents/.github/workflows?ref=dev`)
+returned `ci.yml`, which runs `terraform fmt -check -recursive terraform/`.
+
+The correct finding was materially narrower and materially different: **a
+local-gate blind spot, not an unguarded repo.** Had it gone out as drafted it
+would have asserted a security-shaped gap that does not exist, in two issues, and
+sent someone to fix CI that was already correct.
+
+The tell was cheap and I nearly missed it: *an empty result is a claim about my
+query as much as about the world.* AGENTS.md §2 already warns never to trust a
+stale checkout, and this is that rule biting through an unexpected door — not the
+branch I was working on, but the branch I was **reading** from. **Read estate
+facts from the remote ref, not from whatever the local checkout happens to be
+sitting on.**
+
+**Proving the fix in both directions, on a repo built to fail (2026-08-03).**
+#1243's gate change could have been "verified" by running it on the two fleets
+and seeing `terraform-fmt OK` — which proves the check *runs*, and nothing about
+whether it *works*. Instead: a scratch repo with a deliberately misformatted
+`terraform/bad.tf`, run twice.
+
+| gate | result |
+| --- | --- |
+| `origin/dev` | `-- terraform-fmt  n/a - no terraform in this repo` → **`verify passed`** |
+| the branch | `FAIL terraform-fmt  terraform/bad.tf` → **`verify failed`** |
+
+That table is the whole evidence base for the PR, and it took about two minutes.
+The old-gate row is the one that matters — without it, "the new gate passes" is
+compatible with the gate having been fine all along. **A guard demonstrated only
+in its passing state has not been demonstrated.**
+
+**Checking that #1250 existed before working on it (2026-08-03).** Asked to
+progress "1250 and 1239", the cheap move is to assume a typo and start on the
+nearest plausible issue. Sweeping both orgs for issue *and* PR #1250 returned
+nothing — the highest number in `biffo-template` was #1244, created that morning.
+Guessing would have meant building something nobody asked for and reporting it as
+the requested work. **Costing seconds, this is the same §1 discipline that found
+#591 was already merged: establish that the work exists before doing it.**
 
 **Check whether the guard already exists before writing it.** Asked to build two
 guards, one was already built — `destructive-plan.mjs` (#387), wired, tested, and
@@ -4092,6 +4205,37 @@ distribute"; this is the first time it has been followed rather than cited.
 
 ## What needs more thought
 
+**A lesson recorded four times with no mechanism behind it is not a lesson, and
+this page cannot tell the difference.** The lexical-closing-keyword trap has now
+been logged **four** times — tabsii-platform#76, tabsii-crm#133 (itself recorded
+as "the third vector"), and #1238 today. The `tabsii-crm#133` row's recorded fix
+reads, verbatim: *`practice — never write a closing keyword in prose, in the PR
+body **or** the commit`*. Today's occurrence was authored by an agent with this
+page available, in the repo that owns it.
+
+The uncomfortable part is not the trap — it is filable and now filed (#1245).
+It is that **"fix: practice" is a status this page accepts and never revisits.**
+A row resolved that way looks closed, contributes to the fixed count, and has no
+trigger that fires when it recurs. Three separate sessions each believed they had
+resolved this.
+
+Two things worth deciding:
+
+- **Should `fix lands in: practice` be a permitted terminal status at all?** It
+  is honest for genuinely unmechanisable things, and it is also the path of least
+  resistance for anything where the guard is fiddly — which is exactly where
+  recurrence lives.
+- **Nothing counts recurrences.** `evidence.jsonl` has `refs`, but no "this is
+  the same failure as row N" edge, so a fourth occurrence reads as a fourth
+  distinct row rather than as one unresolved problem with four data points.
+  A recurrence count is the number that would have escalated this after the
+  second time. The corpus is 449 rows and this class is invisible in it.
+
+**A rule that lives in prose reaches nobody who has not read that prose.** The
+same shape as §1's claim protocol living in one skill while every other workflow
+did the work unaware (#1193) — and the remedy was the same there: move it into
+the thing that executes.
+
 **Nothing audits a guard's reach, and reach is where guards actually fail.**
 Every guard in this repo is trusted in proportion to its name rather than its
 coverage. `check-destructive-plan.mjs` was correct, tested and wired — and stood
@@ -5672,6 +5816,8 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `biffo-verify` | **worked — §6's "suspect the ruler first" stopped a wrong issue reaching GitHub** | Invoked at the end of the #1021 session. Its highest-value moment was retroactive but decisive: `ls .github/workflows/` in both fleet checkouts returned empty, and an issue asserting "these repos have no terraform checking at all" was already drafted. §6's instruction to distrust a surprising measurement before the subject sent me to `gh api …?ref=dev`, which returned `ci.yml` running `terraform fmt -check -recursive terraform/` — the checkouts were parked on `main`. The filed finding changed from "unguarded repos" to "a local-gate blind spot", which is narrower, true, and fixes something different. §3 also fired cleanly: the scratch repo with a misformatted `terraform/bad.tf` proved the *old* gate passed it, which is the half that actually evidences #1243. §1 stopped work on a non-existent issue (#1250). Its §8 is, as ever, the only reason any of this is written down. |
+| `biffo-workflow` | **not invoked — and it should have been, three times** | Every unit of work in this session (#1238, tabsii-runners#41, #1243) followed AGENTS.md by hand: fresh worktree off a fetched `origin/dev`, `pnpm install`, claim before starting, unpiped `git push; echo $?`, `wait-for-checks`, `branch-health` after merge. It mostly went right, and the two places it went wrong are the two the skill exists to prevent. **First**, I skipped `pnpm install` in the #1239 worktree and the gate failed on `prettier: not found` / `turbo: not found` — AGENTS.md §1 says install *before working*, and the skill's step order enforces it where habit did not. **Second**, and worse: PR #1238's body carried `Does not close #1021`, which closed the issue on merge (#1245). **Why it was missed:** the session began as "work on 1021" — framed as investigation, not as "make a change" — so no workflow trigger matched, and by the time there was a change to land I was already mid-flight and running the steps from memory. Suggested trigger addition: **an investigation that produces a diff has become a change**, and the skill should be invoked at that transition rather than only when a request opens with "start a change". |
 | `biffo-verify` | **worked — invoked at the end of a long session, retroactively, and its §8 was the only reason any of this got written down** | Rolling `@tabsii-com/ui` out across four sibling repos (tabsii-platform#508/#534) was done without invoking the skill by name once, yet §2 ("reproduce by the reporter's route"), §4 ("verify the deployed artifact"), and §7 ("say what you did not verify") were all applied throughout on habit — live `curl`s against every merge, an explicit deferred-scope note in the `tabsii-marketplace` PR body about why `NavBar`→`TopBar` was not done. The session correctly self-corrected twice mid-flight without the skill: once by proactively granting `tabsii-geo` package access before its first CI run (having been burned reactively on `tabsii-lms`), once by tracing a `basePath` bug back through two already-merged, already-deployed PRs rather than patching only the repo it was found in. None of that got **recorded** until this skill was explicitly invoked at the end — matching a `needs more thought` finding already on this page (`§8 fired only when the operator asked`). The retroactive capture still worked cleanly: every cost, class and fix-location was reconstructable from the session transcript alone. |
 | `biffo-workflow` | **worked — twice, and Step 1's fresh-fetch rule was the one that mattered** | Ran for #1122 and #1147. The estate sweep behind #1123 was first done against **local checkouts**, which turned out to be 1–11 commits behind their own `dev` (`tabsii-marketplace` by 11). Redoing it via `git show origin/dev:<path>` after a fetch is what made the 7-repo table trustworthy; §1's "a primary checkout 10 commits behind produced a whole audit against dead code" is exactly the failure that was about to be repeated. Step 4's honest-push rule also fired for real: a `pnpm run <gate> \| tail` chain masked a **prettier failure on YAML I had just broken**, and every subsequent gate in the `&&` chain still ran because the pipe's exit status is `tail`'s. Re-running each gate capturing `$?` found it. The trap is documented in AGENTS.md §4 for `git push`; it is the same trap for any gate. |
 | `biffo-verify` | **worked — §1 caught three false claims about the estate in one session** | "Establish the current state before writing anything" was the highest-value step by a distance. It found that (a) the destructive-plan guard I had been asked to write already existed, wired and tested; (b) two issues I filed that morning had been closed by someone else's PR while I worked elsewhere; (c) the sibling sweep I had reported was built on stale checkouts. Each check cost ~2 minutes. §3 (prove the test fails without the fix) fired cleanly for both guards — reverting only `publish-sdk.yml` failed exactly one case naming job, line and command, and reverting only the skeleton's `deploy.yml` did the same. |

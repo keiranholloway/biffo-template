@@ -9,7 +9,7 @@
  * write path never touches the frozen legacy file.
  */
 
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { makeTmpDir } from '../test-utils/tmp.js'
@@ -236,6 +236,25 @@ describe('writeEvidenceEntry — the write path future sessions use', () => {
     expect(() =>
       writeEvidenceEntry({ summary: 'same summary' }, { dir, date: '2026-08-03' }),
     ).toThrow()
+  })
+
+  it('leaves the earlier entry untouched when it refuses (#1222)', () => {
+    // The refusal is an atomic `wx` create, so the loser's payload never
+    // reaches the file — the earlier session's finding survives intact. See
+    // `toctou-atomic-create.test.ts` for the raced version of this.
+    const root = tempRoot()
+    const dir = join(root, 'evidence')
+    const path = writeEvidenceEntry(
+      { summary: 'same summary', detail: 'session one' },
+      { dir, date: '2026-08-03' },
+    )
+    expect(() =>
+      writeEvidenceEntry(
+        { summary: 'same summary', detail: 'session two' },
+        { dir, date: '2026-08-03' },
+      ),
+    ).toThrow(/already exists — choose a more specific slug or date/)
+    expect(JSON.parse(readFileSync(path, 'utf8')).detail).toBe('session one')
   })
 
   it('two sessions writing on the same day never collide when their summaries differ', () => {

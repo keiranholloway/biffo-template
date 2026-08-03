@@ -1,3 +1,4 @@
+import { SIBLING_STATUS_CHECKS } from '../adapters/source-control/github/index.js'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -364,7 +365,15 @@ describe('runSiblingCreate', () => {
       repoId: 99,
     })
     expect(aws.bootstrapTerraformBackend).toHaveBeenCalledWith('reports')
-    expect(github.configureBranchProtection).toHaveBeenCalledWith(SIBLING_CONFIG)
+    // Pinned, not loosened: a sibling must be born requiring E2E as well
+    // (#1208). tabsii-geo had the harness and did not require it, so a
+    // regression merged green and sat on `dev` for four hours.
+    expect(github.configureBranchProtection).toHaveBeenCalledWith(
+      SIBLING_CONFIG,
+      undefined,
+      SIBLING_STATUS_CHECKS,
+    )
+    expect(SIBLING_STATUS_CHECKS).toContain('E2E (Playwright)')
     expect(github.enableVulnerabilityAlerts).toHaveBeenCalledOnce()
     expect(github.setRepoVariable).toHaveBeenCalledWith(
       'acme',

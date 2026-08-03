@@ -103,6 +103,51 @@ jobs:
         # so it cannot assume a layout. Do not edit it here; edit it upstream.
         run: sh ../../scripts/js-dependency-audit.sh
 
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    # `packages: read` so pnpm can install any private @tabsii-com/* package
+    # from GitHub Packages using the workflow token. Harmless if this sibling
+    # has none.
+    permissions:
+      contents: read
+      packages: read
+    # The official Playwright image, pinned to the @playwright/test version in
+    # apps/frontend/package.json. It ships Chromium and every browser system
+    # dependency, so this needs no `--with-deps`, no apt, and no root on the
+    # self-hosted runners.
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
+    defaults:
+      run:
+        working-directory: apps/frontend
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: apps/frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Browser system deps come from the container; this only drops the
+      # Chromium binary into the resolved cache path (a no-op if present).
+      - name: Install Chromium
+        run: pnpm exec playwright install chromium
+      # `playwright test` boots its own webServer: it builds the static export
+      # and serves it base-path aware, INCLUDING
+      # `/.well-known/biffo-identity.json`. Serving that document is what makes
+      # the harness represent the deployed app -- without it the runtime pool
+      # lookup (#403) resolves null and every spec dies on a redirect to the
+      # portal, which is how tabsii-geo's CI broke for four hours (#1208).
+      - name: E2E tests
+        run: pnpm run e2e
+
   python:
     name: Python (lint, types, test, security)
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}

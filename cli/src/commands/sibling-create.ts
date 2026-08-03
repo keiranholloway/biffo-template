@@ -6,7 +6,7 @@ import chalk from 'chalk'
 import { Command } from 'commander'
 import { AwsAdapter } from '../adapters/cloud/aws/index.js'
 import { GitAdapter } from '../adapters/git/index.js'
-import { GitHubAdapter } from '../adapters/source-control/github/index.js'
+import { GitHubAdapter, SIBLING_STATUS_CHECKS } from '../adapters/source-control/github/index.js'
 import { BiffoConfigSchema, type BiffoConfig } from '../config/schema.js'
 import { SiblingConfigSchema, type SiblingConfig } from '../config/sibling-schema.js'
 import { assertBuildIsFresh } from '../lib/build-freshness.js'
@@ -730,7 +730,11 @@ async function configureSiblingGithub(
   await github.createBranch(org, repo, 'main', 'dev')
   await github.setDefaultBranch(org, repo, 'dev')
 
-  await github.configureBranchProtection(config)
+  // SIBLING_STATUS_CHECKS, not the default: a sibling ships an E2E harness and
+  // an instance does not, so this is where the extra required context belongs
+  // (#1208). Requiring it on an instance would hang every PR on a job the
+  // template's ci.yml has no equivalent of.
+  await github.configureBranchProtection(config, undefined, SIBLING_STATUS_CHECKS)
   await github.createEnvironments(config)
   // Bind it to admins as well (#1058). A sibling is a full deployable repo with
   // the same three branches, so leaving it advisory would reintroduce the

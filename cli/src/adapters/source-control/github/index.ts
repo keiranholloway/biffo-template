@@ -41,6 +41,22 @@ export const DEFAULT_STATUS_CHECKS = [
 ]
 
 /**
+ * The checks a SIBLING is born requiring (#1208).
+ *
+ * A superset of `DEFAULT_STATUS_CHECKS`, because a sibling ships an E2E harness
+ * and an instance does not: the template's own `ci.yml` has no `e2e` job, so
+ * requiring that context on an instance would leave every PR waiting forever on
+ * something nothing reports — the trap the `js` job's name comment in the
+ * skeleton warns about.
+ *
+ * The pairing is the point. `tabsii-geo` had five E2E files and did NOT require
+ * the check, so a regression merged green and sat on `dev` for four hours.
+ * Coverage that cannot block a merge is documentation. A sibling is now born
+ * with the harness AND with it required.
+ */
+export const SIBLING_STATUS_CHECKS = [...DEFAULT_STATUS_CHECKS, 'E2E (Playwright)']
+
+/**
  * Merge settings every Biffo repo is created with (#714).
  *
  * **`allow_auto_merge` is the load-bearing one, and its absence is a trap.**

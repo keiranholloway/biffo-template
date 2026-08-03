@@ -140,6 +140,22 @@ function existingWorkspaceSources(text: string): Set<string> {
  * Add `<dep> = { workspace = true }` to the plugin `pyproject.toml` for every
  * dependency that the instance's workspace provides as a member and that is not
  * already sourced. Idempotent. Returns the names added (empty if none needed).
+ *
+ * ## The `existsSync`-then-write here is read-modify-write, not a guard (#1222)
+ *
+ * CodeQL flags this as `js/file-system-race` alongside two genuine overwrite
+ * guards. It is not one. The `existsSync` asks "is there a file to edit at
+ * all?" and the function then reads that file, appends to its text and writes
+ * the result back. Rewriting a file it just read is the whole job, so `wx` —
+ * the fix applied to the two real guards — would make this throw on every call
+ * that has anything to do.
+ *
+ * The residual exposure is a lost update if something else rewrites the same
+ * `pyproject.toml` in the window between the read and the write. That is
+ * accepted: this runs inside `biffo plugin install`, which is already
+ * mutating that plugin's vendored tree wholesale (copying files, running `uv`),
+ * so a second concurrent writer to the same path is outside what any locking
+ * here could make safe.
  */
 export function ensureWorkspaceSources(
   pluginPyprojectPath: string,
@@ -168,6 +184,8 @@ export function ensureWorkspaceSources(
       '[tool.uv.sources]\n' +
       `${lines.join('\n')}\n`
   }
+  // codeql[js/file-system-race] — see the block comment above: this is a
+  // read-modify-write, not an overwrite guard, so there is no check to race.
   writeFileSync(pluginPyprojectPath, updated)
   return toAdd
 }

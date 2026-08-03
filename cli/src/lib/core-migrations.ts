@@ -926,16 +926,34 @@ function alreadyCarried(
  * files — a path that already exists is a bug in the planner (it should have
  * been skipped), so this refuses to overwrite one rather than clobber applied
  * history.
+ *
+ * ## Why `wx` rather than an `existsSync` guard (#1222)
+ *
+ * This used to read `if (existsSync(abs)) throw …` and then `writeFileSync`.
+ * Between those two statements another process can create the file, and the
+ * write overwrites it regardless — so the refusal was advisory, not enforced.
+ * `wx` is create-or-fail performed by the kernel as one operation: there is no
+ * window at all. The `EEXIST` is translated back into the same message the
+ * guard produced, so callers and tests see no behaviour change beyond the race
+ * being closed.
+ *
+ * The cost of getting this wrong is what makes it worth the care: silently
+ * overwriting a migration another `biffo core upgrade` just wrote re-issues
+ * already-applied DDL against the instance's database.
  */
 export function applyMigrationCarry(instanceDir: string, plan: MigrationCarryPlan): string[] {
   const written: string[] = []
   for (const e of plan.entries) {
     const abs = join(instanceDir, e.path)
-    if (existsSync(abs)) {
-      throw new Error(`Refusing to overwrite an existing migration: ${e.path}`)
-    }
     mkdirSync(dirname(abs), { recursive: true })
-    writeFileSync(abs, e.content)
+    try {
+      writeFileSync(abs, e.content, { flag: 'wx' })
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+        throw new Error(`Refusing to overwrite an existing migration: ${e.path}`)
+      }
+      throw err
+    }
     written.push(e.path)
   }
   return written

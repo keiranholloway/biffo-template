@@ -147,6 +147,14 @@ export function slugify(text) {
  * Refuses to overwrite an existing file: a collision means the slug needs to
  * be more specific, not that the earlier entry should be silently replaced.
  *
+ * The refusal is an atomic `wx` create, not an `existsSync` check followed by
+ * a write (#1222). This corpus has concurrent writers BY DESIGN — several
+ * agent sessions run against this estate at once — so the window between a
+ * check and a write is not theoretical here: two sessions writing the same
+ * `date-slug` is the exact case the guard exists for, and the check-then-write
+ * form lost the earlier entry rather than refusing. `EEXIST` is translated
+ * back into the same message, so nothing else changes.
+ *
  * @param {Record<string, any>} row
  * @param {{dir?: string, date?: string, slug?: string}} [opts]
  * @returns {string} the path written, relative to `opts.dir`'s base
@@ -158,10 +166,14 @@ export function writeEvidenceEntry(row, opts = {}) {
   mkdirSync(dir, { recursive: true })
   const file = `${date}-${slug || 'entry'}.json`
   const path = join(dir, file)
-  if (existsSync(path)) {
-    throw new Error(`${path} already exists — choose a more specific slug or date`)
+  try {
+    writeFileSync(path, `${JSON.stringify({ ...row, date }, null, 2)}\n`, { flag: 'wx' })
+  } catch (err) {
+    if (err && err.code === 'EEXIST') {
+      throw new Error(`${path} already exists — choose a more specific slug or date`)
+    }
+    throw err
   }
-  writeFileSync(path, `${JSON.stringify({ ...row, date }, null, 2)}\n`)
   return path
 }
 

@@ -454,7 +454,28 @@ export function serializeInstanceCoreVersion(
  *
  * Preserving unknown keys rather than an enumerated list is deliberate: a field
  * added later is protected without anyone having to remember this function.
+ *
+ * ## The `existsSync`-then-write here is read-modify-write, not a guard (#1222)
+ *
+ * CodeQL flags this shape as `js/file-system-race`, and for the two guards it
+ * also flagged (`applyMigrationCarry`, `writeEvidenceEntry`) it was right: those
+ * read `if (exists) throw`, so a concurrent create defeated a refusal. This one
+ * is the opposite. The `existsSync` does not decide *whether* to write — the
+ * write always happens. It decides only whether there are existing keys worth
+ * preserving, and overwriting the file is the entire purpose of the function.
+ *
+ * So `wx` would not harden this, it would break it: after the first upgrade the
+ * file always exists, and every subsequent `writeInstanceCoreVersion` would
+ * throw `EEXIST`. There is nothing to make atomic without changing behaviour.
+ *
+ * What remains is a lost update — a concurrent writer's keys vanishing — and
+ * that is accepted deliberately. Two `biffo core upgrade` runs against the same
+ * instance working tree are already unsound for reasons this file cannot fix
+ * (they share a git index, a branch and a working tree), so serialising one
+ * JSON write inside that would buy nothing real. The upgrade is single-writer
+ * by construction, per instance checkout.
  */
+// codeql[js/file-system-race]
 export function writeInstanceCoreVersion(cwd: string, version: string): void {
   const path = join(cwd, INSTANCE_CORE_FILE)
   let rest: Record<string, unknown> = {}
@@ -462,6 +483,8 @@ export function writeInstanceCoreVersion(cwd: string, version: string): void {
     rest = { ...parseInstanceCoreManifest(path).raw }
     delete rest.version // re-supplied by serializeInstanceCoreVersion, and first
   }
+  // codeql[js/file-system-race] — see the block comment above: this is a
+  // read-modify-write, not an overwrite guard, so there is no check to race.
   writeFileSync(path, serializeInstanceCoreVersion(version, rest))
 }
 

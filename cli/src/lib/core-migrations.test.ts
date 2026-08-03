@@ -279,6 +279,20 @@ describe('applyMigrationCarry', () => {
     applyMigrationCarry(instanceDir, plan)
     expect(() => applyMigrationCarry(instanceDir, plan)).toThrow(/Refusing to overwrite/)
   })
+
+  it('leaves the existing file byte-for-byte when it refuses (#1222)', () => {
+    // The refusal is an atomic `wx` create, so the file on disk is the one
+    // that was already there — not a half-written casualty of the attempt.
+    // See `toctou-atomic-create.test.ts` for the raced version of this.
+    writeFileSync(join(templateDir, MIGRATIONS_VERSIONS_DIR, '0001_a.py'), migration('0001', null))
+    const plan = planMigrationCarry({ templateDir, instanceDir })
+    const abs = join(instanceDir, MIGRATIONS_VERSIONS_DIR, '0001_a.py')
+    const incumbent = '# an unrelated migration already living at this path\n'
+    mkdirSync(dirname(abs), { recursive: true })
+    writeFileSync(abs, incumbent)
+    expect(() => applyMigrationCarry(instanceDir, plan)).toThrow(/Refusing to overwrite/)
+    expect(readFileSync(abs, 'utf8')).toBe(incumbent)
+  })
 })
 
 /**

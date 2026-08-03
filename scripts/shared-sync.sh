@@ -111,6 +111,42 @@ set -u
 (set -o pipefail) 2>/dev/null && set -o pipefail || true
 
 TEMPLATE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# ---- worktree lifecycle log (#1160) -----------------------------------------
+#
+# On 2026-08-02 two repos in a 13-repo round reached phase 2 with their staged
+# worktree gone. Three hypotheses have been written and discarded against it:
+# a concurrent SHIP run (there was none -- the four overlapping runs that day
+# were all `--check`, which never reaches `stage_repo`), an unchecked
+# `worktree add` (checked since #856), and a missing base ref (the ship path
+# takes its base from `gh repo view`). Nothing found so far can remove that
+# directory.
+#
+# The failure is rare, non-deterministic and has resisted reproduction, so this
+# stops guessing and makes the NEXT occurrence explain itself: every create and
+# every remove, with a timestamp and the PID that did it. Two concurrent runs
+# interleave in one file, so `run-start`/`run-end` bracketing is what shows a
+# second process operating inside the first one's round -- the shape three
+# hypotheses have been about.
+#
+# **Always on, deliberately.** An opt-in flag would be off when a rare
+# non-deterministic failure happens, which is the only time it is worth having.
+# The cost is a handful of short lines per run.
+#
+# Appended, never read by this script, and failure to write is ignored: this is
+# a side channel, not a gate. That is NOT the `2>/dev/null` antipattern recorded
+# for the fetch in #1158 -- there the suppressed error changed the meaning of
+# everything after it, whereas a log that cannot be written changes nothing
+# except that the next occurrence stays unexplained. Lines are short and appends
+# are atomic under PIPE_BUF, so concurrent runs interleave cleanly rather than
+# tearing.
+SYNC_WT_LOG="${SHARED_SYNC_WT_LOG:-$HOME/.shared-sync-worktrees.log}"
+
+wt_log() {
+  # event, repo label, path
+  printf '%s\tpid=%s\t%-20s\t%-26s\t%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$1" "$2" "${3:-}" >> "$SYNC_WT_LOG" 2>/dev/null || true
+}
 MANIFEST="$TEMPLATE_ROOT/shared-files.json"
 [ -f "$MANIFEST" ] || { echo "no shared-files.json beside $0" >&2; exit 2; }
 
@@ -136,6 +172,25 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$ESTATE" ] || { echo "--estate <dir> is required" >&2; exit 2; }
+
+# Bracket the run before any work: a second process operating inside another's
+# round is only visible if both ends are recorded.
+SYNC_RUN_MODE=ship
+[ -n "$CHECK" ] && SYNC_RUN_MODE=check
+[ -n "$REHEARSE_ONLY" ] && SYNC_RUN_MODE=rehearse
+[ -n "$NO_REHEARSE" ] && SYNC_RUN_MODE=ship-unproven
+[ -n "$CANDIDATES" ] && SYNC_RUN_MODE=candidates
+wt_log "run-start($SYNC_RUN_MODE)" "${ONLY:-<all repos>}" "$ESTATE"
+
+# `trap ... EXIT` REPLACES any previous EXIT trap, and two more are set further
+# down (the --candidates temp file, and TARGETS/VERDICTS). A bare trap here
+# would therefore be silently dead in every run that reaches them -- which is
+# most runs, and exactly the ones worth logging. So every EXIT trap in this file
+# calls this, and adding another means calling it too.
+wt_log_run_end() {
+  wt_log "run-end($SYNC_RUN_MODE)" "${ONLY:-<all repos>}" "$ESTATE"
+}
+trap wt_log_run_end EXIT
 [ -n "$REHEARSE_ONLY" ] && [ -n "$NO_REHEARSE" ] && {
   echo "--rehearse and --no-rehearse are opposites" >&2; exit 2; }
 
@@ -442,7 +497,7 @@ if [ -n "$CANDIDATES" ]; then
   fi
 
   rows=$(mktemp)
-  trap 'rm -f "$rows"' EXIT
+  trap 'rm -f "$rows"; wt_log_run_end' EXIT
   printf '%s\n' "$repos" | while IFS="$TAB" read -r label d base; do
     [ -n "$d" ] || continue
     # `ls-tree -r` lines are `<mode> <type> <sha><TAB><path>`. The sed rewrites
@@ -532,11 +587,16 @@ stage_repo() {
   # --prune for the same reason as the drift check above (#943).
   git -C "$d" fetch origin --prune --quiet || return 1
   wt="$d/.worktrees/shared-sync"
+  wt_log remove-pre-stage "$label" "$wt"
   git -C "$d" worktree remove --force "$wt" 2>/dev/null
   # `branch -D` reports on STDOUT, so a quiet run printed "Deleted branch
   # chore/sync-shared" in the middle of the rehearsal table.
   git -C "$d" branch -D chore/sync-shared >/dev/null 2>&1
-  git -C "$d" worktree add -q "$wt" -b chore/sync-shared "origin/$base" || return 1
+  git -C "$d" worktree add -q "$wt" -b chore/sync-shared "origin/$base" || {
+    wt_log add-FAILED "$label" "$wt"
+    return 1
+  }
+  wt_log add "$label" "$wt"
 
   for f in $FILES; do
     mkdir -p "$wt/$(dirname "$f")"
@@ -599,6 +659,7 @@ stage_repo() {
 
   git -C "$wt" add -A
   if git -C "$wt" diff --cached --quiet; then
+    wt_log remove-nothing-to-sync "$label" "$wt"
     git -C "$d" worktree remove --force "$wt" 2>/dev/null
     return 2
   fi
@@ -686,6 +747,9 @@ require_staged_worktree() {
   _wt="$1"
   _label="$2"
   [ -d "$_wt" ] && return 0
+  # The event this whole log exists for (#1160): read the lines above it for a
+  # `remove-*` on this path from another pid, and the mystery is over.
+  wt_log MISSING-AT-SHIP "$_label" "$_wt"
   printf '%-26s \033[31mstaged worktree missing\033[0m at %s\n' "$_label" "$_wt" >&2
   printf '%-26s   phase 1 staged it and it was gone by phase 2. Nothing was\n' '' >&2
   printf '%-26s   pushed for this repo, and no PR was opened. Cause unknown -\n' '' >&2
@@ -803,7 +867,7 @@ Run \`sh scripts/gate-coverage.sh\` after merging to see this repo's gate measur
 # the one that ships is worth nothing.
 TARGETS=$(mktemp)
 VERDICTS=$(mktemp)
-trap 'rm -f "$TARGETS" "$VERDICTS"' EXIT
+trap 'rm -f "$TARGETS" "$VERDICTS"; wt_log_run_end' EXIT
 
 printf '\nshared-file sync - template -> repos core upgrade cannot reach\n\n'
 for d in "$ESTATE"/*/; do
@@ -1030,6 +1094,7 @@ else
     # orphan-worktree accumulation AGENTS.md section 1 exists to prevent.
     while IFS="$TAB" read -r label d slug base; do
       grep -q "^$label${TAB}FAIL${TAB}" "$VERDICTS" && continue
+      wt_log remove-rehearsal-fail "$label" "$d/.worktrees/shared-sync"
       git -C "$d" worktree remove --force "$d/.worktrees/shared-sync" 2>/dev/null
       git -C "$d" branch -D chore/sync-shared 2>/dev/null
     done < "$TARGETS"

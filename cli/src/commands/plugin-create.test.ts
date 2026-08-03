@@ -60,6 +60,19 @@ function makeGitHubMock() {
           unprotectedBranches: [],
         }),
       ),
+    // Mirrors the real adapter's sealBranchProtection: records its own outcome
+    // on the same run-scoped collector, same as `protectSingleBranch` above.
+    sealBranchProtection: vi
+      .fn()
+      .mockImplementation(async (org: string, repo: string, branches: string[]) =>
+        recordBranchProtectionOutcome({
+          status: 'applied',
+          org,
+          repo,
+          protectedBranches: branches,
+          unprotectedBranches: [],
+        }),
+      ),
     setRepoVariable: vi.fn().mockResolvedValue(undefined),
     getRepoVariable: vi.fn().mockResolvedValue(undefined),
     repoRunnerCount: vi.fn().mockResolvedValue(3),
@@ -356,6 +369,91 @@ describe.runIf(SKELETON)('runPluginCreate', () => {
           string[],
         ]
         for (const context of contexts) expect(ci).toContain(context)
+      })
+
+      // ─── #1212: the plugin path's missing seal ──────────────────────────────
+      //
+      // `protectSingleBranch` sets `enforce_admins: false` on purpose (see its
+      // own docstring) — but unlike `init.ts` (step 7) and `sibling-create.ts`,
+      // nothing ever closed it here. A plugin repo was born with a full
+      // required-check list that bound nobody, permanently.
+      describe('sealing (#1212)', () => {
+        it('seals dev only AFTER protection is applied, matching the git-write-then-seal order', async () => {
+          const order: string[] = []
+          const git = makeGitMock()
+          const github = makeGitHubMock()
+          git.push.mockImplementation(async () => {
+            order.push('push')
+          })
+          const originalProtect = github.protectSingleBranch
+          github.protectSingleBranch = vi.fn().mockImplementation(async (...args: unknown[]) => {
+            order.push('protectSingleBranch')
+            return (originalProtect as (...a: unknown[]) => unknown)(...args)
+          }) as never
+          const originalSeal = github.sealBranchProtection
+          github.sealBranchProtection = vi.fn().mockImplementation(async (...args: unknown[]) => {
+            order.push('sealBranchProtection')
+            return (originalSeal as (...a: unknown[]) => unknown)(...args)
+          }) as never
+
+          await runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), {
+            git: git as never,
+            makeGitHub: () => github as never,
+            resolveToken: () => Promise.resolve('t0ken'),
+          })
+
+          expect(github.sealBranchProtection).toHaveBeenCalledOnce()
+          expect(github.sealBranchProtection).toHaveBeenCalledWith(
+            'acme',
+            'biffo-plugin-acme-crm',
+            ['dev'],
+          )
+          const seal = order.indexOf('sealBranchProtection')
+          expect(seal, 'the seal must actually run').toBeGreaterThanOrEqual(0)
+          expect(order.lastIndexOf('push'), 'push must never run after the seal').toBeLessThan(seal)
+          expect(
+            order.lastIndexOf('protectSingleBranch'),
+            'protection must be applied before it is sealed',
+          ).toBeLessThan(seal)
+        })
+
+        it('does not seal when protection was skipped on a 403', async () => {
+          const { deps, github } = remoteDeps()
+          github.protectSingleBranch.mockImplementation(
+            async (org: string, repo: string, branch: string) =>
+              recordBranchProtectionOutcome({
+                status: 'skipped-403',
+                org,
+                repo,
+                protectedBranches: [],
+                unprotectedBranches: [branch],
+                reason: 'Upgrade to GitHub Team or make this repository public.',
+              }),
+          )
+
+          await runPluginCreate('acme-crm', options({ standalone: true, org: 'acme' }), deps)
+
+          // Sealing an unprotected branch would 404 and record a SECOND,
+          // misleading outcome ("protection was applied but does not bind
+          // admins") on top of the correct skipped-403 one already recorded.
+          expect(github.sealBranchProtection).not.toHaveBeenCalled()
+        })
+
+        it('does not seal when contexts could not be determined, so protection was never applied', async () => {
+          const skeleton = join(projectRoot, 'skeleton-no-jobs')
+          cpSync(SKELETON!, skeleton, { recursive: true })
+          writeFileSync(join(skeleton, '.github/workflows/ci.yml'), 'name: CI\non: [push]\n')
+
+          const { deps, github } = remoteDeps()
+          await runPluginCreate(
+            'acme-crm',
+            options({ standalone: true, org: 'acme', skeletonRoot: skeleton }),
+            deps,
+          )
+
+          expect(github.protectSingleBranch).not.toHaveBeenCalled()
+          expect(github.sealBranchProtection).not.toHaveBeenCalled()
+        })
       })
 
       it('creates and pushes the repo but skips protection when contexts cannot be determined', async () => {

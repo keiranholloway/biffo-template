@@ -2,6 +2,11 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import {
+  makeTemplateCheckout,
+  realSharedSync,
+  sharedSyncIn,
+} from '../test-utils/shared-sync-template.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
@@ -20,22 +25,28 @@ import { makeTmpDir } from '../test-utils/tmp.js'
  * that: a pid on every line, both ends of a run bracketed, and the
  * `MISSING-AT-SHIP` marker present so the reader can search backwards from it.
  */
-const script = join(import.meta.dirname, '..', '..', '..', 'scripts', 'shared-sync.sh')
-
 /**
- * A satellite clone that is genuinely drifted, plus a `gh` stub.
+ * A satellite clone that is genuinely drifted, plus a `gh` stub and a fixture
+ * TEMPLATE carrying the real script.
  *
  * The stub is needed because the ship path resolves each repo's base from
  * `gh repo view --json defaultBranchRef`, which a `file://` origin cannot
  * answer — without it every repo reports `cannot resolve default branch` and
  * nothing ever stages. The scaffolding repo lives OUTSIDE the estate so the
  * survey does not pick it up as a second satellite.
+ *
+ * The template is a fixture rather than this repo's own checkout because
+ * `TEMPLATE_ROOT` is `dirname $0/..`: running the script where it sits makes
+ * the developer's tree the subject of shared-sync's staleness preflight, which
+ * exits 2 before `stage_repo` is ever reached (#1252). That is what made
+ * `logs the add and the pre-stage remove` fail on unpulled checkouts only.
  */
-function estate(): { dir: string; log: string; path: string } {
+function estate(): { dir: string; log: string; path: string; script: string } {
   const root = makeTmpDir('wtlog')
   const dir = join(root, 'estate')
   const log = join(root, 'worktrees.log')
   mkdirSync(dir, { recursive: true })
+  const script = sharedSyncIn(makeTemplateCheckout(root))
 
   const origin = join(root, 'origin.git')
   execFileSync('git', ['init', '-q', '--bare', '-b', 'dev', origin])
@@ -75,12 +86,12 @@ function estate(): { dir: string; log: string; path: string } {
   )
   chmodSync(join(bin, 'gh'), 0o755)
 
-  return { dir, log, path: bin }
+  return { dir, log, path: bin, script }
 }
 
-function run(e: { dir: string; log: string; path: string }, args: string[]) {
+function run(e: { dir: string; log: string; path: string; script: string }, args: string[]) {
   try {
-    execFileSync('bash', [script, '--estate', e.dir, ...args], {
+    execFileSync('bash', [e.script, '--estate', e.dir, ...args], {
       encoding: 'utf8',
       env: { ...process.env, SHARED_SYNC_WT_LOG: e.log, PATH: e.path + ':' + process.env.PATH },
     })
@@ -146,7 +157,7 @@ describe('worktree lifecycle log', () => {
   }, 30_000)
 
   it('names the guard event distinctly, so it can be searched backwards from', () => {
-    const body = readFileSync(script, 'utf8')
+    const body = readFileSync(realSharedSync, 'utf8')
 
     // The one event this log exists for. Asserted in the source rather than by
     // running it, because the condition is unreachable by construction — see
@@ -158,7 +169,7 @@ describe('worktree lifecycle log', () => {
   })
 
   it('logs every worktree removal in the file, with none left unlogged', () => {
-    const body = readFileSync(script, 'utf8')
+    const body = readFileSync(realSharedSync, 'utf8')
     const removals = body.split('\n').filter((l) => l.includes('worktree remove --force'))
     const logged = body.split('\n').filter((l) => l.trim().startsWith('wt_log remove'))
 

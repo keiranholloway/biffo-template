@@ -126,6 +126,11 @@ export interface StandaloneGitHub {
     branch: string,
     statusChecks: string[],
   ): Promise<BranchProtectionOutcome>
+  sealBranchProtection(
+    org: string,
+    repo: string,
+    branches: string[],
+  ): Promise<BranchProtectionOutcome>
   setRepoVariable(org: string, repo: string, name: string, value: string): Promise<void>
   getRepoVariable(org: string, repo: string, name: string): Promise<string | undefined>
   repoRunnerCount(org: string, repo: string): Promise<number | null>
@@ -453,7 +458,34 @@ async function createAndPushStandaloneRepo(
         'every PR, so none was applied.',
     })
   } else {
-    await github.protectSingleBranch(org, names.dist, 'dev', contexts)
+    const outcome = await github.protectSingleBranch(org, names.dist, 'dev', contexts)
+    // Close the scaffold-time admin bypass (#1212), the same gap #1058 closed
+    // for `init.ts` and `sibling-create.ts`: `protectSingleBranch` sets
+    // `enforce_admins: false` (see its own docstring), and nothing else in this
+    // path ever bound it — so a plugin repo was born with a full required-check
+    // list that was advisory for its own admin, permanently.
+    //
+    // Safe here, not merely convenient: the only git-object write to THIS repo
+    // is the `deps.git.push` above, which has already happened, and nothing
+    // between here and the end of the function writes to it again —
+    // `registerInRegistrySources` below pushes to the *registry* repo, not this
+    // one. That is the same safety argument `sibling-create.ts` makes for
+    // sealing before its own trailing settings calls.
+    //
+    // Sealed only when `protectSingleBranch` actually applied protection
+    // (`outcome.status === 'applied'`), deliberately unlike the unconditional
+    // seal in `init.ts`/`sibling-create.ts`. Those protect three branches at
+    // once, so a partial 403 still leaves other branches genuinely protected
+    // for the seal to bind. Here there is exactly one branch: on a 403 or a
+    // no-contexts skip, `dev` was never protected at all, and sealing it
+    // unconditionally would call `setAdminBranchProtection` on an unprotected
+    // branch — a 404 recorded as `unsealed` with the message "protection was
+    // applied but does not bind admins", which is false in this case and would
+    // duplicate the (correct) `skipped-403`/`skipped-no-contexts` outcome
+    // already recorded above.
+    if (outcome.status === 'applied') {
+      await github.sealBranchProtection(org, names.dist, ['dev'])
+    }
   }
 
   if (options.register !== false) {

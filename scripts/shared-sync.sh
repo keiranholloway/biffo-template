@@ -465,6 +465,51 @@ repo_dir() {
 TEMPLATE_REPO=$(repo_dir "$TEMPLATE_ROOT")
 [ -n "$TEMPLATE_REPO" ] || { echo "$TEMPLATE_ROOT is not a git repository" >&2; exit 2; }
 
+# Refuse to ship from a stale template checkout.
+#
+# This mechanism reads the SATELLITE side from `origin/<base>` refs, never a
+# working tree -- deliberately, because a stale checkout on the measuring
+# machine once produced a fake 4-variant reading of api-client.ts. The TEMPLATE
+# side had no such protection: every file distributed, and every comparison
+# `--check` makes, is read from `$TEMPLATE_ROOT` -- whatever tree you happen to
+# be standing in.
+#
+# That asymmetry bit three times in one session on 2026-08-03:
+#   - `--check` reported `1 current` against a manifest two commits old, which
+#     is a true statement about the wrong question;
+#   - a sweep shipped the PREVIOUS .githooks/pre-push and scripts/verify.sh to
+#     14 repos, which would have deleted a guard script while leaving the
+#     `[ -f ... ]` caller that warns and continues -- silently disabling the
+#     force-push guard estate-wide;
+#   - and both times the output looked confident and well-formed, because being
+#     behind produces a wrong ANSWER rather than an error.
+#
+# Only enforced when HEAD is on the integration branch: CI checks out a detached
+# merge ref, and a feature branch is a legitimate place to test an unmerged
+# change. Exit 2 is "cannot tell", the same convention wait-for-checks.sh and
+# branch-health.sh use, and it is never a pass.
+_tpl_branch=$(git -C "$TEMPLATE_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
+if [ "$_tpl_branch" = "dev" ]; then
+  git -C "$TEMPLATE_ROOT" fetch -q origin dev 2>/dev/null || true
+  _behind=$(git -C "$TEMPLATE_ROOT" rev-list --count HEAD..origin/dev 2>/dev/null || echo 0)
+  if [ "${_behind:-0}" -gt 0 ]; then
+    echo "shared-sync: this template checkout is $_behind commit(s) behind origin/dev." >&2
+    echo "  Everything it would ship, and everything --check compares against, comes from" >&2
+    echo "  THIS tree. Run: git pull --ff-only origin dev" >&2
+    exit 2
+  fi
+  # Only on the SHIPPING path. `--check`, `--candidates` and `--backfill` write
+  # nothing, and refusing to report on a dirty tree would block the very command
+  # you reach for while editing shared files.
+  if [ "${CHECK:-0}" = 0 ] && [ "${CANDIDATES:-0}" = 0 ] && [ "${BACKFILL:-0}" = 0 ] &&
+    ! git -C "$TEMPLATE_ROOT" diff --quiet HEAD -- "$MANIFEST" scripts .githooks _skeletons 2>/dev/null; then
+    echo "shared-sync: uncommitted changes to distributed paths in this checkout." >&2
+    echo "  Shipping them would push content no satellite can trace to a commit." >&2
+    echo "  Commit them, or stash with: git stash push -m shared-sync" >&2
+    exit 2
+  fi
+fi
+
 # The repos this run's scope reaches: same selection as the drift survey below
 # (applies(), template excluded, --repo honoured), fetched and resolved to
 # their base branch. Emitted as `label<TAB>dir<TAB>base`.

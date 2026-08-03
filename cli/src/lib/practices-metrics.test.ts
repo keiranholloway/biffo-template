@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { makeTmpDir } from '../test-utils/tmp.js'
+import { carriedPrsSection } from '../commands/core-upgrade.js'
 // @ts-expect-error -- plain .mjs so the collector runs on bare node from a
 // scheduled workflow that installs nothing. Imported here so the logic has one
 // home rather than a TypeScript copy that can drift from it — same arrangement
@@ -2235,6 +2236,35 @@ describe('cross-repo time-to-feature (#767)', () => {
     expect(parseCarriedPrs(marker('746,747,770'))).toEqual([746, 747, 770])
     expect(parseCarriedPrs('no marker here')).toEqual([])
     expect(parseCarriedPrs(null)).toEqual([])
+  })
+
+  it('round-trips a wrapped, multi-line marker (#1198)', () => {
+    // `carriedPrsSection` used to emit the whole PR list on one line, which
+    // crossed commitlint's 100-character body limit at roughly 13 carried PRs
+    // and made `--apply` unable to commit its own upgrade (#1198). It now
+    // repeats the full marker once per line, chunked to fit. This proves the
+    // reader recovers exactly the writer's PR list once that wrapping is in
+    // play — not just that each side works in isolation.
+    const carried = Array.from({ length: 99 }, (_, i) => i + 1)
+    const section = carriedPrsSection(carried)
+    const markerLines = section.filter((l: string) => l.startsWith('<!--'))
+    expect(markerLines.length).toBeGreaterThan(1) // else the fixture proves nothing
+    for (const line of markerLines) {
+      expect(line.length).toBeLessThanOrEqual(100)
+    }
+
+    const body = `Automated core upgrade.\n\n${section.join('\n')}\n`
+    expect(parseCarriedPrs(body)).toEqual(carried)
+
+    // The #1011 fallback path too: the same wrapped marker embedded in a
+    // commit message rather than a PR body.
+    const commits = [
+      {
+        messageHeadline: 'chore(core): upgrade template core 0.204.3 -> 0.228.5',
+        messageBody: section.join('\n'),
+      },
+    ]
+    expect(parseCarriedPrs(undefined, commits)).toEqual(carried)
   })
 
   it('falls back to a commit message when the PR body has no marker (#1011)', () => {

@@ -1,9 +1,10 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { type CoreManifest, readCoreManifest } from './core-manifest.js'
+import { isInstanceRepo } from './core-version.js'
 import {
   type MergeFileFn,
   type OrphanBaseline,
@@ -511,6 +512,104 @@ describe('buildCommitMessage carries the same marker as the PR body (#1011)', ()
     expect(message).not.toContain(CARRIED_PRS_MARKER)
   })
 })
+
+describe('carriedPrsSection wraps at the commitlint line limit (#1198)', () => {
+  // Real spans hit today: tabsii-platform (21 PRs, 140-char single-line
+  // marker) and biffo-platform (99 PRs, ~1000-char marker). Both rejected the
+  // commit outright — `body-max-line-length` for the first,
+  // `footer-max-line-length` for the second (blank-line-preceded HTML
+  // comments commitlint treats as a footer once long enough). A test with a
+  // 2-PR list, which is what existed before this fix, never crosses the
+  // 13-or-so-PR threshold where the single-line marker starts failing.
+  const oneToNinetyNine = Array.from({ length: 99 }, (_, i) => i + 1)
+
+  it('keeps every rendered line at or under 100 characters', () => {
+    const lines = carriedPrsSection(oneToNinetyNine)
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(100)
+    }
+    // Confirms the fixture actually produced marker lines at all — a fix that
+    // "passes" trivially because nothing got emitted proves nothing.
+    expect(lines.some((l) => l.startsWith('<!--'))).toBe(true)
+  })
+
+  it('splits into more than one marker line once the list is long enough', () => {
+    const lines = carriedPrsSection(oneToNinetyNine)
+    const markerLines = lines.filter((l) => l.startsWith('<!--'))
+    expect(markerLines.length).toBeGreaterThan(1)
+  })
+
+  it('every marker line is independently well-formed and carries every number exactly once', () => {
+    const lines = carriedPrsSection(oneToNinetyNine)
+    const markerLines = lines.filter((l) => l.startsWith('<!--'))
+    const recovered: number[] = []
+    for (const line of markerLines) {
+      expect(line).toMatch(new RegExp(`^<!-- ${CARRIED_PRS_MARKER}[0-9,]+ -->$`))
+      const match = new RegExp(`${CARRIED_PRS_MARKER}([0-9,]+)`).exec(line)
+      recovered.push(...(match?.[1].split(',').map(Number) ?? []))
+    }
+    expect(recovered).toEqual(oneToNinetyNine)
+  })
+
+  it('a small list still renders as a single line, unchanged from before #1198', () => {
+    const lines = carriedPrsSection([750, 746, 746])
+    expect(lines).toEqual(['', `<!-- ${CARRIED_PRS_MARKER}746,750 -->`])
+  })
+})
+
+// Runs the real message past THIS repo's own commitlint toolchain — an
+// instance carries `commitlint.config.js` (template-owned, distributed) but
+// its `node_modules/.bin/commitlint` is a local build artifact this guard
+// cannot resolve as instance-safe (#367/#384), so this whole block is
+// template-only, same as `core-migrations.test.ts`'s "the real template".
+const runningInInstance = isInstanceRepo(repoRoot)
+
+describe.skipIf(runningInInstance)(
+  'the worst-case marker actually passes commitlint (#1198)',
+  () => {
+    // Reproduces the exact failure from the issue, then proves the fix — not by
+    // asserting our own wrapping logic, but by running the real message past
+    // the repo's real commitlint config, the same way `.githooks/commit-msg`
+    // and CI do.
+    const commitlintBin = resolve(repoRoot, 'node_modules/.bin/commitlint')
+
+    function runCommitlint(message: string): { code: number | null; output: string } {
+      const dir = makeTmpDir('commitlint-1198')
+      const file = join(dir, 'MSG')
+      writeFileSync(file, message)
+      const result = spawnSync(commitlintBin, ['--edit', file], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      })
+      return { code: result.status, output: `${result.stdout}${result.stderr}` }
+    }
+
+    it('the pre-fix single-line marker for a 99-PR upgrade is rejected', () => {
+      // The literal shape `buildCommitMessage` used to emit: proves the
+      // reported failure is real before trusting the fix (AGENTS.md §4).
+      const numbers = Array.from({ length: 99 }, (_, i) => i + 1).join(',')
+      const subject = 'chore(core): upgrade template core 0.204.3 -> 0.228.5'
+      const message = `${subject}\n\n<!-- ${CARRIED_PRS_MARKER}${numbers} -->\n`
+      const { code, output } = runCommitlint(message)
+      expect(code).not.toBe(0)
+      expect(output).toMatch(/max-line-length/)
+    })
+
+    it('buildCommitMessage for the same 99-PR upgrade now passes', () => {
+      const numbers = Array.from({ length: 99 }, (_, i) => i + 1)
+      const message = buildCommitMessage('0.204.3', '0.228.5', numbers)
+      const { code, output } = runCommitlint(message)
+      expect(code, output).toBe(0)
+    })
+
+    it('buildCommitMessage for the tabsii-platform 21-PR span now passes', () => {
+      const numbers = Array.from({ length: 21 }, (_, i) => 1042 + i)
+      const message = buildCommitMessage('0.222.4', '0.228.5', numbers)
+      const { code, output } = runCommitlint(message)
+      expect(code, output).toBe(0)
+    })
+  },
+)
 
 describe('planCoreUpgrade reads the template as a git tree, not a directory (#1006)', () => {
   let base: string

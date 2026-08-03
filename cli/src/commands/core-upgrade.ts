@@ -940,6 +940,16 @@ function readCarriedPrs(templateRepo: string | undefined, from: string, to: stri
 }
 
 /**
+ * commitlint's `body-max-line-length` (see `commitlint.config.js`, which
+ * extends `@commitlint/config-conventional`'s default of 100). The marker
+ * must respect it: `buildCommitMessage` embeds this section verbatim into a
+ * commit body, and a rule this load-bearing (ADR-0006 derives the release
+ * bump from the subject) is not something a generated message gets to bend
+ * (#1198).
+ */
+const MARKER_LINE_MAX = 100
+
+/**
  * The template PRs this upgrade carries, in a form a tool can read.
  *
  * ## Why this exists
@@ -960,11 +970,47 @@ function readCarriedPrs(templateRepo: string | undefined, from: string, to: stri
  *
  * Rendered inside an HTML comment: it is provenance for tooling, not something
  * a reviewer needs to read past on every upgrade.
+ *
+ * ## Wrapping (#1198)
+ *
+ * The marker used to be a single line: `36 + ~5n` characters for `n` carried
+ * PRs, which crosses commitlint's 100-character `body-max-line-length` at
+ * roughly n ≥ 13 — exactly the upgrades with the most provenance to carry,
+ * since a wider version span carries more PRs. `--apply` could no longer
+ * commit its own upgrade once the gap grew large enough, which defeats the
+ * entire point of #1011 (the marker surviving a push failure) by never
+ * letting the commit land in the first place.
+ *
+ * Rather than relax the gate (it is right, and it is not this marker's to
+ * weaken) or move the marker somewhere the commit doesn't reach, this repeats
+ * the full `<!-- biffo:carries-template-prs:…numbers… -->` comment once per
+ * line, chunking the sorted PR list so each rendered line stays at or under
+ * `MARKER_LINE_MAX`. Every line is independently a complete, self-describing
+ * marker — `scripts/practices-metrics.mjs`'s `extractCarriedPrs` matches all
+ * of them and unions the numbers, so a reader never needs to reassemble a
+ * split token across lines.
  */
 export function carriedPrsSection(carriedPrs: number[]): string[] {
   if (carriedPrs.length === 0) return []
   const unique = [...new Set(carriedPrs)].sort((a, b) => a - b)
-  return ['', `<!-- ${CARRIED_PRS_MARKER}${unique.join(',')} -->`]
+
+  const lines: string[] = []
+  let chunk: number[] = []
+  for (const pr of unique) {
+    const candidate = [...chunk, pr]
+    const rendered = `<!-- ${CARRIED_PRS_MARKER}${candidate.join(',')} -->`
+    if (rendered.length > MARKER_LINE_MAX && chunk.length > 0) {
+      lines.push(`<!-- ${CARRIED_PRS_MARKER}${chunk.join(',')} -->`)
+      chunk = [pr]
+    } else {
+      chunk = candidate
+    }
+  }
+  if (chunk.length > 0) {
+    lines.push(`<!-- ${CARRIED_PRS_MARKER}${chunk.join(',')} -->`)
+  }
+
+  return ['', ...lines]
 }
 
 /**

@@ -243,16 +243,32 @@ export function isUpgradePr(pr) {
  * and commit-message paths in {@link parseCarriedPrs} — same regex, same
  * validation, so the two can never quietly diverge.
  *
+ * ## Multiple marker lines (#1198)
+ *
+ * `carriedPrsSection` (`cli/src/commands/core-upgrade.ts`) used to emit the
+ * whole PR list as one `<!-- biffo:carries-template-prs:… -->` line, which
+ * crossed commitlint's 100-character `body-max-line-length` at roughly 13
+ * carried PRs and made `--apply` unable to commit its own upgrade. It now
+ * repeats the full marker once per line, chunked to fit the limit — so a
+ * message can contain several complete, independent markers rather than one
+ * marker split across lines. Matching with `g` and unioning every match's
+ * numbers reads all of them back as one list; a single-line legacy marker
+ * (already merged upgrade commits, and every test fixture below) is just the
+ * one-match case of the same loop.
+ *
  * @param {string | null | undefined} text
  */
 function extractCarriedPrs(text) {
   if (typeof text !== 'string') return []
-  const match = new RegExp(`${CARRIED_PRS_MARKER}([0-9,]+)`).exec(text)
-  if (!match?.[1]) return []
-  const numbers = match[1]
-    .split(',')
-    .map((n) => Number(n.trim()))
-    .filter((n) => Number.isInteger(n) && n > 0)
+  const regex = new RegExp(`${CARRIED_PRS_MARKER}([0-9,]+)`, 'g')
+  const numbers = []
+  let match
+  while ((match = regex.exec(text)) !== null) {
+    for (const n of match[1].split(',')) {
+      const num = Number(n.trim())
+      if (Number.isInteger(num) && num > 0) numbers.push(num)
+    }
+  }
   return [...new Set(numbers)].sort((a, b) => a - b)
 }
 

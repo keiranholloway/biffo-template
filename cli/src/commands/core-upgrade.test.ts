@@ -751,6 +751,76 @@ describe('runCoreUpgrade --apply — restores the caller’s branch (#984)', () 
     // HEAD never moved, so there is nothing to restore and no switch to make.
     expect(git.switchBranch).not.toHaveBeenCalled()
   })
+
+  /**
+   * Issue #1137. `applyUpgradePlan` + `git add -A` run and stage the merge
+   * BEFORE `git commit` is attempted, so a commit that fails for any reason —
+   * most commonly the ownership guard correctly refusing a conflicted,
+   * `--allow-conflicts` commit — leaves the working tree dirty with the merge
+   * still in it. At that point the upgrade branch's tip is bit-identical to
+   * `callerBranch`'s (no commit ever landed on it), so `switchBranch`'s own
+   * git-level protection does not fire: switching back would succeed and
+   * silently carry the staged, conflict-marked merge onto the caller's branch
+   * — exactly the "conflicted core upgrade lands on dev" report in #1137.
+   *
+   * `hasUncommittedChanges` returning `true` is how this is simulated here: a
+   * fake can't reproduce git's "identical tip" behaviour directly (see
+   * `core-upgrade.integration.test.ts` for that, against real git), but it can
+   * assert the caller-branch code path never even attempts the unsafe switch
+   * once it knows the tree is dirty.
+   */
+  it('does not switch back when the commit fails and leaves the tree dirty (#1137)', async () => {
+    const { deps, git } = fakeDeps({
+      commit: vi.fn().mockRejectedValue(new Error('core ownership guard: refused (conflicted)')),
+      // First call is `checkInstanceCurrency`'s pre-flight check, before
+      // anything has run — clean, so the upgrade proceeds. Every call after
+      // that is `restoreCallerBranch`'s, once the failed commit has left the
+      // merge staged but uncommitted.
+      hasUncommittedChanges: vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true),
+    })
+
+    await expect(runCoreUpgrade(applyOpts(), deps)).rejects.toThrow(/ownership guard/)
+
+    // The unsafe switch never happens — HEAD stays on the upgrade branch,
+    // where the dirty state actually belongs.
+    expect(git.switchBranch).not.toHaveBeenCalled()
+    expect(vi.mocked(log.warn).mock.calls.map((c) => String(c[0]))).toContainEqual(
+      expect.stringContaining('uncommitted changes'),
+    )
+  })
+
+  it('still restores normally when a later step fails but nothing is left uncommitted', async () => {
+    // Sanity check that #1137's guard is conditional, not a regression of
+    // #984: a failure AFTER a successful commit (push, PR) leaves a clean
+    // tree, and the existing restore-on-failure behaviour above must still
+    // hold for that case.
+    const { deps, git } = fakeDeps({
+      push: vi.fn().mockRejectedValue(new Error('Failed to push branch')),
+      hasUncommittedChanges: vi.fn().mockResolvedValue(false),
+    })
+
+    await expect(runCoreUpgrade(applyOpts(), deps)).rejects.toThrow(/push/i)
+
+    expect(git.switchBranch).toHaveBeenCalledWith(instance, 'main')
+  })
+
+  it('fails closed (does not switch) when it cannot even tell whether the tree is dirty', async () => {
+    const { deps, git } = fakeDeps({
+      commit: vi.fn().mockRejectedValue(new Error('core ownership guard: refused (conflicted)')),
+      // Clean on the pre-flight check, then unanswerable once
+      // `restoreCallerBranch` asks after the commit has failed.
+      hasUncommittedChanges: vi
+        .fn()
+        .mockResolvedValueOnce(false)
+        .mockRejectedValue(new Error('git status failed')),
+    })
+
+    await expect(runCoreUpgrade(applyOpts(), deps)).rejects.toThrow(/ownership guard/)
+
+    // An unanswerable "is it dirty?" is treated the same as "yes" — never as
+    // "no, safe to switch".
+    expect(git.switchBranch).not.toHaveBeenCalled()
+  })
 })
 
 describe('buildPrBody — global workflow promotion note (issue #328)', () => {

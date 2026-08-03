@@ -664,6 +664,11 @@ async function applyAndOpenPr(
   // the primary afterwards (a `git grep`, an audit, another tool's `--cwd .`)
   // silently reads the upgrade tree instead of the integration branch.
   //
+  // Putting HEAD back is not unconditionally safe, though (#1137): see
+  // `restoreCallerBranch`'s docstring for why it refuses to switch at all while
+  // the working tree is dirty, rather than trusting `switchBranch`'s own
+  // git-level protection to make every restore harmless.
+  //
   // Read here rather than reusing the currency check's value so it is the branch
   // as it stands immediately before HEAD moves, not as it stood before planning.
   const callerBranch = await git.currentBranch(options.cwd)
@@ -694,13 +699,41 @@ async function applyAndOpenPr(
 }
 
 /**
- * Put HEAD back where the caller left it, best-effort (#984).
+ * Put HEAD back where the caller left it, best-effort (#984) — but only when
+ * doing so cannot silently relocate unfinished work onto the caller's branch
+ * (#1137).
  *
  * Never throws. It runs in a `finally`, so throwing would replace whatever real
  * error the upgrade hit — a failed push reported as a failed checkout — and the
  * upgrade's actual outcome (branch pushed, PR opened) is not undone by HEAD
  * being in the wrong place. A warning naming both branches is the honest report:
  * the caller can finish the restore with one command.
+ *
+ * ## Why this checks for uncommitted changes first (#1137)
+ *
+ * `switchBranch`'s own git-level safety only refuses a switch that would
+ * **discard** a change — i.e. one that conflicts with content the target
+ * branch already has. That protects against data loss, but it is not the same
+ * property as "this checkout is safe to hand back to the caller": the upgrade
+ * branch is freshly created FROM `callerBranch`, so until a commit lands on it
+ * the two branches' tips are bit-identical. Nothing conflicts with an
+ * identical tree, so `git switch` succeeds trivially and silently carries
+ * whatever is staged or modified — a conflicted, `--allow-conflicts` merge
+ * included — onto `callerBranch`. That is precisely `applyUpgradePlan` +
+ * `git add -A` running, then `git commit` failing (most commonly the
+ * ownership guard correctly refusing a conflict-marked commit): the files are
+ * written and staged before the commit is attempted, so a refused commit
+ * leaves them sitting in the working tree with nothing to distinguish them,
+ * to git, from ordinary uncommitted edits made directly on `callerBranch`.
+ * AGENTS.md §2 forbids a direct commit landing on the integration branch, and
+ * this would leave the caller one ordinary `git commit` away from exactly
+ * that — worse than merely leaving HEAD parked on the upgrade branch, which is
+ * only untidy.
+ *
+ * So: refuse to switch at all while the working tree is dirty. Leaving HEAD on
+ * the upgrade branch is always safe — the dirty state stays attributed to the
+ * branch that actually produced it — and the warning says so explicitly rather
+ * than guessing whether the caller wanted those changes kept or discarded.
  */
 async function restoreCallerBranch(
   git: CoreUpgradeGit,
@@ -718,6 +751,29 @@ async function restoreCallerBranch(
     )
     return
   }
+
+  // #1137: check before switching, not after. See the docstring above for why
+  // an uncommitted change here is unsafe to carry across even though
+  // `switchBranch` itself would not refuse it.
+  let dirty: boolean
+  try {
+    dirty = await git.hasUncommittedChanges(cwd)
+  } catch {
+    // Cannot tell — fail closed the same way a genuine "yes" does, rather than
+    // switching on the optimistic assumption that a failed check meant clean.
+    dirty = true
+  }
+  if (dirty) {
+    log.warn(
+      `Left ${cwd} on ${upgradeBranch}: it has uncommitted changes from this run, and switching ` +
+        `back to ${callerBranch} would silently carry them onto it rather than losing them — which ` +
+        `is worse (#1137). Resolve them on ${upgradeBranch} first: commit them there, or discard the ` +
+        `failed attempt with \`git reset --hard\` / \`git clean -fd\`, THEN ` +
+        `\`git switch ${callerBranch}\`.`,
+    )
+    return
+  }
+
   try {
     await git.switchBranch(cwd, callerBranch)
   } catch {

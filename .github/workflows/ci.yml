@@ -130,11 +130,26 @@ jobs:
       # derives the bump from the squash-merge subject — which is this PR's
       # title. Fail if that title is not a Conventional Commits subject, or a
       # feature ships silently as a patch (ADR-0006, #423).
+      #
+      # Deliberately NOT `PR_TITLE: ${{ github.event.pull_request.title }}`
+      # (#1187, the second instance of #1174): that value is frozen at the
+      # moment the `pull_request` event fired, and this step's ONLY remedy is
+      # "retitle the PR" — an edit that neither re-triggers CI (no `edited` in
+      # the trigger's default types) nor changes what a re-run replays. So a
+      # correctly retitled PR stayed red until someone pushed an unrelated
+      # commit. GH_TOKEN/PR_NUMBER/GH_REPO instead let the script
+      # (`resolveReleaseSubject`) read the title LIVE via `gh pr view`, so a
+      # re-run genuinely re-evaluates the PR as it is now.
+      #
+      # `pull-requests: read` is already granted on this job — added for the
+      # closing-keywords fetch in #1180, and it covers the title too.
       - if: github.event_name == 'pull_request'
         run: sh scripts/biffo.sh check release-subject
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
       # The mirror image, for instances: fail if an INSTANCE changed a
       # template-owned path (#370). Inert in the template, where that is the
       # point of every PR. Shares this job rather than adding its own — same

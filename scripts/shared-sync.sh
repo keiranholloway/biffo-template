@@ -490,8 +490,21 @@ TEMPLATE_REPO=$(repo_dir "$TEMPLATE_ROOT")
 # branch-health.sh use, and it is never a pass.
 _tpl_branch=$(git -C "$TEMPLATE_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
 if [ "$_tpl_branch" = "dev" ]; then
-  git -C "$TEMPLATE_ROOT" fetch -q origin dev 2>/dev/null || true
-  _behind=$(git -C "$TEMPLATE_ROOT" rev-list --count HEAD..origin/dev 2>/dev/null || echo 0)
+  # Only claim "behind" when the fetch actually SUCCEEDED. A clone that cannot
+  # reach its remote still has a local `origin/dev` ref, and it can legitimately
+  # be behind it -- but "you are behind, run git pull" is the wrong diagnosis
+  # for a repo whose fetch just failed, and it masked the real message
+  # ("cannot fetch") that shared-sync already prints for exactly that case.
+  #
+  # Found when #1220 stopped this suite serving a cached pass: two tests that
+  # assert the fetch-failure path had been green without running. A guard that
+  # answers a question it could not ask is the same defect this preflight
+  # exists to catch, one level in.
+  if git -C "$TEMPLATE_ROOT" fetch -q origin dev 2>/dev/null; then
+    _behind=$(git -C "$TEMPLATE_ROOT" rev-list --count HEAD..origin/dev 2>/dev/null || echo 0)
+  else
+    _behind=0
+  fi
   if [ "${_behind:-0}" -gt 0 ]; then
     echo "shared-sync: this template checkout is $_behind commit(s) behind origin/dev." >&2
     echo "  Everything it would ship, and everything --check compares against, comes from" >&2

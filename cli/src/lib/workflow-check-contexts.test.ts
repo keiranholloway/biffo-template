@@ -119,6 +119,10 @@ describe.runIf(SKELETON)('against the real plugin skeleton', () => {
       'Type Check',
       'Test',
       'Validate biffo.plugin.json',
+      // #1244. The skeleton ships a terraform/ module and, until now, nothing
+      // that looked at it. Adding the job adds a required context, which is the
+      // point: a scaffolded plugin repo cannot merge unparseable HCL.
+      'Terraform (fmt)',
       'Secret Scan',
       'Dependency Audit',
     ])

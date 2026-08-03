@@ -1958,6 +1958,42 @@ the PR-per-instance exist because manual copy-ins let instances drift silently
 argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
+### Measured: eight and a half hours, **zero delivery** — 500m at 0 delivery / 290 platform / 210 toil (2026-08-03)
+
+The single most useful number this page has produced, and it is a **zero**.
+
+A full session — 04:16 to 12:40, ~500 agent-minutes — shipped **nothing a
+tabsii user would notice**. Twenty merged PRs, fourteen satellites resynced
+twice, and not one line of product. Logged via `practices-session.mjs` as
+`delivery 0 · platform 290 · toil 210` rather than rounded into something more
+comfortable, because a flattering estimate breaks the only measurement that can
+falsify the merge-derived split.
+
+**Where the 210 toil minutes went**, largest first:
+
+| Cost | Cause | Structural? |
+| --- | --- | --- |
+| **~80m** across two rounds of **28 shared-sync PRs** over 14 repos | Each round: open 14, wait for CI on a saturated self-hosted fleet, merge 13, re-verify `--check`. Three repos additionally needed `update-branch` because `strict` protection means green-but-behind cannot merge | **Structural.** Nothing was wrong; this is what distributing one file to fourteen repos costs |
+| **~40m** hand-finishing **both instance core upgrades** | `commitlint` rejected the tool's own commit message twice — the carries-template-prs marker is one line and `body-max-line-length` is 100 (#1198). 21 PRs = 140 chars; 99 = ~1000 | **Structural**, and self-inflicted by a fix: #1011 moved the marker into the commit message to protect provenance, which is what made the commit unmakeable |
+| **~20m** resolving one `AGENTS.md` conflict **twice** | `lint-staged` ran `prettier` over a conflicted file and rewrote the markers — `>>>>>>>` became a `> > > > > > >` blockquote, `=======` became `\=======`. The first resolver silently dropped **121 lines** | **Structural.** Any `--allow-conflicts` upgrade hits it |
+| **~15m** on a **`pg-test` failure that was not a regression** | `pg-test-db.sh` keys its container per checkout and reuses it indefinitely; this one had been up 13 hours, so a fixture seeded "10 days ago" had become 11. The upgrade touched no `domains/` code at all | Structural — a date-seeded fixture against a long-lived container rots on a clock, not on a change |
+| **~20m** on **four claim collisions** | Withdrawing from #1174, releasing #1188, discovering #1165 had already merged. Three of four were work-existing with no label | Structural — the rule lived in 4 of 11 skills (#1209) |
+| **~10m** on **`/tmp` ENOSPC mid-session** | The CLI suite leaks ~40 temp dirs per run; `/tmp` held 30,211 entries, 17,648 of them fixtures. Unrelated tooling started failing | Structural (#1197), and it broke things that had nothing to do with it |
+| **~10m** on transient reruns | A Terraform provider-registry reset and a `git push` that printed `Everything up-to-date` while 2 commits ahead | Noise, but the push one is the masked-push trap and only checking the remote caught it |
+
+**The honest reading.** Almost none of that was carelessness — six of seven rows
+are structural, meaning a setting or a mechanism would remove the need entirely
+rather than someone being more careful. That is the useful finding: *this
+estate's plumbing cost is a property of its shape, not of its operators.*
+
+**And the uncomfortable one.** The 290 platform minutes were real, chosen
+investment — a redaction primitive, a branch-health tool, a claim protocol, an
+E2E harness, a CodeQL gate. Every one is defensible on its own. Together they
+are still a full working day in which **the product did not move**. Two or three
+such days in a row is a pattern worth naming out loud rather than discovering in
+a quarterly.
+
+
 ## What went well — practices that earned their keep
 
 **Check whether the guard already exists before writing it.** Asked to build two
@@ -3931,6 +3967,35 @@ mutation is the bug's real shape, since `tenant_id` arrives by inheritance.
 
 **Worth adding to §3:** for a new module, revert the *logic*, not the *file*.
 
+**Three separate guards caught me, and two were written the same day.** The
+`shared-files-parity` test refused a hook change that had not been mirrored into
+both skeletons. `repo-layout-assertion-guard` refused a new test for naming
+`.husky/` — a path instances do not have. `status-checks.test.ts` refused a new
+E2E job **until it was actually required**, which is precisely the complaint
+#1208 makes about `tabsii-geo`. And `no-raw-mkdtemp` (merged hours earlier) has
+now caught three PRs including one of mine. None of these were about the
+subject of the change; all three were about a consequence I had not thought
+through.
+
+**`branch-health.sh` attributed a breakage correctly on its first use in a repo
+it was not written in.** `tabsii-geo`'s `dev` was red and a shared-sync PR
+inherited the failure. It reported `CI has been failing since 28d62534
+(06:44) … The newest failure is at 68317c4e — but it is NOT where this
+started.` — naming another session's auth change, hours earlier, rather than the
+PR in hand. That is the exact 2h25m misattribution the tool was written for,
+answered in one command, in the environment least like the one it was built in.
+
+**Reading a conflict instead of resolving it found two instance fixes the
+template lacked.** A `core upgrade` reported `cognito.py` as a conflict. Taking
+the template's side would have silently reintroduced two bugs `tabsii-platform`
+had already fixed: a symbol alphabet deliberately excluding `$` and `&` (they do
+not survive an HTML invite email, `tabsii-crm#52`), and a password floor of 12
+matching the pool's real `minimum_length` against the template's 8. Both were
+folded upstream **first** (#1192, #1195), each with a guard, and only then was
+the conflict resolved. AGENTS.md §9 calls this "reconcile before you
+distribute"; this is the first time it has been followed rather than cited.
+
+
 ## What needs more thought
 
 **Nothing audits a guard's reach, and reach is where guards actually fail.**
@@ -5455,6 +5520,39 @@ had already become machine guards earlier in the session (the sibling deploy's
 `deploy-status` job, and the CRUD schema check in `_run_db_init`). **The prose
 half is the part on trial.**
 
+**A rule has two distribution channels and nothing checks you used both.**
+`AGENTS.md` at the repo root reaches *instances* via `biffo core upgrade`;
+`_skeletons/*/AGENTS.md` reaches *satellites* via `shared-sync`. The claim
+protocol was written into the root only, so `scripts/claim.sh` landed in 14
+satellites with **zero** mentions of it in their `AGENTS.md`. Found by checking
+a real satellite; `--check` reported the estate clean throughout, because the
+script was current and the rule was simply absent. Nothing detects "this file
+was distributed and the thing that explains it was not".
+
+**"Not done until `--check` is clean" is written for *adding* a file, and the
+same rule silently governs *changing* one.** Merging a `scripts/verify.sh`
+change re-drifted all 14 satellites within the hour, an hour after #1203 was
+filed about exactly that class. The prose reads as a rule about the manifest;
+it is really a rule about every merge that touches a listed path.
+
+**The claim protocol cannot prevent a race, and one of four collisions proves
+it.** #1165 went from branch to **merged in three minutes**. No label, no
+pre-flight check and no amount of discipline would have caught that window. The
+honest position is that `claim.sh` makes collisions *cheap to detect early*, not
+impossible — and the four collisions this session all cost minutes rather than
+shipped rework, which is the argument for not building anything heavier.
+
+**Half the estate cannot run CodeQL at any price.** `biffo-platform`,
+`biffo-platform-app` and `biffo-runners` are private repos under a **user
+account**, where GitHub offers no `code_security` setting at all — the API
+returns no such key, where an org repo returns `code_security: disabled`. They
+hold template-owned code that `core upgrade` distributes and that is scanned
+only in `biffo-template`. The four TOCTOU findings (#1222) **run in those
+repos** and would never have been reported there. Either they move to an
+organisation, or the JS/TS gap gets closed by something that does not need a
+SARIF upload.
+
+
 ## Skills used
 
 Skills cannot be iterated on impressions. Every invocation, with an honest outcome.
@@ -5715,6 +5813,10 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-add-service` | **partial — its "most follow-up wiring is now automatic" is true, and the gap it leaves is the expensive one** | `biffo sibling create` set every repo variable correctly and the skill's known-gotcha list is genuinely obsolete (RUNNER_LABEL, CORS, PATH_PREFIX all handled). But the sibling's first Deploy fires from the skeleton push in step 4, ~1s **before** step 7 sets `SIBLING_DEPLOY_ENABLED` — so it skips both jobs and reports **success**. The skill says to "verify the result is genuinely live rather than merely green", which is exactly right and is the only reason it was caught; it does not warn that the first green run is *always* a lie. |
 | `groom-backlog` | **worked — and its "an open issue is a claim" rule paid twice in one run** | 28 open → 18. Its Step 1 fan-out (four read-only agents on a cheap model) verified 28 issues in one pass, and its **spot-check-the-surprising-verdicts** rule is what stopped the run's only irreversible mistake: the single `STALE/WRONG` verdict was right that #1019's premise was false (both CRUD guards use AND; ADR-0010 mentions neither "supersedes" nor "bypass") and wrong that the issue was therefore closable — its second ask, a test asserting the two guards agree, was real and unmet. Closing on the agent's summary would have discarded it. Its weakest point is the same as last time: **ranking**. The order it produced was reshuffled once real file-overlap constraints were applied, because two of the top items shared `cli/src/lib/core-upgrade.ts` and could not run concurrently. |
 | `biffo-verify` | **partial — §8 fired on operator prompt again; this file now records that same cause at least four times** | The diagnostic half of this skill was applied all session **without the skill being invoked at all**: §2 (reproduce by the reporter's route) on #726, §4 (verify the deployed artefact) on #1058 where `git tag --contains` disproved a scaffold's provenance that timestamps appeared to confirm, and §6's blind-zero check **twice decisively** — seven days of quiet logs meant "no dry-run was ever run", not "the fix works", and zero runs for a sibling brand needed an unscoped control before it meant anything. Those parts are internalised because **they pay the session that performs them**. §8 pays the *next* session, and it fired only when the operator asked — for at least the fourth consecutive recorded time, on top of an entry above that already concluded *"a section that keeps diagnosing its own non-use and does not change is evidence the trigger is wrong"*. That diagnosis has now been correct and inert for four sessions. **The parallel with this session's other finding is exact**: 121 corpus rows did not stop five fail-opens shipping, and four recorded diagnoses have not made §8 self-trigger. Documented is not prevented. The fix is mechanical or it is nothing — §8 should fire on *"a defect was found"*, which is observable, rather than on *"the session is ending"*, which nothing detects. |
+| `groom-backlog` | **worked — Step 1's "an issue is a claim" was worth more than the fixes** | Ran across four batches. Verification caught **#1096's premise as largely false** (the guard takes `adrDir` as a parameter and only ever scans its own repo, and the real harm was already fixed by #1097), **#1133 marked DONE on a docs-only PR** whose two substantive defects were untouched, **#1040 marked STALE** when only its diagnosis had been retracted, and **#1083 marked DONE** when it is a running experiment with a 2026-09-01 review date. Four wrong verdicts in ten spot-checks, every one in the direction of closing live work. The class-sweep step is what turned "fix #1135" into finding #1169 — the same missing primitive failing in the opposite direction, leaking a token where the other discarded an error. |
+| `biffo-verify` | **worked — §3 caught a test of mine that could not fail** | The sharpest single moment of the session. The new sibling E2E smoke spec passed against a harness **deliberately broken exactly as `tabsii-geo`'s was**, because the draft omitted `NEXT_PUBLIC_CORE_PORTAL_URL` and `page.tsx` only redirects `if (signed_out && CORE_PORTAL_URL)` — so the app had nowhere to redirect to and the assertion could not fire. Reading the spec would never have shown it; only reverting the harness and watching did. It was about to ship into **every future sibling** as coverage-shaped scaffolding. §2's "verify in the environment least like the one you built in" also fired: the claim-protocol fix was verified against a **real satellite** rather than the drift report, which is the only reason it was caught reaching 14 repos with the rule explaining it reaching none. |
+| `biffo-workflow` | **worked — the honest-push rule fired for real, again** | `git push` printed `Everything up-to-date` after a transport error while the local branch was **2 commits ahead**. Caught only because §4 says check the remote rather than believe the message. Also caught the `\| tail` exit-status trap twice in my own verification: `sh scripts/claim.sh <closed issue>; echo $?` through a pipe reported `0` for every case, and re-measuring without the pipe gave the real `1`/`2`. The trap is documented for `git push`; it applies to any command whose exit code you are reading. |
+| `biffo-verify` | **partial — §8 has no guidance on distributing the lesson itself** | The skill is emphatic that a lesson must be recorded, and correct that it is where ad-hoc work escapes. What it does not cover is that in this estate a rule has **two distribution channels** — the root `AGENTS.md` reaches *instances* via `biffo core upgrade`, and `_skeletons/*/AGENTS.md` reaches *satellites* via `shared-sync`. Writing the claim rule into the root only (#1209) put it where 14 of 17 repos cannot read it, and it took a manual check of a real satellite to notice. Suggested addition to §8: when the lesson is a **rule**, name which channel carries it to which repos, and verify in one repo of each kind. |
 
 ## Adding a row
 

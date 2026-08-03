@@ -1,0 +1,15 @@
+{
+  "refs": [
+    "#1203"
+  ],
+  "summary": "A distributed fix reached 14 repos with the rule explaining it reaching none of them. #1209 added the claim protocol to the template's ROOT AGENTS.md and distributed scripts/claim.sh to every satellite. Checked afterwards against a real satellite rather than the drift report: claim.sh present on tabsii-crm dev, AGENTS.md mentions of it = 0. A satellite's AGENTS.md comes from filesFromSkeleton — the SKELETON's copy — not the repo root, which is the instance ruleset carrying section 9 and the upgrade flow. So editing the root reached instances via core upgrade and no satellite at all: 14 repos got a script with nothing telling them to run it. This is the same defect the fix was for, reproduced inside its own fix. Separately, merging a change to scripts/verify.sh (a shared file) without re-running shared-sync re-drifted all 14 within the hour — the rule 'not done until --check is clean' applies to CHANGING a listed file, not only to adding one",
+  "class": "drift",
+  "alsoClass": [
+    "process"
+  ],
+  "surfacedIn": "all 14 satellites",
+  "fixesIn": "biffo-template _skeletons/*/AGENTS.md",
+  "status": "fixed",
+  "costMinutes": 35,
+  "date": "2026-08-03"
+}

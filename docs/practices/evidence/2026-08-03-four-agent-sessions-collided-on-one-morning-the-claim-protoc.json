@@ -1,0 +1,16 @@
+{
+  "refs": [
+    "#1209",
+    "#1213"
+  ],
+  "summary": "Four agent sessions collided on one morning. The claim protocol (an in-progress label) lived ONLY in the groom-backlog skill: 4 of 11 skills mentioned it, and biffo-workflow — the skill for driving a unit of work start to merge — was not one of them, nor biffo-verify, biffo-sib-imp or practices-standup. Nothing in the repo mentioned it at all. So the sessions doing the work had never been told the rule existed. THREE OF FOUR collisions were work-exists-label-does-not (a live worktree or a merged PR on an unlabelled issue); the fourth was the reverse. Checking only the label would have caught one of four. Fixed by moving the rule to AGENTS.md and adding scripts/claim.sh, which checks four signals: label, open PR referencing the issue, remote branch naming it, and a merged PR that closed it. It cannot prevent a race — one issue went from branch to merged in three minutes",
+  "class": "drift",
+  "alsoClass": [
+    "process"
+  ],
+  "surfacedIn": "biffo-template #1165, #1174, #1188, #621/#956",
+  "fixesIn": "biffo-template AGENTS.md, _skeletons/*/AGENTS.md, scripts/claim.sh",
+  "status": "fixed",
+  "costMinutes": 55,
+  "date": "2026-08-03"
+}

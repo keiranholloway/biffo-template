@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * The defect this script exists to prevent is a wait loop that reads "no checks
@@ -33,7 +33,7 @@ interface StubOptions {
  * once exhausted, so a test only spells out the states it cares about.
  */
 function stubGh(options: StubOptions): string {
-  const dir = mkdtempSync(join(tmpdir(), 'waitchecks-'))
+  const dir = makeTmpDir('waitchecks')
   const counter = join(dir, 'calls')
   writeFileSync(counter, '0')
 

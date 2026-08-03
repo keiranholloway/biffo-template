@@ -1,12 +1,12 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { assertInvokes, assertRunsCommand } from '../lib/workflow-run-commands.js'
 import type { CoreManifest } from '../lib/core-manifest.js'
 import { checkCommand } from './check.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '../../..')
@@ -123,7 +123,7 @@ describe('scripts/biffo.sh', () => {
    * bug, and this dispatcher runs in every guard invocation in every repo.
    */
   const dispatchFor = (instanceVersion: string | null): string => {
-    const dir = mkdtempSync(join(tmpdir(), 'biffo-dispatch-'))
+    const dir = makeTmpDir('biffo-dispatch')
     try {
       execFileSync('git', ['init', '-q'], { cwd: dir })
       if (instanceVersion !== null) {

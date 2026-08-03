@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runPluginUninstall } from './plugin-uninstall.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -22,7 +22,7 @@ const MANIFEST = {
 }
 
 function makeProjectRoot(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'biffo-project-'))
+  const dir = makeTmpDir('biffo-project')
   mkdirSync(join(dir, 'services', 'widgets'), { recursive: true })
   writeFileSync(join(dir, 'services', 'widgets', 'biffo.plugin.json'), JSON.stringify(MANIFEST))
   return dir
@@ -69,7 +69,7 @@ describe('runPluginUninstall', () => {
   })
 
   it('rejects when cwd has no services/ directory', async () => {
-    const notAProject = mkdtempSync(join(tmpdir(), 'not-a-biffo-project-'))
+    const notAProject = makeTmpDir('not-a-biffo-project')
     try {
       await expect(
         runPluginUninstall(

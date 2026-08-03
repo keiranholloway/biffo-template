@@ -9,8 +9,7 @@
  * adapter, a manifest shape the real validator rejects, etc.
  */
 import { execa } from 'execa'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
@@ -18,6 +17,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { GitAdapter } from '../adapters/git/index.js'
 import { RegistryAdapter } from '../adapters/registry/index.js'
 import { runPluginInstall } from './plugin-install.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 const REGISTRY_URL = 'https://example.com/registry/plugins.json'
 const server = setupServer()
@@ -66,7 +66,7 @@ describe('runPluginInstall — end-to-end', () => {
 
   beforeEach(async () => {
     // A local bare-ish "plugin repo" the CLI will `git clone`.
-    pluginSourceRepo = mkdtempSync(join(tmpdir(), 'biffo-plugin-source-'))
+    pluginSourceRepo = makeTmpDir('biffo-plugin-source')
     await initGitRepo(pluginSourceRepo)
     writeFileSync(
       join(pluginSourceRepo, 'biffo.plugin.json'),
@@ -91,7 +91,7 @@ describe('runPluginInstall — end-to-end', () => {
     await commitAll(pluginSourceRepo, 'initial plugin source')
 
     // A local "Biffo project checkout" the CLI installs into.
-    projectRoot = mkdtempSync(join(tmpdir(), 'biffo-project-'))
+    projectRoot = makeTmpDir('biffo-project')
     mkdirSync(join(projectRoot, 'services'), { recursive: true })
     await initGitRepo(projectRoot)
     writeFileSync(join(projectRoot, 'README.md'), '# Test project\n')

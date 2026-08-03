@@ -1,5 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -15,6 +14,7 @@ import {
   resolveBranch,
 } from './core-ownership-guard.js'
 import { upgradeBranchName } from './core-upgrade.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const manifest = readCoreManifest(repoRoot)
@@ -336,7 +336,7 @@ describe('checkCoreOwnership — warn-only prefixes', () => {
 describe('readDivergenceConfig', () => {
   let dir: string
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'biffo-divergence-'))
+    dir = makeTmpDir('biffo-divergence')
   })
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true })

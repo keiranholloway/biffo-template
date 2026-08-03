@@ -1,5 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
@@ -9,11 +8,12 @@ import {
   findSkeletonRoot,
   scaffoldPlugin,
 } from './plugin-scaffold.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 let root: string
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'plugin-scaffold-'))
+  root = makeTmpDir('plugin-scaffold')
 })
 
 afterEach(() => {

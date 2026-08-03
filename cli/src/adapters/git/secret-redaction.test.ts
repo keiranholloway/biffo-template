@@ -1,10 +1,10 @@
 import { execa } from 'execa'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterAll, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { GitAdapter, REDACTED, redactSecrets } from './index.js'
+import { makeTmpDir } from '../../test-utils/tmp.js'
 
 /**
  * No thrown error from a token-taking git operation may contain the token.
@@ -53,20 +53,9 @@ const SENTINEL = 'BIFFO-SENTINEL-NOT-A-REAL-CREDENTIAL-0123456789'
  */
 const UNROUTABLE = 'https://127.0.0.1:1/biffo/does-not-exist.git'
 
-const temps: string[] = []
-function tempDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `${prefix}-`))
-  temps.push(dir)
-  return dir
-}
-
-afterAll(() => {
-  for (const dir of temps) rmSync(dir, { recursive: true, force: true })
-})
-
 /** A real repo with one commit and an HTTPS remote, so `push` reaches `injectToken`. */
 async function repoWithHttpsRemote(): Promise<string> {
-  const dir = tempDir('biffo-redact-push')
+  const dir = makeTmpDir('biffo-redact-push')
   const opts = { cwd: dir } as const
   await execa('git', ['init', '-q', '-b', 'main'], opts)
   await execa('git', ['config', 'user.email', 'test@example.com'], opts)

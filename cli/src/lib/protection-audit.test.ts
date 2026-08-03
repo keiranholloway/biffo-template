@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * `protection-audit.sh` answers two questions that look like one.
@@ -55,7 +55,7 @@ interface RepoSpec {
 }
 
 function estateWith(specs: (string | RepoSpec)[]) {
-  const estate = mkdtempSync(join(tmpdir(), 'protaudit-'))
+  const estate = makeTmpDir('protaudit')
   for (const raw of specs) {
     const spec: RepoSpec = typeof raw === 'string' ? { slug: raw } : raw
     const branches = spec.branches ?? ['dev']

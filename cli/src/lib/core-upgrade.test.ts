@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -17,6 +16,7 @@ import {
   readOrphanBaseline,
   writeOrphanBaseline,
 } from './core-upgrade.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 
@@ -42,9 +42,9 @@ describe('planCoreUpgrade (classification)', () => {
   let theirs: string
 
   beforeEach(() => {
-    base = mkdtempSync(join(tmpdir(), 'base-'))
-    ours = mkdtempSync(join(tmpdir(), 'ours-'))
-    theirs = mkdtempSync(join(tmpdir(), 'theirs-'))
+    base = makeTmpDir('base')
+    ours = makeTmpDir('ours')
+    theirs = makeTmpDir('theirs')
   })
   afterEach(() => {
     for (const d of [base, ours, theirs]) rmSync(d, { recursive: true, force: true })
@@ -341,8 +341,8 @@ import type { UpgradePlan } from './core-upgrade.js'
  */
 describe('applyUpgradePlan — file modes', () => {
   it('mirrors the executable bit from the upstream tree', () => {
-    const theirs = mkdtempSync(join(tmpdir(), 'theirs-mode-'))
-    const instance = mkdtempSync(join(tmpdir(), 'inst-mode-'))
+    const theirs = makeTmpDir('theirs-mode')
+    const instance = makeTmpDir('inst-mode')
     try {
       writeFileSync(join(theirs, 'run.sh'), '#!/bin/sh\necho hi\n', { mode: 0o755 })
       writeFileSync(join(theirs, 'plain.txt'), 'data\n', { mode: 0o644 })
@@ -371,7 +371,7 @@ describe('applyUpgradePlan — file modes', () => {
 describe('applyUpgradePlan', () => {
   let dir: string
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'apply-'))
+    dir = makeTmpDir('apply')
   })
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true })
@@ -527,12 +527,12 @@ describe('planCoreUpgrade reads the template as a git tree, not a directory (#10
   }
 
   beforeEach(() => {
-    base = mkdtempSync(join(tmpdir(), 'base-'))
-    ours = mkdtempSync(join(tmpdir(), 'ours-'))
+    base = makeTmpDir('base')
+    ours = makeTmpDir('ours')
     // The target tree is a live template checkout, which is what the fast path
     // ("the target IS this checkout's latest tag") and --to-template both hand
     // the planner.
-    theirs = mkdtempSync(join(tmpdir(), 'theirs-'))
+    theirs = makeTmpDir('theirs')
     git(theirs, ['init', '--quiet'])
   })
   afterEach(() => {
@@ -636,9 +636,9 @@ describe('planCoreUpgrade orphan report (#1026)', () => {
   }
 
   beforeEach(() => {
-    base = mkdtempSync(join(tmpdir(), 'base-'))
-    ours = mkdtempSync(join(tmpdir(), 'ours-'))
-    theirs = mkdtempSync(join(tmpdir(), 'theirs-'))
+    base = makeTmpDir('base')
+    ours = makeTmpDir('ours')
+    theirs = makeTmpDir('theirs')
   })
   afterEach(() => {
     for (const d of [base, ours, theirs]) rmSync(d, { recursive: true, force: true })
@@ -711,7 +711,7 @@ describe('orphan baseline (#1026)', () => {
   let instance: string
 
   beforeEach(() => {
-    instance = mkdtempSync(join(tmpdir(), 'orphan-baseline-'))
+    instance = makeTmpDir('orphan-baseline')
   })
   afterEach(() => {
     rmSync(instance, { recursive: true, force: true })

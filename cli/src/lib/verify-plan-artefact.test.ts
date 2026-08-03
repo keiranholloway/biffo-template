@@ -18,11 +18,11 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const SCRIPT = join(repoRoot, 'scripts/verify.sh')
@@ -36,7 +36,7 @@ interface Run {
 }
 
 function runWith(rel: string | null, bytes: Buffer | null): Run {
-  const dir = mkdtempSync(join(tmpdir(), 'biffo-plan-'))
+  const dir = makeTmpDir('biffo-plan')
   try {
     execFileSync('git', ['init', '-q'], { cwd: dir })
     writeFileSync(join(dir, 'package.json'), '{"name":"p","scripts":{"lint":"true"}}\n')

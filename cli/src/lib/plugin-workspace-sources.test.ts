@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
@@ -14,7 +14,7 @@ import {
 
 let root: string
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'biffo-uv-sources-'))
+  root = makeTmpDir('biffo-uv-sources')
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 

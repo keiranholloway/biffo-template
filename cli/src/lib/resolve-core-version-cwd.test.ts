@@ -19,11 +19,12 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, copyFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, copyFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 // cli/src/lib/ -> cli/src/ -> cli/ -> repo root
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -34,7 +35,7 @@ let workdir: string
 beforeEach(() => {
   // A minimal INSTANCE: biffo.core.json at the root, the script under scripts/,
   // and the artifact directory deploy-app.yml actually runs from.
-  workdir = mkdtempSync(join(tmpdir(), 'corever-'))
+  workdir = makeTmpDir('corever')
   mkdirSync(join(workdir, 'scripts'), { recursive: true })
   mkdirSync(join(workdir, 'api-service'), { recursive: true })
   writeFileSync(join(workdir, 'biffo.core.json'), JSON.stringify({ version: '9.9.9' }))

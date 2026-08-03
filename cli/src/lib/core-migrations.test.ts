@@ -1,13 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -29,6 +20,7 @@ import {
   validateChain,
 } from './core-migrations.js'
 import { listTemplateOwnedFiles } from './core-manifest.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 
@@ -131,8 +123,8 @@ describe('planMigrationCarry', () => {
   let instanceDir: string
 
   beforeEach(() => {
-    templateDir = mkdtempSync(join(tmpdir(), 'tmpl-'))
-    instanceDir = mkdtempSync(join(tmpdir(), 'inst-'))
+    templateDir = makeTmpDir('tmpl')
+    instanceDir = makeTmpDir('inst')
     for (const d of [templateDir, instanceDir]) {
       mkdirSync(join(d, MIGRATIONS_VERSIONS_DIR), { recursive: true })
     }
@@ -247,8 +239,8 @@ describe('applyMigrationCarry', () => {
   let instanceDir: string
 
   beforeEach(() => {
-    templateDir = mkdtempSync(join(tmpdir(), 'tmpl-'))
-    instanceDir = mkdtempSync(join(tmpdir(), 'inst-'))
+    templateDir = makeTmpDir('tmpl')
+    instanceDir = makeTmpDir('inst')
     mkdirSync(join(templateDir, MIGRATIONS_VERSIONS_DIR), { recursive: true })
   })
   afterEach(() => {
@@ -306,8 +298,8 @@ describe('planMigrationCarry — recognising an already-carried migration', () =
   let instanceDir: string
 
   beforeEach(() => {
-    templateDir = mkdtempSync(join(tmpdir(), 'tmpl-'))
-    instanceDir = mkdtempSync(join(tmpdir(), 'inst-'))
+    templateDir = makeTmpDir('tmpl')
+    instanceDir = makeTmpDir('inst')
     for (const d of [templateDir, instanceDir]) {
       mkdirSync(join(d, MIGRATIONS_VERSIONS_DIR), { recursive: true })
     }
@@ -802,7 +794,7 @@ describe.skipIf(runningInInstance)('the real template', () => {
   })
 
   it('carries every core migration into a fresh instance', () => {
-    const instanceDir = mkdtempSync(join(tmpdir(), 'fresh-'))
+    const instanceDir = makeTmpDir('fresh')
     try {
       const plan = planMigrationCarry({ templateDir: repoRoot, instanceDir })
       const templateFiles = readMigrations(join(repoRoot, MIGRATIONS_VERSIONS_DIR)).map(

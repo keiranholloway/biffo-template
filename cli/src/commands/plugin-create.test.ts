@@ -1,13 +1,4 @@
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs'
-import { tmpdir } from 'node:os'
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -18,6 +9,7 @@ import { INSTANCE_CORE_FILE } from '../lib/core-version.js'
 import { findSkeletonRoot } from '../lib/plugin-scaffold.js'
 import { log } from '../lib/logger.js'
 import { runPluginCreate } from './plugin-create.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -97,7 +89,7 @@ beforeEach(() => {
   vi.mocked(log.success).mockClear()
   // Module-scoped, and a real CLI run is one process — tests clear it themselves.
   resetBranchProtectionOutcomes()
-  projectRoot = mkdtempSync(join(tmpdir(), 'biffo-project-'))
+  projectRoot = makeTmpDir('biffo-project')
   mkdirSync(join(projectRoot, 'services'), { recursive: true })
 })
 
@@ -625,7 +617,7 @@ describe.runIf(SKELETON)('runPluginCreate', () => {
       // exact failure that left plugins.json empty for months.
       describe('registry sources.json', () => {
         function withRegistry(sources: unknown[] = []) {
-          const registryDir = mkdtempSync(join(tmpdir(), 'biffo-registry-'))
+          const registryDir = makeTmpDir('biffo-registry')
           writeFileSync(
             join(registryDir, 'sources.json'),
             JSON.stringify({ note: 'n', sources }, null, 2),

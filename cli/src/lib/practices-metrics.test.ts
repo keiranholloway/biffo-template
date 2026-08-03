@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { makeTmpDir } from '../test-utils/tmp.js'
 // @ts-expect-error -- plain .mjs so the collector runs on bare node from a
 // scheduled workflow that installs nothing. Imported here so the logic has one
 // home rather than a TypeScript copy that can drift from it — same arrangement
@@ -1499,7 +1499,7 @@ describe('renderAudits', () => {
 })
 
 describe('definitionBreak', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'practices-break-'))
+  const dir = makeTmpDir('practices-break')
   const write = (date: string, schema: number) =>
     writeFileSync(join(dir, `${date}.json`), JSON.stringify({ schema, windows: {} }))
 
@@ -1511,11 +1511,11 @@ describe('definitionBreak', () => {
   })
 
   it('reports nothing when the series is continuous', () => {
-    const clean = mkdtempSync(join(tmpdir(), 'practices-clean-'))
+    const clean = makeTmpDir('practices-clean')
     writeFileSync(join(clean, '2026-07-28.json'), JSON.stringify({ schema: 2 }))
     writeFileSync(join(clean, '2026-07-29.json'), JSON.stringify({ schema: 2 }))
     expect(definitionBreak(clean)).toBeNull()
-    expect(definitionBreak(mkdtempSync(join(tmpdir(), 'practices-empty-')))).toBeNull()
+    expect(definitionBreak(makeTmpDir('practices-empty'))).toBeNull()
   })
 
   it('marks the break on the page, naming what it means', () => {

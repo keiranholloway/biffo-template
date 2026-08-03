@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, writeFileSync, chmodSync, existsSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, chmodSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * Arming has to reach worktrees that **already exist**, on branches nobody is
@@ -23,7 +23,7 @@ import { join } from 'node:path'
 const scripts = join(import.meta.dirname, '..', '..', '..', 'scripts')
 
 function repoWithWorktree() {
-  const dir = mkdtempSync(join(tmpdir(), 'install-hooks-'))
+  const dir = makeTmpDir('install-hooks')
   const main = join(dir, 'main')
   mkdirSync(main)
   const git = (cwd: string, ...args: string[]) =>

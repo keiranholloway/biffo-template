@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { findInstalledPlugin, findInstalledPlugins, pluginDir } from './plugin-locations.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 let cwd: string
 
@@ -12,7 +12,7 @@ function install(relDir: string): void {
 }
 
 beforeEach(() => {
-  cwd = mkdtempSync(join(tmpdir(), 'biffo-plugin-locations-'))
+  cwd = makeTmpDir('biffo-plugin-locations')
 })
 afterEach(() => {
   rmSync(cwd, { recursive: true, force: true })

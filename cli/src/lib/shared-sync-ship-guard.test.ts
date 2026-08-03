@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * `ship_repo` must refuse to run against a staged worktree that is not there,
@@ -57,7 +58,7 @@ function callGuard(path: string) {
 
 describe('require_staged_worktree', () => {
   it('passes silently when the staged worktree is there', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ship-guard-'))
+    const dir = makeTmpDir('ship-guard')
     const { code, out } = callGuard(dir)
 
     expect(code).toBe(0)

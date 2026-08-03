@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { CoreManifest } from './core-manifest.js'
 import { coreVersionTag, releasePathspecs, templateOwnedPathspecs } from './core-tags.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '../../..')
@@ -135,8 +135,8 @@ describe('sync-core-tag script', () => {
       .sort()
 
   beforeEach(() => {
-    repo = mkdtempSync(join(tmpdir(), 'biffo-core-tag-'))
-    remote = mkdtempSync(join(tmpdir(), 'biffo-core-tag-remote-'))
+    repo = makeTmpDir('biffo-core-tag')
+    remote = makeTmpDir('biffo-core-tag-remote')
     execFileSync('git', ['init', '-q', '--bare', remote])
     g('init', '-q', '-b', 'main')
     g('config', 'user.email', 'test@example.com')

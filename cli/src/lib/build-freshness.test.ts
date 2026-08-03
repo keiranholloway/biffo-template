@@ -1,5 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -9,6 +8,7 @@ import {
   SKIP_ENV_VAR,
   type BuildFreshnessResult,
 } from './build-freshness.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 let root: string
 
@@ -42,7 +42,7 @@ function runFromDist(env: Record<string, string | undefined> = {}): BuildFreshne
 }
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'biffo-freshness-'))
+  root = makeTmpDir('biffo-freshness')
 })
 
 afterEach(() => {
@@ -124,7 +124,7 @@ describe('checkBuildFreshness', () => {
   })
 
   it('skips when no package.json can be found above the module', () => {
-    const orphan = mkdtempSync(join(tmpdir(), 'biffo-orphan-'))
+    const orphan = makeTmpDir('biffo-orphan')
     try {
       const result = checkBuildFreshness({
         moduleUrl: pathToFileURL(join(orphan, 'dist', 'index.js')).href,

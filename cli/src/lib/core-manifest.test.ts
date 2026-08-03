@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -15,6 +14,7 @@ import {
   resolveTemplateRoot,
 } from './core-manifest.js'
 import { isInstanceRepo } from './core-version.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(here, '..', '..', '..')
@@ -358,7 +358,7 @@ describe('real repo core-manifest.json', () => {
    * three-way merge a tree against itself and report nothing to do.
    */
   it('rejects an instance root, which also carries a core-manifest.json', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'biffo-root-'))
+    const dir = makeTmpDir('biffo-root')
     try {
       writeFileSync(join(dir, CORE_MANIFEST_FILE), JSON.stringify({ version: 1 }))
       expect(findTemplateRoot(dir)).toBe(dir)
@@ -373,7 +373,7 @@ describe('real repo core-manifest.json', () => {
   it('resolveTemplateRoot appends caller guidance verbatim when no root is found', () => {
     // A tmp dir has no core-manifest.json / core.version above it, so the walk
     // fails and the command-specific remedy (issue #324) must reach the user.
-    const noRoot = mkdtempSync(join(tmpdir(), 'biffo-noroot-'))
+    const noRoot = makeTmpDir('biffo-noroot')
     try {
       expect(() =>
         resolveTemplateRoot({ fromDir: noRoot, guidance: 'Pass --template-repo <path>.' }),
@@ -389,8 +389,8 @@ describe('listTemplateOwnedFiles + computeCoreDiff', () => {
   let instance: string
 
   beforeEach(() => {
-    template = mkdtempSync(join(tmpdir(), 'biffo-tmpl-'))
-    instance = mkdtempSync(join(tmpdir(), 'biffo-inst-'))
+    template = makeTmpDir('biffo-tmpl')
+    instance = makeTmpDir('biffo-inst')
   })
   afterEach(() => {
     rmSync(template, { recursive: true, force: true })
@@ -479,7 +479,7 @@ describe('listTemplateOwnedFiles + computeCoreDiff', () => {
   })
 
   it('distinguishes an upstream removal from an instance addition, given a base (#689)', () => {
-    const base = mkdtempSync(join(tmpdir(), 'biffo-base-'))
+    const base = makeTmpDir('biffo-base')
     // The template shipped this and later dropped it -> an upgrade DELETES it.
     write(base, 'services/api/retired.py', 'old core file')
     write(instance, 'services/api/retired.py', 'old core file')

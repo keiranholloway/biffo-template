@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * `--backfill` answers the question `--candidates` structurally cannot (#1109):
@@ -95,7 +95,7 @@ function runBackfill(templateDir: string, estate: string): { out: string; status
 
 describe('shared-sync.sh --backfill', () => {
   it('reports only paths some repos have and others lack', () => {
-    const root = mkdtempSync(join(tmpdir(), 'backfill-'))
+    const root = makeTmpDir('backfill')
     try {
       const estate = join(root, 'estate')
       mkdirSync(estate, { recursive: true })
@@ -123,7 +123,7 @@ describe('shared-sync.sh --backfill', () => {
   it('skips paths the manifest already governs', () => {
     // A listed path has a channel and `--check` reports on it. Repeating it
     // here would be a second voice on a question already answered.
-    const root = mkdtempSync(join(tmpdir(), 'backfill-'))
+    const root = makeTmpDir('backfill')
     try {
       const estate = join(root, 'estate')
       mkdirSync(estate, { recursive: true })
@@ -148,7 +148,7 @@ describe('shared-sync.sh --backfill', () => {
     // siblings. Comparing them against a full sibling skeleton reported 39
     // fictional gaps against 20 real ones -- `services/api/*` "missing" from
     // repos that will never hold a FastAPI service.
-    const root = mkdtempSync(join(tmpdir(), 'backfill-'))
+    const root = makeTmpDir('backfill')
     try {
       const estate = join(root, 'estate')
       mkdirSync(estate, { recursive: true })
@@ -182,7 +182,7 @@ describe('shared-sync.sh --backfill', () => {
     // COMMON DIR -- so `<...>/.git/_skeletons/*/` matched nothing and the run
     // printed a confident `0 backfill gap(s)`. A zero meaning "could not see
     // the input" is the defect this estate keeps finding; it must exit non-zero.
-    const root = mkdtempSync(join(tmpdir(), 'backfill-'))
+    const root = makeTmpDir('backfill')
     try {
       const estate = join(root, 'estate')
       mkdirSync(estate, { recursive: true })

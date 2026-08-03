@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -10,6 +9,7 @@ import {
   logTail,
   type PublishAttempt,
 } from './npm-publish.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * The logs below are npm's real output shapes, not paraphrases. The whole point
@@ -277,7 +277,7 @@ describe('report-publish-failure script', () => {
 
   let dir: string
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'biffo-publish-report-'))
+    dir = makeTmpDir('biffo-publish-report')
   })
   afterEach(() => rmSync(dir, { recursive: true, force: true }))
 

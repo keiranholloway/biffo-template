@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { coreTag, materializeTemplateAtTag, workingTreeMatchesTag } from './core-template-trees.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 describe('coreTag', () => {
   it('builds the tag for a semver', () => {
@@ -33,7 +33,7 @@ describe('materializeTemplateAtTag — success path (real git repo)', () => {
   const made: Array<() => void> = []
 
   beforeEach(() => {
-    repo = mkdtempSync(join(tmpdir(), 'biffo-tpl-repo-'))
+    repo = makeTmpDir('biffo-tpl-repo')
     const g = (args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' })
     g(['init', '-q'])
     g(['config', 'user.email', 'test@example.com'])
@@ -71,7 +71,7 @@ describe('workingTreeMatchesTag — the #471 stale-working-tree gate (real git r
   let g: (args: string[]) => string
 
   beforeEach(() => {
-    repo = mkdtempSync(join(tmpdir(), 'biffo-tpl-match-'))
+    repo = makeTmpDir('biffo-tpl-match')
     g = (args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' })
     g(['init', '-q'])
     g(['config', 'user.email', 'test@example.com'])

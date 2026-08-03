@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runDataImport } from './data-import.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -15,7 +15,7 @@ const promptMock = vi.hoisted(() => vi.fn())
 vi.mock('inquirer', () => ({ default: { prompt: (...args: unknown[]) => promptMock(...args) } }))
 
 function makeProjectRoot(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'biffo-project-'))
+  const dir = makeTmpDir('biffo-project')
   mkdirSync(join(dir, 'services'), { recursive: true })
   return dir
 }
@@ -23,7 +23,7 @@ function makeProjectRoot(): string {
 function makeLocalSourceDir(
   files: Record<string, string> = { '000_first.sql': 'SELECT 1;' },
 ): string {
-  const dir = mkdtempSync(join(tmpdir(), 'biffo-data-src-'))
+  const dir = makeTmpDir('biffo-data-src')
   for (const [name, content] of Object.entries(files)) {
     writeFileSync(join(dir, name), content)
   }
@@ -68,7 +68,7 @@ describe('runDataImport', () => {
   })
 
   it('rejects when cwd has no services/ directory', async () => {
-    const notAProject = mkdtempSync(join(tmpdir(), 'not-a-biffo-project-'))
+    const notAProject = makeTmpDir('not-a-biffo-project')
     const git = makeGitMock()
 
     try {
@@ -129,7 +129,7 @@ describe('runDataImport', () => {
     })
 
     it('resolves --path as a subdirectory of the local source', async () => {
-      const sourceDir = mkdtempSync(join(tmpdir(), 'biffo-data-src-'))
+      const sourceDir = makeTmpDir('biffo-data-src')
       mkdirSync(join(sourceDir, 'ddl', 'modules'), { recursive: true })
       writeFileSync(join(sourceDir, 'ddl', 'modules', '000_first.sql'), 'SELECT 1;')
       const git = makeGitMock()
@@ -144,7 +144,7 @@ describe('runDataImport', () => {
     })
 
     it('rejects when no .sql files are found at the source', async () => {
-      const sourceDir = mkdtempSync(join(tmpdir(), 'biffo-data-src-empty-'))
+      const sourceDir = makeTmpDir('biffo-data-src-empty')
       writeFileSync(join(sourceDir, 'README.md'), 'not sql')
       const git = makeGitMock()
 
@@ -219,7 +219,7 @@ describe('runDataImport', () => {
     })
 
     it('resolves --path as a subdirectory of the cloned repo', async () => {
-      const clonedDir = mkdtempSync(join(tmpdir(), 'biffo-data-src-'))
+      const clonedDir = makeTmpDir('biffo-data-src')
       mkdirSync(join(clonedDir, 'ddl', 'modules'), { recursive: true })
       writeFileSync(join(clonedDir, 'ddl', 'modules', '000_first.sql'), 'SELECT 1;')
       const git = makeGitMock(clonedDir)
@@ -240,7 +240,7 @@ describe('runDataImport', () => {
     })
 
     it('cleans up the temp clone even when the manifest is invalid downstream', async () => {
-      const clonedDir = mkdtempSync(join(tmpdir(), 'biffo-data-src-empty-'))
+      const clonedDir = makeTmpDir('biffo-data-src-empty')
       const git = makeGitMock(clonedDir)
 
       await expect(

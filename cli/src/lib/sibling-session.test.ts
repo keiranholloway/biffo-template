@@ -1,6 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { rmSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   deleteSiblingSession,
@@ -9,6 +7,7 @@ import {
   saveSiblingSession,
   type SiblingSession,
 } from './sibling-session.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 function makeSession(name: string): SiblingSession {
   return {
@@ -30,7 +29,7 @@ function makeSession(name: string): SiblingSession {
 let tmpDir: string
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'biffo-sibling-session-'))
+  tmpDir = makeTmpDir('biffo-sibling-session')
   process.env['BIFFO_SIBLING_SESSIONS_DIR'] = tmpDir
 })
 

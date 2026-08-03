@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * Every create and every remove of a staged worktree is logged, with a
@@ -32,7 +32,7 @@ const script = join(import.meta.dirname, '..', '..', '..', 'scripts', 'shared-sy
  * survey does not pick it up as a second satellite.
  */
 function estate(): { dir: string; log: string; path: string } {
-  const root = mkdtempSync(join(tmpdir(), 'wtlog-'))
+  const root = makeTmpDir('wtlog')
   const dir = join(root, 'estate')
   const log = join(root, 'worktrees.log')
   mkdirSync(dir, { recursive: true })

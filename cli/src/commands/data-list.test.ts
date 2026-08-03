@@ -1,16 +1,16 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { capturedOutput } from '../test-utils/console.js'
 import { runDataList } from './data-list.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
 
 function makeProjectRoot(): string {
-  return mkdtempSync(join(tmpdir(), 'biffo-project-'))
+  return makeTmpDir('biffo-project')
 }
 
 function writeSqlFiles(projectRoot: string, importName: string, filenames: string[]): void {

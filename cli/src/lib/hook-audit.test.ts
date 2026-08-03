@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * The audit's only job is to distinguish a hook that will run from one that
@@ -17,7 +17,7 @@ import { join } from 'node:path'
 const script = join(import.meta.dirname, '..', '..', '..', 'scripts', 'hook-audit.sh')
 
 function repo(hooksPath?: string, withHooks = false) {
-  const dir = mkdtempSync(join(tmpdir(), 'hookaudit-'))
+  const dir = makeTmpDir('hookaudit')
   execFileSync('git', ['-C', dir, 'init', '-q', '-b', 'dev'])
   if (hooksPath) {
     execFileSync('git', ['-C', dir, 'config', 'core.hooksPath', hooksPath])
@@ -44,7 +44,7 @@ function audit(estate: string) {
 
 describe('hook-audit', () => {
   it('fails on a tree whose hooksPath points at nothing', () => {
-    const estate = mkdtempSync(join(tmpdir(), 'estate-'))
+    const estate = makeTmpDir('estate')
     const r = repo('.githooks') // configured, directory never created
     execFileSync('cp', ['-r', r, join(estate, 'dead-repo')])
     const { code, stdout } = audit(estate)
@@ -54,7 +54,7 @@ describe('hook-audit', () => {
   })
 
   it('passes a tree whose hooks are present', () => {
-    const estate = mkdtempSync(join(tmpdir(), 'estate-'))
+    const estate = makeTmpDir('estate')
     const r = repo('.githooks', true)
     execFileSync('cp', ['-r', r, join(estate, 'armed-repo')])
     const { code, stdout } = audit(estate)
@@ -68,7 +68,7 @@ describe('hook-audit', () => {
    * twenty-five sibling and plugin trees would drown the five that are lying.
    */
   it('reports an unconfigured tree without failing', () => {
-    const estate = mkdtempSync(join(tmpdir(), 'estate-'))
+    const estate = makeTmpDir('estate')
     const r = repo()
     execFileSync('cp', ['-r', r, join(estate, 'bare-repo')])
     const { code, stdout } = audit(estate)
@@ -82,7 +82,7 @@ describe('hook-audit', () => {
    * false comfort this script exists to remove.
    */
   it('does not count git’s .sample files as hooks', () => {
-    const estate = mkdtempSync(join(tmpdir(), 'estate-'))
+    const estate = makeTmpDir('estate')
     const r = repo()
     execFileSync('cp', ['-r', r, join(estate, 'sample-repo')])
     const { stdout } = audit(estate)

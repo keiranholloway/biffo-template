@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * Keep the local gate a mirror of CI, not a subset of it.
@@ -276,7 +276,7 @@ describe('verify.sh discovers JS packages that are not at the repo root', () => 
    * the checks were always applicable — the gate just looked in one place.
    */
   const repoWithNestedJs = () => {
-    const dir = mkdtempSync(join(tmpdir(), 'verify-nested-'))
+    const dir = makeTmpDir('verify-nested')
     for (const pkg of ['web', 'web-admin']) {
       mkdirSync(join(dir, pkg), { recursive: true })
       writeFileSync(
@@ -314,7 +314,7 @@ describe('verify.sh discovers JS packages that are not at the repo root', () => 
     // The grep was anchored to line start, so it only saw pretty-printed
     // manifests. A minified one would have reported "no lint script" — a skip
     // that reads as a considered decision rather than a parser limitation.
-    const dir = mkdtempSync(join(tmpdir(), 'verify-min-'))
+    const dir = makeTmpDir('verify-min')
     mkdirSync(join(dir, 'web'), { recursive: true })
     writeFileSync(
       join(dir, 'web', 'package.json'),
@@ -331,7 +331,7 @@ describe('verify.sh discovers JS packages that are not at the repo root', () => 
    * the gap was invisible until a primary checkout was audited.
    */
   it('never walks into a vendored terraform module cache', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'verify-tf-'))
+    const dir = makeTmpDir('verify-tf')
     mkdirSync(join(dir, 'terraform', '.terraform', 'modules', 'runners', 'lambdas'), {
       recursive: true,
     })

@@ -1,9 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { deriveNames, findSkeletonRoot, scaffoldPlugin } from './plugin-scaffold.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * Scaffold **two** plugins from the real skeleton and check they can coexist.
@@ -30,7 +30,7 @@ import { deriveNames, findSkeletonRoot, scaffoldPlugin } from './plugin-scaffold
 let root: string
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'two-plugins-'))
+  root = makeTmpDir('two-plugins')
 })
 
 afterEach(() => {

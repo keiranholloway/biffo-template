@@ -16,13 +16,13 @@
  * checkout also changed underneath.
  */
 import { execa } from 'execa'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GitAdapter } from '../adapters/git/index.js'
 import type { CoreUpgradeDeps } from './core-upgrade.js'
 import { runCoreUpgrade } from './core-upgrade.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 const MANIFEST = { version: 1, templateOwned: ['services/api/'], userOwned: ['services/'] }
 
@@ -46,10 +46,10 @@ describe('runCoreUpgrade --apply — HEAD in a real checkout (#984)', () => {
   beforeEach(async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
 
-    base = mkdtempSync(join(tmpdir(), 'ci-base-'))
-    theirs = mkdtempSync(join(tmpdir(), 'ci-theirs-'))
-    instance = mkdtempSync(join(tmpdir(), 'ci-inst-'))
-    remote = mkdtempSync(join(tmpdir(), 'ci-remote-'))
+    base = makeTmpDir('ci-base')
+    theirs = makeTmpDir('ci-theirs')
+    instance = makeTmpDir('ci-inst')
+    remote = makeTmpDir('ci-remote')
 
     // Merge base @ 0.1.0 and target @ 0.2.0, as loose trees — no tags needed.
     writeFileSync(join(base, 'core.version'), '0.1.0\n')
@@ -146,10 +146,10 @@ describe('runCoreUpgrade --apply — a failed commit does not land on the caller
   beforeEach(async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
 
-    base = mkdtempSync(join(tmpdir(), 'cf-base-'))
-    theirs = mkdtempSync(join(tmpdir(), 'cf-theirs-'))
-    instance = mkdtempSync(join(tmpdir(), 'cf-inst-'))
-    remote = mkdtempSync(join(tmpdir(), 'cf-remote-'))
+    base = makeTmpDir('cf-base')
+    theirs = makeTmpDir('cf-theirs')
+    instance = makeTmpDir('cf-inst')
+    remote = makeTmpDir('cf-remote')
 
     writeFileSync(join(base, 'core.version'), '0.1.0\n')
     writeFileSync(join(base, 'core-manifest.json'), JSON.stringify(MANIFEST))

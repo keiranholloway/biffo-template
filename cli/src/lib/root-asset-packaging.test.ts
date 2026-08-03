@@ -2,17 +2,16 @@ import { execFileSync } from 'node:child_process'
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { makeTmpDir } from '../test-utils/tmp.js'
 // @ts-expect-error -- plain .mjs inventory, shared with the prepack script so
 // there is exactly one source of truth for what the tarball must carry.
 import {
@@ -179,7 +178,7 @@ describe('resolver registry covers every upward-walking module', () => {
 describe.skipIf(runningInInstance)('sync-packaged-assets.mjs', () => {
   let dest: string
   beforeEach(() => {
-    dest = mkdtempSync(join(tmpdir(), 'biffo-pack-'))
+    dest = makeTmpDir('biffo-pack')
   })
   afterEach(() => {
     rmSync(dest, { recursive: true, force: true })

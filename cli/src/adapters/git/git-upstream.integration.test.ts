@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { GitAdapter } from './index.js'
+import { makeTmpDir } from '../../test-utils/tmp.js'
 
 /**
  * #758, proven end to end against real repositories.
@@ -24,8 +24,8 @@ describe('push leaves a branch that can be found once merged (#758)', () => {
     execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
 
   beforeEach(() => {
-    remote = mkdtempSync(join(tmpdir(), 'biffo-remote-'))
-    work = mkdtempSync(join(tmpdir(), 'biffo-work-'))
+    remote = makeTmpDir('biffo-remote')
+    work = makeTmpDir('biffo-work')
     git(remote, 'init', '--bare', '-q', '-b', 'dev')
     git(work, 'init', '-q', '-b', 'dev')
     git(work, 'config', 'user.email', 'test@example.com')

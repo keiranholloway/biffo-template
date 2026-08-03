@@ -1,9 +1,8 @@
 import { execaSync } from 'execa'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { rmSync } from 'node:fs'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { resolveReleaseSubject } from './check-release-subject.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * How the release-subject guard obtains the title it judges (#1187).
@@ -31,7 +30,7 @@ import { resolveReleaseSubject } from './check-release-subject.js'
 
 const temps: string[] = []
 function gitRepo(subject: string): string {
-  const dir = mkdtempSync(join(tmpdir(), 'biffo-relsubj-'))
+  const dir = makeTmpDir('biffo-relsubj')
   temps.push(dir)
   const opts = { cwd: dir } as const
   execaSync('git', ['init', '-q', '-b', 'dev'], opts)

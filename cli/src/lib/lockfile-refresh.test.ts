@@ -1,5 +1,4 @@
-import { globSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { globSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
@@ -9,11 +8,12 @@ import {
   lockfilesNeedingRefresh,
   refreshLockfiles,
 } from './lockfile-refresh.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 describe('lockfilesNeedingRefresh', () => {
   let dir: string
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'biffo-lock-'))
+    dir = makeTmpDir('biffo-lock')
     writeFileSync(join(dir, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n')
     writeFileSync(join(dir, 'uv.lock'), 'version = 1\n')
   })
@@ -176,7 +176,7 @@ describe('the real template repo', () => {
    */
   it('names manifests and lockfiles that actually exist', () => {
     const repoRoot = join(__dirname, '..', '..', '..')
-    const scratch = mkdtempSync(join(tmpdir(), 'biffo-lock-real-'))
+    const scratch = makeTmpDir('biffo-lock-real')
     try {
       // Copy just the lockfile names across so existsSync sees them.
       for (const t of LOCKFILE_TRIGGERS) {

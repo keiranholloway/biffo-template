@@ -16,19 +16,11 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { beforeAll, describe, expect, it } from 'vitest'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const SCRIPT = join(repoRoot, 'scripts/practices-daily.sh')
@@ -101,7 +93,7 @@ function abortRuns(
   initialPage = '<html><body><h1>Dashboard</h1></body></html>\n',
   extraEnv: Record<string, string> = {},
 ): Result {
-  const dir = mkdtempSync(join(tmpdir(), 'practices-alert-'))
+  const dir = makeTmpDir('practices-alert')
   try {
     const page = join(dir, 'dashboard.html')
     writeFileSync(page, initialPage)
@@ -170,7 +162,7 @@ describe('a failed collection marks the dashboard stale', () => {
   it('survives having no dashboard to stamp', () => {
     // First-ever run, or a cleared home directory. Must not turn a collection
     // failure into a trap failure that hides it.
-    const dir = mkdtempSync(join(tmpdir(), 'practices-alert-'))
+    const dir = makeTmpDir('practices-alert')
     try {
       const script = join(dir, 'run.sh')
       writeFileSync(script, `${harness}false\n`)
@@ -221,7 +213,7 @@ describe('the alert interrupts once, not once per failure', () => {
     // Fail-open: a notification that stacks is worth more than one that never
     // appears. This is the shape of the bug the function's own comment records
     // -- a guard that reads as coverage and silently suppresses the alert.
-    const dir = mkdtempSync(join(tmpdir(), 'practices-alert-'))
+    const dir = makeTmpDir('practices-alert')
     try {
       const page = join(dir, 'dashboard.html')
       writeFileSync(page, '<html><body><h1>Dashboard</h1></body></html>\n')

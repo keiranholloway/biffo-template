@@ -19,6 +19,8 @@ importing botocore.
 
 from __future__ import annotations
 
+import secrets
+import string
 from typing import Any
 
 import boto3
@@ -28,6 +30,72 @@ from botocore.exceptions import ClientError
 from .config import settings
 
 logger = Logger()
+
+REDACTED = "***"
+
+# Redacting a 3-character string would punch holes through unrelated text in
+# whatever it's embedded in and destroy the diagnostic value redaction exists
+# to preserve — so, like `MIN_REDACTABLE` in `cli/src/adapters/git/index.ts`
+# (#1171), anything shorter than this is left alone rather than blanked. Real
+# Cognito temporary passwords satisfy the pool's own minimum length (8), which
+# is itself above this floor.
+_MIN_REDACTABLE = 8
+
+
+def redact_secret(text: str, secret: str | None) -> str:
+    """Replace every occurrence of `secret` in `text` with `REDACTED`.
+
+    Mirrors `redactSecrets` in `cli/src/adapters/git/index.ts` (#1171): plain
+    substring replacement, never a `re` pattern built from the secret — a
+    password containing `.` or `+` would otherwise become a regex matching far
+    more than itself. There is no percent-encoded form to additionally strip
+    the way a URL-embedded token needs (#1169) — a Cognito TemporaryPassword
+    never passes through URL encoding on its way into a boto3 call or a
+    Cognito error message, so the raw form is the only one that can appear.
+
+    `secret` of `None`, empty, or shorter than `_MIN_REDACTABLE` is left
+    alone rather than blanking unrelated text — see `_MIN_REDACTABLE`.
+    """
+    if not secret or len(secret) < _MIN_REDACTABLE:
+        return text
+    return text.replace(secret, REDACTED)
+
+
+_UPPER = string.ascii_uppercase
+_LOWER = string.ascii_lowercase
+_DIGITS = string.digits
+_SYMBOLS = "!@#$%^&*()-_=+"
+
+
+def generate_temporary_password(length: int = 20) -> str:
+    """Generate a random password for `CognitoAdmin.create_user`'s
+    `temporary_password` parameter.
+
+    `admin_create_user` never returns whatever password Cognito itself would
+    have generated, so a caller that wants to build its own invite email
+    (carrying the password itself, e.g. via an event-driven "Send email"
+    automation, rather than relying on Cognito's own bare-bones invite
+    template which only supports `{username}`/`{####}`) has no way to learn
+    it unless it supplies one — this is that generator. Core's own policy:
+    20 characters drawn from upper/lower/digit/symbol, with at least one of
+    each guaranteed, comfortably clearing the pool's default minimum (8) and
+    complexity requirements without the caller needing to know them.
+
+    Uses `secrets`, not `random` — this value is a live login credential from
+    the moment it's generated, not just after Cognito accepts it.
+    """
+    if length < 8:
+        raise ValueError("temporary passwords must be at least 8 characters")
+    required = [
+        secrets.choice(_UPPER),
+        secrets.choice(_LOWER),
+        secrets.choice(_DIGITS),
+        secrets.choice(_SYMBOLS),
+    ]
+    alphabet = _UPPER + _LOWER + _DIGITS + _SYMBOLS
+    password = required + [secrets.choice(alphabet) for _ in range(length - len(required))]
+    secrets.SystemRandom().shuffle(password)
+    return "".join(password)
 
 
 class CognitoAdminError(Exception):
@@ -88,13 +156,29 @@ class CognitoAdmin:
             "cognito-idp", region_name=region or settings.cognito_region
         )
 
-    def _call(self, op: str, **kwargs: Any) -> dict[str, Any]:
+    def _call(
+        self, op: str, *, redact: list[str | None] | None = None, **kwargs: Any
+    ) -> dict[str, Any]:
+        """Invoke a `cognito-idp` admin operation, translating a `ClientError`
+        into a `CognitoAdminError`.
+
+        `redact` lists any secret-shaped argument the caller passed in this
+        `kwargs` (e.g. a `TemporaryPassword`) so it can be stripped out of the
+        raised error's message — defense-in-depth against Cognito ever
+        echoing a rejected value back in an error string (it doesn't today
+        for `InvalidPasswordException`, but nothing about the API contract
+        promises that stays true). The log line below never included `kwargs`
+        in the first place, only `op`/`code`, so no separate redaction is
+        needed there.
+        """
         kwargs["UserPoolId"] = self._pool_id
         try:
             return getattr(self._client, op)(**kwargs)
         except ClientError as exc:
             code = exc.response.get("Error", {}).get("Code", "Unknown")
             message = exc.response.get("Error", {}).get("Message", str(exc))
+            for secret in redact or []:
+                message = redact_secret(message, secret)
             logger.warning("Cognito admin call failed", extra={"op": op, "code": code})
             raise CognitoAdminError(code, message) from exc
 
@@ -109,6 +193,7 @@ class CognitoAdmin:
         phone_number: str | None = None,
         groups: list[str] | None = None,
         suppress_invite_email: bool = False,
+        temporary_password: str | None = None,
     ) -> dict[str, Any]:
         """Create a user; Cognito emails a temporary password unless suppressed.
 
@@ -116,6 +201,22 @@ class CognitoAdmin:
         are assigned after creation. given_name/family_name are required so a
         user always has a real name in the ID token — an absent name is what
         made the dashboard fall back to showing the raw `sub` UUID.
+
+        `temporary_password`, when given, is forwarded to Cognito as
+        `TemporaryPassword` instead of letting it silently generate one — the
+        same `FORCE_CHANGE_PASSWORD` state either way. `admin_create_user`
+        never returns whatever password it picked, so this is the only way a
+        caller can know the value, e.g. to build its own branded invite email
+        (carrying the password itself) rather than relying on Cognito's own
+        template. Use `generate_temporary_password()` to produce one, or
+        `suppress_invite_email=True` alongside it if Cognito's own email
+        should stay silent while a different flow sends the real one.
+
+        This value is a live login credential end to end: it is never logged
+        (see `_call`'s docstring — the log line there never carried `kwargs`),
+        never appears in the normalized user this method returns, and is
+        stripped from any `CognitoAdminError` this call raises even though
+        Cognito is not known to ever echo a rejected password back in one.
         """
         attributes = [
             {"Name": "email", "Value": email},
@@ -137,7 +238,9 @@ class CognitoAdmin:
         }
         if suppress_invite_email:
             kwargs["MessageAction"] = "SUPPRESS"
-        created = self._call("admin_create_user", **kwargs)["User"]
+        if temporary_password:
+            kwargs["TemporaryPassword"] = temporary_password
+        created = self._call("admin_create_user", redact=[temporary_password], **kwargs)["User"]
         for group in groups or []:
             self.add_to_group(username=created["Username"], group=group)
         return _normalize_user(created)

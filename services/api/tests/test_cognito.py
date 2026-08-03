@@ -1,8 +1,17 @@
 """Unit tests for the CognitoAdmin adapter, exercised against a moto fake pool."""
 
+from unittest.mock import Mock
+
 import boto3
 import pytest
-from api.cognito import CognitoAdmin, CognitoAdminError
+from api.cognito import (
+    REDACTED,
+    CognitoAdmin,
+    CognitoAdminError,
+    generate_temporary_password,
+    redact_secret,
+)
+from botocore.exceptions import ClientError
 from moto import mock_aws
 
 REGION = "us-east-1"
@@ -134,3 +143,204 @@ def test_get_missing_user_raises_typed_error(pool):
     with pytest.raises(CognitoAdminError) as excinfo:
         admin.get_user("nobody@example.com")
     assert excinfo.value.code == "UserNotFoundException"
+
+
+# --- caller-supplied TemporaryPassword (#950) ------------------------------
+
+
+def _password_reaches_cognito(client, pool_id: str, username: str, password: str) -> bool:
+    """True iff `password` is the actual FORCE_CHANGE_PASSWORD credential
+    Cognito holds for `username` right now.
+
+    Drives a real `admin_initiate_auth` (ADMIN_USER_PASSWORD_AUTH) against the
+    moto fake pool rather than inspecting `create_user`'s own return value —
+    the normalized user never carries the password (by design), so the only
+    way to prove a *specific* value was actually set, as opposed to *some*
+    value Cognito generated on its own, is to authenticate with it. The right
+    password gets challenged to change it (`NEW_PASSWORD_REQUIRED`); a wrong
+    one is rejected outright — moto enforces the credential value here even
+    though (per manual probing) it does not enforce password complexity.
+    """
+    app_client_id = client.create_user_pool_client(
+        UserPoolId=pool_id,
+        ClientName=f"test-auth-{username}",
+        ExplicitAuthFlows=["ADMIN_USER_PASSWORD_AUTH"],
+    )["UserPoolClient"]["ClientId"]
+    try:
+        resp = client.admin_initiate_auth(
+            UserPoolId=pool_id,
+            ClientId=app_client_id,
+            AuthFlow="ADMIN_USER_PASSWORD_AUTH",
+            AuthParameters={"USERNAME": username, "PASSWORD": password},
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "NotAuthorizedException":
+            return False
+        raise
+    return resp.get("ChallengeName") == "NEW_PASSWORD_REQUIRED"
+
+
+def test_create_user_forwards_caller_supplied_temporary_password(pool):
+    """The password the caller passed in is the password Cognito actually set
+
+    — not merely *a* password Cognito generated on its own, which is the
+    failure mode a no-op `temporary_password` param would produce (moto still
+    creates the user and puts it in FORCE_CHANGE_PASSWORD either way, so a
+    test that only checked user status would pass against that no-op too).
+    """
+    admin, client, pool_id = pool
+    chosen = "Caller-Ch0sen-Passw0rd!"
+
+    admin.create_user(
+        email="judy@example.com",
+        given_name="Judy",
+        family_name="Jones",
+        suppress_invite_email=True,
+        temporary_password=chosen,
+    )
+
+    assert _password_reaches_cognito(client, pool_id, "judy@example.com", chosen)
+    assert not _password_reaches_cognito(client, pool_id, "judy@example.com", "wrong-password-1!")
+
+
+def test_create_user_without_temporary_password_leaves_cognito_to_generate_one(pool):
+    """Omitting `temporary_password` is unchanged behaviour: Cognito still
+    creates the user (FORCE_CHANGE_PASSWORD), just not with a password the
+    caller chose — guards against the new parameter becoming accidentally
+    required.
+    """
+    admin, _client, _pool_id = pool
+    user = admin.create_user(
+        email="ken@example.com",
+        given_name="Ken",
+        family_name="Kato",
+        suppress_invite_email=True,
+    )
+    assert user["status"] == "FORCE_CHANGE_PASSWORD"
+
+
+def test_create_user_response_never_includes_temporary_password(pool):
+    admin, _client, _pool_id = pool
+    secret = "Sup3r$ecretPassw0rd!"
+
+    user = admin.create_user(
+        email="ivan@example.com",
+        given_name="Ivan",
+        family_name="Ivanov",
+        suppress_invite_email=True,
+        temporary_password=secret,
+    )
+
+    assert secret not in str(user)
+
+
+def test_create_user_redacts_temporary_password_from_cognito_errors():
+    """If Cognito ever echoed a rejected TemporaryPassword back in an error
+    message — moto and real Cognito both don't today, but nothing about the
+    API contract promises that stays true — `create_user` must not let it
+    through. Exercised with a mocked client raising exactly that shape,
+    since neither moto nor real Cognito can be made to produce it on demand.
+    """
+    secret = "Ex0tic$ecretPassw0rd!"
+    client = Mock()
+    client.admin_create_user.side_effect = ClientError(
+        {
+            "Error": {
+                "Code": "InvalidParameterException",
+                "Message": (
+                    f"Invalid parameter TemporaryPassword: {secret} does not conform to policy"
+                ),
+            }
+        },
+        "AdminCreateUser",
+    )
+    admin = CognitoAdmin(client=client, user_pool_id="pool-id", region=REGION)
+
+    with pytest.raises(CognitoAdminError) as excinfo:
+        admin.create_user(
+            email="leo@example.com",
+            given_name="Leo",
+            family_name="Lin",
+            temporary_password=secret,
+        )
+
+    # The secret never survives to the raised error...
+    assert secret not in excinfo.value.message
+    assert secret not in str(excinfo.value)
+    # ...but the failure is still diagnosable, not blanked wholesale — the
+    # other half of #1135/#1171's lesson: a "fix" that discards the whole
+    # message is the other failure mode, and it's what made #1040 undiagnosable.
+    assert "TemporaryPassword" in excinfo.value.message
+    assert "does not conform to policy" in excinfo.value.message
+    assert REDACTED in excinfo.value.message
+
+
+# --- redact_secret ----------------------------------------------------------
+
+
+def test_redact_secret_replaces_every_occurrence():
+    secret = "tok++needs//no-escaping"
+    text = f"raw {secret} and again {secret}"
+    assert redact_secret(text, secret) == f"raw {REDACTED} and again {REDACTED}"
+
+
+def test_redact_secret_treats_secret_literally_never_as_a_regex():
+    # If this were compiled into a pattern, "x.x.x.x" would match "aXbXcXd".
+    assert redact_secret("a.b.c.d", "x.x.x.x") == "a.b.c.d"
+
+
+def test_redact_secret_ignores_none_and_implausibly_short_secrets():
+    assert redact_secret("some error text", None) == "some error text"
+    assert redact_secret("some error text", "") == "some error text"
+    assert redact_secret("some error text", "short") == "some error text"
+
+
+def test_redact_secret_preserves_surrounding_context():
+    secret = "Sup3r$ecretPassw0rd!"
+    out = redact_secret(f"AdminCreateUser failed: TemporaryPassword {secret} rejected", secret)
+    assert secret not in out
+    assert out == f"AdminCreateUser failed: TemporaryPassword {REDACTED} rejected"
+
+
+# --- generate_temporary_password ---------------------------------------------
+
+
+def test_generate_temporary_password_meets_cognito_default_complexity():
+    password = generate_temporary_password()
+    assert len(password) == 20
+    assert any(c.isupper() for c in password)
+    assert any(c.islower() for c in password)
+    assert any(c.isdigit() for c in password)
+    assert any(not c.isalnum() for c in password)
+
+
+def test_generate_temporary_password_honours_custom_length():
+    assert len(generate_temporary_password(length=32)) == 32
+
+
+def test_generate_temporary_password_rejects_lengths_below_cognito_minimum():
+    with pytest.raises(ValueError):
+        generate_temporary_password(length=7)
+
+
+def test_generate_temporary_password_is_not_constant():
+    assert generate_temporary_password() != generate_temporary_password()
+
+
+def test_generated_password_is_accepted_by_create_user(pool):
+    """Round-trips a generated password through create_user and Cognito
+    itself, proving the two halves of #950 compose: the generator's output is
+    a value `create_user`'s `temporary_password` accepts and Cognito sets.
+    """
+    admin, client, pool_id = pool
+    generated = generate_temporary_password()
+
+    admin.create_user(
+        email="mia@example.com",
+        given_name="Mia",
+        family_name="Moore",
+        suppress_invite_email=True,
+        temporary_password=generated,
+    )
+
+    assert _password_reaches_cognito(client, pool_id, "mia@example.com", generated)

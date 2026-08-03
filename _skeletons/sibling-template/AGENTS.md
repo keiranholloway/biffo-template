@@ -96,11 +96,16 @@ it deliberately and say so in a comment; never steal a fresh one.
 
 - Get CI green and confirm it: `gh pr checks <N>`. A green local run is not
   sufficient — verify the actual PR checks.
-- **Wait with `scripts/wait-for-checks.sh`, not a hand-rolled loop:**
+- **Wait with the CLI's `wait-for-checks`, not a hand-rolled loop:**
 
   ```bash
-  sh scripts/wait-for-checks.sh <N>   # 0 green · 1 failed · 2 cannot tell
+  sh scripts/biffo.sh wait-for-checks <N>   # 0 green · 1 failed · 2 cannot tell
   ```
+
+  This repo no longer carries its own copy of the script. `scripts/biffo.sh`
+  resolves the version-pinned Biffo CLI from `.biffo-shared-version` and runs
+  the canonical copy that ships inside the package, so there is one script
+  rather than one per repo (#1109).
 
   Do not write your own `until … grep -c pending … done`. That polls for the
   **absence** of pending checks, so the empty window right after

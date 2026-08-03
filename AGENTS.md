@@ -236,11 +236,16 @@ origin/<branch>:<path>` for a specific change. A green PR page is not proof
 - Get CI green yourself and confirm it — run `gh pr checks <N>` and wait for all
   required checks to pass. A green local run is not sufficient evidence; the
   agent verifies the actual PR checks.
-- **Wait with `scripts/wait-for-checks.sh`, not a hand-rolled loop:**
+- **Wait with the CLI's `wait-for-checks`, not a hand-rolled loop:**
 
   ```bash
-  sh scripts/wait-for-checks.sh <N> [-R owner/repo]   # 0 green · 1 failed · 2 cannot tell
+  sh scripts/biffo.sh wait-for-checks <N> [-R owner/repo]   # 0 green · 1 failed · 2 cannot tell
   ```
+
+  Satellites no longer carry their own copy: `scripts/biffo.sh` resolves the
+  version-pinned CLI and runs the canonical script that ships inside the
+  package (#1109). This repo keeps `scripts/wait-for-checks.sh` because it is
+  the source that gets packaged, not a distributed copy.
 
   Do not write your own `until … grep -c pending … done`. That polls for the
   **absence** of pending checks, so the empty window right after

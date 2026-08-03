@@ -22,12 +22,33 @@
     },
     "test": {
       "dependsOn": ["^build"],
+      "cache": false,
       "inputs": [
         "$TURBO_DEFAULT$",
         ".env.test*",
+        "$TURBO_ROOT$/AGENTS.md",
+        "$TURBO_ROOT$/CLAUDE.md",
+        "$TURBO_ROOT$/core-manifest.json",
+        "$TURBO_ROOT$/shared-files.json",
+        "$TURBO_ROOT$/package.json",
+        "$TURBO_ROOT$/pnpm-workspace.yaml",
+        "$TURBO_ROOT$/pyproject.toml",
+        "$TURBO_ROOT$/commitlint.config.js",
+        "$TURBO_ROOT$/.gitleaks.toml",
+        "$TURBO_ROOT$/.githooks/**",
+        "$TURBO_ROOT$/.husky/**",
+        "$TURBO_ROOT$/.github/workflows/**",
+        "$TURBO_ROOT$/_skeletons/**",
+        "$TURBO_ROOT$/modules/**",
+        "$TURBO_ROOT$/scripts/**",
+        "$TURBO_ROOT$/apps/portal/**",
+        "$TURBO_ROOT$/infra/environments/dev/plugins.core.tf",
+        "$TURBO_ROOT$/services/api/src/api/schemas/orchestration.py",
+        "$TURBO_ROOT$/services/_plugins/orchestrator/src/orchestrator/actions.py",
         "$TURBO_ROOT$/docs/practices/evidence.jsonl",
         "$TURBO_ROOT$/docs/practices/evidence/**",
-        "$TURBO_ROOT$/docs/guides/development-practices.md"
+        "$TURBO_ROOT$/docs/guides/development-practices.md",
+        "$TURBO_ROOT$/docs/guides/core-upgrade.md"
       ],
       "outputs": ["coverage/**"]
     }

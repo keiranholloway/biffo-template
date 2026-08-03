@@ -25,6 +25,7 @@ const RETIRED = [
   { script: 'scripts/pg-test-db.sh', subcommand: 'pg-test-db' },
   { script: 'scripts/rewrite-scope-check.sh', subcommand: 'rewrite-scope-check' },
   { script: 'scripts/gate-coverage.sh', subcommand: 'gate-coverage' },
+  { script: 'scripts/verify.sh', subcommand: 'verify' },
 ]
 
 /**
@@ -204,5 +205,48 @@ describe('the bridge preserves the caller working directory', () => {
     const sync = readFileSync(join(repoRoot, 'scripts/shared-sync.sh'), 'utf8')
     expect(sync).toContain('sh "$TEMPLATE_ROOT/scripts/gate-coverage.sh"')
     expect(sync).not.toContain('cd "$wt" && sh scripts/gate-coverage.sh')
+  })
+})
+
+describe('the local gate no longer passes by being absent', () => {
+  /**
+   * `.githooks/pre-push` used to print "no scripts/verify.sh — NO checks ran"
+   * and **exit 0**. A repo without the file passed its pre-push having checked
+   * nothing — one level up from #855, where eight repos ran a gate two versions
+   * old and `tabsii-crm` checked one thing in eight on a 700-line change and
+   * printed `verify passed`.
+   *
+   * With the gate inside the versioned package there is no absent case, and
+   * which version a repo runs is its `.biffo-shared-version`.
+   */
+  it('pre-push execs the gate through the bridge', () => {
+    const hook = readFileSync(join(repoRoot, '.githooks/pre-push'), 'utf8')
+    expect(hook).toContain('exec sh scripts/biffo.sh verify')
+  })
+
+  it('has no branch that exits 0 because the gate is missing', () => {
+    // Comments only, stripped: a comment NAMING the removed fallback is the
+    // record of why it went, and asserting over prose would fail on its own
+    // explanation. `ci-wiring-audit.sh` makes the same distinction — a line
+    // naming a script is never a violation even when it contains the string.
+    const code = readFileSync(join(repoRoot, '.githooks/pre-push'), 'utf8')
+      .split('\n')
+      .filter((l) => !l.trim().startsWith('#'))
+      .join('\n')
+    expect(code).not.toContain('NO checks ran')
+    expect(code).not.toContain('[ ! -f scripts/verify.sh ]')
+    // NOT a blanket `exit 0` ban: the hook legitimately exits 0 when CI is set
+    // (the gate is CI's job there) and on `git rev-parse` failure. The defect
+    // was exiting 0 *because the gate was missing*, which is what the two
+    // assertions above pin.
+  })
+
+  it('the package.json script uses the same path, so both agree', () => {
+    // Two ways to run the gate that resolve different copies is exactly the
+    // drift this removes.
+    const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as {
+      scripts: Record<string, string>
+    }
+    expect(pkg.scripts['verify']).toBe('sh scripts/biffo.sh verify')
   })
 })

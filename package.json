@@ -16,7 +16,7 @@
     "test": "turbo run test",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yaml,yml,css}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yaml,yml,css}\"",
-    "verify": "sh scripts/verify.sh",
+    "verify": "sh scripts/biffo.sh verify",
     "prepare": "sh scripts/install-hooks.sh"
   },
   "devDependencies": {

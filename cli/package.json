@@ -30,7 +30,8 @@
     "scripts/hook-audit.sh",
     "scripts/pg-test-db.sh",
     "scripts/rewrite-scope-check.sh",
-    "scripts/gate-coverage.sh"
+    "scripts/gate-coverage.sh",
+    "scripts/verify.sh"
   ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",

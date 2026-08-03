@@ -96,6 +96,57 @@ describe('shared-files.json parity with the skeletons', () => {
 })
 
 /**
+ * The reverse direction, for `scripts/` ONLY (#1165).
+ *
+ * The header above declines to assert that every skeleton file appears in the
+ * shared set, and that remains right: skeletons carry `ci.yml`, `pyproject.toml`
+ * and manifests that a satellite must own and customise. But `scripts/` is not
+ * like the rest of the skeleton, for one specific reason:
+ *
+ * **A script in a skeleton with no distribution channel is frozen at birth,
+ * forever, in every repo scaffolded from it.** Nothing ever revisits it, because
+ * a skeleton is only exercised when somebody scaffolds. These are governance
+ * executables — gates, audits, hook installers — so "frozen" means a repo
+ * running a check whose bugs were fixed upstream a year ago and believing it.
+ *
+ * `scripts/shared-sync.sh` was exactly this and worse: **541 lines against the
+ * template's 1137**, and a satellite has no satellites, no `shared-files.json`
+ * and nothing to distribute, so the copy could not do anything useful even when
+ * current. `tabsii-lms` carries it today. Every reference to it in a satellite
+ * points at the TEMPLATE's copy, so the file's only effect was to invite a
+ * mistake.
+ *
+ * The rule: a skeleton's `scripts/` entry is either in the shared set (kept
+ * current) or explicitly declared birth-time-seeded below. The allowlist exists
+ * so a future legitimate case has a declared home and a written reason, rather
+ * than reintroducing this silently.
+ */
+describe('skeleton scripts/ all have a distribution channel', () => {
+  /**
+   * Scripts a skeleton may ship WITHOUT being in the shared set, because the
+   * satellite is expected to own and diverge them after birth.
+   *
+   * Empty on purpose. Adding an entry is a decision that this script will never
+   * be updated in any repo already scaffolded — say why here.
+   */
+  const seededAtBirth = new Set<string>([])
+
+  it.each(skeletons)('%s ships no undistributed script', (skeleton) => {
+    const dir = join(root, '_skeletons', skeleton, 'scripts')
+    const orphans = readdirSync(dir)
+      .map((f) => `scripts/${f}`)
+      .filter((rel) => !sharedFiles.includes(rel) && !seededAtBirth.has(rel))
+
+    expect(
+      orphans,
+      `_skeletons/${skeleton} ships script(s) with no distribution channel, so every repo ` +
+        `scaffolded from it freezes them at birth (#1165). Either add each to ` +
+        `shared-files.json's \`files\`, or declare it in \`seededAtBirth\` with a reason.`,
+    ).toEqual([])
+  })
+})
+
+/**
  * `filesIfPresent` is the OTHER half of the shared set: files kept in step only
  * where they already exist, never created (#1107).
  *

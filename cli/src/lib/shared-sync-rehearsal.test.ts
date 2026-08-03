@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { anchorToOrigin } from '../test-utils/shared-sync-template.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
@@ -203,6 +204,11 @@ function makeTemplate(
   git(dir, 'config', 'commit.gpgsign', 'false')
   git(dir, 'add', '-A')
   git(dir, 'commit', '-m', 'chore: fixture template')
+  // On `dev`, so shared-sync's staleness preflight applies to this fixture as
+  // it does to a real template checkout. Anchoring it to its own origin gives
+  // that check a defined answer the test controls, rather than one that depends
+  // on how the preflight currently treats an unreachable remote (#1252).
+  anchorToOrigin(dir)
 }
 
 /** A `gh` that answers `repo view` and logs every call, so PR creation is observable. */

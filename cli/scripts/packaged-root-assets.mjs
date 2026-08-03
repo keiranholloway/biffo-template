@@ -168,13 +168,32 @@ export const UNPACKAGED_ROOT_ASSETS = [
       '(services/api, packages/, modules/) are present. `biffo core upgrade` must resolve a real ' +
       'biffo-template checkout via --template instead (ADR-0006 Phase 3).',
   },
+  {
+    path: 'scripts/shared-sync.sh',
+    resolvedBy: 'src/test-utils/shared-sync-template.ts -- realSharedSync (test fixtures only)',
+    why:
+      'The distribution mechanism itself, and it runs only from a template checkout: it reads ' +
+      'this repo shared-files.json and _skeletons/, walks an --estate of sibling clones, and ' +
+      'refuses to run from a checkout behind origin/dev. None of that means anything inside an ' +
+      'installed package, and the satellites it ships TO are targets rather than callers -- they ' +
+      'reach the estate guards through scripts/biffo.sh instead (#1109). The only upward walk to ' +
+      'it is a test fixture builder copying it into a throwaway template (#1252), which never ' +
+      'runs from an installed package at all.',
+  },
 ]
 
 /**
- * Every non-test module under `cli/src/` that resolves something by walking up
- * from `import.meta.url`. The guard asserts this list matches reality, so a new
- * resolver cannot be added without classifying the asset it seeks as packaged or
- * deliberately unpackaged above.
+ * Every module under `cli/src/` that resolves something by walking up from
+ * `import.meta.url`, excluding `*.test.ts` files themselves. The guard asserts
+ * this list matches reality, so a new resolver cannot be added without
+ * classifying the asset it seeks as packaged or deliberately unpackaged above.
+ *
+ * That includes test *helpers*, which are not `*.test.ts` and so are scanned:
+ * `src/test-utils/shared-sync-template.ts` is here for that reason. Declaring
+ * it is deliberate rather than widening the scan to skip `test-utils/` -- an
+ * exclusion is a place a real resolver could later hide, and the classification
+ * it forces (shared-sync.sh is template-only, see UNPACKAGED_ROOT_ASSETS) is
+ * worth having written down.
  */
 export const RESOLVER_SITES = [
   { file: 'src/lib/core-manifest.ts', asset: 'core-manifest.json', packaged: false },
@@ -200,6 +219,14 @@ export const RESOLVER_SITES = [
   },
   { file: 'src/commands/sibling-create.ts', asset: '_skeletons', packaged: true },
   { file: 'src/commands/plugin-create.ts', asset: '_skeletons', packaged: true },
+  {
+    file: 'src/test-utils/shared-sync-template.ts',
+    // Test-only. Locates this repo's real scripts/shared-sync.sh to COPY into a
+    // throwaway fixture template, because executing it where it sits makes the
+    // developer's own checkout the template under test (#1252).
+    asset: 'scripts/shared-sync.sh',
+    packaged: false,
+  },
   {
     file: 'src/lib/build-freshness.ts',
     // Compares dist/ against src/, both inside the package/checkout — it resolves

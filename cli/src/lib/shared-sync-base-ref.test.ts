@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { makeTemplateCheckout, sharedSyncIn } from '../test-utils/shared-sync-template.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
@@ -22,15 +23,22 @@ import { makeTmpDir } from '../test-utils/tmp.js'
  * .worktrees/shared-sync`: a message about a directory, for a missing ref, in a
  * run that had already opened 11 PRs.
  */
-const script = join(import.meta.dirname, '..', '..', '..', 'scripts', 'shared-sync.sh')
 
 /**
  * A satellite clone whose only remote-tracking branch is `main`, with no
  * `origin/dev` and no `origin/HEAD` — the shape a `--single-branch` clone has
  * after the estate moved its default to `dev`.
+ *
+ * Returned with a fixture template that carries the real script, rather than
+ * running it out of this repo's checkout: `TEMPLATE_ROOT` is `dirname $0/..`,
+ * so the latter puts the developer's own staleness in front of every assertion
+ * below (#1252). See `test-utils/shared-sync-template.ts`.
  */
-function estateWithUnreadableClone(): string {
-  const estate = makeTmpDir('sync-estate')
+function estateWithUnreadableClone(): { estate: string; script: string } {
+  const root = makeTmpDir('sync-estate')
+  const estate = join(root, 'estate')
+  mkdirSync(estate, { recursive: true })
+  const script = sharedSyncIn(makeTemplateCheckout(root))
 
   const origin = join(estate, 'origin.git')
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin])
@@ -70,12 +78,12 @@ function estateWithUnreadableClone(): string {
   execFileSync('git', ['-C', origin, 'symbolic-ref', 'HEAD', 'refs/heads/dev'])
   execFileSync('git', ['-C', seed, 'push', '-q', 'origin', '--delete', 'main'])
 
-  return estate
+  return { estate, script }
 }
 
-function run(estate: string, args: string[]) {
+function run(fixture: { estate: string; script: string }, args: string[]) {
   try {
-    const stdout = execFileSync('bash', [script, '--estate', estate, ...args], {
+    const stdout = execFileSync('bash', [fixture.script, '--estate', fixture.estate, ...args], {
       encoding: 'utf8',
     })
     return { code: 0, out: stdout }
@@ -87,8 +95,8 @@ function run(estate: string, args: string[]) {
 
 describe('shared-sync on a clone that cannot reach its remote', () => {
   it('reports the fetch failure instead of calling it drift', () => {
-    const estate = estateWithUnreadableClone()
-    const { out } = run(estate, ['--check', '--repo', 'satellite'])
+    const fixture = estateWithUnreadableClone()
+    const { out } = run(fixture, ['--check', '--repo', 'satellite'])
 
     // Without this, `2>/dev/null` swallows `fatal: couldn't find remote ref`,
     // NOTHING is pruned, and every later read runs against the dead
@@ -100,8 +108,8 @@ describe('shared-sync on a clone that cannot reach its remote', () => {
   })
 
   it('does not claim the shared files are missing when it could not fetch', () => {
-    const estate = estateWithUnreadableClone()
-    const { out } = run(estate, ['--check', '--repo', 'satellite'])
+    const fixture = estateWithUnreadableClone()
+    const { out } = run(fixture, ['--check', '--repo', 'satellite'])
 
     // `scripts/verify.sh(missing)` would send someone to fix file distribution
     // when the actual fix is `git remote set-branches` in that clone.
@@ -109,15 +117,15 @@ describe('shared-sync on a clone that cannot reach its remote', () => {
   })
 
   it('names the clone to fix, since the repair is local to it', () => {
-    const estate = estateWithUnreadableClone()
-    const { out } = run(estate, ['--check', '--repo', 'satellite'])
+    const fixture = estateWithUnreadableClone()
+    const { out } = run(fixture, ['--check', '--repo', 'satellite'])
 
-    expect(out).toContain(join(estate, 'satellite'))
+    expect(out).toContain(join(fixture.estate, 'satellite'))
   })
 
   it('fails the check rather than passing a repo it could not read', () => {
-    const estate = estateWithUnreadableClone()
-    const { code } = run(estate, ['--check', '--repo', 'satellite'])
+    const fixture = estateWithUnreadableClone()
+    const { code } = run(fixture, ['--check', '--repo', 'satellite'])
 
     expect(code).not.toBe(0)
   })

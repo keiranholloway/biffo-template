@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { anchorToOrigin, realSharedSync } from '../test-utils/shared-sync-template.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
@@ -21,8 +22,6 @@ import { makeTmpDir } from '../test-utils/tmp.js'
  * themselves rather than today's estate contents — which change weekly and
  * would make this a change-detector.
  */
-const realScript = join(import.meta.dirname, '..', '..', '..', 'scripts', 'shared-sync.sh')
-
 const GIT_ENV = ['-c', 'user.email=t@t', '-c', 'user.name=t']
 
 function commitAll(dir: string): void {
@@ -61,7 +60,7 @@ function template(root: string, skeletonFiles: string[], manifest: object): stri
   const dir = join(root, 'template')
   mkdirSync(join(dir, 'scripts'), { recursive: true })
   execFileSync('git', ['init', '-q', '-b', 'dev', dir])
-  cpSync(realScript, join(dir, 'scripts', 'shared-sync.sh'))
+  cpSync(realSharedSync, join(dir, 'scripts', 'shared-sync.sh'))
   writeFileSync(join(dir, 'shared-files.json'), JSON.stringify(manifest, null, 2))
   for (const rel of skeletonFiles) {
     const full = join(dir, '_skeletons', 'sibling-template', rel)
@@ -69,6 +68,11 @@ function template(root: string, skeletonFiles: string[], manifest: object): stri
     writeFileSync(full, `${rel}\n`)
   }
   commitAll(dir)
+  // The fixture template sits on `dev`, so shared-sync's staleness preflight
+  // applies to it. Give it an origin it is current with, so the fixture DECIDES
+  // that question instead of landing on whichever branch of the preflight an
+  // unreachable remote happens to take (#1252).
+  anchorToOrigin(dir)
   return dir
 }
 

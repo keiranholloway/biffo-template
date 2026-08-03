@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CoreUpgradeDeps } from './core-upgrade.js'
-import { buildPrBody, runCoreUpgrade } from './core-upgrade.js'
+import { buildPrBody, resolveTemplateRepoFlag, runCoreUpgrade } from './core-upgrade.js'
 import type { MergeEntry, MergeStatus, UpgradePlan } from '../lib/core-upgrade.js'
 import type { MigrationCarryPlan } from '../lib/core-migrations.js'
 
@@ -808,5 +808,36 @@ describe('buildPrBody — global workflow promotion note (issue #328)', () => {
     }
     const body = buildPrBody('0.1.0', '0.2.0', planWith([ordinary]), noMigrations, 'dev')
     expect(body).not.toContain('Promotion required')
+  })
+})
+
+describe('resolveTemplateRepoFlag — --template as an alias for --template-repo (#1138)', () => {
+  it('returns the canonical --template-repo value when only it is given', () => {
+    expect(resolveTemplateRepoFlag('/path/to/template', undefined)).toBe('/path/to/template')
+  })
+
+  it('returns the --template alias value when only it is given', () => {
+    expect(resolveTemplateRepoFlag(undefined, '/path/to/template')).toBe('/path/to/template')
+  })
+
+  it('returns undefined when neither is given', () => {
+    expect(resolveTemplateRepoFlag(undefined, undefined)).toBeUndefined()
+  })
+
+  it('accepts both when they resolve to the same path', () => {
+    expect(resolveTemplateRepoFlag('/a/b', '/a/b')).toBe('/a/b')
+  })
+
+  it('accepts both when they resolve to the same path via different spellings, returning --template-repo’s spelling', () => {
+    // Normalization happens later, in the caller's resolve() — this just has
+    // to not throw, and it returns the canonical flag's value verbatim rather
+    // than silently rewriting what the user typed.
+    expect(resolveTemplateRepoFlag('/a/b/../b', '/a/b')).toBe('/a/b/../b')
+  })
+
+  it('throws when both are given with different paths, naming both values', () => {
+    expect(() => resolveTemplateRepoFlag('/a', '/b')).toThrow(
+      /--template-repo.*\/a.*--template.*\/b/s,
+    )
   })
 })

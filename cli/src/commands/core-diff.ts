@@ -18,10 +18,10 @@ import { log } from '../lib/logger.js'
 
 /**
  * Guidance shown when `core diff` cannot find a template root. It names the flag
- * this command exposes (`--template`) — distinct from `core upgrade`'s
- * `--template-repo` — with a complete invocation. Every `--flag` it names must
- * be a real option on `coreDiffCommand`; `error-flag-consistency.test.ts`
- * enforces that (#324).
+ * this command exposes (`--template`) — the same spelling `core upgrade` now
+ * accepts too, as an alias for its canonical `--template-repo` (#1138) — with a
+ * complete invocation. Every `--flag` it names must be a real option on
+ * `coreDiffCommand`; `error-flag-consistency.test.ts` enforces that (#324).
  */
 export const MISSING_TEMPLATE_ROOT_GUIDANCE =
   'Pass --template <path> to a biffo-template checkout, e.g. ' +

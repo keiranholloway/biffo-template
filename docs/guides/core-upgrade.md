@@ -396,7 +396,7 @@ Useful flags:
 
 - `--apply` — actually do it (without this, it's a dry-run preview).
 - `--to <version>` — target a specific core version (default: the CLI's latest). Resolved from its `core-v<version>` tag.
-- `--template-repo <path>` — the biffo-template clone whose tags supply the trees (default: the template the CLI ships with).
+- `--template-repo <path>` — the biffo-template clone whose tags supply the trees (default: the template the CLI ships with). `--template` is accepted as an alias, matching `core diff`'s flag of the same name (#1138).
 - `--allow-conflicts` — open the PR even if some files conflict (see below). Without it, a conflicting plan aborts and just prints the report.
 - `--base <branch>` — the branch the PR targets (e.g. `dev`, which triggers your deploy).
 - `--remote <name>` — the git remote to push to / open the PR on (default `origin`).

@@ -40,8 +40,13 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+// The corpus is legacy `.jsonl` + one-file-per-entry directory, merged and
+// sorted (#1132) — `readCorpusStrict` throws rather than reading a corpus
+// that half-parses as if it were a smaller valid one, matching this file's
+// own "unmeasured, never zero" rule below.
+import { readCorpusStrict } from './practices-corpus.mjs'
 
 /** Snapshot schema version. Bump when a field's meaning changes, never when one is added. */
 export const SCHEMA_VERSION = 2
@@ -2454,10 +2459,7 @@ const FAIL_OPEN_DONE = new Set(['fixed', 'closed', 'fixed downstream'])
 export function summariseFailOpenBacklog(corpusPath, now = new Date()) {
   let rows
   try {
-    rows = readFileSync(corpusPath, 'utf8')
-      .split('\n')
-      .filter((l) => l.trim() !== '')
-      .map((l) => JSON.parse(l))
+    rows = readCorpusStrict(corpusPath)
   } catch {
     return { error: 'unmeasured' }
   }

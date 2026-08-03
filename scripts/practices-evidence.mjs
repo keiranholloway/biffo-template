@@ -42,8 +42,29 @@
  * quoted. Prose *counts* belong inside the block; prose *interpretation* goes
  * outside it, because the splice overwrites everything between the markers.
  *
+ * ## Writing a new entry (#1132)
+ *
+ * `docs/practices/evidence.jsonl` is now a **frozen legacy file** — several
+ * agent sessions run concurrently in this estate, and a single file every one
+ * of them appends to conflicts by construction (whole-file hunks, a botched
+ * merge silently duplicating rows — see `practices-monotonic.mjs`'s header for
+ * the incident that forced this). Nothing appends to it again. New findings
+ * are written as their own file under `docs/practices/evidence/`, one per
+ * entry, via `--add` or `writeEvidenceEntry` in `practices-corpus.mjs`
+ * directly. Two sessions writing the same day never collide: their filenames
+ * differ. Every read below (`--report`, `--markdown`, `--write`) merges the
+ * legacy file with the directory, sorted, so nothing here needs to know which
+ * one a row came from.
+ *
+ * `--extract`/`--enrich` still exist for the markdown scoreboard table, but
+ * their write side now targets the directory too, for the same reason: they
+ * used to rewrite the whole of `evidence.jsonl` on every run, which is exactly
+ * the churn #1132 removes. Neither ever writes to the legacy file again.
+ *
  * Usage:
- *   node scripts/practices-evidence.mjs --extract   # markdown -> evidence.jsonl
+ *   node scripts/practices-evidence.mjs --add <row.json> [--slug s] [--date d]
+ *                                                    # file ONE new entry
+ *   node scripts/practices-evidence.mjs --extract   # table -> new entries only
  *   node scripts/practices-evidence.mjs --enrich    # add dates from GitHub
  *   node scripts/practices-evidence.mjs --report    # regenerate the analysis
  *   node scripts/practices-evidence.mjs --markdown  # print the tally block
@@ -51,8 +72,14 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  EVIDENCE_DIR,
+  readCorpus,
+  readEvidenceDirEntries,
+  writeEvidenceEntry,
+  writeEvidenceFile,
+} from './practices-corpus.mjs'
 
 export const SOURCE = 'docs/guides/development-practices.md'
 export const EVIDENCE = 'docs/practices/evidence.jsonl'
@@ -89,9 +116,10 @@ export function renderTallies(repoBlock, classBlock) {
     '# Practices tallies',
     '',
     'Regenerate with `node scripts/practices-evidence.mjs --write`.',
-    'Source of truth is `docs/practices/evidence.jsonl`; this file is derived',
-    'from it and is git-ignored so concurrent practices PRs cannot conflict on',
-    'it (#953).',
+    'Source of truth is `docs/practices/evidence.jsonl` (frozen legacy rows)',
+    'merged with `docs/practices/evidence/` (one file per entry, #1132); this',
+    'file is derived from both and is git-ignored so concurrent practices PRs',
+    'cannot conflict on it (#953).',
     '',
     repoBlock,
     '',
@@ -686,36 +714,86 @@ function gh(path) {
 function main() {
   const argv = process.argv.slice(2)
   const has = (f) => argv.includes(f)
+  const arg = (name) => {
+    const i = argv.indexOf(name)
+    return i === -1 ? null : argv[i + 1]
+  }
+
+  if (has('--add')) {
+    // The write path every future session uses (#1132): one new file, never
+    // an append. `<row.json>` is a JSON object matching the corpus schema —
+    // write it to a scratch path first (refs/summary/class/status/etc, see
+    // any file under docs/practices/evidence/ for the shape).
+    const srcPath = arg('--add')
+    if (!srcPath) {
+      process.stderr.write('--add requires a path to a JSON file with the row to record\n')
+      process.exit(1)
+    }
+    const row = JSON.parse(readFileSync(srcPath, 'utf8'))
+    if (!row.summary) {
+      process.stderr.write('row is missing "summary"\n')
+      process.exit(1)
+    }
+    if (row.class && !CLASSES.includes(row.class)) {
+      process.stderr.write(`row's "class" must be one of: ${CLASSES.join(', ')}\n`)
+      process.exit(1)
+    }
+    const path = writeEvidenceEntry(
+      {
+        refs: row.refs ?? [],
+        summary: row.summary,
+        class: row.class ?? null,
+        alsoClass: row.alsoClass ?? [],
+        surfacedIn: row.surfacedIn ?? '',
+        fixesIn: row.fixesIn ?? '',
+        status: row.status ?? 'unfiled',
+        costMinutes: row.costMinutes ?? null,
+        date: row.date ?? null,
+      },
+      { dir: EVIDENCE_DIR, date: arg('--date') ?? row.date, slug: arg('--slug') },
+    )
+    process.stderr.write(`wrote ${path}\n`)
+    return
+  }
 
   if (has('--extract')) {
+    // Never writes evidence.jsonl again (#1132) — it is a frozen legacy file.
+    // A markdown table row already recorded somewhere (legacy or directory)
+    // is left alone; a genuinely new one becomes its own directory file.
     const fresh = extractRows(readFileSync(SOURCE, 'utf8'))
-    const existing = readEvidence(EVIDENCE)
-    const rows = mergeExtracted(fresh, existing)
-    mkdirSync(dirname(EVIDENCE), { recursive: true })
-    writeFileSync(EVIDENCE, rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
-    const kept = rows.filter((r) => r.date).length
-    // Loud, because the alternative is a dataset that quietly shrinks.
-    const orphans = orphanedRows(fresh, existing)
+    const existing = readCorpus(EVIDENCE)
+    const { pairs, orphans } = pairRows(fresh, existing)
+    let written = 0
+    fresh.forEach((row, i) => {
+      if (pairs.has(i)) return // already recorded — do not re-persist it anywhere
+      writeEvidenceEntry({ ...row, date: row.date ?? null }, { dir: EVIDENCE_DIR })
+      written += 1
+    })
+    // Loud, because the alternative is a dataset that quietly looks smaller.
     if (orphans.length > 0) {
       process.stderr.write(
-        `\nWARNING: ${orphans.length} stored row(s) are not in the markdown and were KEPT.\n` +
-          `If your checkout predates another session's rows, rebase before re-extracting.\n` +
-          `To delete one deliberately, remove it from ${EVIDENCE} as well.\n`,
+        `\nWARNING: ${orphans.length} stored row(s) are not in the markdown. Nothing was\n` +
+          `deleted — they stay wherever they already live (legacy file or directory).\n` +
+          `If your checkout predates another session's table row, rebase before\n` +
+          `re-extracting.\n`,
       )
       for (const row of orphans) process.stderr.write(`  - ${row.summary.slice(0, 90)}\n`)
     }
     process.stderr.write(
-      `extracted ${rows.length} rows (${kept} keeping a known date) -> ${EVIDENCE}\n`,
+      `${written} new row(s) written to ${EVIDENCE_DIR}/ ` +
+        `(${fresh.length - written} already recorded, ${EVIDENCE} untouched)\n`,
     )
     return
   }
 
   if (has('--enrich')) {
-    const rows = readEvidence(EVIDENCE)
+    // Only ever rewrites a directory entry, never the frozen legacy file —
+    // every legacy row's enrichment (or lack of one) is now permanent.
+    const entries = readEvidenceDirEntries(EVIDENCE_DIR)
     const cache = new Map()
     let dated = 0
-    for (const row of rows) {
-      if (row.date || row.refs.length === 0) continue
+    for (const { file, row } of entries) {
+      if (row.date || !row.refs || row.refs.length === 0) continue
       // Earliest referenced item ≈ when the failure surfaced; later refs are fixes.
       let earliest = null
       for (const ref of row.refs) {
@@ -732,16 +810,18 @@ function main() {
       }
       if (earliest) {
         row.date = earliest.slice(0, 10)
+        writeEvidenceFile(EVIDENCE_DIR, file, row)
         dated += 1
       }
     }
-    writeFileSync(EVIDENCE, rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
-    process.stderr.write(`dated ${dated} rows from GitHub\n`)
+    process.stderr.write(
+      `dated ${dated} row(s) in ${EVIDENCE_DIR}/ from GitHub (${EVIDENCE} is frozen, untouched)\n`,
+    )
     return
   }
 
   if (has('--markdown') || has('--write')) {
-    const rows = readEvidence(EVIDENCE)
+    const rows = readCorpus(EVIDENCE)
     const repoBlock = tallyMarkdown(rows)
     const classBlock = classMarkdown(rows)
     if (has('--write')) {
@@ -756,7 +836,7 @@ function main() {
     return
   }
 
-  const a = analyse(readEvidence(EVIDENCE))
+  const a = analyse(readCorpus(EVIDENCE))
   process.stdout.write(`${JSON.stringify(a, null, 2)}\n`)
 }
 

@@ -43,15 +43,29 @@
  * history, so the removal is reviewable later rather than being a decision
  * someone made in a terminal.
  *
+ * ## The directory (#1132)
+ *
+ * `evidence.jsonl` is now a frozen legacy file — new findings are written as
+ * their own file under `docs/practices/evidence/`, one per entry, so
+ * concurrent sessions never touch the same path and cannot conflict. The
+ * shrink check above is exactly wrong for a directory: two sessions ADDING a
+ * file apiece can never collide, so growth is not the interesting property.
+ * The one way this corpus loses a finding is a file vanishing, so the
+ * directory's guard is simpler and stronger than "never shrinks" — **no path
+ * present at the merge base is missing now**. Same escape hatch
+ * (`Practices-Removal:`), because a genuine duplicate or merge still needs a
+ * way out.
+ *
  * Runs on bare node with no install, like every other script here.
  *
  * Usage:  node scripts/practices-monotonic.mjs [baseRef]
  */
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 
 export const EVIDENCE = 'docs/practices/evidence.jsonl'
+export const EVIDENCE_DIR = 'docs/practices/evidence'
 export const MARKDOWN = 'docs/guides/development-practices.md'
 export const REMOVAL_TRAILER = 'Practices-Removal:'
 
@@ -155,6 +169,24 @@ export function hasRemovalTrailer(commitMessages) {
 }
 
 /**
+ * The per-directory equivalent of "never shrinks": no path is ever DELETED.
+ *
+ * A count cannot express this correctly for a directory the way it does for
+ * a single file — two sessions each ADDING one file grows the count exactly
+ * as much as one session deleting a different one and adding two, so "grew"
+ * proves nothing. Deletion is the only loss shape a per-entry directory can
+ * suffer, so it is what gets checked, directly.
+ *
+ * @param {string[]} baseFiles filenames present at the merge base
+ * @param {string[]} headFiles filenames present now
+ */
+export function assessDeletions(baseFiles, headFiles) {
+  const headSet = new Set(headFiles)
+  const deleted = baseFiles.filter((f) => !headSet.has(f))
+  return { deleted, ok: deleted.length === 0 }
+}
+
+/**
  * @param {{evidence: number, tableRows: number}} base
  * @param {{evidence: number, tableRows: number}} head
  * @param {boolean} acknowledged
@@ -178,11 +210,31 @@ function git(args) {
   }
 }
 
+/**
+ * `*.json` paths under `dir` at git ref `ref`. Empty, not an error, when the
+ * directory does not exist there yet — every PR predating #1132 has none.
+ */
+function listDirAtRef(ref, dir) {
+  const out = git(['ls-tree', '-r', '--name-only', ref, '--', dir])
+  return out
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.endsWith('.json'))
+}
+
+/** `*.json` paths under `dir` on disk right now. */
+function listDirNow(dir) {
+  if (!existsSync(dir)) return []
+  return readdirSync(dir)
+    .filter((f) => f.endsWith('.json'))
+    .map((f) => `${dir}/${f}`)
+}
+
 function main() {
   const baseRef = process.argv[2] ?? process.env['GITHUB_BASE_REF'] ?? 'dev'
   // No corpus in this repo — every instance scaffolded from the template runs
-  // this check and has neither file. Silence, not failure.
-  if (!existsSync(EVIDENCE) && !existsSync(MARKDOWN)) return
+  // this check and has neither file nor directory. Silence, not failure.
+  if (!existsSync(EVIDENCE) && !existsSync(MARKDOWN) && !existsSync(EVIDENCE_DIR)) return
 
   const mergeBase = git(['merge-base', `origin/${baseRef}`, 'HEAD']).trim()
   if (!mergeBase) {
@@ -226,6 +278,34 @@ function main() {
         `rows your branch added.\n`,
     )
     process.exit(1)
+  }
+
+  // The directory's own check: no path present at the merge base may be
+  // missing now. Separate from `losses` above because the remedy and the
+  // framing are different — a count regressing asks "did this shrink?", a
+  // directory asks "is everything that was here still here?".
+  const baseDirFiles = listDirAtRef(mergeBase, EVIDENCE_DIR)
+  const headDirFiles = listDirNow(EVIDENCE_DIR)
+  const { deleted, ok: dirOk } = assessDeletions(baseDirFiles, headDirFiles)
+  if (!dirOk && !hasRemovalTrailer(messages)) {
+    process.stderr.write(
+      `\npractices-monotonic: ${deleted.length} file(s) deleted from ${EVIDENCE_DIR}:\n` +
+        deleted.map((f) => `  - ${f}\n`).join('') +
+        `\nThis directory exists so concurrent sessions never touch the same path —\n` +
+        `each finding is its own file, so the only way it loses one is a file\n` +
+        `vanishing outright. If this was deliberate (a genuine duplicate, two rows\n` +
+        `merged), say so in a commit:\n\n` +
+        `    ${REMOVAL_TRAILER} merged two rows recording the same condition\n\n` +
+        `Otherwise you are probably editing from a stale base. Rebase onto\n` +
+        `origin/${baseRef} and re-apply.\n`,
+    )
+    process.exit(1)
+  }
+  if (!dirOk) {
+    process.stderr.write(
+      `practices-monotonic: ${deleted.length} file(s) deleted from ${EVIDENCE_DIR} ` +
+        `(allowed: a commit carries ${REMOVAL_TRAILER}).\n`,
+    )
   }
 
   for (const loss of losses) {

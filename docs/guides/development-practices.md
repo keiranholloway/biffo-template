@@ -5740,13 +5740,26 @@ saying "how did that ever work?".
    is indistinguishable from one that does not exist, and that is a fixable
    defect in the skill.
 
-Then re-extract, so the analysis stays derived rather than asserted:
+Then record the same finding as a corpus entry — **its own file, never an
+append** (#1132). `docs/practices/evidence.jsonl` is a frozen legacy file:
+several agent sessions run concurrently in this estate, and a single file
+every one of them appended to conflicted by construction — a whole-file hunk
+on every capture PR, one incident that came within a human's second glance of
+silently dropping another session's row. Nothing appends to it again.
 
 ```bash
-node scripts/practices-evidence.mjs --extract   # table -> docs/practices/evidence.jsonl
-node scripts/practices-evidence.mjs --enrich    # recover dates from the linked issues
+# Write the row to a scratch JSON file first, then file it as one new entry:
+node scripts/practices-evidence.mjs --add /tmp/row.json
+#   -> docs/practices/evidence/2026-08-03-metric-denominator-blindness.json
+
 node scripts/practices-evidence.mjs --report    # regenerate the counts above
+#   (reads evidence.jsonl AND docs/practices/evidence/, merged and sorted)
 ```
+
+Two sessions filing a row the same day never collide — their filenames differ.
+`--extract`/`--enrich` still exist to pull rows out of the markdown table
+above, but they now write new entries into `docs/practices/evidence/` too,
+never back into the frozen `.jsonl`.
 
 Keep entries falsifiable. "Testing could be better" helps nobody; "the audit gate
 exits 0 when the registry returns non-JSON, so a green check does not mean the

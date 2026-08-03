@@ -23,7 +23,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_STATUS_CHECKS } from './index.js'
+import { DEFAULT_STATUS_CHECKS, SIBLING_STATUS_CHECKS } from './index.js'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..')
 
@@ -99,8 +99,22 @@ describe('DEFAULT_STATUS_CHECKS vs. the workflows that must report them', () => 
   })
 
   it('matches the required job names in the sibling skeleton ci.yml (biffo sibling create)', () => {
+    // SIBLING_STATUS_CHECKS, not the default. A sibling ships an E2E harness
+    // (#1208) and an instance does not, so the two lists genuinely differ —
+    // requiring `E2E (Playwright)` on an instance would leave every PR waiting
+    // forever on a context the template's ci.yml never reports.
     const required = jobNames(SKELETON_CI).filter((n) => !NOT_REQUIRED.has(n))
-    expect([...required].sort()).toEqual([...DEFAULT_STATUS_CHECKS].sort())
+    expect([...required].sort()).toEqual([...SIBLING_STATUS_CHECKS].sort())
+  })
+
+  it('keeps the sibling list a strict superset of the instance list', () => {
+    // If these ever diverge in the other direction — a check instances require
+    // that siblings do not — a sibling would be born less protected than an
+    // instance, silently. The superset relation is the invariant, not the
+    // specific extra entries.
+    for (const check of DEFAULT_STATUS_CHECKS) {
+      expect(SIBLING_STATUS_CHECKS, `siblings do not require '${check}'`).toContain(check)
+    }
   })
 
   it('only excludes jobs that actually exist', () => {

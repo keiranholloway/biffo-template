@@ -127,9 +127,11 @@ def soft_delete_attr(model: type[Any]) -> Any | None:
     return getattr(model, SOFT_DELETE_COLUMN, model.__table__.columns[SOFT_DELETE_COLUMN])
 
 
-def _visible(model: type[Any], query: Any) -> Any:
+def visible_rows(model: type[Any], query: Any) -> Any:
     """Narrow a query to rows that are not tombstoned. A no-op for a model with
-    no soft-delete column, so every caller can apply it unconditionally."""
+    no soft-delete column, so every caller can apply it unconditionally — which
+    is the point: the owner-data handlers share it, so there is one place that
+    decides what "still exists" means rather than two that can drift."""
     tombstone = soft_delete_attr(model)
     return query if tombstone is None else query.where(tombstone.is_(None))
 
@@ -224,7 +226,7 @@ def make_list_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
         tenant_id: str = Depends(require_plugin_tenant_context),
         db: AsyncSession = Depends(get_db),
     ) -> list[dict[str, Any]]:
-        query = _visible(model, select(model).where(model.tenant_id == tenant_id))
+        query = visible_rows(model, select(model).where(model.tenant_id == tenant_id))
         result = await db.execute(query)
         return [serialize(row) for row in result.scalars().all()]
 
@@ -237,7 +239,9 @@ def make_read_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
         tenant_id: str = Depends(require_plugin_tenant_context),
         db: AsyncSession = Depends(get_db),
     ) -> dict[str, Any]:
-        query = _visible(model, select(model).where(model.id == id, model.tenant_id == tenant_id))
+        query = visible_rows(
+            model, select(model).where(model.id == id, model.tenant_id == tenant_id)
+        )
         result = await db.execute(query)
         row = result.scalar_one_or_none()
         if row is None:
@@ -310,7 +314,9 @@ def make_update_handler(
         # A tombstoned row is invisible to read, so it must be invisible to
         # update too — otherwise a caller who cannot see a row can still write
         # to it, and the 404 read becomes a lie rather than a boundary.
-        query = _visible(model, select(model).where(model.id == id, model.tenant_id == tenant_id))
+        query = visible_rows(
+            model, select(model).where(model.id == id, model.tenant_id == tenant_id)
+        )
         result = await db.execute(query)
         row = result.scalar_one_or_none()
         if row is None:
@@ -334,27 +340,31 @@ def make_delete_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
         tenant_id: str = Depends(require_plugin_tenant_context),
         db: AsyncSession = Depends(get_db),
     ) -> dict[str, Any]:
-        query = _visible(model, select(model).where(model.id == id, model.tenant_id == tenant_id))
+        query = visible_rows(
+            model, select(model).where(model.id == id, model.tenant_id == tenant_id)
+        )
         result = await db.execute(query)
         row = result.scalar_one_or_none()
         if row is None:
             # Includes an already-tombstoned row: deleting one twice is a 404,
             # not a second `<table>.deleted` event for the same row.
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-        # Capture the row for the event before it's deleted/expired.
         exclude = frozenset(getattr(model, "__event_exclude__", ()) or ())
-        deleted_payload = _event_payload(row, exclude)
         tombstone = soft_delete_attr(model)
         if tombstone is None:
+            # Capture the row for the event before it's deleted/expired.
+            deleted_payload = _event_payload(row, exclude)
             await db.delete(row)
             await db.flush()
         else:
-            # A model carrying deleted_at is tombstoned, never destroyed. The
-            # SQL is an UPDATE, so it is the table's UPDATE grants and RLS
-            # UPDATE policy that govern it — not its DELETE ones. A table
-            # exposing generic delete on a soft-delete model needs an UPDATE
-            # policy that admits the caller; a DELETE policy alone will not
-            # authorise this and the row will not be found to update.
+            # A model carrying deleted_at is tombstoned, never destroyed, and
+            # the event carries the tombstoned row — deleted_at included, so a
+            # consumer can see when it happened.
+            #
+            # Note for a table under RLS: this makes the statement an UPDATE,
+            # so the table's UPDATE grants and UPDATE policy are what must
+            # admit the caller. A DELETE policy alone no longer authorises the
+            # generic delete on such a table.
             setattr(row, SOFT_DELETE_COLUMN, func.now())
             await db.flush()
             await db.refresh(row)

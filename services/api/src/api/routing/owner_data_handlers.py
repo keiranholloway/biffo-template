@@ -41,7 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..middleware.auth import AuthenticatedUser
 from ..middleware.principal import Principal, require_signed_principal
-from .crud_handlers import serialize
+from .crud_handlers import serialize, visible_rows
 
 Handler = Callable[..., Awaitable[Any]]
 
@@ -95,10 +95,20 @@ def make_owner_create_handler(
 
 
 def _owned(model: type[Any], owner_column: str, founder: AuthenticatedUser):
-    """A base SELECT scoped to this founder's rows on this tenant."""
-    return select(model).where(
-        model.tenant_id == founder.tenant_id,
-        getattr(model, owner_column) == _owner_id(founder),
+    """A base SELECT scoped to this founder's rows on this tenant, excluding
+    tombstoned ones.
+
+    These handlers have no delete verb, so nothing here *creates* a tombstone —
+    but a model reached this way may also be exposed through the tenant-scoped
+    handlers, or soft-deleted by a bespoke domain endpoint, and a row that is
+    deleted everywhere else must not still be visible here.
+    """
+    return visible_rows(
+        model,
+        select(model).where(
+            model.tenant_id == founder.tenant_id,
+            getattr(model, owner_column) == _owner_id(founder),
+        ),
     )
 
 

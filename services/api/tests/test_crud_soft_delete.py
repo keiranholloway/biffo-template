@@ -70,6 +70,18 @@ class _OptedOutWidget(TenantScopedModel):
     )
 
 
+class _SoftOwned(TenantScopedModel):
+    """An owner-scoped table that also carries deleted_at."""
+
+    __tablename__ = "soft_owned_test"
+
+    owner_sub: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str] = mapped_column(String(100), nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+
+
 @pytest.fixture
 async def session():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -255,3 +267,29 @@ class TestDeletedAtIsNotBodySettable:
             await handler(id=row_id, payload={"deleted_at": None}, tenant_id="default", db=session)
 
         assert exc.value.status_code == 422
+
+
+class TestOwnerDataSharesTheSameRule:
+    """The owner-data handlers are a second query surface over the same models
+    (`routing/owner_data_handlers.py`). They have no delete verb, so nothing
+    there creates a tombstone — but a row soft-deleted through the tenant-scoped
+    handlers, or by a bespoke domain endpoint, must not still be readable here.
+    Both surfaces now narrow through the same `visible_rows`."""
+
+    async def test_owned_select_excludes_tombstoned(self, session):
+        from api.middleware.auth import AuthenticatedUser
+        from api.routing.owner_data_handlers import _owned
+
+        founder = AuthenticatedUser(
+            sub="alice", email="a@x.com", username="alice", tenant_id="default", roles=[]
+        )
+        live = _SoftOwned(tenant_id="default", owner_sub="alice", label="live")
+        gone = _SoftOwned(tenant_id="default", owner_sub="alice", label="tombstoned")
+        session.add_all([live, gone])
+        await session.flush()
+        gone.deleted_at = func.now()
+        await session.flush()
+
+        rows = (await session.execute(_owned(_SoftOwned, "owner_sub", founder))).scalars().all()
+
+        assert [r.label for r in rows] == ["live"]

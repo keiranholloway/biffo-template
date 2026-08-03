@@ -130,6 +130,11 @@ describe('worktree lifecycle log', () => {
     }
   })
 
+  // The only case here that reaches `stage_repo`: it clones, adds a real
+  // worktree and stages, all in a shell subprocess. The 5s default is sized for
+  // in-process unit tests, and this one exceeded it under a full-parallelism run
+  // while passing serially — a timeout that depends on how busy the machine is
+  // reports a scheduling delay as a defect in the logging it guards.
   it('logs the add and the pre-stage remove when a run actually stages', () => {
     const e = estate()
     const out = run(e, ['--rehearse'])
@@ -138,7 +143,7 @@ describe('worktree lifecycle log', () => {
     expect(out).toMatch(/\tadd\s/)
     // The path is what a reader greps for when hunting who removed it.
     expect(out).toContain(join(e.dir, 'satellite', '.worktrees', 'shared-sync'))
-  })
+  }, 30_000)
 
   it('names the guard event distinctly, so it can be searched backwards from', () => {
     const body = readFileSync(script, 'utf8')

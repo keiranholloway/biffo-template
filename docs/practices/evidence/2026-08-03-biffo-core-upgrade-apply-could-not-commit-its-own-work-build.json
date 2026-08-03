@@ -1,0 +1,15 @@
+{
+  "refs": [
+    "#1198"
+  ],
+  "summary": "biffo core upgrade --apply could not commit its own work. buildCommitMessage emits the carries-template-prs provenance marker (#767, moved into the commit message by #1011) as ONE line, and commitlint's body-max-line-length is 100. Measured on both real upgrades: tabsii-platform 21 carried PRs = 140 chars, biffo-platform 99 = ~1000 chars. Both rejected; both instance upgrades had to be finished by hand. The mechanism that exists to preserve provenance destroyed the commit carrying it, and failed hardest on the upgrades with the most provenance to record — the bigger the gap an instance has to close, the more certain the failure. Existing tests used two-PR lists (746,750), so a limit that bites at ~13 PRs was invisible. Fixed by wrapping inside the HTML comment, and by making the READER tolerate whitespace: the old parser ([0-9,]+) stops at a newline, so wrapping the writer alone would have returned [] — total provenance loss that looks like working",
+  "class": "process",
+  "alsoClass": [
+    "fail-open"
+  ],
+  "surfacedIn": "tabsii-platform and biffo-platform core upgrades",
+  "fixesIn": "biffo-template cli/src/commands/core-upgrade.ts, scripts/practices-metrics.mjs",
+  "status": "fixed",
+  "costMinutes": 40,
+  "date": "2026-08-03"
+}

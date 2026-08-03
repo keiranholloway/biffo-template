@@ -1,0 +1,15 @@
+{
+  "refs": [
+    "#1214"
+  ],
+  "summary": "CodeQL was dormant across the whole estate and looked like coverage. The only thing that could enable it was vars.ENABLE_CODE_SCANNING, set in NO repo, so nine repos reported 'Analyze (...) skipped' on every run and had no dataflow SAST at all, for months. Code Security is FREE on public repositories, so the gate is now github.event.repository.private == false || the opt-in. The first real run on biffo-template found 7 alerts, 5 high — four js/file-system-race TOCTOU in core-migrations.ts, core-version.ts, plugin-workspace-sources.ts and practices-corpus.mjs, i.e. the code that upgrades every instance. Two false positives triaged out. Note the estate was NOT unscanned (bandit, eslint-plugin-security, gitleaks, checkov all run); the missing layer was specifically JS/TS dataflow, and the initial assessment that CodeQL's value was 'incremental' was an understatement",
+  "class": "fail-open",
+  "alsoClass": [
+    "visibility"
+  ],
+  "surfacedIn": "nine estate repos carrying a dormant codeql.yml",
+  "fixesIn": "biffo-template .github/workflows/codeql.yml + sibling skeleton",
+  "status": "fixed",
+  "costMinutes": 45,
+  "date": "2026-08-03"
+}

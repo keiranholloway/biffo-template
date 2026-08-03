@@ -1,0 +1,16 @@
+{
+  "refs": [
+    "#1208",
+    "#1219"
+  ],
+  "summary": "2 of 13 repos had any E2E coverage and the sibling skeleton shipped none, so every sibling was born with zero and stayed there. Worse, tabsii-geo HAD five E2E files and did not require the check, so a regression merged green and sat on dev for four hours. Coverage that cannot block a merge is documentation. Fixed by shipping a working Playwright harness in the skeleton and making it required for new siblings — which needed TWO check lists, because an instance has no e2e job and requiring that context there would hang every PR forever. The important finding is about the fix itself: the first draft of the smoke spec PASSED against a harness deliberately broken exactly as geo's was, because it omitted NEXT_PUBLIC_CORE_PORTAL_URL and page.tsx only redirects if CORE_PORTAL_URL is set — the app had nowhere to redirect to, so the test could not fail. A test that cannot fail is worse than no test. Only the fail-first run caught it",
+  "class": "fail-open",
+  "alsoClass": [
+    "drift"
+  ],
+  "surfacedIn": "tabsii-geo and 10 siblings with no E2E at all",
+  "fixesIn": "biffo-template _skeletons/sibling-template + cli/ status checks",
+  "status": "fixed",
+  "costMinutes": 75,
+  "date": "2026-08-03"
+}

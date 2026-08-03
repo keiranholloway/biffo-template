@@ -54,6 +54,57 @@ HEAD..origin/<integration>` is `0` before trusting a tree.
 Several agents often run concurrently in this repo. A worktree isolates your
 **files**; it does not isolate everything.
 
+#### Check before you start, and push early
+
+**Before starting work on an issue, run:**
+
+```bash
+sh scripts/claim.sh <issue-number> [-R owner/repo]   # 0 free · 1 taken · 2 cannot tell
+```
+
+It asks four questions, because the answer lives in more than one place: does
+the issue carry the `in-progress` label, is there an **open PR** referencing it,
+is there a **remote branch** naming it, and has a PR already merged that closes
+it. If it reports free, it claims the issue for you — label and dated comment
+together, so the claim can later be recognised as stale.
+
+**Exit 2 is "cannot tell" and is never "free".** An unreadable issue or an
+unauthenticated `gh` must stop you, not wave you through.
+
+**Why four signals rather than the label alone.** The label is a
+hand-maintained second copy of something git already knows: a branch exists, a
+PR exists. Those are automatic — you cannot do the work without creating them —
+while the label is a separate action someone has to remember, in a workflow that
+may never have been told to. Second copies of a decision drift; that is the same
+lesson as `_extract_detail`, as `AGENTS.md` itself (#559), and as the commit-msg
+type list.
+
+On 2026-08-03 four sessions collided in one morning. **Three of the four were
+"work exists, label does not"** — a live worktree or a merged PR, on an issue
+nobody had labelled. The fourth was the reverse: a label with no work, while
+another session built the thing and opened a PR. Checking only the label would
+have caught one of four.
+
+**Push your branch as soon as it exists.** The claim is a reservation; the
+branch is the evidence, and it is the only signal other machines can see — a
+local worktree is invisible estate-wide. The window between starting and pushing
+is where collisions actually happen: one of that morning's issues went from
+branch to **merged in three minutes**, which no protocol could have caught.
+
+**Release what you claim.** Remove the label when the PR merges, when you close
+the issue, or when you stop — including when you stop because someone else got
+there first. A claim you never release is worse than no claim, because the next
+session believes it. If you are skipping something because it is claimed, check
+how old the claim is: an `in-progress` issue with no activity for over an hour is
+probably abandoned. Steal it deliberately and say so in a comment; never steal a
+fresh one.
+
+**This applies to every workflow, not just backlog grooming.** It used to live
+in one agent skill, which is why the sessions doing the work — running an
+ordinary change, a build, a fix — had never been told about it. That is the same
+shape as §3's Conventional Commits being binding on seventeen repos and enforced
+in three (#1193).
+
 - **`git stash` is shared across all worktrees.** A bare `git stash pop` pops
   whatever is on top of the _repository's_ stack — which may be another
   session's uncommitted work, in files you never touched. This has already

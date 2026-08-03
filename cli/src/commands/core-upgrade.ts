@@ -43,6 +43,7 @@ import {
   materializeTemplateAtTag,
   workingTreeMatchesTag,
 } from '../lib/core-template-trees.js'
+import { type InstanceSeam, findNewUndeclaredSeams } from '../lib/instance-seams.js'
 import {
   type BreakingChange,
   UPGRADE_GUIDE_PATH,
@@ -518,12 +519,20 @@ async function runCoreUpgradeResolved(
   // invocation, not just the ones that also carry a template-owned change.
   const orphanRatchet = checkOrphanRatchet(plan.orphaned.length, readOrphanBaseline(options.cwd))
 
+  // #1188: same reasoning as the orphan ratchet above — computed and printed
+  // before anything can short-circuit, so a new undeclared seam is visible on
+  // every run (dry run included), not only the ones that also change something
+  // else. See instance-seams.ts for why "new relative to base" and "derived
+  // from tsconfig.json" are both load-bearing.
+  const newSeams = findNewUndeclaredSeams(baseDir, theirsDir, options.cwd)
+
   const heading = options.apply ? 'Biffo core upgrade' : 'Biffo core upgrade (dry run)'
   console.log(chalk.bold(`\n  ${heading}\n`))
   console.log(`  instance core:   ${instanceVersion ?? chalk.dim('(unrecorded)')}`)
   console.log(`  merge base:      ${fromVersion}`)
   console.log(`  target:          ${toVersion}\n`)
 
+  printNewInstanceSeams(newSeams)
   printOrphanReport(plan.orphaned, orphanRatchet)
   if (orphanRatchet.increased) {
     throw new Error(
@@ -612,6 +621,7 @@ async function runCoreUpgradeResolved(
     theirsDir,
     coreVersionCleanup,
     orphanRatchet,
+    newSeams,
   )
 }
 
@@ -630,6 +640,10 @@ async function applyAndOpenPr(
   /** #1026 orphan ratchet outcome — carried through so a first-ever baseline
    * can be recorded alongside the rest of this upgrade's writes. */
   orphanRatchet: OrphanRatchet,
+  /** #1188 — new `@/instance-*` seams this upgrade introduces with no
+   * instance declaration yet. Warned, never failed on — see
+   * `printNewInstanceSeams`'s docstring for why. */
+  newSeams: InstanceSeam[],
 ): Promise<void> {
   if (breaking.length > 0 && !options.acknowledgeBreaking) {
     throw new Error(
@@ -690,6 +704,7 @@ async function applyAndOpenPr(
       theirsDir,
       coreVersionCleanup,
       orphanRatchet,
+      newSeams,
       branch,
       token,
     )
@@ -800,6 +815,8 @@ async function buildCommitAndOpenPr(
   theirsDir: string,
   coreVersionCleanup: CoreVersionCleanup | null,
   orphanRatchet: OrphanRatchet,
+  /** #1188 — carried through to the PR body. */
+  newSeams: InstanceSeam[],
   branch: string,
   /** Resolved by the caller, before the branch exists, so a missing token fails
    * the run without having moved HEAD first. */
@@ -904,6 +921,7 @@ async function buildCommitAndOpenPr(
       breaking,
       cleanedCoreVersion ? coreVersionCleanup : null,
       carriedPrs,
+      newSeams,
     ),
   })
 
@@ -1022,6 +1040,9 @@ export function buildPrBody(
   coreVersionCleanup: CoreVersionCleanup | null = null,
   /** Template PR numbers this upgrade carries, for time-to-feature (#767). */
   carriedPrs: number[] = [],
+  /** New `@/instance-*` seams this upgrade introduces with no instance
+   * declaration yet (#1188). */
+  newSeams: InstanceSeam[] = [],
 ): string {
   const lines: string[] = []
   if (breaking.length > 0) {
@@ -1033,6 +1054,32 @@ export function buildPrBody(
       'Read these before merging — some destroy data or require manual work afterwards.',
       '',
       ...breaking.flatMap((b) => [`### ${b.version} — ${b.title}`, '', b.body, '']),
+      '---',
+      '',
+    )
+  }
+  if (newSeams.length > 0) {
+    // Same placement reasoning as breaking changes above (#407): this is a
+    // "read before merging" item, not a footnote after a long change list.
+    lines.push(
+      `## ⚠ ${newSeams.length} new instance seam(s) — no declaration yet (#1188)`,
+      '',
+      'This upgrade introduces a new optional `@/instance-*` module the portal can ' +
+        'resolve to an instance-owned override. **This instance has not declared one**, so ' +
+        'until it does, it silently gets the template-owned generic default listed below — ' +
+        'not necessarily the behaviour this instance actually wants.',
+      '',
+      ...newSeams.flatMap((s) => [
+        `### \`${s.specifier}\``,
+        '',
+        `- Add \`${s.instanceFile}\` to declare this instance's own behaviour.`,
+        `- Until then, this instance uses the template default: \`${s.defaultFile}\`.`,
+        '',
+      ]),
+      'The contract this module implements is part of THIS upgrade, so it does not exist yet ' +
+        'anywhere the instance could have written the file in advance — add it as a follow-up ' +
+        'commit on this PR, before merging, once the files above have landed on this branch.',
+      '',
       '---',
       '',
     )
@@ -1304,6 +1351,40 @@ function printCoreVersionCleanup(cleanup: CoreVersionCleanup | null, applying: b
       ? `does not match biffo.core.json — looks repurposed, keeping ${CORE_VERSION_FILE}`
       : `biffo.core.json absent or unparseable — no authority to check, keeping ${CORE_VERSION_FILE}`
   console.log(`  ${chalk.dim('cleanup'.padEnd(15))} ${chalk.dim(`${cleanup.found}: ${why}`)}`)
+}
+
+/**
+ * Report #1188's new-undeclared-seam warning to the terminal. Printed on every
+ * run, dry run included — same reasoning as `printOrphanReport` below: a
+ * warning nobody sees before merge is one nobody acts on before merge.
+ *
+ * This is deliberately a warning, never a thrown error (contrast
+ * `orphanRatchet.increased` below, which does throw): failing the upgrade here
+ * would deadlock it. The instance file this warns about cannot compile until
+ * the contract this same upgrade carries has landed, so there is no way to
+ * pre-satisfy the check before running `--apply` — a hard fail would leave the
+ * operator unable to get ANY upgrade PR open until they can already read a
+ * contract module that does not yet exist anywhere they can reach. Warning
+ * loudly, here and in the PR body (`newInstanceSeamsSection` below), lets the
+ * otherwise-good upgrade merge while making the follow-up unmissable: the
+ * contract is on the upgrade branch the moment `--apply` finishes, so the
+ * instance's declaration can be added as a second commit on that same PR,
+ * before it merges.
+ */
+function printNewInstanceSeams(seams: InstanceSeam[]): void {
+  if (seams.length === 0) return
+  console.log(
+    chalk.red.bold(
+      `  ⚠ ${String(seams.length)} new instance seam(s) introduced with no declaration (#1188):`,
+    ),
+  )
+  for (const s of seams) {
+    console.log(`    ${chalk.bold(s.specifier)} → add ${chalk.yellow(s.instanceFile)}`)
+    console.log(
+      chalk.dim(`      Until then, this instance gets the template default: ${s.defaultFile}`),
+    )
+  }
+  console.log()
 }
 
 /**

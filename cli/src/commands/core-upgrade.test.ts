@@ -646,6 +646,102 @@ describe('runCoreUpgrade — orphaned core.version cleanup (#434)', () => {
   })
 })
 
+describe('runCoreUpgrade — new instance seam warning (#1188)', () => {
+  let base: string
+  let theirs: string
+  let instance: string
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    base = makeTmpDir('seam-base')
+    theirs = makeTmpDir('seam-theirs')
+    instance = makeTmpDir('seam-inst')
+    // Something outside apps/portal/ also changes, so the upgrade is never a
+    // no-op regardless of what the seam check finds.
+    writeFileSync(join(base, 'core.version'), '0.1.0\n')
+    writeFileSync(join(base, 'core-manifest.json'), JSON.stringify(MANIFEST))
+    w(base, 'services/api/main.py', 'v1')
+    writeFileSync(join(theirs, 'core.version'), '0.2.0\n')
+    writeFileSync(join(theirs, 'core-manifest.json'), JSON.stringify(MANIFEST))
+    w(theirs, 'services/api/main.py', 'v2')
+    writeFileSync(join(instance, 'biffo.core.json'), JSON.stringify({ version: '0.1.0' }))
+    w(instance, 'services/api/main.py', 'v1')
+  })
+  afterEach(() => {
+    for (const d of [base, theirs, instance]) rmSync(d, { recursive: true, force: true })
+  })
+
+  function tsconfig(paths: Record<string, string[]>): string {
+    return JSON.stringify({ compilerOptions: { baseUrl: '.', paths } })
+  }
+
+  async function apply(): Promise<ReturnType<typeof fakeDeps>> {
+    const deps = fakeDeps()
+    await runCoreUpgrade(
+      { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs, apply: true },
+      deps.deps,
+    )
+    return deps
+  }
+
+  it('warns in the terminal and the PR body when a new seam has no instance declaration', async () => {
+    w(base, 'apps/portal/tsconfig.json', tsconfig({}))
+    w(
+      theirs,
+      'apps/portal/tsconfig.json',
+      tsconfig({ '@/instance-login-destinations': ['./src/lib/login-destinations-default.ts'] }),
+    )
+    // instance never adds src/instance-login-destinations.ts
+
+    const { createPullRequest } = await apply()
+
+    const terminalOutput = vi
+      .mocked(console.log)
+      .mock.calls.map((c) => String(c[0]))
+      .join('\n')
+    expect(terminalOutput).toContain('#1188')
+    expect(terminalOutput).toContain('apps/portal/src/instance-login-destinations.ts')
+    expect(createPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.stringContaining('apps/portal/src/instance-login-destinations.ts'),
+      }),
+    )
+    expect(createPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('#1188') }),
+    )
+  })
+
+  it('does not warn when the instance already declares the new seam', async () => {
+    w(base, 'apps/portal/tsconfig.json', tsconfig({}))
+    w(
+      theirs,
+      'apps/portal/tsconfig.json',
+      tsconfig({ '@/instance-login-destinations': ['./src/lib/login-destinations-default.ts'] }),
+    )
+    w(instance, 'apps/portal/src/instance-login-destinations.ts', 'export const x = 1\n')
+
+    const { createPullRequest } = await apply()
+
+    expect(createPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.not.stringContaining('#1188') }),
+    )
+  })
+
+  it('is unaffected when the upgrade carries no seam changes at all', async () => {
+    const paths = { '@/instance-nav': ['./src/lib/instance-nav-empty.ts'] }
+    w(base, 'apps/portal/tsconfig.json', tsconfig(paths))
+    w(theirs, 'apps/portal/tsconfig.json', tsconfig(paths))
+    // instance never declared @/instance-nav either — irrelevant, it is not new.
+
+    const { createPullRequest } = await apply()
+
+    expect(createPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.not.stringContaining('#1188') }),
+    )
+  })
+})
+
 /**
  * Issue #984: `--apply` created the upgrade branch by checking it out in the
  * caller's own checkout and never moved HEAD back, so the repo it was pointed at
@@ -878,6 +974,79 @@ describe('buildPrBody — global workflow promotion note (issue #328)', () => {
     }
     const body = buildPrBody('0.1.0', '0.2.0', planWith([ordinary]), noMigrations, 'dev')
     expect(body).not.toContain('Promotion required')
+  })
+})
+
+describe('buildPrBody — new instance seams (#1188)', () => {
+  function emptySummary(): Record<MergeStatus, number> {
+    return {
+      unchanged: 0,
+      'take-theirs': 0,
+      'keep-ours': 0,
+      merged: 0,
+      conflict: 0,
+      added: 0,
+      'add-conflict': 0,
+      removed: 0,
+      'remove-conflict': 0,
+    }
+  }
+
+  function planWith(changes: MergeEntry[]): UpgradePlan {
+    const summary = emptySummary()
+    for (const c of changes) summary[c.status]++
+    return { entries: changes, changes, conflicts: [], summary }
+  }
+
+  const noMigrations: MigrationCarryPlan = { entries: [], instanceHead: null, skipped: [] }
+
+  const tsconfigChange: MergeEntry = {
+    path: 'apps/portal/tsconfig.json',
+    status: 'merged',
+    conflicted: false,
+    content: '{}',
+  }
+
+  const seam = {
+    specifier: '@/instance-login-destinations',
+    instanceFile: 'apps/portal/src/instance-login-destinations.ts',
+    defaultFile: 'apps/portal/src/lib/login-destinations-default.ts',
+  }
+
+  it('names the file the instance must add and the default that applies until then', () => {
+    const body = buildPrBody(
+      '0.1.0',
+      '0.2.0',
+      planWith([tsconfigChange]),
+      noMigrations,
+      'dev',
+      [],
+      [],
+      null,
+      [],
+      [seam],
+    )
+    expect(body).toContain('#1188')
+    expect(body).toContain('@/instance-login-destinations')
+    expect(body).toContain('apps/portal/src/instance-login-destinations.ts')
+    expect(body).toContain('apps/portal/src/lib/login-destinations-default.ts')
+  })
+
+  it('omits the section entirely when no new seam is introduced', () => {
+    const body = buildPrBody(
+      '0.1.0',
+      '0.2.0',
+      planWith([tsconfigChange]),
+      noMigrations,
+      'dev',
+      [],
+      [],
+      null,
+      [],
+      [],
+    )
+    expect(body).not.toContain('#1188')
+    expect(body).not.toContain('instance seam')
   })
 })
 

@@ -1,0 +1,13 @@
+{
+  "refs": [],
+  "summary": "An agent's own background-task convention manufactured the exact false positive biffo-verify warns about, through a channel the existing guidance does not name. The pattern used all session was `sh scripts/wait-for-checks.sh <PR> ...; echo \"exit: $?\"`, run via run_in_background, with the task-notification's own completion summary read as the result ('Background command ... completed (exit code 0)'). That summary is the exit code of the WHOLE compound command -- and because the last command in the chain is always `echo`, which always succeeds, the wrapper reports success regardless of whether wait-for-checks.sh itself returned 0 (green), 1 (failed) or 2 (cannot tell). This is the AGENTS.md 'cmd | tail' trap wearing a different disguise: not a pipe masking a pipeline's exit status, but a background-task notification's own summary masking a compound command's exit status -- the same shape, a channel the existing documentation does not mention. It bit twice in one session. Once from the wrong directory entirely: wait-for-checks.sh was run from a stale primary checkout that predated the script's addition to shared-files.json, so `sh: 0: cannot open scripts/wait-for-checks.sh: No such file` printed, the script never ran, and the notification still read 'completed (exit code 0)' -- almost read as a green PR check. Caught only because a direct `gh pr checks` query moments later showed every check still pending, which didn't match a supposed pass. The second time the script genuinely ran but from the correct worktree, and the SAME reading habit (trusting the notification wrapper) had to be deliberately overridden by `cat`-ing the task's actual output file and finding the literal printed 'exit: N' line before treating any result as either a pass or a merge-ready signal. Once the trap was named, catching it was cheap -- a few seconds to cat the output file each time -- but the near-miss (almost merging on the wrong-directory false pass) was the expensive version, since branch protection was the only thing that would have caught it if the PR HAD been mergeable at that moment.",
+  "class": "visibility",
+  "alsoClass": [
+    "process"
+  ],
+  "surfacedIn": "session tooling -- wait-for-checks.sh invoked via run_in_background across tabsii-intake, tabsii-lms, tabsii-geo, tabsii-marketplace PRs",
+  "fixesIn": "habit only -- always cat the background task's own output file for the literal printed exit line, never trust the task-notification wrapper's completion summary",
+  "status": "corrected before shipping",
+  "costMinutes": 15,
+  "date": "2026-08-03"
+}

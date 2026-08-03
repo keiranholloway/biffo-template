@@ -1958,6 +1958,23 @@ the PR-per-instance exist because manual copy-ins let instances drift silently
 argument is for making each hop **fast to verify and honest about its result**,
 not for removing it.
 
+### Measured: one manifest file needed three full tag/carry/deploy cycles to actually reach S3 (2026-08-02)
+
+Repointing tabsii-platform's sibling manifest (#508) is a template-owned change,
+so every fix has to travel: merge in `biffo-template`, tag, `biffo core upgrade`
+into the instance, merge that carry PR, wait for the instance's own deploy. Each
+lap is roughly a PR-CI wait (2–3 min) plus a tag/publish (under a minute) plus a
+full application deploy (several minutes) — call it 10–15 minutes of pure
+waiting per lap, before any diagnosis time. It took **three** laps: the path
+repoint itself, then the S3-sync-exclusion fix, then the `upload-artifact`
+dotfile-exclusion fix — each only discoverable by curling the live URL *after*
+the previous lap's deploy finished, because each fix's own CI was green and
+proved nothing about the one bug still hiding behind it. Total, not counting the
+diagnosis time already priced into the fail-open row above: **~40 minutes of
+structural waiting**, unavoidable given the distribution model, and the reason
+§2's "verify in the target that differs most" now reads "verify **after every
+lap**, not just the last one" in the went-well entry on this page.
+
 ## What went well — practices that earned their keep
 
 **Check whether the guard already exists before writing it.** Asked to build two
@@ -3931,6 +3948,52 @@ mutation is the bug's real shape, since `tenant_id` arrives by inheritance.
 
 **Worth adding to §3:** for a new module, revert the *logic*, not the *file*.
 
+### Live-checked the deployed artifact at every step of a four-repo rollout, and it paid for itself three separate times (2026-08-03)
+
+Rolling `@tabsii-com/ui` out to `tabsii-intake`, `tabsii-lms`, `tabsii-geo` and
+`tabsii-marketplace` (tabsii-platform#508/#534), every merge was followed by
+`curl`-ing the live URL and grepping the compiled CSS/HTML for the expected
+values — not just watching CI go green. That habit, applied consistently rather
+than once, is what surfaced three real defects that a passing test suite never
+would have:
+
+1. The `.well-known/siblings.json` manifest 403'd in production through **two**
+   green core-upgrade deploys before a live `curl -D -` plus a diff against the
+   error page's own `etag` proved the object was never actually written to S3 —
+   twice, for two unrelated reasons (see the fail-open row above).
+2. `tabsii-geo`'s brand link rendered `href="/"` in the real prerendered HTML —
+   confirmed **before** writing the fix, not assumed from reading the source —
+   which is what turned "this might be wrong" into "this is live and broken"
+   and justified fixing it immediately rather than filing it for later.
+3. The same live check, re-run **after** the fix on both `tabsii-lms` (grepping
+   the compiled JS bundle for the inlined `"/lms"` literal, since its page is
+   client-rendered) and `tabsii-geo` (grepping the prerendered HTML directly),
+   is what closed the loop — a second green CI run on the fix PRs would have
+   proven nothing more than the first one did.
+
+The generalisable point: for a change whose failure mode is "builds fine,
+serves wrong" (a CDN path, a client-side route, a build-time env substitution),
+treat the live artifact as the only evidence that counts, and check it **both
+before and after** the fix — checking only after cannot distinguish "this fix
+worked" from "this was never actually broken".
+
+### Read a second repo's own code comments to find a bug the first repo's tests couldn't see (2026-08-03)
+
+`@tabsii-com/ui`'s `<TopBar>` brand-link basePath bug (see the boundary row
+above) shipped clean through two consumers' full test suites — typecheck,
+lint, unit tests, even a real `next build` — because none of those exercise
+what a **click** actually does; a literal string default is syntactically
+correct in every one of them. It was found only building a **third** consumer,
+and specifically by reading `tabsii-marketplace`'s existing `NavBar.tsx`, whose
+own code comment explained *why* it mixed `next/link`'s `Link` (auto-prefixed)
+with a plain `<a>` (deliberately not). That comment, written for an unrelated
+reason months earlier, was the thing that made the shared component's silent
+assumption legible. Worth generalising: when building a shared abstraction's
+Nth consumer, read the existing hand-rolled code it is meant to replace before
+writing the replacement, even when the plan is just "swap it in" — the old
+code's own reasoning is often the cheapest place to find what the new
+abstraction forgot to model.
+
 ## What needs more thought
 
 **Nothing audits a guard's reach, and reach is where guards actually fail.**
@@ -5455,12 +5518,33 @@ had already become machine guards earlier in the session (the sibling deploy's
 `deploy-status` job, and the CRUD schema check in `_run_db_init`). **The prose
 half is the part on trial.**
 
+### `biffo-verify`'s §6 has no entry for a background-task wrapper's own completion summary (2026-08-03)
+
+§6 covers a gate that passes when it cannot run, and names `cmd | tail`
+masking a pipeline's real exit status as the canonical example (AGENTS.md §4).
+The same shape recurred through a channel neither section names: a background
+task run as `sh scripts/wait-for-checks.sh <PR>; echo "exit: $?"`, with the
+**task-notification's own "completed (exit code N)" summary** read as the
+result. That summary is the exit status of the whole compound command, and
+because the last command in the chain is always `echo`, it reports success
+regardless of whether the script itself returned 0, 1 or 2. It nearly produced
+a false pass: the script was once run from a stale worktree that predated its
+own addition to `shared-files.json`, printed `cannot open
+scripts/wait-for-checks.sh`, never executed, and the wrapper still read
+"completed (exit code 0)". Caught only because a direct `gh pr checks` query
+moments later showed every check still pending — nothing in the notification
+itself would have raised the question. **Suggested addition to §6**: when a
+tool's own wrapper reports success for a compound command, the wrapper's
+report is never sufficient — read the command's actual last line of output
+(here, the script's own printed `exit: N`) before treating anything as a pass.
+
 ## Skills used
 
 Skills cannot be iterated on impressions. Every invocation, with an honest outcome.
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `biffo-verify` | **worked — invoked at the end of a long session, retroactively, and its §8 was the only reason any of this got written down** | Rolling `@tabsii-com/ui` out across four sibling repos (tabsii-platform#508/#534) was done without invoking the skill by name once, yet §2 ("reproduce by the reporter's route"), §4 ("verify the deployed artifact"), and §7 ("say what you did not verify") were all applied throughout on habit — live `curl`s against every merge, an explicit deferred-scope note in the `tabsii-marketplace` PR body about why `NavBar`→`TopBar` was not done. The session correctly self-corrected twice mid-flight without the skill: once by proactively granting `tabsii-geo` package access before its first CI run (having been burned reactively on `tabsii-lms`), once by tracing a `basePath` bug back through two already-merged, already-deployed PRs rather than patching only the repo it was found in. None of that got **recorded** until this skill was explicitly invoked at the end — matching a `needs more thought` finding already on this page (`§8 fired only when the operator asked`). The retroactive capture still worked cleanly: every cost, class and fix-location was reconstructable from the session transcript alone. |
 | `biffo-workflow` | **worked — twice, and Step 1's fresh-fetch rule was the one that mattered** | Ran for #1122 and #1147. The estate sweep behind #1123 was first done against **local checkouts**, which turned out to be 1–11 commits behind their own `dev` (`tabsii-marketplace` by 11). Redoing it via `git show origin/dev:<path>` after a fetch is what made the 7-repo table trustworthy; §1's "a primary checkout 10 commits behind produced a whole audit against dead code" is exactly the failure that was about to be repeated. Step 4's honest-push rule also fired for real: a `pnpm run <gate> \| tail` chain masked a **prettier failure on YAML I had just broken**, and every subsequent gate in the `&&` chain still ran because the pipe's exit status is `tail`'s. Re-running each gate capturing `$?` found it. The trap is documented in AGENTS.md §4 for `git push`; it is the same trap for any gate. |
 | `biffo-verify` | **worked — §1 caught three false claims about the estate in one session** | "Establish the current state before writing anything" was the highest-value step by a distance. It found that (a) the destructive-plan guard I had been asked to write already existed, wired and tested; (b) two issues I filed that morning had been closed by someone else's PR while I worked elsewhere; (c) the sibling sweep I had reported was built on stale checkouts. Each check cost ~2 minutes. §3 (prove the test fails without the fix) fired cleanly for both guards — reverting only `publish-sdk.yml` failed exactly one case naming job, line and command, and reverting only the skeleton's `deploy.yml` did the same. |
 | `groom-backlog` | **worked, on its own updated rules** | The skill had been rewritten earlier the same session to treat an issue as one *instance* of a class. Applied to its own output: the three findings originally filed as one issue were split (#1123/#1129/#1130) once it was clear the shared title hid two of them, and the ordering dependency between #1129 and #1130 — each inert without the other — was recorded in both rather than left implicit. The "name the class, then sweep for its other instances" step is what turned "fix this workflow" into the two sweep tests. |

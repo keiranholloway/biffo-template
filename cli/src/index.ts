@@ -18,6 +18,7 @@ import { verifyCommand } from './commands/verify.js'
 import { branchHealthCommand } from './commands/branch-health.js'
 import { claimCommand } from './commands/claim.js'
 import { waitForChecksCommand } from './commands/wait-for-checks.js'
+import { runnerDropForensicsCommand } from './commands/runner-drop-forensics.js'
 import { getLatestCoreVersion } from './lib/core-version.js'
 import { NonInteractiveError, registerNonInteractive } from './lib/interactive.js'
 import { log } from './lib/logger.js'
@@ -64,6 +65,7 @@ program.addCommand(branchHealthCommand)
 program.addCommand(claimCommand)
 program.addCommand(verifyCommand)
 program.addCommand(gateCoverageCommand)
+program.addCommand(runnerDropForensicsCommand)
 program.addCommand(hookAuditCommand)
 program.addCommand(pgTestDbCommand)
 program.addCommand(rewriteScopeCheckCommand)

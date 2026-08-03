@@ -43,6 +43,42 @@ This file is distributed by the template and kept in step by
 - **Clean up when the PR merges:** `git worktree remove .worktrees/<name>`, then
   let the branch be deleted. Keep `git worktree list` short and every entry live.
 
+### Check before you start, and push early
+
+**Before starting work on an issue, run:**
+
+```bash
+sh scripts/claim.sh <issue-number> [-R owner/repo]   # 0 free · 1 taken · 2 cannot tell
+```
+
+Several agent sessions run against this estate at once. The script asks four
+questions, because the answer lives in more than one place: does the issue carry
+the `in-progress` label, is there an **open PR** referencing it, is there a
+**remote branch** naming it, and has a PR already merged that closes it. If it
+reports free, it claims the issue for you.
+
+**Exit 2 is "cannot tell" and is never "free".** An unreadable issue or an
+unauthenticated `gh` must stop you, not wave you through.
+
+**Why four signals rather than the label alone.** The label is a
+hand-maintained second copy of something git already knows: a branch exists, a
+PR exists. Those are automatic — you cannot do the work without creating them —
+while the label is a separate action someone has to remember. On 2026-08-03 four
+sessions collided in one morning, and **three of the four were "work exists,
+label does not"**. Checking only the label would have caught one of four.
+
+**Push your branch as soon as it exists.** A local worktree is invisible to
+every other machine; the pushed branch is the only signal they can see. The
+window between starting and pushing is where collisions actually happen — one of
+that morning's issues went from branch to **merged in three minutes**.
+
+**Release what you claim.** Remove the label when the PR merges, when you close
+the issue, or when you stop — including when you stop because someone else got
+there first. A claim you never release is worse than no claim, because the next
+session believes it. Before skipping something because it is claimed, check how
+old the claim is: no activity for over an hour probably means abandoned. Steal
+it deliberately and say so in a comment; never steal a fresh one.
+
 ## 3. Commits
 
 - **Conventional Commits** (`feat`, `fix`, `chore`, `docs`, `test`, `infra`,

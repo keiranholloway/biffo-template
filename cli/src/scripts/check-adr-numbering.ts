@@ -1,11 +1,15 @@
 /**
- * CI entrypoint for the ADR numbering guard (tabsii-platform#449): fail when
- * two files in this repo's own `docs/ADR/` claim the same numeric prefix, or
- * when `docs/ADR/.numbering-allowlist` names a number that isn't actually
- * colliding any more.
+ * CI entrypoint for the ADR numbering guard: fail when two files in this
+ * repo's own `docs/ADR/` claim the same numeric prefix (tabsii-platform#449),
+ * when an INSTANCE repo has a new ADR numbered inside the template's reserved
+ * range (#1105), or when `docs/ADR/.numbering-allowlist` names a number
+ * neither check needs any more.
  *
- * A no-op in a repo with no `docs/ADR/`, or where every prefix is unique —
- * including this template, which has one series by construction.
+ * A no-op in a repo with no `docs/ADR/`, or where every prefix is unique and
+ * (for an instance) none land in the reserved range — including this
+ * template, which has one series by construction and is never checked
+ * against its own reserved range (see adr-numbering-guard.ts's module doc
+ * comment, "The reserved range").
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -13,9 +17,12 @@ import { execa } from 'execa'
 import {
   ALLOWLIST_FILENAME,
   findAdrNumberCollisions,
+  findAdrReservedRangeViolations,
   findStaleAdrNumberingAllowlistEntries,
   formatAdrNumberCollisions,
+  formatAdrReservedRangeViolations,
 } from '../lib/adr-numbering-guard.js'
+import { isInstanceRepo } from '../lib/core-version.js'
 
 export async function runAdrNumberingCheck(): Promise<void> {
   const root = (await execa('git', ['rev-parse', '--show-toplevel'])).stdout.trim()
@@ -26,8 +33,10 @@ export async function runAdrNumberingCheck(): Promise<void> {
     return
   }
 
+  const instance = isInstanceRepo(root)
   const collisions = findAdrNumberCollisions(adrDir)
-  const stale = findStaleAdrNumberingAllowlistEntries(adrDir)
+  const reservedRangeViolations = instance ? findAdrReservedRangeViolations(adrDir) : []
+  const stale = findStaleAdrNumberingAllowlistEntries(adrDir, { isInstance: instance })
   let failed = false
 
   if (collisions.length > 0) {
@@ -40,11 +49,20 @@ export async function runAdrNumberingCheck(): Promise<void> {
     )
   }
 
+  if (reservedRangeViolations.length > 0) {
+    failed = true
+    console.error(
+      "✗ ADR numbering guard: docs/ADR/ has an ADR inside the template's reserved range\n",
+    )
+    console.error(formatAdrReservedRangeViolations(reservedRangeViolations))
+    console.error('\nSee #1105 for why this range is reserved.')
+  }
+
   if (stale.length > 0) {
     failed = true
     console.error(
       `✗ ADR numbering guard: docs/ADR/${ALLOWLIST_FILENAME} names a number that ` +
-        `no longer collides: ${stale.join(', ')}\n` +
+        `neither check needs any more: ${stale.join(', ')}\n` +
         '  Remove the stale entry — an allowlist nothing checks against just hides the next real one.',
     )
   }

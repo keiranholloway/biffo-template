@@ -1,13 +1,16 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   ALLOWLIST_FILENAME,
+  TEMPLATE_ADR_RESERVED_UPTO,
   adrNumbersIn,
   findAdrNumberCollisions,
+  findAdrReservedRangeViolations,
   findStaleAdrNumberingAllowlistEntries,
   formatAdrNumberCollisions,
+  formatAdrReservedRangeViolations,
   readAdrNumberingAllowlist,
 } from './adr-numbering-guard.js'
 
@@ -112,6 +115,61 @@ describe('findAdrNumberCollisions', () => {
   })
 })
 
+describe('findAdrReservedRangeViolations (#1105)', () => {
+  it('flags a new instance ADR numbered inside the reserved range', () => {
+    file('0012-identity-provider-seam.md')
+    expect(findAdrReservedRangeViolations(adrDir)).toEqual([
+      { number: '0012', file: '0012-identity-provider-seam.md' },
+    ])
+  })
+
+  it('does not flag a file numbered above the reserved range', () => {
+    file('0100-unified-login-and-role-based-landing.md')
+    expect(findAdrReservedRangeViolations(adrDir)).toEqual([])
+  })
+
+  it('does not flag a file the allowlist accepts', () => {
+    file('0012-identity-provider-seam.md')
+    writeFileSync(join(adrDir, ALLOWLIST_FILENAME), '0012\n')
+    expect(findAdrReservedRangeViolations(adrDir)).toEqual([])
+  })
+
+  it('flags every file at a violating number, not just one', () => {
+    file('0012-identity-provider-seam.md')
+    // Same number claimed twice — a collision AND a reserved-range violation
+    // are independent findings; this check reports both files regardless.
+    file('0012-something-else.md')
+    expect(
+      findAdrReservedRangeViolations(adrDir)
+        .map((v) => v.file)
+        .sort(),
+    ).toEqual(['0012-identity-provider-seam.md', '0012-something-else.md'])
+  })
+
+  it('respects a custom boundary', () => {
+    file('0050-something.md')
+    // 0050 is outside a 0028 boundary — not reserved, not flagged.
+    expect(findAdrReservedRangeViolations(adrDir, '0028')).toEqual([])
+    // 0050 is inside a 0055 or 0099 boundary — reserved, flagged.
+    expect(findAdrReservedRangeViolations(adrDir, '0055')).toEqual([
+      { number: '0050', file: '0050-something.md' },
+    ])
+    expect(findAdrReservedRangeViolations(adrDir, '0099')).toEqual([
+      { number: '0050', file: '0050-something.md' },
+    ])
+  })
+
+  it('the default boundary is TEMPLATE_ADR_RESERVED_UPTO', () => {
+    file(`${TEMPLATE_ADR_RESERVED_UPTO}-at-the-boundary.md`)
+    expect(findAdrReservedRangeViolations(adrDir)).toEqual([
+      {
+        number: TEMPLATE_ADR_RESERVED_UPTO,
+        file: `${TEMPLATE_ADR_RESERVED_UPTO}-at-the-boundary.md`,
+      },
+    ])
+  })
+})
+
 describe('readAdrNumberingAllowlist', () => {
   it('returns an empty set when the file does not exist', () => {
     expect(readAdrNumberingAllowlist(adrDir)).toEqual(new Set())
@@ -152,6 +210,44 @@ describe('findStaleAdrNumberingAllowlistEntries', () => {
     writeFileSync(join(adrDir, ALLOWLIST_FILENAME), '0009\n')
     expect(findStaleAdrNumberingAllowlistEntries(adrDir)).toEqual(['0009'])
   })
+
+  it('does not flag a non-colliding entry still needed for the reserved range, in an instance', () => {
+    file('0012-identity-provider-seam.md')
+    writeFileSync(join(adrDir, ALLOWLIST_FILENAME), '0012\n')
+    expect(
+      findStaleAdrNumberingAllowlistEntries(adrDir, {
+        isInstance: true,
+        reservedUpTo: TEMPLATE_ADR_RESERVED_UPTO,
+      }),
+    ).toEqual([])
+  })
+
+  it('flags a reserved-range entry once the file is gone, in an instance', () => {
+    // No file claims 0012 any more — the entry outlived its reason.
+    writeFileSync(join(adrDir, ALLOWLIST_FILENAME), '0012\n')
+    expect(
+      findStaleAdrNumberingAllowlistEntries(adrDir, {
+        isInstance: true,
+        reservedUpTo: TEMPLATE_ADR_RESERVED_UPTO,
+      }),
+    ).toEqual(['0012'])
+  })
+
+  it('ignores the reserved range in the template (isInstance omitted / false)', () => {
+    // Same fixture as the "does not flag" case above, but without isInstance:
+    // a single claimant with no collision is reported stale, because the
+    // template's own ADRs are never checked against the reserved range.
+    file('0012-identity-provider-seam.md')
+    writeFileSync(join(adrDir, ALLOWLIST_FILENAME), '0012\n')
+    expect(findStaleAdrNumberingAllowlistEntries(adrDir)).toEqual(['0012'])
+  })
+
+  it('an entry needed for a collision stays even if it would also be reserved-range-stale', () => {
+    file('0012-identity-provider-seam.md')
+    file('0012-something-else.md')
+    writeFileSync(join(adrDir, ALLOWLIST_FILENAME), '0012\n')
+    expect(findStaleAdrNumberingAllowlistEntries(adrDir, { isInstance: true })).toEqual([])
+  })
 })
 
 describe('formatAdrNumberCollisions', () => {
@@ -163,5 +259,50 @@ describe('formatAdrNumberCollisions', () => {
     expect(report).toContain('0010-a.md')
     expect(report).toContain('0010-b.md')
     expect(report).toContain('ambiguous')
+  })
+})
+
+describe('formatAdrReservedRangeViolations', () => {
+  it('names the file, the number, and both remedies', () => {
+    const report = formatAdrReservedRangeViolations([
+      { number: '0012', file: '0012-identity-provider-seam.md' },
+    ])
+    expect(report).toContain('0012-identity-provider-seam.md')
+    expect(report).toContain('ADR-0012')
+    expect(report).toContain('Renumber it above ADR-0099')
+    expect(report).toContain(ALLOWLIST_FILENAME)
+  })
+})
+
+describe('#1096: this guard only ever reaches the docs/ADR/ directory it is given', () => {
+  // The ownership-boundary question #1096 raised is whether a template-owned
+  // check (this file, distributed via `biffo core upgrade`) can assert over
+  // content outside its declared subject. These functions take `adrDir` as a
+  // parameter and never derive a path of their own — proving that means
+  // proving a SIBLING directory's content (which would model, e.g., a
+  // different repo's docs/ADR/, or template-owned content elsewhere in the
+  // same repo) is never read, collided against, or reported, no matter what
+  // it contains.
+  it('adrNumbersIn/findAdrNumberCollisions/findAdrReservedRangeViolations ignore a sibling directory entirely', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'adr-numbering-scope-'))
+    const ownDir = join(parent, 'docs', 'ADR')
+    const siblingDir = join(parent, 'elsewhere')
+    mkdirSync(dirname(ownDir), { recursive: true })
+    mkdirSync(ownDir)
+    mkdirSync(siblingDir)
+    try {
+      // The sibling directory alone would collide with, and violate, every
+      // check this file offers, if the scan escaped `ownDir`.
+      writeFileSync(join(siblingDir, '0012-identity-provider-seam.md'), '')
+      writeFileSync(join(siblingDir, '0012-something-else.md'), '')
+      writeFileSync(join(siblingDir, ALLOWLIST_FILENAME), 'not-a-real-allowlist')
+
+      expect(adrNumbersIn(ownDir)).toEqual(new Map())
+      expect(findAdrNumberCollisions(ownDir)).toEqual([])
+      expect(findAdrReservedRangeViolations(ownDir)).toEqual([])
+      expect(findStaleAdrNumberingAllowlistEntries(ownDir, { isInstance: true })).toEqual([])
+    } finally {
+      rmSync(parent, { recursive: true, force: true })
+    }
   })
 })

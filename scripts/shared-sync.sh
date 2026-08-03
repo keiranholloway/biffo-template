@@ -67,6 +67,7 @@
 #   sh scripts/shared-sync.sh --estate ~/code --repo tabsii-crm
 #   sh scripts/shared-sync.sh --estate ~/code --no-rehearse  # ship unproven, loudly
 #   sh scripts/shared-sync.sh --candidates --estate ~/code   # unlisted paths worth triaging (#1108)
+#   sh scripts/shared-sync.sh --backfill --estate ~/code     # skeleton files older repos never got (#1109)
 #
 # ## `mustBeUniform` and `--candidates` (#1108)
 #
@@ -156,6 +157,7 @@ ONLY=""
 REHEARSE_ONLY=""
 NO_REHEARSE=""
 CANDIDATES=""
+BACKFILL=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --check) CHECK=1; shift ;;
@@ -166,6 +168,8 @@ while [ $# -gt 0 ]; do
     --no-rehearse) NO_REHEARSE=1; shift ;;
     # Advisory discovery, not the guard (#1108) -- see the block comment above.
     --candidates) CANDIDATES=1; shift ;;
+    # The other discovery direction (#1109) -- see its block comment below.
+    --backfill) BACKFILL=1; shift ;;
     --estate) ESTATE="$2"; shift 2 ;;
     --repo) ONLY="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -180,6 +184,7 @@ SYNC_RUN_MODE=ship
 [ -n "$REHEARSE_ONLY" ] && SYNC_RUN_MODE=rehearse
 [ -n "$NO_REHEARSE" ] && SYNC_RUN_MODE=ship-unproven
 [ -n "$CANDIDATES" ] && SYNC_RUN_MODE=candidates
+[ -n "$BACKFILL" ] && SYNC_RUN_MODE=backfill
 wt_log "run-start($SYNC_RUN_MODE)" "${ONLY:-<all repos>}" "$ESTATE"
 
 # `trap ... EXIT` REPLACES any previous EXIT trap, and two more are set further
@@ -481,6 +486,179 @@ applicable_repo_list() {
     printf '%s\t%s\t%s\n' "$(basename "$d")" "$d" "$(resolve_base "$d")"
   done
 }
+
+# --backfill: the OTHER discovery direction (#1109), advisory-only like
+# --candidates.
+#
+# `--candidates` walks the satellites and asks "what do lots of repos hold that
+# the manifest does not govern?". It cannot see this issue's shape at all,
+# because it requires a path in >=5 repos: a file the skeleton gained last month
+# lives in the one repo scaffolded since, and is invisible at 1 holder.
+#
+# This walks the SKELETONS and asks the reverse: "what does a skeleton ship that
+# some of its repos have and others lack?". Improving a skeleton helps only
+# repos scaffolded AFTERWARDS -- existing ones keep whatever it said on the day
+# they were born, and until now nothing reported the difference. Four files
+# (`auth-gate.tsx`, `cognito-hygiene.ts`, `identity.ts`, `branding.ts`) sat in
+# the newest sibling and in none of the four older ones, and nobody had decided
+# that; they were simply created earlier.
+#
+# ## Why PARTIAL adoption specifically, and not "absent everywhere"
+#
+# Reporting every skeleton path a repo lacks would be noise -- a skeleton is
+# full of scaffolding that satellites rename, consume or delete at birth, and a
+# report nobody can read is one nobody reads (the argument protection-audit.sh
+# makes at length). Partial adoption is the crisp signal: **somebody got this
+# file and somebody did not**, which is an inconsistency by construction rather
+# than a judgement about what a repo ought to want. A path every applicable repo
+# holds is fine; one no applicable repo holds is probably scaffolding. Between
+# them is the gap this issue is about.
+#
+# Paths already in any of the four manifest lists are skipped -- they have a
+# channel, and `--check` is the thing that reports on them.
+#
+# Reads `origin/<base>` via ls-tree, never a working tree, for the reason
+# recorded against --check: a guard that fails on somebody's stale checkout is a
+# fail-closed nuisance people learn to ignore.
+#
+# Exits 0 unconditionally. Backfilling is a decision -- `files` CREATES what is
+# absent (`mkdir -p` + `cp` in stage_repo), so adding a path to the shared set is
+# all it takes mechanically, but whether a given repo SHOULD receive a given
+# file is a human call. `auth-gate.tsx` is the standing example: it interacts
+# with each sibling's existing auth flow and must not be dropped in blind.
+if [ -n "$BACKFILL" ]; then
+  repos=$(applicable_repo_list)
+  if [ -z "$repos" ]; then
+    printf '\nno applicable repos found under %s\n\n' "$ESTATE"
+    exit 0
+  fi
+
+  rows=$(mktemp)
+  trap 'rm -f "$rows"; wt_log_run_end' EXIT
+  # `<skeleton><TAB><repo><TAB><path>` for every path every applicable repo
+  # holds, tagged with the skeleton that repo would be scaffolded from now.
+  printf '%s\n' "$repos" | while IFS="$TAB" read -r label d base; do
+    [ -n "$d" ] || continue
+    # Only repos carrying an actual marker. `skeleton_for` falls back to
+    # $SKELETON_DEFAULT for marker-less repos, and using that here would be
+    # wrong rather than merely noisy: the fallback exists so `filesFromSkeleton`
+    # can deliver AGENTS.md/CLAUDE.md to the runner fleets, tabsii-map and
+    # tabsii-data-model-design -- it is not a claim that those repos were
+    # scaffolded from the sibling skeleton. Comparing them against its full tree
+    # reported `services/api/*` as "7 have / 5 lack" across five repos that will
+    # never hold a FastAPI service, drowning the 20 real gaps in 39 fictional
+    # ones. A detector nobody can read is one nobody reads.
+    _skel=""
+    for _pair in $SKELETON_FOR; do
+      _marker=${_pair%%=*}
+      if git -C "$d" cat-file -e "origin/$base:${_marker}" 2>/dev/null; then
+        _skel=${_pair#*=}
+        break
+      fi
+    done
+    [ -n "$_skel" ] || continue
+    git -C "$d" ls-tree -r --name-only "origin/$base" 2>/dev/null |
+      sed "s|^|${_skel}${TAB}${label}${TAB}|"
+  done > "$rows"
+
+  # The skeletons' own file lists, same shape: `<skeleton><TAB><path>`.
+  skelrows=$(mktemp)
+  trap 'rm -f "$rows" "$skelrows"; wt_log_run_end' EXIT
+  # $TEMPLATE_ROOT, not $TEMPLATE_REPO: the latter is repo_dir()'s output, i.e.
+  # the .git COMMON DIR, and `<...>/.git/_skeletons/*/` matches nothing. The
+  # first cut of this used it and reported a confident `0 backfill gap(s)` --
+  # a zero that meant "could not see the input", which is the exact defect this
+  # estate keeps finding. Hence the fail-closed check below.
+  for _dir in "$TEMPLATE_ROOT"/_skeletons/*/; do
+    [ -d "$_dir" ] || continue
+    _name=$(basename "$_dir")
+    ( cd "$_dir" && find . -type f ) |
+      sed "s|^\./||" |
+      sed "s|^|${_name}${TAB}|" >> "$skelrows"
+  done
+
+  # An empty skeleton list can only mean the walk above is broken -- this repo
+  # always has skeletons. Reporting "no gaps" from it would be a pass earned by
+  # reading nothing.
+  if [ ! -s "$skelrows" ]; then
+    echo "no skeleton files found under $TEMPLATE_ROOT/_skeletons -- refusing to report zero gaps" >&2
+    exit 2
+  fi
+
+  node -e '
+    const fs = require("fs")
+    const [manifestPath, rowsPath, skelPath] = process.argv.slice(1)
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+    // Already governed by a list => already triaged, one way or the other.
+    const known = new Set([
+      ...(manifest.files || []),
+      ...Object.keys(manifest.filesIfPresent || {}),
+      ...Object.keys(manifest.filesFromSkeleton || {}),
+      ...Object.keys(manifest.mustBeUniform || {}),
+    ])
+
+    const split = (line) => {
+      const parts = line.split("\t")
+      return parts.length < 2 ? null : parts
+    }
+
+    // skeleton -> Set(path)
+    const skelFiles = new Map()
+    for (const line of fs.readFileSync(skelPath, "utf8").split("\n")) {
+      const p = line && split(line)
+      if (!p) continue
+      const [skel, ...rest] = p
+      const path = rest.join("\t")
+      if (!path) continue
+      if (!skelFiles.has(skel)) skelFiles.set(skel, new Set())
+      skelFiles.get(skel).add(path)
+    }
+
+    // skeleton -> repo -> Set(path)
+    const held = new Map()
+    for (const line of fs.readFileSync(rowsPath, "utf8").split("\n")) {
+      const p = line && split(line)
+      if (!p) continue
+      const [skel, repo, ...rest] = p
+      const path = rest.join("\t")
+      if (!path) continue
+      if (!held.has(skel)) held.set(skel, new Map())
+      const byRepo = held.get(skel)
+      if (!byRepo.has(repo)) byRepo.set(repo, new Set())
+      byRepo.get(repo).add(path)
+    }
+
+    console.log("\nskeleton backfill gaps -- paths some of a skeleton'"'"'s repos have and others lack (advisory only, #1109)")
+    let total = 0
+    for (const [skel, byRepo] of [...held].sort()) {
+      const paths = skelFiles.get(skel)
+      const repos = [...byRepo.keys()].sort()
+      if (!paths || repos.length < 2) continue
+      const rows = []
+      for (const path of paths) {
+        if (known.has(path)) continue
+        const lack = repos.filter((r) => !byRepo.get(r).has(path))
+        const have = repos.length - lack.length
+        // Partial adoption only: everybody-has is fine, nobody-has is
+        // scaffolding the repos were meant to consume or rename.
+        if (have === 0 || lack.length === 0) continue
+        rows.push({ path, have, lack })
+      }
+      rows.sort((a, b) => b.have - a.have || a.path.localeCompare(b.path))
+      total += rows.length
+      console.log(`\n${skel} -- ${repos.length} repos, ${paths.size} skeleton files, ${rows.length} gap(s)\n`)
+      for (const r of rows) {
+        console.log(`  ${r.path.padEnd(48)} ${r.have} have / ${r.lack.length} lack   ${r.lack.join(", ")}`)
+      }
+    }
+    console.log(`\n${total} backfill gap(s) total.`)
+    console.log("Nothing here fails the build. `files` creates what is absent, so backfilling is")
+    console.log("\"add the path to shared-files.json\" -- but whether a repo SHOULD receive a given")
+    console.log("file is a human call. See AGENTS.md section 9, \"Reconcile before you distribute\".")
+  ' "$MANIFEST" "$rows" "$skelrows"
+  printf '\n'
+  exit 0
+fi
 
 # --candidates: advisory discovery, never the guard (#1108). Walks every
 # applicable repo's FULL tree at its base branch -- not just the paths already

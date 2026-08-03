@@ -375,7 +375,12 @@ audit_json() {
   # It reads the snapshot written by the collector a few lines above, so it must
   # stay after it. `$DATA_DIR` rather than `$ESTATE`: this is the only audit
   # whose subject is the measurement rather than the repos.
-  audit_json classification "node scripts/classification-audit.mjs --data '$DATA_DIR'" 'failing steps unclassified|nothing to classify|cannot be audited'
+  #
+  # The `^classification:` alternative catches the exit-2 "cannot tell" messages
+  # (no snapshot, unparseable, no 1-day gates). Without it a real failure reports
+  # `no summary line` -- the same defect this file already records against
+  # hook-audit, where an unanchored match took a heading instead of the count.
+  audit_json classification "node scripts/classification-audit.mjs --data '$DATA_DIR'" 'failing steps unclassified|nothing to classify|cannot be audited|^classification:'
   printf ']}\n'
 } > "$AUDITS"
 

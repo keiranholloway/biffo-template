@@ -325,12 +325,18 @@ function main() {
     console.log(`  ${job.verdict.padEnd(24)} ${job.instance ?? '—'}  ${job.name}${because}`)
   }
 
-  // Exit codes are the point: this is meant to be usable from a script that
-  // decides whether to re-run or to page a human. 0 explained, 1 real failure,
-  // 3 a fleet fault nothing accounts for.
+  // The estate's three-valued contract, and the mapping is not arbitrary:
+  // 0 the drop is explained and a plain re-run is justified; 1 a gate rejected
+  // the change, so go and read the code; 2 CANNOT TELL — a runner demonstrably
+  // died and nothing accounts for it.
+  //
+  // `fleet-fault-unexplained` earns 2 rather than a bespoke code precisely
+  // because **2 is never a pass** here as everywhere else. "The runner died for
+  // reasons unknown" must not read as "safe to re-run and move on"; that is the
+  // fail-open this whole tool exists to close.
   if (result.verdict === VERDICT.REAL_FAILURE) process.exit(1)
   if (result.verdict === VERDICT.SPOT_RECLAIMED) process.exit(0)
-  process.exit(3)
+  process.exit(2)
 }
 
 if (process.argv[1] && process.argv[1].endsWith('runner-drop-forensics.mjs')) {

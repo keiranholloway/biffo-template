@@ -2426,6 +2426,39 @@ a guess. It is not, and the third one is where that costs something.
 > gets quoted back as fact long after the sample that produced it has grown.
 > Corrected in the issue rather than left standing.
 
+> **Settled on 2026-08-03 (#1021), and the answer was already in the account.**
+> The corrected hypothesis above — "spot reclamation, agent process death" — was
+> right about the first and never tested, because #1021 recorded that
+> self-hosted logs are not retained and concluded that nothing could separate
+> "reclaimed" from "starved" until they were. That conclusion was wrong, and the
+> reason it was wrong is worth more than the answer:
+>
+> - a self-hosted job's **`runner_name` is the EC2 instance ID**, so GitHub's own
+>   API hands you the fleet's primary key;
+> - **CloudTrail already retained every reclamation for 90 days** as
+>   `BidEvictedEvent`. Nothing had to be enabled. Management events are on by
+>   default and had been logging this the entire time.
+>
+> Joining the two: **22 of 22 runner-killed jobs across both fleets and all
+> twelve measured repos matched a spot eviction; none were unexplained.** Not
+> starvation, not network — reclamation, every time. The tool is
+> `scripts/runner-drop-forensics.mjs`.
+>
+> **The missing evidence was a missing query.** The issue asked for durable logs
+> — new infrastructure, on the instance, shipped somewhere — to answer a question
+> two existing sources already answered between them. Neither source was hidden;
+> they were just in different systems, and nobody had joined them. Before
+> building a way to observe something, check whether two things you already
+> record intersect on a key. Here the key was sitting in the API response that
+> every one of these investigations had already fetched.
+>
+> The corollary bites the other way too, and is why the tool reports
+> `fleet-fault-unexplained` as a distinct verdict rather than folding it into
+> "not reclaimed": that verdict is the *only* condition under which retaining
+> instance logs would buy anything. The corpus holds zero of them today. If one
+> appears, the log-retention question is live again — and the tool will say so
+> rather than leaving someone to re-derive it.
+
 **§2 "verify in the environment that differs most" was the only thing that worked.**
 Four independently-sufficient defects sat between an admin edit and a run, and no
 gate in the estate could see any of them — a CDN routing gap needs a browser, an

@@ -344,3 +344,41 @@ def test_generated_password_is_accepted_by_create_user(pool):
     )
 
     assert _password_reaches_cognito(client, pool_id, "mia@example.com", generated)
+
+
+# --- generated passwords must survive an HTML email body ----------------------
+#
+# The only reason to generate a temporary password is to put it somewhere
+# Cognito will not: `admin_create_user` never returns the password it set, so an
+# invite flow that sends a branded email must generate one and pass it as
+# `TemporaryPassword`. That destination is HTML, and a password mangled in
+# transit is a user who cannot sign in.
+#
+# tabsii-platform hit this in tabsii-crm#52 and narrowed its own copy of
+# `_SYMBOLS`; the template's still carried `$` and `&`, so the next
+# `biffo core upgrade` would have overwritten the instance's fix with the bug it
+# was written to cure. This asserts the property rather than the string, so the
+# set can be tuned without the guard going stale — and so it fails if a future
+# edit reintroduces a hazardous character.
+
+_HTML_HAZARDS = frozenset("&<>\"'\\$`")
+
+
+def test_symbol_alphabet_excludes_characters_that_break_an_html_email():
+    from api.cognito import _SYMBOLS
+
+    offenders = sorted(set(_SYMBOLS) & _HTML_HAZARDS)
+    assert offenders == [], (
+        f"_SYMBOLS contains {offenders}, which do not survive an HTML email body "
+        "(& starts an entity, $ is a templating token, quotes/brackets/backslash "
+        "need escaping). See tabsii-crm#52."
+    )
+
+
+def test_generated_passwords_never_contain_an_html_hazard():
+    # Sample rather than reason about the alphabet: this is what a caller
+    # actually receives, and it would catch a hazard introduced anywhere in the
+    # generation path, not only in `_SYMBOLS`.
+    for _ in range(200):
+        password = generate_temporary_password()
+        assert not (set(password) & _HTML_HAZARDS), f"generated {password!r}"

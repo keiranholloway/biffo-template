@@ -64,7 +64,27 @@ def redact_secret(text: str, secret: str | None) -> str:
 _UPPER = string.ascii_uppercase
 _LOWER = string.ascii_lowercase
 _DIGITS = string.digits
-_SYMBOLS = "!@#$%^&*()-_=+"
+
+# A conservative subset of what Cognito accepts (it allows a much wider set,
+# including `^ $ * . [ ] { } ( ) ? " ! @ # % & / \ , > < ' : ; | _ ~ ``).
+#
+# `$` and `&` are deliberately EXCLUDED, and this is not fussiness. The only
+# reason a caller generates a temporary password at all is to put it somewhere
+# Cognito will not — `admin_create_user` never returns the password it set, so
+# an invite flow that sends a branded email has to generate one and pass it as
+# `TemporaryPassword`. That destination is an HTML email body, where `&` starts
+# an entity reference and `$` is a replacement token in several templating
+# engines. A password containing either can arrive mangled, or silently
+# truncated, and the user simply cannot sign in.
+#
+# Folded upstream from tabsii-platform, which hit this in tabsii-crm#52 and
+# narrowed its own copy. The template's set still carried `$` and `&`, so the
+# next `biffo core upgrade` would have overwritten the instance's fix with the
+# bug it was written to cure — the `_extract_detail` shape AGENTS.md §9
+# describes, caught this time before the one-way merge ran rather than after.
+#
+# Quotes, angle brackets and backslashes are excluded for the same reason.
+_SYMBOLS = "!@#%^*()-_=+"
 
 
 def generate_temporary_password(length: int = 20) -> str:

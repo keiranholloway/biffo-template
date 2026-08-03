@@ -105,6 +105,22 @@ ordinary change, a build, a fix — had never been told about it. That is the sa
 shape as §3's Conventional Commits being binding on seventeen repos and enforced
 in three (#1193).
 
+**`git push` now enforces the branch/PR half of this (#1231 instance 2).**
+Claiming was advisory — nothing ever ran it for you, so the fix for a
+collision was itself subject to the collision it fixes. `.githooks/pre-push`
+derives the issue number from the branch name and refuses the push if another
+remote branch or another open PR already names it. It deliberately checks
+neither the `in-progress` label nor identity (see above for why), and it
+excludes the branch being pushed so pushing your own branch twice cannot block
+you. A branch that names no issue is skipped silently. If the gate cannot tell
+— no network, `gh` unauthenticated — it warns and lets the push through rather
+than blocking: this is a coordination gate, not a correctness one, and every
+collision on 2026-08-03 was caught before duplicate work merged, so a miss here
+is recoverable in a way a blanket block on push is not. Set
+`BIFFO_CLAIM_STRICT=1` to make cannot-tell block instead. A real conflict names
+what it found and points back here — "steal a claim over an hour stale, with a
+comment" applies to a pre-push block exactly as it does to `claim.sh` itself.
+
 - **`git stash` is shared across all worktrees.** A bare `git stash pop` pops
   whatever is on top of the _repository's_ stack — which may be another
   session's uncommitted work, in files you never touched. This has already

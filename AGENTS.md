@@ -302,7 +302,25 @@ Files every sibling and plugin must hold verbatim are listed in
 sh scripts/shared-sync.sh --check --estate ~/code        # report drift, exit 1 if any
 sh scripts/shared-sync.sh --estate ~/code                # open a PR per drifted repo
 sh scripts/shared-sync.sh --candidates --estate ~/code   # unlisted paths worth triaging; always exits 0
+sh scripts/shared-sync.sh --backfill --estate ~/code     # skeleton files older repos never got; always exits 0
 ```
+
+`--candidates` and `--backfill` are the two discovery directions and neither is
+a gate. `--candidates` walks the **satellites** and asks what many repos hold
+that the manifest does not govern; it requires a path in ≥5 repos, so it is
+structurally blind to a file the skeleton gained recently. `--backfill` walks
+the **skeletons** and asks what some of a skeleton's repos have and others lack
+— which is the drift #1109 recorded, where four frontend helpers sat in the
+newest sibling and in none of the four older ones because improving a skeleton
+only ever helps repos scaffolded afterwards.
+
+`--backfill` reports **partial adoption only**. A path every applicable repo
+holds is fine; a path no applicable repo holds is scaffolding they were meant to
+consume or rename. Between them is the gap. It also considers only repos
+carrying an actual marker: `skeletonDefault` exists so `filesFromSkeleton` can
+deliver `AGENTS.md` to the runner fleets and the design repo, **not** as a claim
+that those repos are siblings, and comparing them against a full sibling
+skeleton invents `services/api/*` gaps in repos that will never hold one.
 
 It is a **one-way overwrite**, not a merge, so only add a file whose copy should
 be identical everywhere — anything a repo is expected to customise belongs in

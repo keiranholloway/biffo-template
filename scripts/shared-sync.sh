@@ -67,6 +67,7 @@
 #   sh scripts/shared-sync.sh --estate ~/code --repo tabsii-crm
 #   sh scripts/shared-sync.sh --estate ~/code --no-rehearse  # ship unproven, loudly
 #   sh scripts/shared-sync.sh --candidates --estate ~/code   # unlisted paths worth triaging (#1108)
+#   sh scripts/shared-sync.sh --backfill --estate ~/code     # skeleton files older repos never got (#1109)
 #
 # ## `mustBeUniform` and `--candidates` (#1108)
 #

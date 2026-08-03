@@ -720,7 +720,7 @@ else
 fi
 
 # Terraform, wherever this repo keeps it: modules/ in the template and
-# instances, infra/ and modules/ in siblings.
+# instances, infra/ and modules/ in siblings, terraform/ in the runner fleets.
 if [ -n "$LIST" ] || command -v terraform >/dev/null 2>&1; then
   # Scope must match this repo's CI, not exceed it. The template and instances
   # deliberately fmt-check modules/ ONLY: infra/environments/ is user-owned, and
@@ -731,11 +731,46 @@ if [ -n "$LIST" ] || command -v terraform >/dev/null 2>&1; then
   tf_dirs=""
   [ -d modules ] && tf_dirs="$tf_dirs modules/"
   [ -f biffo.sibling.json ] && [ -d infra ] && tf_dirs="$tf_dirs infra/"
+  # terraform/ is the whole of a runner fleet (#1239). Both fleets kept every
+  # .tf file there, which is neither of the two directories above, so `tf_dirs`
+  # came out empty and this gate printed `no terraform in this repo` -- in the
+  # two repos that are nothing BUT terraform. Their CI does check it
+  # (`terraform fmt -check -recursive terraform/`), so the gap was local only:
+  # the gate that exists to catch this before the push was the one thing not
+  # catching it. No repo in the estate holds both terraform/ and modules/, so
+  # adding it cannot widen scope anywhere that was already covered.
+  [ -d terraform ] && tf_dirs="$tf_dirs terraform/"
   if [ -n "$tf_dirs" ]; then
     # shellcheck disable=SC2086
     ci_has "terraform fmt" && run_check terraform-fmt terraform fmt -check -recursive $tf_dirs
   else
-    skip terraform-fmt "no terraform in this repo"
+    # Distinguish "this repo has no terraform" from "this repo has terraform
+    # somewhere I do not look". The old message asserted the first and was
+    # printed for the second, which is the difference between a considered skip
+    # and a blind spot wearing its clothes -- the same shape as a branch audit
+    # dropping the repos it could not read (#1145) and reporting the remainder
+    # as the whole.
+    # Pruned rather than filtered, and NOT capped: `| head -20 | wc -l` would
+    # silently report 20 for a repo with 200, and a count that stops counting is
+    # the denominator defect this estate keeps re-learning.
+    _tf_stray=$(find . \
+      \( -name .git -o -name .worktrees -o -name .terraform -o -name node_modules \) -prune \
+      -o -name '*.tf' -print 2>/dev/null | wc -l | tr -d ' ')
+    if [ "${_tf_stray:-0}" -gt 0 ] && [ -z "$LIST" ]; then
+      # A WARN, not a skip and not a failure -- exactly the posture pg-test
+      # takes above for "the repo HAS the thing and the gate is blind to it".
+      # Not a failure because the right scope depends on what this repo's CI
+      # covers, which this gate cannot decide for a layout nobody has declared.
+      NOT_RUN="$NOT_RUN terraform-fmt"
+      printf '  \033[33mWARN\033[0m %-16s NOT RUN - %s .tf file(s) present, none in a directory this gate checks\n' \
+        "terraform-fmt" "$_tf_stray"
+      printf '       \033[33m%s\033[0m\n' \
+        "it looks in modules/, infra/ (siblings) and terraform/ - this repo uses none of them"
+      printf '       \033[90m%s\033[0m\n' \
+        "add the directory to the tf_dirs block in scripts/verify.sh (biffo-template#1239)"
+    else
+      skip terraform-fmt "no .tf files in modules/, infra/ or terraform/"
+    fi
   fi
 else
   skip terraform-fmt "terraform not installed"

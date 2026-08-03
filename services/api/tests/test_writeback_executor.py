@@ -46,6 +46,9 @@ class Note(TenantScopedModel):
     source: Mapped[str | None] = mapped_column(String(32), nullable=True)
     email: Mapped[str | None] = mapped_column(String(200), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    #: A NOT-NULL-in-spirit column only a `from_lookup` derivation could ever
+    #: populate (#672) — e.g. tabsii's `leads.pipeline_stage_id`.
+    stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 def _target(**over: Any) -> wb.WriteBackTarget:
@@ -767,6 +770,93 @@ def test_a_create_whose_trigger_lacks_the_key_is_denied_by_name(app, client):
 
     # Nothing half-written.
     assert asyncio.run(_count()) == 0
+
+
+# ── from_lookup: a create can derive a value the database itself must answer ──
+#
+# #672: `leads.pipeline_stage_id` is a brand's default stage — not the tenant
+# seam, not the definition's scope, not anything the trigger event carries.
+# Only a database read can produce it, and it must run on the same RLS-bound
+# session the insert itself uses.
+
+
+def test_a_lookup_derived_column_is_populated_from_the_bound_session(app, client):
+    calls: list[tuple[Any, str, dict | None]] = []
+
+    async def _resolve_stage(db: AsyncSession, tenant_id: str, scope: dict | None) -> Any:
+        calls.append((db, tenant_id, scope))
+        # Proves this runs on a live, usable session — not a stub or a closed
+        # connection — by actually querying through it.
+        await db.execute(select(Note))
+        return "onboarding"
+
+    wb.register_writeback_target(
+        _target(derived=(*_target().derived, wb.from_lookup("stage", _resolve_stage)))
+    )
+    run_id = asyncio.run(_seed(factory=(app[1])))
+
+    assert _post(client, run_id).json()["status"] == "written"
+    assert len(calls) == 1
+    db_seen, tenant_seen, scope_seen = calls[0]
+    assert isinstance(db_seen, AsyncSession)
+    assert tenant_seen == "default"
+    assert scope_seen == {"level": "brand", "id": "b1"}
+
+    async def _read() -> Note:
+        async with app[1]() as session:
+            return (await session.execute(select(Note))).scalar_one()
+
+    assert asyncio.run(_read()).stage == "onboarding"
+
+
+def test_a_lookup_that_resolves_to_nothing_leaves_the_column_unset(app, client):
+    async def _resolve_nothing(db: AsyncSession, tenant_id: str, scope: dict | None) -> Any:
+        del db, tenant_id, scope
+        return None
+
+    wb.register_writeback_target(
+        _target(derived=(*_target().derived, wb.from_lookup("stage", _resolve_nothing)))
+    )
+    run_id = asyncio.run(_seed(factory=(app[1])))
+
+    assert _post(client, run_id).json()["status"] == "written"
+
+    async def _read() -> Note:
+        async with app[1]() as session:
+            return (await session.execute(select(Note))).scalar_one()
+
+    assert asyncio.run(_read()).stage is None
+
+
+def test_a_lookup_is_never_offered_the_agents_own_output(app, client):
+    """`resolver` receives (db, tenant_id, scope) only — the same boundary every
+    other `derived` kind holds. Naming the derived column in the agent's result
+    must not reach the resolver or the row."""
+    seen_scope_only: list[dict | None] = []
+
+    async def _resolve_stage(db: AsyncSession, tenant_id: str, scope: dict | None) -> Any:
+        del db, tenant_id
+        seen_scope_only.append(scope)
+        return "from-trusted-state"
+
+    wb.register_writeback_target(
+        _target(derived=(*_target().derived, wb.from_lookup("stage", _resolve_stage)))
+    )
+    run_id = asyncio.run(
+        _seed(
+            factory=app[1],
+            result={"email": "a@b.com", "notes": "ok", "stage": "whatever-the-model-said"},
+        )
+    )
+
+    assert _post(client, run_id).json()["status"] == "written"
+    assert seen_scope_only == [{"level": "brand", "id": "b1"}]
+
+    async def _read() -> Note:
+        async with app[1]() as session:
+            return (await session.execute(select(Note))).scalar_one()
+
+    assert asyncio.run(_read()).stage == "from-trusted-state"
 
 
 def test_the_auto_disable_threshold_comes_from_settings_not_a_literal(app, client, monkeypatch):

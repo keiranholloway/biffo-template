@@ -310,6 +310,46 @@ def test_a_payload_derived_column_is_still_not_agent_writeable():
         )
 
 
+# ── from_lookup: a create's Core-set value that only a database read can answer ─
+
+
+def test_from_lookup_requires_a_resolver():
+    """A derivation that names no resolver would silently resolve to nothing —
+    and the column it guards is exactly the one that must never be guessable,
+    let alone unset (#672)."""
+    with pytest.raises(wb.WriteBackConfigurationError, match="names no resolver"):
+        wb.DerivedValue(column="pipeline_stage_id", kind="from_lookup")
+
+
+def test_from_lookup_builds_a_derivation_bound_to_a_resolver():
+    async def _resolve(db: AsyncSession, tenant_id: str, scope: dict[str, Any] | None) -> Any:
+        del db, tenant_id, scope
+        return "onboarding"
+
+    derived = wb.from_lookup("pipeline_stage_id", _resolve)
+    assert derived.kind == "from_lookup"
+    assert derived.resolver is _resolve
+    # Not scope-derived, so it places no requirement on a definition's scope —
+    # the value comes from a database read instead.
+    assert _target(derived=(wb.from_lookup("pipeline_stage_id", _resolve),)).scope_levels == ()
+
+
+def test_a_lookup_derived_column_is_still_not_agent_writeable():
+    """The guard that already refuses a column being both agent-writeable and
+    Core-set applies to this kind too — otherwise declaring it would hand the
+    model back the very column the lookup exists to keep from it."""
+
+    async def _resolve(db: AsyncSession, tenant_id: str, scope: dict[str, Any] | None) -> Any:
+        del db, tenant_id, scope
+        return "onboarding"
+
+    with pytest.raises(wb.WriteBackConfigurationError, match="derived only"):
+        _target(
+            columns=(wb.WriteBackColumn(name="pipeline_stage_id", label="Stage"),),
+            derived=(wb.from_lookup("pipeline_stage_id", _resolve),),
+        )
+
+
 class TestPiiRedaction:
     """#673: identifying values must not persist in AgentRun.result after the write."""
 

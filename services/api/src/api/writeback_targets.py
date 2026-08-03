@@ -76,10 +76,27 @@ RESERVED_COLUMNS: frozenset[str] = frozenset(
     {"id", "tenant_id", "created_at", "updated_at", "deleted_at"}
 )
 
-#: How a derived value is produced. ``from_scope`` is the one that matters for
-#: security: it takes the id from the *definition's validated scope*, which is
-#: the only trustworthy source for a column an authorization decision turns on.
-DERIVED_KINDS: tuple[str, ...] = ("from_tenant", "from_scope", "literal", "from_payload")
+#: How a derived value is produced. ``from_scope`` is the one that matters most
+#: for security among the original three: it takes the id from the *definition's
+#: validated scope*, which is the only trustworthy source for a column an
+#: authorization decision turns on. ``from_lookup`` (#672) widens that surface
+#: further still — see its constructor below for what keeps it safe.
+DERIVED_KINDS: tuple[str, ...] = (
+    "from_tenant",
+    "from_scope",
+    "literal",
+    "from_payload",
+    "from_lookup",
+)
+
+#: ``(db, tenant_id, scope) -> value``, for a ``from_lookup`` derived column.
+#:
+#: Async because the point is a database read — the RLS-bound session decides
+#: what it can see, exactly like the write it feeds. The signature deliberately
+#: excludes the agent's own output: a lookup answers "what does trusted state
+#: say", never "what did the model say", which is the same boundary every other
+#: ``derived`` kind holds.
+DerivedResolver = Callable[[AsyncSession, str, dict[str, Any] | None], Awaitable[Any]]
 
 
 class WriteBackConfigurationError(ValueError):
@@ -198,6 +215,9 @@ class DerivedValue:
     value: Any = None
     #: The trigger event's field to read, when ``kind`` is ``from_payload``.
     payload_field: str | None = None
+    #: The lookup itself, when ``kind`` is ``from_lookup``. A plain function,
+    #: never a name resolved from config — see :func:`from_lookup`.
+    resolver: DerivedResolver | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in DERIVED_KINDS:
@@ -212,6 +232,10 @@ class DerivedValue:
         if self.kind == "from_payload" and not self.payload_field:
             raise WriteBackConfigurationError(
                 f"Derived column {self.column!r} is from_payload but names no payload field."
+            )
+        if self.kind == "from_lookup" and self.resolver is None:
+            raise WriteBackConfigurationError(
+                f"Derived column {self.column!r} is from_lookup but names no resolver."
             )
 
 
@@ -246,6 +270,36 @@ def from_payload(column: str, payload_field: str) -> DerivedValue:
     anything.
     """
     return DerivedValue(column=column, kind="from_payload", payload_field=payload_field)
+
+
+def from_lookup(column: str, resolver: DerivedResolver) -> DerivedValue:
+    """A value read from the database itself — the gap #672 closed.
+
+    Every other ``derived`` kind reads state Core already validated: the tenant
+    seam, the definition's own scope, the trigger event settled before the model
+    ran. None of those can express "the brand's default pipeline stage", which
+    lives in a row nothing upstream of the write has looked at yet — a genuine
+    lookup, not a fact already sitting in the definition or the event.
+
+    Two things keep this from widening the escalation guard ``derived`` exists
+    to hold:
+
+    - ``resolver`` runs on the same RLS-bound session the insert itself uses
+      (``bind_principal_session`` in this module, applied in ``writeback.py``
+      before ``_create_row``), so a lookup can never read a row the workflow's
+      *author* could not see themselves — the same authority boundary every
+      other write-back column answers to.
+    - ``resolver`` is a plain Python callable, supplied here at registration and
+      never resolved from a name or from config. Widening what a lookup may read
+      is therefore a reviewed code change and a deploy, exactly like adding a
+      target or a column — never something a saved definition can steer.
+
+    ``resolver`` receives ``(db, tenant_id, scope)`` — deliberately not the
+    agent's own output, which is the boundary every other ``derived`` kind
+    holds: a lookup answers "what does trusted state say", never "what did the
+    model say".
+    """
+    return DerivedValue(column=column, kind="from_lookup", resolver=resolver)
 
 
 @dataclass(frozen=True)

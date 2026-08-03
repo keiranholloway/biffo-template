@@ -153,14 +153,23 @@ def _coerce(column: WriteBackColumn, value: Any) -> Any:
     return text
 
 
-def _derived_value(
+async def _derived_value(
     derived: DerivedValue,
     *,
+    db: AsyncSession,
     tenant_id: str,
     scope: dict[str, Any] | None,
     event: dict[str, Any] | None = None,
 ) -> Any:
-    """Resolve one Core-set column from trusted state (ADR-0027 §4)."""
+    """Resolve one Core-set column from trusted state (ADR-0027 §4).
+
+    Async because ``from_lookup`` (#672) is: the only kind here that reads the
+    database rather than state already carried on ``tenant_id``/``scope``/
+    ``event``. It runs on ``db`` as handed to this function — the caller
+    (``_create_row``) is only ever reached after ``bind_principal_session`` has
+    succeeded, so the lookup is on the same RLS-bound session the insert itself
+    uses and can never see past what the workflow's owner may.
+    """
     if derived.kind == "from_tenant":
         return tenant_id
     if derived.kind == "literal":
@@ -172,6 +181,12 @@ def _derived_value(
     if derived.kind == "from_payload":
         value = (event or {}).get(derived.payload_field or "")
         return value if value not in (None, "") else None
+    # from_lookup — a database read on the bound session, never the model's
+    # output. `resolver` is validated non-None at registration (#672).
+    if derived.kind == "from_lookup":
+        if derived.resolver is None:  # pragma: no cover — registration refuses this
+            return None
+        return await derived.resolver(db, tenant_id, scope)
     # from_scope — the definition's *validated* scope, which the authoring gate
     # already checked the author may act on. This is the value an instance's row
     # policies evaluate, which is exactly why it may not come from the model.
@@ -739,7 +754,9 @@ async def _create_row(
     """Insert, with Core-set columns taken from trusted state, never the model."""
     fields = {name: value for name, value in values.items() if value is not None}
     for derived in target.derived:
-        resolved = _derived_value(derived, tenant_id=tenant_id, scope=scope, event=event)
+        resolved = await _derived_value(
+            derived, db=db, tenant_id=tenant_id, scope=scope, event=event
+        )
         if resolved is not None:
             fields[derived.column] = resolved
     row = target.model(**fields)

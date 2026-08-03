@@ -54,6 +54,29 @@
 # something must be re-run — but the message says which, so nobody debugs a
 # phantom.
 #
+# ## A conflicting PR has no checks, and never will
+#
+# GitHub cannot compute a merge commit for a branch that conflicts with its
+# base, and it creates **no check runs at all** for such a PR — `gh pr checks`
+# reports "no checks reported" and the rollup stays empty until the branch is
+# rebased. From the checks alone that is indistinguishable from "CI has not
+# started yet", so this script would wait out its entire timeout on a PR whose
+# checks can never arrive. On 2026-08-03 PR #1243 spent over ten minutes
+# printing "Waiting on 5 required check(s)" while one API field said why
+# (#1246).
+#
+# So each poll also reads `mergeable`:
+#
+#   CONFLICTING  exit 2 immediately, naming the cause and the remedy. Still
+#                "cannot tell", never a pass — the change is failing *fast*,
+#                not failing open.
+#   UNKNOWN      keep waiting. GitHub returns it transiently while it computes
+#                mergeability, which it always does for a few seconds after a
+#                push, so treating it as a conflict would be a fresh fail-fast
+#                bug of exactly the shape this script exists to prevent.
+#   anything     keep waiting on the checks as before. An unreadable field
+#   else         (old gh, missing scope) must never become a verdict.
+#
 # ## Usage
 #
 #   sh scripts/wait-for-checks.sh <pr-number> [-R owner/repo]
@@ -69,7 +92,10 @@ TIMEOUT="${WAIT_FOR_CHECKS_TIMEOUT:-1800}"
 INTERVAL="${WAIT_FOR_CHECKS_INTERVAL:-30}"
 
 usage() {
-  sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'
+  # Print the whole header block, however long it grows: from line 2 up to the
+  # first line that is not a comment. A hard-coded end line silently truncates
+  # the help the moment anyone documents something new above it.
+  sed -n '2,/^[^#]/p' "$0" | sed -n 's/^# \{0,1\}//p'
   exit 2
 }
 
@@ -156,6 +182,21 @@ prev_count=-1
 rollup=""
 
 while :; do
+  # Read this every poll, not once up front: a PR is frequently UNKNOWN for the
+  # first few seconds after a push and only then resolves, and a PR that starts
+  # clean can be made CONFLICTING at any moment by a merge into the base branch.
+  mergeable=$(gh_pr view "$PR" --json mergeable --jq '.mergeable' 2>/dev/null) || mergeable=""
+
+  if [ "$mergeable" = "CONFLICTING" ]; then
+    echo "${RED}wait-for-checks: PR $PR conflicts with $base.${OFF}" >&2
+    echo "GitHub creates no check runs for a PR whose merge commit it cannot" >&2
+    echo "compute, so the checks this is waiting for will never appear. Rebase" >&2
+    echo "the branch on $base (or merge $base into it) and push — CI starts as" >&2
+    echo "soon as the conflict clears." >&2
+    echo "Not a failure and not a pass: this is 'cannot tell'." >&2
+    exit 2
+  fi
+
   rollup=$(gh_pr view "$PR" --json statusCheckRollup --jq '
     [ .statusCheckRollup[]?
       | { name:  (.name // .context),
@@ -203,6 +244,10 @@ EOF
     if [ "$count" = "0" ]; then
       # The exact case the naive loop gets wrong, so name it explicitly.
       echo "No checks ever appeared on PR $PR. That is 'cannot tell', not 'green'." >&2
+      if [ "$mergeable" = "UNKNOWN" ]; then
+        echo "GitHub never resolved this PR's mergeability (mergeable=UNKNOWN), which" >&2
+        echo "is often how a conflict looks before it settles. Check it by hand." >&2
+      fi
     else
       echo "Still unfinished:" >&2
       printf '%s\n' "$rollup" | awk -F'\t' 'NF && ($2 == "" || $2 == "PENDING" || $2 == "IN_PROGRESS" || $2 == "QUEUED" || $2 == "WAITING") { print "  " $1 }' >&2

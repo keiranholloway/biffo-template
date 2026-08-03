@@ -310,12 +310,35 @@ origin/<branch>:<path>` for a specific change. A green PR page is not proof
   because nothing did.
 - For **live** instances, a merge may deploy to production immediately. Verify
   the deploy succeeded.
-- **A run is not guaranteed to exist.** GitHub sometimes creates no
-  push-triggered run for a commit at all — on 2026-07-19 two of four
-  consecutive merges here got none, while others arrived ~20 minutes late.
-  Nothing distinguishes "not yet" from "never". If no run appears, re-trigger
-  it via `workflow_dispatch` rather than waiting indefinitely or claiming a
-  verification you did not make. Say plainly that you could not verify.
+- **A run is not guaranteed to exist — but check `mergeable` before you conclude
+  that.** When no checks appear on a **pull request**, the first question is not
+  "did the trigger fire?" but "can GitHub compute this merge at all?":
+
+  ```bash
+  gh pr view <N> --json mergeable --jq .mergeable   # CONFLICTING · MERGEABLE · UNKNOWN
+  ```
+
+  `CONFLICTING` means GitHub cannot build a merge commit, so it creates **no
+  check runs whatsoever** — and none will ever arrive until the branch is
+  rebased. `workflow_dispatch` does not help, because nothing is missing a
+  trigger. On 2026-08-03 PR #1243 sat for over ten minutes printing
+  `Waiting on 5 required check(s)` for exactly this reason (#1246);
+  `wait-for-checks` now reads the field itself and exits 2 with the cause, so
+  you should rarely have to. `UNKNOWN` is transient — GitHub returns it while
+  computing mergeability, especially right after a push — so wait it out rather
+  than treating it as a verdict.
+
+  Only once mergeability is clean is the genuine no-run case in play: GitHub
+  sometimes creates no push-triggered run for a commit at all — on 2026-07-19
+  two of four consecutive merges here got none, while others arrived ~20 minutes
+  late, and nothing distinguishes "not yet" from "never". That is when you
+  re-trigger via `workflow_dispatch`, rather than waiting indefinitely or
+  claiming a verification you did not make. Say plainly that you could not
+  verify.
+
+  The general shape: **before re-running something that produced no output, ask
+  whether it was ever able to run.** Re-triggering a job that cannot start
+  reproduces the wait, not the answer.
 
 ## 7. Security
 

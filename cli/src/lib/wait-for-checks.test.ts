@@ -25,6 +25,13 @@ interface StubOptions {
   state?: string
   /** Make the protection lookup fail, forcing the stability fallback. */
   protectionFails?: boolean
+  /**
+   * One `mergeable` value per poll, last entry repeating — same shape as
+   * `rollups`, because mergeability is a *sequence* too: GitHub answers UNKNOWN
+   * for the first seconds after a push and only then resolves. Defaults to
+   * MERGEABLE throughout.
+   */
+  mergeables?: string[]
 }
 
 /**
@@ -36,10 +43,18 @@ function stubGh(options: StubOptions): string {
   const dir = makeTmpDir('waitchecks')
   const counter = join(dir, 'calls')
   writeFileSync(counter, '0')
+  const mergeCounter = join(dir, 'mergecalls')
+  writeFileSync(mergeCounter, '0')
 
   const last = options.rollups.length - 1
   options.rollups.forEach((lines, i) => {
     writeFileSync(join(dir, 'rollup.' + i), lines.length > 0 ? lines.join('\n') + '\n' : '')
+  })
+
+  const mergeables = options.mergeables ?? ['MERGEABLE']
+  const mergeLast = mergeables.length - 1
+  mergeables.forEach((m, i) => {
+    writeFileSync(join(dir, 'mergeable.' + i), m + '\n')
   })
 
   const protection = options.protectionFails
@@ -52,6 +67,14 @@ function stubGh(options: StubOptions): string {
     '',
     'if [[ "$args" == *"--json state,baseRefName"* ]]; then',
     "  printf '%s\\t%s\\n' '" + (options.state ?? 'OPEN') + "' 'dev'",
+    '  exit 0',
+    'fi',
+    '',
+    'if [[ "$args" == *"--json mergeable"* ]]; then',
+    '  n=$(cat ' + JSON.stringify(mergeCounter) + ')',
+    '  echo $((n + 1)) > ' + JSON.stringify(mergeCounter),
+    '  [ "$n" -gt ' + mergeLast + ' ] && n=' + mergeLast,
+    '  cat ' + JSON.stringify(join(dir, 'mergeable.')) + '"$n"',
     '  exit 0',
     'fi',
     '',
@@ -200,6 +223,86 @@ describe('wait-for-checks', () => {
     })
 
     expect(run(stub, ['--timeout', '60']).code).toBe(0)
+  })
+
+  it('fails fast on a CONFLICTING PR instead of waiting out the timeout', () => {
+    // GitHub creates no check runs for a PR whose merge commit it cannot
+    // compute, so the rollup stays empty forever. Before #1246 this was
+    // indistinguishable from "CI has not started yet" and PR #1243 burned ten
+    // minutes on it.
+    //
+    // The exit code alone cannot prove the fix — an unfixed script also reaches
+    // 2, just via the timeout — so this asserts on *which* 2 it is: the reason
+    // must name the conflict, and the timeout must not have been reached.
+    const stub = stubGh({
+      required: ['CI', 'Secret Scan'],
+      rollups: [[]],
+      mergeables: ['CONFLICTING'],
+    })
+    const { code, out } = run(stub, ['--timeout', '30', '--interval', '1'])
+
+    expect(code).toBe(2)
+    expect(out).toContain('conflicts with dev')
+    expect(out).toContain('will never appear')
+    expect(out).toContain('not a pass')
+    expect(out).not.toContain('timed out')
+    expect(out).not.toContain('All checks concluded')
+  })
+
+  it('exits 2 when a conflict appears after the checks have started', () => {
+    // A merge into the base branch can conflict a PR that was clean when the
+    // wait began, so mergeability is re-read every poll rather than once.
+    const stub = stubGh({
+      rollups: [['CI\tPENDING'], ['CI\tPENDING']],
+      mergeables: ['MERGEABLE', 'CONFLICTING'],
+      protectionFails: true,
+    })
+    const { code, out } = run(stub, ['--timeout', '30', '--interval', '1'])
+
+    expect(code).toBe(2)
+    expect(out).toContain('conflicts with dev')
+    expect(out).not.toContain('timed out')
+  })
+
+  it('KEEPS WAITING on UNKNOWN — GitHub returns it while computing mergeability', () => {
+    // UNKNOWN is the transient answer for the first seconds after every push.
+    // Treating it as a conflict would be a fresh fail-fast bug, so this is the
+    // counterweight to the test above: same field, opposite obligation.
+    const stub = stubGh({
+      rollups: [[], ['CI\tPENDING'], ['CI\tSUCCESS'], ['CI\tSUCCESS']],
+      mergeables: ['UNKNOWN', 'UNKNOWN', 'MERGEABLE'],
+      protectionFails: true,
+    })
+    const { code, out } = run(stub, ['--timeout', '60'])
+
+    expect(code).toBe(0)
+    expect(out).toContain('All checks concluded')
+    expect(out).not.toContain('conflicts with')
+  })
+
+  it('still passes a MERGEABLE PR whose required checks are all green', () => {
+    const stub = stubGh({
+      required: ['CI', 'Secret Scan'],
+      rollups: [['CI\tSUCCESS', 'Secret Scan\tSUCCESS']],
+      mergeables: ['MERGEABLE'],
+    })
+    const { code, out } = run(stub, ['--timeout', '60'])
+
+    expect(code).toBe(0)
+    expect(out).toContain('All checks concluded')
+  })
+
+  it('does not treat an unreadable mergeable field as a conflict', () => {
+    // An old `gh`, or a token without the scope, yields an empty string. A field
+    // the script cannot read must never become a verdict.
+    const stub = stubGh({
+      rollups: [['CI\tSUCCESS'], ['CI\tSUCCESS']],
+      mergeables: [''],
+      protectionFails: true,
+    })
+    const { code } = run(stub, ['--timeout', '60'])
+
+    expect(code).toBe(0)
   })
 
   it('exits 0 immediately on an already-merged PR', () => {

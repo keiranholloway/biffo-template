@@ -381,6 +381,27 @@ audit_json() {
   # `no summary line` -- the same defect this file already records against
   # hook-audit, where an unanchored match took a heading instead of the count.
   audit_json classification "node scripts/classification-audit.mjs --data '$DATA_DIR'" 'failing steps unclassified|nothing to classify|cannot be audited|^classification:'
+  printf ','
+  # Seventh audit (#1196). Is each repo's PRIMARY checkout safe to READ?
+  #
+  # AGENTS.md warns about stale checkouts in two places and it happened anyway,
+  # twice on 2026-08-03, to agents that had AGENTS.md in context: `tabsii-crm`
+  # 16 behind with staged work produced a confident, well-evidenced, wrong
+  # analysis. #1201 added `verify.sh --checkout-health`, which answers the
+  # question -- and says in its own comments that the push-time WARN "does not,
+  # and cannot, cover the read-only case the issue was filed for". Nothing
+  # invoked the standalone form, so it only ever fired if you already suspected
+  # the problem. This is the part that looks without being asked.
+  audit_json checkout "sh scripts/checkout-audit.sh --estate '$ESTATE'" 'primary checkouts'
+  printf ','
+  # Eighth audit (#1133). A red post-merge deploy has no audience: the author
+  # who broke it has moved on, and the next person finds out by merging into it.
+  # On 2026-08-02 that cost 2h25m and four further failed deploys.
+  # `branch-health.sh` was written for exactly this (#1185) and, until now,
+  # nothing ran it -- the same "did the file land / does anything call it"
+  # split #884 records. Looped here rather than teaching the script an
+  # --estate mode, because it already takes -R and needs only `gh`.
+  audit_json deploy "_bh=0; for _d in '$ESTATE'/*/; do [ -d \"\$_d/.git\" ] || continue; _slug=\$(git -C \"\$_d\" remote get-url origin 2>/dev/null | sed -e 's#.*github.com[:/]##' -e 's#\.git\$##'); [ -n \"\$_slug\" ] || continue; sh scripts/branch-health.sh -R \"\$_slug\" --quiet >/dev/null 2>&1; _rc=\$?; [ \$_rc -eq 0 ] || { _bh=1; echo \"  \$_slug rc=\$_rc\"; }; done; [ \$_bh -eq 0 ] && echo 'every integration branch green' || echo 'an integration branch is failing'; exit \$_bh" 'integration branch'
   printf ']}\n'
 } > "$AUDITS"
 

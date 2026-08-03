@@ -1,9 +1,9 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * A guard must not assert on the **text** of a file that parses (#956).
@@ -193,7 +193,7 @@ describe('guards assert on structure, not on the text of a file that parses', ()
     // Pins the scope decision above so widening it is deliberate. `verify.sh`
     // has no parser to hand and its text IS the artefact; `ci.yml` parses, and
     // this repo already ships the splitter for it.
-    const dir = mkdtempSync(join(tmpdir(), 'assert-scope-'))
+    const dir = makeTmpDir('assert-scope')
     try {
       const write = (name: string, body: string): string => {
         const p = join(dir, name)

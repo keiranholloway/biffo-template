@@ -19,11 +19,11 @@
  */
 
 import { execFileSync, type ExecFileSyncOptions } from 'node:child_process'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const SCRIPT = join(repoRoot, 'scripts/verify.sh')
@@ -43,7 +43,7 @@ interface Run {
  * workstation, and cost real trust when it was blamed on an innocent PR.
  */
 function runIn(files: Record<string, string>, env: Record<string, string> = {}): Run {
-  const dir = mkdtempSync(join(tmpdir(), 'biffo-verify-pg-'))
+  const dir = makeTmpDir('biffo-verify-pg')
   try {
     execFileSync('git', ['init', '-q'], { cwd: dir })
     for (const [rel, body] of Object.entries(files)) {

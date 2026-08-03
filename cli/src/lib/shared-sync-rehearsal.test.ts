@@ -1,9 +1,9 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * `scripts/shared-sync.sh` must prove a candidate shared file against every
@@ -249,7 +249,7 @@ function runSync(
   template: string
   satellites: string[]
 } {
-  const base = mkdtempSync(join(tmpdir(), 'shared-sync-'))
+  const base = makeTmpDir('shared-sync')
   made.push(base)
   const estate = join(base, 'estate')
   mkdirSync(estate, { recursive: true })

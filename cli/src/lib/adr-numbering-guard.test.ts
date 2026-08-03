@@ -1,5 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
@@ -13,11 +12,12 @@ import {
   formatAdrReservedRangeViolations,
   readAdrNumberingAllowlist,
 } from './adr-numbering-guard.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 let adrDir: string
 
 beforeEach(() => {
-  adrDir = mkdtempSync(join(tmpdir(), 'adr-numbering-'))
+  adrDir = makeTmpDir('adr-numbering')
 })
 
 afterEach(() => {
@@ -284,7 +284,7 @@ describe('#1096: this guard only ever reaches the docs/ADR/ directory it is give
   // same repo) is never read, collided against, or reported, no matter what
   // it contains.
   it('adrNumbersIn/findAdrNumberCollisions/findAdrReservedRangeViolations ignore a sibling directory entirely', () => {
-    const parent = mkdtempSync(join(tmpdir(), 'adr-numbering-scope-'))
+    const parent = makeTmpDir('adr-numbering-scope')
     const ownDir = join(parent, 'docs', 'ADR')
     const siblingDir = join(parent, 'elsewhere')
     mkdirSync(dirname(ownDir), { recursive: true })

@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * A clone that cannot be read must say so, rather than reporting every shared
@@ -30,7 +30,7 @@ const script = join(import.meta.dirname, '..', '..', '..', 'scripts', 'shared-sy
  * after the estate moved its default to `dev`.
  */
 function estateWithUnreadableClone(): string {
-  const estate = mkdtempSync(join(tmpdir(), 'sync-estate-'))
+  const estate = makeTmpDir('sync-estate')
 
   const origin = join(estate, 'origin.git')
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin])

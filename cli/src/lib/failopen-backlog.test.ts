@@ -11,17 +11,17 @@
  * it must count a fail-open recorded under `alsoClass` the same as a primary one.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { makeTmpDir } from '../test-utils/tmp.js'
 // @ts-expect-error — plain .mjs collector, no types
 import { summariseFailOpenBacklog } from '../../../scripts/practices-metrics.mjs'
 
 const NOW = new Date('2026-07-31T00:00:00Z')
 
 function corpusOf(rows: object[]): string {
-  const dir = mkdtempSync(join(tmpdir(), 'biffo-corpus-'))
+  const dir = makeTmpDir('biffo-corpus')
   const file = join(dir, 'evidence.jsonl')
   writeFileSync(file, rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
   return file
@@ -39,7 +39,7 @@ describe('summariseFailOpenBacklog', () => {
   })
 
   it('reports unmeasured on a corpus that exists but does not parse', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'biffo-corpus-'))
+    const dir = makeTmpDir('biffo-corpus')
     const file = join(dir, 'evidence.jsonl')
     writeFileSync(file, 'not json at all\n')
     try {

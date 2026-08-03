@@ -17,11 +17,11 @@
  */
 
 import { execFileSync, type ExecFileSyncOptions } from 'node:child_process'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const SCRIPT = join(repoRoot, 'scripts/verify.sh')
@@ -61,7 +61,7 @@ const MINIMAL_PATH = '/usr/bin:/bin'
  *   branch, and wrong for assertions that need a check to actually run.
  */
 function runIn(files: Record<string, string>, withoutOptionalTools = false): Run {
-  const dir = mkdtempSync(join(tmpdir(), 'biffo-verify-'))
+  const dir = makeTmpDir('biffo-verify')
   try {
     execFileSync('git', ['init', '-q'], { cwd: dir })
     for (const [rel, body] of Object.entries(files)) {

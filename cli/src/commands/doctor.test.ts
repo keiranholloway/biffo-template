@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runDoctor } from './doctor.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -11,7 +11,7 @@ vi.mock('../lib/logger.js', () => ({
 let cwd: string
 
 beforeEach(() => {
-  cwd = mkdtempSync(join(tmpdir(), 'biffo-doctor-'))
+  cwd = makeTmpDir('biffo-doctor')
 })
 afterEach(() => {
   rmSync(cwd, { recursive: true, force: true })

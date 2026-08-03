@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RegistryPluginEntry } from '../adapters/registry/index.js'
 import { runPluginUpgrade } from './plugin-upgrade.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -33,14 +33,14 @@ const REGISTRY_ENTRY: RegistryPluginEntry = {
 }
 
 function makeProjectRoot(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'biffo-project-'))
+  const dir = makeTmpDir('biffo-project')
   mkdirSync(join(dir, 'services', 'widgets'), { recursive: true })
   writeFileSync(join(dir, 'services', 'widgets', 'biffo.plugin.json'), JSON.stringify(OLD_MANIFEST))
   return dir
 }
 
 function makeClonedPluginDir(manifest: unknown = NEW_MANIFEST, withTerraform = false): string {
-  const dir = mkdtempSync(join(tmpdir(), 'biffo-plugin-src-'))
+  const dir = makeTmpDir('biffo-plugin-src')
   writeFileSync(join(dir, 'biffo.plugin.json'), JSON.stringify(manifest))
   if (withTerraform) {
     mkdirSync(join(dir, 'terraform'), { recursive: true })

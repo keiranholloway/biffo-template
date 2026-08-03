@@ -1,12 +1,12 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CoreUpgradeDeps } from './core-upgrade.js'
 import { buildPrBody, resolveTemplateRepoFlag, runCoreUpgrade } from './core-upgrade.js'
 import type { MergeEntry, MergeStatus, UpgradePlan } from '../lib/core-upgrade.js'
 import type { MigrationCarryPlan } from '../lib/core-migrations.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -68,9 +68,9 @@ describe('runCoreUpgrade --apply', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    base = mkdtempSync(join(tmpdir(), 'base-'))
-    theirs = mkdtempSync(join(tmpdir(), 'theirs-'))
-    instance = mkdtempSync(join(tmpdir(), 'inst-'))
+    base = makeTmpDir('base')
+    theirs = makeTmpDir('theirs')
+    instance = makeTmpDir('inst')
     // base @ 0.1.0
     writeFileSync(join(base, 'core.version'), '0.1.0\n')
     writeFileSync(join(base, 'core-manifest.json'), JSON.stringify(MANIFEST))
@@ -217,7 +217,7 @@ describe('runCoreUpgrade --apply', () => {
     const cleanup = vi.fn()
     // A separate, CORRECT target tree at 0.2.0 (what the tag would extract),
     // distinct from `theirs` — proving the extract, not the working dir, is used.
-    const taggedTarget = mkdtempSync(join(tmpdir(), 'tagged-'))
+    const taggedTarget = makeTmpDir('tagged')
     writeFileSync(join(taggedTarget, 'core.version'), '0.2.0\n')
     writeFileSync(join(taggedTarget, 'core-manifest.json'), JSON.stringify(MANIFEST))
     w(taggedTarget, 'services/api/main.py', 'v2-from-tag')
@@ -402,9 +402,9 @@ describe('runCoreUpgrade — lockfile refresh is driven by what landed (#393)', 
   beforeEach(() => {
     vi.clearAllMocks()
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    base = mkdtempSync(join(tmpdir(), 'lock-base-'))
-    theirs = mkdtempSync(join(tmpdir(), 'lock-theirs-'))
-    instance = mkdtempSync(join(tmpdir(), 'lock-inst-'))
+    base = makeTmpDir('lock-base')
+    theirs = makeTmpDir('lock-theirs')
+    instance = makeTmpDir('lock-inst')
     seed(base, '0.1.0')
     seed(theirs, '0.2.0')
     writeFileSync(join(instance, 'biffo.core.json'), JSON.stringify({ version: '0.1.0' }))
@@ -520,9 +520,9 @@ describe('runCoreUpgrade — orphaned core.version cleanup (#434)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    base = mkdtempSync(join(tmpdir(), 'cv-base-'))
-    theirs = mkdtempSync(join(tmpdir(), 'cv-theirs-'))
-    instance = mkdtempSync(join(tmpdir(), 'cv-inst-'))
+    base = makeTmpDir('cv-base')
+    theirs = makeTmpDir('cv-theirs')
+    instance = makeTmpDir('cv-inst')
     // base @ 0.1.0, theirs @ 0.2.0 — something changes so the upgrade is not a no-op.
     writeFileSync(join(base, 'core.version'), '0.1.0\n')
     writeFileSync(join(base, 'core-manifest.json'), JSON.stringify(MANIFEST))
@@ -665,9 +665,9 @@ describe('runCoreUpgrade --apply — restores the caller’s branch (#984)', () 
   beforeEach(() => {
     vi.clearAllMocks()
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    base = mkdtempSync(join(tmpdir(), 'rb-base-'))
-    theirs = mkdtempSync(join(tmpdir(), 'rb-theirs-'))
-    instance = mkdtempSync(join(tmpdir(), 'rb-inst-'))
+    base = makeTmpDir('rb-base')
+    theirs = makeTmpDir('rb-theirs')
+    instance = makeTmpDir('rb-inst')
     writeFileSync(join(base, 'core.version'), '0.1.0\n')
     writeFileSync(join(base, 'core-manifest.json'), JSON.stringify(MANIFEST))
     w(base, 'services/api/main.py', 'v1')

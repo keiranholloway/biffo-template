@@ -9,10 +9,10 @@
  * write path never touches the frozen legacy file.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { makeTmpDir } from '../test-utils/tmp.js'
 // @ts-expect-error -- plain .mjs, runs on bare node like every other script in scripts/.
 import {
   corpusDirFor,
@@ -30,7 +30,7 @@ import {
 const dirs: string[] = []
 
 function tempRoot(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'biffo-evidence-'))
+  const dir = makeTmpDir('biffo-evidence')
   dirs.push(dir)
   return dir
 }

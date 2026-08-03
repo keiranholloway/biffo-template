@@ -1,6 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -14,6 +13,7 @@ import {
   readRemoteCoreVersion,
   warnIfDispatchRefStale,
 } from './deploy.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -299,10 +299,10 @@ describe('deploy — project-picker fallback under automation (issue #1066, real
   }
 
   beforeEach(() => {
-    projectsDir = mkdtempSync(join(tmpdir(), 'biffo-1066-projects-'))
+    projectsDir = makeTmpDir('biffo-1066-projects')
     // A biffo.config.json-free cwd — resolveConfig must fall through to
     // BIFFO_PROJECTS_DIR without ever finding a local config to short-circuit on.
-    cwd = mkdtempSync(join(tmpdir(), 'biffo-1066-cwd-'))
+    cwd = makeTmpDir('biffo-1066-cwd')
     writeFileSync(
       join(projectsDir, 'biffo-platform.json'),
       JSON.stringify(

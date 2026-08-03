@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync, cpSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync, cpSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * The audit distinguishes "the file landed" from "something calls it", and the
@@ -26,7 +26,7 @@ const script = join(import.meta.dirname, '..', '..', '..', 'scripts', 'ci-wiring
 const template = join(import.meta.dirname, '..', '..', '..')
 
 function estate(repos: Record<string, { hasScript: boolean; ci: string }>) {
-  const dir = mkdtempSync(join(tmpdir(), 'ciwiring-'))
+  const dir = makeTmpDir('ciwiring')
   for (const [name, spec] of Object.entries(repos)) {
     const d = join(dir, name)
     mkdirSync(join(d, '.github', 'workflows'), { recursive: true })
@@ -124,7 +124,7 @@ describe('ci-wiring-audit', () => {
     // checked NOTHING, and 0 is what the daily collector renders as `OK`, so
     // deleting the map would turn the whole estate green.
     const dir = estate({ sat: { hasScript: true, ci: RAW_JS } })
-    const fake = mkdtempSync(join(tmpdir(), 'ciwiring-manifest-'))
+    const fake = makeTmpDir('ciwiring-manifest')
     execFileSync('git', ['-C', fake, 'init', '-q', '-b', 'dev'])
     mkdirSync(join(fake, 'scripts'), { recursive: true })
     writeFileSync(join(fake, 'shared-files.json'), JSON.stringify({ version: 1, files: [] }))
@@ -151,7 +151,7 @@ describe('ci-wiring-audit', () => {
     // sees zero repos and reports clean no matter what the workflows say. That
     // version of this test passed against a deliberately broken audit, which is
     // how it was caught.
-    const dir = mkdtempSync(join(tmpdir(), 'ciwiring-skel-'))
+    const dir = makeTmpDir('ciwiring-skel')
     let found = 0
     for (const skel of ['sibling-template', 'plugin-template']) {
       const src = join(template, '_skeletons', skel)

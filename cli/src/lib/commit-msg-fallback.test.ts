@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterAll, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * `.githooks/commit-msg` must validate a subject in EVERY repo, including the
@@ -38,15 +38,9 @@ import { afterAll, describe, expect, it } from 'vitest'
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 const hookPath = join(repoRoot, '.githooks/commit-msg')
 
-const temps: string[] = []
-afterAll(() => {
-  for (const dir of temps) rmSync(dir, { recursive: true, force: true })
-})
-
 /** A repo shaped like a satellite: hooks installed, no root package.json, no commitlint. */
 function satelliteRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'biffo-commitmsg-'))
-  temps.push(dir)
+  const dir = makeTmpDir('biffo-commitmsg')
   const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' })
   git('init', '-q', '-b', 'dev')
   git('config', 'user.email', 't@e.com')

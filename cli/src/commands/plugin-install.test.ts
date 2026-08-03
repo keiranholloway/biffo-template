@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RegistryPluginEntry } from '../adapters/registry/index.js'
 import { runPluginInstall } from './plugin-install.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -26,13 +26,13 @@ const REGISTRY_ENTRY: RegistryPluginEntry = {
 }
 
 function makeProjectRoot(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'biffo-project-'))
+  const dir = makeTmpDir('biffo-project')
   mkdirSync(join(dir, 'services'), { recursive: true })
   return dir
 }
 
 function makeClonedPluginDir(manifest: unknown = VALID_MANIFEST, withTerraform = false): string {
-  const dir = mkdtempSync(join(tmpdir(), 'biffo-plugin-src-'))
+  const dir = makeTmpDir('biffo-plugin-src')
   writeFileSync(join(dir, 'biffo.plugin.json'), JSON.stringify(manifest))
   if (withTerraform) {
     mkdirSync(join(dir, 'terraform'), { recursive: true })
@@ -305,7 +305,7 @@ describe('runPluginInstall', () => {
   })
 
   it('rejects when cwd has no services/ directory', async () => {
-    const notAProject = mkdtempSync(join(tmpdir(), 'not-a-biffo-project-'))
+    const notAProject = makeTmpDir('not-a-biffo-project')
     const registry = makeRegistryMock()
     const git = makeGitMock(makeClonedPluginDir())
     const migrations = makeMigrationsMock()
@@ -412,7 +412,7 @@ describe('runPluginInstall', () => {
   })
 
   it('rejects when the plugin repo has no biffo.plugin.json at its root', async () => {
-    const clonedDir = mkdtempSync(join(tmpdir(), 'biffo-plugin-src-empty-'))
+    const clonedDir = makeTmpDir('biffo-plugin-src-empty')
     const registry = makeRegistryMock()
     const git = makeGitMock(clonedDir)
     const migrations = makeMigrationsMock()
@@ -662,7 +662,7 @@ describe('runPluginInstall', () => {
     })
 
     it('rejects a --local path that is not a plugin directory', async () => {
-      const empty = mkdtempSync(join(tmpdir(), 'not-a-plugin-'))
+      const empty = makeTmpDir('not-a-plugin')
 
       await expect(
         runPluginInstall(

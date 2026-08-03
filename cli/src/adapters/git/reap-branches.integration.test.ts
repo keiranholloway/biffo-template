@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { classifyUpgradeBranches } from '../../lib/upgrade-branch-reaper.js'
 import { upgradeBranchName } from '../../lib/core-upgrade.js'
 import { GitAdapter } from './index.js'
+import { makeTmpDir } from '../../test-utils/tmp.js'
 
 /**
  * Reaping the branches `core upgrade` leaves behind (#758), proven end to end.
@@ -26,8 +26,8 @@ describe('reaping merged upgrade branches (#758)', () => {
     execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
 
   beforeEach(() => {
-    remote = mkdtempSync(join(tmpdir(), 'biffo-reap-remote-'))
-    work = mkdtempSync(join(tmpdir(), 'biffo-reap-work-'))
+    remote = makeTmpDir('biffo-reap-remote')
+    work = makeTmpDir('biffo-reap-work')
     git(remote, 'init', '--bare', '-q', '-b', 'dev')
     git(work, 'init', '-q', '-b', 'dev')
     git(work, 'config', 'user.email', 'test@example.com')

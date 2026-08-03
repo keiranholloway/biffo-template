@@ -1,6 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { rmSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   deleteSession,
@@ -11,6 +9,7 @@ import {
   saveSession,
   type InitSession,
 } from './session.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 function makeSession(name: string): InitSession {
   return {
@@ -32,7 +31,7 @@ function makeSession(name: string): InitSession {
 let tmpDir: string
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'biffo-test-'))
+  tmpDir = makeTmpDir('biffo-test')
   process.env['BIFFO_SESSIONS_DIR'] = tmpDir
 })
 

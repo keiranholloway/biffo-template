@@ -1,5 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
@@ -11,6 +10,7 @@ import {
   composeExpectedRoleName,
   readAllowlistGlob,
 } from './plugin-allowlist-convention.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 const REPO_ROOT = join(__dirname, '..', '..', '..')
 const SOURCES = [
@@ -24,7 +24,7 @@ let fixture: string
 
 /** A copy of the real modules, so a test can break one and watch the guard fire. */
 beforeEach(() => {
-  fixture = mkdtempSync(join(tmpdir(), 'allowlist-convention-'))
+  fixture = makeTmpDir('allowlist-convention')
   for (const relative of SOURCES) {
     mkdirSync(dirname(join(fixture, relative)), { recursive: true })
     cpSync(join(REPO_ROOT, relative), join(fixture, relative))

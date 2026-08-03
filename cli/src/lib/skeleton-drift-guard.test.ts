@@ -1,14 +1,14 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { SKELETON_RULES, auditSkeleton, formatViolations } from './skeleton-drift-guard.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 let root: string
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'skeleton-drift-'))
+  root = makeTmpDir('skeleton-drift')
 })
 
 afterEach(() => {

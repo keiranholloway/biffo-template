@@ -1,5 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BiffoConfigSchema } from '../config/schema.js'
@@ -18,6 +17,7 @@ import {
   writeSiblingTemplate,
   type SiblingCreateGit,
 } from './sibling-create.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -104,7 +104,7 @@ function makeAwsMock() {
 const coreClones: string[] = []
 
 function seedCoreClone(withSiblingSupport = true, withRootSupport = true): string {
-  const dir = mkdtempSync(join(tmpdir(), 'sibling-core-clone-'))
+  const dir = makeTmpDir('sibling-core-clone')
   coreClones.push(dir)
   const cdnDir = join(dir, 'modules', 'cloud', 'aws', 'cdn')
   mkdirSync(cdnDir, { recursive: true })
@@ -151,8 +151,8 @@ describe('writeSiblingTemplate', () => {
   })
 
   it('rewrites sibling metadata and frontend env defaults', () => {
-    const template = mkdtempSync(join(tmpdir(), 'sibling-template-'))
-    const target = mkdtempSync(join(tmpdir(), 'sibling-target-'))
+    const template = makeTmpDir('sibling-template')
+    const target = makeTmpDir('sibling-target')
     dirs.push(template, target)
     writeFileSync(
       join(template, 'biffo.sibling.json'),
@@ -190,11 +190,11 @@ describe('writeSiblingTemplate', () => {
   })
 
   it('writes declared routes into the sibling biffo.sibling.json', () => {
-    const template = mkdtempSync(join(tmpdir(), 'tmpl-'))
+    const template = makeTmpDir('tmpl')
     mkdirSync(join(template, 'apps', 'frontend'), { recursive: true })
     writeFileSync(join(template, 'biffo.sibling.json'), '{}')
 
-    const target = mkdtempSync(join(tmpdir(), 'tgt-'))
+    const target = makeTmpDir('tgt')
     const configWithRoutes = SiblingConfigSchema.parse({
       project: {
         name: 'reports',
@@ -223,7 +223,7 @@ describe('runSiblingCreate', () => {
   let skeletonRoot: string
 
   beforeEach(() => {
-    skeletonRoot = mkdtempSync(join(tmpdir(), 'sibling-skeleton-'))
+    skeletonRoot = makeTmpDir('sibling-skeleton')
     writeFileSync(join(skeletonRoot, 'biffo.sibling.json'), '{}')
     resetBranchProtectionOutcomes()
     vi.mocked(log.error).mockClear()
@@ -895,7 +895,7 @@ describe('root sibling mode', () => {
   let skeletonRoot: string
 
   beforeEach(() => {
-    skeletonRoot = mkdtempSync(join(tmpdir(), 'sibling-skeleton-'))
+    skeletonRoot = makeTmpDir('sibling-skeleton')
     writeFileSync(join(skeletonRoot, 'biffo.sibling.json'), '{}')
   })
 
@@ -913,8 +913,8 @@ describe('root sibling mode', () => {
   })
 
   it('gives the sibling an EMPTY basePath, not "/"', () => {
-    const template = mkdtempSync(join(tmpdir(), 'root-tmpl-'))
-    const target = mkdtempSync(join(tmpdir(), 'root-tgt-'))
+    const template = makeTmpDir('root-tmpl')
+    const target = makeTmpDir('root-tgt')
     coreClones.push(template, target)
     mkdirSync(join(template, 'apps', 'frontend'), { recursive: true })
     writeFileSync(join(template, 'biffo.sibling.json'), '{}')
@@ -1115,7 +1115,7 @@ describe("the sibling's first deploy (#1065)", () => {
   let skeletonRoot: string
 
   beforeEach(() => {
-    skeletonRoot = mkdtempSync(join(tmpdir(), 'sibling-skeleton-'))
+    skeletonRoot = makeTmpDir('sibling-skeleton')
     writeFileSync(join(skeletonRoot, 'biffo.sibling.json'), '{}')
     resetBranchProtectionOutcomes()
   })

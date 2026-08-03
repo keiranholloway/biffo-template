@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * `scripts/biffo.sh` resolves which copy of the CLI to run, and at which
@@ -32,8 +32,8 @@ describe('scripts/biffo.sh version resolution (#667)', () => {
   let binDir: string
 
   beforeEach(() => {
-    repo = mkdtempSync(join(tmpdir(), 'biffo-sh-'))
-    binDir = mkdtempSync(join(tmpdir(), 'biffo-bin-'))
+    repo = makeTmpDir('biffo-sh')
+    binDir = makeTmpDir('biffo-bin')
     // Stub npx: echo the invocation rather than resolving a package.
     const stub = join(binDir, 'npx')
     writeFileSync(stub, '#!/usr/bin/env sh\necho "NPX $*"\n')

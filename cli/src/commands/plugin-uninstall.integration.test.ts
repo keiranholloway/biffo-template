@@ -6,12 +6,12 @@
  * `git commit` — against a real local repository.
  */
 import { execa } from 'execa'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { GitAdapter } from '../adapters/git/index.js'
 import { runPluginUninstall } from './plugin-uninstall.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 async function initGitRepo(dir: string): Promise<void> {
   await execa('git', ['init', '--initial-branch=main'], { cwd: dir })
@@ -28,7 +28,7 @@ describe('runPluginUninstall — end-to-end', () => {
   let projectRoot: string
 
   beforeEach(async () => {
-    projectRoot = mkdtempSync(join(tmpdir(), 'biffo-project-'))
+    projectRoot = makeTmpDir('biffo-project')
     mkdirSync(join(projectRoot, 'services', 'widgets'), { recursive: true })
     writeFileSync(
       join(projectRoot, 'services', 'widgets', 'biffo.plugin.json'),

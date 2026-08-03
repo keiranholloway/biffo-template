@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, appendFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, appendFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
  * `scripts/rewrite-scope-check.sh` — refuse a force-push that would write a
@@ -39,7 +39,7 @@ const ZERO = '0'.repeat(40)
 type Repo = { work: string; git: (...args: string[]) => string }
 
 function scenario(): Repo {
-  const base = mkdtempSync(join(tmpdir(), 'rewrite-scope-'))
+  const base = makeTmpDir('rewrite-scope')
   const remote = join(base, 'remote')
   const work = join(base, 'work')
 
@@ -225,7 +225,7 @@ describe('rewrite-scope-check', () => {
   it('reports rather than passes when it cannot resolve an integration branch', () => {
     // Absence is reported, never mistaken for clean — the contract verify.sh
     // uses for a check whose tool is missing.
-    const base = mkdtempSync(join(tmpdir(), 'rewrite-scope-noremote-'))
+    const base = makeTmpDir('rewrite-scope-noremote')
     execFileSync('git', ['init', '-q', '-b', 'dev', base])
     execFileSync('git', ['config', 'user.email', 'test@example.test'], { cwd: base })
     execFileSync('git', ['config', 'user.name', 'Test'], { cwd: base })

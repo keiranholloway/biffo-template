@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { capturedOutput } from '../test-utils/console.js'
 import { type CoreDiffJson, runCoreDiff } from './core-diff.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -26,8 +26,8 @@ describe('runCoreDiff', () => {
   let logSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
-    template = mkdtempSync(join(tmpdir(), 'biffo-tmpl-'))
-    instance = mkdtempSync(join(tmpdir(), 'biffo-inst-'))
+    template = makeTmpDir('biffo-tmpl')
+    instance = makeTmpDir('biffo-inst')
     // minimal template root markers
     writeFileSync(join(template, 'core.version'), '0.2.0\n')
     writeFileSync(join(template, 'core-manifest.json'), JSON.stringify(MANIFEST))

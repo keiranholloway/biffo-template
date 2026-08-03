@@ -1,5 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
@@ -14,6 +13,7 @@ import {
   staleFirstPartyCopies,
   syncPluginTerraform,
 } from './plugin-terraform-wiring.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 let cwd: string
 
@@ -78,7 +78,7 @@ function generatedTfvars(env: string): unknown {
 }
 
 beforeEach(() => {
-  cwd = mkdtempSync(join(tmpdir(), 'biffo-plugin-tf-'))
+  cwd = makeTmpDir('biffo-plugin-tf')
 })
 afterEach(() => {
   rmSync(cwd, { recursive: true, force: true })
@@ -299,7 +299,7 @@ describe('syncPluginTerraform', () => {
 describe('first-party plugins are owned by plugins.core.tf, not the generated file (ADR-0014)', () => {
   let cwd: string
   beforeEach(() => {
-    cwd = mkdtempSync(join(tmpdir(), 'biffo-fp-'))
+    cwd = makeTmpDir('biffo-fp')
     mkdirSync(join(cwd, 'infra', 'environments', 'dev'), { recursive: true })
     writeFileSync(
       join(cwd, 'infra', 'environments', 'dev', 'main.tf'),

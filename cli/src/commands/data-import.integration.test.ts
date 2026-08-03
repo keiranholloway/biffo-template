@@ -7,12 +7,12 @@
  * command (unlike plugin-install's equivalent), so no MSW setup needed.
  */
 import { execa } from 'execa'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { GitAdapter } from '../adapters/git/index.js'
 import { runDataImport } from './data-import.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 async function initGitRepo(dir: string): Promise<void> {
   await execa('git', ['init', '--initial-branch=main'], { cwd: dir })
@@ -31,7 +31,7 @@ describe('runDataImport — end-to-end', () => {
 
   beforeEach(async () => {
     // A local "DDL source repo" the CLI will `git clone`.
-    dataSourceRepo = mkdtempSync(join(tmpdir(), 'biffo-data-source-'))
+    dataSourceRepo = makeTmpDir('biffo-data-source')
     await initGitRepo(dataSourceRepo)
     mkdirSync(join(dataSourceRepo, 'ddl', 'modules'), { recursive: true })
     writeFileSync(
@@ -46,7 +46,7 @@ describe('runDataImport — end-to-end', () => {
     await commitAll(dataSourceRepo, 'initial DDL source')
 
     // A local "Biffo project checkout" the CLI imports into.
-    projectRoot = mkdtempSync(join(tmpdir(), 'biffo-project-'))
+    projectRoot = makeTmpDir('biffo-project')
     mkdirSync(join(projectRoot, 'services'), { recursive: true })
     await initGitRepo(projectRoot)
     writeFileSync(join(projectRoot, 'README.md'), '# Test project\n')

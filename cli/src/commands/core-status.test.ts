@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { capturedOutput } from '../test-utils/console.js'
 import { runCoreStatus } from './core-status.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 vi.mock('../lib/logger.js', () => ({
   log: { step: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -20,7 +20,7 @@ describe('runCoreStatus', () => {
   let logSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
-    cwd = mkdtempSync(join(tmpdir(), 'biffo-instance-'))
+    cwd = makeTmpDir('biffo-instance')
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.clearAllMocks()
   })

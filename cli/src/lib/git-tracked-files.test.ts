@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { gitTrackedFiles } from './git-tracked-files.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 function git(repo: string, args: string[]): void {
   execFileSync('git', ['-C', repo, ...args], { stdio: 'ignore' })
@@ -19,7 +19,7 @@ describe('gitTrackedFiles', () => {
   let dir: string
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'biffo-tracked-'))
+    dir = makeTmpDir('biffo-tracked')
   })
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true })

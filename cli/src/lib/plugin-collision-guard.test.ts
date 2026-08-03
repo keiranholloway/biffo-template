@@ -1,5 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
@@ -8,11 +7,12 @@ import {
   formatCollisions,
   regularPackagesOf,
 } from './plugin-collision-guard.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 let services: string
 
 beforeEach(() => {
-  services = mkdtempSync(join(tmpdir(), 'plugin-collisions-'))
+  services = makeTmpDir('plugin-collisions')
 })
 
 afterEach(() => {

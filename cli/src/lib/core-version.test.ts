@@ -1,5 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
@@ -13,6 +12,7 @@ import {
   readInstanceCoreVersion,
   writeInstanceCoreVersion,
 } from './core-version.js'
+import { makeTmpDir } from '../test-utils/tmp.js'
 
 describe('parseCoreVersion', () => {
   it('parses a semver into a numeric tuple', () => {
@@ -39,7 +39,7 @@ describe('compareCoreVersions', () => {
 describe('findCoreVersionUpward / readCoreVersionFile', () => {
   let dir: string
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'biffo-core-'))
+    dir = makeTmpDir('biffo-core')
   })
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true })
@@ -62,7 +62,7 @@ describe('findCoreVersionUpward / readCoreVersionFile', () => {
 describe('readInstanceCoreVersion', () => {
   let dir: string
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'biffo-instance-'))
+    dir = makeTmpDir('biffo-instance')
   })
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true })
@@ -102,7 +102,7 @@ describe('readInstanceCoreVersion', () => {
 describe('declinedMigrations (#735)', () => {
   let dir: string
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'biffo-declined-'))
+    dir = makeTmpDir('biffo-declined')
   })
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true })
@@ -185,7 +185,7 @@ describe('declinedMigrations (#735)', () => {
 describe('planCoreVersionCleanup (#434)', () => {
   let dir: string
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'biffo-cleanup-'))
+    dir = makeTmpDir('biffo-cleanup')
   })
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true })
@@ -282,7 +282,7 @@ describe('planCoreVersionCleanup (#434)', () => {
 describe('isInstanceRepo', () => {
   let dir: string
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'biffo-probe-'))
+    dir = makeTmpDir('biffo-probe')
   })
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true })

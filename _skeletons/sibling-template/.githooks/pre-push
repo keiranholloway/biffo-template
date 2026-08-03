@@ -9,6 +9,19 @@
 # own reporting. CI jobs that push (notably the core-v* tag workflow) have no
 # `uv` on PATH, so firing here made tag pushes fail with `uv: not found` (code
 # 127) and blocked releases. GitHub Actions and every mainstream CI set $CI.
+# git EXPORTS GIT_DIR (and friends) into every hook. In a worktree that points
+# at `<main>/.git/worktrees/<name>` -- a real directory, where an ordinary
+# checkout has `.git` as a FILE -- and turbo reads it expecting the latter,
+# dying with `I/O error: Is a directory (os error 21)` before a single test
+# runs. Reproduced directly: `GIT_DIR=... pnpm turbo run test` fails, the same
+# command without it passes 3/3.
+#
+# That made the gate unpassable from any worktree, which AGENTS.md section 1
+# mandates as the place all work happens. Unsetting is safe: every git command
+# below discovers the repo from the working directory, which is the worktree
+# root and is what they should be operating on anyway.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
 [ -n "${CI:-}" ] && exit 0
 
 # Escape hatch, deliberately explicit rather than a flag on git. `--no-verify`

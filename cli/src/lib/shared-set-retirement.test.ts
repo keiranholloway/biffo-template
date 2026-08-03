@@ -24,6 +24,7 @@ const RETIRED = [
   { script: 'scripts/hook-audit.sh', subcommand: 'hook-audit' },
   { script: 'scripts/pg-test-db.sh', subcommand: 'pg-test-db' },
   { script: 'scripts/rewrite-scope-check.sh', subcommand: 'rewrite-scope-check' },
+  { script: 'scripts/gate-coverage.sh', subcommand: 'gate-coverage' },
 ]
 
 /**
@@ -165,5 +166,43 @@ describe('the callers moved with the scripts', () => {
   it('practices-daily runs hook-audit through the bridge', () => {
     const daily = readFileSync(join(repoRoot, 'scripts/practices-daily.sh'), 'utf8')
     expect(daily).toContain('sh scripts/biffo.sh hook-audit')
+  })
+})
+
+describe('the bridge preserves the caller working directory', () => {
+  /**
+   * The dependency audits take their target from the working directory — a CI
+   * job runs them with `working-directory: apps/frontend`. `scripts/biffo.sh`
+   * normalises to the repo root, which would silently retarget them: the audit
+   * would pass, having audited the wrong tree. That is a wrong ANSWER, not an
+   * error, which is the failure class this whole effort keeps finding.
+   */
+  it('biffo.sh records where the caller stood, before it changes directory', () => {
+    const bridge = readFileSync(join(repoRoot, 'scripts/biffo.sh'), 'utf8')
+    const record = bridge.indexOf('BIFFO_ORIGINAL_CWD=$PWD')
+    const cd = bridge.indexOf('cd "$root"')
+    expect(record).toBeGreaterThan(-1)
+    // Order is the whole point: recorded BEFORE the cd, or it records the root.
+    expect(record).toBeLessThan(cd)
+    expect(bridge).toContain('export BIFFO_ORIGINAL_CWD')
+  })
+
+  it('the command factory spawns scripts there', () => {
+    const factory = readFileSync(join(repoRoot, 'cli/src/lib/packaged-script-command.ts'), 'utf8')
+    expect(factory).toContain("process.env['BIFFO_ORIGINAL_CWD']")
+    expect(factory).toContain('cwd')
+  })
+
+  it('shared-sync rehearsal measures with the template copy, not the satellite one', () => {
+    // It runs inside each STAGED SATELLITE worktree, which no longer carries a
+    // copy — so the old `sh scripts/gate-coverage.sh` would report "coverage
+    // unknown" for every repo and the rehearsal would stop discriminating.
+    //
+    // Going through the satellite's own bridge would work but would resolve
+    // `npx @biffo/cli@<pin>` once per repo: 14 network round trips, and a
+    // measurement that fails when the registry is unreachable.
+    const sync = readFileSync(join(repoRoot, 'scripts/shared-sync.sh'), 'utf8')
+    expect(sync).toContain('sh "$TEMPLATE_ROOT/scripts/gate-coverage.sh"')
+    expect(sync).not.toContain('cd "$wt" && sh scripts/gate-coverage.sh')
   })
 })

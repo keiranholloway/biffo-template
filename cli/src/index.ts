@@ -13,6 +13,7 @@ import { teardownCommand } from './commands/teardown.js'
 import { hookAuditCommand } from './commands/hook-audit.js'
 import { pgTestDbCommand } from './commands/pg-test-db.js'
 import { rewriteScopeCheckCommand } from './commands/rewrite-scope-check.js'
+import { gateCoverageCommand } from './commands/gate-coverage.js'
 import { branchHealthCommand } from './commands/branch-health.js'
 import { claimCommand } from './commands/claim.js'
 import { waitForChecksCommand } from './commands/wait-for-checks.js'
@@ -60,6 +61,7 @@ program.addCommand(teardownCommand)
 program.addCommand(waitForChecksCommand)
 program.addCommand(branchHealthCommand)
 program.addCommand(claimCommand)
+program.addCommand(gateCoverageCommand)
 program.addCommand(hookAuditCommand)
 program.addCommand(pgTestDbCommand)
 program.addCommand(rewriteScopeCheckCommand)

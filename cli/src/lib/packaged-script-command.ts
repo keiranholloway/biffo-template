@@ -60,7 +60,12 @@ export function packagedScriptCommand(spec: {
     const at = process.argv.indexOf(spec.name)
     const args = at === -1 ? [] : process.argv.slice(at + 1)
 
-    const result = spawnSync('sh', [script, ...args], { stdio: 'inherit' })
+    // Back in the directory the caller stood in, not the repo root that
+    // `scripts/biffo.sh` normalises to. Scripts that take their target from the
+    // working directory (the dependency audits, invoked from a CI job's
+    // `working-directory:`) would otherwise audit the wrong tree and pass.
+    const cwd = process.env['BIFFO_ORIGINAL_CWD'] || process.cwd()
+    const result = spawnSync('sh', [script, ...args], { stdio: 'inherit', cwd })
     // A signal-terminated child has a null status. Reporting 0 there would be a
     // pass earned by being killed.
     process.exit(result.status === null ? 2 : result.status)

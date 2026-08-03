@@ -29,7 +29,8 @@
     "scripts/claim.sh",
     "scripts/hook-audit.sh",
     "scripts/pg-test-db.sh",
-    "scripts/rewrite-scope-check.sh"
+    "scripts/rewrite-scope-check.sh",
+    "scripts/gate-coverage.sh"
   ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",

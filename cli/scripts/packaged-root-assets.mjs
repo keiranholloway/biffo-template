@@ -70,6 +70,13 @@ export const PACKAGED_ROOT_ASSETS = [
     why: 'Retired from copy-based distribution (#1109 phase 0d).',
   },
   {
+    path: 'scripts/gate-coverage.sh',
+    kind: 'file',
+    sentinel: 'scripts/gate-coverage.sh',
+    resolvedBy: 'src/lib/packaged-scripts.ts — findPackagedScript()',
+    why: 'Retired from copy-based distribution (#1109 phase 0e).',
+  },
+  {
     path: 'scripts/branch-health.sh',
     kind: 'file',
     sentinel: 'scripts/branch-health.sh',

@@ -923,7 +923,12 @@ rehearse_repo() {
   # where the coverage question does not apply looked like the one repo where the
   # measurement had failed. "Not applicable" and "could not tell" are different
   # answers, and this file exists because conflating them is expensive.
-  _cov=$( (cd "$wt" && sh scripts/gate-coverage.sh 2>&1) |
+  # The TEMPLATE's own canonical copy, run against the staged worktree. Not the
+  # satellite's copy (it no longer has one, #1109) and not through its bridge
+  # either: that would make every rehearsal resolve `npx @biffo/cli@<pin>` once
+  # per repo, turning a local measurement into 14 network round trips -- and
+  # tying the rehearsal's ability to measure to the registry being reachable.
+  _cov=$( (cd "$wt" && sh "$TEMPLATE_ROOT/scripts/gate-coverage.sh" 2>&1) |
     sed 's/\x1b\[[0-9;]*m//g' |
     grep -oE '([0-9]+/[0-9]+|no CI to mirror|NO GATE)' | head -1)
   [ -n "$_cov" ] || _cov='coverage unknown'

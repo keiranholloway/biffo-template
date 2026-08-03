@@ -382,3 +382,45 @@ def test_generated_passwords_never_contain_an_html_hazard():
     for _ in range(200):
         password = generate_temporary_password()
         assert not (set(password) & _HTML_HAZARDS), f"generated {password!r}"
+
+
+# --- the generator's floor must be the pool's actual minimum -------------------
+
+
+def test_minimum_length_matches_the_cognito_pool_terraform():
+    """The constant is the pool's `minimum_length`, read from the Terraform.
+
+    Asserted against the real module rather than restated, because the failure
+    mode is silent drift: a generator permitting a shorter password than the
+    pool accepts does not fail here, it fails inside `admin_create_user` as an
+    opaque `InvalidParameterException`, at a call site that can no longer do
+    anything about it.
+
+    The template guarded at 8 while every pool it ships requires 12 — found
+    while reconciling tabsii-platform's copy, which already had it right.
+    """
+    import re
+    from pathlib import Path
+
+    from api.cognito import COGNITO_MINIMUM_PASSWORD_LENGTH
+
+    # services/api/tests/ -> services/api/ -> services/ -> repo root
+    tf = Path(__file__).resolve().parents[3] / "modules/cloud/aws/auth/main.tf"
+    assert tf.is_file(), f"cannot find the auth module at {tf} — has the layout moved?"
+
+    match = re.search(r"minimum_length\s*=\s*(\d+)", tf.read_text())
+    assert match is not None, "no minimum_length in the auth module — cannot verify the floor"
+
+    assert COGNITO_MINIMUM_PASSWORD_LENGTH == int(match.group(1)), (
+        f"COGNITO_MINIMUM_PASSWORD_LENGTH is {COGNITO_MINIMUM_PASSWORD_LENGTH} but the pool "
+        f"requires {match.group(1)} — a password between the two is generated here and "
+        "rejected by Cognito."
+    )
+
+
+def test_generate_temporary_password_rejects_a_length_the_pool_would_reject():
+    import pytest as _pytest
+    from api.cognito import COGNITO_MINIMUM_PASSWORD_LENGTH
+
+    with _pytest.raises(ValueError, match="at least 12"):
+        generate_temporary_password(length=COGNITO_MINIMUM_PASSWORD_LENGTH - 1)

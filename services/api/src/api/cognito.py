@@ -37,9 +37,15 @@ REDACTED = "***"
 # whatever it's embedded in and destroy the diagnostic value redaction exists
 # to preserve — so, like `MIN_REDACTABLE` in `cli/src/adapters/git/index.ts`
 # (#1171), anything shorter than this is left alone rather than blanked. Real
-# Cognito temporary passwords satisfy the pool's own minimum length (8), which
+# Cognito temporary passwords satisfy the pool's own minimum length (12), which
 # is itself above this floor.
 _MIN_REDACTABLE = 8
+
+# The `minimum_length` set on the Cognito user pool in
+# `modules/cloud/aws/auth/main.tf`. Named here so the generator and the
+# infrastructure cannot drift apart silently -- a generator that permits a
+# shorter password than the pool accepts fails at Cognito, not at the caller.
+COGNITO_MINIMUM_PASSWORD_LENGTH = 12
 
 
 def redact_secret(text: str, secret: str | None) -> str:
@@ -98,14 +104,25 @@ def generate_temporary_password(length: int = 20) -> str:
     template which only supports `{username}`/`{####}`) has no way to learn
     it unless it supplies one — this is that generator. Core's own policy:
     20 characters drawn from upper/lower/digit/symbol, with at least one of
-    each guaranteed, comfortably clearing the pool's default minimum (8) and
-    complexity requirements without the caller needing to know them.
+    each guaranteed, comfortably clearing the pool's minimum (12, see
+    `modules/cloud/aws/auth/main.tf`) and its complexity requirements
+    without the caller needing to know them.
 
     Uses `secrets`, not `random` — this value is a live login credential from
     the moment it's generated, not just after Cognito accepts it.
     """
-    if length < 8:
-        raise ValueError("temporary passwords must be at least 8 characters")
+    # The pool's own `minimum_length` (modules/cloud/aws/auth/main.tf), not a
+    # softer number. Refusing at 8 let a caller generate an 8-11 character
+    # password that Cognito then REJECTS at admin_create_user -- a failure
+    # that surfaces as an opaque InvalidParameterException at the call site
+    # rather than here, where the caller can still do something about it.
+    # tabsii-platform's copy already guarded at 12; folded upstream with the
+    # symbol-set fix (#1192) rather than left to be clobbered by it.
+    if length < COGNITO_MINIMUM_PASSWORD_LENGTH:
+        raise ValueError(
+            f"temporary passwords must be at least {COGNITO_MINIMUM_PASSWORD_LENGTH} "
+            "characters (the Cognito pool's minimum_length)"
+        )
     required = [
         secrets.choice(_UPPER),
         secrets.choice(_LOWER),

@@ -356,23 +356,34 @@ deployment's decision instead of the template's.
 - tabsii's port is not complete until its `auth.py` fork is deleted and a core
   upgrade applies cleanly with no conflict in that file.
 
-## Scope: `require_auth` only
+## Scope: every authenticated path, both transports
 
-**The identity-provider seam covers the `require_auth` path only.** `require_forwarded_user`
-(the plugin/sibling-forwarded-token ingress, used by plugin chat routes per ADR-0017 §3
-and internal owner-scoped plugin data routes) intentionally stays a lightweight, DB-free
-claims check. It calls `identity_from_token()`, which performs pure claims mapping
-without calling `provider.resolve()`, and therefore does not populate `AuthenticatedUser.user_id`.
-Routes that use `require_forwarded_user` and need an owner identity fall back to the raw
-Cognito `sub` claim — this is correct and load-bearing (see `routing/owner_data_handlers.py`).
+**Superseded by #621 (see #655 and its step 3).** This section originally scoped the
+seam to `require_auth` only, and held that the plugin/sibling-forwarded-token ingress
+(ADR-0017 §3 chat routes and §5 internal owner-scoped data routes) should stay a
+lightweight, DB-free claims check that never calls `provider.resolve()`.
 
-Routing the forwarded-token path through the provider would add a database round-trip on
-every plugin-forwarded call; since plugins must never gain database access (ADR-0002),
-this scope boundary is deliberate, not an oversight. A deployment with a custom identity
-provider should be aware that **plugin-owned data is currently attributed by raw Cognito
-`sub`, not the provider's resolved canonical identity**. This is a documented, scoped
-limitation of the current architecture, and a candidate for future refining if the plugin
-surface grows to require tighter integration with canonical identity resolution.
+That scoping was the mechanism of a real security gap, not just a documentation
+choice. `provider.resolve()` is where the `is_active` deactivation check (#150) runs,
+so excluding the forwarded path excluded the deactivation gate from every
+plugin-forwarded route: a suspended user's already-issued access token kept working
+there for the remainder of its ~1h life, while a direct call was refused immediately.
+One database round-trip per plugin-forwarded call is the intended cost of the check,
+not an overhead to be avoided.
+
+Both transports now resolve through `middleware/principal.require_principal`, which
+verifies the token — from `Authorization: Bearer` or from `X-Biffo-User-Token` — and
+then runs `authenticated_identity`, so the provider, the deactivation gate,
+platform-admin sync and permission resolution apply identically. There is one
+authenticated path, and the forwarded-token dependency that used to be the second one
+no longer exists (`tests/test_one_authorization_model.py` keeps it that way).
+
+Consequently `AuthenticatedUser.user_id` **is** populated on the forwarded path, and
+owner-scoped plugin data is attributed to the provider's canonical identity where it
+resolves one. `routing/owner_data_handlers._owner_id` still falls back to the raw
+Cognito `sub` when the provider yields no canonical id, which is the same rule the
+chat routes' `run_as_user_id` uses. ADR-0002 is untouched: the round-trip happens
+inside `services/api/`, and plugins still gain no database access.
 
 ## Related Decisions
 

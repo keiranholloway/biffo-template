@@ -1,0 +1,12 @@
+{
+  "summary": "Two false alarms in one session, both of which read as regressions caused by the change in hand, and neither was. (1) pg-test failed with 'assert 0.0909 == 0.1' on a tabsii-platform core upgrade. scripts/pg-test-db.sh keys its Postgres container per checkout and reuses it indefinitely; this checkout's had been up 13 hours, so a fixture seeded 'onboarding started 10 days ago' had rolled over to 11 days. --recreate and it passed. The upgrade touched no domains/tabsii code at all. (2) git push printed 'Everything up-to-date' after a transport error while the local branch was 2 commits AHEAD — the masked-push trap AGENTS.md section 4 documents, caught only because the remote was checked rather than the message believed. Both cost diagnosis time on the wrong subject; the general rule is that when a measurement surprises you, suspect the ruler first",
+  "class": "visibility",
+  "alsoClass": [
+    "process"
+  ],
+  "surfacedIn": "tabsii-platform pg-test lane; biffo-template push",
+  "fixesIn": "diagnostic practice — no code change",
+  "status": "recorded",
+  "costMinutes": 25,
+  "date": "2026-08-03"
+}

@@ -1,0 +1,12 @@
+{
+  "summary": "Two shell traps in one script, and only one was a syntax error. Writing branch-health.sh hit IFS=$'\\t', which is a bashism: dash reads it as the four literal characters $ ' \\ t and splits fields on ANY of them, so 'Deploy Application' was reported as a workflow called 'Deploy Applica' and one row printed instead of four — while exiting 0. sh -n cannot see it. The second was an unbalanced quote that parsed fine until RUNTIME, ~100 lines after all the useful output, turning a correct exit 1 into a confusing exit 2. AGENTS.md invokes these scripts as `sh` and /bin/sh is dash here, so a #!/usr/bin/env bash shebang is a promise the invocation never keeps. Guarded by shell-portability.test.ts, which does both a parse check and a pattern scan and DERIVES its scope (shebang says sh, or something invokes it as sh) — the first draft checked every script and failed 12 honest bash ones, and flagged [[:space:]] as a bash [[ test",
+  "class": "drift",
+  "alsoClass": [
+    "visibility"
+  ],
+  "surfacedIn": "biffo-template scripts/branch-health.sh",
+  "fixesIn": "biffo-template cli/src/lib/shell-portability.test.ts",
+  "status": "fixed",
+  "costMinutes": 30,
+  "date": "2026-08-03"
+}

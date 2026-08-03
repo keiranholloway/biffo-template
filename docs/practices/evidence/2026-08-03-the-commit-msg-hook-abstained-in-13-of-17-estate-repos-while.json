@@ -1,0 +1,15 @@
+{
+  "refs": [
+    "#1193"
+  ],
+  "summary": "The commit-msg hook abstained in 13 of 17 estate repos while printing a calm sentence that reads like it worked: 'no commitlint config — subject not checked'. It looked for a root commitlint config AND ran it via pnpm exec, which needs a root package.json; most satellites have neither, because their frontend is its own pnpm workspace under apps/frontend/. Verified: 10 of 10 satellites checked have no commitlint config. So AGENTS.md section 3 was binding on every repo and enforced in three. Both alternatives the issue proposed were checked and rejected on evidence — shipping a config does not help without a resolvable binary, and NO satellite carries commitlint or lint-staged anywhere, root or workspace, so there was nothing to resolve from. Fixed with a dependency-free POSIX-sh Conventional Commits fallback that cannot abstain, deliberately checking LESS than commitlint so it never rejects what CI accepts",
+  "class": "fail-open",
+  "alsoClass": [
+    "drift"
+  ],
+  "surfacedIn": "tabsii-crm and 12 other satellites",
+  "fixesIn": "biffo-template .githooks/commit-msg + both skeletons",
+  "status": "fixed",
+  "costMinutes": 50,
+  "date": "2026-08-03"
+}

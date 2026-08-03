@@ -365,6 +365,17 @@ audit_json() {
   # carried on running the raw command, so the distribution was complete and
   # the outcome had not moved. A proxy reported as the outcome, again.
   audit_json wiring "sh scripts/ci-wiring-audit.sh --estate '$ESTATE'" 'calls the shared scripts|still run the raw command'
+  printf ','
+  # Sixth audit (#1167). The five above ask whether the ESTATE is healthy; this
+  # one asks whether the numbers on the page still mean what they say. H4's
+  # primary metric is a share over CLASSIFIED steps, so an unmatched step name
+  # leaves the denominator silently -- 12 of 17 on the morning this was written,
+  # with the headline reading 80% where the honest figure was 47%.
+  #
+  # It reads the snapshot written by the collector a few lines above, so it must
+  # stay after it. `$DATA_DIR` rather than `$ESTATE`: this is the only audit
+  # whose subject is the measurement rather than the repos.
+  audit_json classification "node scripts/classification-audit.mjs --data '$DATA_DIR'" 'failing steps unclassified|nothing to classify|cannot be audited'
   printf ']}\n'
 } > "$AUDITS"
 

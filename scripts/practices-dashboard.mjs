@@ -343,8 +343,10 @@ export function renderSessions(s, mergeToilRatio, windowDays = 7) {
 }
 
 /**
- * The three estate audits, rendered at the top because they are the only things
- * on this page that can be *wrong* rather than merely unflattering.
+ * The estate audits, rendered at the top because they are the only things on
+ * this page that can be *wrong* rather than merely unflattering. (There were
+ * three when this was written and there are six now — the list is read from
+ * `estate-audits.json`, so this renders whatever `practices-daily.sh` ran.)
  *
  * Everything else here is inferred from commit metadata and describes what
  * happened. These describe whether the machinery that is supposed to be

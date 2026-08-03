@@ -35,6 +35,7 @@ import {
   filterToWindow,
   priorWindow,
   classifyFailingStep,
+  classificationBlindness,
   summariseGates,
   gatesForWindow,
   aggregateGates,
@@ -2581,6 +2582,12 @@ describe('classifyFailingStep', () => {
       ['gitleaks git history scan', 'gitleaks'],
       ['Destructive-plan guard', 'destructive-plan'],
       ['Plugin Terraform guard', 'plugin-terraform'],
+      // Both run a script that is deterministic, offline and seconds long:
+      // `uv run python scripts/error_branch_coverage.py --check` and
+      // `sh scripts/biffo.sh check adr-numbering`. Classified from what the
+      // step RUNS, not from its name (#1167).
+      ['Error-branch coverage', 'coverage'],
+      ['ADR numbering guard', 'adr-guard'],
     ] as const) {
       expect(classifyFailingStep(name), name).toEqual({ kind, catchable: true })
     }
@@ -2599,6 +2606,14 @@ describe('classifyFailingStep', () => {
       ['Build and deploy plugin frontends', 'deploy'],
       ['Run terraform apply -input=false -auto-approve', 'deploy'],
       ['Run sh scripts/biffo.sh check release-subject', 'release-subject'],
+      // Every one of these invokes AWS against a live environment — two
+      // `aws lambda invoke`s and an `aws s3 sync` — so no offline check
+      // reproduces them (#1167).
+      ['Apply DDL imports', 'schema-apply'],
+      ['Initialise database schema', 'schema-apply'],
+      ['Sync portal to S3', 'deploy'],
+      // Needs a token and the network, unlike the coverage CHECK above it.
+      ['Coverage upload', 'coverage-upload'],
     ] as const) {
       expect(classifyFailingStep(name), name).toEqual({ kind, catchable: false })
     }
@@ -2661,6 +2676,23 @@ describe('summariseGates', () => {
     expect(result.failingSteps).toBe(0)
     expect(result.share).toBeNull()
   })
+
+  it('records WHICH step names it could not classify, with their counts', () => {
+    // A bare `unclassified: 12` says the metric went blind but not to what, so
+    // the fix needs a human to go and re-derive the names from the jobs API --
+    // which is exactly the step nobody took for the fortnight this shipped
+    // (#1167). Most-frequent first: that is the pattern worth writing.
+    const result = summariseGates([
+      { name: 'Summon a badger' },
+      { name: 'Summon a badger' },
+      { name: 'Feed the badger' },
+      { name: 'Test' },
+    ])
+    expect(result.unclassifiedNames).toEqual([
+      { name: 'Summon a badger', count: 2 },
+      { name: 'Feed the badger', count: 1 },
+    ])
+  })
 })
 
 describe('gatesForWindow', () => {
@@ -2713,6 +2745,96 @@ describe('aggregateGates', () => {
 
   it('reports a null share when nothing was measured', () => {
     expect(aggregateGates({ blind: { gates: { error: 'unmeasured' } } }).share).toBeNull()
+  })
+
+  it('merges the unclassified names across repos so the estate view names them', () => {
+    const repos = {
+      a: { gates: summariseGates([{ name: 'Summon a badger' }, { name: 'Test' }]) },
+      b: { gates: summariseGates([{ name: 'Summon a badger' }, { name: 'Feed the badger' }]) },
+    }
+    expect(aggregateGates(repos).unclassifiedNames).toEqual([
+      { name: 'Summon a badger', count: 2 },
+      { name: 'Feed the badger', count: 1 },
+    ])
+  })
+})
+
+describe('classificationBlindness', () => {
+  // H4's primary outcome metric is a share over CLASSIFIED steps, so every step
+  // the pattern list has never seen leaves the denominator silently. On
+  // 2026-08-03, 12 of 17 estate failing steps were unclassified and the
+  // headline read 80% locally-catchable; over all 17 it was 47%. Nothing
+  // failed, because `unclassified` was reported and never asserted on (#1167).
+  it('fails when unclassified steps are too large a share of the denominator', () => {
+    const result = classificationBlindness({
+      failingSteps: 17,
+      unclassified: 12,
+      unclassifiedNames: [
+        { name: 'Apply DDL imports', count: 5 },
+        { name: 'Error-branch coverage', count: 3 },
+      ],
+    })
+    expect(result.ok).toBe(false)
+    // The names are the actionable part -- a share alone sends you back to the
+    // jobs API to find out what to add.
+    expect(result.summary).toContain('Apply DDL imports')
+    expect(result.summary).toContain('12 of 17')
+  })
+
+  it('passes when every failing step was classified', () => {
+    const result = classificationBlindness({
+      failingSteps: 17,
+      unclassified: 0,
+      unclassifiedNames: [],
+    })
+    expect(result.ok).toBe(true)
+  })
+
+  it('passes when nothing failed at all -- there is no denominator to go blind', () => {
+    expect(
+      classificationBlindness({ failingSteps: 0, unclassified: 0, unclassifiedNames: [] }).ok,
+    ).toBe(true)
+  })
+
+  it('tolerates one unseen name in a large sample rather than crying wolf daily', () => {
+    // A brand-new step name is normal estate churn. The threshold exists so the
+    // audit means something when it does fire -- a guard that is red every
+    // morning trains people to stop reading it, which is the argument
+    // protection-audit.sh makes at length.
+    const result = classificationBlindness({
+      failingSteps: 40,
+      unclassified: 1,
+      unclassifiedNames: [{ name: 'Summon a badger', count: 1 }],
+    })
+    expect(result.ok).toBe(true)
+  })
+
+  it('fails a small sample that is entirely unclassified', () => {
+    // 2 of 2 is 100% blind. Sample size does not rescue it: the share is the
+    // whole denominator, not a rounding artefact.
+    expect(
+      classificationBlindness({
+        failingSteps: 2,
+        unclassified: 2,
+        unclassifiedNames: [{ name: 'Summon a badger', count: 2 }],
+      }).ok,
+    ).toBe(false)
+  })
+
+  it('says so when a pre-existing snapshot has counts but no names', () => {
+    // Every snapshot collected before #1167 is this shape. An empty list would
+    // read as "looked for names, found none", which is a different claim.
+    const result = classificationBlindness({ failingSteps: 17, unclassified: 12 })
+    expect(result.ok).toBe(false)
+    expect(result.summary).toContain('names not recorded')
+  })
+
+  it('refuses to pass a window it could not measure', () => {
+    // `unmeasured` is not `nothing was blind` -- the same distinction
+    // gatesForWindow preserves.
+    const result = classificationBlindness({ error: 'unmeasured' })
+    expect(result.ok).toBe(false)
+    expect(result.summary).toContain('unmeasured')
   })
 })
 

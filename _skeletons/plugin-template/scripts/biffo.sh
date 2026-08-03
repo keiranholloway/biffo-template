@@ -35,6 +35,19 @@
 set -eu
 
 root=$(git rev-parse --show-toplevel)
+
+# Where the CALLER stood, before this script normalises to the repo root.
+#
+# Some packaged scripts take their target from the working directory rather than
+# from a repo layout -- the dependency audits are invoked from a CI job's
+# `working-directory: apps/frontend`, and one byte-identical script is correct
+# at a repo root, in a sibling's frontend and in a service directory alike. The
+# `cd` below would silently retarget them at the repo root, which is a wrong
+# ANSWER rather than an error: the audit would pass, having audited the wrong
+# tree. packagedScriptCommand() spawns each script back in this directory.
+BIFFO_ORIGINAL_CWD=$PWD
+export BIFFO_ORIGINAL_CWD
+
 cd "$root"
 
 # Satellites (sibling apps, plugin repos, runner fleets) carry neither

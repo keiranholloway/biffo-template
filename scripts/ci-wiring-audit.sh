@@ -125,10 +125,18 @@ report() {
   # via a heredoc keeps the loop in this shell.
   while IFS="$(printf '\t')" read -r script pattern; do
     [ -n "$script" ] || continue
-    # Only meaningful where the repo actually HAS the script: a repo that was
-    # never given it is shared-sync's problem, not this one, and reporting it
-    # here would double-count one defect as two.
-    [ -f "$d/$script" ] || continue
+    # Meaningful where the repo can RUN the gate -- either it holds the script,
+    # or it holds `scripts/biffo.sh` and reaches the packaged copy through the
+    # version-pinned CLI (#1109). Before that second clause this skipped every
+    # repo whose copy had been retired, which is the shape this audit exists to
+    # catch one level down: an input it cannot evaluate silently leaves the
+    # denominator, and the remainder gets reported as the whole.
+    #
+    # A repo with neither is shared-sync's problem, not this one, and reporting
+    # it here would double-count one defect as two.
+    if [ ! -f "$d/$script" ] && [ ! -f "$d/scripts/biffo.sh" ]; then
+      continue
+    fi
     held=$((held + 1))
     for f in "$wf_dir"/*.yml "$wf_dir"/*.yaml; do
       [ -f "$f" ] || continue

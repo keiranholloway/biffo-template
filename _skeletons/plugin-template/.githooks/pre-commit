@@ -9,13 +9,31 @@
 root=$(git rev-parse --show-toplevel) || exit 0
 cd "$root" || exit 0
 
+# The two abstention messages below are deliberately phrased as abstentions
+# rather than as status (#1193). The previous wording -- "nothing staged-file-
+# level to run", "skipping" -- read like the hook working, which is why 13 of 17
+# repos ran a formatting gate that formats nothing without anyone noticing.
+#
+# Unlike commit-msg, which now has a built-in fallback because Conventional
+# Commits is a RULE that can be checked with nothing but `sh`, this hook runs a
+# TOOLCHAIN. Checked 2026-08-03: no satellite carries `lint-staged` anywhere --
+# not at the root, not in any workspace -- so there is genuinely nothing to
+# resolve and nothing to fall back to. Making it fatal would block all work in
+# those repos, which is how a safety measure gets ripped out.
+#
+# So it still exits 0. It just no longer implies it checked anything, and it
+# says what would make it real.
 if [ ! -f package.json ]; then
-  echo "pre-commit: no package.json — nothing staged-file-level to run" >&2
+  echo "pre-commit: ABSTAINED — no root package.json, so lint-staged cannot run here." >&2
+  echo "  Staged files were NOT linted or formatted. CI still checks them." >&2
+  echo "  To make this real: add lint-staged to a root package.json (see local-gates.md)." >&2
   exit 0
 fi
 if ! node -e "const p=require('./package.json');process.exit(p['lint-staged']||p.config?.['lint-staged']?0:1)" 2>/dev/null \
-   && [ ! -f .lintstagedrc ] && [ ! -f .lintstagedrc.json ] && [ ! -f lint-staged.config.js ]; then
-  echo "pre-commit: no lint-staged config — skipping (see local-gates.md)" >&2
+  && [ ! -f .lintstagedrc ] && [ ! -f .lintstagedrc.json ] && [ ! -f lint-staged.config.js ]; then
+  echo "pre-commit: ABSTAINED — package.json exists but declares no lint-staged config." >&2
+  echo "  Staged files were NOT linted or formatted. CI still checks them." >&2
+  echo "  To make this real: add a lint-staged config (see local-gates.md)." >&2
   exit 0
 fi
 exec pnpm exec lint-staged

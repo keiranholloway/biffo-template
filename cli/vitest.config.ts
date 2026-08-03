@@ -66,6 +66,17 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts'],
     setupFiles: ['src/test-setup.ts'],
+    // Vitest's 5s default is sized for in-process unit tests. This suite is
+    // dominated by tests that shell out -- `git init`, `git clone`, a real
+    // `shared-sync` round, `verify.sh` against a fixture repo -- and since
+    // #1220 turned caching off, `turbo run test` runs it concurrently with
+    // five other packages. Twelve of those subprocess tests then landed at
+    // 5.0-7.3s and failed, having done nothing wrong.
+    //
+    // A timeout that depends on how busy the machine is reports a scheduling
+    // delay as a defect, and a suite that fails only under load is one people
+    // learn to re-run rather than read.
+    testTimeout: 20_000,
     // Inherited by every worker and every process they spawn. TMP/TEMP are set
     // alongside it because `mktemp` and `os.tmpdir()` consult different names
     // across platforms, and a script that misses the override silently writes

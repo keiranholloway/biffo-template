@@ -9,6 +9,19 @@
 # own reporting. CI jobs that push (notably the core-v* tag workflow) have no
 # `uv` on PATH, so firing here made tag pushes fail with `uv: not found` (code
 # 127) and blocked releases. GitHub Actions and every mainstream CI set $CI.
+# git EXPORTS GIT_DIR (and friends) into every hook. In a worktree that points
+# at `<main>/.git/worktrees/<name>` -- a real directory, where an ordinary
+# checkout has `.git` as a FILE -- and turbo reads it expecting the latter,
+# dying with `I/O error: Is a directory (os error 21)` before a single test
+# runs. Reproduced directly: `GIT_DIR=... pnpm turbo run test` fails, the same
+# command without it passes 3/3.
+#
+# That made the gate unpassable from any worktree, which AGENTS.md section 1
+# mandates as the place all work happens. Unsetting is safe: every git command
+# below discovers the repo from the working directory, which is the worktree
+# root and is what they should be operating on anyway.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
 [ -n "${CI:-}" ] && exit 0
 
 # Escape hatch, deliberately explicit rather than a flag on git. `--no-verify`
@@ -39,6 +52,47 @@ cd "$root" || exit 0
 # the bridge resolves the script from the package -- and if the bridge itself
 # cannot run, that is a reason to stop, not to wave the push through.
 sh scripts/biffo.sh rewrite-scope-check || exit 1
+
+# --- Claim guard (#1231 instance 2) -------------------------------------------
+#
+# `scripts/claim.sh` (packaged inside `@biffo/cli`, run through the bridge
+# above) has asked the estate's four-signal question about "is this issue
+# taken?" since #1209 -- but nothing ever RAN it. It shipped advisory-only, so
+# the fix for the collisions it exists to catch was itself subject to the same
+# failure: a collision happens precisely when someone does not think to check.
+#
+# `--guard <branch>` is the enforced form. It derives the issue number from the
+# branch name (`<type>/<number>-slug>`) and, when the branch names one, checks
+# for another remote branch or another OPEN PR naming the same issue -- NEVER
+# the `in-progress` label (three of four real collisions were "work exists,
+# label does not") and NEVER identity (a claim on #1109 was recorded as
+# `github-actions[bot]` because of a repo-local `user.email` override). It
+# excludes the branch being pushed and any PR whose head IS that branch, so
+# pushing your own branch a second time cannot block you on your own work.
+#
+# A branch that names no issue returns before any network call -- most
+# branches are fine, and noise kills a gate. Measured on a branch that DOES
+# name one: the added latency is the cost of two `gh` lookups, similar in
+# order of magnitude to `rewrite-scope-check` above.
+branch=$(git symbolic-ref --quiet --short HEAD) || branch=""
+
+if [ -n "$branch" ]; then
+  sh scripts/biffo.sh claim --guard "$branch"
+  claim_status=$?
+
+  if [ "$claim_status" -eq 1 ]; then
+    exit 1
+  fi
+
+  # $claim_status -eq 2 is "cannot tell" -- no network, gh unauthenticated, an
+  # API error -- and claim.sh has already printed a warning. Deliberately NOT
+  # blocked here: unlike every other gate in this file, this is a COORDINATION
+  # gate, not a correctness one. A false block costs the ability to push at
+  # all; a miss costs a recoverable collision caught early (every collision in
+  # #1209's own incident was caught before duplicate work merged). Set
+  # BIFFO_CLAIM_STRICT=1 to make claim.sh itself collapse cannot-tell into
+  # exit 1 instead, if you would rather block than guess.
+fi
 
 # Through the version-pinned CLI since #1109, so a repo cannot run a gate two
 # versions old -- eight of them did, and tabsii-crm checked ONE thing in eight

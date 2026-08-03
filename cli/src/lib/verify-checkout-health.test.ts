@@ -24,8 +24,8 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, writeFileSync } from 'node:fs'
+import { makeTmpDir } from '../test-utils/tmp.js'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -65,7 +65,7 @@ let localDir: string
 
 /** origin (bare, `dev` default) + a `local` clone on `dev`, both fully in sync. */
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'checkout-health-'))
+  root = makeTmpDir('checkout-health')
   originDir = join(root, 'origin.git')
   git(['init', '-q', '--bare', '-b', 'dev', originDir], root)
 
@@ -190,7 +190,7 @@ describe('verify.sh --checkout-health: out of scope, reported as n/a rather than
 
 describe('verify.sh --checkout-health: cannot tell is never a pass', () => {
   it('exits 2, not 0, when there is no origin remote to compare against at all', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'checkout-health-noorigin-'))
+    const dir = makeTmpDir('checkout-health-noorigin')
     try {
       git(['init', '-q', '-b', 'dev'], dir)
       writeFileSync(join(dir, 'f.txt'), 'x\n')

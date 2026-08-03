@@ -26,8 +26,8 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { makeTmpDir } from '../test-utils/tmp.js'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -98,7 +98,7 @@ function runVerify(cwd: string): Run {
 
 /** A minimal repo verify.sh can run against fast: no Python, no JS build, no CI file. */
 function minimalRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'verify-gitleaks-'))
+  const dir = makeTmpDir('verify-gitleaks')
   execFileSync('git', ['init', '-q'], { cwd: dir })
   execFileSync(
     'git',
@@ -197,7 +197,7 @@ describe("verify.sh's gitleaks pass scans tracked files only", () => {
     // load gitleaks config" is not the same failure as a real leak, and it
     // would have broken every push in a repo that (legitimately) relies on
     // gitleaks' built-in default ruleset.
-    const dir = mkdtempSync(join(tmpdir(), 'verify-gitleaks-noconfig-'))
+    const dir = makeTmpDir('verify-gitleaks-noconfig')
     try {
       execFileSync('git', ['init', '-q'], { cwd: dir })
       writeFileSync(join(dir, 'package.json'), '{"name":"p","scripts":{"lint":"true"}}\n')

@@ -111,9 +111,19 @@ describe('the template seeds the carve-out', () => {
     // Verified by building both ways -- the specifier alias produced a bundle
     // with the stub's contents while reporting success. The alias must target
     // the RESOLVED default path.
+    //
+    // Pinned to the BEHAVIOUR rather than to two variable names: this assertion
+    // matched `existsSync(instanceNav)` and broke when #1098 generalised the
+    // single pair into a loop over `instanceSeams`, having verified nothing
+    // about whether the aliasing still worked. Two seams share the mechanism
+    // now, so the invariant is that each is guarded by an existence check and
+    // aliases the DEFAULT path to the instance file.
     const config = readFileSync(join(repoRoot, 'apps/portal/next.config.ts'), 'utf8')
-    expect(config).toMatch(/existsSync\(instanceNav\)/)
-    expect(config).toMatch(/\[emptyDefault\]: instanceNav/)
+    expect(config).toMatch(/existsSync\(/)
+    expect(config).toMatch(/\[templateDefault\]: instanceFile/)
+    // Both seams are declared for the alias loop to walk.
+    expect(config).toMatch(/instance-nav\.ts/)
+    expect(config).toMatch(/instance-nav-empty\.ts/)
   })
 
   it.runIf(!runningInInstance)('ships the route group with a README explaining it', () => {

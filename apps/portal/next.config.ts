@@ -28,8 +28,23 @@ import type { NextConfig } from 'next'
  * both export `INSTANCE_NAV_LINKS: InstanceNavLink[]` from the template-owned
  * contract, so typechecking against the default is sound for either.
  */
-const instanceNav = join(import.meta.dirname, 'src', 'instance-nav.ts')
-const emptyDefault = join(import.meta.dirname, 'src', 'lib', 'instance-nav-empty.ts')
+/**
+ * Each optional instance-owned module, as `[instance file, template default]`.
+ *
+ * Two seams share this mechanism now (#1098 added the second), so the pair is
+ * data rather than two hand-written aliases -- a third would otherwise be a
+ * third place to forget one half.
+ */
+const instanceSeams: [string, string][] = [
+  [
+    join(import.meta.dirname, 'src', 'instance-nav.ts'),
+    join(import.meta.dirname, 'src', 'lib', 'instance-nav-empty.ts'),
+  ],
+  [
+    join(import.meta.dirname, 'src', 'instance-login-destinations.ts'),
+    join(import.meta.dirname, 'src', 'lib', 'login-destinations-default.ts'),
+  ],
+]
 
 /** The sliver of webpack's config this touches. Next types the callback's
  *  argument as `any`, which the shared lint config rightly refuses. */
@@ -39,12 +54,13 @@ interface WebpackResolveConfig {
 
 const nextConfig: NextConfig = {
   webpack: (config: WebpackResolveConfig) => {
-    if (existsSync(instanceNav)) {
-      // Alias the RESOLVED path, not the '@/instance-nav' specifier: SWC
+    for (const [instanceFile, templateDefault] of instanceSeams) {
+      if (!existsSync(instanceFile)) continue
+      // Alias the RESOLVED path, not the '@/instance-*' specifier: SWC
       // rewrites tsconfig `paths` at transform time, so webpack never sees the
       // alias key. Verified — aliasing the specifier built successfully and
       // silently emitted the empty default.
-      config.resolve.alias = { ...config.resolve.alias, [emptyDefault]: instanceNav }
+      config.resolve.alias = { ...config.resolve.alias, [templateDefault]: instanceFile }
     }
     return config
   },

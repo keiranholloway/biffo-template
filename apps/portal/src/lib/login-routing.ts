@@ -37,6 +37,22 @@
  */
 
 import { ADMIN_GROUP } from './cognito-groups'
+import {
+  DEFAULT_LOGIN_DESTINATIONS,
+  INSTANCE_LOGIN_DESTINATIONS,
+} from '@/instance-login-destinations'
+import { type LoginDestinations, normalizeLoginDestinations } from './login-destinations-contract'
+
+/**
+ * The destinations these rules resolve to, after an instance's overrides.
+ *
+ * Computed once at module load: the map is static data, and recomputing it per
+ * login would only invite someone to pass a mutable object in.
+ */
+const DESTINATIONS: LoginDestinations = normalizeLoginDestinations(
+  INSTANCE_LOGIN_DESTINATIONS,
+  DEFAULT_LOGIN_DESTINATIONS,
+)
 
 export interface WhoamiRole {
   role: string
@@ -72,6 +88,16 @@ export function resolveDestination(
   whoami: WhoamiResponse,
   groups: string[] | undefined,
   returnTo: string | null,
+  /**
+   * The destination map, defaulting to the instance's. Injectable so the rule
+   * PRECEDENCE can be tested with six distinct values.
+   *
+   * Without it these tests go quiet rather than red: the template default sends
+   * five of the six outcomes to `/admin/`, so an assertion that a unit role and
+   * a tenant role land in different places passes no matter what the rules do.
+   * A test that cannot fail is the shape this estate keeps finding.
+   */
+  destinations: LoginDestinations = DESTINATIONS,
 ): string {
   // Rule 1: a valid returnTo (already sanitised by the caller)
   if (returnTo) {
@@ -82,30 +108,30 @@ export function resolveDestination(
   // /admin/ on (#1104) — routing someone to a destination that will then
   // refuse them is the failure the two rules exist to avoid together.
   if (groups?.includes(ADMIN_GROUP)) {
-    return '/admin/'
+    return destinations.admin
   }
 
   // Rule 3: whoami.is_platform_admin === true
   if (whoami.is_platform_admin) {
-    return '/crm/'
+    return destinations.platformAdmin
   }
 
   // Rule 4: any role whose scope_level is 'tenant'|'brand'|'region'
   if (whoami.roles.some((r) => ['tenant', 'brand', 'region'].includes(r.scope_level))) {
-    return '/crm/'
+    return destinations.orgScoped
   }
 
   // Rule 5: any role whose scope_level is 'unit'. ADR-0105 — training is a
   // section of this surface, not a destination of its own.
   if (whoami.roles.some((r) => r.scope_level === 'unit')) {
-    return '/crm/'
+    return destinations.unitScoped
   }
 
   // Rule 6: whoami.marketplace_role is set and there are no roles
   if (whoami.marketplace_role && whoami.roles.length === 0) {
-    return '/marketplace/'
+    return destinations.marketplace
   }
 
   // Rule 7: otherwise
-  return '/login/no-access/'
+  return destinations.noAccess
 }

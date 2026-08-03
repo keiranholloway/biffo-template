@@ -26,6 +26,35 @@ const {
 // keeps every existing test on the no-return_to path.
 let searchParams: Record<string, string> = {}
 const replaceMock = vi.fn()
+/**
+ * An instance-shaped destination map, supplied through the seam the page reads
+ * (#1098).
+ *
+ * These assertions are about the page's NAVIGATION branch -- `router.push` for
+ * an in-portal destination, `window.location.assign` for a cross-app one -- so
+ * they need a destination that is genuinely cross-app. The template default
+ * sends every role outcome to `/admin/`, which is in-portal and would route
+ * these cases through the router, quietly testing the other branch. Declaring a
+ * map here keeps each test asserting what it was written to assert, and proves
+ * the seam actually reaches the page.
+ */
+const ORG_DESTINATION = '/crm/'
+vi.mock('@/instance-login-destinations', () => ({
+  INSTANCE_LOGIN_DESTINATIONS: {
+    orgScoped: '/crm/',
+    unitScoped: '/crm/',
+    marketplace: '/marketplace/',
+  },
+  DEFAULT_LOGIN_DESTINATIONS: {
+    admin: '/admin/',
+    platformAdmin: '/admin/',
+    orgScoped: '/admin/',
+    unitScoped: '/admin/',
+    marketplace: '/admin/',
+    noAccess: '/login/no-access/',
+  },
+}))
+
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: pushMock, replace: replaceMock }),
   useSearchParams: () => ({ get: (key: string) => searchParams[key] ?? null }),
@@ -234,7 +263,7 @@ describe('LoginPage role-based routing', () => {
     vi.clearAllMocks()
   })
 
-  it('routes to /crm/ for users with tenant-level roles', async () => {
+  it('routes tenant-level roles to the orgScoped destination', async () => {
     const whoami = {
       sub: 'sub-123',
       email: 'founder@example.com',
@@ -259,7 +288,7 @@ describe('LoginPage role-based routing', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
 
     await waitFor(() => {
-      expect(assignMock).toHaveBeenCalledWith('/crm/')
+      expect(assignMock).toHaveBeenCalledWith(ORG_DESTINATION)
     })
   })
 
@@ -354,7 +383,7 @@ describe('LoginPage — arriving already signed in', () => {
     render(<LoginPage />)
 
     await waitFor(() => {
-      expect(assignMock).toHaveBeenCalledWith('/crm/')
+      expect(assignMock).toHaveBeenCalledWith(ORG_DESTINATION)
     })
   })
 
@@ -465,7 +494,7 @@ describe('LoginPage — return_to must not outlive the user it belonged to', () 
     // next person to sign in must be routed by THEIR role, not to the previous
     // user's destination.
     await waitFor(() => {
-      expect(assignMock).toHaveBeenCalledWith('/crm/')
+      expect(assignMock).toHaveBeenCalledWith(ORG_DESTINATION)
     })
     expect(pushMock).not.toHaveBeenCalledWith('/admin/')
   })

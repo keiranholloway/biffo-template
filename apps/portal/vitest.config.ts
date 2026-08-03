@@ -15,16 +15,36 @@ import { defineConfig } from 'vitest/config'
  *
  * Ordered before the `@` prefix so the exact key wins.
  */
-const instanceNav = path.resolve(__dirname, './src/instance-nav.ts')
-const navAlias = existsSync(instanceNav)
-  ? instanceNav
-  : path.resolve(__dirname, './src/lib/instance-nav-empty.ts')
+/**
+ * Every optional instance-owned seam, as `specifier -> [instance file, default]`.
+ *
+ * Data rather than hand-written pairs because #1098 added a second seam and
+ * immediately reproduced the failure this comment warns about: the new
+ * specifier was declared in `tsconfig.json` and `next.config.ts` and forgotten
+ * here, and vitest failed with *"Failed to resolve import
+ * @/instance-login-destinations"* while both others were green.
+ * `instance-seam-resolvers.test.ts` now asserts all three agree.
+ */
+const seams: Record<string, [string, string]> = {
+  '@/instance-nav': ['./src/instance-nav.ts', './src/lib/instance-nav-empty.ts'],
+  '@/instance-login-destinations': [
+    './src/instance-login-destinations.ts',
+    './src/lib/login-destinations-default.ts',
+  ],
+}
+
+const seamAliases = Object.fromEntries(
+  Object.entries(seams).map(([specifier, [instanceFile, fallback]]) => {
+    const resolved = path.resolve(__dirname, instanceFile)
+    return [specifier, existsSync(resolved) ? resolved : path.resolve(__dirname, fallback)]
+  }),
+)
 
 export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      '@/instance-nav': navAlias,
+      ...seamAliases,
       '@': path.resolve(__dirname, './src'),
     },
   },

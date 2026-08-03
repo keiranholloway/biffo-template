@@ -696,6 +696,21 @@ export function writeSiblingTemplate(
     ) + '\n',
   )
 
+  // The pin `scripts/biffo.sh` reads to resolve the version-pinned CLI (#1109).
+  //
+  // Until now only `scripts/shared-sync.sh` ever wrote this, so a sibling was
+  // born WITHOUT it: the bridge found no pin, no `biffo.core.json` and no
+  // `cli/`, and fell through to exec a `tsx` that does not exist. That was
+  // survivable while every repo also carried a copy of each guard script; it is
+  // not, now that `wait-for-checks` reaches a satellite only through the bridge.
+  //
+  // Same `core-v` tag form shared-sync writes, so the two producers agree and a
+  // repo cannot be told two different things about where its files came from.
+  writeFileSync(
+    join(targetDir, '.biffo-shared-version'),
+    `core-v${context.templateVersion.replace(/^core-v/, '')}\n`,
+  )
+
   const envPath = join(targetDir, 'apps', 'frontend', '.env.example')
   try {
     // `basePathFor`, not `/${prefix}` — the root sibling's basePath is the

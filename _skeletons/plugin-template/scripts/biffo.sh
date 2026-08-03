@@ -77,6 +77,22 @@ if [ -f biffo.core.json ]; then
   exec npx --yes "@biffo/cli@$version" "$@"
 fi
 
+# Nothing above matched, so this must be the template — the only repo that
+# carries `cli/`. A satellite that reaches here has no pin, which since #1109
+# means it cannot run guards at all; before this branch it fell through and
+# exec'd a `tsx` that does not exist, exiting 127 with no explanation.
+#
+# `biffo sibling create` now stamps the pin at birth, so this is reachable
+# mainly by a repo scaffolded before that, or by a plugin repo (`biffo plugin
+# create` scaffolds INTO an existing repo, so it has no standalone repo root to
+# stamp). `shared-sync.sh` writes the pin on its first run, which is the fix.
+if [ ! -d cli ]; then
+  echo "biffo.sh: no biffo.core.json, no .biffo-shared-version, and no cli/ here." >&2
+  echo "  If this is a satellite, run shared-sync from the template to stamp it:" >&2
+  echo "    sh scripts/shared-sync.sh --estate <path-to-your-repos>" >&2
+  exit 2
+fi
+
 # NOT `pnpm --filter @biffo/cli exec tsx ...`: `pnpm exec` normalises every
 # non-zero exit to 1. Verified — the CLI exits 2 and pnpm reports 1.
 #

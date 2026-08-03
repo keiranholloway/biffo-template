@@ -23,7 +23,7 @@ from typing import Any
 from aws_lambda_powertools import Logger
 from fastapi import Body, Depends, HTTPException, status
 from pydantic_core import to_jsonable_python
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -95,18 +95,60 @@ def _emit_crud_event(
 # models/plugin_table.py.
 AUTO_COLUMN_NAMES: frozenset[str] = frozenset({"id", "tenant_id", "created_at", "updated_at"})
 
+# The soft-delete marker. A model carrying this column is tombstoned by the
+# delete handler rather than destroyed, and its tombstoned rows are excluded
+# from every generic read. Deliberately NOT in AUTO_COLUMN_NAMES: that set
+# mirrors TenantScopedModel's own columns, and this one is not on the base —
+# it is opt-in per model, declared by simply having the column.
+SOFT_DELETE_COLUMN = "deleted_at"
+
 
 def serialize(row: Any) -> dict[str, Any]:
     """Convert a mapped row into a plain JSON-able dict of its own columns."""
     return {col.name: getattr(row, col.name) for col in row.__table__.columns}
 
 
+def soft_delete_attr(model: type[Any]) -> Any | None:
+    """The model's soft-delete marker attribute, or ``None`` if this model is
+    hard-deleted.
+
+    A model opts in by declaring a ``deleted_at`` column — the same signal the
+    hand-written domain endpoints already use — and can opt back out with
+    ``__soft_delete__ = False`` for a table that genuinely wants rows destroyed
+    (an append-only log being pruned, say). Presence of the column is the
+    trigger because that is what the DDL and the instances' own queries already
+    treat as authoritative; requiring a second declaration would be one more
+    hand-maintained copy of a fact the schema already states.
+    """
+    if not getattr(model, "__soft_delete__", True):
+        return None
+    if SOFT_DELETE_COLUMN not in model.__table__.columns:
+        return None
+    return getattr(model, SOFT_DELETE_COLUMN, model.__table__.columns[SOFT_DELETE_COLUMN])
+
+
+def visible_rows(model: type[Any], query: Any) -> Any:
+    """Narrow a query to rows that are not tombstoned. A no-op for a model with
+    no soft-delete column, so every caller can apply it unconditionally — which
+    is the point: the owner-data handlers share it, so there is one place that
+    decides what "still exists" means rather than two that can drift."""
+    tombstone = soft_delete_attr(model)
+    return query if tombstone is None else query.where(tombstone.is_(None))
+
+
 def user_columns_from_model(model: type[Any]) -> frozenset[str]:
     """Column names a caller may set via the request body — every column on the
-    model except the auto-managed id/tenant_id/created_at/updated_at ones.
-    ``tenant_id`` in particular must never be settable from the body: it always
-    comes from require_plugin_tenant_context (ADR-0001)."""
-    return frozenset(c.name for c in model.__table__.columns if c.name not in AUTO_COLUMN_NAMES)
+    model except the auto-managed id/tenant_id/created_at/updated_at ones and
+    the ``deleted_at`` soft-delete marker. ``tenant_id`` in particular must
+    never be settable from the body: it always comes from
+    require_plugin_tenant_context (ADR-0001), and ``deleted_at`` must not be
+    either — a body-settable tombstone lets any caller with ``update`` delete a
+    row, or resurrect one, without ever holding the ``delete`` permission."""
+    return frozenset(
+        c.name
+        for c in model.__table__.columns
+        if c.name not in AUTO_COLUMN_NAMES and c.name != SOFT_DELETE_COLUMN
+    )
 
 
 def _reject_unwritable_fields(payload: dict[str, Any], user_columns: frozenset[str]) -> None:
@@ -184,7 +226,8 @@ def make_list_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
         tenant_id: str = Depends(require_plugin_tenant_context),
         db: AsyncSession = Depends(get_db),
     ) -> list[dict[str, Any]]:
-        result = await db.execute(select(model).where(model.tenant_id == tenant_id))
+        query = visible_rows(model, select(model).where(model.tenant_id == tenant_id))
+        result = await db.execute(query)
         return [serialize(row) for row in result.scalars().all()]
 
     return handler
@@ -196,7 +239,10 @@ def make_read_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
         tenant_id: str = Depends(require_plugin_tenant_context),
         db: AsyncSession = Depends(get_db),
     ) -> dict[str, Any]:
-        result = await db.execute(select(model).where(model.id == id, model.tenant_id == tenant_id))
+        query = visible_rows(
+            model, select(model).where(model.id == id, model.tenant_id == tenant_id)
+        )
+        result = await db.execute(query)
         row = result.scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -265,7 +311,13 @@ def make_update_handler(
         db: AsyncSession = Depends(get_db),
     ) -> dict[str, Any]:
         _reject_unwritable_fields(payload, user_columns)
-        result = await db.execute(select(model).where(model.id == id, model.tenant_id == tenant_id))
+        # A tombstoned row is invisible to read, so it must be invisible to
+        # update too — otherwise a caller who cannot see a row can still write
+        # to it, and the 404 read becomes a lie rather than a boundary.
+        query = visible_rows(
+            model, select(model).where(model.id == id, model.tenant_id == tenant_id)
+        )
+        result = await db.execute(query)
         row = result.scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -288,15 +340,35 @@ def make_delete_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
         tenant_id: str = Depends(require_plugin_tenant_context),
         db: AsyncSession = Depends(get_db),
     ) -> dict[str, Any]:
-        result = await db.execute(select(model).where(model.id == id, model.tenant_id == tenant_id))
+        query = visible_rows(
+            model, select(model).where(model.id == id, model.tenant_id == tenant_id)
+        )
+        result = await db.execute(query)
         row = result.scalar_one_or_none()
         if row is None:
+            # Includes an already-tombstoned row: deleting one twice is a 404,
+            # not a second `<table>.deleted` event for the same row.
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-        # Capture the row for the event before it's deleted/expired.
         exclude = frozenset(getattr(model, "__event_exclude__", ()) or ())
-        deleted_payload = _event_payload(row, exclude)
-        await db.delete(row)
-        await db.flush()
+        tombstone = soft_delete_attr(model)
+        if tombstone is None:
+            # Capture the row for the event before it's deleted/expired.
+            deleted_payload = _event_payload(row, exclude)
+            await db.delete(row)
+            await db.flush()
+        else:
+            # A model carrying deleted_at is tombstoned, never destroyed, and
+            # the event carries the tombstoned row — deleted_at included, so a
+            # consumer can see when it happened.
+            #
+            # Note for a table under RLS: this makes the statement an UPDATE,
+            # so the table's UPDATE grants and UPDATE policy are what must
+            # admit the caller. A DELETE policy alone no longer authorises the
+            # generic delete on such a table.
+            setattr(row, SOFT_DELETE_COLUMN, func.now())
+            await db.flush()
+            await db.refresh(row)
+            deleted_payload = _event_payload(row, exclude)
         _emit_crud_event(db, model, "deleted", tenant_id, payload=deleted_payload)
         return {"deleted": True, "id": id}
 

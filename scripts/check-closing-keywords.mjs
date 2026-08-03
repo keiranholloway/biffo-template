@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 /**
- * Refuse `Closes #N` on a change whose behaviour only shows up once deployed.
+ * Two guards over a PR body's closing keywords, asking different questions.
+ *
+ * 1. Refuse `Closes #N` on a change whose behaviour only shows up once
+ *    deployed — a path-scoped check, documented immediately below.
+ * 2. Refuse a NEGATED closing keyword anywhere, on any path — see
+ *    `negatedClosingReferences`. GitHub's linker has no concept of negation,
+ *    so `Does not close #N` closes #N.
+ *
+ * ── 1. Closing keywords on deploy-only paths ─────────────────────────────
  *
  * GitHub closes an issue the moment a PR body carrying a closing keyword is
  * merged. For most changes that is right and convenient. For a change whose
@@ -86,30 +94,116 @@ export const DEPLOY_ONLY_PREFIXES = [
   'apps/portal/',
 ]
 
+/** An issue reference GitHub linkifies: `#12` or `owner/repo#12`. */
+const REFERENCE = '(?:[\\w.-]+/[\\w.-]+)?#\\d+'
+
+/**
+ * Blank out fenced code blocks and inline code spans, preserving line count.
+ *
+ * Not merely a courtesy: GitHub does not linkify `#12` inside backticks, so it
+ * does not close anything there either. Matching there would make these guards
+ * STRICTER than the behaviour they exist to model — and it is how the
+ * deploy-path guard first failed its own PR, whose body necessarily quotes the
+ * very pattern it forbids. The negation guard has the same problem in a
+ * sharper form: its failure message, and any PR discussing it, must be able to
+ * quote `does not close #N` without tripping it.
+ *
+ * Every non-newline character becomes a space rather than vanishing, so a
+ * match's offset still maps to the line the author wrote — that is what lets
+ * `negatedClosingReferences` name the offending line.
+ */
+export function stripCode(body) {
+  const blank = (m) => m.replace(/[^\n]/g, ' ')
+  return body.replace(/```[\s\S]*?```/g, blank).replace(/`[^`\n]*`/g, blank)
+}
+
 /**
  * The issue references a body would close on merge.
  *
  * Matches `Closes #12`, `fixes owner/repo#12` and the `Closes: #12` colon
- * form. Deliberately ignores a keyword inside a fenced code block OR an inline
- * code span — GitHub does not linkify a reference there, so it does not close
- * anything there either, and a PR discussing the pattern must not trip a gate
- * on the pattern.
+ * form. Ignores keywords inside code — see `stripCode`.
  */
 export function closingReferences(body) {
   if (!body) return []
-  const withoutCode = body
-    .replace(/```[\s\S]*?```/g, '')
-    // Inline code spans too, and not merely as a courtesy: GitHub does not
-    // linkify `#12` inside backticks, so it does not close anything either.
-    // Matching there would make this guard STRICTER than the behaviour it
-    // exists to model — and it is how the guard first failed its own PR, whose
-    // body necessarily quotes the very pattern it forbids.
-    .replace(/`[^`\n]*`/g, '')
+  const withoutCode = stripCode(body)
+  const pattern = new RegExp(`\\b(${CLOSING_KEYWORDS.join('|')})\\b:?\\s+(${REFERENCE})`, 'gi')
+  return [...withoutCode.matchAll(pattern)].map((m) => m[2])
+}
+
+/**
+ * ── 2. Negated closing keywords, on every path ───────────────────────────
+ *
+ * A sentence that says a PR does NOT close an issue still closes it. GitHub's
+ * linker matches `close #N` and acts; it has no concept of the word before it.
+ *
+ * Four occurrences, three of them "fixed" by writing the rule down again:
+ *
+ *   - tabsii-platform#76 — the original.
+ *   - tabsii-crm#133 — `tabsii-crm#141`'s body carried
+ *     `## Scope note — this PR alone does not close #133`. Its squash commit
+ *     carried only `Refs #133`. The issue closed on merge anyway. The lesson
+ *     recorded then: *keeping a denial out of the commit is not sufficient —
+ *     GitHub's linker reads the PR description text on its own.*
+ *   - #1238 / #1021 (2026-08-03) — `- **Does not close #1021.**` in the body,
+ *     `Refs #1021` in the commit, #1021 closed by the squash-merge.
+ *
+ * The recorded fix each time was a *practice*: "never write a closing keyword
+ * in prose". Three occurrences produced a rule and no mechanism, and the
+ * fourth was authored with that rule available. That is the argument for a
+ * guard rather than another note (#1245).
+ *
+ * ## Why this fires on every path, unlike the check above
+ *
+ * The deploy-path check asks "is this closing an issue nothing has evidenced
+ * yet?", so what the PR touches is the whole question. This one asks "does the
+ * author's own prose contradict what GitHub is about to do?", which has
+ * nothing to do with the diff. #1238 touched `scripts/` and `cli/` and the
+ * deploy-path check correctly stayed silent while the issue closed anyway.
+ *
+ * ## Why the detection is safe to make blocking
+ *
+ * It is not inferring intent. It requires a negation *immediately* before a
+ * closing keyword *and* a linkified issue reference — there is no reading of
+ * `does not close #N` in which the author wants #N closed. Ordinary prose
+ * survives it: `the fail-open the tool exists to close` has no negation and no
+ * reference, and `this does not close it` has no `#N`, so GitHub would not
+ * close anything there and neither does this fire.
+ */
+const NEGATIONS = [
+  // `not` covers "does not", "will not", "should not", "is not", "did not".
+  '\\bnot',
+  '\\bnever',
+  '\\bwithout',
+  '\\bcannot',
+  // The contracted forms, matched as a suffix so one alternative covers
+  // don't / doesn't / didn't / won't / can't / isn't / shouldn't.
+  "n['’]t",
+]
+
+/**
+ * The negated closing references in a body, each with the line that carries
+ * it — a guard that says only "no" gets worked around.
+ *
+ * Returns `[{ reference, line, lineNumber }]`, in body order.
+ */
+export function negatedClosingReferences(body) {
+  if (!body) return []
+  const text = stripCode(body)
+  const authored = body.split('\n')
   const pattern = new RegExp(
-    `\\b(${CLOSING_KEYWORDS.join('|')})\\b:?\\s+((?:[\\w.-]+/[\\w.-]+)?#\\d+)`,
+    `(?:${NEGATIONS.join('|')})\\s+(?:${CLOSING_KEYWORDS.join('|')})\\b:?\\s+(${REFERENCE})`,
     'gi',
   )
-  return [...withoutCode.matchAll(pattern)].map((m) => m[2])
+  return [...text.matchAll(pattern)].map((m) => {
+    // `stripCode` preserves newlines, so an offset into the blanked text still
+    // maps to the line the author actually wrote.
+    const lineNumber = text.slice(0, m.index).split('\n').length
+    return {
+      reference: m[1],
+      lineNumber,
+      line: (authored[lineNumber - 1] ?? m[0]).trim(),
+    }
+  })
 }
 
 /** Whether the author has claimed, in the body, to have verified this on a
@@ -117,7 +211,9 @@ export function closingReferences(body) {
  * a box tick, not evidence. */
 export function hasVerifiedTrailer(body) {
   if (!body) return false
-  const line = body.split('\n').find((l) => l.trim().toLowerCase().startsWith(VERIFIED_TRAILER.toLowerCase()))
+  const line = body
+    .split('\n')
+    .find((l) => l.trim().toLowerCase().startsWith(VERIFIED_TRAILER.toLowerCase()))
   if (line === undefined) return false
   return line.slice(line.indexOf(':') + 1).trim().length > 0
 }
@@ -130,10 +226,18 @@ export function deployOnlyPaths(changedFiles) {
 /**
  * The whole decision, pure so it is testable without a repo or a PR.
  *
- * Returns `{ ok }` on a pass, or `{ ok: false, references, paths }` naming
- * exactly what tripped it — a guard that says only "no" gets worked around.
+ * Returns `{ ok }` on a pass, or a failure carrying `kind` plus exactly what
+ * tripped it — a guard that says only "no" gets worked around.
+ *
+ * The negation check runs FIRST and ignores `changedFiles` entirely. It is not
+ * a special case of the deploy-path check: a `Verified-on-deploy:` trailer
+ * cannot excuse it either, because the author is not claiming the issue is
+ * verified, they are saying it is not being closed at all.
  */
 export function assess({ body, changedFiles }) {
+  const negated = negatedClosingReferences(body)
+  if (negated.length > 0) return { ok: false, kind: 'negated-keyword', negated }
+
   const references = closingReferences(body)
   if (references.length === 0) return { ok: true, reason: 'no-closing-keyword' }
 
@@ -142,10 +246,37 @@ export function assess({ body, changedFiles }) {
 
   if (hasVerifiedTrailer(body)) return { ok: true, reason: 'verified-trailer' }
 
-  return { ok: false, references, paths }
+  return { ok: false, kind: 'deploy-only-path', references, paths }
 }
 
-export function formatFailure({ references, paths }) {
+export function formatFailure(result) {
+  return result.kind === 'negated-keyword'
+    ? formatNegatedFailure(result)
+    : formatDeployOnlyFailure(result)
+}
+
+function formatNegatedFailure({ negated }) {
+  const refs = [...new Set(negated.map((n) => n.reference))]
+  return [
+    `This PR body says it does NOT close ${refs.join(', ')}, and GitHub will`,
+    `close ${refs.length === 1 ? 'it' : 'them'} anyway on merge. Its linker matches the keyword and the`,
+    'issue reference; it has no concept of the word "not" in front of them.',
+    '',
+    ...negated.map((n) => `  line ${n.lineNumber}: ${n.line}`),
+    '',
+    'This has now happened four times (tabsii-platform#76, tabsii-crm#133,',
+    '#1021 via #1238 — see #1245). Keeping the denial out of the commit',
+    'message is not enough: GitHub reads the PR description on its own.',
+    '',
+    'Rewrite the line so no closing keyword sits in front of the reference:',
+    ...refs.map((r) => `  - \`Refs ${r}\`, or "leaves ${r} open"`),
+    '',
+    'Then edit the PR body — this guard reads it live, so an edit alone turns',
+    'the check green with no new commit (#1174).',
+  ].join('\n')
+}
+
+function formatDeployOnlyFailure({ references, paths }) {
   const shown = paths.slice(0, 10)
   const more = paths.length - shown.length
   return [

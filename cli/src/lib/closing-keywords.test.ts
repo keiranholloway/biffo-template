@@ -8,9 +8,28 @@ import {
   deployOnlyPaths,
   formatFailure,
   hasVerifiedTrailer,
+  negatedClosingReferences,
   resolveBody,
   VERIFIED_TRAILER,
 } from '../../../scripts/check-closing-keywords.mjs'
+
+/**
+ * The two REAL bodies that motivated the negation guard (#1245). Fixtures, not
+ * paraphrases: three of the four occurrences were "fixed" by re-writing the
+ * rule down, so this guard is proven against the text that actually shipped.
+ */
+const PR_1238_BODY = [
+  '## What this does',
+  '',
+  '- **Does not close #1021.** Two of its three checkboxes are answered by this',
+  '  PR, which is the fail-open the tool exists to close.',
+].join('\n')
+
+const TABSII_CRM_141_BODY = [
+  '## Scope note — this PR alone does not close #133',
+  '',
+  'Refs #133.',
+].join('\n')
 
 describe('closing-keyword guard', () => {
   describe('closingReferences', () => {
@@ -49,6 +68,86 @@ describe('closing-keyword guard', () => {
 
     it('does not match a word that merely starts with a keyword', () => {
       expect(closingReferences('Closest #12')).toEqual([])
+    })
+  })
+
+  // #1245: GitHub's linker has no concept of negation. A body saying it does
+  // NOT close an issue closes it anyway. Four occurrences, three of them
+  // "fixed" by writing the rule down again — hence a mechanism.
+  describe('negatedClosingReferences', () => {
+    it('FAILS on the real #1238 body, and names the line that did it', () => {
+      // #1021 closed at 2026-08-03T18:20:53Z by a7797a5, the squash-merge of
+      // #1238, whose commit message carried only `Refs #1021`. The close came
+      // from this sentence.
+      const found = negatedClosingReferences(PR_1238_BODY)
+      expect(found).toHaveLength(1)
+      expect(found[0].reference).toBe('#1021')
+      expect(found[0].lineNumber).toBe(3)
+      expect(found[0].line).toContain('Does not close #1021.')
+    })
+
+    it('FAILS on the real tabsii-crm#141 body — the third occurrence', () => {
+      const found = negatedClosingReferences(TABSII_CRM_141_BODY)
+      expect(found).toHaveLength(1)
+      expect(found[0].reference).toBe('#133')
+      expect(found[0].lineNumber).toBe(1)
+      expect(found[0].line).toContain('does not close #133')
+    })
+
+    it('catches the other negation forms an author would reach for', () => {
+      for (const phrase of [
+        "doesn't close #7",
+        "don't fix #7",
+        "won't resolve #7",
+        'will not resolve #7',
+        'does not fix #7',
+        'did not fix #7',
+        'this cannot close #7',
+        'never closes #7',
+        'Does NOT close #7',
+      ]) {
+        const refs = negatedClosingReferences(phrase).map((n: { reference: string }) => n.reference)
+        expect(refs, phrase).toEqual(['#7'])
+      }
+    })
+
+    it('spans a line break, because markdown renders one as a space', () => {
+      expect(negatedClosingReferences('this PR does not\nclose #7')).toHaveLength(1)
+    })
+
+    it('finds the cross-repo form too', () => {
+      expect(
+        negatedClosingReferences('does not close tabsii-com/tabsii-crm#133')[0].reference,
+      ).toBe('tabsii-com/tabsii-crm#133')
+    })
+
+    it('does NOT fire on ordinary prose — the false positives that would kill it', () => {
+      // Verbatim from #1238's own body, and harmless: no issue number follows.
+      expect(negatedClosingReferences('which is the fail-open the tool exists to close.')).toEqual(
+        [],
+      )
+      // The safe rewrite this guard asks for must itself pass.
+      expect(negatedClosingReferences('Refs #1021')).toEqual([])
+      expect(negatedClosingReferences('Refs #1021 — this PR leaves #1021 open')).toEqual([])
+      // A negation with no reference closes nothing, so there is nothing to warn about.
+      expect(negatedClosingReferences('This does not close it')).toEqual([])
+      // A keyword with no negation is the OTHER check's business, not this one.
+      expect(negatedClosingReferences('Closes #1021')).toEqual([])
+      // Not a closing keyword at all.
+      expect(negatedClosingReferences('does not touch #1021')).toEqual([])
+      expect(negatedClosingReferences('will not reopen #1021')).toEqual([])
+      // Gerunds are not keywords GitHub acts on, so nothing closes here either.
+      // Firing would make this guard stricter than the behaviour it models.
+      expect(negatedClosingReferences('merged without closing #1021')).toEqual([])
+      // A reference that is not adjacent to the keyword.
+      expect(negatedClosingReferences('does not close anything; see #1021')).toEqual([])
+    })
+
+    it('ignores a negation inside code, because GitHub linkifies nothing there', () => {
+      // Load-bearing: this guard's own failure message quotes the pattern, and
+      // so must any PR discussing it — including the one that added it.
+      expect(negatedClosingReferences('Never write `does not close #12` in a body')).toEqual([])
+      expect(negatedClosingReferences(['```', 'Does not close #12', '```'].join('\n'))).toEqual([])
     })
   })
 
@@ -118,6 +217,45 @@ describe('closing-keyword guard', () => {
         '\n',
       )
       expect(assess({ body, changedFiles: deployPath }).ok).toBe(true)
+    })
+
+    it('FAILS a negated keyword on a path the deploy-only check ignores', () => {
+      // The whole point of #1245: #1238 touched `scripts/` and `cli/`, so the
+      // deploy-only check correctly stayed silent — and #1021 closed anyway.
+      const localOnly = ['scripts/wait-for-checks.sh', 'cli/src/lib/a.ts']
+      expect(assess({ body: 'Closes #1021', changedFiles: localOnly }).ok).toBe(true)
+
+      const result = assess({ body: PR_1238_BODY, changedFiles: localOnly })
+      expect(result.ok).toBe(false)
+      expect(result.kind).toBe('negated-keyword')
+      expect(result.negated.map((n: { reference: string }) => n.reference)).toEqual(['#1021'])
+    })
+
+    it('FAILS the tabsii-crm#141 body too, on no changed files at all', () => {
+      // Path-independent by construction: the failure mode has nothing to do
+      // with what the PR touches.
+      const result = assess({ body: TABSII_CRM_141_BODY, changedFiles: [] })
+      expect(result.ok).toBe(false)
+      expect(result.kind).toBe('negated-keyword')
+    })
+
+    it('does not let a Verified-on-deploy trailer excuse a negated keyword', () => {
+      // The trailer says "I saw this working". A negation says "this is not
+      // being closed". They are not the same claim, so one cannot waive the
+      // other.
+      const body = [PR_1238_BODY, '', `${VERIFIED_TRAILER} deploy 30752514507`].join('\n')
+      expect(assess({ body, changedFiles: ['infra/a.tf'] }).ok).toBe(false)
+    })
+
+    it('names the offending line and both rewrites, so the fix is obvious', () => {
+      const result = assess({ body: PR_1238_BODY, changedFiles: ['cli/src/lib/a.ts'] })
+      const message = formatFailure(result)
+      expect(message).toContain('#1021')
+      expect(message).toContain('line 3')
+      expect(message).toContain('Does not close #1021.')
+      // Both suggested rewrites, verbatim from the issue.
+      expect(message).toContain('Refs #1021')
+      expect(message).toContain('leaves #1021 open')
     })
 
     it('names both the issue and the paths, so the fix is obvious from the log', () => {

@@ -178,6 +178,27 @@ Three ways out, in rough order of preference:
 2. **Port the body change into your copy by hand**, keeping its `# biffo:carried-from:` marker. Safe only when re-stating the DDL is a no-op against your already-migrated database — and it is a hand-edit of a template-owned file, which is the divergence the ownership boundary exists to prevent.
 3. **Drop the arriving test from the PR** and raise it upstream, if the property it asserts genuinely cannot hold in your instance.
 
+##### Which of the three actually applies (#751)
+
+Options 1 and 2 above are not really alternatives for the same defect — each is useless for the other's class of change, so picking wrong is worse than picking slowly:
+
+| Class | State of your already-applied database | The only thing that fixes it |
+| --- | --- | --- |
+| **Replay-safe** — a guard, an idempotency check, a comment (#670's `_has_core_users_table()`) | already correct | option 2, the body edit |
+| **Outcome-changing** — a wrong column type, a missing index/constraint/default | actually wrong | option 1, a follow-on migration |
+
+A body edit cannot fix an outcome-changing case (restating unchanged-in-effect DDL against a database that already has the wrong schema changes nothing), and a follow-on migration cannot fix a replay-safe one that a fresh environment cannot even reach (#670's fix had to be *in* `0010`'s body, because a fresh environment dies inside it before any follow-on runs).
+
+Upstream can now record which class a specific edit belongs to, directly on the migration, so you don't have to work it out cold:
+
+```python
+# biffo:body-change: replay-safe — guards a table Core doesn't always own
+```
+
+When present, the plan attaches it to the `body drift` entry (`MigrationCarryPlan.divergedBodies[].declared`, `cli/src/lib/core-migrations.ts`) so the CLI can eventually cross out whichever of options 1/2 the declaration rules out.
+
+**This is reporting, not enforcement, and deliberately so.** The carry still leaves every already-carried file exactly alone, declared or not — a `replay-safe` declaration does not get auto-applied, and an `outcome-changing` one is not blocked any differently than plain undeclared drift is today. The classification itself is issue #751's decision, reasoned from a single real example (#670); #751 says explicitly that it wants two or three more real body changes to test the two-class model against before the carry starts *acting* on it, rather than risking a wrong declaration silently telling an operator their database converged when it didn't. Until then, an undeclared `body drift` means exactly what it always has: judge it yourself, using the table above.
+
 ## Destroying stateful infrastructure
 
 `terraform apply` runs with `-auto-approve`, so nothing pauses for a human. A guard in the **Plan** job (before Apply, so refusing costs nothing) fails the deploy if the plan would destroy a database, a Cognito user pool, an S3 bucket or another resource whose data no re-apply can recreate.

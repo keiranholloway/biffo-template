@@ -112,6 +112,11 @@ export interface MigrationCarryPlan {
    * the migration.
    *
    * The planner already knew both halves and simply never related them.
+   *
+   * #751 classifies *why* a body changed, when the template author has said so
+   * (`DivergedMigrationBody.declared`) — but the carry does not yet act on the
+   * classification. See that field's doc for what "act on it" would mean and
+   * why this stops short of it.
    */
   divergedBodies: DivergedMigrationBody[]
 }
@@ -124,6 +129,40 @@ export interface DeclinedCarry {
   upstream?: string
 }
 
+/**
+ * Whether a body change to an already-shipped migration can be *inferred* to
+ * leave an already-applied database in the same state (#751).
+ *
+ * - `replay-safe` — the DDL an already-applied instance ran is unchanged;
+ *   only what a *fresh* environment would run differs (a guard, a comment, an
+ *   idempotency check). Re-stating it changes nothing about a database that
+ *   already ran the old body.
+ * - `outcome-changing` — an already-applied instance's schema is actually
+ *   wrong now (a column type, a missing index or constraint or default).
+ *   Nothing about restating the migration's body can fix that; only a
+ *   follow-on migration converges it.
+ *
+ * These are not competing options for the same defect — #670's fix
+ * (`_has_core_users_table()`, a runtime guard) is replay-safe and could never
+ * have been delivered as a follow-on, because a fresh environment dies
+ * *inside* the old body before a follow-on is ever reached. A wrong column
+ * type is the opposite: replaying the unchanged DDL does nothing to a
+ * database that already has the wrong type.
+ */
+export type BodyChangeClassification = 'replay-safe' | 'outcome-changing'
+
+/**
+ * A template author's declaration of why an edit to an already-shipped
+ * migration's body is safe to leave for the instance to judge — see
+ * {@link BodyChangeClassification}.
+ */
+export interface BodyChangeDeclaration {
+  classification: BodyChangeClassification
+  /** Required, on the same principle as `DeclinedMigration.reason`: an
+   * unreviewable declaration is drift wearing a temporary label. */
+  reason: string
+}
+
 /** An already-carried migration the template has since edited. @see MigrationCarryPlan.divergedBodies */
 export interface DivergedMigrationBody {
   /** The template's filename for it. */
@@ -132,6 +171,27 @@ export interface DivergedMigrationBody {
   instanceFile: string
   /** How the instance's copy was recognised as this migration. */
   how: CarryMatchKind
+  /**
+   * The template author's classification of this body change, when the
+   * current template file carries a `# biffo:body-change:` marker
+   * (@see parseBodyChangeDeclaration). Absent when nobody has classified it
+   * yet — which is every migration edited before #751, and the default for
+   * any new one until this becomes a habit.
+   *
+   * **This is reporting, not enforcement.** #751's own text is explicit that
+   * the classification wants sanity-checking against two or three more real
+   * body changes before the carry starts *acting* on it — #670 is still the
+   * only worked example. So a `declared` entry here changes nothing about
+   * what the carry does: the file is left alone and `body drift` is reported
+   * exactly as it was before this field existed. What it changes is what the
+   * operator reads: instead of judging a body change cold, they read the
+   * template author's own classification and reason, and — once
+   * `core-upgrade.ts`'s `printMigrationBodyDrift` is taught to render it, a
+   * change deliberately left to that command's owner — which of the three
+   * remedies actually applies (hand-port only when `replay-safe`; a follow-on
+   * migration is the *only* fix when `outcome-changing`).
+   */
+  declared?: BodyChangeDeclaration
 }
 
 export const MIGRATIONS_VERSIONS_DIR = 'services/api/migrations/versions'
@@ -337,6 +397,59 @@ export function parseCarriedFrom(content: string): string | null {
 export function stampCarriedFrom(content: string, templateFile: string): string {
   if (CARRIED_FROM_RE.test(content)) return content
   return content.replace(REVISION_RE, (m) => `${CARRIED_FROM_MARKER} ${templateFile}\n${m}`)
+}
+
+/**
+ * Declaration marker for {@link BodyChangeClassification} (#751), written by a
+ * template author into their *own* edit of an already-shipped migration:
+ *
+ *     # biffo:body-change: replay-safe — guards a table Core doesn't always own
+ *
+ * A marker in the migration file itself, not a new entry in
+ * `biffo.core.json` or the breaking-changes guide: the declaration is a fact
+ * about one specific edit to one specific migration, so it belongs colocated
+ * with the DDL it describes — the same reasoning the provenance marker above
+ * already applies. It also means this stays a fact the *template* carries
+ * (read from the template's own copy at plan time), so it survives whatever
+ * an instance later renames or renumbers its carried copy to, exactly like
+ * provenance does.
+ *
+ * Whole-line `#` comments are stripped by {@link migrationBodyHash}, so this
+ * marker is never itself "the change" that makes two bodies differ.
+ */
+export const BODY_CHANGE_MARKER = '# biffo:body-change:'
+// Unlike CARRIED_FROM_RE (always inserted flush-left, above the module-level
+// `revision` assignment, and only ever by this tool), this marker is written
+// by hand and belongs beside the DDL it describes — often inside an indented
+// `def upgrade():` body, where a whole-line comment is valid Python
+// regardless of its column. So leading whitespace is accepted here.
+const BODY_CHANGE_LINE_RE = /^[ \t]*# biffo:body-change:[ \t]*(.*)$/m
+const BODY_CHANGE_VALUE_RE = /^(replay-safe|outcome-changing)\b[ \t]*[-—:]*[ \t]*(.+?)[ \t]*$/
+
+/**
+ * Parse a `# biffo:body-change:` declaration out of a migration's content, if
+ * present. Returns `null` when the marker is absent — the common case, and
+ * not an error: most migrations, and every one edited before #751, carry no
+ * declaration at all.
+ *
+ * Throws when the marker line exists but doesn't parse — an unclassifiable or
+ * reasonless declaration is worse than none, since it looks authoritative
+ * without being reviewable (the same principle `DeclinedMigration.reason`
+ * enforces for `biffo.core.json`).
+ */
+export function parseBodyChangeDeclaration(content: string): BodyChangeDeclaration | null {
+  const line = BODY_CHANGE_LINE_RE.exec(content)
+  if (!line) return null
+  const rest = (line[1] ?? '').trim()
+  const value = BODY_CHANGE_VALUE_RE.exec(rest)
+  if (!value) {
+    throw new Error(
+      `Malformed ${BODY_CHANGE_MARKER} marker: expected ` +
+        `"${BODY_CHANGE_MARKER} replay-safe — <reason>" or ` +
+        `"${BODY_CHANGE_MARKER} outcome-changing — <reason>", got "${rest}".`,
+    )
+  }
+  return { classification: value[1] as BodyChangeClassification, reason: value[2] as string }
 }
 
 /** Opens a triple-quoted string at the start of a line (an `r`/`u` prefix is
@@ -561,10 +674,16 @@ export function planMigrationCarry(options: PlanMigrationCarryOptions): Migratio
       // only a real change to what the migration *does*. A `how: 'body'` match
       // cannot land here, the hashes being equal by construction.
       if (migrationBodyHash(m.content) !== migrationBodyHash(already.instance.content)) {
+        // #751. A declaration is read from the TEMPLATE's current copy, not
+        // the instance's — it's a fact about the edit the template author
+        // just made, and doing it this way means it survives any rename or
+        // renumber the instance applied to its own copy, same as provenance.
+        const declared = parseBodyChangeDeclaration(m.content)
         divergedBodies.push({
           file: m.file,
           instanceFile: already.instance.file,
           how: already.how,
+          ...(declared && { declared }),
         })
       }
       continue

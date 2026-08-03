@@ -40,8 +40,13 @@ cd "$root" || exit 0
 # cannot run, that is a reason to stop, not to wave the push through.
 sh scripts/biffo.sh rewrite-scope-check || exit 1
 
-if [ ! -f scripts/verify.sh ]; then
-  echo "pre-push: no scripts/verify.sh — NO checks ran (see local-gates.md)" >&2
-  exit 0
-fi
-exec sh scripts/verify.sh
+# Through the version-pinned CLI since #1109, so a repo cannot run a gate two
+# versions old -- eight of them did, and tabsii-crm checked ONE thing in eight
+# on a 700-line change and printed `verify passed` (#855). There is one copy of
+# verify.sh now, and which version a repo runs is its .biffo-shared-version.
+#
+# The branch this replaces printed "NO checks ran" and **exited 0**: a repo
+# without the file passed its pre-push having checked nothing, which is the
+# same defect one level up from the one #855 recorded. A gate that cannot run
+# is not a gate that passed.
+exec sh scripts/biffo.sh verify

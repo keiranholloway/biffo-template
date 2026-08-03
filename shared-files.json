@@ -6,7 +6,6 @@
     ".githooks/commit-msg",
     ".githooks/pre-commit",
     ".githooks/pre-push",
-    "scripts/verify.sh",
     "scripts/install-hooks.sh",
     "scripts/destructive-plan.mjs",
     "scripts/check-destructive-plan.mjs",

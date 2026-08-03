@@ -77,6 +77,13 @@ export const PACKAGED_ROOT_ASSETS = [
     why: 'Retired from copy-based distribution (#1109 phase 0e).',
   },
   {
+    path: 'scripts/verify.sh',
+    kind: 'file',
+    sentinel: 'scripts/verify.sh',
+    resolvedBy: 'src/lib/packaged-scripts.ts — findPackagedScript()',
+    why: 'The local gate, 978 lines that existed 15 times over (#1109). Which version a repo runs is now its .biffo-shared-version rather than whenever it last received a copy -- the #855 class, closed structurally.',
+  },
+  {
     path: 'scripts/branch-health.sh',
     kind: 'file',
     sentinel: 'scripts/branch-health.sh',

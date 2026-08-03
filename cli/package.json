@@ -26,7 +26,10 @@
     "_skeletons",
     "scripts/wait-for-checks.sh",
     "scripts/branch-health.sh",
-    "scripts/claim.sh"
+    "scripts/claim.sh",
+    "scripts/hook-audit.sh",
+    "scripts/pg-test-db.sh",
+    "scripts/rewrite-scope-check.sh"
   ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",

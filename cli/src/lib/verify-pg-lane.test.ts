@@ -148,8 +148,11 @@ describe('verify.sh reports a lane it cannot run as a GAP, not as inapplicable',
 
 describe('verify.sh provisions the database rather than asking you to remember', () => {
   // A gate that only runs when you exported the right variable is a gate that
-  // runs on the days you did not need it. If the repo ships `pg-test-db.sh`,
-  // the gate calls it.
+  // runs on the days you did not need it, so the gate provisions the database
+  // itself. Since #1109 it does that through `scripts/biffo.sh pg-test-db`
+  // rather than a per-repo copy of the helper, so these fixtures stub the
+  // BRIDGE — the contract being pinned is unchanged: the last stdout line is a
+  // DSN, and anything else means the lane did not run.
   const lane = {
     'package.json': PASSING,
     'services/api/tests/test_rls_pg.py': PG_TEST,
@@ -160,7 +163,7 @@ describe('verify.sh provisions the database rather than asking you to remember',
       ...lane,
       // Stands in for the real helper: the contract is "last stdout line is a
       // DSN", and that contract is what this pins.
-      'scripts/pg-test-db.sh': 'echo "postgresql+asyncpg://u:p@localhost:1/db"\n',
+      'scripts/biffo.sh': 'echo "postgresql+asyncpg://u:p@localhost:1/db"\n',
     })
 
     expect(run.stdout).not.toContain('NOT RUN')
@@ -171,7 +174,7 @@ describe('verify.sh provisions the database rather than asking you to remember',
     // lane did not run rather than pretending a broken helper is a DSN.
     const run = runIn({
       ...lane,
-      'scripts/pg-test-db.sh': 'echo "pg-test-db: no Postgres and no docker" >&2\nexit 1\n',
+      'scripts/biffo.sh': 'echo "pg-test-db: no Postgres and no docker" >&2\nexit 1\n',
     })
 
     expect(run.stdout).toContain('NOT RUN')
@@ -180,7 +183,7 @@ describe('verify.sh provisions the database rather than asking you to remember',
   it('rejects helper output that is not a DSN', () => {
     // A helper that logs to stdout instead of stderr would otherwise hand the
     // gate a sentence and have it reported as a configured database.
-    const run = runIn({ ...lane, 'scripts/pg-test-db.sh': 'echo "ready"\n' })
+    const run = runIn({ ...lane, 'scripts/biffo.sh': 'echo "ready"\n' })
 
     expect(run.stdout).toContain('NOT RUN')
   })

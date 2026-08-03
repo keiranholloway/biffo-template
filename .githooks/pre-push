@@ -31,11 +31,14 @@ cd "$root" || exit 0
 # Why it exists: a force-push can quietly add a file to a branch's change set
 # and record a stale copy of somebody else's merged work as your own change.
 # That happened (tabsii-platform#446) and every local gate was green on it.
-if [ -f scripts/rewrite-scope-check.sh ]; then
-  sh scripts/rewrite-scope-check.sh || exit 1
-else
-  echo "pre-push: no scripts/rewrite-scope-check.sh — rewrite scope NOT checked" >&2
-fi
+# Runs from the version-pinned CLI rather than a per-repo copy (#1109).
+#
+# This used to warn and CONTINUE when the script was absent, which is a
+# fail-open in a gate whose whole job is refusing a push: the one repo missing
+# the file was the one where nothing checked. There is no absent case now --
+# the bridge resolves the script from the package -- and if the bridge itself
+# cannot run, that is a reason to stop, not to wave the push through.
+sh scripts/biffo.sh rewrite-scope-check || exit 1
 
 if [ ! -f scripts/verify.sh ]; then
   echo "pre-push: no scripts/verify.sh — NO checks ran (see local-gates.md)" >&2

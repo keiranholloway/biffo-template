@@ -10,6 +10,9 @@ import { siblingCommand } from './commands/sibling.js'
 import { checkCommand } from './commands/check.js'
 import { doctorCommand } from './commands/doctor.js'
 import { teardownCommand } from './commands/teardown.js'
+import { hookAuditCommand } from './commands/hook-audit.js'
+import { pgTestDbCommand } from './commands/pg-test-db.js'
+import { rewriteScopeCheckCommand } from './commands/rewrite-scope-check.js'
 import { branchHealthCommand } from './commands/branch-health.js'
 import { claimCommand } from './commands/claim.js'
 import { waitForChecksCommand } from './commands/wait-for-checks.js'
@@ -57,6 +60,9 @@ program.addCommand(teardownCommand)
 program.addCommand(waitForChecksCommand)
 program.addCommand(branchHealthCommand)
 program.addCommand(claimCommand)
+program.addCommand(hookAuditCommand)
+program.addCommand(pgTestDbCommand)
+program.addCommand(rewriteScopeCheckCommand)
 program.addCommand(pluginCommand)
 program.addCommand(dataCommand)
 program.addCommand(coreCommand)

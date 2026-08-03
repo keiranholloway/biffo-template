@@ -49,6 +49,27 @@ export const PACKAGED_ROOT_ASSETS = [
     why: 'biffo init step 6/6 and biffo sibling create copy _skeletons/sibling-template into the new repo; biffo plugin create copies _skeletons/plugin-template (#315).',
   },
   {
+    path: 'scripts/hook-audit.sh',
+    kind: 'file',
+    sentinel: 'scripts/hook-audit.sh',
+    resolvedBy: 'src/lib/packaged-scripts.ts — findPackagedScript()',
+    why: 'Retired from copy-based distribution (#1109 phase 0d).',
+  },
+  {
+    path: 'scripts/pg-test-db.sh',
+    kind: 'file',
+    sentinel: 'scripts/pg-test-db.sh',
+    resolvedBy: 'src/lib/packaged-scripts.ts — findPackagedScript()',
+    why: 'Retired from copy-based distribution (#1109 phase 0d).',
+  },
+  {
+    path: 'scripts/rewrite-scope-check.sh',
+    kind: 'file',
+    sentinel: 'scripts/rewrite-scope-check.sh',
+    resolvedBy: 'src/lib/packaged-scripts.ts — findPackagedScript()',
+    why: 'Retired from copy-based distribution (#1109 phase 0d).',
+  },
+  {
     path: 'scripts/branch-health.sh',
     kind: 'file',
     sentinel: 'scripts/branch-health.sh',

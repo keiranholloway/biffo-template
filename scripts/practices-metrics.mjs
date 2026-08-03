@@ -1332,7 +1332,24 @@ export function integrationHealth(
 const STEP_KINDS = [
   // --- not locally catchable: needs cloud credentials, a live environment, or
   // state that does not exist until merge/release time.
-  { kind: 'deploy', catchable: false, match: /deploy|terraform (apply|init)|apply the .* schema/ },
+  {
+    kind: 'deploy',
+    catchable: false,
+    match: /deploy|terraform (apply|init)|apply the .* schema|sync .+ to s3/,
+  },
+  // Schema applied to a LIVE database, not a local one: both steps this matches
+  // are `aws lambda invoke` against the deployed function (`biffo:db-init`, and
+  // the `db/imports/*/` loop). The `rls-test` entry below is the contrast worth
+  // holding onto — that one needs a Postgres, which docker gives you in 3s;
+  // this one needs *the* Postgres, which nothing local can stand in for.
+  {
+    kind: 'schema-apply',
+    catchable: false,
+    match: /ddl import|initiali[sz]e database|init database schema/,
+  },
+  // Before the `coverage` check below, which it contains. Measuring coverage is
+  // offline and fast; shipping the report needs a token and the network.
+  { kind: 'coverage-upload', catchable: false, match: /coverage upload|upload .*coverage|codecov/ },
   { kind: 'publish', catchable: false, match: /publish|sync and audit core-v|tag core version/ },
   // Not offline, and not deterministic over time: a newly-published advisory
   // reddens CI with no code change, so a developer running it an hour earlier
@@ -1351,6 +1368,11 @@ const STEP_KINDS = [
   // --- locally catchable. Specific guards before the generic kinds they contain.
   { kind: 'ownership', catchable: true, match: /ownership/ },
   { kind: 'corpus-guard', catchable: true, match: /corpus is append-only|practices-monotonic/ },
+  // `sh scripts/biffo.sh check adr-numbering` — offline, seconds, no state.
+  { kind: 'adr-guard', catchable: true, match: /adr[- ]numbering|adr .*guard/ },
+  // `uv run python scripts/error_branch_coverage.py --check`. Before `test`,
+  // which "Test coverage" would otherwise take.
+  { kind: 'coverage', catchable: true, match: /coverage/ },
   { kind: 'destructive-plan', catchable: true, match: /destructive-plan/ },
   { kind: 'plugin-terraform', catchable: true, match: /plugin[- ]terraform/ },
   { kind: 'plugin-collisions', catchable: true, match: /plugin[- ]collisions?/ },
@@ -1405,14 +1427,18 @@ export function classifyFailingStep(stepName) {
 export function summariseGates(steps) {
   /** @type {Record<string, number>} */
   const byKind = {}
+  /** @type {Record<string, number>} */
+  const unseen = {}
   let catchable = 0
   let notCatchable = 0
   let unclassified = 0
   for (const step of steps) {
     const { kind, catchable: isCatchable } = classifyFailingStep(step.name)
     byKind[kind] = (byKind[kind] ?? 0) + 1
-    if (isCatchable === null) unclassified += 1
-    else if (isCatchable) catchable += 1
+    if (isCatchable === null) {
+      unclassified += 1
+      unseen[step.name] = (unseen[step.name] ?? 0) + 1
+    } else if (isCatchable) catchable += 1
     else notCatchable += 1
   }
   return {
@@ -1420,10 +1446,91 @@ export function summariseGates(steps) {
     locallyCatchable: catchable,
     notLocallyCatchable: notCatchable,
     unclassified,
+    unclassifiedNames: rankNames(unseen),
     share: rate(catchable, catchable + notCatchable),
     byKind,
   }
 }
+
+/**
+ * `{name: count}` as a most-frequent-first list, ties broken alphabetically so
+ * the output is stable across runs and a diff of two snapshots is readable.
+ *
+ * @param {Record<string, number>} counts
+ * @returns {Array<{name: string, count: number}>}
+ */
+function rankNames(counts) {
+  return Object.entries(counts)
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+}
+
+/**
+ * Is the locally-catchable metric still measuring what it claims to? (#1167)
+ *
+ * `share` is computed over **classified** steps, so a step name no pattern
+ * matches leaves the denominator rather than reddening anything. That is the
+ * correct behaviour for the ratio — guessing would let the headline improve
+ * every time CI grew a step — but it means the metric degrades silently, and
+ * `unclassified` was reported next to it for weeks with nothing asserting on it.
+ *
+ * On 2026-08-03 that cost a real misreading: 12 of 17 estate failing steps were
+ * unclassified, the dashboard read **80%** locally-catchable, and over all 17
+ * steps the honest figure was **47%** — with H4's review two days away and this
+ * as its primary outcome metric. All 12 were six ordinary step names.
+ *
+ * This is the estate's own recurring shape, one level in: a check that cannot
+ * see an input silently shrinks its scope and reports the remainder as the
+ * whole (`AGENTS.md` §2, on `protection-audit.sh` skipping repos with no `dev`).
+ * The fix there and here is the same — make the blind spot fail rather than
+ * abstain.
+ *
+ * @param {{failingSteps?: number, unclassified?: number, unclassifiedNames?: Array<{name: string, count: number}>, error?: string}} gates
+ * @returns {{ok: boolean, summary: string}}
+ */
+export function classificationBlindness(gates) {
+  // Not measuring and measuring zero blindness are different claims — the same
+  // distinction gatesForWindow draws, and the one this whole file keeps finding.
+  if (gates?.error) {
+    return { ok: false, summary: `gates ${gates.error} — classification cannot be audited` }
+  }
+  const failing = gates.failingSteps ?? 0
+  const unclassified = gates.unclassified ?? 0
+  // No failures is no denominator. There is nothing to be blind to, and firing
+  // here would make a good day look like a broken metric.
+  if (failing === 0) return { ok: true, summary: 'no failing steps — nothing to classify' }
+  const share = (unclassified / failing) * 100
+  // A snapshot collected before names were recorded has the count but not the
+  // names. Say that, rather than printing an empty list that reads as though
+  // the names were looked for and there were none.
+  const names = (gates.unclassifiedNames ?? []).length
+    ? gates.unclassifiedNames.map((n) => `${n.name} (${n.count})`).join(', ')
+    : 'names not recorded in this snapshot — re-collect to get them'
+  if (share <= BLINDNESS_THRESHOLD) {
+    return {
+      ok: true,
+      summary: `${unclassified} of ${failing} failing steps unclassified (${share.toFixed(1)}%)`,
+    }
+  }
+  return {
+    ok: false,
+    summary:
+      `${unclassified} of ${failing} failing steps unclassified (${share.toFixed(1)}%) — ` +
+      `add patterns to STEP_KINDS for: ${names}`,
+  }
+}
+
+/**
+ * The share of unclassified steps this tolerates before failing.
+ *
+ * Not zero, deliberately. A new step name is normal estate churn, and a guard
+ * that is red every morning trains people to stop reading it — the argument
+ * `scripts/protection-audit.sh` makes at length, and the reason
+ * `mustBeUniform` ratchets from a baseline rather than demanding day-one purity.
+ * At 20% the 2026-08-03 snapshot (70.6%) fails loudly and a single unseen name
+ * in a normal day's failures does not.
+ */
+export const BLINDNESS_THRESHOLD = 20
 
 /**
  * {@link summariseGates} for one window, or an explicit `unmeasured` when the
@@ -1784,10 +1891,20 @@ export function summariseEstate(repos) {
 export function aggregateGates(repos) {
   const measured = Object.values(repos).filter((r) => r?.gates && !r.gates.error)
   if (measured.length === 0) {
-    return { repos: 0, failingSteps: 0, locallyCatchable: 0, unclassified: 0, share: null, byKind: {} }
+    return {
+      repos: 0,
+      failingSteps: 0,
+      locallyCatchable: 0,
+      unclassified: 0,
+      unclassifiedNames: [],
+      share: null,
+      byKind: {},
+    }
   }
   /** @type {Record<string, number>} */
   const byKind = {}
+  /** @type {Record<string, number>} */
+  const unseen = {}
   let failingSteps = 0
   let locallyCatchable = 0
   let notLocallyCatchable = 0
@@ -1800,6 +1917,11 @@ export function aggregateGates(repos) {
     for (const [kind, n] of Object.entries(repo.gates.byKind)) {
       byKind[kind] = (byKind[kind] ?? 0) + /** @type {number} */ (n)
     }
+    // A step name that goes unmatched in three repos is one pattern to write,
+    // not three findings — merge by name so the audit says so.
+    for (const { name, count } of repo.gates.unclassifiedNames ?? []) {
+      unseen[name] = (unseen[name] ?? 0) + count
+    }
   }
   return {
     repos: measured.length,
@@ -1807,6 +1929,7 @@ export function aggregateGates(repos) {
     locallyCatchable,
     notLocallyCatchable,
     unclassified,
+    unclassifiedNames: rankNames(unseen),
     share: rate(locallyCatchable, locallyCatchable + notLocallyCatchable),
     byKind,
   }

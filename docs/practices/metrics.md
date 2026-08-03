@@ -290,7 +290,27 @@ something `pnpm run lint` would have said in four seconds.
 - `locallyCatchable` / `notLocallyCatchable` — the two sides of the ratio
 - `share` — `locallyCatchable` over the **classified** steps
 - `unclassified` — steps no pattern matched, in neither side of the ratio
+- `unclassifiedNames` — **which** step names those were, most-frequent first
 - `byKind` — the per-kind tally, so the headline can be argued with
+
+**`unclassified` is audited, not merely reported (#1167).** Dropping an unmatched
+step from the ratio is right — a default of `false` would improve the headline
+every time CI grew a step the list had never seen — but it means the metric
+degrades *silently*. On 2026-08-03, 12 of 17 estate failing steps were
+unclassified, all in `tabsii-platform` and all ordinary names (`Apply DDL
+imports`, `Error-branch coverage`, `Initialise database schema`, `Sync portal to
+S3`, `ADR numbering guard`); the dashboard read **80%** where the honest figure
+over all 17 steps was **47%**, two days before H4's review. So
+`scripts/classification-audit.mjs` now fails the daily run when unclassified
+exceeds `BLINDNESS_THRESHOLD` (20%) of failing steps, and `unclassifiedNames`
+exists so it can say *which patterns to write* rather than sending you back to
+the jobs API. The threshold is not zero on purpose: a new step name is normal
+churn, and a guard that is red every morning stops being read.
+
+**Classify from what a step RUNS, not what it is called.** `Apply DDL imports`
+sounds local and is `aws lambda invoke` against the deployed function;
+`Error-branch coverage` sounds heavyweight and is a Python script that finishes
+in seconds. Both were read from the workflow before a pattern was written.
 
 **This is not `gate-coverage.sh`'s exclusion list, and must never be rewired to
 it.** Those answer different questions: `EXCLUDED_KINDS` is what `verify.sh`

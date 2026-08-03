@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 // @ts-expect-error -- plain .mjs so it runs on bare node in CI with no install,
 // like every other script in scripts/. Tested from here so the logic has one home.
 import {
@@ -8,6 +8,7 @@ import {
   deployOnlyPaths,
   formatFailure,
   hasVerifiedTrailer,
+  resolveBody,
   VERIFIED_TRAILER,
 } from '../../../scripts/check-closing-keywords.mjs'
 
@@ -132,6 +133,70 @@ describe('closing-keyword guard', () => {
       // And says how to proceed, both ways.
       expect(message).toContain('Refs #N')
       expect(message).toContain(VERIFIED_TRAILER)
+    })
+  })
+
+  // #1174: `github.event.pull_request.body` is frozen at the moment the
+  // `pull_request` event fired, so editing the PR body — or re-running the
+  // job — could never turn a failing check green. `resolveBody` is what
+  // decides between the direct value (local runs, and every test above) and
+  // a live fetch (CI), and it must fail CLOSED when the live fetch cannot be
+  // trusted, not silently pass on an unreadable body.
+  describe('resolveBody', () => {
+    it('uses PR_BODY directly when set, and never calls the live fetch', async () => {
+      const fetchLiveBody = vi.fn()
+      const body = await resolveBody({
+        env: { PR_BODY: 'Refs #1', GH_TOKEN: 'x', PR_NUMBER: '5', GH_REPO: 'a/b' },
+        fetchLiveBody,
+      })
+      expect(body).toBe('Refs #1')
+      expect(fetchLiveBody).not.toHaveBeenCalled()
+    })
+
+    it('treats a deliberately empty PR_BODY as set, not as "fetch instead"', async () => {
+      const fetchLiveBody = vi.fn()
+      const body = await resolveBody({ env: { PR_BODY: '' }, fetchLiveBody })
+      expect(body).toBe('')
+      expect(fetchLiveBody).not.toHaveBeenCalled()
+    })
+
+    it('fetches live when PR_BODY is absent and the CI trio is present — the CI path', async () => {
+      const fetchLiveBody = vi.fn().mockResolvedValue('Closes #9')
+      const body = await resolveBody({
+        env: { GH_TOKEN: 'x', PR_NUMBER: '9', GH_REPO: 'a/b' },
+        fetchLiveBody,
+      })
+      expect(body).toBe('Closes #9')
+      expect(fetchLiveBody).toHaveBeenCalledWith({ GH_TOKEN: 'x', PR_NUMBER: '9', GH_REPO: 'a/b' })
+    })
+
+    it('returns an empty body when neither PR_BODY nor the CI trio is set (not a PR at all)', async () => {
+      const fetchLiveBody = vi.fn()
+      const body = await resolveBody({ env: {}, fetchLiveBody })
+      expect(body).toBe('')
+      expect(fetchLiveBody).not.toHaveBeenCalled()
+    })
+
+    it('FAILS CLOSED when the live fetch throws, rather than treating it as no closing keyword', async () => {
+      const fetchLiveBody = vi
+        .fn()
+        .mockRejectedValue(new Error('HTTP 403: Resource not accessible'))
+      await expect(
+        resolveBody({
+          env: { GH_TOKEN: 'x', PR_NUMBER: '9', GH_REPO: 'a/b' },
+          fetchLiveBody,
+        }),
+      ).rejects.toThrow(/could not fetch.*#9.*a\/b.*403/s)
+    })
+
+    it('FAILS CLOSED on a half-configured CI trio rather than silently falling back to empty', async () => {
+      // GH_REPO missing: a workflow bug, not "not a pull request". Falling
+      // through to '' here would pass every PR while the fetch is broken.
+      const fetchLiveBody = vi.fn()
+      await expect(
+        resolveBody({ env: { GH_TOKEN: 'x', PR_NUMBER: '9' }, fetchLiveBody }),
+      ).rejects.toThrow(/GH_TOKEN, PR_NUMBER and GH_REPO must all be set together/)
+      expect(fetchLiveBody).not.toHaveBeenCalled()
     })
   })
 })

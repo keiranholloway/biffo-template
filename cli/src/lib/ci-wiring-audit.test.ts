@@ -25,7 +25,7 @@ import { makeTmpDir } from '../test-utils/tmp.js'
 const script = join(import.meta.dirname, '..', '..', '..', 'scripts', 'ci-wiring-audit.sh')
 const template = join(import.meta.dirname, '..', '..', '..')
 
-function estate(repos: Record<string, { hasScript: boolean; ci: string }>) {
+function estate(repos: Record<string, { hasScript: boolean; ci: string; hasTerraform?: boolean }>) {
   const dir = makeTmpDir('ciwiring')
   for (const [name, spec] of Object.entries(repos)) {
     const d = join(dir, name)
@@ -37,6 +37,10 @@ function estate(repos: Record<string, { hasScript: boolean; ci: string }>) {
       for (const s of ['js-dependency-audit.sh', 'py-dependency-audit.sh']) {
         writeFileSync(join(d, 'scripts', s), '#!/usr/bin/env sh\nexit 0\n')
       }
+    }
+    if (spec.hasTerraform) {
+      mkdirSync(join(d, 'terraform'), { recursive: true })
+      writeFileSync(join(d, 'terraform', 'main.tf'), 'variable "x" {\n  type = string\n}\n')
     }
   }
   return dir
@@ -77,6 +81,20 @@ const WIRED_JS = `jobs:
       # advisory, INCONCLUSIVE on an unreachable registry (#591, #743).
       - name: Dependency audit
         run: sh ../../scripts/js-dependency-audit.sh
+`
+
+/** Holds terraform/ and its CI never mentions it — biffo-plugin-idea-scout, exactly (#1244). */
+const TF_UNCHECKED = `jobs:
+  lint:
+    steps:
+      - run: uv run ruff check .
+`
+
+const TF_CHECKED = `jobs:
+  terraform:
+    steps:
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive terraform/
 `
 
 describe('ci-wiring-audit', () => {
@@ -140,6 +158,115 @@ describe('ci-wiring-audit', () => {
     }
   })
 
+  /**
+   * The second question the audit asks (#1244), and the mirror image of the
+   * first: `supersedes` catches a repo running the WRONG command, this catches
+   * one running NO command at all over a class of file it holds.
+   *
+   * `_skeletons/plugin-template/` shipped a whole `terraform/` module and a
+   * `ci.yml` with no terraform step, so every plugin repo was scaffolded with
+   * Terraform nothing checked. `biffo-plugin-idea-scout` is the live instance:
+   * three .tf files on dev, zero terraform references across three workflows.
+   *
+   * The skeleton fix alone cannot close it — it only ever helps repos created
+   * afterwards — and `ci.yml` cannot be a one-way overwrite because the path
+   * depends on each step's working-directory. Nor can `scripts/verify.sh`: its
+   * terraform check is guarded by `ci_has "terraform fmt"` so a template-shipped
+   * gate never asserts over more than the repo's own CI does (the #325 trap), so
+   * a repo whose CI checks nothing correctly gets nothing locally either. An
+   * assertion is the only mechanism left.
+   */
+  describe('requiresCiStep — holds the files, runs no gate', () => {
+    it('fails a repo holding terraform/*.tf with no terraform fmt step', () => {
+      const { code, stdout } = audit(
+        estate({ sat: { hasScript: true, hasTerraform: true, ci: TF_UNCHECKED } }),
+      )
+      expect(stdout).toContain('UNWIRED')
+      // Name the glob, not just "something is wrong" — the reader has to know
+      // which files are unchecked to fix it.
+      expect(stdout).toContain('terraform/*.tf')
+      expect(code).toBe(1)
+    })
+
+    it('passes a repo whose CI runs terraform fmt', () => {
+      const { code, stdout } = audit(
+        estate({ sat: { hasScript: true, hasTerraform: true, ci: TF_CHECKED } }),
+      )
+      expect(stdout).toContain('wired')
+      expect(stdout).not.toContain('UNWIRED')
+      expect(code).toBe(0)
+    })
+
+    it('accepts the step inside a `run: |` block, not only on the run: line', () => {
+      // Deliberately NOT restricted to `run:` lines the way raw_hits is: the two
+      // have opposite failure directions, and here a missed match invents a
+      // violation in a repo that is doing the right thing.
+      const ci = `jobs:
+  terraform:
+    steps:
+      - name: Terraform
+        run: |
+          terraform fmt -check -recursive terraform/
+          terraform validate
+`
+      const { code, stdout } = audit(estate({ sat: { hasScript: true, hasTerraform: true, ci } }))
+      expect(stdout).not.toContain('UNWIRED')
+      expect(code).toBe(0)
+    })
+
+    it('does not let a comment or a step name stand in for the step', () => {
+      // The fail-open that makes the rule worthless. Both skeletons explain
+      // their terraform job in a comment naming the command, and every real job
+      // has a `- name:` line naming it too — so a plain substring search over the
+      // file would pass a repo that mentions the gate and never runs it.
+      const ci = `jobs:
+  lint:
+    steps:
+      # We should probably add terraform fmt here one day.
+      - name: Terraform fmt check
+        run: uv run ruff check .
+`
+      const { code, stdout } = audit(estate({ sat: { hasScript: true, hasTerraform: true, ci } }))
+      expect(stdout).toContain('UNWIRED')
+      expect(code).toBe(1)
+    })
+
+    it('is silent about a repo with no terraform/ at all', () => {
+      // biffo-plugin-ideation. Nothing to check is not a finding, and reporting
+      // it would drown the one repo that is actually broken.
+      const { code, stdout } = audit(estate({ sat: { hasScript: true, ci: TF_UNCHECKED } }))
+      expect(stdout).not.toContain('UNWIRED')
+      expect(stdout).not.toContain('terraform')
+      expect(code).toBe(0)
+    })
+
+    it('exits 2 — not 0 — when the manifest declares no requiresCiStep map', () => {
+      // Same fail-open-in-the-fail-open-detector as the `supersedes` case above,
+      // and it needs its own test: an audit with two halves and one exit code
+      // stays green when either half is emptied, because the other half is still
+      // populated. Deleting this map must be as loud as deleting that one.
+      const dir = estate({ sat: { hasScript: true, hasTerraform: true, ci: TF_UNCHECKED } })
+      const fake = makeTmpDir('ciwiring-manifest-tf')
+      execFileSync('git', ['-C', fake, 'init', '-q', '-b', 'dev'])
+      mkdirSync(join(fake, 'scripts'), { recursive: true })
+      writeFileSync(
+        join(fake, 'shared-files.json'),
+        JSON.stringify({ version: 1, files: [], supersedes: { 'scripts/x.sh': ['raw x'] } }),
+      )
+      try {
+        execFileSync('bash', [script, '--estate', dir], { encoding: 'utf8', cwd: fake })
+        throw new Error('expected a non-zero exit')
+      } catch (e) {
+        const err = e as { status: number; stderr: string }
+        expect(err.status).toBe(2)
+        expect(err.stderr).toContain('requiresCiStep')
+        expect(err.stderr).toContain('checked nothing')
+      } finally {
+        rmSync(fake, { recursive: true, force: true })
+      }
+    })
+  })
+
   it('is clean against the real skeletons, which is the shipped form', () => {
     // A new satellite must be born wired. If this fails, every repo scaffolded
     // from now on inherits the defect #884 exists to close.
@@ -167,6 +294,10 @@ describe('ci-wiring-audit', () => {
 
     const { code, stdout } = audit(dir)
     expect(stdout).toMatch(/sibling-template\s+.*wired/)
+    // Named explicitly, because plugin-template is the skeleton #1244 was about:
+    // it ships terraform/ and its ci.yml must ship the step that checks it. A
+    // bare "no UNWIRED anywhere" would also pass if it stopped shipping either.
+    expect(stdout).toMatch(/plugin-template\s+.*wired/)
     expect(stdout).not.toContain('UNWIRED')
     expect(code).toBe(0)
     rmSync(dir, { recursive: true, force: true })

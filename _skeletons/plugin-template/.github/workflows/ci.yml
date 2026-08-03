@@ -2,9 +2,15 @@ name: CI
 
 # Scaled down from biffo-template's own root .github/workflows/ci.yml for a
 # single Python package: a plugin repo (per ADR-0003) extends the SDK and
-# has no JS/TS and no Terraform of its own — Terraform, if a plugin ships
-# any, is provisioned by the *consuming* project's infra, not this repo's
-# CI (see README's "What this repo does not build" section).
+# has no JS/TS of its own.
+#
+# It DOES have Terraform. This comment used to claim the opposite — "no
+# Terraform of its own; Terraform, if a plugin ships any, is provisioned by the
+# consuming project's infra, not this repo's CI" — while the skeleton beside it
+# shipped a whole `terraform/` module, and that untrue sentence is exactly why
+# nothing checked it (#1244). What the consuming project provisions is the
+# module's *instantiation*; the module's own source lives here, is edited here,
+# and is only ever checked here. See the `terraform` job below.
 
 on:
   push:
@@ -107,6 +113,48 @@ jobs:
         continue-on-error: true
         run: |
           uv run python -m jsonschema -i biffo.plugin.json registry-schema.json
+
+  terraform:
+    name: Terraform (fmt)
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    # This repo's `terraform/` module is checked by nothing else (#1244). The
+    # skeleton shipped the module and no terraform step at all, so every plugin
+    # repo was scaffolded with Terraform that nothing looked at — confirmed live
+    # in biffo-plugin-idea-scout: three .tf files, zero terraform references
+    # across three workflows.
+    #
+    # `scripts/verify.sh` cannot substitute for this job, and deliberately does
+    # not try: its terraform check is guarded by `ci_has "terraform fmt"` so a
+    # template-shipped gate never asserts over more than the repo's own CI does
+    # (the #325 trap). A repo whose CI checks nothing therefore, correctly, gets
+    # nothing locally either. This job is what switches the local gate on.
+    #
+    # ## Why there is no `terraform validate` here
+    #
+    # Not an oversight, and do not "fix" it by adding one. `terraform/main.tf`
+    # sets `source = "../../cloud/aws/compute"`, a path relative to the module's
+    # INSTALL location (`modules/plugins/<name>/` in the consuming monorepo),
+    # not to this repo. `terraform init` in `terraform/` therefore fails with
+    #
+    #   Error: Unreadable module directory
+    #   Unable to evaluate directory symlink: lstat ../../cloud: no such file
+    #
+    # before `validate` is ever reached — verified against this skeleton. The
+    # module is validated where its paths resolve: by the consuming project's
+    # own `infra-validate` job, after `biffo plugin install` has copied it into
+    # place. See `terraform/README.md`, which has said so all along.
+    #
+    # fmt alone is not cosmetic. `terraform fmt -check` parses the HCL, so it
+    # exits 2 on an unparseable file and 3 on a merely unformatted one — the
+    # "a malformed .tf merges green" hole is closed by this step by itself.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: '~> 1.9'
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive terraform/
 
   security-secrets:
     name: Secret Scan

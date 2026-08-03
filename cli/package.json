@@ -23,7 +23,8 @@
   "files": [
     "dist",
     "schemas",
-    "_skeletons"
+    "_skeletons",
+    "scripts/wait-for-checks.sh"
   ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",

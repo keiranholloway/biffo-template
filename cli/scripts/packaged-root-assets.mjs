@@ -48,6 +48,22 @@ export const PACKAGED_ROOT_ASSETS = [
       'src/commands/sibling-create.ts — defaultSiblingTemplateRoot(); src/commands/plugin-create.ts',
     why: 'biffo init step 6/6 and biffo sibling create copy _skeletons/sibling-template into the new repo; biffo plugin create copies _skeletons/plugin-template (#315).',
   },
+  {
+    path: 'scripts/wait-for-checks.sh',
+    kind: 'file',
+    sentinel: 'scripts/wait-for-checks.sh',
+    resolvedBy: 'src/lib/packaged-scripts.ts — findPackagedScript()',
+    why:
+      'The first guard moved off copy-based distribution (#1109). Satellites received this as ' +
+      'one of 16 files copied into 15 repos -- roughly 240 copies kept byte-identical by hand, ' +
+      'with about ten of the estate guards written to police them. Shipping the canonical copy ' +
+      'INSIDE the versioned package means a satellite runs it via `scripts/biffo.sh ' +
+      'wait-for-checks`, pinned to its own .biffo-shared-version, and there is one copy rather ' +
+      'than fifteen. Packaged as a single FILE rather than all of scripts/: that directory also ' +
+      'holds template-only tooling (practices-*, bootstrap, setup-oidc) an instance has no use ' +
+      'for, and UNPACKAGED_ROOT_ASSETS records that shipping a root asset can be actively ' +
+      'harmful when something resolves it by walking up.',
+  },
 ]
 
 /**
@@ -83,6 +99,15 @@ export const RESOLVER_SITES = [
     // the checkout, so there is no repo-root asset to ship.
     asset: null,
     packaged: false,
+  },
+  {
+    file: 'src/commands/wait-for-checks.ts',
+    // Resolves the packaged shell script through findPackagedScript(). Declared
+    // here so the guard fails if the asset is ever un-packaged: the upward walk
+    // still reaches the repo root in a checkout, so a missing `files` entry is
+    // invisible in CI and breaks only on a real npm install (#259, #315, #1109).
+    asset: 'scripts/wait-for-checks.sh',
+    packaged: true,
   },
   { file: 'src/commands/sibling-create.ts', asset: '_skeletons', packaged: true },
   { file: 'src/commands/plugin-create.ts', asset: '_skeletons', packaged: true },

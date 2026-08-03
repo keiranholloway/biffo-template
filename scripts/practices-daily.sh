@@ -416,6 +416,18 @@ audit_json() {
   # whatever it finds, which is how a detector stops being read. Lower --max when
   # the list shrinks; the script says so itself and fails if you do not.
   audit_json deadsurface "node scripts/dead-surface.mjs --estate '$ESTATE' --max 23" 'uncalled route'
+  printf ','
+  # Tenth audit (#956). Is the fail-open corpus a WORKLIST, or just a record?
+  #
+  # `unfiled` is a literal status meaning written down and never converted into
+  # an issue -- nobody decided. `summariseFailOpenBacklog()` has computed this
+  # into every snapshot for weeks and it was surfaced NOWHERE, which made the
+  # number measuring whether lessons become work itself a lesson that never did.
+  #
+  # Ratcheted on `unfiled` only. `unfixed` is explicitly NOT a target (#956 says
+  # so): a corpus that stops recording defects to keep a number down is worse
+  # than useless. `unfiled` is the one that should never grow.
+  audit_json failopen "node scripts/failopen-audit.mjs --data '$DATA_DIR' --max 12" 'fail-open backlog|unfiled|cannot'
   printf ']}\n'
 } > "$AUDITS"
 

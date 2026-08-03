@@ -662,8 +662,12 @@ _pg_modules=$(pg_test_modules)
 # rebuild), so calling it is better than warning about it. Failure is silent
 # BECAUSE the WARN below is the honest report of it -- no Docker, no server, no
 # schema all end in the same place: the lane did not run, and the gate says so.
-if [ -z "$PG_TEST_DSN" ] && [ -n "$_pg_modules" ] && [ -z "$LIST" ] && [ -f scripts/pg-test-db.sh ]; then
-  PG_TEST_DSN=$(sh scripts/pg-test-db.sh 2>/dev/null | tail -1) || PG_TEST_DSN=""
+if [ -z "$PG_TEST_DSN" ] && [ -n "$_pg_modules" ] && [ -z "$LIST" ]; then
+  # Through the bridge since #1109; the `-f scripts/pg-test-db.sh` guard went
+  # with the copy. Failure stays silent here BECAUSE the WARN below is the
+  # honest report of it -- no Docker, no server, no schema and no CLI all end
+  # in the same place: the lane did not run, and the gate says so.
+  PG_TEST_DSN=$(sh scripts/biffo.sh pg-test-db 2>/dev/null | tail -1) || PG_TEST_DSN=""
   case "$PG_TEST_DSN" in
     postgres*) ;;
     *) PG_TEST_DSN="" ;;

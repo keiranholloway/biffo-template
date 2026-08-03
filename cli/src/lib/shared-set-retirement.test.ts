@@ -21,7 +21,18 @@ const RETIRED = [
   { script: 'scripts/wait-for-checks.sh', subcommand: 'wait-for-checks' },
   { script: 'scripts/branch-health.sh', subcommand: 'branch-health' },
   { script: 'scripts/claim.sh', subcommand: 'claim' },
+  { script: 'scripts/hook-audit.sh', subcommand: 'hook-audit' },
+  { script: 'scripts/pg-test-db.sh', subcommand: 'pg-test-db' },
+  { script: 'scripts/rewrite-scope-check.sh', subcommand: 'rewrite-scope-check' },
 ]
+
+/**
+ * The subset AGENTS.md mandates by name. The others are invoked by tooling
+ * (`verify.sh`, `.githooks/pre-push`, `practices-daily.sh`) rather than by a
+ * human following the rules, so asserting they appear in AGENTS.md would fail
+ * on a file that was never meant to name them.
+ */
+const MANDATED = ['wait-for-checks', 'branch-health', 'claim']
 
 /**
  * Phase 0b of #1109: the first path ever to LEAVE the shared set.
@@ -82,7 +93,7 @@ describe('the instructions moved before the files did', () => {
     '%s tells agents to use the bridge',
     (path) => {
       const body = readFileSync(join(repoRoot, path), 'utf8')
-      for (const { subcommand } of RETIRED) {
+      for (const subcommand of MANDATED) {
         expect(body, `${path} does not route ${subcommand} through the bridge`).toContain(
           `sh scripts/biffo.sh ${subcommand}`,
         )
@@ -127,5 +138,32 @@ describe('a sibling is born able to resolve the bridge', () => {
     const source = readFileSync(join(repoRoot, 'cli/src/commands/sibling-create.ts'), 'utf8')
     expect(source).toContain(".biffo-shared-version'")
     expect(source).toContain('core-v${context.templateVersion')
+  })
+})
+
+describe('the callers moved with the scripts', () => {
+  /**
+   * These three are invoked by tooling, not by a human reading AGENTS.md, so
+   * the caller is the thing that had to change. Both of these were **fail-open**
+   * before: each guarded its call with `[ -f <script> ]` and carried on when the
+   * file was absent — so the one repo missing the copy was the one where nothing
+   * checked, and it reported success.
+   */
+  it('pre-push runs rewrite-scope-check through the bridge, and fails closed', () => {
+    const hook = readFileSync(join(repoRoot, '.githooks/pre-push'), 'utf8')
+    expect(hook).toContain('sh scripts/biffo.sh rewrite-scope-check || exit 1')
+    expect(hook).not.toContain('rewrite scope NOT checked')
+    expect(hook).not.toContain('[ -f scripts/rewrite-scope-check.sh ]')
+  })
+
+  it('verify.sh provisions the pg lane through the bridge', () => {
+    const verify = readFileSync(join(repoRoot, 'scripts/verify.sh'), 'utf8')
+    expect(verify).toContain('sh scripts/biffo.sh pg-test-db')
+    expect(verify).not.toContain('[ -f scripts/pg-test-db.sh ]')
+  })
+
+  it('practices-daily runs hook-audit through the bridge', () => {
+    const daily = readFileSync(join(repoRoot, 'scripts/practices-daily.sh'), 'utf8')
+    expect(daily).toContain('sh scripts/biffo.sh hook-audit')
   })
 })

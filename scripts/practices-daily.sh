@@ -350,7 +350,7 @@ audit_json() {
   # Anchored: hook-audit prints both "N working trees - ..." and a "DEAD working
   # trees:" header, and an unanchored match took the header, so a failing audit
   # reported a heading instead of the count.
-  audit_json arming "sh scripts/hook-audit.sh --estate '$ESTATE'" '^[0-9]+ working trees'
+  audit_json arming "sh scripts/biffo.sh hook-audit --estate '$ESTATE'" '^[0-9]+ working trees'
   printf ','
   audit_json drift "sh scripts/shared-sync.sh --check --estate '$ESTATE'" 'current, .* drifted'
   printf ','

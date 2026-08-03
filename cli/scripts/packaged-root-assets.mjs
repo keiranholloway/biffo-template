@@ -49,6 +49,24 @@ export const PACKAGED_ROOT_ASSETS = [
     why: 'biffo init step 6/6 and biffo sibling create copy _skeletons/sibling-template into the new repo; biffo plugin create copies _skeletons/plugin-template (#315).',
   },
   {
+    path: 'scripts/branch-health.sh',
+    kind: 'file',
+    sentinel: 'scripts/branch-health.sh',
+    resolvedBy: 'src/lib/packaged-scripts.ts — findPackagedScript()',
+    why:
+      'Retired from copy-based distribution with claim.sh (#1109 phase 0c). AGENTS.md section 6 ' +
+      'mandates it after a merge; it was one of 15 identical copies.',
+  },
+  {
+    path: 'scripts/claim.sh',
+    kind: 'file',
+    sentinel: 'scripts/claim.sh',
+    resolvedBy: 'src/lib/packaged-scripts.ts — findPackagedScript()',
+    why:
+      'Retired from copy-based distribution with branch-health.sh (#1109 phase 0c). AGENTS.md ' +
+      'section 1 mandates it before starting an issue; it was one of 15 identical copies.',
+  },
+  {
     path: 'scripts/wait-for-checks.sh',
     kind: 'file',
     sentinel: 'scripts/wait-for-checks.sh',
@@ -101,8 +119,10 @@ export const RESOLVER_SITES = [
     packaged: false,
   },
   {
-    file: 'src/commands/wait-for-checks.ts',
-    // Resolves the packaged shell script through findPackagedScript(). Declared
+    file: 'src/lib/packaged-script-command.ts',
+    // Resolves EVERY packaged shell script through findPackagedScript() — one
+    // factory builds wait-for-checks, branch-health and claim, so the upward
+    // walk exists once rather than once per command. Declared
     // here so the guard fails if the asset is ever un-packaged: the upward walk
     // still reaches the repo root in a checkout, so a missing `files` entry is
     // invisible in CI and breaks only on a real npm install (#259, #315, #1109).

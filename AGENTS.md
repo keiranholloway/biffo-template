@@ -59,7 +59,7 @@ Several agents often run concurrently in this repo. A worktree isolates your
 **Before starting work on an issue, run:**
 
 ```bash
-sh scripts/claim.sh <issue-number> [-R owner/repo]   # 0 free · 1 taken · 2 cannot tell
+sh scripts/biffo.sh claim <issue-number> [-R owner/repo]   # 0 free · 1 taken · 2 cannot tell
 ```
 
 It asks four questions, because the answer lives in more than one place: does
@@ -272,10 +272,10 @@ origin/<branch>:<path>` for a specific change. A green PR page is not proof
 
 - After merging, confirm the integration branch's CI goes green:
   `gh run list --branch <default-branch>` and watch the run.
-- **Check the whole branch with `scripts/branch-health.sh`, not a run list:**
+- **Check the whole branch with the CLI's `branch-health`, not a run list:**
 
   ```bash
-  sh scripts/branch-health.sh [-R owner/repo]   # 0 green · 1 red · 2 cannot tell
+  sh scripts/biffo.sh branch-health [-R owner/repo]   # 0 green · 1 red · 2 cannot tell
   ```
 
   It reports the latest run of **every** workflow on the integration branch, so

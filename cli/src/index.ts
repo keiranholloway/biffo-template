@@ -10,6 +10,8 @@ import { siblingCommand } from './commands/sibling.js'
 import { checkCommand } from './commands/check.js'
 import { doctorCommand } from './commands/doctor.js'
 import { teardownCommand } from './commands/teardown.js'
+import { branchHealthCommand } from './commands/branch-health.js'
+import { claimCommand } from './commands/claim.js'
 import { waitForChecksCommand } from './commands/wait-for-checks.js'
 import { getLatestCoreVersion } from './lib/core-version.js'
 import { NonInteractiveError, registerNonInteractive } from './lib/interactive.js'
@@ -53,6 +55,8 @@ program.addCommand(deployCommand)
 program.addCommand(destroyCommand)
 program.addCommand(teardownCommand)
 program.addCommand(waitForChecksCommand)
+program.addCommand(branchHealthCommand)
+program.addCommand(claimCommand)
 program.addCommand(pluginCommand)
 program.addCommand(dataCommand)
 program.addCommand(coreCommand)

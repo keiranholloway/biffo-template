@@ -24,6 +24,22 @@ dev = [
   "pyright>=1.1.0",
 ]
 
+[tool.uv]
+# `cryptography` arrives transitively via `pyjwt[crypto]`, so there is no direct
+# declaration to raise a floor on — the constraint has to be stated here.
+#
+# CVE-2026-69247 / GHSA-g6cj-pr64-35w5 (2026-08-03): `pkcs7_decrypt_*` reported
+# the outcome of decrypting a RecipientInfo's `encryptedKey` in distinguishable
+# ways — one of them disclosing the recovered length — giving a Bleichenbacher
+# oracle against the content-encryption key to anything that decrypts
+# attacker-supplied EnvelopedData. Introduced in 44.0.0, fixed in 50.0.0.
+#
+# This skeleton does not call PKCS#7 today, so the constraint is preventative
+# rather than a live exposure — but `pip-audit` is a required check and reads
+# the resolved tree, not the reachable code, so an unpinned transitive
+# dependency reddens every sibling scaffolded from here.
+constraint-dependencies = ["cryptography>=50.0.0"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

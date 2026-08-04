@@ -5,9 +5,7 @@
   ],
   "summary": "A projection and the fetch it advertises are computed from two different tables with two different RLS policies, so the projection can promise a resource the very next call refuses -- with both queries locally correct and nothing going red. `GET /api/v1/lessons/{id}/material-url` returned 404 for every learner, video and document alike, so LMS feature FR-LMS-01 was non-functional for its only audience. `tabsii.lessons` had been given learner-reachable RLS disjuncts (modules 074, 077) but `tabsii.media_assets` never was, so a learner could see the *lesson* but not the *file attached to it*: `has_material` came from `lessons.media_asset_id IS NOT NULL`, which needs no `media_assets` visibility at all, while the fetch joined `media_assets`, whose policy required a permission code learners deliberately do not hold. The UI rendered a 'Watch video' button that 404'd on click. Also worth generalising from the same defect: a table gaining a new consumer does not inherit that consumer's entitlement model -- `media_assets` is shared by six subsystems, and the LMS became the sixth, the only one whose readers hold no `media_assets.read`.",
   "class": "visibility",
-  "alsoClass": [
-    "drift"
-  ],
+  "alsoClass": [],
   "surfacedIn": "tabsii-platform (learner opening lesson material, FR-LMS-01)",
   "fixesIn": "tabsii-platform#575 -- db/imports/tabsii/088_media_assets_lesson_material_read.sql plus a 10-case real-Postgres RLS test file",
   "status": "fixed",

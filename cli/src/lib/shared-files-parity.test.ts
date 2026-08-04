@@ -255,3 +255,80 @@ describe('shared-files.json filesFromSkeleton', () => {
     }
   })
 })
+
+/**
+ * A module in the shared set and its test should not be in different lists
+ * (#1272).
+ *
+ * `apps/frontend/src/lib/api-client.ts` was added to `filesIfPresent` for
+ * #1107 — `handleResponse` threw a raw JSON error body at the user — and
+ * `shared-sync.sh` has kept it current in 7/7 siblings ever since. Its test,
+ * `api-client.test.ts`, sat in the skeleton the whole time (it is what
+ * caught #1107 in the first place) but was never listed anywhere, so the
+ * fix reached seven repos and the assertion that would catch it regressing
+ * reached one. A `handleResponse` regression shipped through the sync would
+ * be silent in six of them.
+ *
+ * The rule this encodes: for every `*.ts` module in `files` or
+ * `filesIfPresent` whose `*.test.ts` sibling exists beside its canonical
+ * source, that test path must be listed in the SAME list, not left out or
+ * put in the other one. `files` entries are canonical at this repo's own
+ * root, so the sibling test is looked for there; `filesIfPresent` entries
+ * are canonical at their mapped skeleton source, so the sibling test is
+ * looked for beside the source, not beside the target (the target may not
+ * even exist here — that is the entire reason `filesIfPresent` exists).
+ *
+ * What this deliberately does NOT assert: that every `*.ts` file has a
+ * test. Plenty legitimately don't. It only catches a test that exists,
+ * right beside a module already judged important enough to distribute, and
+ * silently isn't distributed with it.
+ */
+describe("a distributed module's test is distributed too (#1272)", () => {
+  /** `foo.ts` -> `foo.test.ts`; null for anything that isn't a plain module. */
+  function testSiblingPath(tsPath: string): string | null {
+    if (!tsPath.endsWith('.ts') || tsPath.endsWith('.test.ts') || tsPath.endsWith('.d.ts')) {
+      return null
+    }
+    return `${tsPath.slice(0, -'.ts'.length)}.test.ts`
+  }
+
+  const filesCases = sharedFiles.flatMap((rel) => {
+    const testPath = testSiblingPath(rel)
+    return testPath !== null && existsSync(join(root, testPath)) ? [[rel, testPath] as const] : []
+  })
+
+  const conditionalCases = Object.entries(conditionalFiles).flatMap(([target, source]) => {
+    const sourceTestPath = testSiblingPath(source)
+    return sourceTestPath !== null && existsSync(join(root, sourceTestPath))
+      ? [[target, source, sourceTestPath] as const]
+      : []
+  })
+
+  it('finds at least one real case, so the assertions below are not vacuous', () => {
+    // Guard the guard, same as the `filesIfPresent`/`filesFromSkeleton`
+    // blocks above: api-client.ts/api-client.test.ts is a standing case in
+    // this repo today, not a hypothetical one.
+    expect(filesCases.length + conditionalCases.length).toBeGreaterThan(0)
+  })
+
+  it.each(filesCases)('%s has its test (%s) listed in `files` too', (rel, testPath) => {
+    expect(
+      sharedFiles,
+      `${testPath} exists at this repo's root (${rel}'s test) but is not in \`files\`, so ` +
+        `it never reaches the repos ${rel} is distributed to (#1272).`,
+    ).toContain(testPath)
+  })
+
+  it.each(conditionalCases)(
+    '%s has its test listed in `filesIfPresent` too (source test %s)',
+    (target, _source, sourceTestPath) => {
+      const targetTestPath = testSiblingPath(target)
+      expect(
+        targetTestPath !== null ? conditionalFiles[targetTestPath] : undefined,
+        `${sourceTestPath} exists in the skeleton (${target}'s test) but ` +
+          `${targetTestPath ?? '(its target has no derivable test path)'} is not in ` +
+          `\`filesIfPresent\`, so it never reaches the repos ${target} is distributed to (#1272).`,
+      ).toBe(sourceTestPath)
+    },
+  )
+})

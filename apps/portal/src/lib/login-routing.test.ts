@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { LoginDestinations } from './login-destinations-contract'
 
 /**
@@ -17,7 +17,7 @@ const D: LoginDestinations = {
   marketplace: '/d-marketplace/',
   noAccess: '/d-no-access/',
 }
-import { resolveDestination, type WhoamiResponse } from './login-routing'
+import { canEnterReturnTo, resolveDestination, type WhoamiResponse } from './login-routing'
 
 const baseWhoami: WhoamiResponse = {
   sub: 'sub-123',
@@ -30,9 +30,17 @@ const baseWhoami: WhoamiResponse = {
   roles: [],
 }
 
+/** A brand-scoped user: the identity #1309 was reproduced with on tabsii dev. */
+const brandWhoami: WhoamiResponse = {
+  ...baseWhoami,
+  roles: [{ role: 'brand_manager', scope_level: 'brand', brand_id: 'brand-1' }],
+}
+
 describe('resolveDestination', () => {
-  it('rule 1: returns returnTo when provided and valid', () => {
-    const result = resolveDestination(baseWhoami, [], '/admin/plugins/', D)
+  it('rule 1: returns returnTo when the caller can enter it', () => {
+    // Within the portal's own surface, and this caller holds the group its gate
+    // requires — so rule 1 is honoured, which is the feature.
+    const result = resolveDestination(baseWhoami, ['admin'], '/admin/plugins/', D)
     expect(result).toBe('/admin/plugins/')
   })
 
@@ -247,5 +255,132 @@ describe('resolveDestination', () => {
     // Unit role (rule 5) takes precedence over marketplace_role (rule 6)
     const result = resolveDestination(whoami, [], null, D)
     expect(result).toBe(D.unitScoped)
+  })
+})
+
+/**
+ * #1309 — rule 1 used to win before every role rule with no entitlement check,
+ * so a `return_to` naming a surface the caller cannot enter routed them there
+ * for `AuthGuard` to refuse.
+ *
+ * ## What these tests can and cannot prove
+ *
+ * They exercise the **precedence**, which is the template-owned part: whether an
+ * unusable `returnTo` yields to the role rules, and whether a usable one still
+ * wins. That is testable here and worth pinning here.
+ *
+ * They cannot prove anything about an instance's real values, and #1312 is the
+ * reason to say so out loud: `destinations` is INJECTED, so every assertion
+ * below is against sentinels. Whether tabsii's brand-scoped user actually lands
+ * somewhere useful depends on tabsii's own
+ * `src/instance-login-destinations.ts`, which this repo never sees. Only that
+ * instance can verify the landing; this suite verifies the rule that chooses it.
+ *
+ * Note the entitlement check reads the portal's real route prefix
+ * (`PORTAL_BASE_PATH`), never the injected map — `/admin/**` is where the
+ * portal's routes physically live, whatever an instance points `D.admin` at.
+ */
+describe('resolveDestination: returnTo entitlement (#1309)', () => {
+  it('discards a portal-admin returnTo for a caller without the admin group', () => {
+    // The exact reproduction: a real Brand HQ, no cognito:groups, following
+    // /login?return_to=%2Fadmin%2F. Must land on their role's surface, not on
+    // the one that will refuse them.
+    const result = resolveDestination(brandWhoami, [], '/admin/', D)
+    expect(result).toBe(D.orgScoped)
+    expect(result).not.toBe('/admin/')
+  })
+
+  it('discards a DEEP portal-admin returnTo too, not just the bare surface', () => {
+    // The whole /admin subtree sits inside one AuthGuard, so a nested path is
+    // refused exactly as the root is.
+    const result = resolveDestination(brandWhoami, [], '/admin/users/?sort=name', D)
+    expect(result).toBe(D.orgScoped)
+  })
+
+  it('honours a portal-admin returnTo for an admin-group caller (unaffected)', () => {
+    const result = resolveDestination(baseWhoami, ['admin'], '/admin/users/', D)
+    expect(result).toBe('/admin/users/')
+  })
+
+  it('honours a sibling returnTo for a caller the portal cannot judge', () => {
+    // A deep link into a sibling app must survive login: the portal does not
+    // know what /crm/ admits and must not guess. This is the feature.
+    const result = resolveDestination(brandWhoami, [], '/crm/leads/123/', D)
+    expect(result).toBe('/crm/leads/123/')
+  })
+
+  it('honours a sibling returnTo even for a caller with no roles at all', () => {
+    // Rule 7 would send them to noAccess, but the sibling gates itself and may
+    // well admit them on grounds this module cannot see (e.g. marketplace).
+    const result = resolveDestination(baseWhoami, [], '/marketplace/', D)
+    expect(result).toBe('/marketplace/')
+  })
+
+  it('falls through to noAccess when the discarded returnTo leaves no rule matching', () => {
+    // Discarding must not invent a landing — it hands over to the role rules and
+    // accepts their answer, including "nowhere". This is the case that makes
+    // #1310's page reachable, which is why the two issues ship together.
+    const result = resolveDestination(baseWhoami, [], '/admin/', D)
+    expect(result).toBe(D.noAccess)
+  })
+
+  it('discards for a unit-scoped caller as well, landing them on unitScoped', () => {
+    const whoami: WhoamiResponse = {
+      ...baseWhoami,
+      roles: [{ role: 'store_manager', scope_level: 'unit', unit_id: 'unit-1' }],
+    }
+    const result = resolveDestination(whoami, [], '/admin/', D)
+    expect(result).toBe(D.unitScoped)
+  })
+
+  it('does NOT honour a portal-admin returnTo on is_platform_admin alone', () => {
+    // #1309 suggested testing "rule 2 or rule 3". AuthGuard checks group
+    // membership ONLY -- nothing there reads whoami -- so admitting a platform
+    // admin outside the group would route them straight into the refusal this
+    // change exists to prevent.
+    const whoami: WhoamiResponse = { ...baseWhoami, is_platform_admin: true }
+    const result = resolveDestination(whoami, [], '/admin/', D)
+    expect(result).toBe(D.platformAdmin)
+    expect(result).not.toBe('/admin/')
+  })
+
+  it('leaves a trace rather than swallowing the intent silently', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      resolveDestination(brandWhoami, [], '/admin/', D)
+      expect(warn).toHaveBeenCalledTimes(1)
+      // The discarded value must appear, or the trace cannot be acted on.
+      expect(warn.mock.calls[0]?.[0]).toContain('/admin/')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('does not warn when returnTo is honoured', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      resolveDestination(brandWhoami, [], '/crm/leads/1/', D)
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
+describe('canEnterReturnTo', () => {
+  it.each([
+    ['/admin/', undefined, false],
+    ['/admin/', [], false],
+    ['/admin/', ['editor', 'viewer'], false],
+    ['/admin/', ['admin'], true],
+    ['/admin/users/?tab=1', ['admin'], true],
+    // Not the portal's surface, so not the portal's call.
+    ['/crm/', undefined, true],
+    ['/', undefined, true],
+    ['/marketplace/anything/', [], true],
+    // A prefix that merely LOOKS like the portal's is a different app.
+    ['/administration/', [], true],
+  ] as const)('%s with groups %j -> %s', (returnTo, groups, expected) => {
+    expect(canEnterReturnTo(returnTo, groups as string[] | undefined)).toBe(expected)
   })
 })

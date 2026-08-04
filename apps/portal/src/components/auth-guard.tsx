@@ -76,7 +76,10 @@ export function AuthGuard({
     return (
       <NoAccess
         title="No access"
-        message="Your account doesn't have access to this area. Contact your administrator if you think that's wrong."
+        message="Your account doesn't have access to this area."
+        // Refused from THIS surface only — their roles may admit another, and
+        // /login/ forwards them to it (#1310).
+        recovery="home"
       />
     )
   }

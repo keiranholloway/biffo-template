@@ -486,7 +486,22 @@ a repo, and is excluded by that test. Some of what it reports is deliberate
 (`auth-gate.tsx` is intentionally per-app; `apps/frontend/src/app/example/**`
 is scaffolding meant to be deleted) and it does not guess which — that split is
 recorded by hand, not inferred from the path. Advisory only, like the other two
-— always exits 0, and it has no CI ratchet yet.
+— and since #1271 it **ratchets**: `shared-files.json`'s `skeletonAdoption`
+records `<skeleton>:<path> -> holder count`, and the mode exits 1 when a count
+falls **below** its baseline, or when a new unadopted skeleton path has no
+baseline at all. Pre-existing residue never blocks — same posture as
+`mustBeUniform` and the orphan ratchet — and a count that _improves_ is reported
+with an instruction to lower the baseline, because a ratchet that never tightens
+stops meaning anything.
+
+Paths a skeleton declares in its `.scaffold-tokens.json` are reported separately
+as **template payload**: `biffo plugin create` rewrites `example_plugin` to the
+new plugin's package name, so `src/example_plugin/main.py` becomes
+`src/idea_scout/main.py` and **0 adoption is correct**. Deleting them would break
+scaffolding outright — there would be nothing left to rename. The token list is a
+deliberate second copy of `plugin-scaffold.ts`'s substitution table, kept honest
+by `cli/src/lib/scaffold-tokens-parity.test.ts`, which asserts the two agree in
+both directions.
 
 It is a **one-way overwrite**, not a merge, so only add a file whose copy should
 be identical everywhere — anything a repo is expected to customise belongs in

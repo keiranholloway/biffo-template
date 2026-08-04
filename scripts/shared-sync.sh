@@ -715,8 +715,20 @@ if [ -n "$BACKFILL" ]; then
   for _dir in "$TEMPLATE_ROOT"/_skeletons/*/; do
     [ -d "$_dir" ] || continue
     _name=$(basename "$_dir")
-    ( cd "$_dir" && find . -type f ) |
-      sed "s|^\./||" |
+    # `git ls-tree`, NOT `find`. `find` walks the WORKING TREE, so it reports
+    # every gitignored artefact a skeleton happens to be carrying on this
+    # machine -- a `.venv/` left behind by one diagnostic run turned this
+    # report from 29 rows into **10,994**, burying every real finding under
+    # site-packages. Those files are not shipped to anybody: the satellites
+    # are measured with `ls-tree` against `origin/<base>` (see the comment
+    # above `applicable_repo_list`), so enumerating the skeleton from a
+    # checkout compared paths that can never match by construction.
+    #
+    # Third instance of this class in one day: `auth.ts` measured 6 variants
+    # from working trees where `origin/dev` had 2, and a branch was judged
+    # unpushed from a stale local ref. Read refs, not checkouts.
+    git -C "$TEMPLATE_ROOT" ls-tree -r --name-only HEAD -- "_skeletons/${_name}/" |
+      sed "s|^_skeletons/${_name}/||" |
       sed "s|^|${_name}${TAB}|" >> "$skelrows"
   done
 
@@ -867,8 +879,20 @@ if [ -n "$ADOPTION" ]; then
     [ -d "$_dir" ] || continue
     [ -f "$_dir/.github/workflows/ci.yml" ] || continue
     _name=$(basename "$_dir")
-    ( cd "$_dir" && find . -type f ) |
-      sed "s|^\./||" |
+    # `git ls-tree`, NOT `find`. `find` walks the WORKING TREE, so it reports
+    # every gitignored artefact a skeleton happens to be carrying on this
+    # machine -- a `.venv/` left behind by one diagnostic run turned this
+    # report from 29 rows into **10,994**, burying every real finding under
+    # site-packages. Those files are not shipped to anybody: the satellites
+    # are measured with `ls-tree` against `origin/<base>` (see the comment
+    # above `applicable_repo_list`), so enumerating the skeleton from a
+    # checkout compared paths that can never match by construction.
+    #
+    # Third instance of this class in one day: `auth.ts` measured 6 variants
+    # from working trees where `origin/dev` had 2, and a branch was judged
+    # unpushed from a stale local ref. Read refs, not checkouts.
+    git -C "$TEMPLATE_ROOT" ls-tree -r --name-only HEAD -- "_skeletons/${_name}/" |
+      sed "s|^_skeletons/${_name}/||" |
       sed "s|^|${_name}${TAB}|" >> "$skelrows"
   done
 

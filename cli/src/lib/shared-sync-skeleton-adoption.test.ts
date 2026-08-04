@@ -274,4 +274,41 @@ describe('shared-sync.sh --skeleton-adoption', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+  it('enumerates the skeleton from the ref, so an untracked artefact is invisible', () => {
+    // `find` walks the WORKING TREE. A `.venv/` left in the real
+    // `_skeletons/sibling-template/services/api/` by one diagnostic run took
+    // this report from 29 rows to **10,994**, burying every real finding under
+    // site-packages. Those files ship to nobody -- satellites are measured with
+    // `ls-tree` against `origin/<base>` -- so a checkout-side enumeration
+    // compares paths that cannot match by construction.
+    //
+    // Third instance of the class in one day: `auth.ts` read 6 variants from
+    // working trees where `origin/dev` had 2, and a branch was judged unpushed
+    // from a stale local ref. The fix is structural, not discipline.
+    const root = makeTmpDir('adoption-ref')
+    try {
+      const estate = join(root, 'estate')
+      mkdirSync(estate, { recursive: true })
+      satellite(estate, 'repo-a', 'biffo.sibling.json', [])
+      satellite(estate, 'repo-b', 'biffo.sibling.json', ['src/real.ts'])
+      const tpl = template(root, { 'sibling-template': { files: ['src/real.ts'] } }, MANIFEST)
+
+      // Untracked, written AFTER the fixture commits — exactly what a
+      // gitignored build artefact looks like on a developer's machine.
+      const junk = join(tpl, '_skeletons', 'sibling-template', '.venv', 'lib', 'site.py')
+      mkdirSync(join(junk, '..'), { recursive: true })
+      writeFileSync(junk, 'junk\n')
+
+      const { out, status } = runAdoption(tpl, estate)
+
+      expect(status, out).toBe(0)
+      // The tracked partial-adoption gap is still found...
+      expect(out).toContain('src/real.ts')
+      // ...and the untracked artefact is not reported at all.
+      expect(out).not.toContain('.venv')
+      expect(out).not.toContain('site.py')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })

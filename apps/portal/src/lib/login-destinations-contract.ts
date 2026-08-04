@@ -85,3 +85,32 @@ export function normalizeLoginDestinations(
   }
   return out
 }
+
+/**
+ * What every rule resolves to before an instance overrides anything.
+ *
+ * Lives HERE, in the contract, because this module is the only one in the seam
+ * that is never aliased (#1308). `next.config.ts` maps the resolved path of
+ * `login-destinations-default.ts` to an instance's own file, so a module that
+ * imports the defaults from there imports ITSELF once an instance exists — both
+ * spellings were built and both died prerendering `/login` with
+ * `RangeError: Maximum call stack size exceeded`, recursing on one frame.
+ *
+ * The consequence of not having this was that every instance had to restate all
+ * six values, including `noAccess: '/login/no-access/'` — a template-owned route
+ * an instance does not own. If that route moved, every instance broke silently
+ * and the template's own tests stayed green.
+ *
+ * Kept separate from the (empty) instance declaration in
+ * `login-destinations-default.ts` so `normalizeLoginDestinations` always has a
+ * complete map to fall back to, key by key: a partial override must not be able
+ * to leave a rule undefined.
+ */
+export const DEFAULT_LOGIN_DESTINATIONS: LoginDestinations = {
+  admin: '/admin/',
+  platformAdmin: '/admin/',
+  orgScoped: '/admin/',
+  unitScoped: '/admin/',
+  marketplace: '/admin/',
+  noAccess: '/login/no-access/',
+}

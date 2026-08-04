@@ -50,11 +50,12 @@
 
 import { ADMIN_GROUP } from './cognito-groups'
 import { isWithinPortal } from './return-to'
+import { INSTANCE_LOGIN_DESTINATIONS } from '@/instance-login-destinations'
 import {
   DEFAULT_LOGIN_DESTINATIONS,
-  INSTANCE_LOGIN_DESTINATIONS,
-} from '@/instance-login-destinations'
-import { type LoginDestinations, normalizeLoginDestinations } from './login-destinations-contract'
+  type LoginDestinations,
+  normalizeLoginDestinations,
+} from './login-destinations-contract'
 
 /**
  * The destinations these rules resolve to, after an instance's overrides.

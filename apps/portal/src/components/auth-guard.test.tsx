@@ -226,6 +226,27 @@ describe('AuthGuard requireGroup', () => {
     expect(pushMock).not.toHaveBeenCalled()
   })
 
+  it('offers a refused user somewhere to go, not just a sign-in link (#1310)', () => {
+    // The refusal is from THIS surface only. Their roles may well admit another,
+    // and /login/ forwards them to it through `resolveDestination` -- so this
+    // page must name that route rather than telling a signed-in person to sign
+    // in. WHERE it lands is instance-owned data and only verifiable deployed.
+    useAuthMock.mockReturnValue({ session: sessionWithGroups(undefined), loading: false })
+
+    const { getByRole, queryByText } = render(
+      <AuthGuard requireGroup="admin">
+        <div>Protected content</div>
+      </AuthGuard>,
+    )
+
+    expect(queryByText('Back to sign in')).not.toBeInTheDocument()
+    // Loose on the trailing slash: next/link drops it under jsdom, and the
+    // source literal is guarded by internal-links.test.ts (#275) instead.
+    expect(getByRole('link', { name: 'Go to your home page' }).getAttribute('href')).toMatch(
+      /^\/login\/?$/,
+    )
+  })
+
   it('fails closed when the ID token cannot be decoded', () => {
     useAuthMock.mockReturnValue({
       session: {

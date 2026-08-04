@@ -356,6 +356,41 @@ origin/<branch>:<path>` for a specific change. A green PR page is not proof
   whether it was ever able to run.** Re-triggering a job that cannot start
   reproduces the wait, not the answer.
 
+### A dependency audit is time-dependent — a red with no tree change is a registry event
+
+`pnpm audit` and `pip-audit` ask **live** advisory sources. Their verdict is a
+function of what had been ingested at that instant, not only of the tree. Two
+runs of the **same commit**, minutes apart, can legitimately disagree — this
+happened repeatedly on 2026-08-03 while two advisory waves landed, and a green
+was nearly banked as evidence a repo was clean (#1269).
+
+Two consequences worth knowing before you go hunting:
+
+- **A red that appears with no tree change is not a colleague's merge.**
+  `branch-health` will correctly name the first failing commit, and that commit
+  can be entirely innocent. Check the audit line's timestamp before attributing
+  it to a change.
+- **`dev` being green is not evidence `dev` is clean** — only that nothing had
+  been ingested when it was last asked.
+
+So every audit line now states **what it saw and when**:
+
+```
+pnpm audit (workspace: .): 0 critical, 0 high across 978 package(s)
+  (0 moderate, 2 low — reported, not blocking); registry answered 2026-08-04T05:18:48Z.
+```
+
+That is falsifiable; a bare "no advisories" was not. Severities below the
+blocking threshold are printed too, so a tree that is _clean_ and a tree that is
+_merely under the threshold_ stop looking identical.
+
+**An audit that cannot run BLOCKS, and exits 2.** "Could not determine" is a
+different fact from "found a real advisory" (exit 1), so do not go looking for a
+vulnerability when you see a 2 — find out why the tool could not run. This was
+`exit 0` until #1269, and `biffo-plugin-ideation` rode that path on every run:
+`pip-audit` was never declared, so its Python dependencies had never been
+scanned and the check was permanently green.
+
 ## 7. Security
 
 - **Never commit secrets** (keys, tokens, credentials, `.env` values).

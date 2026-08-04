@@ -91,6 +91,11 @@ audit_deps() {
   for attempt in $(seq 1 "$attempts"); do
     # shellcheck disable=SC2086
     out="$(uv run pip-audit -f json $extra 2>/dev/null)"
+    # Stamped when the advisory source answered, not when the run started —
+    # pip-audit queries PyPI/OSV live, so its verdict is time-dependent in the
+    # same way pnpm audit's is (#1269). Without the stamp a pass cannot be
+    # distinguished from a pass taken before an advisory was published.
+    seen_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
     # printf, never echo: the CI step runs `sh scripts/...` i.e. dash, whose
     # `echo` interprets backslash escapes. Advisory payloads contain them, so
@@ -101,12 +106,16 @@ audit_deps() {
     # had been doing exactly that on every run.
     if printf '%s' "$out" | jq -e '.dependencies' >/dev/null 2>&1; then
       vuln_count="$(printf '%s' "$out" | jq '[.dependencies[].vulns[]?] | length')"
+      pkg_count="$(printf '%s' "$out" | jq '.dependencies | length')"
       if [ "$vuln_count" -gt 0 ]; then
         echo "::error::${label}: ${vuln_count} vulnerability(ies)."
         printf '%s' "$out" | jq '[.dependencies[] | select(.vulns | length > 0)]' 2>/dev/null | head -c 4000
         return 1
       fi
-      echo "${label}: no vulnerabilities found."
+      # State the population and the moment, so the green is falsifiable: a
+      # pass over 0 packages and a pass over 92 look identical otherwise, and
+      # the first is the failure this whole file exists to prevent.
+      echo "${label}: 0 vulnerabilities across ${pkg_count} package(s); advisory source answered ${seen_at}."
       return 0
     fi
 
@@ -114,7 +123,7 @@ audit_deps() {
     [ "$attempt" -lt "$attempts" ] && sleep "$((attempt * 3))"
   done
 
-  echo "::warning::${label}: could not produce parseable output after ${attempts} attempts (a transient network/registry error); treating as INCONCLUSIVE and not blocking. Advisory scanning was NOT performed for this tree — see #591."
+  echo "::error::${label}: could not produce parseable output after ${attempts} attempts. Advisory scanning was NOT performed for this tree, so this is INCONCLUSIVE and BLOCKS — a gate that cannot see its input must not report clean (#1269, #591). If this is a missing tool rather than a network fault, the fix is to declare it: biffo-plugin-ideation rode this path on every run, permanently green while scanning nothing."
   inconclusive=$((inconclusive + 1))
   return 0
 }
@@ -201,7 +210,7 @@ for lock in $ALL_LOCKS; do
   else
     # An export failure is "couldn't run", not "clean" — same discipline as a
     # transient pip-audit error, and it must never read as a pass.
-    echo "::warning::pip-audit (${rel}): could not export requirements from ${lock}; treating as INCONCLUSIVE and not blocking. Advisory scanning was NOT performed for this tree — see #719."
+    echo "::error::pip-audit (${rel}): could not export requirements from ${lock}. Advisory scanning was NOT performed for this tree, so this is INCONCLUSIVE and BLOCKS (#1269, #719)."
     inconclusive=$((inconclusive + 1))
   fi
 
@@ -213,7 +222,12 @@ if [ "$failed" -ne 0 ]; then
 fi
 
 if [ "$inconclusive" -ne 0 ]; then
-  echo "${inconclusive} tree(s) could not be audited; see warnings above."
+  # Exit 2, not 1: "could not determine" is a different fact from "found a real
+  # advisory". Conflating them sends whoever reads the red hunting a
+  # vulnerability that may not exist. Same three-valued contract as
+  # scripts/claim.sh (0 free / 1 taken / 2 cannot tell).
+  echo "::error::${inconclusive} tree(s) could not be audited; see the errors above. Failing closed."
+  exit 2
 fi
 
 echo "py-dependency-audit: audited ${tree_count} tree(s), 0 blocking findings."

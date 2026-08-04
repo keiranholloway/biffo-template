@@ -105,16 +105,29 @@ audit_dir() {
     #     trusting it — the workspace audit had silently stopped working.)
     # shellcheck disable=SC2086
     out="$(cd "$dir" 2>/dev/null && pnpm audit --json $extra 2>/dev/null)"
+    # Stamped the instant the registry answered, not when the run started.
+    # `pnpm audit` asks the LIVE registry, so its verdict is a function of what
+    # had been ingested at this moment — two runs of the same tree minutes apart
+    # can legitimately disagree (#1269). Without this stamp a green is not
+    # falsifiable, and a red appearing hours after a merge reads as "someone
+    # broke dev" when nothing in the tree moved.
+    seen_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
     if printf '%s' "$out" | jq -e '.metadata.vulnerabilities' >/dev/null 2>&1; then
       high="$(printf '%s' "$out" | jq '.metadata.vulnerabilities.high // 0')"
       crit="$(printf '%s' "$out" | jq '.metadata.vulnerabilities.critical // 0')"
+      mod="$(printf '%s' "$out" | jq '.metadata.vulnerabilities.moderate // 0')"
+      low="$(printf '%s' "$out" | jq '.metadata.vulnerabilities.low // 0')"
+      total="$(printf '%s' "$out" | jq '.metadata.totalDependencies // 0')"
       if [ "$((high + crit))" -gt 0 ]; then
-        echo "::error::${label}: ${crit} critical + ${high} high advisory(ies)."
+        echo "::error::${label}: ${crit} critical + ${high} high advisory(ies) across ${total} package(s); registry answered ${seen_at}."
         printf '%s' "$out" | jq '.advisories // .metadata.vulnerabilities' 2>/dev/null | head -c 4000
         return 1
       fi
-      echo "${label}: no high/critical advisories."
+      # A bare "no advisories" is not falsifiable. State the population, the
+      # severities that did NOT block, and when the registry was asked, so a
+      # reader can tell a clean tree from a tree nobody looked at properly.
+      echo "${label}: 0 critical, 0 high across ${total} package(s) (${mod} moderate, ${low} low — reported, not blocking); registry answered ${seen_at}."
       return 0
     fi
 
@@ -123,7 +136,7 @@ audit_dir() {
     [ "$attempt" -lt "$attempts" ] && sleep "$((attempt * 3))"
   done
 
-  echo "::warning::${label}: audit could not run after ${attempts} attempts (the registry returned a non-JSON/error response); treating as INCONCLUSIVE and not blocking. Advisory scanning was NOT performed for this tree — see #591."
+  echo "::error::${label}: audit could not run after ${attempts} attempts (the registry returned a non-JSON/error response). Advisory scanning was NOT performed for this tree, so this is INCONCLUSIVE and BLOCKS — a gate that cannot see its input must not report clean (#1269, #591)."
   inconclusive=$((inconclusive + 1))
   return 0
 }
@@ -209,7 +222,14 @@ if [ "$failed" -ne 0 ]; then
 fi
 
 if [ "$inconclusive" -ne 0 ]; then
-  echo "${inconclusive} tree(s) could not be audited; see warnings above."
+  # Exit 2, not 1: "could not determine" is a different fact from "found a real
+  # advisory", and conflating them sends whoever reads the red looking for a
+  # vulnerability that may not exist. Same three-valued contract as
+  # scripts/claim.sh (0 free / 1 taken / 2 cannot tell) and the zero-trees exit
+  # above. Until #1269 this returned 0 -- biffo-plugin-ideation rode that path
+  # on EVERY run, permanently green while scanning nothing.
+  echo "::error::${inconclusive} tree(s) could not be audited; see the errors above. Failing closed."
+  exit 2
 fi
 
 echo "js-dependency-audit: audited ${tree_count} tree(s), 0 blocking findings."

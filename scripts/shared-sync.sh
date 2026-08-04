@@ -332,11 +332,26 @@ applies() {
   # since these are template-owned paths in an instance.
   [ -f "$1/biffo.core.json" ] && return 1
   for m in $MARKERS; do [ -f "$1/$m" ] && return 0; done
-  # Also: any repo already carrying the gate. The runner repos have neither
-  # marker but did receive verify.sh, and a mechanism that distributes a file
-  # once and then stops tracking it is the drift this script exists to end --
-  # it would have recreated the exact hole in the exact repos nobody watches.
-  [ -f "$1/scripts/verify.sh" ] && return 0
+  # Also: any repo already receiving shared distribution. The runner repos, the
+  # design repo and tabsii-map have neither marker but are in scope, and a
+  # mechanism that distributes a file once and then stops tracking it is the
+  # drift this script exists to end -- it would have recreated the exact hole in
+  # the exact repos nobody watches.
+  #
+  # This clause used to test `scripts/verify.sh`, and #1241 moved that file into
+  # the CLI package and swept the copies. It was therefore DEAD, and dead in the
+  # most misleading way available: all four repos still resolved because their
+  # local working trees carried a `verify.sh` that no longer exists on their
+  # `origin/dev` -- and all four are checkouts `checkout-audit.sh` reports as
+  # parked or behind. The next `git pull` in any of them would have dropped it
+  # out of scope silently, shrinking the denominator with no error, which is the
+  # #1145 shape AGENTS.md section 2 names: a check that cannot evaluate an input
+  # drops it and reports the remainder as the whole.
+  #
+  # `scripts/biffo.sh` is the successor because it is the bridge every satellite
+  # holds and the first entry in `files` -- "already receiving distribution" is
+  # exactly what the old clause meant by "already carrying the gate".
+  [ -f "$1/scripts/biffo.sh" ] && return 0
   return 1
 }
 
@@ -353,7 +368,7 @@ applies() {
 #       the one that ships.
 #
 # Repos with NEITHER marker fall through to $SKELETON_DEFAULT. They are in scope
-# via the `scripts/verify.sh` clause in applies() -- the runner repos, tabsii-map
+# via the `scripts/biffo.sh` clause in applies() -- the runner repos, tabsii-map
 # and tabsii-data-model-design -- and the satellite ruleset applies to them
 # unchanged: it is dev-branch, worktrees, commits, PRs, never-merge-red, honest
 # pushes and security, with no deploy clause for a repo without a deploy to trim.
@@ -1087,7 +1102,7 @@ stage_repo() {
   # the installer had skipped the one layout it could not see.
   [ -f "$wt/package.json" ] && (cd "$wt" && pnpm install --frozen-lockfile >/dev/null 2>&1 || true)
   [ -f "$wt/pyproject.toml" ] && (cd "$wt" && uv sync --all-groups >/dev/null 2>&1 || true)
-  for p in $( (cd "$wt" && sh scripts/verify.sh --list 2>/dev/null) | grep -oE '\-\-dir(ectory)? \./[A-Za-z0-9_./-]+' | awk '{print $2}' | sort -u); do
+  for p in $( (cd "$wt" && sh scripts/biffo.sh verify --list 2>/dev/null) | grep -oE '\-\-dir(ectory)? \./[A-Za-z0-9_./-]+' | awk '{print $2}' | sort -u); do
     (cd "$wt/$p" 2>/dev/null && { pnpm install --frozen-lockfile >/dev/null 2>&1 ||
       pnpm install --frozen-lockfile --ignore-workspace >/dev/null 2>&1 ||
       uv sync --all-groups >/dev/null 2>&1; }) || true
@@ -1115,12 +1130,23 @@ rehearse_repo() {
   wt="$1"
 
   # `sh`, not `bash`: this is exactly how `.githooks/pre-push` invokes it
-  # (`exec sh scripts/verify.sh`), and /bin/sh is dash on every machine in this
-  # estate. A gate proven under one shell and run under another is not the same
-  # gate -- `js-dependency-audit.sh` reported INCONCLUSIVE on every invocation
-  # while exiting 0 for exactly that reason, because dash's `echo` interprets
-  # backslash escapes and bash's does not (#883).
-  _out=$( (cd "$wt" && sh scripts/verify.sh 2>&1) )
+  # (`exec sh scripts/biffo.sh verify`), and /bin/sh is dash on every machine in
+  # this estate. A gate proven under one shell and run under another is not the
+  # same gate -- `js-dependency-audit.sh` reported INCONCLUSIVE on every
+  # invocation while exiting 0 for exactly that reason, because dash's `echo`
+  # interprets backslash escapes and bash's does not (#883).
+  #
+  # Through the BRIDGE, not `scripts/verify.sh` directly. #1241 moved the gate
+  # into the versioned CLI package and swept the satellites' copies, so from
+  # 2026-08-03 19:25 this line ran `sh: 0: cannot open scripts/verify.sh` in
+  # every repo -- and because the rehearsal refuses the whole round when any
+  # target fails, shared-file distribution was DOWN estate-wide from that
+  # moment. Nothing reported it, because nothing runs a round on a schedule; it
+  # surfaced on the first round attempted afterwards, by which time all 14 repos
+  # were drifted. Keeping this identical to what pre-push runs is the invariant
+  # the comment above already asserts -- it just stopped being true when the
+  # gate moved and its callers did not.
+  _out=$( (cd "$wt" && sh scripts/biffo.sh verify 2>&1) )
   _rc=$?
   _checks=$(printf '%s' "$_out" | sed -n 's/.*verify passed[^-]*- *//p' | head -1)
 
@@ -1279,7 +1305,7 @@ $(for _entry in $FROM_SKELETON; do
       *"non-fast-forward"*|*"fetch first"*)
         printf '%-26s \033[31mbranch diverged\033[0m - someone else pushed to chore/sync-shared\n' "$label" ;;
       *"verify failed"*|*"verify ran NOTHING"*)
-        printf '%-26s \033[31mGATE REFUSED THE PUSH\033[0m - run scripts/verify.sh there\n' "$label" ;;
+        printf '%-26s \033[31mGATE REFUSED THE PUSH\033[0m - run `sh scripts/biffo.sh verify` there\n' "$label" ;;
       *)
         printf '%-26s \033[31mpush failed\033[0m: %s\n' "$label" "$(echo "$push_out" | tail -1)" ;;
     esac

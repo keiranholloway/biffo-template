@@ -42,9 +42,11 @@ function satellite(estate: string, name: string, marker: string, files: string[]
   const dir = join(estate, name)
   execFileSync('git', ['init', '-q', '-b', 'dev', dir])
   writeFileSync(join(dir, marker), '{}\n')
-  // Every in-scope repo needs the gate for `applies()` to select it.
+  // Every in-scope repo needs the bridge for `applies()` to select it. It was
+  // `scripts/verify.sh` until #1241 moved that file into the CLI package and
+  // swept the satellites' copies.
   mkdirSync(join(dir, 'scripts'), { recursive: true })
-  writeFileSync(join(dir, 'scripts', 'verify.sh'), '#!/bin/sh\n')
+  writeFileSync(join(dir, 'scripts', 'biffo.sh'), '#!/bin/sh\n')
   // Every fixture repo carries the skeleton's own ci.yml, matching real
   // repos, so it does not itself show up as an unrelated 0-holder gap in
   // every assertion below -- the tests below are about the files they
@@ -234,7 +236,7 @@ describe('shared-sync.sh --skeleton-adoption', () => {
       const dir = join(estate, 'runners')
       execFileSync('git', ['init', '-q', '-b', 'dev', dir])
       mkdirSync(join(dir, 'scripts'), { recursive: true })
-      writeFileSync(join(dir, 'scripts', 'verify.sh'), '#!/bin/sh\n')
+      writeFileSync(join(dir, 'scripts', 'biffo.sh'), '#!/bin/sh\n')
       commitAll(dir)
       execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', origin])
       execFileSync('git', ['-C', dir, 'push', '-q', '-u', 'origin', 'dev'])

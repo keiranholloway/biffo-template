@@ -158,3 +158,38 @@ export function makeTemplateCheckout(root: string, opts: TemplateCheckoutOptions
 export function sharedSyncIn(templateDir: string): string {
   return join(templateDir, 'scripts', 'shared-sync.sh')
 }
+
+/**
+ * Give a fixture satellite the bridge every real satellite carries.
+ *
+ * `scripts/biffo.sh` does two jobs for `shared-sync.sh`, and a fixture without
+ * it models a world that stopped existing on 2026-08-03:
+ *
+ *  - it is the `applies()` scope clause for repos with no `biffo.*.json` marker
+ *    (the runner fleets, the design repo, `tabsii-map`);
+ *  - it is how the rehearsal runs the gate — `sh scripts/biffo.sh verify`,
+ *    identical to `.githooks/pre-push`, since #1241 moved `verify.sh` into the
+ *    versioned CLI package and swept the satellites' copies.
+ *
+ * The stub dispatches `verify` straight to the repo's own `scripts/verify.sh`
+ * stub, which is precisely what the real bridge does with a version-pinned CLI.
+ * Keeping the dispatch means a fixture's gate outcome — `GATE-FAILS-HERE` and
+ * friends — still comes from the file the test seeded, so no existing
+ * expectation changes.
+ */
+export function writeSatelliteBridge(dir: string): void {
+  mkdirSync(join(dir, 'scripts'), { recursive: true })
+  const bridge = join(dir, 'scripts', 'biffo.sh')
+  writeFileSync(
+    bridge,
+    [
+      '#!/bin/sh',
+      '# fixture bridge — see writeSatelliteBridge()',
+      '[ "$1" = verify ] || exit 0',
+      'shift',
+      'exec sh scripts/verify.sh "$@"',
+      '',
+    ].join('\n'),
+  )
+  chmodSync(bridge, 0o755)
+}

@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { anchorToOrigin } from '../test-utils/shared-sync-template.js'
+import { anchorToOrigin, writeSatelliteBridge } from '../test-utils/shared-sync-template.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
 /**
@@ -147,6 +147,7 @@ function makeSatellite(estate: string, name: string, opts: SatelliteOpts = {}): 
     writeFileSync(join(dir, 'scripts/gate-coverage.sh'), '#!/usr/bin/env bash\nexit 0\n')
   }
   if (opts.gateFails) writeFileSync(join(dir, 'GATE-FAILS-HERE'), '')
+  writeSatelliteBridge(dir)
   git(dir, 'add', '-A')
   git(dir, 'commit', '-m', 'chore: fixture')
   git(dir, 'push', 'origin', 'dev')
@@ -202,6 +203,7 @@ function makeTemplate(
   git(dir, 'config', 'user.email', 'fixture@example.com')
   git(dir, 'config', 'user.name', 'Fixture')
   git(dir, 'config', 'commit.gpgsign', 'false')
+  writeSatelliteBridge(dir)
   git(dir, 'add', '-A')
   git(dir, 'commit', '-m', 'chore: fixture template')
   // On `dev`, so shared-sync's staleness preflight applies to this fixture as

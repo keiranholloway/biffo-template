@@ -68,6 +68,44 @@
 #   sh scripts/shared-sync.sh --estate ~/code --no-rehearse  # ship unproven, loudly
 #   sh scripts/shared-sync.sh --candidates --estate ~/code   # unlisted paths worth triaging (#1108)
 #   sh scripts/shared-sync.sh --backfill --estate ~/code     # skeleton files older repos never got (#1109)
+#   sh scripts/shared-sync.sh --skeleton-adoption --estate ~/code  # skeleton paths not held by EVERY applicable repo (#1271)
+#
+# ## `--skeleton-adoption`: enumerate, don't threshold (#1271)
+#
+# `--candidates` (below) is blind to exactly the case it would be most useful
+# for. It requires a path in >=5 repos before it reports it, so a file the
+# skeleton gained recently -- which few or no siblings have adopted yet -- is
+# invisible, and the fewer repos that hold it the LESS visible it is. Signal
+# runs backwards against need. Measured 2026-08-04: 15 of the 76 paths the
+# sibling skeleton owns sat below that threshold, entirely unreported,
+# including one at 0/7.
+#
+# This mode has no threshold to be blind below, because it does not sample --
+# it enumerates. The skeleton's file list is already known (it is whatever
+# `_skeletons/<name>/` contains), so instead of asking "what do many repos
+# happen to hold?" it asks the direct question: "of the paths a skeleton
+# actually owns, which ones does every applicable repo hold?" A path held by
+# 0 repos is exactly as reportable as one held by 6 of 7 -- both are "not
+# held by all" -- so unlike `--backfill` this does NOT skip the
+# nobody-has-it case (that is scaffolding for `--backfill`'s purpose, but for
+# adoption tracking a 0/7 is the loudest possible signal, not noise).
+#
+# "Repo skeleton" is discovered the same way
+# `cli/src/lib/skeleton-governance-workflows.test.ts` discovers it: a
+# directory under `_skeletons/` that ships `.github/workflows/ci.yml`. Not a
+# hardcoded name list -- `_skeletons/registry/` is plugin-registry *content*
+# (`plugins.json` and its schema), never scaffolded into a repo, and ships no
+# CI workflow at all, so it is excluded by construction rather than by an
+# exception someone has to remember to add.
+#
+# Advisory only, exactly like `--candidates` and `--backfill`: this is a
+# question for a human to triage (declare the deliberate ones, backfill the
+# rest, or add a channel for the ones with none), never a build failure. It
+# always exits 0. A per-path baseline ratchet, so a NEW gap can fail CI while
+# pre-existing residue does not, is the natural next step (`shared-files.json`
+# would carry it, the way `mustBeUniform` baselines do) but is deliberately
+# not built here -- that is a decision for whoever owns the ratchet, not a
+# side effect of the report existing.
 #
 # ## `mustBeUniform` and `--candidates` (#1108)
 #
@@ -158,6 +196,7 @@ REHEARSE_ONLY=""
 NO_REHEARSE=""
 CANDIDATES=""
 BACKFILL=""
+ADOPTION=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --check) CHECK=1; shift ;;
@@ -170,6 +209,8 @@ while [ $# -gt 0 ]; do
     --candidates) CANDIDATES=1; shift ;;
     # The other discovery direction (#1109) -- see its block comment below.
     --backfill) BACKFILL=1; shift ;;
+    # Enumerate rather than threshold (#1271) -- see the block comment above.
+    --skeleton-adoption) ADOPTION=1; shift ;;
     --estate) ESTATE="$2"; shift 2 ;;
     --repo) ONLY="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -185,6 +226,7 @@ SYNC_RUN_MODE=ship
 [ -n "$NO_REHEARSE" ] && SYNC_RUN_MODE=ship-unproven
 [ -n "$CANDIDATES" ] && SYNC_RUN_MODE=candidates
 [ -n "$BACKFILL" ] && SYNC_RUN_MODE=backfill
+[ -n "$ADOPTION" ] && SYNC_RUN_MODE=skeleton-adoption
 wt_log "run-start($SYNC_RUN_MODE)" "${ONLY:-<all repos>}" "$ESTATE"
 
 # `trap ... EXIT` REPLACES any previous EXIT trap, and two more are set further
@@ -511,10 +553,11 @@ if [ "$_tpl_branch" = "dev" ]; then
     echo "  THIS tree. Run: git pull --ff-only origin dev" >&2
     exit 2
   fi
-  # Only on the SHIPPING path. `--check`, `--candidates` and `--backfill` write
-  # nothing, and refusing to report on a dirty tree would block the very command
-  # you reach for while editing shared files.
+  # Only on the SHIPPING path. `--check`, `--candidates`, `--backfill` and
+  # `--skeleton-adoption` write nothing, and refusing to report on a dirty tree
+  # would block the very command you reach for while editing shared files.
   if [ "${CHECK:-0}" = 0 ] && [ "${CANDIDATES:-0}" = 0 ] && [ "${BACKFILL:-0}" = 0 ] &&
+    [ "${ADOPTION:-0}" = 0 ] &&
     ! git -C "$TEMPLATE_ROOT" diff --quiet HEAD -- "$MANIFEST" scripts .githooks _skeletons 2>/dev/null; then
     echo "shared-sync: uncommitted changes to distributed paths in this checkout." >&2
     echo "  Shipping them would push content no satellite can trace to a commit." >&2
@@ -714,6 +757,156 @@ if [ -n "$BACKFILL" ]; then
     console.log("\"add the path to shared-files.json\" -- but whether a repo SHOULD receive a given")
     console.log("file is a human call. See AGENTS.md section 9, \"Reconcile before you distribute\".")
   ' "$MANIFEST" "$rows" "$skelrows"
+  printf '\n'
+  exit 0
+fi
+
+# --skeleton-adoption: the class fix for #1271 -- see the block comment near
+# the top of this file for why `--candidates` cannot see this shape.
+#
+# Walks the same two inputs `--backfill` does (what applicable repos hold, and
+# what the skeletons own) but asks a stricter question with no threshold at
+# all: for every path a repo skeleton owns, is it held by EVERY repo that
+# skeleton applies to? `--backfill` deliberately drops the "0 repos have it"
+# case as scaffolding noise; this mode deliberately keeps it, because for
+# adoption tracking specifically, a skeleton path nobody has adopted yet is
+# the loudest signal there is, not noise to filter.
+#
+# Advisory only, like `--candidates` and `--backfill` -- always exits 0. Some
+# gaps this reports are deliberate (a per-app file that must NOT converge, or
+# scaffolding meant to be deleted at birth) and that is a human decision to
+# record, not something this report should guess by pattern-matching paths.
+if [ -n "$ADOPTION" ]; then
+  repos=$(applicable_repo_list)
+  if [ -z "$repos" ]; then
+    printf '\nno applicable repos found under %s\n\n' "$ESTATE"
+    exit 0
+  fi
+
+  # `<skeleton><TAB><repo><TAB><path>` for every path every applicable repo
+  # holds, tagged with the skeleton that repo would be scaffolded from now --
+  # identical shape and reasoning to `--backfill`'s $rows above.
+  rows=$(mktemp)
+  trap 'rm -f "$rows"; wt_log_run_end' EXIT
+  printf '%s\n' "$repos" | while IFS="$TAB" read -r label d base; do
+    [ -n "$d" ] || continue
+    _skel=""
+    for _pair in $SKELETON_FOR; do
+      _marker=${_pair%%=*}
+      if git -C "$d" cat-file -e "origin/$base:${_marker}" 2>/dev/null; then
+        _skel=${_pair#*=}
+        break
+      fi
+    done
+    # Marker-less repos are skipped, same as --backfill and for the same
+    # reason: $SKELETON_DEFAULT exists so `filesFromSkeleton` can deliver
+    # AGENTS.md/CLAUDE.md to the runner fleets, tabsii-map and
+    # tabsii-data-model-design, not as a claim that those repos were
+    # scaffolded from a repo skeleton. Comparing them against a full skeleton
+    # tree would invent gaps in repos that will never hold the paths in
+    # question.
+    [ -n "$_skel" ] || continue
+    git -C "$d" ls-tree -r --name-only "origin/$base" 2>/dev/null |
+      sed "s|^|${_skel}${TAB}${label}${TAB}|"
+  done > "$rows"
+
+  # Which `_skeletons/*/` directories are actual REPO skeletons, discovered
+  # rather than named. The discriminator is "ships a CI workflow" -- the same
+  # test `cli/src/lib/skeleton-governance-workflows.test.ts` uses (merged in
+  # #1274) -- not a hardcoded name list. `_skeletons/registry/` is
+  # plugin-registry *content* (`plugins.json` and its schema, consumed by the
+  # plugin store), never scaffolded into a repo, and ships no
+  # `.github/workflows/ci.yml` -- so it is excluded by what it IS rather than
+  # by an exception someone has to remember to add when a new content-only
+  # directory shows up under `_skeletons/`.
+  skelrows=$(mktemp)
+  trap 'rm -f "$rows" "$skelrows"; wt_log_run_end' EXIT
+  for _dir in "$TEMPLATE_ROOT"/_skeletons/*/; do
+    [ -d "$_dir" ] || continue
+    [ -f "$_dir/.github/workflows/ci.yml" ] || continue
+    _name=$(basename "$_dir")
+    ( cd "$_dir" && find . -type f ) |
+      sed "s|^\./||" |
+      sed "s|^|${_name}${TAB}|" >> "$skelrows"
+  done
+
+  # An empty result can only mean the discriminator or the walk above is
+  # broken -- this repo always has at least the sibling and plugin skeletons,
+  # and both always ship ci.yml. Reporting "nothing to report" from it would
+  # be a pass earned by reading nothing, the exact shape #1218 and #1270
+  # record for other fail-opens in this estate.
+  if [ ! -s "$skelrows" ]; then
+    echo "no repo skeletons found under $TEMPLATE_ROOT/_skeletons (ships .github/workflows/ci.yml) -- refusing to report zero gaps" >&2
+    exit 2
+  fi
+
+  node -e '
+    const fs = require("fs")
+    const [rowsPath, skelPath] = process.argv.slice(1)
+
+    const split = (line) => {
+      const parts = line.split("\t")
+      return parts.length < 2 ? null : parts
+    }
+
+    // skeleton -> Set(path)
+    const skelFiles = new Map()
+    for (const line of fs.readFileSync(skelPath, "utf8").split("\n")) {
+      const p = line && split(line)
+      if (!p) continue
+      const [skel, ...rest] = p
+      const path = rest.join("\t")
+      if (!path) continue
+      if (!skelFiles.has(skel)) skelFiles.set(skel, new Set())
+      skelFiles.get(skel).add(path)
+    }
+
+    // skeleton -> repo -> Set(path)
+    const held = new Map()
+    for (const line of fs.readFileSync(rowsPath, "utf8").split("\n")) {
+      const p = line && split(line)
+      if (!p) continue
+      const [skel, repo, ...rest] = p
+      const path = rest.join("\t")
+      if (!path) continue
+      if (!held.has(skel)) held.set(skel, new Map())
+      const byRepo = held.get(skel)
+      if (!byRepo.has(repo)) byRepo.set(repo, new Set())
+      byRepo.get(repo).add(path)
+    }
+
+    console.log("\nskeleton adoption -- every path a skeleton owns, and whether every applicable repo holds it (advisory only, enumerated not thresholded, #1271)")
+    let total = 0
+    for (const [skel, byRepo] of [...held].sort()) {
+      const paths = skelFiles.get(skel)
+      const repos = [...byRepo.keys()].sort()
+      if (!paths || repos.length === 0) continue
+      const rows = []
+      for (const path of paths) {
+        const lack = repos.filter((r) => !byRepo.get(r).has(path))
+        const have = repos.length - lack.length
+        // No threshold anywhere, and -- unlike --backfill -- the 0-holders
+        // case is NOT skipped. --backfill treats "nobody has it" as
+        // scaffolding a repo consumes or deletes at birth; here it is the
+        // clearest possible instance of "not held by all", which is the
+        // whole question this mode answers.
+        if (lack.length === 0) continue
+        rows.push({ path, have, lack })
+      }
+      rows.sort((a, b) => a.have - b.have || a.path.localeCompare(b.path))
+      total += rows.length
+      console.log(`\n${skel} -- ${repos.length} applicable repo(s), ${paths.size} skeleton path(s), ${rows.length} not held by all\n`)
+      for (const r of rows) {
+        console.log(`  ${r.path.padEnd(48)} ${r.have}/${repos.length} hold it   lacking: ${r.lack.join(", ")}`)
+      }
+    }
+    console.log(`\n${total} skeleton-owned path(s) not held by every applicable repo.`)
+    console.log("Nothing here fails the build -- no threshold, and deliberately no exclusion list.")
+    console.log("Some of these are known to be intentional (a file meant to differ per app, or")
+    console.log("scaffolding meant to be deleted at birth) rather than unadopted -- that split is a")
+    console.log("human decision to record (e.g. in the mustBeUniformNote field of shared-files.json), not")
+    console.log("something this report should guess from the path.")
+  ' "$rows" "$skelrows"
   printf '\n'
   exit 0
 fi

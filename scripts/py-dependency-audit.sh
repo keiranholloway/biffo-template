@@ -30,11 +30,23 @@
 # and it is clean" read identically to "we never checked".
 #
 # Unlike `pnpm audit --ignore-workspace`, pip-audit cannot simply be run inside
-# a skeleton directory: the skeleton is not an installed environment, and
-# pip-audit's default mode audits an environment. So we export `--frozen`
-# requirements from the skeleton's own lockfile (a read of the committed lock,
-# no re-resolution) and audit those with `-r`, from the workspace, which is
-# where pip-audit is actually installed.
+# a nested directory: it is not an installed environment, and pip-audit's
+# default mode audits an environment. So we export `--frozen` requirements from
+# the nested lockfile (a read of the committed lock, no re-resolution) and
+# audit those with `-r`, from the workspace, which is where pip-audit is
+# actually installed.
+#
+# ## Discovery, not a fixed path list (#1270)
+#
+# A fixed sweep of "workspace + `_skeletons/**`" is the same shape of gap one
+# level further down: it reports clean on any uv.lock outside that pair, and an
+# INSTANCE grows trees this repo never has — vendored plugin services such as
+# `services/idea-scout/uv.lock`. Found live: that lockfile and
+# `services/ideation/uv.lock` both sat on `cryptography@49.0.0` (CVE-2026-69247)
+# while this gate stayed green, because it never looked there.
+#
+# So every uv.lock under the repo is DISCOVERED by walking from the git root,
+# rather than assumed from a hardcoded list — see "Discover the trees" below.
 #
 # ## This file is distributed verbatim (#743)
 #
@@ -44,11 +56,10 @@
 # shipped a raw `uv run pip-audit` — so every satellite was born with the
 # original defect and reddened a required check on any PyPI/OSV hiccup.
 #
-# It therefore takes its target from the CURRENT WORKING DIRECTORY — the CI
-# job's `working-directory` — rather than assuming a repo layout: `.` is the
-# root project here and in a plugin repo, `services/api` in a sibling, and the
-# `_skeletons/**` sweep below simply finds nothing outside this repo. Keep it
-# layout-agnostic, or the copies stop being interchangeable and
+# It therefore takes its WORKSPACE tree from the CURRENT WORKING DIRECTORY —
+# the CI job's `working-directory` — rather than assuming a repo layout: `.` is
+# the root project here and in a plugin repo, `services/api` in a sibling. Keep
+# it layout-agnostic, or the copies stop being interchangeable and
 # `shared-sync.sh --check` starts reporting drift that is really divergence.
 #
 # POSIX sh (the CI step runs `sh scripts/...`, i.e. dash) — no `pipefail`.
@@ -108,26 +119,89 @@ audit_deps() {
   return 0
 }
 
-# The workspace itself.
-audit_deps "pip-audit (workspace)" "" || failed=1
+# ## Discover the trees (#1270)
+#
+# Walk from the git root — not the CWD this script happens to run from — so a
+# vendored tree anywhere in the repo is found regardless of where the CI job's
+# `working-directory` points. Excludes `node_modules`, `.git`, `.worktrees`
+# (other agents' in-progress checkouts) and `.venv` (an installed environment,
+# not a lockfile source).
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -z "$REPO_ROOT" ]; then
+  echo "::error::py-dependency-audit: not inside a git repository ('git rev-parse --show-toplevel' failed). Discovery cannot walk a tree it cannot find." >&2
+  exit 2
+fi
 
-# Every scaffolding tree with its own lockfile. Discovered rather than listed,
-# so a new skeleton is covered the day it lands instead of the day someone
-# remembers to add it here.
-for lock in $(find _skeletons -name uv.lock -not -path '*/node_modules/*' 2>/dev/null | sort); do
-  dir="$(dirname "$lock")"
+WORKSPACE_ABS=$(pwd -P)
+
+# shellcheck disable=SC2016
+ALL_LOCKS=$(find "$REPO_ROOT" \
+  \( -name node_modules -o -name .git -o -name .worktrees -o -name .venv \) -prune -o \
+  -type f -name uv.lock -print 2>/dev/null | sort)
+
+# Fail CLOSED, not open, on an empty discovery (#1270). Zero trees — including
+# no uv.lock at the workspace root itself — means discovery is broken, not
+# that the repo has nothing to audit. Same posture as `verify.sh`'s `ci_has()`
+# (#1218) and `ci-wiring-audit.sh`'s empty-map check: "This audit checked
+# nothing. That is a configuration error, not a pass." Exit 2, the estate's
+# "cannot tell" code, distinct from "found a vulnerability" (1) and "clean"
+# (0) — CI treats any non-zero as a failed step either way.
+if [ -z "$ALL_LOCKS" ]; then
+  printf '::error::py-dependency-audit: discovered ZERO uv.lock trees under %s.\n' "$REPO_ROOT" >&2
+  printf 'This audit checked nothing. That is a configuration error, not a pass — see #1270.\n' >&2
+  exit 2
+fi
+
+# Print what was scanned BEFORE auditing, so the list survives even if a later
+# tree crashes the run — a bare green must be a falsifiable claim, not
+# something a reader has to infer or re-enumerate by hand.
+tree_count=$(printf '%s\n' "$ALL_LOCKS" | wc -l | tr -d ' ')
+printf 'py-dependency-audit: discovered %s uv.lock tree(s):\n' "$tree_count"
+for lock in $ALL_LOCKS; do
+  dir=$(dirname "$lock")
+  dir_abs=$(cd "$dir" 2>/dev/null && pwd -P)
+  case "$dir_abs" in
+    "$REPO_ROOT") rel=. ;;
+    "$REPO_ROOT"/*) rel=${dir_abs#"$REPO_ROOT"/} ;;
+    *) rel="$dir_abs" ;;
+  esac
+  if [ "$dir_abs" = "$WORKSPACE_ABS" ]; then
+    printf '  - %s (workspace)\n' "$rel"
+  else
+    printf '  - %s\n' "$rel"
+  fi
+done
+
+# Audit each discovered tree. The workspace's own lockfile is audited via the
+# INSTALLED environment `uv sync` already produced (unchanged from before —
+# `uv run pip-audit` with no `-r`). Every other discovered lockfile is not an
+# installed environment, so it is exported with `--frozen` (a read of the
+# committed lock, no re-resolution) and audited with `-r`, from the workspace,
+# which is where pip-audit is actually installed.
+for lock in $ALL_LOCKS; do
+  dir=$(dirname "$lock")
+  dir_abs=$(cd "$dir" 2>/dev/null && pwd -P)
+  case "$dir_abs" in
+    "$REPO_ROOT") rel=. ;;
+    "$REPO_ROOT"/*) rel=${dir_abs#"$REPO_ROOT"/} ;;
+    *) rel="$dir_abs" ;;
+  esac
+
+  if [ "$dir_abs" = "$WORKSPACE_ABS" ]; then
+    audit_deps "pip-audit (workspace: ${rel})" "" || failed=1
+    continue
+  fi
+
   reqs="$(mktemp)"
 
-  # `--frozen` reads the committed lock verbatim instead of re-resolving, so
-  # what gets audited is exactly what a scaffolded sibling would be born with.
-  # `--no-emit-project` drops the skeleton package itself (nothing published to
+  # `--no-emit-project` drops the tree's own package (nothing published to
   # audit); `--no-dev` keeps the audit to what actually ships.
   if (cd "$dir" && uv export --frozen --no-dev --no-emit-project) >"$reqs" 2>/dev/null && [ -s "$reqs" ]; then
-    audit_deps "pip-audit (${dir})" "-r $reqs" || failed=1
+    audit_deps "pip-audit (${rel})" "-r $reqs" || failed=1
   else
     # An export failure is "couldn't run", not "clean" — same discipline as a
     # transient pip-audit error, and it must never read as a pass.
-    echo "::warning::pip-audit (${dir}): could not export requirements from ${lock}; treating as INCONCLUSIVE and not blocking. Advisory scanning was NOT performed for this tree — see #719."
+    echo "::warning::pip-audit (${rel}): could not export requirements from ${lock}; treating as INCONCLUSIVE and not blocking. Advisory scanning was NOT performed for this tree — see #719."
     inconclusive=$((inconclusive + 1))
   fi
 
@@ -142,4 +216,5 @@ if [ "$inconclusive" -ne 0 ]; then
   echo "${inconclusive} tree(s) could not be audited; see warnings above."
 fi
 
+echo "py-dependency-audit: audited ${tree_count} tree(s), 0 blocking findings."
 exit 0

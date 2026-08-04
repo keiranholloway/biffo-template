@@ -324,8 +324,27 @@ node scripts/practices-metrics.mjs --windows 1,7,90 --out "$DATA_DIR"
 ESTATE="${PRACTICES_ESTATE:-$HOME/code}"
 AUDITS="$DATA_DIR/estate-audits.json"
 
+# Results accumulate one JSON object per line here, and the file below is
+# assembled from them in a single step once every audit has run.
+#
+# The old form streamed the JSON straight into `$AUDITS` -- an opening brace, an
+# audit, a comma, an audit -- so anything that killed the run mid-block left a
+# syntactically truncated file behind. On 2026-08-04 that is exactly what
+# happened: a 129-byte `estate-audits.json` ending in a comma, which then threw
+# `SyntaxError: Unexpected end of JSON input` in `practices-standup.mjs` and
+# blocked the morning standup outright. A partial write that still looks like a
+# file is worse than no file, because `existsSync` says yes.
+AUDIT_LINES=$(mktemp)
+AUDIT_STARTED=$(date -u +%FT%TZ)
+
+# Every audit this run is expected to produce, in report order. The assembler
+# reads it, so an audit that never ran is recorded as an explicit failure rather
+# than silently absent -- the difference between a check that answered "no
+# problem" and one nobody asked. Keep in step with the calls below.
+AUDIT_EXPECTED='coverage arming drift protection wiring classification checkout deploy deadsurface failopen'
+
 audit_json() {
-  _name="$1"; _cmd="$2"
+  _name="$1"; _cmd="$2"; _match="$3"
   # `cmd; rc=$?` does NOT survive `set -e` -- the assignment carries the failing
   # status and the script dies before the next line. Verified: the guarded form
   # is the only one that reaches the report. Getting this wrong would have taken
@@ -336,100 +355,117 @@ audit_json() {
   # Strip ANSI: this lands in JSON and on a web page, and escape codes there are
   # noise that hides the number.
   _clean=$(printf '%s' "$_out" | sed 's/\x1b\[[0-9;]*m//g')
-  _summary=$(printf '%s' "$_clean" | grep -E "$3" | tail -1 | sed 's/^ *//;s/ *$//')
+  # `set -o pipefail` is live (top of file), so a grep MISS fails this whole
+  # pipeline, the assignment carries that status, and `set -e` kills the run --
+  # which made the `${_summary:-...}` fallback on the next line unreachable dead
+  # code for as long as it has existed. That is the 2026-08-04 outage: nine of
+  # ten audits never ran, the dashboard was never re-rendered, the snapshot was
+  # never committed or pushed, and no notification fired, because one audit's
+  # summary line did not match.
+  #
+  # The guard belongs on `grep` specifically. Every other stage here succeeds on
+  # empty input; grep is the only one that reports "found nothing" as failure,
+  # and finding nothing is a legitimate outcome we want to REPORT.
+  _summary=$(printf '%s' "$_clean" | { grep -E "$_match" || true; } | tail -1 | sed 's/^ *//;s/ *$//')
+  if [ -z "$_summary" ]; then
+    # A no-match used to report the constant "no summary line" and throw away
+    # `$_out`, so the audit's actual output -- the only evidence of WHY it did
+    # not match -- was unrecoverable. The 2026-08-04 root cause is undiagnosable
+    # for exactly this reason: `arming` produced something, and nothing kept it.
+    _summary="no line matched /$_match/ -- last output: $(printf '%s' "$_clean" | tail -3 | tr '\n' ' ' | cut -c1-300)"
+  fi
   node -e '
     const [name, rc, summary] = process.argv.slice(1)
-    process.stdout.write(JSON.stringify({ name, ok: rc === "0", exit: Number(rc), summary }))
-  ' "$_name" "$_rc" "${_summary:-no summary line}"
+    process.stdout.write(JSON.stringify({ name, ok: rc === "0", exit: Number(rc), summary }) + "\n")
+  ' "$_name" "$_rc" "$_summary" >> "$AUDIT_LINES"
 }
 
-{
-  printf '{"collectedAt":"%s","audits":[' "$(date -u +%FT%TZ)"
-  audit_json coverage "sh scripts/gate-coverage.sh --estate '$ESTATE'" 'covers its own CI|do not cover'
-  printf ','
-  # Anchored: hook-audit prints both "N working trees - ..." and a "DEAD working
-  # trees:" header, and an unanchored match took the header, so a failing audit
-  # reported a heading instead of the count.
-  audit_json arming "sh scripts/biffo.sh hook-audit --estate '$ESTATE'" '^[0-9]+ working trees'
-  printf ','
-  audit_json drift "sh scripts/shared-sync.sh --check --estate '$ESTATE'" 'current, .* drifted'
-  printf ','
-  # Fourth audit (#715). Branch protection drifted for ~3 weeks across three
-  # repos -- including the live core platform -- because a scaffold-time 403 is
-  # skipped permanently and nothing ever re-asks. This is the re-asking.
-  audit_json protection "sh scripts/protection-audit.sh --estate '$ESTATE'" 'branches checked'
-  printf ','
-  # Fifth audit (#884). `drift` above answers "did the file land"; this answers
-  # "does anything call it". They went to zero and 7-of-13 respectively on the
-  # same morning: eleven repos merged the shared audit scripts and every one
-  # carried on running the raw command, so the distribution was complete and
-  # the outcome had not moved. A proxy reported as the outcome, again.
-  audit_json wiring "sh scripts/ci-wiring-audit.sh --estate '$ESTATE'" 'calls the shared scripts|still run the raw command'
-  printf ','
-  # Sixth audit (#1167). The five above ask whether the ESTATE is healthy; this
-  # one asks whether the numbers on the page still mean what they say. H4's
-  # primary metric is a share over CLASSIFIED steps, so an unmatched step name
-  # leaves the denominator silently -- 12 of 17 on the morning this was written,
-  # with the headline reading 80% where the honest figure was 47%.
-  #
-  # It reads the snapshot written by the collector a few lines above, so it must
-  # stay after it. `$DATA_DIR` rather than `$ESTATE`: this is the only audit
-  # whose subject is the measurement rather than the repos.
-  #
-  # The `^classification:` alternative catches the exit-2 "cannot tell" messages
-  # (no snapshot, unparseable, no 1-day gates). Without it a real failure reports
-  # `no summary line` -- the same defect this file already records against
-  # hook-audit, where an unanchored match took a heading instead of the count.
-  audit_json classification "node scripts/classification-audit.mjs --data '$DATA_DIR'" 'failing steps unclassified|nothing to classify|cannot be audited|^classification:'
-  printf ','
-  # Seventh audit (#1196). Is each repo's PRIMARY checkout safe to READ?
-  #
-  # AGENTS.md warns about stale checkouts in two places and it happened anyway,
-  # twice on 2026-08-03, to agents that had AGENTS.md in context: `tabsii-crm`
-  # 16 behind with staged work produced a confident, well-evidenced, wrong
-  # analysis. #1201 added `verify.sh --checkout-health`, which answers the
-  # question -- and says in its own comments that the push-time WARN "does not,
-  # and cannot, cover the read-only case the issue was filed for". Nothing
-  # invoked the standalone form, so it only ever fired if you already suspected
-  # the problem. This is the part that looks without being asked.
-  audit_json checkout "sh scripts/checkout-audit.sh --estate '$ESTATE'" 'primary checkouts'
-  printf ','
-  # Eighth audit (#1133). A red post-merge deploy has no audience: the author
-  # who broke it has moved on, and the next person finds out by merging into it.
-  # On 2026-08-02 that cost 2h25m and four further failed deploys.
-  # `branch-health.sh` was written for exactly this (#1185) and, until now,
-  # nothing ran it -- the same "did the file land / does anything call it"
-  # split #884 records. Looped here rather than teaching the script an
-  # --estate mode, because it already takes -R and needs only `gh`.
-  audit_json deploy "_bh=0; for _d in '$ESTATE'/*/; do [ -d \"\$_d/.git\" ] || continue; _slug=\$(git -C \"\$_d\" remote get-url origin 2>/dev/null | sed -e 's#.*github.com[:/]##' -e 's#\.git\$##'); [ -n \"\$_slug\" ] || continue; sh scripts/branch-health.sh -R \"\$_slug\" --quiet >/dev/null 2>&1; _rc=\$?; [ \$_rc -eq 0 ] || { _bh=1; echo \"  \$_slug rc=\$_rc\"; }; done; [ \$_bh -eq 0 ] && echo 'every integration branch green' || echo 'an integration branch is failing'; exit \$_bh" 'integration branch'
-  printf ','
-  # Ninth audit (#1110). Which Core API routes does nothing in the estate call?
-  #
-  # Plan 0013 recorded two milestones complete when only the CORE half had
-  # merged: 550 lines of tested, deployed, unreachable code, with both boards
-  # green the whole time. Found by hand weeks later while writing an "as built"
-  # section. The milestone was marked done because its PR merged -- a fair proxy
-  # for a single-repo milestone and not for a cross-repo one, and nothing
-  # compared the two repos.
-  #
-  # Baselined rather than advisory: without a number this shows OK every morning
-  # whatever it finds, which is how a detector stops being read. Lower --max when
-  # the list shrinks; the script says so itself and fails if you do not.
-  audit_json deadsurface "node scripts/dead-surface.mjs --estate '$ESTATE' --max 23" 'uncalled route'
-  printf ','
-  # Tenth audit (#956). Is the fail-open corpus a WORKLIST, or just a record?
-  #
-  # `unfiled` is a literal status meaning written down and never converted into
-  # an issue -- nobody decided. `summariseFailOpenBacklog()` has computed this
-  # into every snapshot for weeks and it was surfaced NOWHERE, which made the
-  # number measuring whether lessons become work itself a lesson that never did.
-  #
-  # Ratcheted on `unfiled` only. `unfixed` is explicitly NOT a target (#956 says
-  # so): a corpus that stops recording defects to keep a number down is worse
-  # than useless. `unfiled` is the one that should never grow.
-  audit_json failopen "node scripts/failopen-audit.mjs --data '$DATA_DIR' --max 12" 'fail-open backlog|unfiled|cannot'
-  printf ']}\n'
-} > "$AUDITS"
+audit_json coverage "sh scripts/gate-coverage.sh --estate '$ESTATE'" 'covers its own CI|do not cover'
+# Anchored: hook-audit prints both "N working trees - ..." and a "DEAD working
+# trees:" header, and an unanchored match took the header, so a failing audit
+# reported a heading instead of the count.
+audit_json arming "sh scripts/biffo.sh hook-audit --estate '$ESTATE'" '^[0-9]+ working trees'
+audit_json drift "sh scripts/shared-sync.sh --check --estate '$ESTATE'" 'current, .* drifted'
+# Fourth audit (#715). Branch protection drifted for ~3 weeks across three
+# repos -- including the live core platform -- because a scaffold-time 403 is
+# skipped permanently and nothing ever re-asks. This is the re-asking.
+audit_json protection "sh scripts/protection-audit.sh --estate '$ESTATE'" 'branches checked'
+# Fifth audit (#884). `drift` above answers "did the file land"; this answers
+# "does anything call it". They went to zero and 7-of-13 respectively on the
+# same morning: eleven repos merged the shared audit scripts and every one
+# carried on running the raw command, so the distribution was complete and
+# the outcome had not moved. A proxy reported as the outcome, again.
+audit_json wiring "sh scripts/ci-wiring-audit.sh --estate '$ESTATE'" 'calls the shared scripts|still run the raw command'
+# Sixth audit (#1167). The five above ask whether the ESTATE is healthy; this
+# one asks whether the numbers on the page still mean what they say. H4's
+# primary metric is a share over CLASSIFIED steps, so an unmatched step name
+# leaves the denominator silently -- 12 of 17 on the morning this was written,
+# with the headline reading 80% where the honest figure was 47%.
+#
+# It reads the snapshot written by the collector a few lines above, so it must
+# stay after it. `$DATA_DIR` rather than `$ESTATE`: this is the only audit
+# whose subject is the measurement rather than the repos.
+#
+# The `^classification:` alternative catches the exit-2 "cannot tell" messages
+# (no snapshot, unparseable, no 1-day gates). Without it a real failure reports
+# `no summary line` -- the same defect this file already records against
+# hook-audit, where an unanchored match took a heading instead of the count.
+audit_json classification "node scripts/classification-audit.mjs --data '$DATA_DIR'" 'failing steps unclassified|nothing to classify|cannot be audited|^classification:'
+# Seventh audit (#1196). Is each repo's PRIMARY checkout safe to READ?
+#
+# AGENTS.md warns about stale checkouts in two places and it happened anyway,
+# twice on 2026-08-03, to agents that had AGENTS.md in context: `tabsii-crm`
+# 16 behind with staged work produced a confident, well-evidenced, wrong
+# analysis. #1201 added `verify.sh --checkout-health`, which answers the
+# question -- and says in its own comments that the push-time WARN "does not,
+# and cannot, cover the read-only case the issue was filed for". Nothing
+# invoked the standalone form, so it only ever fired if you already suspected
+# the problem. This is the part that looks without being asked.
+audit_json checkout "sh scripts/checkout-audit.sh --estate '$ESTATE'" 'primary checkouts'
+# Eighth audit (#1133). A red post-merge deploy has no audience: the author
+# who broke it has moved on, and the next person finds out by merging into it.
+# On 2026-08-02 that cost 2h25m and four further failed deploys.
+# `branch-health.sh` was written for exactly this (#1185) and, until now,
+# nothing ran it -- the same "did the file land / does anything call it"
+# split #884 records. Looped here rather than teaching the script an
+# --estate mode, because it already takes -R and needs only `gh`.
+audit_json deploy "_bh=0; for _d in '$ESTATE'/*/; do [ -d \"\$_d/.git\" ] || continue; _slug=\$(git -C \"\$_d\" remote get-url origin 2>/dev/null | sed -e 's#.*github.com[:/]##' -e 's#\.git\$##'); [ -n \"\$_slug\" ] || continue; sh scripts/branch-health.sh -R \"\$_slug\" --quiet >/dev/null 2>&1; _rc=\$?; [ \$_rc -eq 0 ] || { _bh=1; echo \"  \$_slug rc=\$_rc\"; }; done; [ \$_bh -eq 0 ] && echo 'every integration branch green' || echo 'an integration branch is failing'; exit \$_bh" 'integration branch'
+# Ninth audit (#1110). Which Core API routes does nothing in the estate call?
+#
+# Plan 0013 recorded two milestones complete when only the CORE half had
+# merged: 550 lines of tested, deployed, unreachable code, with both boards
+# green the whole time. Found by hand weeks later while writing an "as built"
+# section. The milestone was marked done because its PR merged -- a fair proxy
+# for a single-repo milestone and not for a cross-repo one, and nothing
+# compared the two repos.
+#
+# Baselined rather than advisory: without a number this shows OK every morning
+# whatever it finds, which is how a detector stops being read. Lower --max when
+# the list shrinks; the script says so itself and fails if you do not.
+audit_json deadsurface "node scripts/dead-surface.mjs --estate '$ESTATE' --max 23" 'uncalled route'
+# Tenth audit (#956). Is the fail-open corpus a WORKLIST, or just a record?
+#
+# `unfiled` is a literal status meaning written down and never converted into
+# an issue -- nobody decided. `summariseFailOpenBacklog()` has computed this
+# into every snapshot for weeks and it was surfaced NOWHERE, which made the
+# number measuring whether lessons become work itself a lesson that never did.
+#
+# Ratcheted on `unfiled` only. `unfixed` is explicitly NOT a target (#956 says
+# so): a corpus that stops recording defects to keep a number down is worse
+# than useless. `unfiled` is the one that should never grow.
+audit_json failopen "node scripts/failopen-audit.mjs --data '$DATA_DIR' --max 12" 'fail-open backlog|unfiled|cannot'
+
+# Assemble the live file in ONE step, from whatever the audits produced.
+# `--expected` is what turns "this audit is missing" into a reported failure:
+# a run that dies half way through now yields a well-formed file in which the
+# audits that never ran say so, and the existing failing-audit notification
+# below picks them up like any other red.
+node scripts/practices-audit-assemble.mjs \
+  --lines "$AUDIT_LINES" \
+  --expected "$AUDIT_EXPECTED" \
+  --collected-at "$AUDIT_STARTED" \
+  --out "$AUDITS"
+rm -f "$AUDIT_LINES"
 
 echo "practices-daily: estate audits ->"
 node -e '

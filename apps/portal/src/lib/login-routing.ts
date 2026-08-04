@@ -5,7 +5,8 @@
  * destination, determine where they should be redirected after authentication.
  *
  * Rules are evaluated in order (first match wins):
- * 1. A valid returnTo provided by the caller -> returnTo
+ * 1. A valid returnTo provided by the caller, IF this caller could enter it
+ *    (see `canEnterReturnTo`) -> returnTo
  * 2. User is in the 'admin' Cognito group -> '/admin/'
  * 3. User is marked as a platform admin -> '/crm/'
  * 4. User has any role with scope_level 'tenant'|'brand'|'region' -> '/crm/'
@@ -34,9 +35,21 @@
  *
  * The row remains a landing destination, not an entitlement: what either
  * surface actually serves is decided by the database.
+ *
+ * ## Rule 1 is conditional, and only on the one surface this app owns (#1309)
+ *
+ * It used to be unconditional, which made every rule below it unreachable for
+ * any request carrying a `return_to`. The caller sanitises that value as a
+ * **URL** — internal, absolute, no protocol-relative escape — which is a
+ * different question from whether the caller may *use* it, so a link naming a
+ * surface they cannot enter routed them there for `AuthGuard` to refuse.
+ *
+ * See `canEnterReturnTo` for the deliberately narrow test and why it is not a
+ * second copy of an entitlement model.
  */
 
 import { ADMIN_GROUP } from './cognito-groups'
+import { isWithinPortal } from './return-to'
 import {
   DEFAULT_LOGIN_DESTINATIONS,
   INSTANCE_LOGIN_DESTINATIONS,
@@ -76,6 +89,50 @@ export interface WhoamiResponse {
 }
 
 /**
+ * Whether this caller could actually enter `returnTo`, so rule 1 can decline to
+ * send them somewhere that will only refuse them (#1309).
+ *
+ * ## Why it checks exactly one surface, and why that is not a cop-out
+ *
+ * The tempting fix is a route-to-entitlement table covering every destination.
+ * That would be a **second copy** of each surface's own gate, in a file that
+ * ships from the template while the gates ship from wherever their app lives —
+ * so it would drift, and a router that disagrees with a gate is the bug this
+ * function exists to remove, reintroduced one level up.
+ *
+ * So the test is: **is this a surface whose gate this module can read?** Exactly
+ * one qualifies. The portal's own routes live under `PORTAL_BASE_PATH`, and all
+ * of them sit inside a single `AuthGuard requireGroup={ADMIN_GROUP}` in
+ * `app/admin/layout.tsx`. That gate's whole predicate is `ADMIN_GROUP`
+ * membership, read from the same `cognito:groups` claim passed in here, via the
+ * same constant. Router and gate therefore cannot disagree — there is one rule,
+ * referenced twice, not two rules kept in step.
+ *
+ * Everything else is honoured unchanged, and deliberately: a sibling app
+ * (ADR-0007) gates itself, the portal cannot know what `/crm/` admits, and
+ * guessing would break the feature `return_to` exists for. A deep link into
+ * `/crm/leads/123/` still survives login.
+ *
+ * ## `is_platform_admin` is NOT consulted, though #1309 suggested it
+ *
+ * The issue proposed honouring an `/admin/` returnTo when "rule 2 or rule 3"
+ * would match, describing that as "the same ADMIN_GROUP / is_platform_admin
+ * test `AuthGuard` applies". `AuthGuard` does not apply that test: it checks
+ * group membership alone (`sessionGroups(session).includes(requireGroup)`), and
+ * nothing there reads `whoami`. Admitting a platform admin who is not in the
+ * group would route them to `/admin/` for the gate to refuse — reproducing the
+ * exact defect. The narrower test is the one that matches reality.
+ *
+ * (That a platform admin outside the `admin` group can still be sent to
+ * `/admin/` by rule 3 is a separate question about the destination map, not
+ * about rule 1, and is left alone here.)
+ */
+export function canEnterReturnTo(returnTo: string, groups: string[] | undefined): boolean {
+  if (!isWithinPortal(returnTo)) return true
+  return groups?.includes(ADMIN_GROUP) ?? false
+}
+
+/**
  * Determine the post-login destination for a user based on their identity,
  * group memberships, and an optional return_to.
  *
@@ -99,9 +156,23 @@ export function resolveDestination(
    */
   destinations: LoginDestinations = DESTINATIONS,
 ): string {
-  // Rule 1: a valid returnTo (already sanitised by the caller)
+  // Rule 1: a valid returnTo (sanitised as a URL by the caller) that this
+  // caller could also enter. An unusable one falls through to the role rules
+  // rather than being honoured into a refusal (#1309).
   if (returnTo) {
-    return returnTo
+    if (canEnterReturnTo(returnTo, groups)) {
+      return returnTo
+    }
+    // Discarding intent silently is the other half of the complaint, so leave a
+    // trace. Deliberately developer-facing: telling the *user* would need a
+    // notice rendered on the destination, and the destination is usually a
+    // different app on a different origin, so there is no surface to render it
+    // on without inventing a cross-app contract nothing currently implements.
+    console.warn(
+      `[login-routing] discarded return_to "${returnTo}": it names this portal's own ` +
+        `admin surface, which requires the "${ADMIN_GROUP}" group. Falling through to ` +
+        `the role-based rules.`,
+    )
   }
 
   // Rule 2: groups includes 'admin'. The same constant `AuthGuard` gates

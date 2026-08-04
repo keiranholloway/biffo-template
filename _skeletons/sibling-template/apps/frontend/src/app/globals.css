@@ -1,12 +1,19 @@
-:root {
-  color-scheme: light;
-}
+/* This sibling's visual language comes from `@biffo/design-tokens`, the
+ * single definition shared by the portal, other siblings and plugin
+ * frontends (see packages/design-tokens/tokens.css in biffo-template for the
+ * full rationale). Do NOT redeclare `--bg`, `--brand` etc. locally here — a
+ * local copy is exactly how three different brand blues shipped across
+ * surfaces a founder sees in one page. Add product-specific styles below the
+ * import, expressed in terms of these variables, so re-skinning the product
+ * is a one-line change upstream rather than a hunt through every consumer.
+ */
+@import '@biffo/design-tokens/tokens.css';
 
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: #f9fafb;
-  color: #111827;
+  background: var(--bg-subtle);
+  color: var(--text);
 }
 
 .center-screen {
@@ -22,8 +29,8 @@ body {
   width: 2rem;
   height: 2rem;
   border-radius: 9999px;
-  border: 4px solid #d1d5db;
-  border-top-color: #2563eb;
+  border: 4px solid var(--border-strong);
+  border-top-color: var(--brand);
   animation: spin 0.8s linear infinite;
 }
 

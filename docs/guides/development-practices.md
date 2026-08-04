@@ -5810,6 +5810,47 @@ repos** and would never have been reported there. Either they move to an
 organisation, or the JS/TS gap gets closed by something that does not need a
 SARIF upload.
 
+### The measuring apparatus is not on the list of things that get measured (2026-08-04)
+
+**Every audit this page relies on ran through one unguarded shell construct, and
+nothing anywhere would have told us.** `practices-daily.sh` builds each audit's
+headline with `... | grep -E "$3" | tail -1 | sed ...` under `set -euo pipefail`,
+so a grep **miss** kills the entire run — making the `${_summary:-no summary
+line}` fallback on the very next line unreachable dead code for as long as it had
+existed. On 2026-08-04 that cost 9 of 10 audits, the dashboard render, the
+snapshot commit and push, the failing-audit notification, and the morning standup
+(which crashed outright on the 129-byte truncated `estate-audits.json`). Fixed
+and guarded in #1273.
+
+Three things that generalise, none of which is the shell bug:
+
+- **The intent was written down and lost anyway.** The function's own comments
+  argue at length that *"a failing audit must REPORT, not abort … fail-open's
+  mirror image, and just as useless"*, and carefully guard the audit **command's**
+  exit code. Two lines below, the summary extraction was equally lethal and
+  unguarded. A comment explaining the hazard is not a guard against it, and this
+  page's own thesis — documented is not prevented — applies to the code that
+  produces this page.
+- **We measure the estate with ten audits and the estate's measuring apparatus
+  with none.** `gate-coverage`, `hook-audit`, `shared-sync`, `protection-audit`,
+  `ci-wiring`, `classification`, `checkout`, `branch-health`, `dead-surface` and
+  `failopen` all ask whether the *repos* are healthy. Nothing asks whether the
+  thing running them is. A one-line "did today's `estate-audits.json` contain N
+  audits collected today?" check would have caught this at 04:31 rather than at
+  a human's first read.
+- **The root cause is permanently unrecoverable, by design.** `audit_json`
+  discarded the audit's output unless it *matched*, so there is no way to say why
+  `arming` produced no `N working trees` line at 03:41. A no-match now keeps a
+  slice of the real output. Worth checking elsewhere: any error path that
+  reports a constant instead of the thing it failed to parse has thrown away the
+  only evidence of its own failure.
+
+Related, and unresolved: **the standup's ranking cannot see this class at all.**
+It ranks `costMinutes × recurrence` over the snapshot, and an outage in the
+collector *is* the reason the snapshot is thin — so the cheaper the day looks,
+the more likely the instrument is broken. Today's item was chosen by reading the
+log, not the ranking, and nothing would have surfaced it otherwise.
+
 ## Skills used
 
 Skills cannot be iterated on impressions. Every invocation, with an honest outcome.

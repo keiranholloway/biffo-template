@@ -1,0 +1,14 @@
+{
+  "refs": [],
+  "summary": "The daily estate-audit harness was fail-CLOSED, and one grep miss cost the whole morning. practices-daily.sh runs under `set -euo pipefail`, and audit_json extracted each audit's headline with `... | grep -E \"$3\" | tail -1 | sed ...`. Under pipefail a grep MISS fails that pipeline, the assignment carries the status, and set -e kills the run — making the `${_summary:-no summary line}` fallback on the very next line unreachable dead code for as long as it had existed. On 2026-08-04 the 04:30 run died 18s in on audit two of ten: 9 of 10 audits never ran, the dashboard was never re-rendered (bookmarked page still read 'collected 2026-08-03'), the snapshot was never committed or pushed, no notification could fire, and estate-audits.json was left at 129 bytes ending in a comma — which threw SyntaxError in practices-standup.mjs and blocked the morning standup outright. The script's OWN comments argue at length that 'a failing audit must REPORT, not abort ... fail-open's mirror image' and guard the audit COMMAND's exit code; the summary extraction two lines below was equally lethal and unguarded. The intent was written down and one construct defeated it. A verified end-to-end run of the fixed block found THREE red audits (drift 14 drifted, wiring, checkout 6 unsafe to read) that nothing reported that day. Two sub-lessons: (1) a truncated file is worse than a missing one, because every reader's guard is existsSync and a half-written file passes it — results now accumulate line-per-audit and assemble in one write-then-rename, with any audit that never ran recorded as ok:false rather than silently absent; (2) discarding an audit's output unless it MATCHED made the root cause permanently undiagnosable — I still cannot say why arming produced no matching line at 03:41. Guarded by practices-audit-harness.test.ts, which drives the real audit_json lifted out of the script and was verified failing 3-of-11 against the pre-fix version.",
+  "class": "visibility",
+  "alsoClass": [
+    "fail-open",
+    "process"
+  ],
+  "surfacedIn": "biffo-template scripts/practices-daily.sh",
+  "fixesIn": "biffo-template cli/src/lib/practices-audit-harness.test.ts",
+  "status": "fixed",
+  "costMinutes": 75,
+  "date": "2026-08-04"
+}

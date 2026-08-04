@@ -13,6 +13,7 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "@biffo/design-tokens": "^0.248.2",
     "amazon-cognito-identity-js": "^6.3.12",
     "next": "^15.5.22",
     "react": "^19.0.0",

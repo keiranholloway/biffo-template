@@ -18,6 +18,22 @@ import pytest
 from api.events.base import BiffoEvent, EventPublisher, PublishOutcome
 from moto import mock_aws
 
+# EventPublisher builds `boto3.client("events")` with no explicit region, so the
+# tests must supply one via the environment or construction raises
+# `NoRegionError: You must specify a region`. It passed locally purely because a
+# developer shell has AWS_DEFAULT_REGION set; CI has none, and the first run
+# here failed all six cases on it.
+#
+# `us-east-1` matches the constant the other moto suites in this package use
+# (test_cognito.py). autouse so no test can forget it.
+REGION = "us-east-1"
+
+
+@pytest.fixture(autouse=True)
+def _aws_region(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_DEFAULT_REGION", REGION)
+    monkeypatch.setenv("AWS_REGION", REGION)
+
 
 def _event(run_id: str | None = "run-1") -> BiffoEvent:
     payload: dict[str, Any] = {"agent": "demo-enricher"}

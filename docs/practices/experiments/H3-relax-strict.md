@@ -623,7 +623,67 @@ landed between 3% and 8% would have had two contradictory rules in one file, and
 whichever the reviewer quoted would have looked pre-registered. **The correction
 is to the day-5 note, not to the Falsification section.**
 
-### Rollback
+### Rollback — DEFERRED by operator decision, 2026-08-04
+
+> **`strict` remains `false` on `biffo-template`. The pre-registered rollback has
+> NOT been executed.** Recorded here the same day, because the paragraphs below
+> state that it was, and a result file that misdescribes the live configuration is
+> worse than one with no result in it.
+>
+> **Verified live at the time of writing**, rather than assumed:
+> `biffo-template` `strict = false` (5 required contexts intact),
+> `tabsii-platform` `strict = false` (6 intact). Nothing else in either
+> protection object was touched.
+>
+> **This is a deferral, not an override.** The decision is deliberately postponed
+> to after **[H4](./H4-shift-left-gates.md)'s review on 2026-08-05**, because H4
+> determines what the rollback costs:
+>
+> - **If H4 confirms** — the race is driven by repush volume and its local
+>   pre-push gate holds `racedShare` under 8% with `strict` unchanged — then
+>   restoring `strict` is close to free, and the pre-registered default should
+>   simply be executed.
+> - **If H4 refutes** — `strict` was genuinely suppressing the race — then
+>   restoring it costs the full contention delta below for a benefit measured at
+>   or near zero, and overriding the default becomes a real decision that must be
+>   argued and recorded, not taken by silence.
+>
+> **The verdict is unchanged and is not reopened by this.** H3 is `refuted`. The
+> counter-metric breached both lines, and no part of this deferral rewrites the
+> rule after seeing the number — that remains the thing this file exists to
+> prevent. What is deferred is the *action*, which the day-5 observation already
+> said must be *"made explicitly on 2026-08-04 rather than by default"*.
+>
+> **The measured cost of rolling back**, from `biffo-template`'s own baseline
+> rather than the comparator, so it is a within-repo comparison:
+>
+> | | now (`strict: false`) | baseline (`strict: true`) |
+> | --- | ---: | ---: |
+> | `racedShare` | 4.4% | 16.0% |
+> | `repushRate` | 17.7% | 43.6% |
+> | green-to-merge P90 | 7.4 min | 22.3 min |
+>
+> At the current rate of 367 merges/week that is roughly **43 more PRs hitting
+> the race and ~95 more requiring a repush each week**.
+>
+> **A correction to this document's own attribution while deferring.** The Result
+> above says none of the three failures is a semantic conflict. Two are
+> unambiguous — a transient network reset and externally published advisories.
+> The third, the `core-v0.190.1` tag ancestry failure, is a **merge-ordering**
+> failure, and relaxing `strict` permits an ordering no PR was tested against, so
+> it is at least plausibly connected. Day 5's attribution to the pre-existing
+> `core.version` race class (#293/#294/#342/#423, all predating the experiment
+> under `strict: true`) is retained, but the honest count is **two clearly
+> unrelated and one arguable**, not zero of three. Stated because the deferral
+> leans on that attribution, and a reason to hold should not be stronger than its
+> evidence.
+>
+> **If no decision is recorded by the time H4's result lands, the pre-registered
+> default stands and `strict` goes back on.** A deferral with no expiry is an
+> override that never had to argue for itself.
+
+#### The pre-registered rollback, for reference
+
 
 Per the pre-registered rule — *"A refuted hypothesis gets the change rolled back,
 not quietly kept because it felt better"* — `strict` returns to `true` on

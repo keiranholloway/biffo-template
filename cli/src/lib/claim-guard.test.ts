@@ -28,7 +28,23 @@ interface OpenPr {
   title?: string
   body?: string
   headRefName: string
+  /**
+   * What GitHub computes from a closing keyword — the signal the guard now
+   * reads instead of the raw body text (#1281, #1311). A fixture that writes
+   * `title: 'fixes #1234'` must ALSO declare this, because GitHub would: the
+   * text and the structured field are two views of one fact, and the guard
+   * deliberately trusts only the parsed one.
+   */
+  closingIssuesReferences?: Array<{
+    number: number
+    repository: { name: string; owner: { login: string } }
+  }>
 }
+
+/** A closing reference in the repo the stub reports. */
+const closes = (n: number) => [
+  { number: n, repository: { name: 'repo', owner: { login: 'owner' } } },
+]
 
 interface StubOptions {
   /** Open PRs `gh pr list` would report, before claim.sh's own jq filter runs. */
@@ -58,6 +74,9 @@ function stubBins(options: StubOptions): { dir: string; callLog: string } {
   const gh = [
     '#!/usr/bin/env bash',
     `echo "gh $*" >> ${JSON.stringify(callLog)}`,
+    // repo_slug() asks for this; without it the slug is empty and no closing
+    // reference can ever match.
+    'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "owner/repo"; exit 0; fi',
     'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then',
     `  if [ ${prExit} -ne 0 ]; then`,
     '    echo "stub gh: simulated failure" >&2',
@@ -165,7 +184,13 @@ describe('claim.sh --guard', () => {
     const { dir } = stubBins({
       openPrs: [
         { number: 99, headRefName: 'feat/1234-thing', title: '', body: '' },
-        { number: 100, headRefName: 'chore/rename', title: 'fixes #1234', body: '' },
+        {
+          number: 100,
+          headRefName: 'chore/rename',
+          title: 'fixes #1234',
+          body: '',
+          closingIssuesReferences: closes(1234),
+        },
       ],
     })
     const { code, out } = run(dir, 'feat/1234-thing')
@@ -207,7 +232,15 @@ describe('claim.sh --guard', () => {
     // git ls-remote fails, but the open-PR signal alone is enough to block —
     // conflict must take priority over cannot-tell, not the reverse.
     const { dir } = stubBins({
-      openPrs: [{ number: 100, headRefName: 'chore/rename', title: 'fixes #1234', body: '' }],
+      openPrs: [
+        {
+          number: 100,
+          headRefName: 'chore/rename',
+          title: 'fixes #1234',
+          body: '',
+          closingIssuesReferences: closes(1234),
+        },
+      ],
       lsRemoteExit: 1,
     })
     const { code, out } = run(dir, 'feat/1234-thing')
@@ -226,5 +259,25 @@ describe('claim.sh --guard: shell portability', () => {
 
   it('the script file actually exists at the resolved path', () => {
     expect(existsSync(script)).toBe(true)
+  })
+  it('does NOT block on a PR that merely mentions the issue in prose (#1311)', () => {
+    // The shape the estate's own practices produce: a PR naming the other
+    // instances of a bug class, and what it deliberately left alone. PR #100
+    // closes 999 and says it is NOT touching 1234 — it must not lock 1234.
+    const { dir } = stubBins({
+      openPrs: [
+        {
+          number: 100,
+          headRefName: 'chore/rename',
+          title: 'fix the other one',
+          body: 'same bug, not fixed in this PR: #1234 is owned by another agent',
+          closingIssuesReferences: closes(999),
+        },
+      ],
+    })
+    const { code, out } = run(dir, 'feat/1234-thing')
+
+    expect(code, out).toBe(0)
+    expect(out).not.toContain('#100')
   })
 })

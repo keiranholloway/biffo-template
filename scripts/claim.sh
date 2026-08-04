@@ -128,6 +128,29 @@ gh_issue() { if [ -n "$REPO" ]; then gh issue "$@" --repo "$REPO"; else gh issue
 gh_pr() { if [ -n "$REPO" ]; then gh pr "$@" --repo "$REPO"; else gh pr "$@"; fi; }
 gh_label() { if [ -n "$REPO" ]; then gh label "$@" --repo "$REPO"; else gh label "$@"; fi; }
 
+# This repo as `owner/name`, so a closing reference can be checked against it.
+# GitHub records a CROSS-REPO closing reference in the same list as a local one
+# -- tabsii-lms#43 closes tabsii-platform#553 -- so the number alone is not an
+# answer, and matching on it reproduces the very defect this replaces (#1281).
+#
+# Resolved LAZILY, on first use. Computing it at load cost a `gh repo view` on
+# every single push, including the overwhelmingly common case where `--guard`
+# skips silently because the branch names no issue -- a guard that is meant to
+# touch nothing was suddenly making a network call per push.
+SLUG=""
+SLUG_RESOLVED=""
+repo_slug() {
+  if [ -z "$SLUG_RESOLVED" ]; then
+    SLUG_RESOLVED=1
+    if [ -n "$REPO" ]; then
+      SLUG="$REPO"
+    else
+      SLUG=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo "")
+    fi
+  fi
+  printf '%s' "$SLUG"
+}
+
 # `git ls-remote --heads ""` fails outright ("fatal: bad repository ''") rather
 # than falling back to the default remote — `${REPO:+url}` expands to an empty
 # STRING ARGUMENT when $REPO is unset, not to no argument at all. That silently
@@ -171,9 +194,11 @@ if [ -n "$GUARD_BRANCH" ]; then
   cannot_tell_reasons=""
 
   # --- an open PR referencing the issue, excluding our own branch's PR --------
+  slug=$(repo_slug)
   pr_err=$(mktemp)
-  open_prs=$(gh_pr list --state open --limit 100 --json number,title,body,headRefName \
-    --jq "[.[] | select(((.title + \" \" + .body) | test(\"(^|[^0-9])#$guard_issue([^0-9]|\$)\")) or (.headRefName | test(\"(^|[^0-9])$guard_issue([^0-9]|\$)\")))] | .[] | select(.headRefName != \"$GUARD_BRANCH\") | \"#\(.number) \(.headRefName)\"" \
+  slug=$(repo_slug)
+open_prs=$(gh_pr list --state open --limit 100 --json number,headRefName,closingIssuesReferences \
+    --jq "[.[] | select(([.closingIssuesReferences[]? | select(.number == $guard_issue and ((.repository.owner.login + \"/\" + .repository.name) == \"$slug\"))] | length > 0) or (.headRefName | test(\"(^|[^0-9])$guard_issue([^0-9]|\$)\")))] | .[] | select(.headRefName != \"$GUARD_BRANCH\") | \"#\(.number) \(.headRefName)\"" \
     2>"$pr_err")
   pr_status=$?
   pr_err_text=$(cat "$pr_err")
@@ -275,8 +300,9 @@ esac
 # Matches the issue number in the title or body as a whole number, so #118 does
 # not match #1188.
 
-open_prs=$(gh_pr list --state open --limit 100 --json number,title,body,headRefName \
-  --jq "[.[] | select(((.title + \" \" + .body) | test(\"(^|[^0-9])#$ISSUE([^0-9]|\$)\")) or (.headRefName | test(\"(^|[^0-9])$ISSUE([^0-9]|\$)\")))] | .[] | \"#\(.number) \(.headRefName)\"" 2>/dev/null)
+slug=$(repo_slug)
+open_prs=$(gh_pr list --state open --limit 100 --json number,headRefName,closingIssuesReferences \
+  --jq "[.[] | select(([.closingIssuesReferences[]? | select(.number == $ISSUE and ((.repository.owner.login + \"/\" + .repository.name) == \"$slug\"))] | length > 0) or (.headRefName | test(\"(^|[^0-9])$ISSUE([^0-9]|\$)\")))] | .[] | \"#\(.number) \(.headRefName)\"" 2>/dev/null)
 
 if [ -n "$open_prs" ]; then
   printf '%s\n' "$open_prs" | while IFS= read -r pr; do
@@ -305,8 +331,9 @@ fi
 # Not "taken" — "possibly already done". #1165 was built and merged in three
 # minutes; the only trace afterwards is a merged PR.
 
-merged=$(gh_pr list --state merged --limit 30 --json number,title,body,mergedAt \
-  --jq "[.[] | select((.title + \" \" + .body) | test(\"(^|[^0-9])#$ISSUE([^0-9]|\$)\"))] | .[0] | select(. != null) | \"#\(.number) merged \(.mergedAt[0:16])\"" 2>/dev/null)
+slug=$(repo_slug)
+merged=$(gh_pr list --state merged --limit 30 --json number,mergedAt,closingIssuesReferences \
+  --jq "[.[] | select(([.closingIssuesReferences[]? | select(.number == $ISSUE and ((.repository.owner.login + \"/\" + .repository.name) == \"$slug\"))] | length > 0))] | .[0] | select(. != null) | \"#\(.number) merged \(.mergedAt[0:16])\"" 2>/dev/null)
 
 if [ -n "$merged" ]; then
   echo "  ${YELLOW}merged${OFF}     $merged"

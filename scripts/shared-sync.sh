@@ -1413,6 +1413,26 @@ for d in "$ESTATE"/*/; do
   printf '%-26s \033[33mdrifted\033[0m%s\n' "$label" "$delta"
 done
 
+# `current + drifted + failed` is every repo the loop above actually looked
+# at -- a repo it excluded (no `.git`, the template itself, `--repo` naming
+# someone else, `applies()` saying no) never touches any of the three. All
+# three at zero therefore means the survey read NOTHING, which is
+# indistinguishable from "0 drifted" downstream: `--check` would print
+# "0 current, 0 drifted" and exit 0, and the default path would fall straight
+# through the empty-$TARGETS branch below and exit 0 too -- a clean-looking
+# report earned by never having looked at a single repo. That is the exact
+# shape #1291 named for the dependency audits ("this audit checked nothing.
+# That is a configuration error, not a pass.") and #1295's own symptom: a
+# rehearsal logging `run-start` then `run-end` with no repos staged in
+# between, because it never got past this point. A genuinely quiet estate
+# (every repo present, applicable, and current) still has `current` > 0, so
+# this cannot fire on a real clean day -- only on an empty or
+# nothing-applies `--estate`.
+if [ "$((current + drifted + failed))" -eq 0 ]; then
+  echo "surveyed zero repos under --estate $ESTATE -- refusing to report a clean run against nothing" >&2
+  exit 2
+fi
+
 if [ -n "$CHECK" ]; then
   printf '\n%s current, %s drifted\n' "$current" "$drifted"
 

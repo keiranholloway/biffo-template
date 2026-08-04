@@ -100,8 +100,17 @@ export function NoAccess({
           </button>
         </div>
 
+        {/*
+          The caveat follows the action, and differs with it: someone refused
+          from one area may simply be in the wrong place, while someone with no
+          surface at all needs access granted. Both sentences were already in
+          the product at the two call sites -- they moved here so the ORDER is
+          guaranteed by the component rather than by each caller's prose.
+        */}
         <p className="mt-4 text-sm text-gray-500">
-          Contact your administrator if you think that&apos;s wrong.
+          {recovery === 'home'
+            ? "Contact your administrator if you think that's wrong."
+            : 'Contact your administrator to request access.'}
         </p>
       </div>
     </div>

@@ -74,7 +74,8 @@ describe('NoAccess', () => {
 
     const link = getByRole('link', { name: 'Go to your home page' })
     const caveat = container.querySelector('p.text-gray-500')
-    expect(caveat).toHaveTextContent(/contact your administrator/i)
+    // "in the wrong place", not "you have nothing" -- this variant HAS a home.
+    expect(caveat).toHaveTextContent("Contact your administrator if you think that's wrong.")
     expect(link.compareDocumentPosition(caveat as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
   })
 
@@ -114,13 +115,18 @@ describe('NoAccess', () => {
       expect(pushMock).toHaveBeenCalledWith('/login/')
     })
 
-    it('still names the caveat, and still after the action', () => {
+    it('asks for access to be GRANTED, not for a misplacement to be corrected', () => {
+      // Both sentences already existed at the two call sites; moving them into
+      // the component must not collapse them into one. Someone with no surface
+      // at all needs access granted -- "if you think that's wrong" would be the
+      // wrong advice, and was this page's copy before the move.
       const { container, getByRole } = render(
         <NoAccess title="No access" message="Nope." recovery="none" />,
       )
 
       const action = getByRole('button', { name: 'Sign in with a different account' })
       const caveat = container.querySelector('p.text-gray-500')
+      expect(caveat).toHaveTextContent('Contact your administrator to request access.')
       expect(action.compareDocumentPosition(caveat as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
     })
   })

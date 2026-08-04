@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import type { LoginDestinations } from './login-destinations-contract'
 
@@ -364,6 +367,31 @@ describe('resolveDestination: returnTo entitlement (#1309)', () => {
     } finally {
       warn.mockRestore()
     }
+  })
+})
+
+/**
+ * Drift guard for the one external fact `canEnterReturnTo` relies on.
+ *
+ * The router declines an `/admin/**` returnTo for a caller outside
+ * `ADMIN_GROUP` **because that is what the gate on those routes checks**. If
+ * `app/admin/layout.tsx` ever guarded on a different group, or stopped guarding,
+ * the router would be confidently wrong and every test above would still pass —
+ * they all inject their own groups and never read the layout.
+ *
+ * So assert the coupling directly, the way `internal-links.test.ts` (#275)
+ * couples hrefs to the `trailingSlash` setting they depend on: read the source.
+ */
+describe('canEnterReturnTo is coupled to the gate it mirrors', () => {
+  it('the /admin subtree is guarded on ADMIN_GROUP', () => {
+    const layout = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), '../app/admin/layout.tsx'),
+      'utf8',
+    )
+
+    // The whole subtree, guarded once, on the same constant this module imports.
+    expect(layout).toMatch(/<AuthGuard\s+requireGroup=\{ADMIN_GROUP\}>/)
+    expect(layout).toMatch(/import \{ ADMIN_GROUP \} from '@\/lib\/cognito-groups'/)
   })
 })
 

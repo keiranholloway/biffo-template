@@ -301,6 +301,7 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | [#1244](https://github.com/keiranholloway/biffo-template/issues/1244) | **The plugin skeleton ships a `terraform/` module and a `ci.yml` with no terraform step, so every plugin repo is born with Terraform nothing checks.** `biffo-plugin-idea-scout` is the live instance: 3 `.tf` files, zero terraform references across all three workflows. **#1239 cannot cover this**, and correctly does not try — the local check is guarded by `ci_has "terraform fmt"` so a template-shipped gate never asserts over more than the repo's own CI (the #325 trap), so a repo whose CI checks nothing gets nothing locally either and the hole stays open. The two halves must move together. Also not a copy problem: `ci.yml` is deliberately outside the one-way-overwrite set because the path depends on each step's `working-directory`, so the mechanism has to be a **`ci-wiring-audit` assertion** — *a repo holding `terraform/*.tf` must have a `terraform fmt` step* — rather than a file | **fail-open** · drift | biffo-plugin-idea-scout, found sweeping for #1239 | biffo-template `_skeletons/` + `ci-wiring-audit`; backfill [biffo-plugin-idea-scout#101](https://github.com/keiranholloway/biffo-plugin-idea-scout/issues/101) | **open** |
 | [#1245](https://github.com/keiranholloway/biffo-template/issues/1245) | **FOURTH occurrence of the lexical-closing-keyword trap — and the finding is no longer the trap, it is that the recorded remedy was a _practice_ and a practice did not hold.** A PR body reading `**Does not close #1021.**` closed #1021 on merge. Proved, not assumed: squash commit `a7797a5` contains only `Refs #1021`, and the timeline attributes the close to that commit, so it came from the **body**; a later deliberate `gh issue close` reported "already closed". This is mechanically identical to the `tabsii-crm#133` row above — same denial-shaped phrase, same `Refs`-only commit, same outcome — which was itself logged as the *third* vector after tabsii-platform#76. **That row's recorded fix reads `practice — never write a closing keyword in prose`.** Today an agent with this very page available did it again. `check-closing-keywords.mjs` is **not** at fault and correctly stayed silent: it asks whether a PR closes an issue only provable on deploy, and fires only on `infra/`, `.github/workflows/`, `apps/portal/` etc., none of which #1238 touched | **process** · drift | biffo-template [#1238](https://github.com/keiranholloway/biffo-template/pull/1238) PR body | biffo-template — extend the guard with a **negated-keyword** check on *every* path | **open** — detection needs no intent inference and is false-positive-free: a negation immediately before a closing keyword means the prose asserts the opposite of what GitHub will do |
 | [#1246](https://github.com/keiranholloway/biffo-template/issues/1246) | **`wait-for-checks` waited out ten-plus minutes on a PR whose checks could never appear.** #1243 was pushed while #1241 was merging a restructure of the same file; the PR went `mergeable=CONFLICTING`, and **GitHub creates no check runs for a PR it cannot compute a merge commit for**. `gh pr checks` reported "no checks reported"; the script printed "Waiting on 5 required check(s)" indefinitely — output identical to the legitimate "CI has not started yet" case. One field settles it. **Worse than the wasted wait:** AGENTS.md §6 documents the superficially similar "GitHub sometimes creates no run" case and prescribes `workflow_dispatch`, which is *actively wrong* here — the problem is an uncomputable merge, not a missing trigger, so following the documented remedy costs more time | **visibility** · process | biffo-template #1243, while landing #1239 | biffo-template `scripts/wait-for-checks.sh` + AGENTS.md §6 | **open** — the script is *right* to wait on a positive signal; the fix is to fail **fast** with the reason (exit 2 on `CONFLICTING`, keep waiting on `UNKNOWN`, which GitHub returns transiently) |
+| [tabsii-platform#573](https://github.com/tabsii-com/tabsii-platform/issues/573) | **A projection and the fetch it advertises are computed from two different tables with two different RLS policies, so the projection can promise a resource the very next call refuses — with both queries locally correct and nothing going red.** `has_material` came from `lessons.media_asset_id IS NOT NULL`, which needs no `media_assets` visibility at all, while the fetch joined `media_assets`, whose policy required a permission code learners deliberately do not hold — `tabsii.lessons` had been given learner-reachable RLS disjuncts (modules 074, 077) but `tabsii.media_assets` never was, so a learner could see the *lesson* but not the *file attached to it*. `GET /api/v1/lessons/{id}/material-url` 404'd for every learner, video and document alike, so LMS feature FR-LMS-01 was non-functional for its only audience, and the UI rendered a "Watch video" button that 404'd on click. Also worth generalising from the same defect: **a table gaining a new consumer does not inherit that consumer's entitlement model** — `media_assets` is shared by six subsystems, and the LMS became the sixth, the only one whose readers hold no `media_assets.read` | **visibility** | tabsii-platform | tabsii-platform [#575](https://github.com/tabsii-com/tabsii-platform/pull/575) — `db/imports/tabsii/088_media_assets_lesson_material_read.sql` + a 10-case real-Postgres RLS test file | **fixed** |
 
 ### What the classes say
 
@@ -2077,6 +2078,25 @@ E2E harness, a CodeQL gate. Every one is defensible on its own. Together they
 are still a full working day in which **the product did not move**. Two or three
 such days in a row is a pattern worth naming out loud rather than discovering in
 a quarterly.
+
+### No expensive retry loop this time — the notable cost was ~15m of chosen investment, not toil (2026-08-04)
+
+Fixing tabsii-platform#573 had none of the retry/rebuild/redeploy churn the
+rows above are full of. The one cost worth naming is ~15 minutes of deliberate
+measurement work that no gate asked for: seeding 40k `media_assets` and 20k
+`lessons` rows and reading `EXPLAIN ANALYZE` with and without an index, on the
+theory that module 088's new `EXISTS` subquery might be expensive at volume. It
+was — ~240x — and that is the reason the regression did not ship (see *what
+needs more thought*, above).
+
+Label it deliberately: **chosen investment, not toil.** Nothing forced the
+15 minutes; nothing in CI or `verify.sh` would have caught the regression
+either way, so skipping it would have cost nothing *today*. The asymmetry worth
+generalising is the one it exposes: verifying an RLS policy's **correctness**
+is cheap and well-supported — the real-Postgres lane, the fail-first run, ten
+cases in seconds — while verifying its **cost** required hand-built volume and
+has no tooling at all. The first has a lane; the second has a person who
+happened to think of it.
 
 ## What went well — practices that earned their keep
 
@@ -4203,6 +4223,26 @@ folded upstream **first** (#1192, #1195), each with a guard, and only then was
 the conflict resolved. AGENTS.md §9 calls this "reconcile before you
 distribute"; this is the first time it has been followed rather than cited.
 
+### Binding the right principal is what made the test non-vacuous, and the original verification failed exactly there (2026-08-04)
+
+tabsii-platform#573 had previously been reported verified end to end — upload →
+S3 → `material-url` → real bytes — and that was **true**, performed as Brand
+HQ, which holds `media_assets.read`. The same round trip as a learner 404s. The
+new test file for module 088 therefore carries an explicit
+`test_the_learner_really_holds_no_media_assets_read`, asserting the caller is
+neither a platform admin (`fn_is_platform_admin()` short-circuits) nor a holder
+of the code — so the file cannot silently go vacuous later. An allow-case that
+passes for the wrong reason is indistinguishable from a fix; this is the
+concrete evidence that it was not one.
+
+### The fail-first run discriminated the design, not just the diff (2026-08-04)
+
+With the module 088 policy absent, exactly 3 of 10 new RLS cases failed and 7
+passed — because the refusal cases were already refused before the fix
+existed. That 3-of-10 split is itself the signal that the tests are aimed at
+the right clause: a fail-first run that fails on *all* cases, or on none,
+would not have told us anything about which disjunct was missing.
+
 ## What needs more thought
 
 **A lesson recorded four times with no mechanism behind it is not a lesson, and
@@ -5895,6 +5935,29 @@ an outage in a collector or a distribution channel makes the day look *cheaper*.
 Both of today's items were found by reading logs and running things, not from
 the ranking.
 
+### Nothing guards the DDL module header every module needs (2026-08-04)
+
+`SET search_path TO tabsii, public;` is mandatory at the top of every
+DDL-imported module in tabsii-platform, and nothing checks it is there.
+`services/api/tests/test_ddl_import_conventions.py` parametrises over every
+module and asserts `CREATE POLICY`/`CREATE TABLE`/`CREATE INDEX`/`ADD COLUMN`
+are all guarded for re-appliability — but `grep search_path` over that test file
+returns nothing. Module 034 shipped broken for exactly this reason and needed a
+successor module (035) to fix it, because the importer is checksum-locked and
+an applied module cannot be edited in place. Filed as
+[tabsii-platform#576](https://github.com/tabsii-com/tabsii-platform/issues/576).
+
+### An RLS policy's per-row cost is invisible to every gate (2026-08-04)
+
+Module 088's `EXISTS` subquery joining `lessons` had no index on
+`lessons.media_asset_id`. Measured at 20k lessons, the route's own query ran in
+~25ms with the index and ~6.0s without — roughly 240x — because without it the
+subquery seq-scans `lessons` *and* re-evaluates `lessons_read`'s own
+`fn_authorized` calls across all 20,001 rows. Nothing in CI or `verify.sh`
+would have caught that; it was found only by deliberately seeding volume and
+reading `EXPLAIN ANALYZE`. There is no gate, and no convention, requiring a new
+RLS subquery to name its supporting index.
+
 ## Skills used
 
 Skills cannot be iterated on impressions. Every invocation, with an honest outcome.
@@ -6162,6 +6225,8 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **worked — §3 caught a test of mine that could not fail** | The sharpest single moment of the session. The new sibling E2E smoke spec passed against a harness **deliberately broken exactly as `tabsii-geo`'s was**, because the draft omitted `NEXT_PUBLIC_CORE_PORTAL_URL` and `page.tsx` only redirects `if (signed_out && CORE_PORTAL_URL)` — so the app had nowhere to redirect to and the assertion could not fire. Reading the spec would never have shown it; only reverting the harness and watching did. It was about to ship into **every future sibling** as coverage-shaped scaffolding. §2's "verify in the environment least like the one you built in" also fired: the claim-protocol fix was verified against a **real satellite** rather than the drift report, which is the only reason it was caught reaching 14 repos with the rule explaining it reaching none. |
 | `biffo-workflow` | **worked — the honest-push rule fired for real, again** | `git push` printed `Everything up-to-date` after a transport error while the local branch was **2 commits ahead**. Caught only because §4 says check the remote rather than believe the message. Also caught the `\| tail` exit-status trap twice in my own verification: `sh scripts/claim.sh <closed issue>; echo $?` through a pipe reported `0` for every case, and re-measuring without the pipe gave the real `1`/`2`. The trap is documented for `git push`; it applies to any command whose exit code you are reading. |
 | `biffo-verify` | **partial — §8 has no guidance on distributing the lesson itself** | The skill is emphatic that a lesson must be recorded, and correct that it is where ad-hoc work escapes. What it does not cover is that in this estate a rule has **two distribution channels** — the root `AGENTS.md` reaches *instances* via `biffo core upgrade`, and `_skeletons/*/AGENTS.md` reaches *satellites* via `shared-sync`. Writing the claim rule into the root only (#1209) put it where 14 of 17 repos cannot read it, and it took a manual check of a real satellite to notice. Suggested addition to §8: when the lesson is a **rule**, name which channel carries it to which repos, and verify in one repo of each kind. |
+| `biffo-workflow` | **worked — Step 1's "`pnpm install` ALWAYS" was load-bearing on a SQL-and-Python change** | Fixing tabsii-platform#573 touched only a DDL module and a pytest file — no JS in the diff. Followed §1 as written anyway, and the commit-time hooks still ran `lint-staged`/`ruff` via the shared hook, because that is what installing deps in the fresh worktree armed. Skipping the JS install on the (false) theory that "there's no JS here" would have been the exact §1 footgun the skill exists to prevent, just reached from the other direction — a change with no JS in it still needs the JS toolchain present for the gate that runs on every commit. |
+| `biffo-verify` | **worked — §3 and §6 both did concrete work on tabsii-platform#573** | §3 (prove the test fails without the fix) produced the 3-of-10 fail-first split recorded above in *what went well*. §6's "distrust a green check / a zero is two different claims" instinct is what prompted checking whether the new test file was actually inside CI's own `test_*_pg.py` glob rather than assuming it, given the fixed-check-list traps already recorded elsewhere on this page — it was: 10 cases collected. Also worth recording as a §6-adjacent finding of my own: running only tabsii-platform's RLS test directory would have missed the DDL convention guards entirely, which live in `services/api/tests/` and `services/governance/tests/` — a guard that only runs where it already passes is the same shape §6 warns about, one level out. |
 
 ## Adding a row
 

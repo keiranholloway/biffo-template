@@ -20,18 +20,20 @@ export interface GitHubAdapterOptions {
  * real checks green.
  *
  * `configureBranchProtection` defaults to this list, and neither caller
- * overrides it: `biffo init` ships `.github/workflows/ci.yml` and `biffo
- * sibling create` (ADR-0007) ships
- * `_skeletons/sibling-template/.github/workflows/ci.yml`, so *both* workflows
- * must declare exactly these job names. `status-checks.test.ts` enforces that
- * coupling in CI (issue #189) — edit a workflow's job names and that test tells
- * you to update this constant.
+ * overrides it: `biffo init` ships `.github/workflows/ci.yml` AND
+ * `.github/workflows/release-guards.yml` (GitHub's template-generate copies
+ * the whole tree) and `biffo sibling create` (ADR-0007) ships
+ * `_skeletons/sibling-template/.github/workflows/ci.yml`, so all of those
+ * workflows must declare exactly these job names. `status-checks.test.ts`
+ * enforces that coupling in CI (issue #189) — edit a workflow's job names and
+ * that test tells you to update this constant.
  *
  * CI consolidates all JS checks into one job and all Python checks into another
  * (per-job billing + repeated installs make a dozen sub-minute jobs wasteful),
  * so lint/type/test/audit/SAST are folded into the two toolchain checks below.
- * The core workflow's template-only `Release Guards` job is deliberately
- * absent: it no-ops in instances (see `status-checks.test.ts`).
+ * The core `release-guards.yml`'s template-only `Release Guards` job (moved
+ * out of `ci.yml` in #1319) is deliberately absent: it no-ops in instances
+ * (see `status-checks.test.ts`).
  */
 export const DEFAULT_STATUS_CHECKS = [
   'JS (lint, types, test, audit)',

@@ -299,6 +299,15 @@ origin/<branch>:<path>` for a specific change. A green PR page is not proof
   and rebase/resolve any child PRs afterward before merging them.
 - Do **not** bypass a required human review you cannot satisfy. Stop and surface
   it instead of forcing the merge.
+- **`--auto` waits forever on a required check that cannot re-evaluate itself.**
+  `gh pr merge --auto` queues the merge and returns immediately — it does not
+  watch anything, so a PR can sit indefinitely with six of seven checks green
+  while the seventh needs an action nobody has taken. The `Release Guards`
+  closing-keyword failure is the recorded case (#1319): the fix is a PR-body
+  edit, and — before `release-guards.yml`'s trigger gained `edited` — a body
+  edit alone never re-ran the check, only `gh run rerun <run-id> --failed` did.
+  If you arm `--auto`, still watch it with `wait-for-checks` rather than
+  assuming "queued" means "will finish".
 
 ## 6. Verify post-merge CI/CD
 

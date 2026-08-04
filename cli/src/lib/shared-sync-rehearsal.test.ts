@@ -511,6 +511,39 @@ describe('shared-sync rehearsal', () => {
     expect(run.out).toMatch(/--no-rehearse: shipping 2 repos unproven/)
     expect(run.ghCalls.filter((c) => c.startsWith('pr create'))).toHaveLength(2)
   }, 120_000)
+
+  // #1295's own symptom: `applies()` used to read the working tree instead of
+  // the ref, so a fixture estate could survey every repo, exclude every one of
+  // them, and still exit 0 with `run-start(rehearse)` immediately followed by
+  // `run-end` and no staging events in between -- a well-formed empty pass
+  // earned by reading nothing. That root cause is fixed (#1292), but the
+  // failure MODE -- zero repos surveyed reported as a clean run -- is worth a
+  // guard of its own, independent of what caused it: #1291 named exactly this
+  // shape for the dependency audits ("this audit checked nothing. That is a
+  // configuration error, not a pass.").
+  it('fails loudly when the estate resolves to zero repos, in every mode', () => {
+    // No satellites at all: the estate holds only the template, which is
+    // always excluded, so the survey loop's `applies()`/`.git` filters never
+    // let a single repo through -- this is what a fixture that failed to seed
+    // any clones looks like, and it must not be silently indistinguishable
+    // from "0 drifted".
+    const zero = { satellites: [] as Array<[string, SatelliteOpts]> }
+
+    const checkRun = runSync(['--check'], zero)
+    expect(checkRun.run.status).not.toBe(0)
+    expect(checkRun.run.out).toMatch(/surveyed zero repos/)
+
+    const rehearseRun = runSync(['--rehearse'], zero)
+    expect(rehearseRun.run.status).not.toBe(0)
+    expect(rehearseRun.run.out).toMatch(/surveyed zero repos/)
+    // Never reached Phase 1 -- nothing to rehearse and no PR to open.
+    expect(rehearseRun.run.out).not.toMatch(/rehearsing/)
+
+    const shipRun = runSync([], zero)
+    expect(shipRun.run.status).not.toBe(0)
+    expect(shipRun.run.out).toMatch(/surveyed zero repos/)
+    expect(shipRun.run.ghCalls.filter((c) => c.startsWith('pr create'))).toEqual([])
+  }, 120_000)
 })
 
 /**

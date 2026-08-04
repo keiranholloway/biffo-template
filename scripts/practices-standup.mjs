@@ -463,6 +463,69 @@ const GREEN = '[32m'
 const YELLOW = '[33m'
 const OFF = '[0m'
 
+/**
+ * Read the estate audits, and never let their absence pass as "nothing to say".
+ *
+ * This used to be `existsSync(f) ? JSON.parse(readFileSync(f)).audits ?? [] : []`,
+ * which failed in two directions on the same morning (2026-08-04):
+ *
+ * - the file was TRUNCATED — `practices-daily.sh` streamed its JSON straight to
+ *   disk and died mid-array — so `JSON.parse` threw and the whole standup
+ *   crashed, on data that had nothing to do with the ranking;
+ * - and had it merely been absent, the `[]` fallback would have ranked the day
+ *   in silence with `armingRegression` unraisable — a disarmed-hook regression
+ *   reading exactly like an estate whose hooks are all armed.
+ *
+ * The second is the worse one, and it is this estate's most-recorded defect: a
+ * zero that means "could not see the input" rendered identically to one that
+ * means "nothing there". So: degrade to an empty list, because a missing audit
+ * must not block the rest of the standup — but say so loudly every time.
+ *
+ * Scope, because it is easy to overstate: `buildFindings` consumes exactly one
+ * audit, `arming`. The other nine reach people through the dashboard and the
+ * failing-audit notification in `practices-daily.sh`, not through this ranking —
+ * so the warning below claims the arming finding and the audits' own verdicts,
+ * and not a pile of findings that never existed here.
+ */
+export function readAudits(auditsFile, snapshotFile) {
+  const warn = (why) =>
+    process.stderr.write(
+      `${YELLOW}WARNING${OFF}: ${why}\n` +
+        `  The arming finding cannot be raised, and no audit verdict (drift,\n` +
+        `  protection, wiring, checkout, dead surface, fail-open backlog) has been\n` +
+        `  read today — that is UNMEASURED, not clean.\n` +
+        `  Re-run: sh scripts/practices-daily.sh\n\n`,
+    )
+
+  if (!existsSync(auditsFile)) {
+    warn(`no estate audits at ${auditsFile}.`)
+    return []
+  }
+
+  let doc
+  try {
+    doc = JSON.parse(readFileSync(auditsFile, 'utf8'))
+  } catch (err) {
+    warn(`${auditsFile} is not readable JSON (${err.message}).`)
+    return []
+  }
+
+  const audits = Array.isArray(doc?.audits) ? doc.audits : []
+  if (!audits.length) warn(`${auditsFile} lists no audits.`)
+
+  // A stale audits file is the failure mode the atomic write introduced by
+  // design: if the collection dies before assembling, yesterday's file stays put
+  // and reads as today's. The snapshot beside it is named for its day, so the
+  // two can be compared without trusting a clock.
+  const snapshotDay = snapshotFile.replace(/\.json$/, '')
+  const auditDay = typeof doc?.collectedAt === 'string' ? doc.collectedAt.slice(0, 10) : null
+  if (auditDay && auditDay !== snapshotDay) {
+    warn(`estate audits are from ${auditDay}, but the snapshot is ${snapshotDay} — the audits did not run today.`)
+  }
+
+  return audits
+}
+
 function main() {
   const argv = process.argv.slice(2)
   const arg = (name) => {
@@ -501,8 +564,7 @@ function main() {
     process.exit(1)
   }
   const corpus = readEvidenceCorpus(arg('--corpus') ?? 'docs/practices/evidence.jsonl')
-  const auditsFile = join(dataDir, 'estate-audits.json')
-  const audits = existsSync(auditsFile) ? JSON.parse(readFileSync(auditsFile, 'utf8')).audits ?? [] : []
+  const audits = readAudits(join(dataDir, 'estate-audits.json'), file)
 
   const findings = buildFindings(snapshot, corpus, audits)
   const loop = closeLoop(readLastChoice(logFile), snapshot)

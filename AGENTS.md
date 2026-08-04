@@ -414,6 +414,7 @@ sh scripts/shared-sync.sh --check --estate ~/code        # report drift, exit 1 
 sh scripts/shared-sync.sh --estate ~/code                # open a PR per drifted repo
 sh scripts/shared-sync.sh --candidates --estate ~/code   # unlisted paths worth triaging; always exits 0
 sh scripts/shared-sync.sh --backfill --estate ~/code     # skeleton files older repos never got; always exits 0
+sh scripts/shared-sync.sh --skeleton-adoption --estate ~/code  # skeleton paths not held by EVERY applicable repo; always exits 0
 ```
 
 `--candidates` and `--backfill` are the two discovery directions and neither is
@@ -432,6 +433,25 @@ carrying an actual marker: `skeletonDefault` exists so `filesFromSkeleton` can
 deliver `AGENTS.md` to the runner fleets and the design repo, **not** as a claim
 that those repos are siblings, and comparing them against a full sibling
 skeleton invents `services/api/*` gaps in repos that will never hold one.
+
+`--skeleton-adoption` is a third mode, and the fix for the class `--candidates`
+is structurally blind to (#1271): a path the skeleton gained recently, which
+few or no siblings have adopted yet, is exactly the case `--candidates`'s ≥5
+threshold hides — the fewer repos that hold it, the less visible it is. This
+mode has no threshold, because it does not sample, it **enumerates**: the
+skeleton's own file list is known, so for every path it owns it counts holders
+across the applicable repos and reports any not held by **all** of them —
+including a path held by zero, which `--backfill` deliberately treats as
+scaffolding but which here is the loudest possible adoption signal. "Repo
+skeleton" is discovered the same way
+`cli/src/lib/skeleton-governance-workflows.test.ts` discovers it: a directory
+under `_skeletons/` that ships `.github/workflows/ci.yml`, not a hardcoded name
+list — `_skeletons/registry/` is plugin-registry content, never scaffolded into
+a repo, and is excluded by that test. Some of what it reports is deliberate
+(`auth-gate.tsx` is intentionally per-app; `apps/frontend/src/app/example/**`
+is scaffolding meant to be deleted) and it does not guess which — that split is
+recorded by hand, not inferred from the path. Advisory only, like the other two
+— always exits 0, and it has no CI ratchet yet.
 
 It is a **one-way overwrite**, not a merge, so only add a file whose copy should
 be identical everywhere — anything a repo is expected to customise belongs in

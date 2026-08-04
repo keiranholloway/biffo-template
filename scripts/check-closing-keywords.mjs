@@ -295,6 +295,20 @@ function formatDeployOnlyFailure({ references, paths }) {
     '    used, then close the issue by hand with what you saw; or',
     `  - if you have ALREADY confirmed this on a running environment, add a`,
     `    \`${VERIFIED_TRAILER} <what you saw, and where>\` line to the PR body.`,
+    '',
+    // Both remedies are body edits, and a body edit does NOT re-trigger this
+    // workflow -- `pull_request` uses the default types, which exclude
+    // `edited`. The body IS read live (#1174/#1180), so a re-run genuinely
+    // re-evaluates; without saying so, the obvious next move is to wait for a
+    // re-check that never comes, or to push an empty commit to force one.
+    // I did the latter on #1304 while this very message was on screen.
+    'Then RE-RUN this check — do not push an empty commit. Editing the PR body',
+    'does not re-trigger CI, but the body is read live at run time, so:',
+    '',
+    '    gh run rerun <run-id> --failed',
+    '',
+    'The trailer must start the line: a `Verified-on-deploy:` inside backticks',
+    'or a bullet is not a trailer and will not be seen.',
   ].join('\n')
 }
 

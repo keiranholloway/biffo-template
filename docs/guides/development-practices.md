@@ -5851,6 +5851,50 @@ collector *is* the reason the snapshot is thin — so the cheaper the day looks,
 the more likely the instrument is broken. Today's item was chosen by reading the
 log, not the ranking, and nothing would have surfaced it otherwise.
 
+### A mechanism nobody schedules has no failure signal (2026-08-04)
+
+**Shared-file distribution was down estate-wide for ten hours and nothing
+noticed, because the only way to observe it was to invoke it.** #1241 moved
+`verify.sh` into the CLI package and swept the satellites' copies; `pre-push`
+was updated, and three callers in `shared-sync.sh` were not. Every rehearsal
+target then failed with `cannot open scripts/verify.sh`, and since the rehearsal
+refuses the whole round when any target fails, nothing shipped from 19:25 on.
+It surfaced only as the immediate consequence of adding a daily round (#1286,
+#1290).
+
+The general shape is worth more than the bug: **for a hand-invoked mechanism,
+the invocation and the observation are the same act.** Anything only ever run by
+a person has no failure signal between runs, so its outage lasts exactly as long
+as the interval nobody happened to need it — here, long enough for the
+claim-collision gate added the previous day to reach zero of fourteen repos.
+
+Three further things from the same morning:
+
+- **A comment asserting an invariant is not a guard on it.** The rehearsal had
+  always carried *"this is exactly how `.githooks/pre-push` invokes it"*. It was
+  true when written and silently stopped being true. The replacement guard
+  *derives* pre-push's actual invocation and requires the rehearsal to match, so
+  the next move updates one file and the guard follows.
+- **A scope test against a working tree measures whoever last ran `git pull`.**
+  The marker-less scope clause tested a deleted file and still resolved, because
+  four checkouts carried a stale copy. The first fix swapped the filename and
+  kept the working-tree test — and dropped all four repos out of scope on the
+  next run, 14 to 10, in silence. `shared-files.json`'s `mustBeUniform` note had
+  already recorded the identical lesson ("reads `origin/<base>` refs, never a
+  working tree"); it simply had not been applied here. **Recording a lesson in
+  one place does not apply it in another**, which is this page's own thesis
+  turned on the page itself.
+- **An ad-hoc round immediately after a merge races the CLI publish.** A round
+  stamps `.biffo-shared-version` from the template's current core version and
+  then `npx`es it; one run failed with `ETARGET no matching version` eight
+  seconds after the publish workflow succeeded. The 04:00 slot avoids this by
+  construction, which is a second, unplanned argument for scheduling.
+
+Unresolved: the standup ranks `costMinutes × recurrence` over the snapshot, so
+an outage in a collector or a distribution channel makes the day look *cheaper*.
+Both of today's items were found by reading logs and running things, not from
+the ranking.
+
 ## Skills used
 
 Skills cannot be iterated on impressions. Every invocation, with an honest outcome.

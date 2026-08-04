@@ -1,0 +1,14 @@
+{
+  "refs": [],
+  "summary": "Moving a file into the package left three callers behind, and shared-file distribution was down estate-wide for 10 hours with nothing reporting it. #1241 moved scripts/verify.sh into the versioned CLI package and swept the satellites' copies; .githooks/pre-push was updated to `exec sh scripts/biffo.sh verify`, and three call sites in shared-sync.sh were not — the rehearsal's gate run, its `--list` install-directory discovery, and applies()'s scope clause for marker-less repos. Every rehearsal target then failed with `sh: 0: cannot open scripts/verify.sh`, and because the rehearsal deliberately refuses the whole round when ANY target fails, nothing shipped from 2026-08-03 19:25 onward. That is why all 14 satellites were drifted on .githooks/pre-push and AGENTS.md — including the claim-collision pre-push gate added the day before to stop the four-session collision, which reached ZERO of them. Three lessons. (1) A comment asserting an invariant is not a guard on it: the rehearsal has always carried the line 'this is exactly how .githooks/pre-push invokes it', which was true when written and silently stopped being true; the new guard DERIVES pre-push's actual invocation and requires the rehearsal to match, so the next move updates one file and the guard follows. (2) The scope clause is the quieter and more alarming half — it tested for a deleted file, so it was dead, yet all four marker-less repos still resolved because their LOCAL WORKING TREES carry a verify.sh that no longer exists on their origin/dev, and every one is a checkout the checkout audit reports as parked or behind. The next `git pull` in any of them drops the repo out of scope silently: the #1145 shape, a check that cannot evaluate an input dropping it and reporting the remainder as the whole. (3) Nothing reported ANY of it because nothing ran a round on a schedule — the outage was found only by running the first round in ten hours, as the immediate consequence of adding a daily one. A mechanism invoked only by hand has no failure signal, because the invocation and the observation are the same act.",
+  "class": "fail-open",
+  "alsoClass": [
+    "drift",
+    "visibility"
+  ],
+  "surfacedIn": "biffo-template scripts/shared-sync.sh",
+  "fixesIn": "biffo-template cli/src/lib/shared-sync-gate-invocation.test.ts",
+  "status": "fixed",
+  "costMinutes": 45,
+  "date": "2026-08-04"
+}

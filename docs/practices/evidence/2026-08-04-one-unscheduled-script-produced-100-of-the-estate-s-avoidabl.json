@@ -1,0 +1,13 @@
+{
+  "refs": [],
+  "summary": "One unscheduled script produced 100% of the estate's avoidable merges. `shared-sync.sh` opens one PR per drifted repo and NOTHING auto-merges them, so every round somebody starts is ~12 more merges somebody has to land — and verified 2026-08-04, no workflow in any repo referenced it, so it was run entirely by hand, reactively, after template merges. On 2026-08-03: 19 commits touching shared files (05:24–22:13) produced ~6.8 rounds across 12 repos = 81 merges, 69 avoidable. That 69 was the estate's ENTIRE avoidable-merge count for the day (windows.1.amplification.top has exactly one entry and its avoidableMerges equals the estate total). The obvious fix was a settle window, and checking the real commit timestamps BEFORE writing it showed it cannot work: the changes are spread across seventeen hours and were already being hand-batched at ~2.7 changes per round, so debouncing bursts leaves ~7 rounds standing. Only a fixed daily round moves the number, 7 to 1. Two general lessons. (1) A tool with a real per-invocation cost and no schedule will be invoked at whatever rate feels responsive, which is far above the rate that is efficient — the cost is invisible at the call site because it lands in twelve other repos. (2) The gate added to enforce batching is deliberately fail-OPEN on the schedule's absence, which is the opposite posture to most gates in this estate and is correct here: if the daily round is not actually running, blocking the manual path would leave drift undistributed forever while printing a confident message about a round that never comes. So the marker is written by the RUN not by the install, and it ages out after 48h, so a schedule that dies stops gating and the manual path reopens by itself. Also recorded as a process failure of my own: while testing I piped a SHIPPING invocation through `head`, which SIGPIPE'd it mid-rehearsal and left staging worktrees in 14 satellites (no PRs opened, nothing pushed, all 14 removed). AGENTS.md section 4 documents never piping `git push`; the rule generalises to anything that mutates the estate.",
+  "class": "process",
+  "alsoClass": [
+    "visibility"
+  ],
+  "surfacedIn": "biffo-template scripts/shared-sync.sh",
+  "fixesIn": "biffo-template scripts/shared-sync-daily.sh",
+  "status": "fixed",
+  "costMinutes": 55,
+  "date": "2026-08-04"
+}

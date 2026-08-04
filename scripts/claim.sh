@@ -126,6 +126,7 @@ OFF=$(printf '\033[0m')
 
 gh_issue() { if [ -n "$REPO" ]; then gh issue "$@" --repo "$REPO"; else gh issue "$@"; fi; }
 gh_pr() { if [ -n "$REPO" ]; then gh pr "$@" --repo "$REPO"; else gh pr "$@"; fi; }
+gh_label() { if [ -n "$REPO" ]; then gh label "$@" --repo "$REPO"; else gh label "$@"; fi; }
 
 # `git ls-remote --heads ""` fails outright ("fatal: bad repository ''") rather
 # than falling back to the default remote — `${REPO:+url}` expands to an empty
@@ -328,6 +329,29 @@ if [ -n "$CHECK_ONLY" ]; then
   echo "${GREEN}Free.${OFF} ${DIM}(--check: nothing changed)${OFF}"
   exit 0
 fi
+
+# Make sure the label EXISTS before trying to apply it (#1289).
+#
+# AGENTS.md requires this label, and nothing ever created it. It was absent in
+# 12 of 16 estate repos, so `claim` could never return 0 there: the add below
+# failed and the script exited 2, "cannot tell", on every issue, for ever. The
+# coordination gate was structurally unable to pass in three quarters of the
+# estate, and nobody noticed because the two repos where claiming is exercised
+# most -- biffo-template and tabsii-platform -- were among the four that had it.
+#
+# Creating it here rather than in a setup step is deliberate: a label that only
+# exists where somebody remembered to run something is the same defect one step
+# removed. This runs on the claim path, so the mechanism repairs itself in any
+# repo where it is used, including one scaffolded tomorrow.
+#
+# Idempotent, and NOT fatal on failure: `gh label create` exits non-zero when the
+# label already exists, which is the overwhelmingly common case. A real failure
+# (no permission, no network) surfaces on the add immediately below, which IS
+# fatal -- so a broken claim still refuses rather than pretending.
+gh_label create "$LABEL" \
+  -c FBCA04 \
+  -d "Claimed by a running agent session -- do not start work on this" \
+  >/dev/null 2>&1 || true
 
 # Claim it. Label AND comment together: the label is what other sessions filter
 # on, the comment is what dates it so a stale claim can be recognised later.

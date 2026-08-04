@@ -1,6 +1,6 @@
 # H3 — relaxing `strict` removes the race without breaking `dev`
 
-**Status:** `running`
+**Status:** `refuted`
 **Pre-registered:** 2026-07-28, **before** `strict` was turned off
 **Amended:** 2026-07-28 — counter-metric extended to cover silent content loss,
 which the original could not see. Adds a way to refute; removes none. See
@@ -521,9 +521,142 @@ guidance as H3's failure threshold is **[H4](./H4-shift-left-gates.md)'s
 prediction**, not H3's — H3 has no `racedShare` refutation clause at all. The
 same guidance also carries the review date as 2026-08-11; it is **2026-08-04**.
 
-## Result
+> **This paragraph is wrong, and was corrected at review on 2026-08-04.** The
+> [Falsification](#falsification) section *does* carry a `racedShare` clause —
+> *"Refuted if `racedShare` is still above 8% on 2026-08-04 with at least 50
+> merged PRs in the window"* — pre-registered on 2026-07-28, and H4 cites the
+> same 8% as *"H3's own falsification threshold"*. Only the review-date half of
+> the correction above was right.
+>
+> It changed no verdict: the reading came in at 4.4%, under 8% either way. But
+> for four days this file contained two contradictory statements about its own
+> refutation rule, and a result landing between 3% and 8% would have let a
+> reviewer quote either one and appear to be citing the pre-registration. The
+> pre-registered section governs; a later observation cannot amend it by
+> asserting what it says.
 
-_To be completed on 2026-08-04. Verdict: `confirmed` / `refuted` /
-`inconclusive` / `abandoned`. A refuted hypothesis gets the change rolled back,
-not quietly kept because it felt better — and the counter-metric can refute it on
-its own, whatever the primary metric says._
+## Result — 2026-08-04
+
+**Verdict: `refuted`.**
+
+Refuted on the **counter-metric**, on both of its conditions independently, exactly as
+pre-registered: *"the counter-metric can refute it on its own, whatever the primary
+metric says."*
+
+### The reading — `keiranholloway/biffo-template`, 7d to 2026-08-04T04:35Z
+
+`node scripts/practices-metrics.mjs --window 7 --repo keiranholloway/biffo-template`
+
+| | baseline 2026-07-28 | day 5 | **2026-08-04** | target / line | |
+| --- | ---: | ---: | ---: | ---: | :--- |
+| merged PRs | 275 | 357 | **367** | >=50 | not inconclusive |
+| **`racedShare`** | 16.0% | 7.8% | **4.4%** | <3% target / **>8% refutes** | missed target, **line not breached** |
+| `repushRate` | 43.6% | 23.8% | **17.7%** | <25% | **met** |
+| green-but-unmerged | 17.8 min/PR | 11.0 | **15.9 min/PR** | <8 | missed — see note |
+| `staleMergeShare` | — | — | **6.3%** (23 merges) | exposure, not damage | rose from 1.9% |
+| `ciFailureRate` | 12.7% | — | **9.0%** | — | |
+| **`integration.failures`** | 0 | 2 | **3** | **>2 refutes** | **BREACHED** |
+| **`integration.redMinutes`** | 0 | 54.7 | **99.5** | **>60 refutes** | **BREACHED** |
+| `runnerKills` / `failuresUnclassified` | — | 0 / 0 | **0 / 0** | — | not a classification artefact |
+
+**The comparator did not move, so the result is attributable.** `tabsii-crm`
+(`strict: true`, untouched, the pre-registered control): 77 merged PRs,
+`racedShare` **18.2%**, `repushRate` **46.8%**, `staleMergeShare` **0%**,
+`integration.failures` **0**, `redMinutes` **0**. It sits almost exactly where
+`biffo-template`'s own baseline was (16.0% / 43.6%), which is what the confounds
+section asked for: *"If its numbers move too, something estate-wide changed and
+this result is not attributable to the intervention."* It did not, so the
+contention improvement is real and is the intervention's.
+
+### Why it is refuted anyway, and why that is not being argued away
+
+The three failures were each inspected at the log, not inferred:
+
+1. **`30463621771`**, 2026-07-29, `CI` -> *Validate modules*. **Transient network** —
+   `connection reset by peer` against `registry.terraform.io`.
+2. **`30555489992`**, 2026-07-30, `Core Version Tag`. **Release-pipeline ordering race** —
+   `core-v0.190.1` pointed at a commit not yet an ancestor of `dev`.
+3. **`30847204581`**, 2026-08-03, `CI` -> *Dependency audit*. **Externally published
+   advisories** (esbuild GHSA-g7r4-m6w7-qqqr, undici) landing mid-window; #1256
+   records that nothing in the commit caused it.
+
+**None is a semantic conflict.** The counter-metric exists to detect *untested
+combinations* — two changes that pass alone and break together — which is the only
+thing `strict` was buying. Zero of three are that shape. On the evidence, relaxing
+`strict` did not cause a single integration failure in seven days.
+
+**That does not rescue the hypothesis, and the reason is the point of this file.**
+The day-5 observation raised exactly this — *"worth considering whether the
+counter-metric should require a failure to be plausibly combination-shaped before
+it counts"* — and **did not adopt it**. Adopting it now, after the numbers are
+known, is indistinguishable from fitting the test to the answer. The 2026-07-28
+amendment set the rule this file lives by: an amendment may only **add** ways to
+refute, and must be made **before** the result is known. So the pre-registered
+line stands, and H3 is refuted.
+
+### Three defects in the instrument, recorded for the successor rather than used here
+
+1. **The counter-metric is an absolute count on a repo whose volume grew 33%**
+   (275 -> 367 merged PRs; 1,190 integration runs). "Confounds acknowledged in
+   advance" states *"All primary metrics are rates or per-PR"* — the counter-metric
+   is neither. A busier repo breaches `>2 failures` on ambient noise alone. The
+   control's clean 0/0 came with **one fifth** the merge volume.
+2. **It cannot distinguish integration risk from ambient CI noise.** Two of three
+   failures were external events (a network reset, an upstream advisory
+   publication) that no branch-protection setting can prevent.
+3. **The tertiary metric is a mean dragged by outliers.** 15.9 min/PR against a
+   `greenToMergeP50` of **0.3 minutes** and `P90` of **7.4 minutes** — the typical PR
+   spends 18 seconds green-but-unmerged, and P90 is *inside* the <8 target. One PR
+   sat 1,666 minutes. The pre-registration chose the mean, so the mean is scored;
+   a successor should pre-register a percentile.
+
+### A contradiction inside this document, found during the review
+
+The **Falsification** section states: *"Refuted if `racedShare` is still above 8%
+on 2026-08-04 with at least 50 merged PRs."* The day-5 observation states the
+opposite: *"H3 has no `racedShare` refutation clause at all."* The Falsification
+section is the pre-registered text and governs; H4 also cites 8% as *"H3's own
+falsification threshold"*, so the day-5 sentence is simply wrong.
+
+It changed nothing here — 4.4% is under 8% either way — but a review that had
+landed between 3% and 8% would have had two contradictory rules in one file, and
+whichever the reviewer quoted would have looked pre-registered. **The correction
+is to the day-5 note, not to the Falsification section.**
+
+### Rollback
+
+Per the pre-registered rule — *"A refuted hypothesis gets the change rolled back,
+not quietly kept because it felt better"* — `strict` returns to `true` on
+`keiranholloway/biffo-template`:
+
+```sh
+gh api -X PATCH repos/keiranholloway/biffo-template/branches/dev/protection/required_status_checks \
+  -f strict=true
+```
+
+**`tabsii-platform` is deliberately NOT rolled back today, and this supersedes the
+Extension's "the rollback rule now covers two repos" only as to timing.** It joined
+the arm on 2026-07-31; a 7-day window ending today is ~4 days pre-treatment. Day 5
+already recorded the recommendation: *"give `tabsii-platform` its own review on
+2026-08-07, seven days after it actually joined."* Rolling it back today would
+destroy the only clean post-treatment window it has, on the strength of data
+mostly collected before the treatment existed. Its 2026-08-04 reading, for the
+record and **not as a verdict**: 220 merged PRs, `racedShare` 28.6%, `repushRate`
+31.4%, `integration.failures` 16 (of which `runnerKills` **8**), `redMinutes` 517.2.
+
+### What this leaves open
+
+- **The race has a cause nobody has identified.** Pre-registration: *"If it does
+  not, the race had a cause nobody has identified, which is itself worth knowing."*
+  `racedShare` fell 16.0% -> 4.4% while the control stayed at 18.2%, so `strict`
+  was clearly *a* cause — but the <3% prediction failed, and restoring `strict`
+  predicts a return toward 16%. **H4 reviews 2026-08-05** and its amendment
+  predicts `racedShare` below 8% from repush volume alone, with `strict`
+  unchanged. If H4 confirms, this rollback is the correct default and H3 was
+  measuring someone else's mechanism.
+- **A successor needs a counter-metric that measures integration risk rather than
+  CI weather** — combination-shaped failures only, expressed as a rate. That is a
+  new pre-registration, not a retrofit of this one.
+- **The cost that motivated #808 is unaddressed.** Restoring `strict` on the
+  template restores a gate that, over seven days and 367 merges, prevented
+  **zero** measured integration failures.

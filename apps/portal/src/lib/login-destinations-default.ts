@@ -29,19 +29,3 @@
 import type { LoginDestinations } from '@/lib/login-destinations-contract'
 
 export const INSTANCE_LOGIN_DESTINATIONS: Partial<LoginDestinations> = {}
-
-/**
- * What every rule resolves to before an instance overrides anything.
- *
- * Kept separate from the (empty) instance declaration above so
- * `normalizeLoginDestinations` always has a complete map to fall back to,
- * key by key — a partial override must not be able to leave a rule undefined.
- */
-export const DEFAULT_LOGIN_DESTINATIONS: LoginDestinations = {
-  admin: '/admin/',
-  platformAdmin: '/admin/',
-  orgScoped: '/admin/',
-  unitScoped: '/admin/',
-  marketplace: '/admin/',
-  noAccess: '/login/no-access/',
-}

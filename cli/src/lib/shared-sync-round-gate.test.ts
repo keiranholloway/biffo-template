@@ -89,6 +89,37 @@ describe('the round gate only bites when a scheduled round is actually running',
   })
 })
 
+/**
+ * The gate must key off the ESTATE, never `$HOME`.
+ *
+ * The first version defaulted the marker to `$HOME/.shared-sync-daily.last`, and
+ * the moment a real round wrote one, seven fixture tests began failing on the
+ * workstation: they drive throwaway estates in `/tmp` and never set the
+ * variable, so they read the developer's own marker and the gate stopped their
+ * rounds. CI has no marker, so CI stayed green — a local-gate/CI divergence in
+ * the hardest direction to believe, passing where nobody watches and failing
+ * where somebody does.
+ *
+ * Keying it to `$ESTATE` makes a fixture inert by construction rather than by an
+ * opt-out each call site has to remember.
+ */
+describe('the round marker is scoped to the estate, not the machine', () => {
+  const sync = () => readFileSync(SYNC, 'utf8')
+  const daily = () => readFileSync(DAILY, 'utf8')
+
+  it('never defaults the marker under $HOME', () => {
+    const offenders = [...sync().split('\n'), ...daily().split('\n')]
+      .filter((line) => !line.trim().startsWith('#'))
+      .filter((line) => /SHARED_SYNC_MARKER:-\$HOME/.test(line))
+    expect(offenders).toEqual([])
+  })
+
+  it('defaults it beside the estate in both the gate and the scheduled round', () => {
+    expect(sync()).toMatch(/SHARED_SYNC_MARKER:-\$ESTATE\/\.shared-sync-daily\.last/)
+    expect(daily()).toMatch(/SHARED_SYNC_MARKER:-\$ESTATE\/\.shared-sync-daily\.last/)
+  })
+})
+
 describe('the scheduled round and its override are wired to the parser', () => {
   const src = () => readFileSync(SYNC, 'utf8')
 

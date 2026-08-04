@@ -1541,7 +1541,25 @@ fi
 # install, and it ages out: a schedule that dies stops gating within 48 hours
 # and the manual path reopens by itself.
 _scheduled_round_is_live() {
-  _marker="${SHARED_SYNC_MARKER:-$HOME/.shared-sync-daily.last}"
+  # Beside the ESTATE, not in `$HOME`. The question this answers is "has a
+  # scheduled round run for THIS estate", so the estate is what it should be
+  # keyed to — and a `$HOME`-global path made the answer depend on the machine
+  # rather than the subject.
+  #
+  # That is not theoretical: the first version defaulted to
+  # `$HOME/.shared-sync-daily.last`, and the moment a real round wrote one, seven
+  # fixture tests began failing on this workstation — they drive throwaway
+  # estates in `/tmp` and never set the variable, so they read the developer's
+  # own marker and the gate stopped their rounds. CI has no marker, so it stayed
+  # green: a local-gate/CI divergence in the direction that is hardest to
+  # believe, where the suite passes in the place nobody is watching and fails in
+  # the place somebody is.
+  #
+  # Keying it to `$ESTATE` fixes both at once and needs no test to know the gate
+  # exists: a fixture estate is a fresh temp directory, so it has no marker, so
+  # the gate is inert there by construction rather than by an opt-out somebody
+  # has to remember at each call site.
+  _marker="${SHARED_SYNC_MARKER:-$ESTATE/.shared-sync-daily.last}"
   [ -f "$_marker" ] || return 1
   _now_s=$(date +%s)
   _marker_s=$(date -r "$_marker" +%s 2>/dev/null || echo 0)
@@ -1552,7 +1570,7 @@ if [ -z "$SCHEDULED" ] && [ -z "$NOW" ]; then
   if _scheduled_round_is_live; then
     printf '\n%s current, %s drifted -- \033[33mnot shipping\033[0m\n\n' "$current" "$drifted"
     printf 'A scheduled round runs daily (scripts/shared-sync-daily.sh, last run %s).\n' \
-      "$(cat "${SHARED_SYNC_MARKER:-$HOME/.shared-sync-daily.last}" 2>/dev/null || echo unknown)"
+      "$(cat "${SHARED_SYNC_MARKER:-$ESTATE/.shared-sync-daily.last}" 2>/dev/null || echo unknown)"
     printf 'Starting another one by hand costs %s more PRs that somebody has to merge,\n' "$drifted"
     printf 'and that cost was 69 of the estate'"'"'s 69 avoidable merges on 2026-08-03.\n\n'
     printf '  wait      the next round distributes this automatically\n'

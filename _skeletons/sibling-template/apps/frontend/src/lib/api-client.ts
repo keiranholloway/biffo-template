@@ -179,6 +179,51 @@ async function refreshViaPortalSession(): Promise<string | null> {
   return session?.getIdToken().getJwtToken() ?? null
 }
 
+/**
+ * The freshest token this module has renewed a specific stale one into.
+ *
+ * Every caller passes `getIdToken` as `() => token` closing over React state
+ * that a renewal happening outside React never updates (see `send` below).
+ * Without this, the SAME stale value keeps coming back from `getIdToken()` for
+ * the rest of the page's life, so every request after the first expiry pays a
+ * full 401 + renew + retry cycle even though the previous renewal already
+ * produced a token that would have worked.
+ *
+ * Keyed by the stale token it replaced — not just "the freshest token" — and
+ * consulted in `send` only when the caller's own `getIdToken()` result still
+ * equals that key. That is what makes it safe to share at module scope:
+ *
+ * - **Safe across sign-out, or a different user signing in.** Either changes
+ *   what `getIdToken()` returns, and a Cognito id token is unique per session,
+ *   so the new value cannot equal a previous session's `staleToken`. The
+ *   cache simply stops matching — nothing has to remember to clear it.
+ *   Rejected: a bare "freshest known token" cache with no key would keep
+ *   answering with the previous session's token until something explicitly
+ *   cleared it on sign-out, which is a security defect (a stale credential
+ *   handed to the wrong session) far worse than the latency this fixes.
+ * - **Safe for concurrent requests and multiple `createApiClient` instances.**
+ *   They all read the same React state through their own `getIdToken`
+ *   closures, so they all see the same stale value and all benefit from the
+ *   one cache entry — there is nothing per-instance to keep in step, the same
+ *   reasoning as `inFlightRenewal` above.
+ *
+ * Rejected alternative: an optional `onTokenRenewed` callback for callers to
+ * update their own state themselves. Cleaner ownership in principle, but it
+ * only helps callers that wire it up — every sibling's call sites today do
+ * not — so the default path would stay slow. This fixes the default path
+ * with no caller changes required.
+ */
+let renewedTokenCache: { staleToken: string; freshToken: string } | null = null
+
+/**
+ * Test-only: clear the module-scope renewal cache so one test's renewal
+ * cannot leak into the next. Production code never calls this — the cache is
+ * meant to live for the whole page.
+ */
+export function __resetRenewedTokenCacheForTests(): void {
+  renewedTokenCache = null
+}
+
 export function createApiClient(
   getIdToken: () => string | null,
   refreshIdToken: () => Promise<string | null> = refreshViaPortalSession,
@@ -197,13 +242,24 @@ export function createApiClient(
    * makes "once" structural: there is no path back to the top, so a genuinely
    * revoked session cannot spin however many 401s it produces.
    *
-   * It also carries the token the renewal returned rather than re-reading
-   * `getIdToken()`. Every caller passes `() => token` closing over React state,
-   * which a renewal outside React has not updated — so re-reading it would
-   * re-send the credential the gateway just rejected and burn the one retry.
+   * The first attempt prefers `renewedTokenCache` over `getIdToken()` when the
+   * caller's own state is still the exact value a previous renewal in this
+   * module already replaced — see the doc on `renewedTokenCache` above for why
+   * that is safe. That is what stops a page from paying the full cycle on
+   * every request for the rest of its life once React state has gone stale.
+   *
+   * The retry itself carries the token the renewal returned rather than
+   * re-reading `getIdToken()`. Every caller passes `() => token` closing over
+   * React state, which a renewal outside React has not updated — so re-reading
+   * it would re-send the credential the gateway just rejected and burn the one
+   * retry.
    */
   async function send<T>(path: string, init: RequestInit): Promise<T> {
-    const sentToken = getIdToken()
+    const callerToken = getIdToken()
+    const sentToken =
+      callerToken !== null && renewedTokenCache?.staleToken === callerToken
+        ? renewedTokenCache.freshToken
+        : callerToken
     const res = await fetch(`${API_URL}${path}`, { ...init, headers: authHeaders(sentToken) })
     if (res.status !== 401) return handleResponse<T>(res)
 
@@ -212,6 +268,14 @@ export function createApiClient(
     // retry would re-send what was just rejected. Skip it rather than spend it.
     if (renewed == null || renewed === sentToken) {
       throw new ApiError(401, unauthorizedMessage(await bodyOf(res)))
+    }
+
+    // Cache against the caller's OWN stale value, not `sentToken` (which may
+    // already have been substituted from a previous cache hit) — that is the
+    // value `getIdToken()` keeps returning for the rest of the page's life, so
+    // it is the correct key for the next call to match against.
+    if (callerToken !== null) {
+      renewedTokenCache = { staleToken: callerToken, freshToken: renewed }
     }
 
     const retried = await fetch(`${API_URL}${path}`, { ...init, headers: authHeaders(renewed) })

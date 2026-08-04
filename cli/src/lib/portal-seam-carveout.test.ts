@@ -96,15 +96,50 @@ describe('portal instance seams are authorable, not just resolvable (#1305)', ()
     expect(seams).toContain('instance-nav.ts')
   })
 
-  it.each(declaredSeamFiles())(
-    'the %s seam has a userOwned carve-out, so an instance may actually create it',
+  /**
+   * Both files an instance needs per seam: the declaration and its test.
+   *
+   * The test is not a nicety here. The values a seam carries are **instance
+   * data**, so the only place that can assert what they resolve to is the
+   * instance — `login-routing.test.ts` deliberately INJECTS six distinct
+   * destinations to test rule precedence, and its own docstring explains why it
+   * must: against the real map five of six outcomes are `/admin/`, so those
+   * assertions "go quiet rather than red". Correct upstream, and it means no
+   * template test can ever cover an instance's actual destinations.
+   *
+   * Refusing the instance's test therefore leaves the values with no possible
+   * test **anywhere**, which is how tabsii shipped every non-admin user to a
+   * refusal page with a green suite in both repos (#1307).
+   *
+   * Derived from the seam file rather than listed, for the same reason the seam
+   * list itself is derived: a third hand-written list is a third place to forget
+   * a half. `vitest.config.ts`'s include already globs every `.test.ts` under
+   * `src`, so a carve-out at this path needs no further wiring.
+   */
+  function requiredCarveOuts(): string[] {
+    return declaredSeamFiles().flatMap((file) => [file, file.replace(/\.ts$/, '.test.ts')])
+  }
+
+  it('expects a test carve-out per seam, so the pairing cannot silently vanish', () => {
+    // If the `.test.ts` derivation broke, the it.each below would still run and
+    // still pass -- on half the cases. Assert the shape of what it iterates.
+    const required = requiredCarveOuts()
+    expect(required.filter((f) => f.endsWith('.test.ts')).length).toBe(declaredSeamFiles().length)
+  })
+
+  it.each(requiredCarveOuts())(
+    '%s has a userOwned carve-out, so an instance may actually create it',
     (file) => {
       const expected = `apps/portal/src/${file}`
+      const isTest = file.endsWith('.test.ts')
       expect(
         ownerOf(expected) === 'user',
-        `next.config.ts declares the ${file} seam but core-manifest.json does not carve it out. ` +
-          `apps/portal/ is templateOwned, so the ownership guard refuses any instance that creates ` +
-          `it — the seam resolves and cannot be authored, which is #1305.`,
+        `next.config.ts declares a seam needing ${file} but core-manifest.json does not carve it ` +
+          `out. apps/portal/ is templateOwned, so the ownership guard refuses any instance that ` +
+          (isTest
+            ? `creates it — the seam can be authored and cannot be tested, which is #1307. Only the ` +
+              `instance can assert what its own seam data resolves to.`
+            : `creates it — the seam resolves and cannot be authored, which is #1305.`),
       ).toBe(true)
     },
   )

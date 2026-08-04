@@ -55,9 +55,11 @@ const manifest = JSON.parse(readFileSync(join(root, 'shared-files.json'), 'utf8'
   filesFromSkeleton?: Record<string, string>
   skeletonForMarker?: Record<string, string>
   skeletonDefault?: string
+  mustBeUniform?: Record<string, number>
 }
 const sharedFiles: string[] = manifest.files
 const conditionalFiles: Record<string, string> = manifest.filesIfPresent ?? {}
+const uniformFiles: Record<string, number> = manifest.mustBeUniform ?? {}
 const skeletonFiles: Record<string, string> = manifest.filesFromSkeleton ?? {}
 const skeletonForMarker: Record<string, string> = manifest.skeletonForMarker ?? {}
 
@@ -284,17 +286,59 @@ describe('shared-files.json filesFromSkeleton', () => {
  * silently isn't distributed with it.
  */
 describe("a distributed module's test is distributed too (#1272)", () => {
-  /** `foo.ts` -> `foo.test.ts`; null for anything that isn't a plain module. */
-  function testSiblingPath(tsPath: string): string | null {
-    if (!tsPath.endsWith('.ts') || tsPath.endsWith('.test.ts') || tsPath.endsWith('.d.ts')) {
-      return null
+  /**
+   * A module's test path, or null if the path is not a plain module.
+   *
+   * TWO conventions, because the estate has two languages and the first version
+   * of this guard only knew one. It derived `foo.test.ts` from `foo.ts` and was
+   * therefore structurally blind to every Python module — so it shipped in
+   * #1287 looking like it covered the class, and `core_client.py` (7/7) with
+   * `test_core_client.py` (1/7) sat underneath it untouched. Five siblings were
+   * still carrying the #1107 bug that test would have caught (#1299).
+   *
+   * A guard whose reach is narrower than its name is the recurring shape here:
+   * `--candidates` needing >=5 holders (#1271), `verify.sh` looking only at the
+   * repo root (#855, #1239). Enumerate the conventions; do not assume one.
+   */
+  function testSiblingPath(modulePath: string): string | null {
+    // TypeScript: `src/lib/foo.ts` -> `src/lib/foo.test.ts`, same directory.
+    if (modulePath.endsWith('.ts')) {
+      if (modulePath.endsWith('.test.ts') || modulePath.endsWith('.d.ts')) return null
+      return `${modulePath.slice(0, -'.ts'.length)}.test.ts`
     }
-    return `${tsPath.slice(0, -'.ts'.length)}.test.ts`
+    // Python: a different DIRECTORY and a `test_` PREFIX rather than a suffix,
+    // which is why a suffix-only rule could never have found it.
+    // `services/api/src/api/foo.py` -> `services/api/tests/test_foo.py`
+    if (modulePath.endsWith('.py')) {
+      const m = modulePath.match(/^(.*)\/src\/[^/]+\/([^/]+)\.py$/)
+      if (!m) return null
+      const [, servicePrefix, name] = m
+      if (name.startsWith('test_') || name === '__init__') return null
+      return `${servicePrefix}/tests/test_${name}.py`
+    }
+    return null
   }
 
   const filesCases = sharedFiles.flatMap((rel) => {
     const testPath = testSiblingPath(rel)
     return testPath !== null && existsSync(join(root, testPath)) ? [[rel, testPath] as const] : []
+  })
+
+  // `mustBeUniform` is the third home, and the one that actually mattered.
+  // `core_client.py` is tracked there — not in `files`/`filesIfPresent`, because
+  // it has drifted and a one-way overwrite would clobber whichever copy is
+  // right — so a guard reading only the two writing lists could never see it.
+  // A path tracked BECAUSE its copies disagree is the last place a missing test
+  // is affordable: `auth.ts` and `auth.test.ts` are both listed there, which is
+  // the precedent this follows.
+  const uniformCases = Object.keys(uniformFiles).flatMap((rel) => {
+    const testPath = testSiblingPath(rel)
+    if (testPath === null) return []
+    // Only where the skeleton actually ships a test — otherwise this demands a
+    // file nobody has written.
+    return skeletons.some((sk) => existsSync(join(root, '_skeletons', sk, testPath)))
+      ? [[rel, testPath] as const]
+      : []
   })
 
   const conditionalCases = Object.entries(conditionalFiles).flatMap(([target, source]) => {
@@ -310,6 +354,26 @@ describe("a distributed module's test is distributed too (#1272)", () => {
     // this repo today, not a hypothetical one.
     expect(filesCases.length + conditionalCases.length).toBeGreaterThan(0)
   })
+
+  it('finds at least one mustBeUniform module with a skeleton test, so the arm is not vacuous', () => {
+    expect(uniformCases.length).toBeGreaterThan(0)
+  })
+
+  it.each(uniformCases)(
+    '%s is tracked, so its test (%s) must be tracked somewhere too',
+    (rel, testPath) => {
+      const tracked =
+        Object.keys(uniformFiles).includes(testPath) ||
+        sharedFiles.includes(testPath) ||
+        Object.keys(conditionalFiles).includes(testPath)
+      expect(
+        tracked,
+        `${rel} is in mustBeUniform but ${testPath} is tracked nowhere. A module distributed or ` +
+          `tracked across the estate whose test is not is exactly #1272/#1299: the test reaches one ` +
+          `repo and a regression is silent in the rest.`,
+      ).toBe(true)
+    },
+  )
 
   it.each(filesCases)('%s has its test (%s) listed in `files` too', (rel, testPath) => {
     expect(

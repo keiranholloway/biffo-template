@@ -351,6 +351,26 @@ applies() {
   # `scripts/biffo.sh` is the successor because it is the bridge every satellite
   # holds and the first entry in `files` -- "already receiving distribution" is
   # exactly what the old clause meant by "already carrying the gate".
+  #
+  # Read from `origin/<base>`, NOT the working tree, and that distinction is the
+  # whole point rather than a detail. #1290 swapped the filename in this clause
+  # and kept the `[ -f ... ]`, which dropped all four marker-less repos out of
+  # scope on the very next run: their checkouts are parked on `main` or behind
+  # (`checkout-audit.sh` reports every one of them), so they hold the PREVIOUS
+  # generation's `scripts/verify.sh` and not the bridge. The round went from 14
+  # repos to 10 in silence.
+  #
+  # That is the same defect the swap was meant to fix, one filename later: a
+  # scope test against a working tree measures whoever last ran `git pull` on
+  # this machine, not the estate. `shared-files.json`'s `mustBeUniform` note
+  # already records the identical lesson from the other direction -- it reads
+  # `origin/<base>` refs precisely so a stale checkout cannot move the number --
+  # and this clause should have been written that way to begin with.
+  #
+  # The working tree stays as a fallback for a clone with no fetched origin,
+  # where the ref genuinely cannot be read and refusing scope would be worse.
+  _base=$(resolve_base "$1")
+  git -C "$1" rev-parse -q --verify "origin/$_base:scripts/biffo.sh" >/dev/null 2>&1 && return 0
   [ -f "$1/scripts/biffo.sh" ] && return 0
   return 1
 }

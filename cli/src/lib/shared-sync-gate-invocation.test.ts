@@ -82,4 +82,43 @@ describe('the rehearsal runs the same gate the push hook runs', () => {
     const manifest = JSON.parse(readFileSync(join(repoRoot, 'shared-files.json'), 'utf8'))
     expect(manifest.files).toContain(scopeFile)
   })
+
+  /**
+   * The regression #1290 shipped, and the reason the filename was never the
+   * point. That PR swapped the scope clause from `scripts/verify.sh` to
+   * `scripts/biffo.sh` and kept the `[ -f ... ]` working-tree test — so on the
+   * next run all four marker-less repos left scope in silence, because their
+   * checkouts are parked on `main` or behind and still hold the previous
+   * generation's file. The round went from 14 repos to 10 with no error.
+   *
+   * A scope test against a working tree measures whoever last ran `git pull` on
+   * the machine, not the estate. `shared-files.json`'s `mustBeUniform` note
+   * records the same lesson from the other direction, in as many words: it reads
+   * `origin/<base>` refs "never a working tree", because a guard that moves with
+   * somebody's stale checkout is one people learn to ignore.
+   *
+   * The `[ -f ... ]` fallback is deliberate and stays — a clone with no fetched
+   * origin genuinely cannot answer, and refusing scope there would be worse. The
+   * invariant is that the REF is consulted first.
+   */
+  it('resolves scope from origin/<base>, not from whatever the checkout happens to hold', () => {
+    const applies = SYNC.slice(
+      SYNC.indexOf('applies() {'),
+      SYNC.indexOf('\n}\n', SYNC.indexOf('applies() {')),
+    )
+
+    const refTest = applies.search(
+      /git -C "\$1" rev-parse -q --verify "origin\/\$_base:scripts\/biffo\.sh"/,
+    )
+    const treeTest = applies.search(/^\s*\[ -f "\$1\/scripts\/biffo\.sh" \] && return 0$/m)
+
+    expect(refTest, 'applies() must consult the origin ref for the scope clause').toBeGreaterThan(
+      -1,
+    )
+    expect(
+      treeTest,
+      'the working-tree fallback should remain for unfetchable clones',
+    ).toBeGreaterThan(-1)
+    expect(refTest).toBeLessThan(treeTest)
+  })
 })

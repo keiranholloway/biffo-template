@@ -91,6 +91,9 @@ set -u
 
 ISSUE=""
 REPO=""
+HOLDER=""
+RELEASE=""
+HOLDER_MARK="claim-holder:"
 CHECK_ONLY=""
 GUARD_BRANCH=""
 
@@ -106,6 +109,15 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --check) CHECK_ONLY=1; shift ;;
+    --as)
+      HOLDER="${2:-}"
+      shift 2
+      ;;
+    --release)
+      HOLDER="${2:-}"
+      RELEASE=1
+      shift 2
+      ;;
     --guard)
       GUARD_BRANCH="${2:-}"
       shift 2
@@ -127,6 +139,23 @@ OFF=$(printf '\033[0m')
 gh_issue() { if [ -n "$REPO" ]; then gh issue "$@" --repo "$REPO"; else gh issue "$@"; fi; }
 gh_pr() { if [ -n "$REPO" ]; then gh pr "$@" --repo "$REPO"; else gh pr "$@"; fi; }
 gh_label() { if [ -n "$REPO" ]; then gh label "$@" --repo "$REPO"; else gh label "$@"; fi; }
+
+# Does the newest claim comment on $1 carry holder token $2? (#1279)
+#
+# Reads the LAST claim comment rather than any, so a re-claim by a different
+# session supersedes an older one rather than both matching for ever. Returns
+# non-zero when it cannot tell -- an unreadable comment list must never read as
+# "yours", or the flag becomes a way to steal a claim by guessing.
+claim_held_by() {
+  _c=$(gh_issue view "$1" --json comments \
+    --jq "[.comments[]? | select(.body | contains(\"$HOLDER_MARK\"))] | last | .body // \"\"" \
+    2>/dev/null) || return 1
+  [ -n "$_c" ] || return 1
+  case "$_c" in
+    *"$HOLDER_MARK$2"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 # This repo as `owner/name`, so a closing reference can be checked against it.
 # GitHub records a CROSS-REPO closing reference in the same list as a local one
@@ -167,10 +196,50 @@ remote_branches() {
 }
 
 LABEL=in-progress
+
+# --- holder identity (#1279) -------------------------------------------------
+#
+# A claim used to record WHEN and WHO, and every session on a workstation claims
+# under the same GitHub actor. So a delegated agent could not distinguish
+# "my orchestrator claimed this for me" from "a stranger claimed it 90 seconds
+# ago", and the safe reading is to stop. On 2026-08-04 four agents were
+# dispatched onto pre-claimed issues; one ran the check first and correctly
+# refused to start, producing nothing. Whether a delegate works or stalls
+# depended on whether it happened to check before starting.
+#
+# `--as <token>` makes the claim answerable: an existing claim carrying the same
+# token reads as YOUR claim and returns free. `--release <token>` refuses to
+# clear somebody else's.
+#
+# The token is opaque and never a secret -- it identifies a session, not a
+# person, and appears in a public comment.
+
 TAKEN=0
 REASONS=""
 
 note() { REASONS="${REASONS}  $1\n"; TAKEN=1; }
+
+# --- --release <token>: only the holder clears it (#1279) --------------------
+#
+# A claim nobody can prove ownership of is one anybody can clear, and a stale
+# label left behind by a crashed session is indistinguishable from a live one.
+# Refusing a mismatched release is what makes the token worth recording.
+if [ -n "$RELEASE" ]; then
+  if claim_held_by "$ISSUE" "$HOLDER"; then
+    gh_issue edit "$ISSUE" --remove-label "$LABEL" >/dev/null 2>&1 || {
+      echo "${RED}claim: could not remove the '$LABEL' label.${OFF}" >&2
+      exit 2
+    }
+    echo "${GREEN}Released.${OFF} ${DIM}(held by $HOLDER)${OFF}"
+    exit 0
+  fi
+  echo "${RED}claim: #$ISSUE is not held by '$HOLDER' — refusing to release it.${OFF}" >&2
+  echo "${DIM}  Clearing somebody else's claim is how two sessions end up on one issue.${OFF}" >&2
+  echo "${DIM}  If the claim is genuinely stale (AGENTS.md: over an hour, no branch, no PR),${OFF}" >&2
+  echo "${DIM}  remove the label by hand and say so in a comment.${OFF}" >&2
+  exit 1
+fi
+
 
 # --- --guard <branch>: the enforced pre-push gate -----------------------------
 #
@@ -290,7 +359,15 @@ fi
 case ",$labels," in
   *",$LABEL,"*)
     updated=$(gh_issue view "$ISSUE" --json updatedAt --jq .updatedAt 2>/dev/null)
-    note "${YELLOW}label${OFF}      carries '$LABEL' (issue last updated $updated)"
+    # Whose claim is it? (#1279) A claim carrying OUR token is not a collision --
+    # it is the orchestrator that dispatched us. Without this a delegated agent
+    # cannot tell its own reservation from a stranger's and correctly refuses to
+    # start, which is the failure this flag exists to remove.
+    if [ -n "$HOLDER" ] && claim_held_by "$ISSUE" "$HOLDER"; then
+      echo "${DIM}label      carries '$LABEL', held by ${HOLDER} — that is you${OFF}"
+    else
+      note "${YELLOW}label${OFF}      carries '$LABEL' (issue last updated $updated)"
+    fi
     ;;
 esac
 
@@ -388,7 +465,7 @@ gh_issue edit "$ISSUE" --add-label "$LABEL" >/dev/null 2>&1 || {
   exit 2
 }
 gh_issue comment "$ISSUE" \
-  --body "Claimed at $(date -u +%FT%TZ) by \`$(git config user.name 2>/dev/null || echo agent)\`. Release it — remove the label — on merge, or if you stop." \
+  --body "Claimed at $(date -u +%FT%TZ) by \`$(git config user.name 2>/dev/null || echo agent)\`.${HOLDER:+ ${HOLDER_MARK}${HOLDER}} Release it — remove the label — on merge, or if you stop." \
   >/dev/null 2>&1
 
 echo "${GREEN}Claimed.${OFF}"

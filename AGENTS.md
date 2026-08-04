@@ -60,6 +60,8 @@ Several agents often run concurrently in this repo. A worktree isolates your
 
 ```bash
 sh scripts/biffo.sh claim <issue-number> [-R owner/repo]   # 0 free · 1 taken · 2 cannot tell
+sh scripts/biffo.sh claim <issue-number> --as <token>      # a claim carrying <token> is YOURS, not a collision
+sh scripts/biffo.sh claim <issue-number> --release <token> # only the holder may clear it
 ```
 
 It asks four questions, because the answer lives in more than one place: does
@@ -84,6 +86,20 @@ On 2026-08-03 four sessions collided in one morning. **Three of the four were
 nobody had labelled. The fourth was the reverse: a label with no work, while
 another session built the thing and opened a PR. Checking only the label would
 have caught one of four.
+
+**Dispatching agents onto issues you have claimed? Pass `--as <token>`.**
+A claim records when and who, and every session on a workstation claims under
+the same GitHub actor — so without a token a delegated agent cannot tell your
+reservation from a stranger's, and the rule it correctly follows is _never steal
+a fresh claim_. On 2026-08-04 four agents were dispatched onto pre-claimed
+issues; the one that checked before starting refused and produced nothing, while
+the three that had not yet checked worked normally. Whether a delegate works or
+stalls should not depend on when it happens to look.
+
+Generate any opaque token per session, claim with `--as`, and give the same
+token to every agent you dispatch. `--release <token>` then refuses to clear
+anybody else's claim, which is what makes a stale label distinguishable from a
+live one.
 
 **Push your branch as soon as it exists.** The claim is a reservation; the
 branch is the evidence, and it is the only signal other machines can see — a

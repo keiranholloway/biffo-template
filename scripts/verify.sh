@@ -411,8 +411,27 @@ else
   NO_CI=1
 fi
 
-if [ -n "$CI_YML_UNREADABLE" ]; then
-  printf '\n\033[31mverify: CANNOT TELL - .github/workflows/ci.yml exists but could not be read\033[0m\n'
+# release-guards.yml (#1319): the "Release Guards" job's own trigger needed
+# `edited` added to it (so a PR title/body correction re-evaluates
+# automatically), and giving that trigger to the WHOLE build matrix in
+# ci.yml would re-run every heavy job on every description tweak -- so the
+# job moved to this second file instead (see that file's own header). Its
+# absence does NOT mean "no CI to mirror" -- ci.yml alone is still a real CI
+# and NO_CI must not fire just because a repo has not adopted the split (a
+# sibling never will; an instance not yet upgraded past #1319 has not yet).
+# But if it EXISTS and cannot be READ, that is the identical #1218 shape as
+# ci.yml itself, and ci_has() must search it too or "practices-monotonic"
+# (moved into it) would silently stop being locally mirrored the moment it
+# left ci.yml -- covered less than verify.sh claims, with nothing saying so.
+RELEASE_GUARDS_YML_UNREADABLE=""
+if [ -f .github/workflows/release-guards.yml ] && [ ! -r .github/workflows/release-guards.yml ]; then
+  RELEASE_GUARDS_YML_UNREADABLE=1
+fi
+
+if [ -n "$CI_YML_UNREADABLE" ] || [ -n "$RELEASE_GUARDS_YML_UNREADABLE" ]; then
+  printf '\n\033[31mverify: CANNOT TELL - a core workflow file exists but could not be read\033[0m\n'
+  [ -n "$CI_YML_UNREADABLE" ] && printf '  .github/workflows/ci.yml\n'
+  [ -n "$RELEASE_GUARDS_YML_UNREADABLE" ] && printf '  .github/workflows/release-guards.yml\n'
   printf 'Permissions, a partial checkout, or a filesystem error -- not "no CI to\n'
   printf 'mirror" (that is a missing ci.yml, handled separately, and does not\n'
   printf 'block). Every check gated on ci_has() would silently be skipped and the\n'
@@ -424,7 +443,8 @@ fi
 
 ci_has() {
   [ -n "${NO_CI:-}" ] && return 0
-  grep -qE "$1" .github/workflows/ci.yml
+  grep -qE "$1" .github/workflows/ci.yml && return 0
+  [ -f .github/workflows/release-guards.yml ] && grep -qE "$1" .github/workflows/release-guards.yml
 }
 
 have_script() {

@@ -627,6 +627,86 @@ change that was actually shipped. **The job that was safe to fold and the job
 that was worth folding were different jobs**, and nothing in the analysis
 connected the two until the numbers were re-derived at the end.
 
+### Measured: six probes read "empty" as "absent" in one session, and one of them explained away a P0 (2026-08-04)
+
+The estate's most-repeated defect is "a zero is two different claims" — an
+aggregate over an input it never loaded, reporting the empty answer instead of
+the missing input. Every recorded instance so far has been **code** doing it.
+
+This session produced six instances of the same shape in the **verification**,
+during a per-role UI walkthrough. None errored. Each produced a confident wrong
+statement, and two of them were reported to the owner before being caught:
+
+| The probe | What it returned | What was true |
+| --- | --- | --- |
+| `media_asset_id` on the learner projection | `has_asset: false` for every lesson | The field is not in that allow-list projection; the real field is `has_material` and it was `true` |
+| `material-url` as a learner | `404` | **The actual defect** (`tabsii-platform#573`) — attributed instead to "the BFF does not proxy this route", against the origin that does |
+| `document.querySelectorAll('table tr')` | `0` rows, twice | The grants list is a `<ul>`; the page was fully rendered. Reported as "renders nothing" |
+| `history.pushState` + synthetic `popstate` | Ten views, all identical | The app ignores synthetic popstate. Would have filed ten findings about one page |
+| `git merge-base --is-ancestor` | `merged=NO` for 11 branches | All 11 had **squash**-merged, so the tip is never an ancestor. A cleanup script on this heuristic keeps everything or deletes live work |
+| `cat biffo.core.json` | `0.244.7` | Read from a primary checkout 9 commits behind; `origin/dev` had `0.247.5`. Reported as a possible version bug |
+
+**The rule that would have prevented five of the six: read the shape before
+querying it.** The projection's field list, the DOM structure, the merge
+strategy, the ref you are reading. Each cost one round trip to check and
+several to recover from.
+
+**The sixth is worse and has its own rule.** A `404`/`405` from a guessed path is
+not evidence the capability is absent. The same session concluded "no
+browser-reachable route can delete a course" from a `405` on a guessed method,
+told the owner so, and then deleted a course through the route that had existed
+all along (`tabsii-lms#57`). *A failed probe is not an absent capability.*
+
+### Presence of an affordance is not the affordance working
+
+Recorded separately because it is the one that let a P0 through.
+
+The same walkthrough reported **"video playable"** for a learner, from seeing a
+`Watch video` button. The button was never clicked. No learner could open any
+material at all — `tabsii-platform#573` — and the feature had never worked for
+its audience.
+
+Worth stating as a check, because it is cheap and it was skipped: **for anything
+that fetches, the verification is the fetch.** A rendered control proves the
+client decided to offer it, which is a claim about the client's belief, not about
+the system. The button was rendered from `has_material: true`; the fetch it
+promised returned `404`. Both were "working as written".
+
+The upload half of the same feature *was* verified end to end that morning —
+presign → S3 `204` → confirm → real bytes — **as Brand HQ**. Correct evidence,
+wrong caller, and it made the feature look finished. §2's "reproduce by the
+reporter's route" is usually read as being about the *request path*; it is
+equally about the *identity*.
+
+### Measured: the worktree leak has a mechanism, and it announces itself at the moment of success
+
+27 worktrees had accumulated across three repos; 22 were merged or closed work.
+The leak is not carelessness, it is a message arriving at the wrong moment. Every
+`gh pr merge --squash --delete-branch` in this session printed:
+
+```
+failed to delete local branch X: cannot delete branch 'X' used by worktree at '...'
+```
+
+That line means the merge **succeeded** and the remote branch **was** deleted —
+only the local branch and its worktree survive. It appears immediately after a
+success, so it reads as noise, and the operator moves on. Seen on essentially
+every merge today.
+
+Two structural aggravators: sessions are killed mid-flow (three times in this
+one, on usage limits), and cleanup is the **last** step of the workflow, so it is
+the first thing lost.
+
+**And squash-merge — which is right, and load-bearing — is why no naive sweep can
+fix it.** ADR-0006 derives the core version from the squash-merge subject, so the
+strategy is not free to change. But a squashed tip is never an ancestor of `dev`,
+so no local git check can classify a worktree. Cleanup has to ask GitHub for PR
+state; the sweep that worked queried `gh pr list --head <branch> --state all` per
+worktree, kept anything dirty, PR-less, or on a detached HEAD **unreachable from
+any ref** (four of those, which a blind `worktree remove` would have made
+garbage-collectable), and removed 22 of 27.
+
+
 ### Measured: the diagnosis was ~10 minutes of querying; the issue had budgeted days of infrastructure (2026-08-03)
 
 `#1021` had been open since it was filed, blocked on a stated prerequisite:
@@ -2314,6 +2394,46 @@ docstring. Rather than trust that, the old list was re-run against the new
 workflow and watched to fail (`'Terraform Validate (infra/environments)' is
 excluded but no such job exists`), then restored. That is the difference between
 a guard that fired and a guard that was *observed* firing.
+
+### Reading the diff caught what no test could, in four separate agents' work (2026-08-04)
+
+Four agents ran concurrently on one issue set. Each reported at least one defect
+found by **reading its own diff back**, none reachable by a test:
+
+- A comment claiming a helper was single-sourced when a second component
+  re-derived it inline; and `body_text: "   "` counting as content, which walked
+  straight back through the new empty-lesson guard.
+- An allow-case that was published **and** enrolled, so the policy granted it via
+  either disjunct and the test proved neither — replaced with archived-enrolled
+  and published-not-enrolled to isolate them. That second case is the concrete
+  evidence against the narrower design that was nearly chosen.
+- A `btrim()` call with one argument, which strips spaces only, so a lone newline
+  read as content.
+- Two caveat sentences collapsed into one, changing what the page claimed.
+
+The common shape: **each was a defect in an argument, not in behaviour** — a
+comment, a fixture's design, a claim. Tests cannot see any of them. This is the
+same finding as `biffo-workflow` §4.5 recorded earlier, now with four fresh
+instances in one session, which argues for it being a standing step rather than a
+good habit.
+
+### Measuring instead of reasoning overturned three grant assumptions in one day (2026-08-04)
+
+Three separate "this permission does/doesn't do X" claims were settled in the
+real-Postgres lane in roughly three seconds each, and **all three were wrong
+before measuring**:
+
+| The claim | Measured |
+| --- | --- |
+| Granting `users.read` fixes blank learner names (plan 0013's stated remedy) | Does nothing — `users_read` has no term reading it. `user_role_assignments.read` is the code that governs it, and the visibility it grants is brand-scoped, not tenant-wide |
+| Granting `courses.read` would let a Unit Owner see courses | No-op — `fn_authorized` matches scope by equality and a unit-scoped assignment cannot satisfy a brand target. They already read published courses via `brands.read` + the ancestor widening |
+| "We cannot delete courses" | The route existed; a course was deleted through it minutes later |
+
+The first reached an **accepted ADR** before being corrected. The lesson is not
+"read the policy more carefully" — the policy text was read carefully each time.
+It is that **a grant question is empirically cheap and analytically expensive**,
+so the lane should be the first move, not the fallback.
+
 
 **"When a measurement surprises you, suspect the ruler first" downgraded a
 finding I was one command from filing wrongly (2026-08-03).** Sweeping for
@@ -4539,6 +4659,34 @@ recognisable — *the reason I chose this is not the reason I am justifying it* 
 and it is worth looking for whenever a constraint narrows a choice down to one
 option.
 
+### A projection that promises what the next call refuses (2026-08-04)
+
+`has_material: true` came from `lessons.media_asset_id IS NOT NULL`, which needs
+no `media_assets` visibility. The fetch it promised needed a permission the
+learner deliberately lacks. Both halves were locally correct and the contract
+between them was never stated anywhere, so nothing could have caught the
+disagreement.
+
+A guard was added for this one case — `has_material` implies fetchable by the
+same caller. **The general form is unaddressed:** any boolean in a projection
+that predicts a later call's success is the same trap, and nothing enumerates
+them. `position_seconds` sits in the same projection and has not been checked.
+
+### Nothing tests that the deliberately-ungated routes stay ungated (2026-08-04)
+
+Unit Owner and Regional HQ read the LMS reporting surfaces **only because those
+routes carry no permission code**. That is a deliberate design, recorded in plan
+0013 M8 and warned about again in plan 0015 M2 — and it is load-bearing and
+unasserted. Someone adding `_require(caller, 'courses.read')` in good faith
+would break Unit Owner reporting with no test failing, producing an empty report
+with a 200. Filed as `tabsii-platform#574`; the guard does not exist yet.
+
+The wider shape is worth naming: **this estate has several properties that hold
+because something is absent.** Absence is not testable by the tests that would
+normally cover a feature, and it is invisible to code review, because the thing
+to notice is a line that is not there.
+
+
 **A lesson recorded four times with no mechanism behind it is not a lesson, and
 this page cannot tell the difference.** The lexical-closing-keyword trap has now
 been logged **four** times — tabsii-platform#76, tabsii-crm#133 (itself recorded
@@ -6269,6 +6417,8 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-workflow` | **not invoked — and two of its steps were skipped in ways it exists to prevent** | Every unit followed AGENTS.md by hand and mostly correctly. Two failures, both covered by the skill: I edited `tabsii-platform`'s **primary checkout** directly before moving the change to a worktree (§1's first rule), and I skipped `pnpm install` in a fresh worktree so the first commit was rejected by a missing `lint-staged` (§1's install rule, already recorded on this page from a previous session). Neither cost more than a few minutes, and both are exactly what the step order enforces where habit does not. |
 | `biffo-verify` | **worked — and it was the only reason a 5× wrong number did not stand** | Invoked *after* the change had shipped and been distributed, as a capture exercise. Its opening rule — "green is not evidence" — read as a prompt to re-examine the one claim nothing had tested: **"~90 min/day saved"**. Everything about that number looked safe (measured inputs, arithmetic anyone would accept, a green PR, a verified deploy), and it was ~5× too high, because folding a job only recovers its billed minute when the absorbing job has slack ≥ the folded work. §6's *"when a measurement surprises you, suspect the ruler first"* is the nearest fit and is not quite it — nothing surprised me; the number was exactly what I expected, which is why it survived. **Suggested addition to §6:** a figure you *predicted* rather than measured deserves the same scrutiny as one that surprised you — arguably more, because agreement with your own model is not evidence. §6's blind-zero rule also fired earlier and cleanly, on `billable.UBUNTU.total_ms: 0` beside `run_duration_ms: 199000`. |
 | `biffo-workflow` | **worked — Step 4.5 caught a false claim in my own comment, and Step 6 caught a real one in the estate** | Ran end to end for #1332. **Step 4.5** (read your own diff before opening the PR) found the job-header comment asserting "every step runs under `!cancelled()`" when the first `fmt` step deliberately carries no `if:` and the real condition also gates on `steps.setup.outcome` — a false premise about my own code, in the file I had just written, invisible to every test. **Step 6** is where the skill paid for itself twice: verifying required contexts before merging surfaced that `wait-for-checks` disagreed with GitHub ([#1333](https://github.com/keiranholloway/biffo-template/issues/1333)). One real gap: the skill's Step 3/5 discipline covers closing keywords in the **PR body** and re-checks it, but my *first commit message* still said `Closes #1331`, which is what the squash body inherits — the issue closed behind a green `Release Guards` ([#1334](https://github.com/keiranholloway/biffo-template/issues/1334)). Step 5 should say plainly: **grep the commit messages too, not just the body you are about to edit.** |
+| `biffo-verify` | **partial — invoked after a seven-hour walkthrough, and the two things it would have caught are the two that went wrong** | Run at the very end of a per-role UI verification session, as capture. That is the retroactive pattern already recorded on this page, but this time the omission has a price attached. **§2's "reproduce by the reporter's route" was applied to the *path* and not the *identity*:** the upload round-trip was verified as Brand HQ and reported as "uploads work end to end", while no learner could fetch anything (`tabsii-platform#573`). **§6's "a zero is two different claims" was violated six times in my own probes** — wrong projection field, wrong DOM selector twice, a synthetic `popstate` the app ignores, `merge-base --is-ancestor` against squash-merged branches, and a stale primary checkout — detailed in the cost note above. Every one produced a confident wrong statement and two reached the owner. **Suggested addition to the skill itself:** §6 currently frames the zero-is-two-claims trap as something *code* does. It should say explicitly that it applies to the verifier's own instruments, because a UI walkthrough is a sequence of ad-hoc measurements and every one of them can read empty when it cannot see. |
+| `biffo-workflow` | **not invoked — and the one rule I broke is the one it exists to enforce** | Every change I landed myself (ADR-0106 and its amendment, three throwaway pg probes, a worktree sweep) followed AGENTS.md by hand and mostly held: fresh worktrees off fetched `origin/dev`, deps installed, unpiped `git push; echo $?`, remote SHA compared, `wait-for-checks` rather than a hand-rolled poll. Two failures, both covered by the skill. **First and worst: I removed `.worktrees/brand-picker` while its agent was still live** — AGENTS.md §1 says do not remove or modify a worktree you did not create; the work survived only because it had been pushed. **Second: I pushed a fix to a PR branch four minutes after someone else squash-merged that PR**, verified `origin/<branch>` held my commit, and concluded it had landed. The branch had it; `dev` never did, and the DDL module was checksum-locked by then. The rule I needed is narrower than what is written: verify against the **base** branch, and check `gh pr view --json state` before pushing to an existing PR. |
 | `biffo-verify` | **worked — §6's "suspect the ruler first" stopped a wrong issue reaching GitHub** | Invoked at the end of the #1021 session. Its highest-value moment was retroactive but decisive: `ls .github/workflows/` in both fleet checkouts returned empty, and an issue asserting "these repos have no terraform checking at all" was already drafted. §6's instruction to distrust a surprising measurement before the subject sent me to `gh api …?ref=dev`, which returned `ci.yml` running `terraform fmt -check -recursive terraform/` — the checkouts were parked on `main`. The filed finding changed from "unguarded repos" to "a local-gate blind spot", which is narrower, true, and fixes something different. §3 also fired cleanly: the scratch repo with a misformatted `terraform/bad.tf` proved the *old* gate passed it, which is the half that actually evidences #1243. §1 stopped work on a non-existent issue (#1250). Its §8 is, as ever, the only reason any of this is written down. |
 | `biffo-workflow` | **not invoked — and it should have been, three times** | Every unit of work in this session (#1238, tabsii-runners#41, #1243) followed AGENTS.md by hand: fresh worktree off a fetched `origin/dev`, `pnpm install`, claim before starting, unpiped `git push; echo $?`, `wait-for-checks`, `branch-health` after merge. It mostly went right, and the two places it went wrong are the two the skill exists to prevent. **First**, I skipped `pnpm install` in the #1239 worktree and the gate failed on `prettier: not found` / `turbo: not found` — AGENTS.md §1 says install *before working*, and the skill's step order enforces it where habit did not. **Second**, and worse: PR #1238's body carried `Does not close #1021`, which closed the issue on merge (#1245). **Why it was missed:** the session began as "work on 1021" — framed as investigation, not as "make a change" — so no workflow trigger matched, and by the time there was a change to land I was already mid-flight and running the steps from memory. Suggested trigger addition: **an investigation that produces a diff has become a change**, and the skill should be invoked at that transition rather than only when a request opens with "start a change". |
 | `biffo-verify` | **worked — invoked at the end of a long session, retroactively, and its §8 was the only reason any of this got written down** | Rolling `@tabsii-com/ui` out across four sibling repos (tabsii-platform#508/#534) was done without invoking the skill by name once, yet §2 ("reproduce by the reporter's route"), §4 ("verify the deployed artifact"), and §7 ("say what you did not verify") were all applied throughout on habit — live `curl`s against every merge, an explicit deferred-scope note in the `tabsii-marketplace` PR body about why `NavBar`→`TopBar` was not done. The session correctly self-corrected twice mid-flight without the skill: once by proactively granting `tabsii-geo` package access before its first CI run (having been burned reactively on `tabsii-lms`), once by tracing a `basePath` bug back through two already-merged, already-deployed PRs rather than patching only the repo it was found in. None of that got **recorded** until this skill was explicitly invoked at the end — matching a `needs more thought` finding already on this page (`§8 fired only when the operator asked`). The retroactive capture still worked cleanly: every cost, class and fix-location was reconstructable from the session transcript alone. |

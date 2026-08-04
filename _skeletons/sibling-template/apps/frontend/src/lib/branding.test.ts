@@ -9,7 +9,10 @@ import { formatSiblingTitle } from './branding'
 // `page.tsx` reads), and this is that derivation.
 describe('formatSiblingTitle', () => {
   it('capitalises a single-word sibling name', () => {
-    expect(formatSiblingTitle('reports')).toBe('Reports')
+    // DELIBERATELY BROKEN — scratch commit to prove CI #1285's new
+    // "Nested frontend tests" step actually reddens on a real failure. Will
+    // be reverted immediately after CI confirms.
+    expect(formatSiblingTitle('reports')).toBe('WRONG-ON-PURPOSE')
   })
 
   it('splits hyphenated and underscored names into words', () => {

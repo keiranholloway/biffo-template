@@ -34,9 +34,10 @@ anywhere in `services/api/`, on purpose.
 
 ```
 apps/frontend/            # Next.js 15 static export. `/` is the SSO demo ("<name> - Hello <username>",
-                           #   proving the shared-session SSO works); src/lib/auth-gate.tsx + the
-                           #   src/app/example/ routes show the public-default / opt-in-auth pattern
-                           #   ("Your app goes here" below). src/lib/auth.ts reads the shared session.
+                           #   proving the shared-session SSO works end to end, gate included);
+                           #   src/lib/auth-gate.tsx is the reusable wrapper for any OTHER page that
+                           #   needs the same gate ("Your app goes here" below). src/lib/auth.ts reads
+                           #   the shared session.
 services/api/              # FastAPI + Mangum backend. Verifies the core project's Cognito JWT itself
                            #   (defense in depth — API Gateway's own JWT authorizer is the first layer).
                            #   core_client.py is the ONLY sanctioned way to reach core-owned data.
@@ -81,12 +82,10 @@ else depends on it.
 This is a Next.js **App Router** app with `output: 'export'` (a static site).
 A route is just a folder with a `page.tsx` under `apps/frontend/src/app/`:
 
-| File                            | URL served                          |
-| ------------------------------- | ----------------------------------- |
-| `src/app/page.tsx`              | `/` (the demo — replace or keep)    |
-| `src/app/pricing/page.tsx`      | `/pricing/`                         |
-| `src/app/example/page.tsx`      | `/example/` (public example, below) |
-| `src/app/example/members/page.tsx` | `/example/members/` (gated example) |
+| File                        | URL served                       |
+| --------------------------- | --------------------------------- |
+| `src/app/page.tsx`          | `/` (the demo — replace or keep) |
+| `src/app/pricing/page.tsx`  | `/pricing/`                       |
 
 **The `basePath` / `PATH_PREFIX` wiring is automatic — don't hand-write it.**
 The core project's CloudFront routes `baseurl.com/<name>/*` to this sibling and
@@ -116,8 +115,7 @@ browser never holds a core credential.
 
 The go-live state for most products is a **public** app. That is the easy path
 here: any `page.tsx` you add is served **unauthenticated** the moment it
-deploys — no auth code, no bounce. `src/app/example/page.tsx` is a one-screen
-demonstration of exactly that; copy it or delete it.
+deploys — no auth code, no bounce, nothing to opt out of.
 
 When a page _does_ need a signed-in user, opt in with the `<AuthGate>` helper
 (`src/lib/auth-gate.tsx`) — one wrapper, and only that page becomes private:
@@ -142,15 +140,18 @@ export default function Dashboard() {
 A signed-out visitor is redirected to the core portal's login and returned to
 that exact route afterwards; a signed-in visitor sees the content. `AuthGate`
 builds on `getCurrentSession`/`auth.ts` and never signs anyone in itself
-(ADR-0007). `src/app/example/members/page.tsx` is the runnable version of the
-snippet above. Wrap only what must be private — never gate the whole app.
+(ADR-0007) — it is the same round-trip `/` already runs, packaged as a
+one-line wrapper for any page besides `/`. Wrap only what must be private —
+never gate the whole app. There is no separate demo route for this: `/`
+already proves the mechanism works end to end, and the snippet above is the
+runnable form.
 
 ### The path a founder actually walks
 
 1. Run locally (`pnpm dev`, below) and open `/` — watch the SSO demo work.
 2. Replace `src/app/page.tsx` with your own public home page (or add
    `src/app/<something>/page.tsx`). It's public by default — that's your
-   go-live state. Delete the `example/` routes once you've read them.
+   go-live state.
 3. For any area that needs a login, wrap its `page.tsx` in `<AuthGate>`.
 4. Push to `main`; `deploy.yml` builds the static export with the right
    `NEXT_PUBLIC_BASE_PATH` and syncs it to S3 behind the core CloudFront —

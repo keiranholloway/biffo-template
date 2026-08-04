@@ -1,5 +1,10 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
-import { ApiError, createApiClient, extractErrorMessage } from './api-client'
+import {
+  ApiError,
+  createApiClient,
+  extractErrorMessage,
+  __resetRenewedTokenCacheForTests,
+} from './api-client'
 
 /**
  * A backend's error body is JSON like `{"detail": "..."}`. Throwing the whole
@@ -42,6 +47,7 @@ describe('extractErrorMessage', () => {
 describe('createApiClient error handling', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+    __resetRenewedTokenCacheForTests()
   })
 
   it('throws an ApiError carrying the message, not the wire format', async () => {
@@ -83,6 +89,7 @@ describe('createApiClient session renewal', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    __resetRenewedTokenCacheForTests()
   })
 
   function ok(body: unknown) {
@@ -114,6 +121,20 @@ describe('createApiClient session renewal', () => {
       return Promise.resolve(
         headers['Authorization'] === `Bearer ${freshToken}` ? ok(body) : unauthorized(),
       )
+    })
+  }
+
+  /**
+   * Same shape as `fetchAcceptingOnly`, but for a scenario spanning more than
+   * one session's fresh token — proving a later session is never let in on an
+   * earlier session's renewed credential.
+   */
+  function fetchAcceptingAnyOf(freshTokens: string[], body: unknown = { items: [] }) {
+    return vi.fn((_url: string, init: RequestInit) => {
+      const headers = (init.headers ?? {}) as Record<string, string>
+      const sent = headers['Authorization']
+      const accepted = freshTokens.some((token) => sent === `Bearer ${token}`)
+      return Promise.resolve(accepted ? ok(body) : unauthorized())
     })
   }
 
@@ -265,6 +286,89 @@ describe('createApiClient session renewal', () => {
     const [, retry] = fetchMock.mock.calls
     expect(retry[1].method).toBe('POST')
     expect(retry[1].body).toBe(JSON.stringify({ title: 'New' }))
+  })
+
+  /**
+   * The claim this PR (biffo-template#1283) exists to prove, not the retry
+   * behaviour #1277 already covers above. #1277 fixed the user-visible half —
+   * the FIRST 401 after expiry renews and retries so the call still succeeds.
+   * What it left is every LATER request on the same page: nothing wrote the
+   * renewed token back to the state `getIdToken()` reads, so a second request
+   * with the same stale closure paid the identical 401 + renew + retry cycle
+   * all over again, for the rest of the page's life. Without the fix in this
+   * PR, the second `api.get` below would fetch twice and renew a second time
+   * — exactly like the first request did — rather than sending the renewed
+   * token straight away.
+   */
+  it('sends the renewed token directly on a later request, and does not 401 again', async () => {
+    const fetchMock = fetchAcceptingOnly('fresh')
+    vi.stubGlobal('fetch', fetchMock)
+    const refresh = vi.fn(() => Promise.resolve<string | null>('fresh'))
+
+    // Every real caller passes `() => token` closing over React state that a
+    // renewal outside React never updates — so this closure keeps returning
+    // 'expired' for the rest of the page's life, exactly like the reporter's
+    // hours-long authoring session.
+    const api = createApiClient(() => 'expired', refresh)
+
+    // First request: pays the full cycle, exactly as #1277 fixed it.
+    await expect(api.get('/api/v1/courses')).resolves.toEqual({ items: [] })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(refresh).toHaveBeenCalledTimes(1)
+
+    // Second request: same client, same stale `getIdToken()` value. Assert
+    // the actual claim — exactly ONE fetch, carrying the renewed token
+    // directly, with no second 401 and no second renewal.
+    fetchMock.mockClear()
+    await expect(api.get('/api/v1/modules')).resolves.toEqual({ items: [] })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [, init] = fetchMock.mock.calls[0]
+    expect((init.headers as Record<string, string>)['Authorization']).toBe('Bearer fresh')
+    expect(refresh).toHaveBeenCalledTimes(1)
+  })
+
+  /**
+   * The hazard called out when this fix was scoped: a module-level cache is
+   * shared mutable state, so sign-out — or a different user signing in, in
+   * the same tab, which `tabsii-marketplace`'s public self-service flow makes
+   * real — must not let the previous session's renewed token leak into the
+   * next one. That would be a security defect, not a latency one.
+   */
+  it('does not leak a renewed token across sign-out to a different session', async () => {
+    const fetchMock = fetchAcceptingAnyOf(['fresh-a', 'fresh-b'])
+    vi.stubGlobal('fetch', fetchMock)
+
+    let currentToken = 'expired-a'
+    const refresh = vi.fn(() =>
+      Promise.resolve<string | null>(currentToken === 'expired-a' ? 'fresh-a' : 'fresh-b'),
+    )
+    const api = createApiClient(() => currentToken, refresh)
+
+    // User A's session: first call renews and retries; second call is served
+    // straight from the cache (this is the behaviour under test above).
+    await expect(api.get('/api/v1/courses')).resolves.toEqual({ items: [] })
+    await expect(api.get('/api/v1/courses')).resolves.toEqual({ items: [] })
+    expect(refresh).toHaveBeenCalledTimes(1)
+
+    // Sign-out, then a DIFFERENT user signs in — a brand new stale token from
+    // `getIdToken()`, simulating React state now belonging to a new session.
+    currentToken = 'expired-b'
+    const callsBeforeSwitch = fetchMock.mock.calls.length
+
+    await expect(api.get('/api/v1/courses')).resolves.toEqual({ items: [] })
+
+    const callsSinceSwitch = fetchMock.mock.calls.slice(callsBeforeSwitch)
+    // If user A's cached token had leaked, this request would succeed on its
+    // FIRST fetch by reusing 'fresh-a'. Instead it must pay its own renewal —
+    // proof the new session's first request sent its OWN stale token, not the
+    // previous session's cached fresh one.
+    expect(callsSinceSwitch).toHaveLength(2)
+    const firstAuthHeader = (callsSinceSwitch[0][1].headers as Record<string, string>)[
+      'Authorization'
+    ]
+    expect(firstAuthHeader).toBe('Bearer expired-b')
+    expect(refresh).toHaveBeenCalledTimes(2)
   })
 
   it('leaves a non-401 failure entirely alone', async () => {

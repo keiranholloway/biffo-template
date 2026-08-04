@@ -134,7 +134,17 @@ describe('shared-sync.sh --skeleton-adoption', () => {
       mkdirSync(estate, { recursive: true })
       satellite(estate, 'repo-a', 'biffo.sibling.json', [])
       satellite(estate, 'repo-b', 'biffo.sibling.json', [])
-      const tpl = template(root, { 'sibling-template': { files: ['src/orphan.ts'] } }, MANIFEST)
+      // Baseline recorded so the ratchet is satisfied: this test is about what
+      // gets REPORTED, not about whether an unbaselined path fails (covered
+      // separately below).
+      const tpl = template(
+        root,
+        { 'sibling-template': { files: ['src/orphan.ts'] } },
+        {
+          ...MANIFEST,
+          skeletonAdoption: { 'sibling-template:src/orphan.ts': 0 },
+        },
+      )
 
       const { out, status } = runAdoption(tpl, estate)
       expect(status, out).toBe(0)
@@ -172,7 +182,14 @@ describe('shared-sync.sh --skeleton-adoption', () => {
       satellite(estate, 'repo-a', 'biffo.sibling.json', ['src/almost.ts'])
       satellite(estate, 'repo-b', 'biffo.sibling.json', ['src/almost.ts'])
       satellite(estate, 'repo-c', 'biffo.sibling.json', [])
-      const tpl = template(root, { 'sibling-template': { files: ['src/almost.ts'] } }, MANIFEST)
+      const tpl = template(
+        root,
+        { 'sibling-template': { files: ['src/almost.ts'] } },
+        {
+          ...MANIFEST,
+          skeletonAdoption: { 'sibling-template:src/almost.ts': 2 },
+        },
+      )
 
       const { out, status } = runAdoption(tpl, estate)
       expect(status, out).toBe(0)
@@ -291,7 +308,14 @@ describe('shared-sync.sh --skeleton-adoption', () => {
       mkdirSync(estate, { recursive: true })
       satellite(estate, 'repo-a', 'biffo.sibling.json', [])
       satellite(estate, 'repo-b', 'biffo.sibling.json', ['src/real.ts'])
-      const tpl = template(root, { 'sibling-template': { files: ['src/real.ts'] } }, MANIFEST)
+      const tpl = template(
+        root,
+        { 'sibling-template': { files: ['src/real.ts'] } },
+        {
+          ...MANIFEST,
+          skeletonAdoption: { 'sibling-template:src/real.ts': 1 },
+        },
+      )
 
       // Untracked, written AFTER the fixture commits — exactly what a
       // gitignored build artefact looks like on a developer's machine.
@@ -307,6 +331,111 @@ describe('shared-sync.sh --skeleton-adoption', () => {
       // ...and the untracked artefact is not reported at all.
       expect(out).not.toContain('.venv')
       expect(out).not.toContain('site.py')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  it('a holder count below its baseline fails the run', () => {
+    // The whole point of the ratchet: residue never blocks, a REGRESSION does.
+    const root = makeTmpDir('adoption-regress')
+    try {
+      const estate = join(root, 'estate')
+      mkdirSync(estate, { recursive: true })
+      satellite(estate, 'repo-a', 'biffo.sibling.json', ['src/shared.ts'])
+      satellite(estate, 'repo-b', 'biffo.sibling.json', [])
+      const tpl = template(
+        root,
+        { 'sibling-template': { files: ['src/shared.ts'] } },
+        { ...MANIFEST, skeletonAdoption: { 'sibling-template:src/shared.ts': 2 } },
+      )
+
+      const { out, status } = runAdoption(tpl, estate)
+
+      expect(status, out).toBe(1)
+      expect(out).toContain('REGRESSED from 2')
+      expect(out).toContain('ADOPTION REGRESSED')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('holds the line at the baseline, so pre-existing residue never blocks', () => {
+    const root = makeTmpDir('adoption-hold')
+    try {
+      const estate = join(root, 'estate')
+      mkdirSync(estate, { recursive: true })
+      satellite(estate, 'repo-a', 'biffo.sibling.json', ['src/shared.ts'])
+      satellite(estate, 'repo-b', 'biffo.sibling.json', [])
+      const tpl = template(
+        root,
+        { 'sibling-template': { files: ['src/shared.ts'] } },
+        { ...MANIFEST, skeletonAdoption: { 'sibling-template:src/shared.ts': 1 } },
+      )
+
+      const { out, status } = runAdoption(tpl, estate)
+
+      expect(status, out).toBe(0)
+      expect(out).not.toContain('REGRESSED')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a new unadopted skeleton path with no baseline fails, not passes', () => {
+    // Otherwise a skeleton gains a file nobody adopts and nothing notices --
+    // the #1271 blind spot reappearing one level up.
+    const root = makeTmpDir('adoption-new')
+    try {
+      const estate = join(root, 'estate')
+      mkdirSync(estate, { recursive: true })
+      satellite(estate, 'repo-a', 'biffo.sibling.json', [])
+      satellite(estate, 'repo-b', 'biffo.sibling.json', [])
+      const tpl = template(
+        root,
+        { 'sibling-template': { files: ['src/brand-new.ts'] } },
+        { ...MANIFEST, skeletonAdoption: {} },
+      )
+
+      const { out, status } = runAdoption(tpl, estate)
+
+      expect(status, out).toBe(1)
+      expect(out).toContain('NEW -- no baseline')
+      expect(out).toContain('sibling-template:src/brand-new.ts')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a scaffold-token path is template payload, not an adoption gap', () => {
+    // `src/example_plugin/main.py` becomes `src/idea_scout/main.py` in a real
+    // plugin, so 0 adoption is CORRECT. Reporting it as a gap invites someone
+    // to "fix" it by deleting the file the scaffolder renames, which would
+    // break `biffo plugin create` outright.
+    const root = makeTmpDir('adoption-payload')
+    try {
+      const estate = join(root, 'estate')
+      mkdirSync(estate, { recursive: true })
+      satellite(estate, 'repo-a', 'biffo.sibling.json', [])
+      satellite(estate, 'repo-b', 'biffo.sibling.json', [])
+      const tpl = template(
+        root,
+        { 'sibling-template': { files: ['src/example_plugin/main.py'] } },
+        {
+          ...MANIFEST,
+          skeletonAdoption: {},
+        },
+      )
+      writeFileSync(
+        join(tpl, '_skeletons', 'sibling-template', '.scaffold-tokens.json'),
+        JSON.stringify({ tokens: ['example_plugin'] }),
+      )
+
+      const { out, status } = runAdoption(tpl, estate)
+
+      // Not a gap, so no baseline is demanded and the run passes.
+      expect(status, out).toBe(0)
+      expect(out).toContain('template payload')
+      expect(out).not.toContain('NEW -- no baseline')
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

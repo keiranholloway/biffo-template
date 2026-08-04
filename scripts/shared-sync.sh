@@ -874,7 +874,8 @@ if [ -n "$ADOPTION" ]; then
   # by an exception someone has to remember to add when a new content-only
   # directory shows up under `_skeletons/`.
   skelrows=$(mktemp)
-  trap 'rm -f "$rows" "$skelrows"; wt_log_run_end' EXIT
+  skeltokens=$(mktemp)
+  trap 'rm -f "$rows" "$skelrows" "$skeltokens"; wt_log_run_end' EXIT
   for _dir in "$TEMPLATE_ROOT"/_skeletons/*/; do
     [ -d "$_dir" ] || continue
     [ -f "$_dir/.github/workflows/ci.yml" ] || continue
@@ -894,6 +895,19 @@ if [ -n "$ADOPTION" ]; then
     git -C "$TEMPLATE_ROOT" ls-tree -r --name-only HEAD -- "_skeletons/${_name}/" |
       sed "s|^_skeletons/${_name}/||" |
       sed "s|^|${_name}${TAB}|" >> "$skelrows"
+    # Tokens `biffo plugin create` rewrites when it scaffolds this skeleton.
+    # A path containing one is TEMPLATE PAYLOAD: `src/example_plugin/main.py`
+    # becomes `src/idea_scout/main.py` in a real plugin, so no scaffolded repo
+    # can ever hold the skeleton's spelling of it. Reporting that as a 0/N
+    # adoption gap is a false positive -- it is a file that did its job.
+    # Declared by the skeleton, never guessed from the path, and kept honest by
+    # cli/src/lib/scaffold-tokens-parity.test.ts.
+    if [ -f "$_dir/.scaffold-tokens.json" ]; then
+      node -e "
+        const t = JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).tokens || []
+        for (const tok of t) console.log(process.argv[2] + '\t' + tok)
+      " "$_dir/.scaffold-tokens.json" "$_name" >> "$skeltokens"
+    fi
   done
 
   # An empty result can only mean the discriminator or the walk above is
@@ -908,7 +922,24 @@ if [ -n "$ADOPTION" ]; then
 
   node -e '
     const fs = require("fs")
-    const [rowsPath, skelPath] = process.argv.slice(1)
+    const [rowsPath, skelPath, tokensPath, manifestPath] = process.argv.slice(1)
+
+    // skeleton -> [token]; empty when a skeleton declares none.
+    const tokens = new Map()
+    for (const line of fs.readFileSync(tokensPath, "utf8").split("\n")) {
+      const p = line && line.split("\t")
+      if (!p || p.length < 2) continue
+      if (!tokens.has(p[0])) tokens.set(p[0], [])
+      tokens.get(p[0]).push(p[1])
+    }
+    const isPayload = (skel, path) => (tokens.get(skel) || []).some((t) => path.includes(t))
+
+    // path -> baseline holder count. Pre-existing residue never blocks; only a
+    // REGRESSION does. Same posture as `mustBeUniform` and the core-upgrade
+    // orphan ratchet -- a guard that is red on the pre-existing set every
+    // morning is one people learn to scroll past.
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+    const baselines = manifest.skeletonAdoption || {}
 
     const split = (line) => {
       const parts = line.split("\t")
@@ -941,6 +972,10 @@ if [ -n "$ADOPTION" ]; then
       byRepo.get(repo).add(path)
     }
 
+    const payload = []
+    const regressions = []
+    const unbaselined = []
+    const improvements = []
     console.log("\nskeleton adoption -- every path a skeleton owns, and whether every applicable repo holds it (advisory only, enumerated not thresholded, #1271)")
     let total = 0
     for (const [skel, byRepo] of [...held].sort()) {
@@ -957,24 +992,63 @@ if [ -n "$ADOPTION" ]; then
         // clearest possible instance of "not held by all", which is the
         // whole question this mode answers.
         if (lack.length === 0) continue
+        if (isPayload(skel, path)) { payload.push({ skel, path }); continue }
         rows.push({ path, have, lack })
       }
       rows.sort((a, b) => a.have - b.have || a.path.localeCompare(b.path))
       total += rows.length
       console.log(`\n${skel} -- ${repos.length} applicable repo(s), ${paths.size} skeleton path(s), ${rows.length} not held by all\n`)
       for (const r of rows) {
-        console.log(`  ${r.path.padEnd(48)} ${r.have}/${repos.length} hold it   lacking: ${r.lack.join(", ")}`)
+        const base = baselines[`${skel}:${r.path}`]
+        let flag = ""
+        if (base === undefined) {
+          flag = "   [NEW -- no baseline]"
+          unbaselined.push(`${skel}:${r.path}`)
+        } else if (r.have < base) {
+          flag = `   [REGRESSED from ${base}]`
+          regressions.push(`${skel}:${r.path} -- ${r.have}/${repos.length}, baseline ${base}`)
+        } else if (r.have > base) {
+          flag = `   [IMPROVED from ${base} -- tighten the baseline]`
+          improvements.push(`${skel}:${r.path} -- ${r.have}, baseline ${base}`)
+        }
+        console.log(`  ${r.path.padEnd(48)} ${r.have}/${repos.length} hold it   lacking: ${r.lack.join(", ")}${flag}`)
       }
     }
+
+    if (payload.length) {
+      console.log(`\ntemplate payload -- renamed by \`biffo plugin create\`, so 0 adoption is CORRECT (${payload.length} path(s))\n`)
+      for (const p of payload.sort((a, b) => a.path.localeCompare(b.path))) {
+        console.log(`  ${p.path.padEnd(48)} (${p.skel} rewrites this at scaffold time)`)
+      }
+      console.log("\n  Declared by the skeleton in .scaffold-tokens.json, never guessed from the path.")
+      console.log("  Deleting these would break `biffo plugin create` -- there would be nothing to rename.")
+    }
+
     console.log(`\n${total} skeleton-owned path(s) not held by every applicable repo.`)
-    console.log("Nothing here fails the build -- no threshold, and deliberately no exclusion list.")
-    console.log("Some of these are known to be intentional (a file meant to differ per app, or")
-    console.log("scaffolding meant to be deleted at birth) rather than unadopted -- that split is a")
-    console.log("human decision to record (e.g. in the mustBeUniformNote field of shared-files.json), not")
-    console.log("something this report should guess from the path.")
-  ' "$rows" "$skelrows"
+
+    // The ratchet. Pre-existing residue never blocks; a regression does, and so
+    // does a NEW unadopted path with no recorded baseline -- otherwise a
+    // skeleton could gain a file nobody adopts and the gate would never notice,
+    // which is the #1271 blind spot reappearing one level up.
+    if (regressions.length) {
+      console.log("\nADOPTION REGRESSED -- a repo that held these no longer does:")
+      for (const r of regressions) console.log(`  ${r}`)
+    }
+    if (unbaselined.length) {
+      console.log("\nNEW unadopted skeleton path(s) with no baseline in shared-files.json:")
+      for (const u of unbaselined) console.log(`  ${u}`)
+      console.log("  Record a baseline (or adopt it everywhere). A skeleton file nobody takes is")
+      console.log("  exactly what --candidates could never see.")
+    }
+    if (improvements.length) {
+      console.log("\nImproved -- lower these baselines, or the ratchet stops meaning anything:")
+      for (const i of improvements) console.log(`  ${i}`)
+    }
+    if (regressions.length || unbaselined.length) process.exit(1)
+  ' "$rows" "$skelrows" "$skeltokens" "$MANIFEST"
+  _adoption_status=$?
   printf '\n'
-  exit 0
+  exit "$_adoption_status"
 fi
 
 # --candidates: advisory discovery, never the guard (#1108). Walks every

@@ -440,4 +440,30 @@ describe('shared-sync.sh --skeleton-adoption', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+  it('does not treat .scaffold-tokens.json as an adoption gap — it is skeleton metadata', () => {
+    // Found by the ratchet flagging its OWN arrival, one merge after the file
+    // was added: the verification run happened while it was still untracked, so
+    // `ls-tree` could not see it. It configures this report rather than
+    // shipping to a scaffolded repo, so "no satellite adopted it" is not a gap.
+    const root = makeTmpDir('adoption-meta')
+    try {
+      const estate = join(root, 'estate')
+      mkdirSync(estate, { recursive: true })
+      satellite(estate, 'repo-a', 'biffo.sibling.json', ['src/shared.ts'])
+      satellite(estate, 'repo-b', 'biffo.sibling.json', ['src/shared.ts'])
+      const tpl = template(
+        root,
+        { 'sibling-template': { files: ['src/shared.ts', '.scaffold-tokens.json'] } },
+        { ...MANIFEST, skeletonAdoption: {} },
+      )
+
+      const { out, status } = runAdoption(tpl, estate)
+
+      // No gaps at all: shared.ts is 2/2 and the metadata file is not counted.
+      expect(status, out).toBe(0)
+      expect(out).not.toContain('.scaffold-tokens.json')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })

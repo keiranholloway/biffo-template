@@ -284,6 +284,37 @@ async def test_an_event_without_a_run_id_is_ignored():
     assert core.requests == []
 
 
+async def test_receipt_is_logged_with_run_id_before_any_claim_attempt(caplog):
+    # biffo-template#1017: this line is the runtime's half of localising an
+    # undelivered agent.run.requested. It must be independently greppable by
+    # run_id — not only present inside a raw event dump — and must appear
+    # even when the claim that follows loses the race, since a reader
+    # diagnosing "never claimed" needs to know the event at least arrived.
+    core = FakeCore(complete_status=409)  # claim path is irrelevant here
+
+    with caplog.at_level(logging.INFO):
+        await _plugin(core, FakeLLM()).events.dispatch(_event(run_id="run-42"))
+
+    received = [r for r in caplog.records if r.getMessage() == "agent.run.requested received"]
+    assert len(received) == 1
+    assert received[0].__dict__["run_id"] == "run-42"
+
+
+async def test_receipt_is_logged_even_when_the_claim_is_lost_to_a_duplicate(caplog):
+    # The receipt log must not be contingent on winning the claim race — it is
+    # evidence the EVENT arrived, independent of what happens to the run. A
+    # 409 here means another invocation already owns the run (§5); the receipt
+    # line must still have fired before that was known.
+    core = FakeCore(claim_status=409)
+
+    with caplog.at_level(logging.INFO):
+        await _plugin(core, FakeLLM()).events.dispatch(_event(run_id="run-42"))
+
+    received = [r for r in caplog.records if r.getMessage() == "agent.run.requested received"]
+    assert len(received) == 1
+    assert received[0].__dict__["run_id"] == "run-42"
+
+
 async def test_a_failed_completion_post_does_not_raise_into_the_lambda():
     # Core refusing the completion (409, already terminal) leaves the run
     # stranded — §5's second divergence point. It is logged, not crashed on:

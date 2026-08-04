@@ -16,7 +16,7 @@ from typing import Any
 from aws_lambda_powertools import Logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .base import BiffoEvent
+from .base import BiffoEvent, PublishOutcome
 from .registry import EventType, find_event
 
 logger = Logger()
@@ -86,17 +86,28 @@ def is_declared(source: str, detail_type: str) -> bool:
     return False
 
 
-async def publish_pending(db: AsyncSession) -> None:
+async def publish_pending(db: AsyncSession) -> list[PublishOutcome]:
     """Publish the buffered events — called by ``get_db`` *after* a successful
     commit. Refuses any undeclared event (the compliance gate) and never raises
-    into the request (``EventPublisher.publish`` is itself best-effort)."""
+    into the request (``EventPublisher.publish`` is itself best-effort).
+
+    Returns each accepted event's :class:`PublishOutcome`, in publish order
+    (biffo-template#1017) — ``get_db`` currently discards it, same as before this
+    change, but the outcome is no longer thrown away *inside* the publisher, so a
+    future caller with somewhere to record it (an outbox, a per-run column) has
+    something to call rather than needing to re-plumb the publish path first. An
+    undeclared, refused event contributes no entry — it never reached
+    ``EventPublisher.publish`` at all, which is a compliance rejection, not a
+    delivery outcome.
+    """
     events: list[BiffoEvent] = db.info.pop(_BUFFER_KEY, [])
     if not events:
-        return
+        return []
     # Lazy import to avoid a database <- dependencies <- events import cycle.
     from ..dependencies import get_event_publisher
 
     publisher = get_event_publisher()
+    outcomes: list[PublishOutcome] = []
     for event in events:
         if not is_declared(event.source, event.detail_type):
             logger.error(
@@ -104,4 +115,5 @@ async def publish_pending(db: AsyncSession) -> None:
                 extra={"source": event.source, "detail_type": event.detail_type},
             )
             continue
-        publisher.publish(event)
+        outcomes.append(publisher.publish(event))
+    return outcomes

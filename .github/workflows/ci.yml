@@ -294,6 +294,21 @@ jobs:
       - name: ADR numbering guard
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: sh scripts/biffo.sh check adr-numbering
+      # `_skeletons/sibling-template/apps/frontend` sits outside this repo's
+      # own pnpm workspace on purpose (see that skeleton's own
+      # pnpm-workspace.yaml), so nothing above this step ever installs or runs
+      # it. It is the canonical copy of api-client.ts/auth.ts distributed to
+      # all seven siblings via shared-files.json's filesIfPresent — #1277
+      # added 223 lines of tests for the 401-refresh logic there and every one
+      # of the 9 checks on that PR passed without importing a single one of
+      # them (#1285). This installs and runs that tree's own vitest suite
+      # (and any other nested pnpm project the repo grows outside the
+      # workspace — see the script's own comments for why it discovers rather
+      # than hardcodes the path), failing closed if discovery finds nothing to
+      # test at all.
+      - name: Nested frontend tests (_skeletons/ and any other vendored tree)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/nested-frontend-tests.sh
 
   python:
     name: Python (lint, types, test, security)

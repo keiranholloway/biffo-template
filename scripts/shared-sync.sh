@@ -197,6 +197,8 @@ NO_REHEARSE=""
 CANDIDATES=""
 BACKFILL=""
 ADOPTION=""
+SCHEDULED=""
+NOW=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --check) CHECK=1; shift ;;
@@ -211,6 +213,11 @@ while [ $# -gt 0 ]; do
     --backfill) BACKFILL=1; shift ;;
     # Enumerate rather than threshold (#1271) -- see the block comment above.
     --skeleton-adoption) ADOPTION=1; shift ;;
+    # The two halves of the round gate below. `--scheduled` marks the daily
+    # round (scripts/shared-sync-daily.sh); `--now` is the human override for a
+    # change that must not wait for it.
+    --scheduled) SCHEDULED=1; shift ;;
+    --now) NOW=1; shift ;;
     --estate) ESTATE="$2"; shift 2 ;;
     --repo) ONLY="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -1464,6 +1471,53 @@ if [ ! -s "$TARGETS" ]; then
   printf '\n%s current, %s drifted\n\n' "$current" "$drifted"
   [ "${failed:-0}" -gt 0 ] && exit 1
   exit 0
+fi
+
+# ---- The round gate ----------------------------------------------------------
+#
+# A round is not free: it opens one PR per drifted repo and nothing auto-merges
+# them, so every round a human starts is ~12 more merges somebody has to land.
+# On 2026-08-03 seven ad-hoc rounds produced 81 merges across 12 repos, 69 of
+# them avoidable -- the estate's ENTIRE avoidable-merge count for the day, from
+# this one script. Batching to one scheduled round takes that to ~12.
+#
+# So the default becomes "wait for the round", and shipping immediately becomes
+# a thing you say out loud. "People will just stop running it by hand once a
+# schedule exists" is behavioural, and this repo's own thesis -- argued at
+# length in docs/guides/development-practices.md -- is that documented is not
+# prevented.
+#
+# It is deliberately fail-OPEN on the schedule's absence, which is the opposite
+# posture to most gates here and is the right one. If the daily round is not
+# actually running, gating the manual path would leave drift undistributed
+# forever while printing a confident message about a round that never comes --
+# strictly worse than no gate. So the marker is written by the RUN, not by the
+# install, and it ages out: a schedule that dies stops gating within 48 hours
+# and the manual path reopens by itself.
+_scheduled_round_is_live() {
+  _marker="${SHARED_SYNC_MARKER:-$HOME/.shared-sync-daily.last}"
+  [ -f "$_marker" ] || return 1
+  _now_s=$(date +%s)
+  _marker_s=$(date -r "$_marker" +%s 2>/dev/null || echo 0)
+  [ "$((_now_s - _marker_s))" -lt 172800 ]
+}
+
+if [ -z "$SCHEDULED" ] && [ -z "$NOW" ]; then
+  if _scheduled_round_is_live; then
+    printf '\n%s current, %s drifted -- \033[33mnot shipping\033[0m\n\n' "$current" "$drifted"
+    printf 'A scheduled round runs daily (scripts/shared-sync-daily.sh, last run %s).\n' \
+      "$(cat "${SHARED_SYNC_MARKER:-$HOME/.shared-sync-daily.last}" 2>/dev/null || echo unknown)"
+    printf 'Starting another one by hand costs %s more PRs that somebody has to merge,\n' "$drifted"
+    printf 'and that cost was 69 of the estate'"'"'s 69 avoidable merges on 2026-08-03.\n\n'
+    printf '  wait      the next round distributes this automatically\n'
+    printf '  --now     ship immediately anyway (governance change that must not wait)\n'
+    printf '  --check   report drift without opening anything\n\n'
+    exit 0
+  fi
+  printf '\n\033[33mNo scheduled round has run in the last 48h\033[0m -- shipping this one, because\n'
+  printf 'gating it would leave drift undistributed with nothing to pick it up.\n'
+  printf 'Install the daily round to stop paying for ad-hoc ones; the crontab line is\n'
+  printf 'in the header of scripts/shared-sync-daily.sh.\n'
 fi
 
 # ---- Phase 1: rehearse -------------------------------------------------------

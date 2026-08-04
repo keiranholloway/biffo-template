@@ -45,11 +45,18 @@ REPO_ROOT="${SHARED_SYNC_REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
 ESTATE="${SHARED_SYNC_ESTATE:-$HOME/code}"
 
 # The marker `shared-sync.sh` reads to decide whether a scheduled round actually
-# exists. It is deliberately written by the RUN rather than by the install: an
-# installed-but-broken cron entry would otherwise gate every ad-hoc round behind
-# --now while distributing nothing, which is strictly worse than no schedule at
-# all. See `_scheduled_round_is_live` for the other half of this contract.
-MARKER="${SHARED_SYNC_MARKER:-$HOME/.shared-sync-daily.last}"
+# exists. Two properties, both load-bearing:
+#
+#  - written by the RUN rather than by the install, because an
+#    installed-but-broken cron entry would otherwise gate every ad-hoc round
+#    behind --now while distributing nothing — strictly worse than no schedule;
+#  - keyed to the ESTATE rather than $HOME, because the question is "has a round
+#    run for this estate". A $HOME-global path made seven fixture tests read the
+#    developer's own marker and fail on this workstation while CI, which has no
+#    marker, stayed green.
+#
+# See `_scheduled_round_is_live` for the other half of this contract.
+MARKER="${SHARED_SYNC_MARKER:-$ESTATE/.shared-sync-daily.last}"
 
 _invocation_source() {
   if [ -r "/proc/$PPID/comm" ] && grep -qi '^cron' "/proc/$PPID/comm" 2>/dev/null; then

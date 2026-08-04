@@ -892,8 +892,15 @@ if [ -n "$ADOPTION" ]; then
     # Third instance of this class in one day: `auth.ts` measured 6 variants
     # from working trees where `origin/dev` had 2, and a branch was judged
     # unpushed from a stale local ref. Read refs, not checkouts.
+    # `.scaffold-tokens.json` is skeleton METADATA -- it configures this very
+    # report rather than shipping to a scaffolded repo, so counting it as an
+    # adoption gap asks why no satellite "adopted" the config file describing
+    # what gets renamed. Found by the ratchet flagging its own arrival one merge
+    # after it was added: the check that verified this feature ran while the
+    # file was still untracked, so `ls-tree` could not yet see it.
     git -C "$TEMPLATE_ROOT" ls-tree -r --name-only HEAD -- "_skeletons/${_name}/" |
       sed "s|^_skeletons/${_name}/||" |
+      grep -v '^\.scaffold-tokens\.json$' |
       sed "s|^|${_name}${TAB}|" >> "$skelrows"
     # Tokens `biffo plugin create` rewrites when it scaffolds this skeleton.
     # A path containing one is TEMPLATE PAYLOAD: `src/example_plugin/main.py`

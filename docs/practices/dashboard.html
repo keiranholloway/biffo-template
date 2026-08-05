@@ -100,7 +100,7 @@ td.mid{color:var(--warn)}
       <h1>Are we building the product, or maintaining the machine?</h1>
     </div>
     <div class="stamp num">
-      collected 2026-08-03 03:40 UTC<br />
+      collected 2026-08-05 03:40 UTC<br />
       windows 1 / 7 / 90 days
     </div>
   </div>
@@ -113,31 +113,51 @@ td.mid{color:var(--warn)}
         <div class="label">Gate coverage</div>
         <div class="value num" style="font-size:15px">Every gate covers its own CI.</div>
         <div class="note">does each repo&rsquo;s gate mirror that repo&rsquo;s CI? &middot; exit 0</div>
-      </div><div class="tile good">
+      </div><div class="tile critical">
         <div class="label">Hook arming</div>
-        <div class="value num" style="font-size:15px">32 working trees — 30 armed, 0 dead, 2 without hooks (93% armed)</div>
-        <div class="note">will the hook actually fire? &middot; exit 0</div>
-      </div><div class="tile good">
+        <div class="value num" style="font-size:15px">no line matched /^[0-9]+ working trees/ -- last output: scripts/biffo.sh: 120: exec: /home/keiran/code/biffo-template/.worktrees/practices-daily/cli/node_modules/.bin/tsx: not found</div>
+        <div class="note">will the hook actually fire? &middot; exit 127</div>
+      </div><div class="tile critical">
         <div class="label">Shared files</div>
-        <div class="value num" style="font-size:15px">14 current, 0 drifted</div>
-        <div class="note">is every repo on the current gate? &middot; exit 0</div>
+        <div class="value num" style="font-size:15px">0 current, 14 drifted</div>
+        <div class="note">is every repo on the current gate? &middot; exit 1</div>
       </div><div class="tile good">
         <div class="label">Branch protection</div>
         <div class="value num" style="font-size:15px">35 branches checked, all protected and binding</div>
         <div class="note">is every integration branch actually gated? &middot; exit 0</div>
-      </div><div class="tile good">
+      </div><div class="tile critical">
         <div class="label">wiring</div>
-        <div class="value num" style="font-size:15px">Every repo calls the shared scripts it holds.</div>
+        <div class="value num" style="font-size:15px">Some repos still run the raw command, or run no gate at all.</div>
+        <div class="note"> &middot; exit 1</div>
+      </div><div class="tile good">
+        <div class="label">classification</div>
+        <div class="value num" style="font-size:15px">OK  2026-08-05.json: 0 of 14 failing steps unclassified (0.0%)</div>
+        <div class="note"> &middot; exit 0</div>
+      </div><div class="tile critical">
+        <div class="label">checkout</div>
+        <div class="value num" style="font-size:15px">18 primary checkouts — $6 clean$, $5 unsafe to read$, 6 behind only, 1 not evaluated</div>
+        <div class="note"> &middot; exit 1</div>
+      </div><div class="tile good">
+        <div class="label">deploy</div>
+        <div class="value num" style="font-size:15px">every integration branch green</div>
+        <div class="note"> &middot; exit 0</div>
+      </div><div class="tile good">
+        <div class="label">deadsurface</div>
+        <div class="value num" style="font-size:15px">23 uncalled route(s), at baseline 23.</div>
+        <div class="note"> &middot; exit 0</div>
+      </div><div class="tile good">
+        <div class="label">failopen</div>
+        <div class="value num" style="font-size:15px">12 unfiled, at baseline 12.</div>
         <div class="note"> &middot; exit 0</div>
       </div></div>
 
   <div class="headline">
     <p class="q">Capability built — merges that shipped something, rolling 7 days</p>
-    <div class="v num">24.3%</div>
+    <div class="v num">19.4%</div>
     <div class="sub">
-      <span class="pill warning">warning</span>
-      &nbsp;floor 28% · prior 7d baseline 33.3% · last 24h 13.6%
-      · Biffo 13.3% · Tabsii 11%
+      <span class="pill critical">critical</span>
+      &nbsp;floor 28% · prior 7d baseline 33% · last 24h 18.3%
+      · Biffo 8.9% · Tabsii 10.5%
       
     </div>
   </div>
@@ -146,47 +166,47 @@ td.mid{color:var(--warn)}
     
     <div class="tile critical">
       <div class="label">Toil ratio · 7d</div>
-      <div class="value num">54%</div>
-      <div class="note">rework + toil · budget 50% · prior 7d 47.3%</div>
+      <div class="value num">62.1%</div>
+      <div class="note">rework + toil · budget 50% · prior 7d 44.2%</div>
     </div>
     
     <div class="tile good">
       <div class="label">Platform vs product · 7d</div>
-      <div class="value num">56.3% / 43.7%</div>
-      <div class="note">merges in biffo-* vs tabsii-* · prior 7d 83.3% / 16.7%</div>
+      <div class="value num">49.4% / 50.6%</div>
+      <div class="note">merges in biffo-* vs tabsii-* · prior 7d 81% / 19%</div>
     </div>
     
     <div class="tile warning">
       <div class="label">Green wait per merge · 7d</div>
-      <div class="value num">19.5 min</div>
-      <div class="note">correct work that could not land · 338.4h across 1039 merges · prior 7d 7.7 min</div>
+      <div class="value num">15.8 min</div>
+      <div class="note">correct work that could not land · 289.8h across 1098 merges · prior 7d 6.8 min</div>
     </div>
     
     <div class="tile critical">
       <div class="label">Caught second · 7d</div>
-      <div class="value num">69.8%</div>
-      <div class="note">81 of 116 failing steps · H4 target &lt;20% · baseline 66% · <strong>19 unclassified</strong><br />test 38 · unclassified 19 · rls-test 18 · deploy 15</div>
+      <div class="value num">57%</div>
+      <div class="note">102 of 179 failing steps · H4 target &lt;20% · baseline 66% · <strong>6 unclassified</strong><br />test 54 · dependency-audit 43 · deploy 21 · coverage 13</div>
     </div>
     
     <div class="tile unknown">
       <div class="label">Merges · 24h</div>
-      <div class="value num">169</div>
-      <div class="note">7d 1039 · 90d 2004</div>
+      <div class="value num">93</div>
+      <div class="note">7d 1098 · 90d 2330</div>
     </div>
   </div>
 
   <h2>Work mix — 7 days, merge-weighted</h2>
-  <div class="mix"><span style="width:46%;background:var(--good)" title="delivery, quality &amp; docs 46.0%"></span><span style="width:54%;background:var(--crit)" title="toil + rework 54.0%"></span></div>
+  <div class="mix"><span style="width:37.9%;background:var(--good)" title="delivery, quality &amp; docs 37.9%"></span><span style="width:62.1%;background:var(--crit)" title="toil + rework 62.1%"></span></div>
   <div class="legend">
     <span><i style="background:var(--good)"></i>delivery, quality &amp; docs</span>
-    <span><i style="background:var(--crit)"></i>toil + rework (54%)</span>
+    <span><i style="background:var(--crit)"></i>toil + rework (62.1%)</span>
   </div>
 
   <h2>Wall-clock vs the merge proxy — is the headline believable?</h2>
   <div class="sessions">
-    <div><span class="k">recorded</span> <strong class="num">99</strong> tasks · <strong class="num">246.9h</strong> over <strong class="num">7</strong> days</div>
-    <div><span class="k">wall-clock</span> delivery <strong class="num">22.1%</strong> · platform <strong class="num">47.7%</strong> · toil <strong class="num">30.3%</strong></div>
-    <div><span class="k">merge proxy</span> toil <strong class="num">54%</strong> over 7d — proxy is off by -23.7 points — treat the headline with suspicion</div>
+    <div><span class="k">recorded</span> <strong class="num">108</strong> tasks · <strong class="num">291.1h</strong> over <strong class="num">9</strong> days</div>
+    <div><span class="k">wall-clock</span> delivery <strong class="num">19.7%</strong> · platform <strong class="num">49.8%</strong> · toil <strong class="num">30.5%</strong></div>
+    <div><span class="k">merge proxy</span> toil <strong class="num">62.1%</strong> over 7d — proxy is off by -31.6 points — treat the headline with suspicion</div>
     
   </div>
 
@@ -203,182 +223,182 @@ td.mid{color:var(--warn)}
       </thead>
       <tbody><tr>
       <td><strong>biffo-template</strong><span class="side">platform</span></td>
-      <td class="num">47</td>
-      <td class="num">790</td>
+      <td class="num">35</td>
+      <td class="num">889</td>
       <td class="num ">9.2%</td>
-      <td class="num hot">30.3%</td>
-      <td class="num mid">9.8%</td>
-      <td class="num">2.3%</td>
-      <td class="num hot">145.9h</td>
-      <td class="num mid">43.5%</td>
-      <td class="num">4.5h</td>
+      <td class="num mid">24.8%</td>
+      <td class="num mid">9.6%</td>
+      <td class="num">5%</td>
+      <td class="num hot">143.6h</td>
+      <td class="num mid">44.5%</td>
+      <td class="num">6.1h</td>
     </tr>
 <tr>
       <td><strong>tabsii-platform</strong><span class="side">product</span></td>
-      <td class="num">45</td>
-      <td class="num">425</td>
+      <td class="num">32</td>
+      <td class="num">461</td>
       <td class="num mid">16.9%</td>
-      <td class="num hot">31.8%</td>
-      <td class="num hot">16.9%</td>
-      <td class="num">5.5%</td>
-      <td class="num hot">262.1h</td>
-      <td class="num mid">41.2%</td>
+      <td class="num hot">31.7%</td>
+      <td class="num hot">18%</td>
+      <td class="num">5.7%</td>
+      <td class="num hot">270.3h</td>
+      <td class="num mid">40.6%</td>
       <td class="num">3.7h</td>
     </tr>
 <tr>
       <td><strong>tabsii-crm</strong><span class="side">product</span></td>
-      <td class="num">9</td>
-      <td class="num">142</td>
-      <td class="num ">7.7%</td>
-      <td class="num mid">21.1%</td>
-      <td class="num mid">8.5%</td>
-      <td class="num">2.9%</td>
-      <td class="num mid">17.8h</td>
-      <td class="num ">34.3%</td>
-      <td class="num">1.8h</td>
+      <td class="num">7</td>
+      <td class="num">165</td>
+      <td class="num ">13.9%</td>
+      <td class="num mid">27.3%</td>
+      <td class="num mid">9.1%</td>
+      <td class="num">2.5%</td>
+      <td class="num mid">20.4h</td>
+      <td class="num mid">41%</td>
+      <td class="num">14.8h</td>
     </tr>
 <tr>
       <td><strong>biffo-platform</strong><span class="side">platform</span></td>
-      <td class="num">0</td>
-      <td class="num">119</td>
-      <td class="num ">8.4%</td>
-      <td class="num mid">23.5%</td>
-      <td class="num mid">3.4%</td>
+      <td class="num">1</td>
+      <td class="num">124</td>
+      <td class="num ">8.1%</td>
+      <td class="num mid">23.4%</td>
+      <td class="num mid">3.2%</td>
       <td class="num">0%</td>
-      <td class="num ">8.9h</td>
-      <td class="num hot">69.4%</td>
+      <td class="num ">9.9h</td>
+      <td class="num hot">66.7%</td>
       <td class="num">6.5h</td>
     </tr>
 <tr>
       <td><strong>biffo-plugin-ideation</strong><span class="side">platform</span></td>
-      <td class="num">5</td>
-      <td class="num">69</td>
-      <td class="num ">14.7%</td>
-      <td class="num hot">30.9%</td>
-      <td class="num mid">7.4%</td>
-      <td class="num">1.5%</td>
-      <td class="num ">3.8h</td>
-      <td class="num hot">62.9%</td>
-      <td class="num">7h</td>
+      <td class="num">2</td>
+      <td class="num">85</td>
+      <td class="num ">11.9%</td>
+      <td class="num hot">38.1%</td>
+      <td class="num mid">8.3%</td>
+      <td class="num">1.2%</td>
+      <td class="num ">6.2h</td>
+      <td class="num hot">66.3%</td>
+      <td class="num">8.3h</td>
     </tr>
 <tr>
       <td><strong>biffo-plugin-idea-scout</strong><span class="side">platform</span></td>
-      <td class="num">5</td>
-      <td class="num">60</td>
+      <td class="num">1</td>
+      <td class="num">75</td>
       <td class="num ">0%</td>
-      <td class="num hot">36.7%</td>
+      <td class="num hot">42.7%</td>
       <td class="num mid">6.7%</td>
       <td class="num">0%</td>
-      <td class="num ">2.6h</td>
-      <td class="num hot">66.1%</td>
+      <td class="num ">4.6h</td>
+      <td class="num hot">70.1%</td>
       <td class="num">15.9h</td>
     </tr>
 <tr>
       <td><strong>tabsii-intake</strong><span class="side">product</span></td>
-      <td class="num">6</td>
-      <td class="num">39</td>
-      <td class="num ">2.6%</td>
-      <td class="num hot">41%</td>
+      <td class="num">3</td>
+      <td class="num">58</td>
+      <td class="num mid">17.2%</td>
+      <td class="num hot">46.6%</td>
       <td class="num hot">10.3%</td>
-      <td class="num">2.6%</td>
-      <td class="num mid">20.5h</td>
-      <td class="num hot">67.5%</td>
-      <td class="num">2.5h</td>
+      <td class="num">1.7%</td>
+      <td class="num mid">23.7h</td>
+      <td class="num hot">71.2%</td>
+      <td class="num">27.1h</td>
     </tr>
 <tr>
       <td><strong>tabsii-geo</strong><span class="side">product</span></td>
-      <td class="num">6</td>
-      <td class="num">39</td>
-      <td class="num ">2.6%</td>
-      <td class="num hot">43.6%</td>
-      <td class="num hot">10.3%</td>
-      <td class="num">2.9%</td>
-      <td class="num ">2.5h</td>
-      <td class="num hot">67.5%</td>
-      <td class="num">458.9h</td>
+      <td class="num">3</td>
+      <td class="num">56</td>
+      <td class="num hot">26.8%</td>
+      <td class="num hot">48.2%</td>
+      <td class="num mid">8.9%</td>
+      <td class="num">2.4%</td>
+      <td class="num ">3h</td>
+      <td class="num hot">70.2%</td>
+      <td class="num">156h</td>
     </tr>
 <tr>
       <td><strong>tabsii-marketplace</strong><span class="side">product</span></td>
-      <td class="num">6</td>
-      <td class="num">35</td>
-      <td class="num ">5.7%</td>
-      <td class="num hot">57.1%</td>
-      <td class="num hot">17.1%</td>
+      <td class="num">3</td>
+      <td class="num">52</td>
+      <td class="num mid">23.1%</td>
+      <td class="num hot">57.7%</td>
+      <td class="num hot">15.4%</td>
       <td class="num">0%</td>
-      <td class="num ">2.8h</td>
-      <td class="num hot">72.2%</td>
+      <td class="num ">4.8h</td>
+      <td class="num hot">75.5%</td>
       <td class="num">601.5h</td>
     </tr>
 <tr>
-      <td><strong>tabsii-map</strong><span class="side">product</span></td>
-      <td class="num">7</td>
-      <td class="num">32</td>
-      <td class="num ">0%</td>
-      <td class="num hot">57.1%</td>
-      <td class="num ">0%</td>
+      <td><strong>biffo-platform-app</strong><span class="side">platform</span></td>
+      <td class="num">3</td>
+      <td class="num">44</td>
+      <td class="num hot">27.3%</td>
+      <td class="num hot">63.6%</td>
+      <td class="num hot">11.4%</td>
       <td class="num">0%</td>
-      <td class="num ">0.3h</td>
-      <td class="num hot">66.7%</td>
+      <td class="num ">4.4h</td>
+      <td class="num hot">78.7%</td>
+      <td class="num">70.7h</td>
+    </tr>
+<tr>
+      <td><strong>tabsii-map</strong><span class="side">product</span></td>
+      <td class="num">0</td>
+      <td class="num">44</td>
+      <td class="num ">0%</td>
+      <td class="num hot">63.2%</td>
+      <td class="num mid">5.3%</td>
+      <td class="num">0%</td>
+      <td class="num ">1.6h</td>
+      <td class="num hot">72.9%</td>
       <td class="num">0.9h</td>
     </tr>
 <tr>
       <td><strong>tabsii-data-model-design</strong><span class="side">product</span></td>
-      <td class="num">7</td>
-      <td class="num">32</td>
+      <td class="num">0</td>
+      <td class="num">43</td>
       <td class="num ">0%</td>
-      <td class="num hot">57.1%</td>
-      <td class="num ">0%</td>
+      <td class="num hot">66.7%</td>
+      <td class="num hot">11.1%</td>
       <td class="num">0%</td>
-      <td class="num ">0.4h</td>
-      <td class="num mid">47.5%</td>
+      <td class="num ">2.1h</td>
+      <td class="num hot">58.8%</td>
       <td class="num">387.8h</td>
     </tr>
 <tr>
-      <td><strong>biffo-platform-app</strong><span class="side">platform</span></td>
-      <td class="num">6</td>
-      <td class="num">28</td>
-      <td class="num ">7.1%</td>
-      <td class="num hot">60.7%</td>
-      <td class="num hot">14.3%</td>
+      <td><strong>tabsii-app</strong><span class="side">product</span></td>
+      <td class="num">3</td>
+      <td class="num">41</td>
+      <td class="num hot">31.7%</td>
+      <td class="num hot">70.7%</td>
+      <td class="num hot">14.6%</td>
       <td class="num">0%</td>
-      <td class="num ">2.4h</td>
-      <td class="num hot">74.2%</td>
-      <td class="num">47.7h</td>
+      <td class="num ">4.8h</td>
+      <td class="num hot">85.7%</td>
+      <td class="num">298.2h</td>
     </tr>
 <tr>
       <td><strong>tabsii-runners</strong><span class="side">product</span></td>
-      <td class="num">7</td>
-      <td class="num">26</td>
+      <td class="num">0</td>
+      <td class="num">38</td>
       <td class="num ">0%</td>
-      <td class="num hot">57.1%</td>
-      <td class="num ">0%</td>
+      <td class="num hot">63.2%</td>
+      <td class="num mid">5.3%</td>
       <td class="num">0%</td>
-      <td class="num ">0.3h</td>
-      <td class="num hot">73.3%</td>
+      <td class="num ">1.9h</td>
+      <td class="num hot">81%</td>
       <td class="num">0.7h</td>
     </tr>
 <tr>
-      <td><strong>tabsii-app</strong><span class="side">product</span></td>
-      <td class="num">6</td>
-      <td class="num">24</td>
-      <td class="num ">8.3%</td>
-      <td class="num hot">70.8%</td>
-      <td class="num hot">12.5%</td>
-      <td class="num">0%</td>
-      <td class="num ">1.9h</td>
-      <td class="num hot">88%</td>
-      <td class="num">1.5h</td>
-    </tr>
-<tr>
       <td><strong>biffo-runners</strong><span class="side">platform</span></td>
-      <td class="num">7</td>
-      <td class="num">22</td>
+      <td class="num">0</td>
+      <td class="num">33</td>
       <td class="num ">0%</td>
-      <td class="num hot">71.4%</td>
-      <td class="num hot">14.3%</td>
+      <td class="num hot">72.2%</td>
+      <td class="num hot">22.2%</td>
       <td class="num">0%</td>
-      <td class="num ">0.3h</td>
-      <td class="num hot">82.6%</td>
+      <td class="num ">2.3h</td>
+      <td class="num hot">88.2%</td>
       <td class="num">51.4h</td>
     </tr></tbody>
     </table>

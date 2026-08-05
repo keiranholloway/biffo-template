@@ -205,3 +205,76 @@ describe('verify.sh ignores nested checkouts when counting the lane', () => {
     expect(run.stdout).toContain('1 Postgres module(s) present')
   })
 })
+
+describe('verify.sh blocks a NOT-RUN pg-test lane when the push is relevant (#656)', () => {
+  // `BIFFO_PGTEST_DIFF_RELEVANT` is `.githooks/pre-push`'s signal, computed
+  // from the actual ref list via `scripts/pgtest-diff-check.sh` (see
+  // pgtest-diff-check.test.ts for that half). Setting it directly here pins
+  // verify.sh's OWN response to the signal, independent of the hook that
+  // produces it -- the same split `checkout_health` uses elsewhere in this
+  // file: the detector and the decision are tested apart.
+  const lane = {
+    'package.json': PASSING,
+    'services/api/tests/test_rls_pg.py': PG_TEST,
+    // No `scripts/biffo.sh` stub here: verify.sh's own self-provisioning
+    // attempt (`sh scripts/biffo.sh pg-test-db`) will fail with "command not
+    // found" in this fixture and fall straight through to NOT RUN, same as a
+    // real repo with no Docker reachable.
+  }
+
+  it('blocks when applicable, not run, and the diff touches db/imports/**', () => {
+    const run = runIn(lane, { BIFFO_PGTEST_DIFF_RELEVANT: '1' })
+
+    expect(run.status).toBe(1)
+    expect(run.stdout).toContain('BLOCKED')
+    expect(run.stdout).toContain('pg-test')
+  })
+
+  it('names both the DSN path and the escape hatch in the block message', () => {
+    const run = runIn(lane, { BIFFO_PGTEST_DIFF_RELEVANT: '1' })
+
+    expect(run.stdout).toContain('scripts/pg-test-db.sh')
+    expect(run.stdout).toContain('BIFFO_TEST_PG_DSN')
+    expect(run.stdout).toContain('BIFFO_SKIP_PGTEST=1')
+  })
+
+  it('does NOT block when the signal is absent (an unrelated diff)', () => {
+    // The ordinary case: `.githooks/pre-push` never sets the variable for a
+    // push that does not touch db/imports/** or a *_pg.py module, so this is
+    // what every routine push through this fixture looks like.
+    const run = runIn(lane)
+
+    expect(run.status).toBe(0)
+    expect(run.stdout).toContain('NOT RUN')
+    expect(run.stdout).not.toContain('BLOCKED')
+  })
+
+  it('does not block once a DSN is set, even with the signal on', () => {
+    // A configured DSN takes verify.sh past the `elif [ -z "$PG_TEST_DSN" ]`
+    // branch this block lives in entirely -- here it lands on `skip pg-test
+    // "no pyproject.toml..."` rather than running the lane for real (no
+    // pyproject.toml fixture exists, deliberately -- see the file header: one
+    // would make ruff/pyright/bandit run against a project that is not there
+    // and fail for reasons unconnected to this test). Either way is "not the
+    // NOT-RUN gap", and the point is the same: once a DSN reaches verify.sh,
+    // `BIFFO_PGTEST_DIFF_RELEVANT` has nothing left to escalate.
+    const run = runIn(lane, {
+      BIFFO_PGTEST_DIFF_RELEVANT: '1',
+      BIFFO_TEST_PG_DSN: 'postgresql+asyncpg://u:p@localhost:1/db',
+    })
+
+    expect(run.stdout).not.toContain('NOT RUN')
+    expect(run.stdout).not.toContain('BLOCKED')
+  })
+
+  it('BIFFO_SKIP_PGTEST=1 overrides the block, and still reports NOT RUN honestly', () => {
+    const run = runIn(lane, {
+      BIFFO_PGTEST_DIFF_RELEVANT: '1',
+      BIFFO_SKIP_PGTEST: '1',
+    })
+
+    expect(run.status).toBe(0)
+    expect(run.stdout).toContain('NOT RUN')
+    expect(run.stdout).not.toContain('BLOCKED')
+  })
+})

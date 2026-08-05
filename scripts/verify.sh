@@ -757,6 +757,39 @@ elif [ -z "$PG_TEST_DSN" ]; then
       "CI runs these as a required check; nothing local is checking them."
     printf '       \033[90m%s\033[0m\n' \
       "set BIFFO_TEST_PG_DSN, or run scripts/pg-test-db.sh if this repo ships one"
+
+    # --- Block on a relevant diff (tabsii-platform#656) --------------------
+    #
+    # The line above is honest -- it says NOT RUN, not passing -- but that is
+    # not enough on its own: it does not block, and a wall of green `OK` lines
+    # trains a reader not to weight one amber line correctly. It surfaced on a
+    # push that was ENTIRELY RLS policy DDL, exactly the diff this lane exists
+    # to check.
+    #
+    # `BIFFO_PGTEST_DIFF_RELEVANT` is set by `.githooks/pre-push`, never by a
+    # developer -- it is the hook's answer to "does this push touch
+    # db/imports/** or a *_pg.py module?", computed from the actual ref list
+    # via `scripts/pgtest-diff-check.sh`. A plain `sh scripts/biffo.sh verify`
+    # run by hand therefore stays advisory, exactly as before: this variable is
+    # only ever present when the hook itself decided the diff warranted it.
+    #
+    # `BIFFO_SKIP_PGTEST` is checked again here, not only in the hook, so this
+    # is provable by driving verify.sh directly (see verify-pg-lane.test.ts)
+    # and so a developer who sets it before invoking verify.sh by hand gets the
+    # same escape hatch the hook advertises.
+    if [ -n "${BIFFO_PGTEST_DIFF_RELEVANT:-}" ] && [ -z "${BIFFO_SKIP_PGTEST:-}" ]; then
+      FAILED="$FAILED pg-test-required"
+      printf '\n'
+      printf '  \033[31mBLOCKED\033[0m: this push touches db/imports/** or a *_pg.py module, and\n'
+      printf '  the pg-test lane above did not run. CI treats it as a required check, so a\n'
+      printf '  push here would report green without having checked the thing most likely\n'
+      printf '  to need it.\n\n'
+      printf '  Get a DSN and re-run:\n'
+      printf '    eval "$(sh scripts/pg-test-db.sh --export)"   # if this repo ships one\n'
+      printf '    export BIFFO_TEST_PG_DSN=postgresql+asyncpg://user:pass@host:port/db\n\n'
+      printf '  Deliberate escape hatch, printed rather than silent (AGENTS.md section 7):\n'
+      printf '    BIFFO_SKIP_PGTEST=1 git push ...\n\n'
+    fi
   fi
 elif ! command -v uv >/dev/null 2>&1; then
   skip pg-test "uv not installed"

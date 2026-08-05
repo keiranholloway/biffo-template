@@ -30,6 +30,7 @@
     "scripts/hook-audit.sh",
     "scripts/pg-test-db.sh",
     "scripts/rewrite-scope-check.sh",
+    "scripts/pgtest-diff-check.sh",
     "scripts/gate-coverage.sh",
     "scripts/verify.sh",
     "scripts/runner-drop-forensics.mjs",

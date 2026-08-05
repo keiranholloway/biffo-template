@@ -70,6 +70,13 @@ export const PACKAGED_ROOT_ASSETS = [
     why: 'Retired from copy-based distribution (#1109 phase 0d).',
   },
   {
+    path: 'scripts/pgtest-diff-check.sh',
+    kind: 'file',
+    sentinel: 'scripts/pgtest-diff-check.sh',
+    resolvedBy: 'src/lib/packaged-scripts.ts — findPackagedScript()',
+    why: '.githooks/pre-push feeds it the same ref list rewrite-scope-check reads, to decide whether a pg-test lane verify.sh reports APPLICABLE BUT NOT RUN should block the push rather than stay advisory (tabsii-platform#656).',
+  },
+  {
     path: 'scripts/gate-coverage.sh',
     kind: 'file',
     sentinel: 'scripts/gate-coverage.sh',

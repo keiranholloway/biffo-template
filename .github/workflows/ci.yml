@@ -313,9 +313,17 @@ jobs:
     # can never arrive, so the surviving job must keep the required name (#1331).
     #
     # The two assertions remain distinct -- see the step comments below. They
-    # are separately named so a failure still says which half broke, and every
-    # step runs under `!cancelled()` so one failing half still reports the
-    # other, exactly as two independent jobs did.
+    # are separately named so a failure still says which half broke, and the
+    # steps after the first run on
+    # `!cancelled() && steps.setup.outcome == 'success'` so one failing half
+    # still reports the other, exactly as two independent jobs did. That is the
+    # same two-part idiom the js/python jobs use for `steps.install.outcome`
+    # (see this file's header): `!cancelled()` to see every failure in a run
+    # rather than only the first, and the setup gate so that when the toolchain
+    # itself fails to install, four steps do not each die separately on a
+    # missing `terraform` binary. The first fmt step needs no `if:` -- default
+    # step semantics already skip it when setup fails, and nothing before it
+    # can fail in a way the others should survive.
     name: Terraform Validate & Security
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 20

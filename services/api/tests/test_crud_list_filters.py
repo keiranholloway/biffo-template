@@ -31,10 +31,14 @@ from api.middleware.auth import AuthenticatedUser, require_auth
 from api.middleware.principal import Principal, require_principal
 from api.models.base import Base, TenantScopedModel
 from api.routing.core_crud_router import build_core_crud_router
-from api.routing.crud_handlers import build_list_query, filterable_columns
+from api.routing.crud_handlers import (
+    _coerce_user_field,
+    build_list_query,
+    filterable_columns,
+)
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import DateTime, Integer, String, Text, Uuid
+from sqlalchemy import Date, DateTime, Integer, String, Text, Uuid
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.pool import StaticPool
@@ -391,3 +395,66 @@ class TestBuildListQueryDirectly:
         assert "tenant_id" in compiled
         assert "deleted_at IS NULL" in compiled
         assert "brand_id" in compiled
+
+
+class TestCoercionRejectsMalformedValuesForEveryTypedColumn:
+    """`_coerce_user_field`'s three `except ValueError` branches, exercised directly.
+
+    The error-branch coverage guard caught one of these shipping unexercised, and
+    it was right to: an unexecuted error branch is one nobody has observed. The
+    route-level tests reach the `Uuid` branch, but `DateTime` and `Date` are not
+    reachable through the fixture table, so asserting them through a request
+    would have meant inventing columns to carry them. Calling the function is
+    the honest way to cover a pure coercion helper.
+    """
+
+    @staticmethod
+    def _model_with(column_type):
+        from sqlalchemy import Column, MetaData, Table
+        from sqlalchemy.orm import DeclarativeBase
+
+        class _Base(DeclarativeBase):
+            metadata = MetaData()
+
+        table = Table(
+            "coercion_probe",
+            _Base.metadata,
+            Column("id", Uuid, primary_key=True),
+            Column("probe", column_type),
+        )
+
+        class _Probe:
+            __table__ = table
+
+        return _Probe
+
+    @pytest.mark.parametrize(
+        ("column_type", "bad_value", "expected_detail"),
+        [
+            (Uuid, "not-a-uuid", "probe is not a valid UUID"),
+            (DateTime, "not-a-datetime", "probe is not a valid datetime"),
+            (Date, "not-a-date", "probe is not a valid date"),
+        ],
+    )
+    def test_a_malformed_value_is_a_400_naming_the_parameter(
+        self, column_type, bad_value, expected_detail
+    ):
+        model = self._model_with(column_type)
+        with pytest.raises(HTTPException) as exc:
+            _coerce_user_field(model, "probe", bad_value)
+        assert exc.value.status_code == 400
+        assert expected_detail in str(exc.value.detail)
+
+    @pytest.mark.parametrize(
+        ("column_type", "good_value"),
+        [
+            (Uuid, "00000000-0000-0000-0000-00000000000a"),
+            (DateTime, "2026-08-05T12:00:00Z"),
+            (Date, "2026-08-05"),
+        ],
+    )
+    def test_a_well_formed_value_is_converted_rather_than_rejected(self, column_type, good_value):
+        """The mirror case. Without it, a coercion that rejected *everything*
+        would satisfy the tests above."""
+        model = self._model_with(column_type)
+        assert _coerce_user_field(model, "probe", good_value) != good_value

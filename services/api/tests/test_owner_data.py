@@ -307,7 +307,9 @@ class TestOwnerListFilters:
 
     def test_the_rejection_names_what_this_table_supports(self, harness):
         alice = self._seed(harness)
-        detail = alice.get(f"{_BASE}?sesion_id=s1").json()["detail"]
+        response = alice.get(f"{_BASE}?sesion_id=s1")
+        assert response.status_code == 400
+        detail = response.json()["detail"]
         assert "session_id" in detail
         assert "label" in detail
 
@@ -330,15 +332,22 @@ class TestOwnerListFilters:
         assert response.status_code == 400
         assert "session_id" in response.json()["detail"]
 
-    def test_a_malformed_value_for_a_typed_column_is_a_400_not_a_500(self, harness):
+    def test_a_malformed_value_for_a_typed_column_is_a_400(self, harness):
         """A value SQLAlchemy's bind processor cannot convert raises at execute
-        and surfaces as a 500 — "the server is broken" for what is plainly bad
-        input.
+        and, against a real driver, surfaces as a 500 — "the server is broken"
+        for what is plainly bad input.
 
         `starts_at` is a DateTime because that is the only non-string filterable
         type a plugin manifest can declare (`plugin_table._TYPE_MAP` has no
         `Uuid`). The Uuid branch of the same coercion is exercised over HTTP by
         `test_crud_list_filters.py`, against a core model that can declare one.
+
+        What this lane can and cannot show: reverting the fix makes this assert
+        `200 == 400`, not `500 == 400`, because SQLite compares a DateTime
+        column against a raw string quite happily. The 500 is asyncpg's
+        behaviour and is not reproducible here — so this test proves the 400,
+        and the claim about the 500 rests on the driver rather than on this
+        assertion.
         """
         alice = self._seed(harness)
         response = alice.get(f"{_BASE}?starts_at=not-a-timestamp")

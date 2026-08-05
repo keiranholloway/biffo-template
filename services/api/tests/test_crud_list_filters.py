@@ -320,6 +320,43 @@ class TestValueValidation:
         response = client.get(_BASE, params={"brand_id": ""})
         assert response.status_code == 400
 
+    def test_the_500_the_coercion_prevents_is_real_and_not_a_story(self):
+        """The counterfactual behind the test name above.
+
+        "400 not 500" is a claim about what would happen *without*
+        `_coerce_user_field`, and a test asserting the 400 cannot show it. So
+        bind the raw string the way an uncoerced filter would and watch it
+        raise: SQLAlchemy's `Uuid` bind processor calls `.hex` on the value, so
+        an unconverted `str` blows up at execute — which FastAPI surfaces as a
+        500, "the server is broken", for what is plainly bad input.
+
+        This is a property of the type's bind processor rather than of any
+        driver, so it holds on SQLite here and on asyncpg in an instance. The
+        `DateTime` branch deliberately gets no equivalent test: SQLite compares
+        that column against a raw string quite happily, so the same
+        counterfactual is not reproducible in this lane and is not asserted.
+        """
+        from sqlalchemy import select as _select
+        from sqlalchemy.exc import StatementError
+
+        engine = create_async_engine(
+            "sqlite+aiosqlite:///:memory:",
+            poolclass=StaticPool,
+            connect_args={"check_same_thread": False},
+        )
+
+        async def _probe() -> None:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            async with async_sessionmaker(engine)() as session:
+                with pytest.raises(StatementError):
+                    await session.execute(_select(Widget).where(Widget.brand_id == "not-a-uuid"))
+
+        try:
+            asyncio.run(_probe())
+        finally:
+            asyncio.run(engine.dispose())
+
 
 class TestBuildListQueryDirectly:
     """`build_list_query` is a pure builder with no session access — which is

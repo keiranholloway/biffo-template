@@ -1,1 +1,65 @@
-{"collectedAt":"2026-08-03T03:40:08Z","audits":[{"name":"coverage","ok":true,"exit":0,"summary":"Every gate covers its own CI."},{"name":"arming","ok":true,"exit":0,"summary":"32 working trees — 30 armed, 0 dead, 2 without hooks (93% armed)"},{"name":"drift","ok":true,"exit":0,"summary":"14 current, 0 drifted"},{"name":"protection","ok":true,"exit":0,"summary":"35 branches checked, all protected and binding"},{"name":"wiring","ok":true,"exit":0,"summary":"Every repo calls the shared scripts it holds."}]}
+{
+  "collectedAt": "2026-08-05T03:40:54Z",
+  "audits": [
+    {
+      "name": "coverage",
+      "ok": true,
+      "exit": 0,
+      "summary": "Every gate covers its own CI."
+    },
+    {
+      "name": "arming",
+      "ok": false,
+      "exit": 127,
+      "summary": "no line matched /^[0-9]+ working trees/ -- last output: scripts/biffo.sh: 120: exec: /home/keiran/code/biffo-template/.worktrees/practices-daily/cli/node_modules/.bin/tsx: not found"
+    },
+    {
+      "name": "drift",
+      "ok": false,
+      "exit": 1,
+      "summary": "0 current, 14 drifted"
+    },
+    {
+      "name": "protection",
+      "ok": true,
+      "exit": 0,
+      "summary": "35 branches checked, all protected and binding"
+    },
+    {
+      "name": "wiring",
+      "ok": false,
+      "exit": 1,
+      "summary": "Some repos still run the raw command, or run no gate at all."
+    },
+    {
+      "name": "classification",
+      "ok": true,
+      "exit": 0,
+      "summary": "OK  2026-08-05.json: 0 of 14 failing steps unclassified (0.0%)"
+    },
+    {
+      "name": "checkout",
+      "ok": false,
+      "exit": 1,
+      "summary": "18 primary checkouts — $6 clean$, $5 unsafe to read$, 6 behind only, 1 not evaluated"
+    },
+    {
+      "name": "deploy",
+      "ok": true,
+      "exit": 0,
+      "summary": "every integration branch green"
+    },
+    {
+      "name": "deadsurface",
+      "ok": true,
+      "exit": 0,
+      "summary": "23 uncalled route(s), at baseline 23."
+    },
+    {
+      "name": "failopen",
+      "ok": true,
+      "exit": 0,
+      "summary": "12 unfiled, at baseline 12."
+    }
+  ]
+}

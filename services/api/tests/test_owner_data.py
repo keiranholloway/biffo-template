@@ -36,6 +36,14 @@ _MANIFEST = {
                 {"name": "owner_sub", "type": "String(64)", "nullable": False},
                 {"name": "label", "type": "String(200)", "nullable": True},
                 {"name": "session_id", "type": "String(36)", "nullable": True},
+                # A column whose type this layer deliberately will NOT filter
+                # on: an Integer compared against a raw query string reaches
+                # the driver and surfaces as a 500 rather than a 400.
+                {"name": "qty", "type": "Integer", "nullable": True},
+                # A column that IS filterable but needs its value converted
+                # first — the coercion path, on the only non-string filterable
+                # type a plugin manifest can currently declare.
+                {"name": "starts_at", "type": "DateTime(timezone=True)", "nullable": True},
             ],
             "permissions": {},  # closed to tenant CRUD
             "owner_scoped_service": {
@@ -186,13 +194,29 @@ def test_another_founders_row_is_invisible(harness):
 
 
 def test_a_query_filter_cannot_relax_the_owner_scope(harness):
+    """Naming the owner column is now a 400 rather than a silent shrug, and the
+    owner scope is un-relaxable either way.
+
+    This used to assert a 200 carrying only Bob's row — true, but true of the
+    defect as well: the parameter was dropped on the floor by an `if key in
+    user_columns` with no `else` (tabsii-platform#665), so a caller could not
+    tell the difference between "your filter was applied" and "your filter was
+    ignored". `_owned` still ANDs the verified founder on unconditionally, so
+    the security property below is unchanged; what changed is that asking for
+    someone else's rows now gets an answer instead of a different question's.
+    """
     alice = harness.client(founder=_founder("alice"))
     alice.post(_BASE, json={"label": "alice's", "session_id": "s1"})
     bob = harness.client(founder=_founder("bob"))
     bob.post(_BASE, json={"label": "bob's", "session_id": "s1"})
 
-    # Bob filters by session_id AND tries to widen owner via the query — still only his.
-    rows = bob.get(f"{_BASE}?session_id=s1&owner_sub=alice").json()
+    refused = bob.get(f"{_BASE}?session_id=s1&owner_sub=alice")
+    assert refused.status_code == 400
+    assert "owner_sub" in refused.json()["detail"]
+
+    # And the filter Bob is allowed to send still returns only Bob's row — the
+    # owner predicate is not something a query parameter ever reached.
+    rows = bob.get(f"{_BASE}?session_id=s1").json()
     assert [r["label"] for r in rows] == ["bob's"]
 
 
@@ -221,3 +245,128 @@ def test_a_principal_the_table_did_not_name_gets_404(harness):
     # system:other is not in allowed_principals -> indistinguishable from missing.
     assert client.post(_BASE, json={"label": "x"}).status_code == 404
     assert client.get(_BASE).status_code == 404
+
+
+# ── list filtering (tabsii-platform#665) ────────────────────────────────────────
+
+
+class TestOwnerListFilters:
+    """`make_owner_list_handler` had three defects in four lines: no `else`, so
+    an unrecognised parameter was silently ignored and the founder got every row
+    they owned with a 200; no value coercion, so a malformed value for a typed
+    column reached the driver as a 500; and `.items()` rather than
+    `.multi_items()`, so a repeated parameter collapsed to its last occurrence.
+
+    This surface is service-authenticated and `_owned` ANDs the verified founder
+    on unconditionally, so none of that was ever a cross-owner leak — it was a
+    wrong answer within the founder's own data, plus a 500 on bad input. The
+    rejection rules are `crud_handlers.apply_list_filters`, shared with the
+    tenant-scoped list route; `test_crud_list_filters.py` covers the same rules
+    from the other side, and `test_list_filter_guard.py` stops a third handler
+    growing its own.
+    """
+
+    @staticmethod
+    def _seed(harness):
+        alice = harness.client(founder=_founder("alice"))
+        alice.post(_BASE, json={"label": "a-one", "session_id": "s1", "qty": 1})
+        alice.post(_BASE, json={"label": "a-two", "session_id": "s2", "qty": 2})
+        harness.client(founder=_founder("bob")).post(
+            _BASE, json={"label": "b-one", "session_id": "s1", "qty": 3}
+        )
+        return alice
+
+    def test_an_accepted_filter_actually_narrows(self, harness):
+        """The half most easily forgotten. Accepting a filter and dropping it is
+        the original defect wearing a different hat, and it passes any test that
+        only checks the status code."""
+        alice = self._seed(harness)
+        response = alice.get(f"{_BASE}?session_id=s1")
+        assert response.status_code == 200
+        assert [r["label"] for r in response.json()] == ["a-one"]
+
+    def test_the_other_value_is_the_mirror_case(self, harness):
+        """A filter that returned nothing would pass the test above only if that
+        test asserted emptiness. It asserts one row; this asserts the
+        complementary one, so "narrows correctly" and "matches nothing" cannot
+        both pass."""
+        alice = self._seed(harness)
+        assert [r["label"] for r in alice.get(f"{_BASE}?session_id=s2").json()] == ["a-two"]
+
+    def test_no_filter_returns_every_row_this_founder_owns(self, harness):
+        alice = self._seed(harness)
+        assert {r["label"] for r in alice.get(_BASE).json()} == {"a-one", "a-two"}
+
+    def test_an_unknown_parameter_is_a_400_naming_it(self, harness):
+        """The defect: `?sesion_id=s1` (a typo) returned every row the founder
+        owned, with a 200, and the caller could not tell."""
+        alice = self._seed(harness)
+        response = alice.get(f"{_BASE}?sesion_id=s1")
+        assert response.status_code == 400
+        assert "sesion_id" in response.json()["detail"]
+
+    def test_the_rejection_names_what_this_table_supports(self, harness):
+        alice = self._seed(harness)
+        response = alice.get(f"{_BASE}?sesion_id=s1")
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert "session_id" in detail
+        assert "label" in detail
+
+    def test_a_column_of_an_unsupported_type_is_rejected_rather_than_ignored(self, harness):
+        """`qty` is a real column on this table and still not a filter, because
+        an Integer compared against a raw query string reaches the driver and
+        500s. The important half is that it does not quietly return every qty."""
+        alice = self._seed(harness)
+        response = alice.get(f"{_BASE}?qty=1")
+        assert response.status_code == 400
+        assert "qty" in response.json()["detail"]
+        # ...and specifically not the unfiltered answer with a 200.
+        assert response.status_code != 200
+
+    def test_a_repeated_parameter_is_rejected_rather_than_last_wins(self, harness):
+        """`.items()` silently kept the last occurrence — a choice between two
+        things the caller asked for, made without saying so."""
+        alice = self._seed(harness)
+        response = alice.get(f"{_BASE}?session_id=s1&session_id=s2")
+        assert response.status_code == 400
+        assert "session_id" in response.json()["detail"]
+
+    def test_a_malformed_value_for_a_typed_column_is_a_400(self, harness):
+        """A value SQLAlchemy's bind processor cannot convert raises at execute
+        and, against a real driver, surfaces as a 500 — "the server is broken"
+        for what is plainly bad input.
+
+        `starts_at` is a DateTime because that is the only non-string filterable
+        type a plugin manifest can declare (`plugin_table._TYPE_MAP` has no
+        `Uuid`). The Uuid branch of the same coercion is exercised over HTTP by
+        `test_crud_list_filters.py`, against a core model that can declare one.
+
+        What this lane can and cannot show: reverting the fix makes this assert
+        `200 == 400`, not `500 == 400`, because SQLite compares a DateTime
+        column against a raw string quite happily. The 500 is asyncpg's
+        behaviour and is not reproducible here — so this test proves the 400,
+        and the claim about the 500 rests on the driver rather than on this
+        assertion.
+        """
+        alice = self._seed(harness)
+        response = alice.get(f"{_BASE}?starts_at=not-a-timestamp")
+        assert response.status_code == 400
+        assert "starts_at" in response.json()["detail"]
+
+    def test_the_owner_column_is_not_a_filter_key(self, harness):
+        """Not a security control — `_owned` already fixes the owner — but
+        `?owner_sub=someone` can only mean "narrow to a founder I am not", and
+        the honest answer is a 400 rather than a 200 for a different question."""
+        alice = self._seed(harness)
+        response = alice.get(f"{_BASE}?owner_sub=bob")
+        assert response.status_code == 400
+        assert "owner_sub" in response.json()["detail"]
+
+    def test_a_filter_still_cannot_reach_another_founders_row(self, harness):
+        """The scope predicate is not something a query parameter reaches: Bob
+        also owns a `session_id=s1` row and it must not appear for Alice."""
+        alice = self._seed(harness)
+        rows = alice.get(f"{_BASE}?session_id=s1").json()
+        assert [r["owner_sub"] for r in rows] == ["alice"]
+        assert "b-one" not in {r["label"] for r in rows}

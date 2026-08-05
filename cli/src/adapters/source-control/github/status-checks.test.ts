@@ -51,14 +51,19 @@ const CORE_WORKFLOWS = [CORE_CI, CORE_RELEASE_GUARDS]
  *   It runs in instances but short-circuits to a pass as soon as it sees
  *   `biffo.core.json`, so making it a required context in a scaffolded repo
  *   would gate merges on a check that is meaningless there.
- * - `Terraform Validate (infra/environments)` (tabsii-platform#521): exists only
- *   in the core `ci.yml`, not the sibling skeleton. `infra/environments/` is an
- *   instance's own dev/staging/prod layout (ADR-0005); a sibling owns one flat
- *   `infra/` tree instead (ADR-0007) and already validates it via its own
- *   `infra-validate` job, so this job has nothing to check there. Requiring a
- *   context that never reports in a scaffolded sibling would BLOCK it forever.
+ *
+ * `Terraform Validate (infra/environments)` (tabsii-platform#521) used to be
+ * the second entry. It is gone because the *job* is gone: #1331 folded it into
+ * `Terraform Validate & Security` as ordinary steps, since GitHub bills every
+ * job a full minute and that one did ~33 seconds of work. Its exclusion here
+ * was load-bearing precisely because it reported only in the core `ci.yml` and
+ * never in the sibling skeleton — as a step of an already-required job it now
+ * reports under a context both shapes emit, so there is nothing left to
+ * exclude. The steps carry their own `!cancelled()` guard and a
+ * missing-directory guard so a sibling without `infra/environments/` still
+ * passes; see those steps' comments in `.github/workflows/ci.yml`.
  */
-const NOT_REQUIRED = new Set(['Release Guards', 'Terraform Validate (infra/environments)'])
+const NOT_REQUIRED = new Set(['Release Guards'])
 
 /**
  * Extract the `name:` of every top-level job in a GitHub Actions workflow.

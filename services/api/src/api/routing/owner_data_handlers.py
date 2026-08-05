@@ -41,7 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..middleware.auth import AuthenticatedUser
 from ..middleware.principal import Principal, require_signed_principal
-from .crud_handlers import serialize, visible_rows
+from .crud_handlers import apply_list_filters, filterable_columns, serialize, visible_rows
 
 Handler = Callable[..., Awaitable[Any]]
 
@@ -133,8 +133,32 @@ def make_owner_read_handler(
 
 
 def make_owner_list_handler(
-    model: type[Any], owner_column: str, user_columns: frozenset[str], allowed: frozenset[str]
+    model: type[Any], owner_column: str, allowed: frozenset[str]
 ) -> Handler:
+    """List this founder's rows, narrowed by whichever equality filters the
+    caller asked for and this table can honour.
+
+    The accepted set is ``filterable_columns`` minus the owner column. Excluding
+    the owner is not a security control — ``_owned`` ANDs the verified founder
+    on unconditionally, so no query parameter has ever been able to widen the
+    result past their own rows — it is a correctness one: ``?owner_sub=someone``
+    can only ever mean "narrow to a founder I am not", and the honest answer to
+    that is a 400 naming the parameter, not a 200 for a different question.
+
+    Rejection and coercion are ``crud_handlers.apply_list_filters``, shared with
+    the tenant-scoped list route rather than reimplemented. What this handler
+    used to do instead — ``if key in user_columns`` with no ``else``, over
+    ``.items()`` rather than ``.multi_items()``, with no value coercion — had
+    three distinct failure modes in four lines (tabsii-platform#665): an
+    unrecognised parameter silently returned every row the founder owned with a
+    200, a repeated parameter collapsed to its last occurrence, and a non-UUID
+    for a ``Uuid`` column reached the driver and surfaced as a 500. The shared
+    helper answers all three with a 400 that names the parameter.
+    """
+    # Resolved once per route at build time — a model's columns cannot change
+    # between requests, and this is what the 400 message quotes back.
+    filterable = filterable_columns(model) - {owner_column}
+
     async def handler(
         request: Request,
         caller: Principal = Depends(require_signed_principal),
@@ -142,13 +166,12 @@ def make_owner_list_handler(
     ) -> list[dict[str, Any]]:
         _authorize(caller, allowed)
         founder = caller.user
-        stmt = _owned(model, owner_column, founder)
-        # Optional equality filters on user columns (e.g. by session_id). The owner
-        # filter is always ANDed on top and can never be relaxed by a query param —
-        # the owner column itself is not an accepted filter key.
-        for key, value in request.query_params.items():
-            if key in user_columns and key != owner_column:
-                stmt = stmt.where(getattr(model, key) == value)
+        stmt = apply_list_filters(
+            model,
+            _owned(model, owner_column, founder),
+            list(request.query_params.multi_items()),
+            filterable=filterable,
+        )
         rows = (await db.execute(stmt)).scalars().all()
         return [serialize(row) for row in rows]
 

@@ -13,17 +13,27 @@ Authorization is NOT done here — it is a separate route-level guard
 (``dependencies.require_crud_permission``) attached by each router, so a handler
 only ever runs for a ``(table, operation)`` the caller is already allowed to
 perform (ADR-0004).
+
+List filtering: the ``list`` handler narrows on the scope columns a model
+declares (``filterable_columns``) and rejects, with a 400, any query parameter
+it cannot honour. It used to accept no query parameters at all, so every filter
+sent over HTTP was silently discarded and a caller whose grant spanned several
+scopes received every scope's rows for a single-scope request (tabsii-crm#239).
+Filters only ever AND conditions onto the tenant-scoped SELECT; they cannot
+widen what tenant scoping (or, in an instance, RLS) already permits.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from typing import Any
+from collections.abc import Awaitable, Callable, Sequence
+from datetime import date, datetime
+from typing import Any, cast
+from uuid import UUID
 
 from aws_lambda_powertools import Logger
-from fastapi import Body, Depends, HTTPException, status
+from fastapi import Body, Depends, HTTPException, Request, status
 from pydantic_core import to_jsonable_python
-from sqlalchemy import func, select
+from sqlalchemy import Date, DateTime, String, Uuid, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -221,12 +231,256 @@ def _integrity_error_response(
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
+# Column types a list filter can compare against a raw query-string value.
+# Exactly the types `_coerce_user_field` converts (Uuid, DateTime, Date) plus
+# String/Text, which needs no conversion because a text column and a query
+# parameter are already the same thing. Everything else is deliberately absent:
+# JSON, ARRAY and geometry types have no useful equality-against-a-string
+# semantics, and Integer/Float/Boolean would reach the driver as strings and
+# surface as a 500 — so they stay rejected until someone adds their coercion
+# beside the others.
+_FILTERABLE_TYPES: tuple[type[Any], ...] = (Uuid, String, DateTime, Date)
+
+
+def _coerce_user_field(model: type[Any], key: str, value: Any) -> Any:
+    """Coerce one caller-supplied value to what its column needs before it is
+    compared.
+
+    A query string has no UUID, datetime or date type, so a typed column's
+    filter arrives as text. SQLAlchemy's bind processors then raise at execute
+    rather than coercing, which surfaces to the caller as a 500 — "the server is
+    broken" — for what is plainly bad input. Convert here instead, and 400 on
+    something unparseable: the same "bad input is a 400" contract the rest of
+    this layer follows. ``None`` and already-native values pass straight
+    through; column types outside the conversion set are untouched, so a
+    ``String`` table behaves exactly as before.
+
+    Deliberately scoped to the **filter** path for now. The create/update body
+    path has the same shape of problem and does not use this yet; an instance
+    that has diverged (tabsii-platform) already applies it to both, and bringing
+    the body path upstream is its own change with its own tests rather than a
+    silent rider on this one.
+    """
+    column = model.__table__.columns.get(key)
+    if column is None or value is None or not isinstance(value, str):
+        return value
+    if isinstance(column.type, Uuid):
+        try:
+            return UUID(value)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{key} is not a valid UUID",
+            ) from exc
+    if isinstance(column.type, DateTime):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{key} is not a valid datetime",
+            ) from exc
+    if isinstance(column.type, Date):
+        try:
+            return date.fromisoformat(value)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{key} is not a valid date",
+            ) from exc
+    return value
+
+
+def filterable_columns(model: type[Any]) -> frozenset[str]:
+    """Query-parameter names a generic list route will honour as equality
+    filters on ``model`` — derived from the model's own columns, never a
+    hardcoded list.
+
+    The rule: **every user column whose type can be compared against a raw
+    query-string value** (``_FILTERABLE_TYPES``). ``user_columns_from_model``
+    supplies the "user column" half, so the auto-managed columns and the
+    ``deleted_at`` tombstone are excluded here for the same reasons they are
+    excluded from the write path — ``tenant_id`` in particular is never a
+    caller's to choose, it comes from the tenant-context dependency (ADR-0001),
+    and it ends in ``_id`` so it has to be excluded deliberately.
+
+    ## Why column type rather than declared foreign keys
+
+    Foreign-key metadata would be the more direct signal for *scope* columns,
+    and it is not usable — for reasons that are properties of how these tables
+    come to exist, not an oversight anyone can fix later:
+
+    * A **plugin** table is built from a manifest, and ``ColumnDefinition`` has
+      no way to declare a ``ForeignKey`` at all (``models/plugin_table.py``), so
+      a dynamically-built model never carries one.
+    * An **instance's** DDL-imported tables keep their real constraints in SQL
+      rather than in the mapped model: ``tabsii-platform``'s entire
+      ``api/models`` package declares zero SQLAlchemy foreign keys — measured,
+      not assumed.
+    * The one place a **core** model does declare one — ``User.organization_id``
+      — belongs to a table that deliberately stays off the generic CRUD layer
+      (ADR-0004 §1), so it is not a counter-example this rule ever sees.
+
+    Deriving the allowed set from ``column.foreign_keys`` would therefore yield
+    an empty set on every table this handler serves and quietly filter nothing:
+    the estate's standard failure shape, a check that passes because it cannot
+    see its input.
+
+    ## Why not only ``_id`` columns
+
+    Scope is carried by foreign keys, so an ``_id`` suffix names most of what
+    matters, and an earlier draft of this rule allowed only that. The type rule
+    is wider on purpose: hand-written list routes exist in instances *solely*
+    because this layer could not filter, and retiring them onto generic CRUD
+    needs ``status`` as much as it needs ``brand_id``. Honouring every filter
+    this layer can honour correctly is what eventually removes the "do not
+    simplify this back to generic CRUD" warnings rather than restating them.
+
+    A column outside the set is **rejected**, naming itself, rather than
+    silently ignored — see ``apply_list_filters``. Widening later means adding a
+    type to ``_FILTERABLE_TYPES`` plus its coercion in ``_coerce_user_field``;
+    nothing else reads this set.
+    """
+    user_columns = user_columns_from_model(model)
+    return frozenset(
+        column.name
+        for column in model.__table__.columns
+        if column.name in user_columns and isinstance(column.type, _FILTERABLE_TYPES)
+    )
+
+
+def apply_list_filters(
+    model: type[Any],
+    query: Any,
+    query_params: Sequence[tuple[str, str]],
+    *,
+    filterable: frozenset[str] | None = None,
+) -> Any:
+    """AND the caller's equality filters onto an already-scoped list ``query``,
+    rejecting anything this layer will not honour.
+
+    ``query`` arrives already carrying whatever scoping the route enforces —
+    tenant for the generic list route, tenant *and* owner for the owner-scoped
+    one (``owner_data_handlers``). This function only ever narrows it further,
+    so no query parameter can widen a result beyond what the caller was already
+    entitled to; the scoping predicates are not this function's to relax.
+
+    ``query_params`` is the raw ``(name, value)`` sequence — Starlette's
+    ``request.query_params.multi_items()`` — deliberately not a dict, so a
+    parameter repeated in the query string is *visible* here rather than
+    silently collapsed to its last occurrence.
+
+    Three ways a caller is told "no", all of them 400 and all of them naming the
+    parameter at fault:
+
+    * a parameter this route cannot filter on (``filterable``);
+    * the same parameter more than once — last-wins would be a silent choice
+      between two things the caller asked for, which is the defect, not the fix;
+    * a value that is not valid for its column, e.g. a non-UUID for a ``Uuid``
+      column (``_coerce_user_field``), which would otherwise reach the driver
+      and surface as a 500.
+
+    **Why loud rejection is the point.** Both list surfaces used to drop what
+    they could not honour on the floor: the generic one took no query parameters
+    at all (tabsii-crm#239) and the owner-scoped one had an ``if key in
+    user_columns`` with no ``else`` (tabsii-platform#665). Either way the filter
+    was accepted by FastAPI, discarded, and answered with a 200 — a caller could
+    not tell that ``?brand_id=X`` had narrowed nothing. Scoping was never
+    bypassed (it still is not; this only ever ANDs conditions on), so the answer
+    was authorised — it was simply not the answer that was asked for. Converting
+    a silent wrong answer into a visible error is the whole objective, and it is
+    why an unrecognised parameter is a 400 rather than a shrug.
+
+    This is a pure query builder with no session access, so it is testable
+    without a database and, in an instance, executable on an RLS-bound
+    connection to observe the narrowing under live policies.
+    """
+    if filterable is None:
+        filterable = filterable_columns(model)
+
+    names = [name for name, _ in query_params]
+
+    unknown = sorted({name for name in names if name not in filterable})
+    if unknown:
+        supported = (
+            f"This endpoint filters on: {', '.join(sorted(filterable))}."
+            if filterable
+            else "This endpoint accepts no filters."
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported query parameter(s): {', '.join(unknown)}. {supported}",
+        )
+
+    repeated = sorted({name for name in names if names.count(name) > 1})
+    if repeated:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Query parameter(s) given more than once: {', '.join(repeated)}. "
+                "Provide each filter at most once."
+            ),
+        )
+
+    for name, value in query_params:
+        query = query.where(getattr(model, name) == _coerce_user_field(model, name, value))
+    return query
+
+
+def build_list_query(
+    model: type[Any],
+    tenant_id: Any,
+    query_params: Sequence[tuple[str, str]],
+    *,
+    filterable: frozenset[str] | None = None,
+) -> Any:
+    """The SELECT behind the generic list route: tenant-scoped, tombstone-free,
+    and narrowed by whichever filters the caller asked for.
+
+    Only the base query is this function's own; every rejection and coercion
+    rule lives in ``apply_list_filters``, which the owner-scoped list route
+    shares. Two list handlers deciding independently what an unknown parameter
+    is worth is exactly the drift that had ``_extract_detail`` written twice
+    (biffo-template#1108).
+    """
+    return apply_list_filters(
+        model,
+        visible_rows(model, select(model).where(model.tenant_id == tenant_id)),
+        query_params,
+        filterable=filterable,
+    )
+
+
+# Default for the list handler's ``request`` parameter, so the handler stays
+# callable as a plain coroutine — several tests exercise it that way, and a
+# direct call has no query string to read.
+#
+# Spelled as a cast rather than ``Request | None`` because FastAPI recognises the
+# parameter by its **annotation**: a plain ``Request`` is injected from the ASGI
+# scope, while ``Request | None`` is a Union it does not special-case and instead
+# tries to build a Pydantic field from, which raises at import time. The default
+# is invisible over HTTP — FastAPI always supplies the real request — so the
+# ``None`` branch is reachable only from an in-process call.
+#
+# "No request" therefore means "no query string", which resolves to no filters:
+# the tenant-scoped result the route returned before filtering existed. That is
+# the widest answer this handler has ever given and it is still tenant-bounded,
+# so the fallback cannot widen scope — it only declines to narrow.
+_NO_REQUEST: Request = cast(Request, None)
+
+
 def make_list_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
+    # Resolved once per route at build time — the model's columns cannot change
+    # between requests, and this is what the 400 message quotes back.
+    filterable = filterable_columns(model)
+
     async def handler(
         tenant_id: str = Depends(require_plugin_tenant_context),
         db: AsyncSession = Depends(get_db),
+        request: Request = _NO_REQUEST,
     ) -> list[dict[str, Any]]:
-        query = visible_rows(model, select(model).where(model.tenant_id == tenant_id))
+        params = list(request.query_params.multi_items()) if request is not None else []
+        query = build_list_query(model, tenant_id, params, filterable=filterable)
         result = await db.execute(query)
         return [serialize(row) for row in result.scalars().all()]
 

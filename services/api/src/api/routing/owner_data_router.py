@@ -81,7 +81,7 @@ def build_owner_data_router(manifests: Sequence[dict[str, Any]] | None = None) -
             )
             table_router.add_api_route(
                 "",
-                make_owner_list_handler(model, owner_column, user_columns, allowed),
+                make_owner_list_handler(model, owner_column, allowed),
                 methods=["GET"],
                 summary=f"list {table_def.name} (owner-scoped)",
             )

@@ -12,6 +12,7 @@ import { doctorCommand } from './commands/doctor.js'
 import { teardownCommand } from './commands/teardown.js'
 import { hookAuditCommand } from './commands/hook-audit.js'
 import { pgTestDbCommand } from './commands/pg-test-db.js'
+import { pgtestDiffCheckCommand } from './commands/pgtest-diff-check.js'
 import { rewriteScopeCheckCommand } from './commands/rewrite-scope-check.js'
 import { gateCoverageCommand } from './commands/gate-coverage.js'
 import { verifyCommand } from './commands/verify.js'
@@ -68,6 +69,7 @@ program.addCommand(gateCoverageCommand)
 program.addCommand(runnerDropForensicsCommand)
 program.addCommand(hookAuditCommand)
 program.addCommand(pgTestDbCommand)
+program.addCommand(pgtestDiffCheckCommand)
 program.addCommand(rewriteScopeCheckCommand)
 program.addCommand(pluginCommand)
 program.addCommand(dataCommand)

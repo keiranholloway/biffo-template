@@ -35,11 +35,22 @@ fi
 root=$(git rev-parse --show-toplevel) || exit 0
 cd "$root" || exit 0
 
-# The rewrite-scope guard runs FIRST, and it is the only thing here that needs
-# the ref list git puts on stdin (<local ref> <local sha> <remote ref>
-# <remote sha>). verify.sh reads no stdin, so consuming it here costs nothing —
-# but it does mean this must run before the `exec` below, which replaces the
-# process entirely.
+# git puts the ref list (<local ref> <local sha> <remote ref> <remote sha>, one
+# line per ref) on this process's stdin, ONCE. Two things below need it --
+# rewrite-scope-check and the pg-test block gate -- and a pipe can only be read
+# once, so it is captured to a file here and each consumer is fed from that
+# file instead of the real stdin. Falling back to no capture (each reader gets
+# whatever is left of the real stdin, i.e. nothing for the second one) rather
+# than failing the push if a temp file cannot be created: this hook's job is to
+# run checks, not to invent a new way to block a push that has nothing to do
+# with any of them.
+REFS_FILE=$(mktemp) || REFS_FILE=""
+if [ -n "$REFS_FILE" ]; then
+  cat >"$REFS_FILE"
+  trap 'rm -f "$REFS_FILE"' EXIT HUP INT TERM
+fi
+
+# The rewrite-scope guard runs FIRST.
 #
 # Why it exists: a force-push can quietly add a file to a branch's change set
 # and record a stale copy of somebody else's merged work as your own change.
@@ -51,7 +62,11 @@ cd "$root" || exit 0
 # the file was the one where nothing checked. There is no absent case now --
 # the bridge resolves the script from the package -- and if the bridge itself
 # cannot run, that is a reason to stop, not to wave the push through.
-sh scripts/biffo.sh rewrite-scope-check || exit 1
+if [ -n "$REFS_FILE" ]; then
+  sh scripts/biffo.sh rewrite-scope-check <"$REFS_FILE" || exit 1
+else
+  sh scripts/biffo.sh rewrite-scope-check || exit 1
+fi
 
 # --- Claim guard (#1231 instance 2) -------------------------------------------
 #
@@ -92,6 +107,42 @@ if [ -n "$branch" ]; then
   # #1209's own incident was caught before duplicate work merged). Set
   # BIFFO_CLAIM_STRICT=1 to make claim.sh itself collapse cannot-tell into
   # exit 1 instead, if you would rather block than guess.
+fi
+
+# --- pg-test block gate (#656) -------------------------------------------
+#
+# verify.sh already reports `pg-test` as `APPLICABLE BUT NOT RUN` when the repo
+# has Postgres-dependent tests and no DSN reached it, and tries to provision one
+# itself via `scripts/biffo.sh pg-test-db` before giving up. That is honest and
+# often self-healing -- but it surfaced on a push that was ENTIRELY RLS policy
+# DDL, where the lane still did not run and the push still went through amber.
+# A wall of green `OK` lines does not make a person weight one amber line
+# correctly at 5pm, and CI treats this lane as required, so a local pass that
+# quietly skipped it is not the thing it looks like.
+#
+# So: if this push touches `db/imports/**` or a `*_pg.py` module -- the
+# convention `scripts/pg-test-db.sh` and verify.sh's own module discovery both
+# use -- and verify.sh still cannot run the lane, block rather than warn.
+# `BIFFO_PGTEST_DIFF_RELEVANT=1` is how that intent reaches verify.sh; it makes
+# no decision itself, `scripts/pgtest-diff-check.sh` (through the same bridge
+# as rewrite-scope-check) does, from the same ref list captured above.
+#
+# Deliberately narrow: an ordinary frontend push touches none of those paths,
+# so `pgtest-diff-check` exits 1 and nothing here changes. A repo whose
+# integration branch cannot be resolved, or that got no ref list at all, exits
+# 2 -- "could not tell" -- and this does NOT block on that, the same posture
+# `rewrite-scope-check` and `claim.sh --guard` take on their own blind spots: a
+# coordination-shaped check that fails closed on not knowing teaches people to
+# route around it, which is the opposite of what a gate is for.
+#
+# `BIFFO_SKIP_PGTEST=1`, checked here rather than only inside verify.sh, is the
+# deliberate escape hatch AGENTS.md section 7 requires for loosening a gate --
+# in the open, not by reaching for `--no-verify` and skipping every other check
+# too.
+if [ -z "${BIFFO_SKIP_PGTEST:-}" ] && [ -n "$REFS_FILE" ]; then
+  if sh scripts/biffo.sh pgtest-diff-check <"$REFS_FILE"; then
+    export BIFFO_PGTEST_DIFF_RELEVANT=1
+  fi
 fi
 
 # Through the version-pinned CLI since #1109, so a repo cannot run a gate two

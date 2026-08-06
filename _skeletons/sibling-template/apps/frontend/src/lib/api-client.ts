@@ -224,6 +224,22 @@ export function __resetRenewedTokenCacheForTests(): void {
   renewedTokenCache = null
 }
 
+/**
+ * What `createApiClient` returns. Named so components can accept a client as a
+ * prop without re-deriving the shape (`ReturnType<typeof createApiClient>`
+ * spelled out at every call site drifts the moment the client gains a method).
+ *
+ * Backported from `tabsii-crm`, which added it and then could not receive this
+ * file: `filesIfPresent` distributes the skeleton's copy verbatim, so a sync
+ * would have deleted an export three of its components import and broken the
+ * build. Caught by the sync rehearsal on 2026-08-06 rather than in fourteen
+ * repos afterwards.
+ *
+ * The rule that applies (AGENTS.md, and biffo-template#1198's hard-won version):
+ * a file an instance is merely AHEAD on is backported, never overwritten.
+ */
+export type ApiClient = ReturnType<typeof createApiClient>
+
 export function createApiClient(
   getIdToken: () => string | null,
   refreshIdToken: () => Promise<string | null> = refreshViaPortalSession,

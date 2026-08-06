@@ -205,7 +205,32 @@ for lock in $ALL_LOCKS; do
 
   # `--no-emit-project` drops the tree's own package (nothing published to
   # audit); `--no-dev` keeps the audit to what actually ships.
-  if (cd "$dir" && uv export --frozen --no-dev --no-emit-project) >"$reqs" 2>/dev/null && [ -s "$reqs" ]; then
+  #
+  # `--no-emit-local` drops LOCAL PATH dependencies, and without it this gate
+  # cannot scan a plugin tree at all (#1340). `biffo-plugin-sdk` is pulled in
+  # as `-e ./packages/python-sdk`; pip-audit tries to resolve it on PyPI, fails
+  # with "Dependency not found on PyPI and could not be audited", and produces
+  # no parseable output -- so the whole tree came back INCONCLUSIVE and blocked.
+  # Every vendored Python plugin tree in every instance has that dependency, so
+  # this was not a niche shape: it blocked all of them.
+  #
+  # Skipping it costs nothing real. A local path dependency is first-party
+  # source, audited in its own repo, and never a published artefact an advisory
+  # could name. Its TRANSITIVE dependencies are still exported and still
+  # audited -- verified on `services/ideation`, where the export keeps 25
+  # packages including three carried `via biffo-plugin-sdk`. So the answer this
+  # gate gives is unchanged for every package an advisory can actually be about.
+  if (cd "$dir" && uv export --frozen --no-dev --no-emit-project --no-emit-local) >"$reqs" 2>/dev/null && [ -s "$reqs" ]; then
+    # Report what was skipped rather than skipping it quietly: "audited
+    # everything except the bits we could not" must never read the same as
+    # "audited everything", which is the failure this whole file exists to
+    # fight. Counted from the same lockfile, so the number is the tree's, not
+    # a guess.
+    local_deps=$( (cd "$dir" && uv export --frozen --no-dev --no-emit-project) 2>/dev/null \
+      | grep -cE '^-e |@ file://' || true )
+    if [ "${local_deps:-0}" -gt 0 ]; then
+      echo "  (${rel}: ${local_deps} local path dependenc$([ "$local_deps" -eq 1 ] && echo y || echo ies) excluded -- first-party, audited in their own repo; their transitive dependencies are still scanned)"
+    fi
     audit_deps "pip-audit (${rel})" "-r $reqs" || failed=1
   else
     # An export failure is "couldn't run", not "clean" — same discipline as a

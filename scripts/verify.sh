@@ -688,8 +688,42 @@ pg_test_modules() {
 # assertions its CI workflow makes, for the same reason.
 pg_test_run() {
   _out="/tmp/biffo-verify-pg.$$"
-  if ! TABSII_TEST_PG_DSN="$PG_TEST_DSN" BIFFO_TEST_PG_DSN="$PG_TEST_DSN" \
-    timeout "$PG_TEST_BUDGET_SECONDS" uv run --directory "$1" pytest -q $2 >"$_out" 2>&1; then
+  _pg_started=$(date +%s)
+  TABSII_TEST_PG_DSN="$PG_TEST_DSN" BIFFO_TEST_PG_DSN="$PG_TEST_DSN" \
+    timeout "$PG_TEST_BUDGET_SECONDS" uv run --directory "$1" pytest -q $2 >"$_out" 2>&1
+  _pg_rc=$?
+  _pg_elapsed=$(($(date +%s) - _pg_started))
+
+  # `timeout` exits 124 when it kills the command (137 if SIGKILL was needed).
+  # Reported apart from a real failure, because they are different facts and
+  # this gate used to render them identically: a killed run printed
+  # `verify failed: pg-test` with NO failing test named, which reads exactly
+  # like a defect and sends the reader hunting one. It happened on
+  # tabsii-platform (#703) -- the same push succeeded on retry, unchanged.
+  #
+  # Same discipline as `wait-for-checks` and the dependency audits: "could not
+  # determine" must never wear the clothes of "found something wrong".
+  if [ "$_pg_rc" -eq 124 ] || [ "$_pg_rc" -eq 137 ]; then
+    echo "TIMED OUT after ${_pg_elapsed}s (budget ${PG_TEST_BUDGET_SECONDS}s)."
+    echo ""
+    echo "This is INCONCLUSIVE, not a failing test: the lane was killed partway,"
+    echo "so nothing below is a verdict on your change. Do not go looking for a"
+    echo "bug on this evidence."
+    echo ""
+    echo "Most likely the lane has simply outgrown its budget. Re-run with more:"
+    echo "  BIFFO_VERIFY_PG_BUDGET=$((PG_TEST_BUDGET_SECONDS * 2)) sh scripts/verify.sh"
+    echo ""
+    echo "If that passes, raise PG_TEST_BUDGET_SECONDS rather than living with a"
+    echo "gate that fails at random -- and re-measure the comment above it, which"
+    echo "records what the lane cost when the number was last chosen."
+    echo ""
+    echo "Partial output before the kill (NOT a result):"
+    tail -15 "$_out"
+    rm -f "$_out"
+    return 1
+  fi
+
+  if [ "$_pg_rc" -ne 0 ]; then
     cat "$_out"
     rm -f "$_out"
     return 1
@@ -706,6 +740,13 @@ pg_test_run() {
     tail -5 "$_out"
     rm -f "$_out"
     return 1
+  fi
+  # A pass with almost no headroom is the state just before the confusing
+  # failure above, and it is silent unless somebody says so. 80% is early
+  # enough to act on and rare enough not to become noise.
+  if [ "$((_pg_elapsed * 100))" -gt "$((PG_TEST_BUDGET_SECONDS * 80))" ]; then
+    printf '\033[33m  note: pg-test took %ss of a %ss budget -- raise PG_TEST_BUDGET_SECONDS before it starts timing out at random.\033[0m\n' \
+      "$_pg_elapsed" "$PG_TEST_BUDGET_SECONDS"
   fi
   rm -f "$_out"
   return 0

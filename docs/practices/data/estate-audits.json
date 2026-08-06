@@ -1,5 +1,5 @@
 {
-  "collectedAt": "2026-08-05T03:40:54Z",
+  "collectedAt": "2026-08-06T03:41:36Z",
   "audits": [
     {
       "name": "coverage",
@@ -35,13 +35,13 @@
       "name": "classification",
       "ok": true,
       "exit": 0,
-      "summary": "OK  2026-08-05.json: 0 of 14 failing steps unclassified (0.0%)"
+      "summary": "OK  2026-08-06.json: 0 of 16 failing steps unclassified (0.0%)"
     },
     {
       "name": "checkout",
       "ok": false,
       "exit": 1,
-      "summary": "18 primary checkouts — $6 clean$, $5 unsafe to read$, 6 behind only, 1 not evaluated"
+      "summary": "18 primary checkouts — $5 clean$, $5 unsafe to read$, 7 behind only, 1 not evaluated"
     },
     {
       "name": "deploy",
@@ -51,9 +51,9 @@
     },
     {
       "name": "deadsurface",
-      "ok": true,
-      "exit": 0,
-      "summary": "23 uncalled route(s), at baseline 23."
+      "ok": false,
+      "exit": 1,
+      "summary": "36 uncalled route(s), baseline 23 — something new was exposed with no caller."
     },
     {
       "name": "failopen",

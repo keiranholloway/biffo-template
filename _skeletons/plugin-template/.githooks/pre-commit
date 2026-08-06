@@ -16,13 +16,39 @@ cd "$root" || exit 0
 #
 # Unlike commit-msg, which now has a built-in fallback because Conventional
 # Commits is a RULE that can be checked with nothing but `sh`, this hook runs a
-# TOOLCHAIN. Checked 2026-08-03: no satellite carries `lint-staged` anywhere --
-# not at the root, not in any workspace -- so there is genuinely nothing to
-# resolve and nothing to fall back to. Making it fatal would block all work in
-# those repos, which is how a safety measure gets ripped out.
+# TOOLCHAIN. There is genuinely nothing to resolve and nothing to fall back to
+# where it is absent, and making it fatal would block all work in those repos,
+# which is how a safety measure gets ripped out.
 #
 # So it still exits 0. It just no longer implies it checked anything, and it
 # says what would make it real.
+#
+# ## The abstention is not the end state, and the count is moving
+#
+# An earlier version of this comment recorded "Checked 2026-08-03: no satellite
+# carries `lint-staged` anywhere". That is no longer true, and leaving it would
+# have made a fixable gap read as a permanent fact about satellites -- the
+# abstention would look like the design rather than a backlog.
+#
+# Re-measured 2026-08-06 across the nine tabsii satellites:
+#
+#   - `tabsii-crm` DOES carry it, and its gate is real.
+#   - `tabsii-ui` gained it the same day (tabsii-ui#24), which also showed the
+#     abstention is cheap to clear: add prettier + lint-staged and a config.
+#   - Seven others still abstain. THREE of those have no root `package.json` at
+#     all, so they hit the FIRST branch below, and no config file can fix them --
+#     they need a root manifest before they need a lint-staged entry.
+#
+# The deeper reason it keeps happening: **`.prettierrc` is not in
+# `shared-files.json`**, so nothing ever carries the estate's formatting rules
+# to a satellite. Each one is left to invent them or have none, and a satellite
+# that adopts prettier with DEFAULTS drifts away from the estate's style rather
+# than towards it -- measured in tabsii-ui, where prettier's defaults reformatted
+# all 7 source files and the template's settings reformatted 3.
+#
+# Do not re-freeze a measured count into this comment without a date and a way
+# to re-derive it. The number is a snapshot of a backlog, not a property of
+# satellites.
 if [ ! -f package.json ]; then
   echo "pre-commit: ABSTAINED — no root package.json, so lint-staged cannot run here." >&2
   echo "  Staged files were NOT linted or formatted. CI still checks them." >&2

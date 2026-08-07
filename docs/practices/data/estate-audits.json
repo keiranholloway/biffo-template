@@ -1,5 +1,5 @@
 {
-  "collectedAt": "2026-08-06T03:41:36Z",
+  "collectedAt": "2026-08-07T03:41:38Z",
   "audits": [
     {
       "name": "coverage",
@@ -17,7 +17,7 @@
       "name": "drift",
       "ok": false,
       "exit": 1,
-      "summary": "0 current, 14 drifted"
+      "summary": "14 current, 0 drifted"
     },
     {
       "name": "protection",
@@ -35,19 +35,19 @@
       "name": "classification",
       "ok": true,
       "exit": 0,
-      "summary": "OK  2026-08-06.json: 0 of 16 failing steps unclassified (0.0%)"
+      "summary": "OK  2026-08-07.json: 0 of 8 failing steps unclassified (0.0%)"
     },
     {
       "name": "checkout",
       "ok": false,
       "exit": 1,
-      "summary": "18 primary checkouts — $5 clean$, $5 unsafe to read$, 7 behind only, 1 not evaluated"
+      "summary": "18 primary checkouts — $8 clean$, $3 unsafe to read$, 6 behind only, 1 not evaluated"
     },
     {
       "name": "deploy",
-      "ok": true,
-      "exit": 0,
-      "summary": "every integration branch green"
+      "ok": false,
+      "exit": 1,
+      "summary": "an integration branch is failing"
     },
     {
       "name": "deadsurface",

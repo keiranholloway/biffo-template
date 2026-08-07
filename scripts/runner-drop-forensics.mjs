@@ -102,6 +102,60 @@ export const VERDICT = {
   FLEET_FAULT_UNEXPLAINED: 'fleet-fault-unexplained',
   /** Ran on a GitHub-hosted runner, so there is no fleet to correlate against. */
   NOT_SELF_HOSTED: 'not-self-hosted',
+  /**
+   * The job never ran. Not a gate rejecting the change, not a runner dying
+   * mid-job — GitHub's own control plane failed before the work began, or no
+   * runner was ever assigned. Re-run it; there is nothing in the repo to fix.
+   */
+  NEVER_RAN: 'never-ran',
+}
+
+/**
+ * A job that GitHub could not start, as distinct from one that ran and failed.
+ *
+ * Two shapes, both observed on 2026-08-06/07 during a critical GitHub Actions
+ * incident, and both previously adjudicated `real-failure` because
+ * `isRunnerKill` answers "did a runner die MID-job?" and neither of these got
+ * that far:
+ *
+ * 1. **Died in setup.** The only step is `Set up job` and it failed —
+ *    `Failed to resolve action download info. Error: Service Unavailable`.
+ *    A gate that genuinely rejects a change has run checkout and install
+ *    first, so it always carries more steps than this.
+ * 2. **Never scheduled.** `conclusion: 'cancelled'` with **no steps at all**
+ *    and no `runner_name`: the job sat in the queue until GitHub gave up.
+ *    Observed at 28m51s against an empty fleet during the same incident.
+ *
+ * Why this is worth its own verdict rather than folding into `real-failure`:
+ * the whole point of this tool is that "red" and "your code is broken" are
+ * different claims. It cost three separate diagnoses in one session — a hunt
+ * for a secret in a file that had none, a hunt for a closing-keyword problem
+ * in a PR body that had none, and a hunt for a bug in a `*_pg.py` test that
+ * had never executed. The signature is one API call away in every case.
+ *
+ * Deliberately narrow. A job whose FIRST step failed but which has later steps
+ * is a normal failure — only a job that never got past setup counts, so a gate
+ * that legitimately fails fast is not laundered into an infrastructure excuse.
+ *
+ * @param {Array<{ conclusion?: string, steps?: Array<{ name?: string, conclusion?: string }>, runner_name?: string | null }> | null | undefined} jobs
+ * @returns {boolean}
+ */
+export function neverRan(jobs) {
+  const stalled = (jobs ?? []).filter(
+    (job) => job.conclusion === 'failure' || job.conclusion === 'cancelled'
+  )
+  if (stalled.length === 0) return false
+  return stalled.every((job) => {
+    const steps = job.steps ?? []
+    // Never scheduled: cancelled with nothing to show for it.
+    if (steps.length === 0) return job.conclusion === 'cancelled'
+    // Died in setup: `Set up job` is the only step, and it failed.
+    return (
+      steps.length === 1 &&
+      steps[0]?.name === 'Set up job' &&
+      steps[0]?.conclusion === 'failure'
+    )
+  })
 }
 
 /**
@@ -187,6 +241,10 @@ export function evictionKilledJob(job, evictedAt) {
  * @returns {{ verdict: string, jobs: Array<{ name: string, instance: string | null, verdict: string, evictedAt: string | null }> }}
  */
 export function adjudicateRun(jobs, evictions) {
+  // Asked BEFORE `isRunnerKill`, which answers "did a runner die mid-job?" — a
+  // job that never started cannot have, so it would otherwise fall straight
+  // through to `real-failure` and send someone to read code that never ran.
+  if (neverRan(jobs)) return { verdict: VERDICT.NEVER_RAN, jobs: [] }
   if (!isRunnerKill(jobs)) return { verdict: VERDICT.REAL_FAILURE, jobs: [] }
 
   const lost = (jobs ?? []).filter((job) => job.conclusion === 'failure')
@@ -334,6 +392,10 @@ function main() {
   // because **2 is never a pass** here as everywhere else. "The runner died for
   // reasons unknown" must not read as "safe to re-run and move on"; that is the
   // fail-open this whole tool exists to close.
+  if (result.verdict === VERDICT.NEVER_RAN) {
+    console.log('  the job never started — GitHub could not schedule or set it up. Re-run it.')
+    process.exit(0)
+  }
   if (result.verdict === VERDICT.REAL_FAILURE) process.exit(1)
   if (result.verdict === VERDICT.SPOT_RECLAIMED) process.exit(0)
   process.exit(2)

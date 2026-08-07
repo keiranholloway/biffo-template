@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 // step, the same arrangement as practices-metrics.mjs. Imported here so the
 // logic has one home rather than a TypeScript copy that can drift from it.
 import {
+  neverRan,
   MATCH_GRACE_MS,
   VERDICT,
   adjudicateRun,
@@ -205,5 +206,93 @@ describe('summarise', () => {
       [VERDICT.FLEET_FAULT_UNEXPLAINED]: 0,
       [VERDICT.NOT_SELF_HOSTED]: 0,
     })
+  })
+})
+
+describe('neverRan', () => {
+  /**
+   * Both fixtures are the REAL job shapes from the GitHub Actions incident of
+   * 2026-08-06/07, taken from `gh api repos/{o}/{r}/actions/jobs/{id}` rather
+   * than imagined. Every one of them was adjudicated `real-failure` at the
+   * time, and each sent someone to look for a defect that did not exist.
+   */
+
+  it('recognises a job that died in Set up job', () => {
+    // Secret Scan on tabsii-platform#727. `Failed to resolve action download
+    // info. Error: Service Unavailable` — it never reached gitleaks, so the
+    // "finding" everyone went looking for could not have existed.
+    const job = {
+      name: 'Secret Scan',
+      conclusion: 'failure',
+      runner_name: 'i-00b0e8dc11506baa2',
+      steps: [{ name: 'Set up job', conclusion: 'failure' }],
+    }
+    expect(neverRan([job])).toBe(true)
+    expect(adjudicateRun([job], new Map()).verdict).toBe(VERDICT.NEVER_RAN)
+  })
+
+  it('recognises a job that was never scheduled', () => {
+    // RLS (real Postgres) on tabsii-platform#730: queued 28m51s against a fleet
+    // with zero instances, then cancelled. No steps, no runner ever assigned.
+    const job = { name: 'RLS (real Postgres)', conclusion: 'cancelled', runner_name: '', steps: [] }
+    expect(neverRan([job])).toBe(true)
+    expect(adjudicateRun([job], new Map()).verdict).toBe(VERDICT.NEVER_RAN)
+  })
+
+  it('exonerates nothing when a gate actually ran and rejected the change', () => {
+    // THE CONTROL. Without this, the change could pass by calling everything
+    // infrastructure — which is a far worse failure than the one it fixes,
+    // because it launders real defects into "just re-run it".
+    const job = {
+      name: 'Python (lint, types, test, security)',
+      conclusion: 'failure',
+      runner_name: 'i-0d9074fd0a57c4846',
+      steps: [
+        { name: 'Set up job', conclusion: 'success' },
+        { name: 'Checkout', conclusion: 'success' },
+        { name: 'Test', conclusion: 'failure' },
+      ],
+    }
+    expect(neverRan([job])).toBe(false)
+    expect(adjudicateRun([job], new Map()).verdict).toBe(VERDICT.REAL_FAILURE)
+  })
+
+  it('does not launder a gate that fails on its very first step', () => {
+    // A job CAN legitimately fail at step one and still have run. The
+    // discriminator is that setup was the ONLY step, not that it failed.
+    const job = {
+      name: 'CI',
+      conclusion: 'failure',
+      runner_name: 'i-0d9074fd0a57c4846',
+      steps: [
+        { name: 'Set up job', conclusion: 'failure' },
+        { name: 'Checkout', conclusion: 'skipped' },
+      ],
+    }
+    expect(neverRan([job])).toBe(false)
+  })
+
+  it('needs EVERY stalled job to have never run, not just one', () => {
+    // A run where one job never started and another genuinely failed must
+    // report the real failure — same reasoning as `adjudicateRun`'s
+    // "one unexplained death dominates".
+    const stalled = { name: 'Secret Scan', conclusion: 'failure', runner_name: '', steps: [] }
+    const real = {
+      name: 'CI',
+      conclusion: 'failure',
+      runner_name: 'i-0d9074fd0a57c4846',
+      steps: [
+        { name: 'Set up job', conclusion: 'success' },
+        { name: 'Test', conclusion: 'failure' },
+      ],
+    }
+    expect(neverRan([stalled, real])).toBe(false)
+    expect(adjudicateRun([stalled, real], new Map()).verdict).toBe(VERDICT.REAL_FAILURE)
+  })
+
+  it('ignores a green run', () => {
+    expect(neverRan([{ name: 'CI', conclusion: 'success', steps: [] }])).toBe(false)
+    expect(neverRan([])).toBe(false)
+    expect(neverRan(null)).toBe(false)
   })
 })

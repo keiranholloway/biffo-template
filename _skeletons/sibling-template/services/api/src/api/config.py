@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     # get or persist data (ADR-0002). Never add a database client here.
     core_api_url: str = ""
 
+    # NOT a free choice: this Lambda sits behind an HTTP API whose integration
+    # timeout is 29s, and `core_client` retries once, so the ceiling is
+    # 2 x this value < 29s. Twelve leaves comfortable room above core's measured
+    # ~7.8s cold start (tabsii-platform#567) and still lands at 24s worst case.
+    # Raising it past ~14 makes the gateway time out first, which returns a 504
+    # with no message rather than the explained one core_client produces.
+    core_api_timeout_seconds: float = 12.0
+
     environment: str = "dev"
     log_level: str = "INFO"
     cors_origins: list[str] = ["http://localhost:3000"]

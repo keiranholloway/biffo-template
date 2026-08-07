@@ -19,7 +19,7 @@
  */
 
 import { execFileSync, type ExecFileSyncOptions } from 'node:child_process'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -46,14 +46,31 @@ function runIn(files: Record<string, string>, env: Record<string, string> = {}):
   const dir = makeTmpDir('biffo-verify-pg')
   try {
     execFileSync('git', ['init', '-q'], { cwd: dir })
+    let hasStubBin = false
     for (const [rel, body] of Object.entries(files)) {
       const full = join(dir, rel)
       mkdirSync(dirname(full), { recursive: true })
       writeFileSync(full, body)
+      // `_stub-bin/` stands in for a real `uv` (and, for the timeout tests,
+      // `timeout` itself) resolved off PATH -- unlike the `scripts/biffo.sh`
+      // stub above, which verify.sh invokes as `sh scripts/biffo.sh ...` and
+      // so never needs an exec bit, `command -v uv` / a bare `uv run ...`
+      // requires the file to actually be executable.
+      if (rel.startsWith('_stub-bin/')) {
+        chmodSync(full, 0o755)
+        hasStubBin = true
+      }
     }
     const childEnv = { ...process.env, ...env }
     if (!('TABSII_TEST_PG_DSN' in env)) delete childEnv.TABSII_TEST_PG_DSN
     if (!('BIFFO_TEST_PG_DSN' in env)) delete childEnv.BIFFO_TEST_PG_DSN
+    // Stub executables win over the real tools, without dropping the PATH the
+    // rest of verify.sh needs (git, find, sed, date, ...) -- only when the
+    // caller has not already pinned PATH itself (the "no uv installed" test
+    // below relies on a deliberately narrow one).
+    if (hasStubBin && !('PATH' in env)) {
+      childEnv.PATH = `${join(dir, '_stub-bin')}:${process.env.PATH ?? ''}`
+    }
     const opts: ExecFileSyncOptions = { cwd: dir, encoding: 'utf8', stdio: 'pipe', env: childEnv }
     try {
       return { stdout: String(execFileSync('sh', [SCRIPT], opts)), status: 0 }
@@ -276,5 +293,79 @@ describe('verify.sh blocks a NOT-RUN pg-test lane when the push is relevant (#65
     expect(run.status).toBe(0)
     expect(run.stdout).toContain('NOT RUN')
     expect(run.stdout).not.toContain('BLOCKED')
+  })
+})
+
+describe('verify.sh reports a killed pg-test lane as inconclusive, not failed (#703)', () => {
+  // A `pyproject.toml` fixture is what every OTHER describe block above avoids
+  // (see the file header) because it would make the general Python lane run
+  // ruff/pyright/bandit/pytest for real. That is not a risk here: none of
+  // these fixtures carry `.github/workflows/ci.yml`, and `ci_has()` gates
+  // every one of those checks on a step existing there -- so with no CI file
+  // they stay skipped and the fixture's real business, actually driving
+  // `pg_test_run` to completion through a stubbed `uv`, is undisturbed.
+  const lane = {
+    'package.json': PASSING,
+    'services/api/pyproject.toml': '',
+    'services/api/tests/test_rls_pg.py': PG_TEST,
+  }
+  const dsn = { BIFFO_TEST_PG_DSN: 'postgresql+asyncpg://u:p@localhost:1/db' }
+
+  it('exits 2 -- cannot tell, never a pass -- when the lane is killed by its own budget', () => {
+    const run = runIn(
+      {
+        ...lane,
+        // Never actually reached: the stub `timeout` below returns 124
+        // immediately, so this only has to exist for `command -v uv`.
+        '_stub-bin/uv': '#!/bin/sh\nexit 0\n',
+        // Stands in for a REAL timeout(1) killing an overlong lane -- exit
+        // 124 is the fact being pinned, not how a genuine test suite would
+        // produce it.
+        '_stub-bin/timeout': '#!/bin/sh\nexit 124\n',
+      },
+      { ...dsn, BIFFO_VERIFY_PG_BUDGET: '5' },
+    )
+
+    expect(run.status).toBe(2)
+    expect(run.stdout).toContain('TIMED OUT after')
+    expect(run.stdout).toContain('budget 5s')
+    expect(run.stdout).toContain('INCONCLUSIVE')
+    expect(run.stdout).toContain('verify inconclusive:')
+    expect(run.stdout).toContain('pg-test')
+    // The estate-wide contract this is joining: cannot-tell must never read
+    // as either verdict.
+    expect(run.stdout).not.toContain('verify failed:')
+    expect(run.stdout).not.toContain('verify passed')
+  })
+
+  it('still exits 1 -- a real failure -- when the lane runs and a test genuinely fails', () => {
+    const run = runIn(
+      {
+        ...lane,
+        '_stub-bin/uv': '#!/bin/sh\necho "1 failed, 2 passed in 0.10s"\nexit 1\n',
+      },
+      dsn,
+    )
+
+    expect(run.status).toBe(1)
+    expect(run.stdout).toContain('verify failed:')
+    expect(run.stdout).toContain('pg-test')
+    expect(run.stdout).toContain('1 failed')
+    expect(run.stdout).not.toContain('INCONCLUSIVE')
+    expect(run.stdout).not.toContain('TIMED OUT')
+  })
+
+  it('exits 0 when the lane runs for real and passes', () => {
+    const run = runIn(
+      {
+        ...lane,
+        '_stub-bin/uv': '#!/bin/sh\necho "3 passed in 0.10s"\nexit 0\n',
+      },
+      dsn,
+    )
+
+    expect(run.status).toBe(0)
+    expect(run.stdout).toContain('verify passed')
+    expect(run.stdout).toContain('pg-test')
   })
 })

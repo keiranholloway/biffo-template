@@ -96,3 +96,36 @@ resource "aws_cloudwatch_event_target" "log_all" {
   target_id      = "CloudWatchLogs"
   arn            = aws_cloudwatch_log_group.events.arn
 }
+
+# EventBridge cannot write to a log group without this, and says nothing when
+# it cannot: the rule above stays ENABLED, `put-events` still returns
+# FailedEntryCount 0, and the log group simply never gets a stream. On
+# tabsii-platform dev that meant "log all events" had produced **zero** log
+# streams since the environment was built, so the one tool for answering "was
+# this event published?" had never worked and nobody could tell.
+#
+# A log-group resource policy is account-and-region scoped rather than attached
+# to the group, which is why it is easy to omit: nothing about the log group,
+# the rule or the target refers to it, and Terraform reports the whole stack as
+# applied without it.
+#
+# Scoped to this rule via `aws:SourceArn` — the confused-deputy guard, same
+# shape as the DLQ policy above. Created only where the rule is (non-prod),
+# because granting a write nothing performs is the wider permission for no gain.
+resource "aws_cloudwatch_log_resource_policy" "events_from_eventbridge" {
+  count       = var.environment != "prod" ? 1 : 0
+  policy_name = "${local.name_prefix}-events-from-eventbridge"
+
+  policy_document = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com" }
+      Action    = ["logs:CreateLogStream", "logs:PutLogEvents"]
+      Resource  = "${aws_cloudwatch_log_group.events.arn}:*"
+      Condition = {
+        ArnEquals = { "aws:SourceArn" = aws_cloudwatch_event_rule.log_all[0].arn }
+      }
+    }]
+  })
+}

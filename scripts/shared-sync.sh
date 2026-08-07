@@ -251,6 +251,19 @@ trap wt_log_run_end EXIT
 FILES=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).files.join('\n'))")
 MARKERS=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).appliesTo.join(' '))")
 
+# `excludes`: repos removed from the measured set, DECLARED with a reason
+# (shared-files.json). A repo that cannot receive a change -- an archived one --
+# is not drift and counting it as such makes a ratchet unsatisfiable forever.
+#
+# But shrinking a denominator is exactly how a check starts lying, so this is
+# never silent: `--check` prints every exclusion and its reason before it
+# reports anything else. `scripts/protection-audit.sh` was rewritten for this
+# (#1145) after four repos answering 404 were dropped and "27 branches checked,
+# all protected and binding" was a true statement about a set that had quietly
+# lost the repos least likely to be protected.
+EXCLUDES=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).excludes||{};console.log(Object.keys(m).join(' '))")
+EXCLUDES_WHY=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).excludes||{};console.log(Object.entries(m).map(([r,w])=>r+': '+w).join('\n'))")
+
 # `filesIfPresent`: files kept in step ONLY in the repos that already hold them,
 # never created in the ones that do not. Emitted as `target<TAB>source`, because
 # unlike `files` the template's copy does not live at the same path -- the
@@ -325,6 +338,8 @@ failed=0
 TAB=$(printf '\t')
 
 applies() {
+  # Declared exclusions first -- see EXCLUDES above. Reported, never silent.
+  for x in $EXCLUDES; do [ "$(basename "$1")" = "$x" ] && return 1; done
   # Instances are NOT in scope: they carry biffo.core.json and a
   # core-manifest.json, so `biffo core upgrade` three-way-merges these paths
   # into them. Two mechanisms writing the same files would fight, and the
@@ -1498,6 +1513,18 @@ VERDICTS=$(mktemp)
 trap 'rm -f "$TARGETS" "$VERDICTS"; wt_log_run_end' EXIT
 
 printf '\nshared-file sync - template -> repos core upgrade cannot reach\n\n'
+
+# Declared exclusions, printed BEFORE any count. A shrinking denominator is the
+# quietest way for a check to start lying (#1145), so every mode that walks the
+# estate says out loud which repos it is not walking, and why.
+if [ -n "$EXCLUDES" ]; then
+  printf '\033[33mexcluded from the measured set\033[0m -- declared in shared-files.json:\n'
+  printf '%s\n' "$EXCLUDES_WHY" | while IFS= read -r line; do
+    [ -n "$line" ] && printf '  %s\n' "$line"
+  done
+  printf '\nEvery count below is over the REMAINING repos, not the whole estate.\n\n'
+fi
+
 for d in "$ESTATE"/*/; do
   d="${d%/}"
   label=$(basename "$d")

@@ -1448,3 +1448,70 @@ async def test_a_failed_sibling_does_not_narrow_the_context():
     assert result["status"] == "requested"
     posted = [b for m, p, b in core.requests if m == "POST" and p.endswith("/agent-runs")][0]
     assert posted["input_payload"]["context"] == {"brief": "shared"}
+
+
+# ── {core_api_url} placeholder (tabsii-platform#723) ────────────────────────
+#
+# Signing is keyed on the URL literally starting with BIFFO_CORE_API_URL, so
+# calling an IAM-gated internal route meant writing a host into the workflow.
+# That is fine for one authored by hand and wrong for one seeded in a DDL
+# module, which runs unchanged in dev, staging and production.
+
+
+def test_core_api_url_placeholder_resolves_and_the_call_is_signed(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("BIFFO_CORE_API_URL", "https://core.example.com")
+    _aws_credentials_env(monkeypatch)
+    http = FakeHttp(status_code=200)
+
+    result = send_http(
+        {"url": "{core_api_url}/api/v1/internal/finance/calculate/{sales_period_id}"},
+        {"sales_period_id": "p-1"},
+        http_client=http,
+    )
+
+    assert result == {"status_code": 200}
+    call = http.calls[0]
+    assert call["url"] == "https://core.example.com/api/v1/internal/finance/calculate/p-1"
+    # Resolving must not cost the signature — an internal route rejects an
+    # unsigned call, so a placeholder that resolved but did not sign would look
+    # like a permissions problem rather than a templating one.
+    assert call["headers"]["Authorization"].startswith("AWS4-HMAC-SHA256")
+
+
+def test_a_trailing_slash_on_the_base_does_not_double_up(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("BIFFO_CORE_API_URL", "https://core.example.com/")
+    _aws_credentials_env(monkeypatch)
+    http = FakeHttp(status_code=200)
+
+    send_http({"url": "{core_api_url}/api/v1/internal/x"}, {}, http_client=http)
+
+    assert http.calls[0]["url"] == "https://core.example.com/api/v1/internal/x"
+
+
+def test_the_placeholder_is_refused_when_the_base_is_unset(monkeypatch: pytest.MonkeyPatch):
+    """Fail loudly rather than resolving to a blank.
+
+    `_render` fills a missing field with an empty string, so a silent
+    resolution here would POST to `/api/v1/internal/...` — a relative URL,
+    unsigned — and read as a broken endpoint rather than an unset variable.
+    """
+    monkeypatch.delenv("BIFFO_CORE_API_URL", raising=False)
+    http = FakeHttp(status_code=200)
+
+    with pytest.raises(ActionError, match="BIFFO_CORE_API_URL is not set"):
+        send_http({"url": "{core_api_url}/api/v1/internal/x"}, {}, http_client=http)
+
+    assert http.calls == []
+
+
+def test_a_url_without_the_placeholder_is_untouched(monkeypatch: pytest.MonkeyPatch):
+    """The escape hatch stays generic — an external webhook is unaffected."""
+    monkeypatch.delenv("BIFFO_CORE_API_URL", raising=False)
+    http = FakeHttp(status_code=200)
+
+    send_http({"url": "https://hooks.slack.com/services/x"}, {"a": 1}, http_client=http)
+
+    assert http.calls[0]["url"] == "https://hooks.slack.com/services/x"
+    assert http.calls[0]["headers"] is None

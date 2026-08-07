@@ -439,6 +439,41 @@ def _core_api_url() -> str:
     return os.environ.get("BIFFO_CORE_API_URL", "")
 
 
+#: What a workflow writes instead of hardcoding a deployment's API host.
+CORE_API_URL_PLACEHOLDER = "{core_api_url}"
+
+
+def _resolve_core_api_url(url: Any) -> Any:
+    """Substitute ``{core_api_url}`` with this deployment's own Core API base.
+
+    Signing is keyed on the URL *literally starting with* ``BIFFO_CORE_API_URL``
+    (see :func:`send_http`), so reaching an IAM-gated ``/api/v1/internal/*``
+    route used to mean writing that host into the workflow. For a workflow
+    created by hand in one environment that is merely awkward; for one **seeded
+    in a DDL module** it is wrong, because the same file runs in dev, staging
+    and production and only one of them would have the right host.
+
+    Substituted here, before ``_render_recipient``, and deliberately not by
+    adding ``core_api_url`` to the payload map: ``_render`` fills missing fields
+    with an empty string, so a payload-based approach would silently produce
+    ``/api/v1/...`` — a relative URL posted nowhere useful — the day an event
+    did not carry the key.
+
+    Raises rather than substituting a blank for the same reason. A workflow that
+    asked for its own Core API and got ``""`` would post to an unsigned,
+    malformed URL and fail as though the endpoint were wrong.
+    """
+    if not isinstance(url, str) or CORE_API_URL_PLACEHOLDER not in url:
+        return url
+    base = _core_api_url()
+    if not base:
+        raise ActionError(
+            "http action_config 'url' uses {core_api_url}, but BIFFO_CORE_API_URL "
+            "is not set in this deployment"
+        )
+    return url.replace(CORE_API_URL_PLACEHOLDER, base.rstrip("/"))
+
+
 def _sigv4_headers(
     method: str, url: str, body: bytes, *, extra_headers: dict[str, str] | None = None
 ) -> dict[str, str]:
@@ -505,6 +540,12 @@ def send_http(
     inherently a trigger/write call — a method selector is a documented,
     deferred follow-up if a GET/read use case ever needs one.
 
+    ``url`` may start with the literal ``{core_api_url}``, which resolves to
+    this deployment's own ``BIFFO_CORE_API_URL`` before anything else happens
+    (:func:`_resolve_core_api_url`). Write that rather than a host when the
+    workflow is **seeded in a DDL module**, which runs unchanged in every
+    environment.
+
     **SigV4-signed automatically when the URL targets this deployment's own
     Core API** (``url`` starts with ``BIFFO_CORE_API_URL``, issue #1071) —
     the only way to reach an IAM-gated ``/api/v1/internal/*`` route (ADR-0009),
@@ -518,7 +559,9 @@ def send_http(
     the same classification :func:`_http_failure` gives every webhook action
     here.
     """
-    url = _render_recipient("http", "url", _require(config, "http", "url"), payload)
+    url = _render_recipient(
+        "http", "url", _resolve_core_api_url(_require(config, "http", "url")), payload
+    )
     headers = _http_headers(config, payload)
     body = _http_body(config, payload)
 

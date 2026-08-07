@@ -40,11 +40,20 @@
 #
 # ## Usage
 #
-#   eval "$(sh scripts/pg-test-db.sh --export)"   # export BIFFO_TEST_PG_DSN
+#   eval "$(sh scripts/pg-test-db.sh --export)"   # export BIFFO_TEST_PG_DSN and TABSII_TEST_PG_DSN
 #   sh scripts/pg-test-db.sh                      # print the DSN on stdout
 #   sh scripts/pg-test-db.sh --recreate           # force a rebuild
 #
 # Only the DSN reaches stdout, so it is safe to capture; progress goes to stderr.
+#
+# `--export` sets BOTH `BIFFO_TEST_PG_DSN` and `TABSII_TEST_PG_DSN` (see
+# tabsii-platform#755): every consumer this script has ever had reads one name
+# or the other, `scripts/verify.sh`'s own bridge already treats them as
+# interchangeable, and a script that only ever emits one of the two names it
+# claims to serve is exactly the fail-open this file's own docstring above
+# argues against -- a gate nobody can run, just one name late instead of a
+# missing script. Emitting both means the name a consumer happens to read is no
+# longer load-bearing.
 #
 # Overridable: BIFFO_PG_HOST, BIFFO_PG_PORT, BIFFO_PG_USER, BIFFO_PG_PASSWORD,
 # BIFFO_PG_DB, BIFFO_PG_CONTAINER, BIFFO_PG_IMAGE.
@@ -236,7 +245,10 @@ fi
 DSN="postgresql+asyncpg://$USER_:$PASS@$HOST:$PORT/$DB"
 emit() {
   if [ "$EXPORT" -eq 1 ]; then
+    # Both names, deliberately (tabsii-platform#755): whichever a consumer
+    # reads, an `eval` of this line alone is enough -- see the Usage note above.
     echo "export BIFFO_TEST_PG_DSN='$DSN'"
+    echo "export TABSII_TEST_PG_DSN='$DSN'"
   else
     echo "$DSN"
   fi

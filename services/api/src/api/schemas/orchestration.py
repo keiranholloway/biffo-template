@@ -370,7 +370,12 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
         "config_fields": [
             {
                 "name": "url",
-                "label": "URL",
+                # `{core_api_url}` is resolved by the action before any payload
+                # templating, so a workflow can address this deployment's own
+                # IAM-gated /api/v1/internal/* routes without naming a host —
+                # which is what lets one seeded in a DDL module run unchanged
+                # in dev, staging and production.
+                "label": "URL ({core_api_url} resolves to this deployment's own API)",
                 "type": "url",
                 "required": True,
                 "payload_template": True,

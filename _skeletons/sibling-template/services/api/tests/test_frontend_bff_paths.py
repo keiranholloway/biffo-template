@@ -254,13 +254,33 @@ def _template_literals(text: str):
 
 _PARAM_SEGMENT = re.compile(r"\{[^}]*\}")
 
-_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
-# From the first `//` preceded by whitespace or start-of-line, to end of line.
-# NOT from the first bare `//`, which would also truncate a `'https://…'`
-# string literal — see the module docstring's "Comments are stripped first"
-# section for the real false positives (tabsii-crm, tabsii-lms) this exists
-# to stop.
-_LINE_COMMENT = re.compile(r"(?:^|(?<=\s))//.*$", re.MULTILINE)
+# ONE alternation, scanned left to right, so whichever comment construct opens
+# FIRST consumes the other (#1374). Two separate passes cannot express that,
+# and the order they ran in was a live fail-open:
+#
+#     text = _BLOCK_COMMENT.sub(...)   # ran first
+#     return _LINE_COMMENT.sub(...)    # ran second
+#
+# A `/*` appearing as PROSE inside a `//` comment was therefore read as a real
+# block-comment opener, and everything up to the file's next literal `*/` —
+# in JSX, typically a `{/* ... */}` far below — was deleted. `tabsii-geo`'s
+# `MapView.tsx` carried `// exclude everything under basemap/*) from the S3
+# deploy`, which swallowed ~180 lines including BOTH of that repo's real call
+# sites. The guard extracted 0 paths and PASSED.
+#
+# `re.sub` takes the leftmost match, so a single alternation gets this right in
+# both directions: a `//` opening first consumes any `/*` on its line, and a
+# `/*` opening first consumes any `//` inside it.
+#
+# The `//` branch requires whitespace or start-of-line before it, NOT a bare
+# `//`, which would also truncate a `'https://…'` string literal — see the
+# module docstring's "Comments are stripped first" section for the real false
+# positives (tabsii-crm, tabsii-lms) that rule exists to stop.
+#
+# An UNTERMINATED `/*` matches nothing and is left in place, deliberately:
+# deleting to end-of-file on a malformed comment is the very blindness this
+# fix exists to remove.
+_COMMENT = re.compile(r"/\*.*?\*/|(?:^|(?<=\s))//[^\n]*", re.DOTALL | re.MULTILINE)
 
 API_PREFIX = "/api/v1/"
 
@@ -269,14 +289,17 @@ def _strip_comments(text: str) -> str:
     """Remove `/* ... */` and `// ...` so a comment merely mentioning a path
     — in prose, as documentation — is never mistaken for a call site.
 
-    A block comment is replaced by the same number of newlines it contained,
-    not deleted outright — this codebase leans heavily on multi-line `/** */`
+    A comment is replaced by the same number of newlines it contained, not
+    deleted outright — this codebase leans heavily on multi-line `/** */`
     JSDoc, and dropping those newlines would shift every subsequent line
     number, misdirecting a failure message at the wrong line for anything
-    below one.
+    below one. A `//` comment contains no newline, so the same substitution
+    correctly erases it to nothing.
+
+    See `_COMMENT` for why this is one pass rather than two, and for the
+    fail-open (#1374) that the two-pass version caused.
     """
-    text = _BLOCK_COMMENT.sub(lambda m: "\n" * m.group(0).count("\n"), text)
-    return _LINE_COMMENT.sub("", text)
+    return _COMMENT.sub(lambda m: "\n" * m.group(0).count("\n"), text)
 
 
 @dataclass(frozen=True)
@@ -643,6 +666,62 @@ def path_is_registered(fastapi_app: FastAPI, normalized: str) -> bool:
     return False
 
 
+def test_the_extractor_is_not_blind() -> None:
+    """Zero extracted paths must mean "none there", never "could not see".
+
+    `test_every_frontend_api_v1_path_is_registered_on_the_bff` cannot tell the
+    difference on its own: it iterates whatever the extractor returned, so an
+    extractor that returns nothing passes it trivially. Every other safeguard
+    in this file — `unresolved` failing rather than skipping, the reported
+    denominator, the declared external allowlist — protects against a path
+    that is SEEN and cannot be resolved. None of them protects against text
+    the extractor never receives.
+
+    That is not hypothetical. #1374: `_strip_comments` ran its block-comment
+    pass before its line-comment pass, so a `/*` in prose inside a `//`
+    comment opened a phantom block that deleted ~180 lines of `tabsii-geo`'s
+    `MapView.tsx`, including both of its real call sites. The suite reported
+    `0 found ... 0 did not match` and passed. It was caught only because the
+    sweep that adopted this guard required a raw-grep cross-check of the
+    extracted count rather than trusting a green test.
+
+    So the cross-check is now part of the guard. Comparing against the RAW
+    text — before any stripping — is the point: the raw scan is the one thing
+    a bug in the stripping cannot affect.
+
+    **What this does and does not catch.** It catches TOTAL blindness over the
+    file set, which is the shape a stripping bug takes when it swallows a
+    span. It does not catch partial loss — three call sites eaten while a
+    fourth survives still passes here. Stated plainly rather than overclaimed;
+    the one-pass `_COMMENT` scanner is what addresses the partial case, and
+    this is the backstop for the next bug of a kind nobody has thought of.
+
+    A repo with genuinely no in-source API calls still passes, because the raw
+    scan reads exactly the same file set the extractor does — test files
+    excluded. `tabsii-app` is the real example: its only `/api/v1` text lives
+    in `lib/api-client.test.ts`, so raw and extracted are both 0 and that is
+    an honest clean.
+    """
+    files = _frontend_source_files()
+    raw_hits = [(f, f.read_text(encoding="utf-8").count(API_PREFIX)) for f in files]
+    raw_total = sum(n for _, n in raw_hits)
+
+    extracted = 0
+    for file in files:
+        extracted += len(extract_api_paths(file.read_text(encoding="utf-8"), file))
+
+    if raw_total and not extracted:
+        offenders = "\n".join(f"  {_relative(f)}: {n} raw occurrence(s)" for f, n in raw_hits if n)
+        raise AssertionError(
+            f"The extractor found 0 `{API_PREFIX}` path(s) across "
+            f"{len(files)} frontend source file(s), but the raw text of those "
+            f"same files contains {raw_total}. That is blindness, not a clean "
+            f"pass — something is consuming the source before extraction "
+            f"reaches it (#1374 was exactly this: a `/*` in prose inside a "
+            f"`//` comment swallowing the rest of the file).\n{offenders}"
+        )
+
+
 def test_every_frontend_api_v1_path_is_registered_on_the_bff() -> None:
     extracted: list[ExtractedPath] = []
     for file in _frontend_source_files():
@@ -805,6 +884,63 @@ class TestExtractApiPaths:
         )
         assert len(found) == 1
         assert found[0].normalized == "/api/v1/whoami"
+
+    def test_a_block_opener_in_prose_inside_a_line_comment_eats_nothing(self) -> None:
+        """#1374, reduced from `tabsii-geo`'s `MapView.tsx` verbatim.
+
+        The `basemap/*)` in that comment is prose — a glob in an English
+        sentence about an S3 deploy exclusion. The two-pass stripper read its
+        `/*` as a real block-comment opener and deleted everything up to the
+        next literal `*/`, which in a `.tsx` file is the JSX comment below.
+        Both real call sites vanished and the suite reported a clean pass.
+        """
+        found = extract_api_paths(
+            "// exclude everything under basemap/*) from the S3 deploy\n"
+            "api.get('/api/v1/units')\n"
+            "api.get('/api/v1/regions')\n"
+            "{/* an ordinary JSX comment */}\n"
+            "api.get('/api/v1/brands')\n",
+            Path("MapView.tsx"),
+        )
+        assert [p.normalized for p in found] == [
+            "/api/v1/units",
+            "/api/v1/regions",
+            "/api/v1/brands",
+        ]
+
+    def test_a_line_comment_marker_inside_a_block_comment_eats_nothing(self) -> None:
+        """The mirror case, which a naive "just swap the two passes" fix
+        breaks: a `//` inside a block comment must not end the block early and
+        leave its `*/` behind as live source."""
+        found = extract_api_paths(
+            "/* see //example.com for why\n"
+            "   this used to call /api/v1/legacy */\n"
+            "api.get('/api/v1/whoami')\n",
+            Path("x.ts"),
+        )
+        assert [p.normalized for p in found] == ["/api/v1/whoami"]
+
+    def test_an_unterminated_block_comment_does_not_eat_the_rest_of_the_file(
+        self,
+    ) -> None:
+        """Deleting to end-of-file on a malformed comment is the same
+        blindness in a different costume, so an unterminated `/*` is left in
+        place and the code after it is still read."""
+        found = extract_api_paths(
+            "/* oops, never closed\napi.get('/api/v1/whoami')\n",
+            Path("x.ts"),
+        )
+        assert [p.normalized for p in found] == ["/api/v1/whoami"]
+
+    def test_comment_stripping_still_preserves_line_numbers(self) -> None:
+        """The one-pass scanner must keep the property the two-pass version
+        had: a failure message points at the real line."""
+        found = extract_api_paths(
+            "/* a\n   multi\n   line\n   comment */\napi.get('/api/v1/whoami')\n",
+            Path("x.ts"),
+        )
+        assert len(found) == 1
+        assert found[0].line == 5
 
     def test_a_url_containing_double_slash_is_not_mistaken_for_a_comment(self) -> None:
         found = extract_api_paths(

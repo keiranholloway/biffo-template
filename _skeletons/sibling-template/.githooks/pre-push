@@ -89,9 +89,21 @@ fi
 # branches are fine, and noise kills a gate. Measured on a branch that DOES
 # name one: the added latency is the cost of two `gh` lookups, similar in
 # order of magnitude to `rewrite-scope-check` above.
+#
+# BIFFO_SKIP_CLAIM_GUARD -- narrow, claim-only escape hatch (#1327). Before
+# this, the only documented way past a false positive here was
+# BIFFO_SKIP_VERIFY at the top of this file, which does not target the claim
+# guard: it skips the WHOLE gate -- ruff, pyright, bandit, gitleaks,
+# rewrite-scope, this guard, everything. An agent reading "skip the claim
+# guard" reasonably reaches for the only hatch documented and gets "skip
+# everything" instead; one did, in the session #1327 was filed from. This
+# variable bypasses exactly the `claim --guard` call below and nothing else --
+# rewrite-scope-check, the pg-test block gate and `verify` all still run.
 branch=$(git symbolic-ref --quiet --short HEAD) || branch=""
 
-if [ -n "$branch" ]; then
+if [ -n "${BIFFO_SKIP_CLAIM_GUARD:-}" ]; then
+  echo "pre-push: claim guard skipped (BIFFO_SKIP_CLAIM_GUARD set) -- the rest of the gate still runs." >&2
+elif [ -n "$branch" ]; then
   sh scripts/biffo.sh claim --guard "$branch"
   claim_status=$?
 

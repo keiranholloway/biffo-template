@@ -34,14 +34,38 @@ failures invisible.
 
 from __future__ import annotations
 
+from datetime import datetime
+from typing import Any
+
 import pytest
+from api.models.base import Base, TenantScopedModel
 from api.routing.crud_handlers import (
     SCOPE_INCONSISTENCY_SQLSTATE,
     _is_permission_denied,
     _is_scope_inconsistency,
     _scope_inconsistency_detail,
+    make_create_handler,
+    make_delete_handler,
+    make_update_handler,
+    user_columns_from_model,
 )
+from fastapi import HTTPException
+from sqlalchemy import DateTime, String, event
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.orm import Mapped, mapped_column
+
+
+@pytest.fixture
+async def session():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        yield s
+    await engine.dispose()
+
 
 _TRIGGER_MESSAGE = "round-robin cursor points at rule 8cab1462, which belongs to another brand"
 
@@ -135,3 +159,134 @@ def test_an_unrelated_sqlstate_matches_neither_arm() -> None:
     exc = _dbapi_error("08006")  # connection_failure
     assert _is_permission_denied(exc) is False
     assert _is_scope_inconsistency(exc) is False
+
+
+# ── the handlers themselves, not just the predicates ──────────────────────────
+#
+# The unit tests above prove the discrimination. They do NOT prove any handler
+# consults it: an `except DBAPIError` arm nothing drives is an untested branch,
+# which is what the error-branch coverage gate says. These force a real refusal
+# through each of the four flush sites.
+
+
+class _ScopeRefusedCourse(TenantScopedModel):
+    """Refuses on INSERT with the scope code."""
+
+    __tablename__ = "scope_refused_courses_dbapi_test"
+
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+
+
+@event.listens_for(_ScopeRefusedCourse, "before_insert")
+def _refuse_insert_scope(mapper: Any, connection: Any, target: Any) -> None:
+    raise _dbapi_error(SCOPE_INCONSISTENCY_SQLSTATE, _TRIGGER_MESSAGE)
+
+
+class _PrivilegeRefusedCourse(TenantScopedModel):
+    """Refuses on INSERT with 42501 — an RLS WITH CHECK denial."""
+
+    __tablename__ = "privilege_refused_courses_dbapi_test"
+
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+
+
+@event.listens_for(_PrivilegeRefusedCourse, "before_insert")
+def _refuse_insert_privilege(mapper: Any, connection: Any, target: Any) -> None:
+    raise _dbapi_error("42501", "new row violates row-level security policy")
+
+
+class _UpdateRefusedCourse(TenantScopedModel):
+    """Accepts the INSERT, refuses the UPDATE with the scope code."""
+
+    __tablename__ = "update_refused_courses_dbapi_test"
+
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+
+
+@event.listens_for(_UpdateRefusedCourse, "before_update")
+def _refuse_update_scope(mapper: Any, connection: Any, target: Any) -> None:
+    raise _dbapi_error(SCOPE_INCONSISTENCY_SQLSTATE, _TRIGGER_MESSAGE)
+
+
+class _HardDeleteRefusedCourse(TenantScopedModel):
+    """No ``deleted_at``: the DELETE arm."""
+
+    __tablename__ = "hard_delete_refused_courses_dbapi_test"
+
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+
+
+@event.listens_for(_HardDeleteRefusedCourse, "before_delete")
+def _refuse_hard_delete(mapper: Any, connection: Any, target: Any) -> None:
+    raise _dbapi_error("42501", "permission denied for table")
+
+
+class _SoftDeleteRefusedCourse(TenantScopedModel):
+    """Carries ``deleted_at``, so the tombstone write is an UPDATE — a scope
+    trigger can refuse a soft delete, which is why that arm exists."""
+
+    __tablename__ = "soft_delete_refused_courses_dbapi_test"
+
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+
+
+@event.listens_for(_SoftDeleteRefusedCourse, "before_update")
+def _refuse_soft_delete(mapper: Any, connection: Any, target: Any) -> None:
+    if target.deleted_at is not None:
+        raise _dbapi_error(SCOPE_INCONSISTENCY_SQLSTATE, _TRIGGER_MESSAGE)
+
+
+async def _create(model: type[Any], session: Any) -> dict[str, Any]:
+    handler = make_create_handler(model, user_columns_from_model(model))
+    return await handler(payload={"name": "Intro to X"}, tenant_id="default", db=session)
+
+
+async def test_create_maps_a_scope_refusal_to_422_with_the_trigger_sentence(session) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await _create(_ScopeRefusedCourse, session)
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail == _TRIGGER_MESSAGE
+
+
+async def test_create_maps_a_privilege_refusal_to_403(session) -> None:
+    """The generic string is right HERE: the caller genuinely lacks the grant,
+    and naming the policy would be schema reconnaissance."""
+    with pytest.raises(HTTPException) as exc_info:
+        await _create(_PrivilegeRefusedCourse, session)
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "You do not have permission to perform this action"
+
+
+async def test_update_maps_a_scope_refusal_to_422(session) -> None:
+    created = await _create(_UpdateRefusedCourse, session)
+    handler = make_update_handler(
+        _UpdateRefusedCourse, user_columns_from_model(_UpdateRefusedCourse)
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await handler(
+            id=created["id"], payload={"name": "Renamed"}, tenant_id="default", db=session
+        )
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail == _TRIGGER_MESSAGE
+
+
+async def test_hard_delete_maps_a_privilege_refusal_to_403_not_500(session) -> None:
+    created = await _create(_HardDeleteRefusedCourse, session)
+    handler = make_delete_handler(_HardDeleteRefusedCourse)
+    with pytest.raises(HTTPException) as exc_info:
+        await handler(id=created["id"], tenant_id="default", db=session)
+    assert exc_info.value.status_code == 403
+
+
+async def test_soft_delete_maps_a_scope_refusal_to_422_not_500(session) -> None:
+    """A soft delete is an UPDATE, so a row whose scope disagrees with its
+    parent cannot be tombstoned without tripping the trigger."""
+    created = await _create(_SoftDeleteRefusedCourse, session)
+    handler = make_delete_handler(_SoftDeleteRefusedCourse)
+    with pytest.raises(HTTPException) as exc_info:
+        await handler(id=created["id"], tenant_id="default", db=session)
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail == _TRIGGER_MESSAGE

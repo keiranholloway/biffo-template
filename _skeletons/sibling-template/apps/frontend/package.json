@@ -2,6 +2,9 @@
   "name": "sibling-frontend",
   "version": "0.0.0",
   "private": true,
+  "engines": {
+    "node": "^22.22.2"
+  },
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build",

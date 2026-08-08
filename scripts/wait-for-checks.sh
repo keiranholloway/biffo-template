@@ -37,6 +37,27 @@
 #    same count seen on two consecutive polls — so a fast check concluding while
 #    slower ones are still registering does not end the wait early.
 #
+# ## A re-run does not replace its old entry, and `statusCheckRollup` never drops it
+#
+# `statusCheckRollup` returns **every** check run against the PR's head commit,
+# including ones a later run has superseded — a re-run adds a second row under
+# the same name rather than replacing the first. Read naively, a check that
+# failed once and was then fixed by a re-run still shows a FAILURE row forever,
+# so "any row with a FAILURE conclusion" reports the wrong thing on exactly the
+# PRs most likely to need this script: anything that failed and was corrected.
+# GitHub's own merge gate, and `gh pr checks`, both resolve a required context to
+# the **latest** run of that name — this script has to do the same, or it
+# disagrees with the authority it exists to reflect (#1333, class #1362).
+#
+# So the rollup is deduped by name, keeping the entry with the latest
+# `completedAt`/`startedAt` (falling back to `updatedAt`/`createdAt` for a plain
+# commit status, which carries no `startedAt`/`completedAt` at all), **before**
+# any conclusion is evaluated. Same `group_by | max_by(latest timestamp)` shape
+# `branch-health.sh` already uses for its per-workflow rollup — that script reads
+# `gh run list`, whose rows are one per distinct run rather than per check name,
+# so it was never exposed to this defect, but the resolution method is the same
+# one worth keeping consistent.
+#
 # ## Exit codes, and why 2 exists
 #
 #   0  every required/observed check concluded, none failed
@@ -200,9 +221,14 @@ while :; do
   rollup=$(gh_pr view "$PR" --json statusCheckRollup --jq '
     [ .statusCheckRollup[]?
       | { name:  (.name // .context),
-          state: (.conclusion // .state // (if .status == "COMPLETED" then "" else null end))
+          state: (.conclusion // .state // (if .status == "COMPLETED" then "" else null end)),
+          when:  (.completedAt // .startedAt // .updatedAt // .createdAt // "")
         }
-    ] | .[] | "\(.name)\t\(.state // "")"') || rollup=""
+    ]
+    | group_by(.name)
+    | map(max_by(.when))
+    | .[]
+    | "\(.name)\t\(.state // "")"') || rollup=""
 
   count=0
   [ -n "$rollup" ] && count=$(printf '%s\n' "$rollup" | grep -c .)

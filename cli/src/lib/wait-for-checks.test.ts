@@ -105,6 +105,78 @@ function stubGh(options: StubOptions): string {
   return dir
 }
 
+/**
+ * A `gh` stub that runs the script's REAL `--jq` filter — via the system `jq`
+ * — against raw `statusCheckRollup` JSON, the same pattern
+ * `claim-holder.test.ts` uses to test `claim.sh`'s own `--jq` filter for real.
+ *
+ * `stubGh` above hands the polling loop pre-flattened `name\tstate` lines, so
+ * it never exercises the jq program at all — every existing test in this file
+ * would pass unchanged whether or not the dedupe fix below is present. This is
+ * the one that actually proves it: it hands `gh` the two-row shape
+ * `statusCheckRollup` returns for a re-run (old FAILURE row untouched, new
+ * SUCCESS row appended) and lets the script's own jq resolve it, matching
+ * PR #1332's real payload (#1333).
+ */
+function stubGhRaw(rollup: unknown[]): string {
+  const dir = makeTmpDir('waitchecks-raw')
+  const fixture = join(dir, 'rollup.json')
+  writeFileSync(fixture, JSON.stringify({ statusCheckRollup: rollup }))
+
+  const gh = [
+    '#!/usr/bin/env bash',
+    'args="$*"',
+    '',
+    'if [[ "$args" == *"--json state,baseRefName"* ]]; then',
+    "  printf '%s\\t%s\\n' 'OPEN' 'dev'",
+    '  exit 0',
+    'fi',
+    '',
+    'if [[ "$args" == *"--json mergeable"* ]]; then',
+    "  echo 'MERGEABLE'",
+    '  exit 0',
+    'fi',
+    '',
+    'if [[ "$args" == *nameWithOwner* ]]; then',
+    "  echo 'acme/widget'",
+    '  exit 0',
+    'fi',
+    '',
+    // No readable protection — forces the stability fallback, same as most
+    // `stubGh` tests above, so this exercises only the dedupe under test.
+    'if [[ "$args" == *protection* ]]; then',
+    '  exit 1',
+    'fi',
+    '',
+    'if [[ "$args" == *statusCheckRollup* ]]; then',
+    '  prev=""',
+    '  jqexpr=""',
+    '  for a in "$@"; do if [ "$prev" = "--jq" ]; then jqexpr="$a"; fi; prev="$a"; done',
+    `  jq -r "$jqexpr" ${JSON.stringify(fixture)}`,
+    '  exit 0',
+    'fi',
+    '',
+    'exit 0',
+    '',
+  ].join('\n')
+
+  writeFileSync(join(dir, 'gh'), gh)
+  chmodSync(join(dir, 'gh'), 0o755)
+  return dir
+}
+
+function checkRun(name: string, conclusion: string, startedAt: string, completedAt: string) {
+  return {
+    __typename: 'CheckRun',
+    name,
+    workflowName: name,
+    status: 'COMPLETED',
+    conclusion,
+    startedAt,
+    completedAt,
+  }
+}
+
 function run(stubDir: string, args: string[] = []) {
   try {
     const stdout = execFileSync('bash', [script, '123', '--interval', '0', ...args], {
@@ -311,5 +383,42 @@ describe('wait-for-checks', () => {
 
     expect(code).toBe(0)
     expect(out).toContain('MERGED')
+  })
+
+  describe('disagreement: a superseded run must not outvote its replacement (#1333, class #1362)', () => {
+    // The guard (this script, reading every row `statusCheckRollup` returns)
+    // and the authority (GitHub's merge gate and `gh pr checks`, which both
+    // resolve a name to its LATEST run) must agree. These construct the exact
+    // state where a naive "any row says FAILURE" reading disagrees with that
+    // authority, and assert the script returns what the authority returns —
+    // in both directions, so the fix is a resolution rule and not a rule that
+    // only ever forgives.
+
+    it('a stale FAILURE superseded by a newer SUCCESS passes — matching GitHub, not the raw rollup', () => {
+      // PR #1332's actual shape: Release Guards failed once, the PR body was
+      // corrected, `edited` re-ran it (#1319), and the re-run passed. Both rows
+      // are real and both are still in `statusCheckRollup` — only their
+      // `startedAt`/`completedAt` order says which one counts.
+      const stub = stubGhRaw([
+        checkRun('Release Guards', 'FAILURE', '2026-08-05T12:14:26Z', '2026-08-05T12:14:47Z'),
+        checkRun('Release Guards', 'SUCCESS', '2026-08-05T12:18:04Z', '2026-08-05T12:18:27Z'),
+      ])
+      const { code, out } = run(stub, ['--timeout', '60'])
+
+      expect(code, out).toBe(0)
+      expect(out).toContain('All checks concluded')
+    })
+
+    it('the inverse: a newer FAILURE after an older SUCCESS still fails — this is not a gate that can only forgive', () => {
+      const stub = stubGhRaw([
+        checkRun('CI', 'SUCCESS', '2026-08-05T12:14:26Z', '2026-08-05T12:15:00Z'),
+        checkRun('CI', 'FAILURE', '2026-08-05T12:20:00Z', '2026-08-05T12:21:00Z'),
+      ])
+      const { code, out } = run(stub, ['--timeout', '60'])
+
+      expect(code, out).toBe(1)
+      expect(out).toContain('Failed:')
+      expect(out).toContain('CI')
+    })
   })
 })

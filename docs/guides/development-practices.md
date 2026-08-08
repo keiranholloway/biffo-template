@@ -1028,12 +1028,12 @@ construction, verified in the deployed bytes, is. Worth stating because a
 5-sample "it works now" is exactly the kind of evidence that reads as stronger
 than it is.
 
-**Toil in this half: ~35 min**, none of it the work — the SSH remote
-authenticating as the wrong account (hit again, by me this time, mid-`core
-upgrade`), a `pnpm install` the pre-push gate correctly rejected, and a
-duplicate `const` declaration that made a whole test file fail to load with
-`SyntaxError` while the summary line read `Tests  no tests` — which looks far
-more like a pass than it is.
+**Toil in this half: ~35 min**, none of it the work — a `core upgrade` push
+rejected by the pre-push gate against a tree with no `node_modules` installed
+(misdiagnosed at the time as the SSH remote authenticating as the wrong
+account; it was not — see #1040), and a duplicate `const` declaration that
+made a whole test file fail to load with `SyntaxError` while the summary line
+read `Tests  no tests` — which looks far more like a pass than it is.
 
 ### Measured: verifying a backlog cost 15 minutes and removed 6 issues (2026-07-31)
 
@@ -1073,11 +1073,15 @@ all five and written once, centrally, afterwards — which is the only reason th
 session did not reproduce **#953** five times over.
 
 **What it cost, honestly:** ~30 minutes of the total was toil, none of it the
-work itself — the SSH remote authenticating as the wrong account (every agent hit
-it independently and each rediscovered the HTTPS workaround), five superseded
-`dev` runs read as failures before the `cancel-in-progress` cause was understood,
-and ESLint scanning a gitignored `apps/portal/out/` that a local reproduction
-build had populated, rejecting a push with no hint from `git status`.
+work itself — a `core upgrade` push rejected by the pre-push gate against a
+tree with no installed dependencies (misdiagnosed independently by every agent
+as the SSH remote authenticating as the wrong account; these repos use HTTPS
+remotes with a working credential helper already configured, and the actual
+fix was always installing dependencies before the push, not a credential
+override — corrected in #1040), five superseded `dev` runs read as failures
+before the `cancel-in-progress` cause was understood, and ESLint scanning a
+gitignored `apps/portal/out/` that a local reproduction build had populated,
+rejecting a push with no hint from `git status`.
 
 ### Five defects in one step, priced (2026-07-31)
 

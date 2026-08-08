@@ -60,6 +60,10 @@ import {
   lockfilesNeedingRefresh,
   refreshLockfiles,
 } from '../lib/lockfile-refresh.js'
+import {
+  describeInstallFailures,
+  installInstanceDependencies,
+} from '../lib/instance-dependency-install.js'
 import { log } from '../lib/logger.js'
 
 /**
@@ -883,10 +887,44 @@ async function buildCommitAndOpenPr(
   await git.add(options.cwd, ['-A'])
   await git.commit(options.cwd, buildCommitMessage(fromVersion, toVersion, carriedPrs))
 
+  // Install dependencies before pushing (#1040). `.husky/pre-push` runs
+  // `scripts/verify.sh`, which cannot run against a tree with no `node_modules`
+  // — this used to go straight from the commit above to the push below, so git
+  // rejected the push at [3/4] on every worktree AGENTS.md §1 tells a caller to
+  // run this in, and [4/4] (opening the PR) never ran. This is what a human
+  // does by hand between the two steps. Same `run` fn and injection point as
+  // `refreshInstanceLockfiles`, so it is testable without a real pnpm/uv on the
+  // machine; failure here is soft (warned, not thrown — see
+  // `installInstanceDependencies`'s docstring) because the push below still
+  // runs and reports its own failure honestly either way.
+  const run: RunCommandFn = deps.runCommand ?? defaultRunCommand
+  const installOutcomes = await installInstanceDependencies(options.cwd, run)
+  const installFailures = describeInstallFailures(installOutcomes)
+  for (const message of installFailures) log.warn(message)
+
   log.step(3, 4, `Pushing ${branch}`)
   const pushOpts: { remote?: string; token: string } = { token }
   if (options.remote) pushOpts.remote = options.remote
-  await git.push(options.cwd, branch, pushOpts)
+  try {
+    await git.push(options.cwd, branch, pushOpts)
+  } catch (err) {
+    // #1040: the push is the step most likely to fail — a pre-push gate
+    // correctly rejecting a tree it cannot verify — and it aborts before
+    // step [4/4], the PR-open call that is the marker's only OTHER home. The
+    // marker is already inside the commit message above (#1011), which
+    // survives this failure, but a human finishing by hand pastes a PR BODY,
+    // not a commit message, and has no reason to go looking in `git log` for
+    // it. Print it explicitly here so it is not lost twice.
+    const marker = carriedPrsSection(carriedPrs).join('\n').trim()
+    log.error(
+      `Push failed: ${(err as Error).message}\n\n` +
+        `The branch ${branch} is committed locally. Push it and open the PR by hand — and ` +
+        (marker.length > 0
+          ? `include this in the PR body so #767's time-to-feature metric can join on it:\n\n${marker}`
+          : 'this upgrade carries no template PRs, so no provenance marker is needed.'),
+    )
+    throw err
+  }
 
   log.step(4, 4, 'Opening pull request')
   const remoteUrl = await git.getRemoteUrl(options.cwd, options.remote)
@@ -922,6 +960,7 @@ async function buildCommitAndOpenPr(
       cleanedCoreVersion ? coreVersionCleanup : null,
       carriedPrs,
       newSeams,
+      installFailures,
     ),
   })
 
@@ -1080,6 +1119,9 @@ export function buildPrBody(
   /** New `@/instance-*` seams this upgrade introduces with no instance
    * declaration yet (#1188). */
   newSeams: InstanceSeam[] = [],
+  /** `describeInstallFailures` output, if `pnpm install` / `uv sync` could not
+   * run on the machine that ran the upgrade (#1040). */
+  installFailures: string[] = [],
 ): string {
   const lines: string[] = []
   if (breaking.length > 0) {
@@ -1226,6 +1268,18 @@ export function buildPrBody(
         'registry config — and committed alongside, rather than left disagreeing:',
       '',
       ...lockfiles.map((o) => `- \`${o.trigger.lockfile}\` (\`${o.trigger.command.join(' ')}\`)`),
+    )
+  }
+  if (installFailures.length > 0) {
+    lines.push(
+      '',
+      '## ⚠ Dependency install failed',
+      '',
+      '`pnpm install` (and `uv sync`, where this instance has Python) could not run on the ' +
+        'machine that opened this PR, so it may not have been possible to verify this tree ' +
+        'before pushing it (#1040):',
+      '',
+      ...installFailures.map((f) => `- ${f}`),
     )
   }
   if (plan.conflicts.length > 0) {

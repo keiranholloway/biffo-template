@@ -31,6 +31,12 @@ function fakeDeps(over: Partial<ReturnType<typeof fakeGit>> = {}) {
     url: 'https://github.com/acme/instance/pull/7',
     number: 7,
   })
+  // Mocked so `applyAndOpenPr`'s unconditional dependency-install step (#1040)
+  // never falls through to `defaultRunCommand` here and shells out to a real
+  // `pnpm install` / `uv sync` against a throwaway tmp dir with no
+  // package.json. Tests that care what it was called with build their own
+  // `runCommand` and override this — see the lockfile-refresh describe block.
+  const runCommand = vi.fn().mockResolvedValue({ ok: true })
   const deps: CoreUpgradeDeps = {
     git,
     makeGitHub: () => ({ createPullRequest, defaultBranch }),
@@ -39,8 +45,9 @@ function fakeDeps(over: Partial<ReturnType<typeof fakeGit>> = {}) {
     // working-tree fast path is taken. Tests that exercise a drifted checkout
     // (#471) override this to false.
     workingTreeMatchesTag: () => true,
+    runCommand,
   }
-  return { deps, git, createPullRequest, defaultBranch }
+  return { deps, git, createPullRequest, defaultBranch, runCommand }
 }
 
 function fakeGit(over: Record<string, unknown> = {}) {
@@ -129,8 +136,9 @@ describe('runCoreUpgrade --apply', () => {
   })
 
   it('embeds the carried-PR marker in the COMMIT message, not only the PR body (#1011)', async () => {
-    // `--apply` can commit and then fail at the push step (e.g. an SSH remote
-    // with no write access), aborting before the PR is ever opened. The
+    // `--apply` can commit and then fail at the push step (e.g. the pre-push
+    // gate rejecting a tree it cannot verify, #1040), aborting before the PR
+    // is ever opened. The
     // operator then pushes and opens the PR by hand, and a hand-made PR never
     // gets the marker `buildPrBody` writes into the PR body. The commit made
     // here, before that failing push, is the one place guaranteed to survive —
@@ -159,6 +167,117 @@ describe('runCoreUpgrade --apply', () => {
       instance,
       expect.stringContaining('<!-- biffo:carries-template-prs:42 -->'),
     )
+  })
+
+  /**
+   * Issue #1040. `applyAndOpenPr` used to go straight from writing files to
+   * `git push` with no install in between, so `.husky/pre-push`'s
+   * `scripts/verify.sh` rejected the push against a tree with no
+   * `node_modules` — every worktree AGENTS.md §1 tells a caller to run this
+   * in. `pnpm install` must run, and run BEFORE the push, not after.
+   */
+  it('installs dependencies before pushing (#1040)', async () => {
+    const { deps, git, runCommand } = fakeDeps()
+
+    await runCoreUpgrade(
+      { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs, apply: true },
+      deps,
+    )
+
+    expect(runCommand).toHaveBeenCalledWith(['pnpm', 'install'], instance)
+    const pnpmCall = runCommand.mock.calls.findIndex(
+      (c) => c[0][0] === 'pnpm' && c[0][1] === 'install' && c[0].length === 2,
+    )
+    expect(pnpmCall).toBeGreaterThanOrEqual(0)
+    // Before the push, not after — an install that ran too late would not have
+    // helped the pre-push gate at all.
+    expect(runCommand.mock.invocationCallOrder[pnpmCall]).toBeLessThan(
+      git.push.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('also runs uv sync before pushing when the instance has a root pyproject.toml (#1040)', async () => {
+    writeFileSync(join(instance, 'pyproject.toml'), '[project]\nname = "inst"\n')
+    const { deps, git, runCommand } = fakeDeps()
+
+    await runCoreUpgrade(
+      { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs, apply: true },
+      deps,
+    )
+
+    expect(runCommand).toHaveBeenCalledWith(['uv', 'sync'], instance)
+    const uvCall = runCommand.mock.calls.findIndex((c) => c[0][0] === 'uv' && c[0][1] === 'sync')
+    expect(runCommand.mock.invocationCallOrder[uvCall]).toBeLessThan(
+      git.push.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('does not invent a uv sync step when the instance has no Python at all (#1040)', async () => {
+    const { deps, runCommand } = fakeDeps()
+
+    await runCoreUpgrade(
+      { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs, apply: true },
+      deps,
+    )
+
+    expect(runCommand).not.toHaveBeenCalledWith(['uv', 'sync'], instance)
+  })
+
+  /**
+   * Issue #1040's secondary fix. The marker is already inside the commit
+   * message (#1011, asserted above) — but a human finishing a failed push by
+   * hand pastes a PR BODY, not a commit message, and has no reason to go
+   * looking in `git log` for it. A failed push must print the marker it would
+   * have emitted, explicitly, so finishing by hand does not silently lose it.
+   */
+  it('prints the carried-PRs marker when the push fails (#1040)', async () => {
+    // Same real template history as the commit-message test above: two tags,
+    // one squash commit ending `(#42)` between them.
+    execFileSync('git', ['init'], { cwd: theirs })
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: theirs })
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: theirs })
+    execFileSync('git', ['add', '-A'], { cwd: theirs })
+    execFileSync('git', ['commit', '-m', 'chore: base'], { cwd: theirs })
+    execFileSync('git', ['tag', 'core-v0.1.0'], { cwd: theirs })
+    w(theirs, 'services/api/note.py', 'note')
+    execFileSync('git', ['add', '-A'], { cwd: theirs })
+    execFileSync('git', ['commit', '-m', 'feat(api): add a note (#42)'], { cwd: theirs })
+    execFileSync('git', ['tag', 'core-v0.2.0'], { cwd: theirs })
+
+    const { deps } = fakeDeps({
+      push: vi.fn().mockRejectedValue(new Error('Failed to push branch')),
+    })
+
+    await expect(
+      runCoreUpgrade(
+        { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs, apply: true },
+        deps,
+      ),
+    ).rejects.toThrow(/push/i)
+
+    const errors = vi.mocked(log.error).mock.calls.map((c) => String(c[0]))
+    expect(errors.some((m) => m.includes('Push failed'))).toBe(true)
+    expect(errors.some((m) => m.includes('<!-- biffo:carries-template-prs:42 -->'))).toBe(true)
+  })
+
+  it('says plainly there is no marker to lose when the failed push carries no template PRs (#1040)', async () => {
+    // No templateRepo git history set up — readCarriedPrs cannot read one, so
+    // carriedPrs is [] (best-effort by design). The failure message must not
+    // claim a marker exists when there is nothing to carry.
+    const { deps } = fakeDeps({
+      push: vi.fn().mockRejectedValue(new Error('Failed to push branch')),
+    })
+
+    await expect(
+      runCoreUpgrade(
+        { cwd: instance, templateRepo: theirs, baseDir: base, theirsDir: theirs, apply: true },
+        deps,
+      ),
+    ).rejects.toThrow(/push/i)
+
+    const errors = vi.mocked(log.error).mock.calls.map((c) => String(c[0]))
+    expect(errors.some((m) => m.includes('carries no template PRs'))).toBe(true)
+    expect(errors.some((m) => m.includes('biffo:carries-template-prs'))).toBe(false)
   })
 
   it('honors an explicit --base over the repo default', async () => {
@@ -447,7 +566,13 @@ describe('runCoreUpgrade — lockfile refresh is driven by what landed (#393)', 
 
     await upgrade()
 
-    expect(runCommand).not.toHaveBeenCalled()
+    // The `--lockfile-only` regeneration is what this test is about, and it
+    // must not fire. `installInstanceDependencies` (#1040) shares the same
+    // `runCommand` fn but always runs a plain `pnpm install` regardless of
+    // what this upgrade touched, so `runCommand` itself is no longer a
+    // reliable "nothing happened" signal — assert on the specific command.
+    expect(runCommand).not.toHaveBeenCalledWith(['pnpm', 'install', '--lockfile-only'], instance)
+    expect(runCommand).not.toHaveBeenCalledWith(['uv', 'lock'], instance)
     // And it does not claim otherwise in the log.
     const info = vi.mocked(log.info).mock.calls.map((c) => String(c[0]))
     expect(info.some((m) => m.includes('Refreshed'))).toBe(false)

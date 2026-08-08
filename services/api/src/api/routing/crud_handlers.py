@@ -34,7 +34,7 @@ from aws_lambda_powertools import Logger
 from fastapi import Body, Depends, HTTPException, Request, status
 from pydantic_core import to_jsonable_python
 from sqlalchemy import Date, DateTime, String, Uuid, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
@@ -184,7 +184,7 @@ def _reject_unwritable_fields(payload: dict[str, Any], user_columns: frozenset[s
 # even though it's a Postgres code — it's what ``exc.orig`` carries in
 # production (postgresql+asyncpg). Other DBAPIs (e.g. the sqlite3 driver the
 # test suite runs against) won't have `.sqlstate`, hence the ``getattr`` below
-# and the generic fallback message — never `str(exc.orig)`.
+# and the generic fallback message — never the raw driver text.
 _INTEGRITY_ERROR_MESSAGES: dict[str, str] = {
     "23505": "That value conflicts with an existing record.",
     "23503": "This action references a record that does not exist.",
@@ -192,6 +192,83 @@ _INTEGRITY_ERROR_MESSAGES: dict[str, str] = {
     "23514": "That value does not satisfy a required condition.",
 }
 _DEFAULT_INTEGRITY_MESSAGE = "That value conflicts with an existing record."
+
+
+def _driver_error(exc: DBAPIError) -> Any:
+    """The REAL driver exception, not the DBAPI wrapper SQLAlchemy raises.
+
+    ``exc.orig`` is ``AsyncAdapt_asyncpg_dbapi.<Error>`` — a thin wrapper the
+    asyncpg dialect raises ``from`` the genuine ``asyncpg.exceptions.*``. It is
+    not the driver exception, and the difference is not cosmetic:
+
+        exc.orig             str() -> "<class 'asyncpg…ForeignKeyViolationError'>: <msg>"
+                             constraint_name -> ATTRIBUTE ABSENT, always
+                             message         -> ATTRIBUTE ABSENT, always
+        exc.orig.__cause__   str() -> "<msg>"
+                             constraint_name -> the real value, or None
+                             message         -> the server's primary message
+
+    Falls back to ``exc.orig`` when there is no ``__cause__``: sqlite (the unit
+    lane) and psycopg raise the driver error directly, with no wrapper.
+    """
+    cause = getattr(exc.orig, "__cause__", None)
+    return exc.orig if cause is None else cause
+
+
+def _is_permission_denied(exc: DBAPIError) -> bool:
+    """A PostgreSQL insufficient-privilege refusal (SQLSTATE 42501) — an RLS
+    ``WITH CHECK`` denial, or a missing grant on the app role.
+
+    Mapped to 403: the caller is authenticated but not authorised for this row,
+    which is distinct from an ``IntegrityError`` (the body, or the current state
+    of the data). Without this arm such a refusal reaches the caller as a 500 —
+    the server reporting itself broken when it had correctly declined.
+    """
+    return getattr(getattr(exc, "orig", None), "sqlstate", None) == "42501"
+
+
+#: SQLSTATE an instance's own triggers raise to say "this row references a
+#: parent in a different scope". A user-defined class, so Postgres never
+#: produces it itself and the match needs no message-text heuristics.
+#:
+#: The letters are historical — first raised by tabsii-platform#701/#789, whose
+#: triggers refuse a child row whose denormalised scope columns disagree with
+#: the parent its foreign key points at. Kept as one estate-wide constant so a
+#: code means the same thing everywhere, rather than each instance minting its
+#: own and this mapping having to learn all of them.
+SCOPE_INCONSISTENCY_SQLSTATE = "TB701"
+
+
+def _is_scope_inconsistency(exc: DBAPIError) -> bool:
+    """Whether a trigger refused this row for referencing a parent in another
+    scope.
+
+    Checked BEFORE ``_is_permission_denied``, and the order is the point. These
+    refusals were spelled 42501 downstream, so they mapped to 403 and told a
+    caller who HELD the permission that they did not — measured against a
+    deployed instance, where the same caller writing the same table succeeded
+    with a same-scope parent and got 403 with a cross-scope one. The remedy a
+    403 implies (obtain a grant) cannot fix it; the row has to change, which is
+    a 422.
+    """
+    return getattr(getattr(exc, "orig", None), "sqlstate", None) == SCOPE_INCONSISTENCY_SQLSTATE
+
+
+def _scope_inconsistency_detail(exc: DBAPIError) -> str:
+    """The trigger's own message, and only that.
+
+    Read off ``_driver_error``: the wrapper has no ``.message`` at all, so
+    reading ``exc.orig`` would silently degrade every 422 to the fallback — the
+    right status code with no explanation, which a status-only assertion would
+    call correct.
+
+    The fallback is a fixed string rather than ``str(exc)``, so a response body
+    can never carry the failing statement or its bound parameters.
+    """
+    message = getattr(_driver_error(exc), "message", None)
+    if isinstance(message, str) and message.strip():
+        return message
+    return "This row references a parent in a different scope"
 
 
 def _integrity_error_response(
@@ -236,8 +313,15 @@ def _integrity_error_response(
     raised by one of our triggers is USER-FACING and must contain nothing a
     caller should not read.
     """
-    sqlstate = getattr(exc.orig, "sqlstate", None)
-    constraint = getattr(exc.orig, "constraint_name", None)
+    # The REAL driver error, not exc.orig: the wrapper has no
+    # `constraint_name` attribute at ALL, so reading it there returns None
+    # for every integrity error, and `authored` below is then true for
+    # genuine FK and unique violations too -- forwarding their raw driver
+    # text, which is the schema reconnaissance this function exists to
+    # prevent. The discriminator has to be able to discriminate.
+    driver = _driver_error(exc)
+    sqlstate = getattr(driver, "sqlstate", None)
+    constraint = getattr(driver, "constraint_name", None)
 
     authored = isinstance(sqlstate, str) and sqlstate.startswith("23") and constraint is None
     if authored:
@@ -251,7 +335,7 @@ def _integrity_error_response(
                 "operation": operation,
                 "sqlstate": sqlstate,
                 "authored": True,
-                "driver_detail": str(exc.orig),
+                "driver_detail": str(driver),
             },
         )
         return HTTPException(
@@ -263,7 +347,7 @@ def _integrity_error_response(
                 # First line only: asyncpg keeps DETAIL/HINT/CONTEXT on later
                 # lines, and CONTEXT in particular carries internal query
                 # text — exactly the reconnaissance #473 excludes.
-                "message": str(exc.orig).split("\n", 1)[0].strip(),
+                "message": str(driver).split("\n", 1)[0].strip(),
                 "constraint": None,
             },
         )
@@ -280,7 +364,7 @@ def _integrity_error_response(
             "operation": operation,
             "sqlstate": sqlstate,
             "constraint": constraint,
-            "driver_detail": str(exc.orig),
+            "driver_detail": str(driver),
         },
     )
     detail: dict[str, Any] = {"message": message}
@@ -605,6 +689,18 @@ def make_create_handler(
             await db.flush()
         except IntegrityError as exc:
             raise _integrity_error_response(exc, model=model, operation="create") from exc
+        except DBAPIError as exc:
+            if _is_scope_inconsistency(exc):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=_scope_inconsistency_detail(exc),
+                ) from exc
+            if _is_permission_denied(exc):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have permission to perform this action",
+                ) from exc
+            raise
         await db.refresh(row)
         _emit_crud_event(db, model, "created", tenant_id, row=row)
         await _run_created_hook(model, db, row, tenant_id)
@@ -639,6 +735,18 @@ def make_update_handler(
             await db.flush()
         except IntegrityError as exc:
             raise _integrity_error_response(exc, model=model, operation="update") from exc
+        except DBAPIError as exc:
+            if _is_scope_inconsistency(exc):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=_scope_inconsistency_detail(exc),
+                ) from exc
+            if _is_permission_denied(exc):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have permission to perform this action",
+                ) from exc
+            raise
         await db.refresh(row)
         _emit_crud_event(db, model, "updated", tenant_id, row=row)
         return serialize(row)
@@ -671,6 +779,18 @@ def make_delete_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
                 await db.flush()
             except IntegrityError as exc:
                 raise _integrity_error_response(exc, model=model, operation="delete") from exc
+            except DBAPIError as exc:
+                if _is_scope_inconsistency(exc):
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                        detail=_scope_inconsistency_detail(exc),
+                    ) from exc
+                if _is_permission_denied(exc):
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="You do not have permission to perform this action",
+                    ) from exc
+                raise
         else:
             # A model carrying deleted_at is tombstoned, never destroyed, and
             # the event carries the tombstoned row — deleted_at included, so a
@@ -693,6 +813,18 @@ def make_delete_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
                 # telling them the server had broken, when it had correctly
                 # declined.
                 raise _integrity_error_response(exc, model=model, operation="delete") from exc
+            except DBAPIError as exc:
+                if _is_scope_inconsistency(exc):
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                        detail=_scope_inconsistency_detail(exc),
+                    ) from exc
+                if _is_permission_denied(exc):
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="You do not have permission to perform this action",
+                    ) from exc
+                raise
             await db.refresh(row)
             deleted_payload = _event_payload(row, exclude)
         _emit_crud_event(db, model, "deleted", tenant_id, payload=deleted_payload)

@@ -1,5 +1,5 @@
 {
-  "collectedAt": "2026-08-07T03:41:38Z",
+  "collectedAt": "2026-08-08T03:41:46Z",
   "audits": [
     {
       "name": "coverage",
@@ -15,9 +15,9 @@
     },
     {
       "name": "drift",
-      "ok": false,
-      "exit": 1,
-      "summary": "14 current, 0 drifted"
+      "ok": true,
+      "exit": 0,
+      "summary": "13 current, 0 drifted"
     },
     {
       "name": "protection",
@@ -35,25 +35,25 @@
       "name": "classification",
       "ok": true,
       "exit": 0,
-      "summary": "OK  2026-08-07.json: 0 of 8 failing steps unclassified (0.0%)"
+      "summary": "OK  2026-08-08.json: 0 of 16 failing steps unclassified (0.0%)"
     },
     {
       "name": "checkout",
       "ok": false,
       "exit": 1,
-      "summary": "18 primary checkouts — $8 clean$, $3 unsafe to read$, 6 behind only, 1 not evaluated"
+      "summary": "18 primary checkouts — $11 clean$, $3 unsafe to read$, 3 behind only, 1 not evaluated"
     },
     {
       "name": "deploy",
-      "ok": false,
-      "exit": 1,
-      "summary": "an integration branch is failing"
+      "ok": true,
+      "exit": 0,
+      "summary": "every integration branch green"
     },
     {
       "name": "deadsurface",
       "ok": false,
       "exit": 1,
-      "summary": "36 uncalled route(s), baseline 23 — something new was exposed with no caller."
+      "summary": "32 uncalled route(s), baseline 23 — something new was exposed with no caller."
     },
     {
       "name": "failopen",

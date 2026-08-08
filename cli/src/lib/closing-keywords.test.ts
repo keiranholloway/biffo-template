@@ -6,10 +6,15 @@ import {
   closingReferences,
   DEPLOY_ONLY_PREFIXES,
   deployOnlyPaths,
+  documentsFor,
+  fetchPrCommitsViaGh,
+  fetchPrTitleViaGh,
   formatFailure,
   hasVerifiedTrailer,
   negatedClosingReferences,
   resolveBody,
+  resolveCommits,
+  resolveTitle,
   VERIFIED_TRAILER,
 } from '../../../scripts/check-closing-keywords.mjs'
 
@@ -335,6 +340,279 @@ describe('closing-keyword guard', () => {
         resolveBody({ env: { GH_TOKEN: 'x', PR_NUMBER: '9' }, fetchLiveBody }),
       ).rejects.toThrow(/GH_TOKEN, PR_NUMBER and GH_REPO must all be set together/)
       expect(fetchLiveBody).not.toHaveBeenCalled()
+    })
+  })
+
+  // #1334: GitHub builds this repo's squash-merge commit message from the
+  // individual COMMIT messages, not the PR body. PR #1332 was opened with
+  // `Closes #1331`, Release Guards correctly refused it (a deploy-only
+  // path), the body was corrected to `Refs #1331`, the guard re-ran reading
+  // only `PR_BODY` and passed — and #1331 closed anyway on merge, because
+  // the first commit's message still said `Closes #1331`. The guard was
+  // right about what it read; GitHub read a different document. #1362 names
+  // this class: "a guard reads a different document from the one that
+  // acts" — the fix is to read all three documents GitHub honours (body,
+  // title, commit messages), not just the one this guard used to see.
+  describe('documentsFor and assess — the commit-message and title sources (#1334)', () => {
+    it('documentsFor includes the body, the title, and each commit — headline AND body', () => {
+      const docs = documentsFor({
+        body: 'Refs #1',
+        title: 'fix(ci): tighten workflow permissions',
+        commits: [{ messageHeadline: 'fix(ci): a', messageBody: 'Closes #1' }],
+      })
+      expect(docs).toEqual([
+        { source: 'the PR body', text: 'Refs #1' },
+        { source: 'the PR title', text: 'fix(ci): tighten workflow permissions' },
+        { source: 'the commit message (subject)', text: 'fix(ci): a' },
+        { source: 'the commit message (body)', text: 'Closes #1' },
+      ])
+    })
+
+    it('labels multiple commits by position, since "the commit message" would be ambiguous', () => {
+      const docs = documentsFor({
+        body: '',
+        commits: [
+          { messageHeadline: 'fix(a): one', messageBody: '' },
+          { messageHeadline: 'fix(b): two', messageBody: 'Closes #2' },
+        ],
+      })
+      expect(docs.map((d) => d.source)).toEqual([
+        'the PR body',
+        'commit 1 (subject)',
+        // commit 1's empty messageBody contributes no document — nothing to scan
+        'commit 2 (subject)',
+        'commit 2 (body)',
+      ])
+    })
+
+    it('omits title and commits entirely when absent, so every pre-#1334 caller is unaffected', () => {
+      expect(documentsFor({ body: 'Refs #1' })).toEqual([
+        { source: 'the PR body', text: 'Refs #1' },
+      ])
+    })
+
+    // The disagreement test the class issue (#1362) asks every guard in this
+    // shape to carry: construct the state where the two documents differ,
+    // and assert the guard returns what the authority (GitHub) returns.
+    // GitHub honours the commit message, so a clean body must not save it.
+    it('FAILS when the body says Refs but a commit message says Closes — the #1332 shape', () => {
+      const result = assess({
+        body: 'Refs #1331 — see explanation below, this needs a deploy to verify.',
+        title: 'fix(ci): tighten workflow permissions',
+        commits: [
+          {
+            messageHeadline: 'fix(ci): tighten workflow permissions',
+            messageBody: 'Closes #1331\n\nRemoves the stale grant.',
+          },
+        ],
+        changedFiles: ['.github/workflows/example.yml'],
+      })
+      expect(result.ok).toBe(false)
+      expect(result.kind).toBe('deploy-only-path')
+      expect(result.references).toEqual(['#1331'])
+      // Names the commit specifically — "the body passed" is not enough
+      // information to fix this, per the module docstring above.
+      expect(result.hits.map((h: { source: string }) => h.source)).toEqual([
+        'the commit message (body)',
+      ])
+      const message = formatFailure(result)
+      expect(message).toContain('the commit message (body): #1331')
+      expect(message).toContain('COMMIT message')
+    })
+
+    // The negative control #1362 requires alongside the disagreement test:
+    // a check that can only ever fail can never go green, which is its own
+    // defect. All three documents saying `Refs` must PASS.
+    it('PASSES the negative control — Refs everywhere, on a deploy-only path', () => {
+      const result = assess({
+        body: 'Refs #1331',
+        title: 'fix(ci): tighten workflow permissions',
+        commits: [
+          { messageHeadline: 'fix(ci): tighten workflow permissions', messageBody: 'Refs #1331' },
+        ],
+        changedFiles: ['.github/workflows/example.yml'],
+      })
+      expect(result.ok).toBe(true)
+    })
+
+    it('FAILS on a closing keyword in the commit HEADLINE, not just the body', () => {
+      // The task's own note: a keyword can sit in either field.
+      const result = assess({
+        body: 'Refs #42',
+        commits: [{ messageHeadline: 'fix(ci): closes #42', messageBody: '' }],
+        changedFiles: ['infra/a.tf'],
+      })
+      expect(result.ok).toBe(false)
+      expect(result.hits.map((h: { source: string }) => h.source)).toEqual([
+        'the commit message (subject)',
+      ])
+    })
+
+    it('FAILS on a closing keyword in the PR TITLE', () => {
+      const result = assess({
+        body: 'Refs #42',
+        title: 'fix(ci): closes #42',
+        changedFiles: ['infra/a.tf'],
+      })
+      expect(result.ok).toBe(false)
+      expect(result.hits.map((h: { source: string }) => h.source)).toEqual(['the PR title'])
+    })
+
+    it('still PASSES a commit closing keyword when nothing changed is deploy-only', () => {
+      // The deploy-only-path check stays scoped by design — see the module
+      // docstring's "why this guard fires on every path" note, which is
+      // about the NEGATION check, not this one. A closing keyword in a
+      // commit on an ordinary code change is fine, same as it always was
+      // for the body.
+      const result = assess({
+        body: 'Refs #9',
+        commits: [{ messageHeadline: 'fix: closes #9', messageBody: '' }],
+        changedFiles: ['cli/src/lib/a.ts'],
+      })
+      expect(result.ok).toBe(true)
+    })
+
+    it('a Verified-on-deploy trailer in the body still excuses a commit-message closing keyword', () => {
+      const body = ['Refs #1331', '', `${VERIFIED_TRAILER} deploy 30752514507, checked: 34`].join(
+        '\n',
+      )
+      const result = assess({
+        body,
+        commits: [{ messageHeadline: 'fix: x', messageBody: 'Closes #1331' }],
+        changedFiles: ['infra/a.tf'],
+      })
+      expect(result.ok).toBe(true)
+    })
+
+    it('FAILS a negated keyword found only in a commit message, on any path', () => {
+      const result = assess({
+        body: 'Refs #7',
+        commits: [{ messageHeadline: 'fix: x', messageBody: 'This does not close #7, see #7' }],
+        changedFiles: ['cli/src/lib/a.ts'],
+      })
+      expect(result.ok).toBe(false)
+      expect(result.kind).toBe('negated-keyword')
+      expect(result.negated[0].source).toBe('the commit message (body)')
+    })
+  })
+
+  // Same live/local/fail-closed shape as `resolveBody` (#1174), applied to
+  // the title — the second of the three documents (#1334).
+  describe('resolveTitle', () => {
+    it('uses PR_TITLE directly when set, and never calls the live fetch', async () => {
+      const fetchLiveTitle = vi.fn()
+      const title = await resolveTitle({
+        env: { PR_TITLE: 'fix: x', GH_TOKEN: 'x', PR_NUMBER: '5', GH_REPO: 'a/b' },
+        fetchLiveTitle,
+      })
+      expect(title).toBe('fix: x')
+      expect(fetchLiveTitle).not.toHaveBeenCalled()
+    })
+
+    it('fetches live when PR_TITLE is absent and the CI trio is present', async () => {
+      const fetchLiveTitle = vi.fn().mockResolvedValue('fix: closes #9')
+      const title = await resolveTitle({
+        env: { GH_TOKEN: 'x', PR_NUMBER: '9', GH_REPO: 'a/b' },
+        fetchLiveTitle,
+      })
+      expect(title).toBe('fix: closes #9')
+      expect(fetchLiveTitle).toHaveBeenCalledWith({ GH_TOKEN: 'x', PR_NUMBER: '9', GH_REPO: 'a/b' })
+    })
+
+    it('returns an empty title when neither PR_TITLE nor the CI trio is set', async () => {
+      const fetchLiveTitle = vi.fn()
+      expect(await resolveTitle({ env: {}, fetchLiveTitle })).toBe('')
+      expect(fetchLiveTitle).not.toHaveBeenCalled()
+    })
+
+    it('FAILS CLOSED when the live fetch throws', async () => {
+      const fetchLiveTitle = vi.fn().mockRejectedValue(new Error('HTTP 403'))
+      await expect(
+        resolveTitle({ env: { GH_TOKEN: 'x', PR_NUMBER: '9', GH_REPO: 'a/b' }, fetchLiveTitle }),
+      ).rejects.toThrow(/could not fetch.*title.*#9.*a\/b.*403/s)
+    })
+
+    it('FAILS CLOSED on a half-configured CI trio', async () => {
+      const fetchLiveTitle = vi.fn()
+      await expect(
+        resolveTitle({ env: { GH_TOKEN: 'x', PR_NUMBER: '9' }, fetchLiveTitle }),
+      ).rejects.toThrow(/GH_TOKEN, PR_NUMBER and GH_REPO must all be set together/)
+      expect(fetchLiveTitle).not.toHaveBeenCalled()
+    })
+  })
+
+  // Same shape again, for commit messages — the actual subject of #1334.
+  describe('resolveCommits', () => {
+    it('parses PR_COMMITS directly when set, and never calls the live fetch', async () => {
+      const fetchLiveCommits = vi.fn()
+      const commits = await resolveCommits({
+        env: {
+          PR_COMMITS: JSON.stringify([{ messageHeadline: 'fix: x', messageBody: 'Closes #1' }]),
+          GH_TOKEN: 'x',
+          PR_NUMBER: '5',
+          GH_REPO: 'a/b',
+        },
+        fetchLiveCommits,
+      })
+      expect(commits).toEqual([{ messageHeadline: 'fix: x', messageBody: 'Closes #1' }])
+      expect(fetchLiveCommits).not.toHaveBeenCalled()
+    })
+
+    it('treats a deliberately empty PR_COMMITS as no commits, not as "fetch instead"', async () => {
+      const fetchLiveCommits = vi.fn()
+      expect(await resolveCommits({ env: { PR_COMMITS: '' }, fetchLiveCommits })).toEqual([])
+      expect(fetchLiveCommits).not.toHaveBeenCalled()
+    })
+
+    it('fetches live when PR_COMMITS is absent and the CI trio is present', async () => {
+      const fetchLiveCommits = vi
+        .fn()
+        .mockResolvedValue([{ messageHeadline: 'fix: x', messageBody: 'Closes #9' }])
+      const commits = await resolveCommits({
+        env: { GH_TOKEN: 'x', PR_NUMBER: '9', GH_REPO: 'a/b' },
+        fetchLiveCommits,
+      })
+      expect(commits).toEqual([{ messageHeadline: 'fix: x', messageBody: 'Closes #9' }])
+      expect(fetchLiveCommits).toHaveBeenCalledWith({
+        GH_TOKEN: 'x',
+        PR_NUMBER: '9',
+        GH_REPO: 'a/b',
+      })
+    })
+
+    it('returns no commits when neither PR_COMMITS nor the CI trio is set', async () => {
+      const fetchLiveCommits = vi.fn()
+      expect(await resolveCommits({ env: {}, fetchLiveCommits })).toEqual([])
+      expect(fetchLiveCommits).not.toHaveBeenCalled()
+    })
+
+    it('FAILS CLOSED when the live fetch throws, rather than treating it as no commits', async () => {
+      const fetchLiveCommits = vi.fn().mockRejectedValue(new Error('HTTP 403'))
+      await expect(
+        resolveCommits({
+          env: { GH_TOKEN: 'x', PR_NUMBER: '9', GH_REPO: 'a/b' },
+          fetchLiveCommits,
+        }),
+      ).rejects.toThrow(/could not fetch.*commits.*#9.*a\/b.*403/s)
+    })
+
+    it('FAILS CLOSED on a half-configured CI trio rather than silently falling back to empty', async () => {
+      const fetchLiveCommits = vi.fn()
+      await expect(
+        resolveCommits({ env: { GH_TOKEN: 'x', PR_NUMBER: '9' }, fetchLiveCommits }),
+      ).rejects.toThrow(/GH_TOKEN, PR_NUMBER and GH_REPO must all be set together/)
+      expect(fetchLiveCommits).not.toHaveBeenCalled()
+    })
+  })
+
+  // Both live-fetchers shell out via execFileSync — a smoke test that they
+  // build the right `gh` invocation, mirroring the (absent) equivalent for
+  // fetchPrBodyViaGh: these are new in #1334, so cover the command shape
+  // directly rather than only through the injected-fake tests above.
+  describe('fetchPrTitleViaGh and fetchPrCommitsViaGh', () => {
+    it('are exported functions — the live path exists, not only the injectable fake', () => {
+      expect(typeof fetchPrTitleViaGh).toBe('function')
+      expect(typeof fetchPrCommitsViaGh).toBe('function')
     })
   })
 })

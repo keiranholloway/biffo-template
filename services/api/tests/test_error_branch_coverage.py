@@ -89,6 +89,144 @@ class TestUnexecuted:
         assert ebc.unexecuted(coverage, tmp_path) == []
 
 
+class TestMergeCoverage:
+    """Combining two lanes' coverage.json (#637).
+
+    The motivating case: `finance_invoicing.void_invoice`'s
+    ``except DBAPIError`` is exercised only by a real-Postgres trigger, so the
+    Python job's own coverage.json (no Postgres, the module skips) reports it
+    unexecuted, and only a second, pg-lane coverage.json shows it covered.
+    """
+
+    def _pg_only_branch_src(self):
+        # Mirrors the shape of the real finding: an except clause reachable
+        # only from a real-Postgres trigger refusal.
+        return "try:\n    void_invoice()\nexcept DBAPIError:\n    raise Conflict()\n"
+
+    def test_a_pg_only_branch_reads_unexecuted_from_the_python_job_alone(self, tmp_path):
+        # BEFORE: only the Python job's coverage.json (no Postgres — the
+        # DBAPIError branch never ran there, exactly as #637 describes).
+        (tmp_path / "m.py").write_text(self._pg_only_branch_src())
+        python_job_coverage = {"files": {"m.py": {"executed_lines": [2], "missing_lines": [4]}}}
+        found = ebc.unexecuted(ebc.merge_coverage([python_job_coverage]), tmp_path)
+        assert [b.line for b in found] == [4]
+
+    def test_the_same_branch_reads_covered_once_the_rls_lane_is_merged_in(self, tmp_path):
+        # AFTER: the RLS Tests lane's own coverage.json ran line 4 for real,
+        # against a real trigger refusal. Merging it in must clear the finding
+        # without needing the Python job's own coverage.json to change at all.
+        (tmp_path / "m.py").write_text(self._pg_only_branch_src())
+        python_job_coverage = {"files": {"m.py": {"executed_lines": [2], "missing_lines": [4]}}}
+        rls_lane_coverage = {"files": {"m.py": {"executed_lines": [2, 4], "missing_lines": []}}}
+        found = ebc.unexecuted(
+            ebc.merge_coverage([python_job_coverage, rls_lane_coverage]), tmp_path
+        )
+        assert found == []
+
+    def test_a_line_missing_in_one_report_but_executed_in_another_is_executed(self):
+        merged = ebc.merge_coverage(
+            [
+                {"files": {"m.py": {"executed_lines": [2], "missing_lines": [4]}}},
+                {"files": {"m.py": {"executed_lines": [4], "missing_lines": [2]}}},
+            ]
+        )
+        assert merged["files"]["m.py"]["executed_lines"] == [2, 4]
+        assert merged["files"]["m.py"]["missing_lines"] == []
+
+    def test_a_file_present_in_only_one_report_still_carries_through(self):
+        merged = ebc.merge_coverage(
+            [
+                {"files": {"only_in_a.py": {"executed_lines": [1], "missing_lines": [2]}}},
+                {"files": {"only_in_b.py": {"executed_lines": [5], "missing_lines": []}}},
+            ]
+        )
+        assert set(merged["files"]) == {"only_in_a.py", "only_in_b.py"}
+        assert merged["files"]["only_in_a.py"]["missing_lines"] == [2]
+
+    def test_a_single_report_merges_to_itself(self):
+        # The identity case, asserted explicitly: the default single-`--coverage`
+        # path (unchanged since #956) must behave exactly as before this change.
+        one = {"files": {"m.py": {"executed_lines": [2], "missing_lines": [4]}}}
+        assert ebc.merge_coverage([one]) == one
+
+    def test_no_reports_merges_to_an_empty_files_map(self):
+        assert ebc.merge_coverage([]) == {"files": {}}
+
+
+class TestMainCombinesMultipleCoverageArgs:
+    """`--coverage` repeated on the CLI, end to end through main()."""
+
+    def _write(self, tmp_path: Path, name: str, coverage: dict) -> Path:
+        p = tmp_path / name
+        p.write_text(json.dumps(coverage))
+        return p
+
+    def test_a_single_run_with_only_the_python_jobs_coverage_reports_the_finding(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(ebc, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(ebc, "BASELINE", tmp_path / "absent-baseline.json")
+        (tmp_path / "m.py").write_text(
+            "try:\n    void_invoice()\nexcept DBAPIError:\n    raise Conflict()\n"
+        )
+        cov = self._write(
+            tmp_path,
+            "python-job-coverage.json",
+            {"files": {"m.py": {"executed_lines": [2], "missing_lines": [4]}}},
+        )
+        monkeypatch.setattr("sys.argv", ["x", "--check", "--coverage", str(cov)])
+        assert ebc.main() == 0  # no baseline yet, so it reports rather than fails
+        assert "m.py:4" in capsys.readouterr().out
+
+    def test_passing_both_lanes_coverage_clears_the_pg_only_finding(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(ebc, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(ebc, "BASELINE", tmp_path / "absent-baseline.json")
+        (tmp_path / "m.py").write_text(
+            "try:\n    void_invoice()\nexcept DBAPIError:\n    raise Conflict()\n"
+        )
+        python_cov = self._write(
+            tmp_path,
+            "python-job-coverage.json",
+            {"files": {"m.py": {"executed_lines": [2], "missing_lines": [4]}}},
+        )
+        rls_cov = self._write(
+            tmp_path,
+            "rls-coverage.json",
+            {"files": {"m.py": {"executed_lines": [2, 4], "missing_lines": []}}},
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            ["x", "--check", "--coverage", str(python_cov), "--coverage", str(rls_cov)],
+        )
+        assert ebc.main() == 0
+        out = capsys.readouterr().out
+        assert "m.py:4" not in out
+        assert "unexecuted error branches: 0" in out
+
+    def test_a_missing_extra_coverage_path_is_noted_but_not_fatal(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(ebc, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(ebc, "BASELINE", tmp_path / "absent-baseline.json")
+        (tmp_path / "m.py").write_text("try:\n    f()\nexcept OSError:\n    g()\n")
+        cov = self._write(
+            tmp_path,
+            "coverage.json",
+            {"files": {"m.py": {"executed_lines": [2, 4], "missing_lines": []}}},
+        )
+        never_written = tmp_path / "rls-coverage.json"
+        monkeypatch.setattr(
+            "sys.argv",
+            ["x", "--check", "--coverage", str(cov), "--coverage", str(never_written)],
+        )
+        assert ebc.main() == 0
+        err = capsys.readouterr().err
+        assert str(never_written) in err
+        assert "not found" in err
+
+
 @pytest.mark.skipif(
     not ebc.BASELINE.is_file(),
     reason=(

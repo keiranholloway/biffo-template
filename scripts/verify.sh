@@ -242,6 +242,14 @@ SKIPPED=""
 # repo demonstrably has -- absence and blindness reading identically is the
 # defect, not a formatting nit.
 NOT_RUN=""
+# Checks that DID run but could not produce a verdict -- kept apart from
+# FAILED because "cannot tell" and "found something wrong" are different
+# facts, and #703 recorded the cost of rendering them the same: a killed
+# pg-test lane printed `verify failed: pg-test` naming no failing test, and
+# sent the reader hunting a bug that was never there. Same convention
+# `wait-for-checks.sh` and `branch-health.sh` already use: a distinct bucket,
+# a distinct exit code (2), and it is NEVER treated as a pass.
+INCONCLUSIVE=""
 # Defined up here, not inside run_check. `run_check` returns EARLY in --list
 # mode, before it would set this -- so `pytest_record "$d" "$LAST_CHECK_SECONDS"`
 # read an unset variable and `set -u` killed the script silently, mid-list.
@@ -411,8 +419,27 @@ else
   NO_CI=1
 fi
 
-if [ -n "$CI_YML_UNREADABLE" ]; then
-  printf '\n\033[31mverify: CANNOT TELL - .github/workflows/ci.yml exists but could not be read\033[0m\n'
+# release-guards.yml (#1319): the "Release Guards" job's own trigger needed
+# `edited` added to it (so a PR title/body correction re-evaluates
+# automatically), and giving that trigger to the WHOLE build matrix in
+# ci.yml would re-run every heavy job on every description tweak -- so the
+# job moved to this second file instead (see that file's own header). Its
+# absence does NOT mean "no CI to mirror" -- ci.yml alone is still a real CI
+# and NO_CI must not fire just because a repo has not adopted the split (a
+# sibling never will; an instance not yet upgraded past #1319 has not yet).
+# But if it EXISTS and cannot be READ, that is the identical #1218 shape as
+# ci.yml itself, and ci_has() must search it too or "practices-monotonic"
+# (moved into it) would silently stop being locally mirrored the moment it
+# left ci.yml -- covered less than verify.sh claims, with nothing saying so.
+RELEASE_GUARDS_YML_UNREADABLE=""
+if [ -f .github/workflows/release-guards.yml ] && [ ! -r .github/workflows/release-guards.yml ]; then
+  RELEASE_GUARDS_YML_UNREADABLE=1
+fi
+
+if [ -n "$CI_YML_UNREADABLE" ] || [ -n "$RELEASE_GUARDS_YML_UNREADABLE" ]; then
+  printf '\n\033[31mverify: CANNOT TELL - a core workflow file exists but could not be read\033[0m\n'
+  [ -n "$CI_YML_UNREADABLE" ] && printf '  .github/workflows/ci.yml\n'
+  [ -n "$RELEASE_GUARDS_YML_UNREADABLE" ] && printf '  .github/workflows/release-guards.yml\n'
   printf 'Permissions, a partial checkout, or a filesystem error -- not "no CI to\n'
   printf 'mirror" (that is a missing ci.yml, handled separately, and does not\n'
   printf 'block). Every check gated on ci_has() would silently be skipped and the\n'
@@ -424,7 +451,8 @@ fi
 
 ci_has() {
   [ -n "${NO_CI:-}" ] && return 0
-  grep -qE "$1" .github/workflows/ci.yml
+  grep -qE "$1" .github/workflows/ci.yml && return 0
+  [ -f .github/workflows/release-guards.yml ] && grep -qE "$1" .github/workflows/release-guards.yml
 }
 
 have_script() {
@@ -637,14 +665,28 @@ fi
 # assertion failure on a feature branch that a local run would have caught. The
 # gate simply did not run it: `verify.sh` had no reference to Postgres in any
 # form, so a required check that costs a full CI round trip had no local
-# counterpart. Measured on tabsii-platform: schema build ~2s, 310 tests ~28s.
+# counterpart.
 #
 # The budget is deliberately its own, and larger than pytest's. `pytest_is_fast`
 # excludes a suite over 15s because a slow unit suite slows every push for a
 # class of failure the fast checks mostly catch first; this lane is the opposite
-# trade -- it is the ONLY local sight of a required check, and 30s against a
-# ~7-minute CI round trip pays for itself the first time it fires.
-PG_TEST_BUDGET_SECONDS="${BIFFO_VERIFY_PG_BUDGET:-120}"
+# trade -- it is the ONLY local sight of a required check, and paying tens of
+# seconds against a ~7-minute CI round trip pays for itself the first time it
+# fires.
+#
+# Re-measured 2026-08-06 (#703): tabsii-platform's lane had grown from the
+# 310 tests / ~28s this number was originally chosen against to 791-805 tests
+# in one day, and six consecutive runs came in at 93, 101, 105, 107, 107, 108s
+# -- against the 120s budget that left as little as 12s of margin, and
+# shrinking with every test the suite gains. Doubled to 240s, the same
+# doubling this file already suggests as the retry (below) -- comfortable
+# headroom today, and re-measure this comment again once it stops being so.
+#
+# Raising the number was the smaller half of that fix and it does not scale: a
+# lane growing 310 -> 946 tests in four days outruns any constant. The other
+# half is below -- the lane now runs CONCURRENTLY where it safely can, which is
+# what actually bends the curve.
+PG_TEST_BUDGET_SECONDS="${BIFFO_VERIFY_PG_BUDGET:-240}"
 PG_TEST_DSN="${BIFFO_TEST_PG_DSN:-${TABSII_TEST_PG_DSN:-}}"
 
 # `.claude/worktrees` is excluded alongside `.worktrees`, and finding out why
@@ -666,10 +708,113 @@ pg_test_modules() {
 # success. A green gate that ran nothing is the exact shape this whole lane
 # exists to end, so the summary line is asserted rather than trusted -- the same
 # assertions its CI workflow makes, for the same reason.
+
+# Run the lane concurrently where that is safe, serially where it is not.
+#
+# ## Why the lane can be shared at all
+#
+# It runs against ONE database. Most modules tolerate that because each owns a
+# distinct tenant UUID namespace and its own Postgres role -- which is the same
+# property that makes them safe to run beside each other. A minority are not:
+# they perform DDL with fixed object names, or they sweep `pg_class` /
+# `information_schema` and assert over every table, so they see rows another
+# module created. Those declare `pytest.mark.serial` and run in a second pass.
+#
+# `--dist loadfile` is load-bearing, not a tuning knob: it keeps every test in
+# a file on ONE worker, so a module's fixtures and its tenant namespace stay
+# within a single process. Splitting by test would break exactly the isolation
+# this relies on.
+#
+# ## Why it degrades rather than fails when xdist is absent
+#
+# `pytest-xdist` is declared beside pytest, so a synced repo has it. A repo
+# that has not re-synced does not, and `-n` would then abort the whole lane
+# with a usage error -- a gate failing over its own dependency rather than over
+# the code, which is the fail-closed nuisance that teaches people to reach for
+# BIFFO_SKIP_VERIFY. It falls back to one undivided pass and says so, which is
+# correct and merely slower.
+pg_xdist_ready() {
+  uv run --directory "$1" python -c "import xdist" >/dev/null 2>&1
+}
+
 pg_test_run() {
   _out="/tmp/biffo-verify-pg.$$"
-  if ! TABSII_TEST_PG_DSN="$PG_TEST_DSN" BIFFO_TEST_PG_DSN="$PG_TEST_DSN" \
-    timeout "$PG_TEST_BUDGET_SECONDS" uv run --directory "$1" pytest -q $2 >"$_out" 2>&1; then
+  _pg_started=$(date +%s)
+
+  if pg_xdist_ready "$1"; then
+    TABSII_TEST_PG_DSN="$PG_TEST_DSN" BIFFO_TEST_PG_DSN="$PG_TEST_DSN" \
+      timeout "$PG_TEST_BUDGET_SECONDS" uv run --directory "$1" \
+      pytest -q -m 'not serial' -n auto --dist loadfile $2 >"$_out" 2>&1
+    _pg_rc=$?
+
+    # Only if the parallel pass actually passed. A failure there is the answer
+    # already, and running the serial pass on top would append a second summary
+    # line that the "did it exercise anything" grep below would happily match.
+    if [ "$_pg_rc" -eq 0 ]; then
+      _pg_left=$((PG_TEST_BUDGET_SECONDS - ($(date +%s) - _pg_started)))
+      [ "$_pg_left" -lt 10 ] && _pg_left=10
+      TABSII_TEST_PG_DSN="$PG_TEST_DSN" BIFFO_TEST_PG_DSN="$PG_TEST_DSN" \
+        timeout "$_pg_left" uv run --directory "$1" \
+        pytest -q -m serial $2 >>"$_out" 2>&1
+      _pg_rc=$?
+      # pytest exits 5 for "no tests collected", which is the CORRECT outcome
+      # in a repo where nothing is marked serial yet. Treating it as a failure
+      # would make this change break every such repo on adoption.
+      [ "$_pg_rc" -eq 5 ] && _pg_rc=0
+    fi
+  else
+    # A FLAG rather than a printf, because this function's whole output is
+    # redirected to a temp file the call site prints only when the lane FAILS.
+    # Printing here would make the one case that most needs saying -- the lane
+    # passed, but slowly and un-split -- the one case nobody ever sees.
+    PG_XDIST_MISSING=1
+    TABSII_TEST_PG_DSN="$PG_TEST_DSN" BIFFO_TEST_PG_DSN="$PG_TEST_DSN" \
+      timeout "$PG_TEST_BUDGET_SECONDS" uv run --directory "$1" pytest -q $2 >"$_out" 2>&1
+    _pg_rc=$?
+  fi
+
+  _pg_elapsed=$(($(date +%s) - _pg_started))
+
+  # `timeout` exits 124 when it kills the command (137 if SIGKILL was needed).
+  # Reported apart from a real failure, because they are different facts and
+  # this gate used to render them identically: a killed run printed
+  # `verify failed: pg-test` with NO failing test named, which reads exactly
+  # like a defect and sends the reader hunting one. It happened on
+  # tabsii-platform (#703) -- the same push succeeded on retry, unchanged.
+  #
+  # Same discipline as `wait-for-checks` and the dependency audits: "could not
+  # determine" must never wear the clothes of "found something wrong" -- and
+  # since that discipline is a distinct EXIT STATUS everywhere else in this
+  # estate (2 = cannot tell, never a pass), not just a distinct message, this
+  # returns 2 rather than 1. The message alone was #1346's fix; it left the
+  # exit code lumped in with a real failure because `run_check`'s generic
+  # caller only sees pass/fail -- the pg-test call site below now reads this
+  # return value directly instead of going through it, precisely so a timeout
+  # can carry its own status without teaching every OTHER check (ruff, pyright,
+  # bandit, pytest, terraform fmt, ...) that exit 2 means something different
+  # from a real failure, when several of those tools already use 2 for their
+  # OWN internal errors.
+  if [ "$_pg_rc" -eq 124 ] || [ "$_pg_rc" -eq 137 ]; then
+    echo "TIMED OUT after ${_pg_elapsed}s (budget ${PG_TEST_BUDGET_SECONDS}s)."
+    echo ""
+    echo "This is INCONCLUSIVE, not a failing test: the lane was killed partway,"
+    echo "so nothing below is a verdict on your change. Do not go looking for a"
+    echo "bug on this evidence."
+    echo ""
+    echo "Most likely the lane has simply outgrown its budget. Re-run with more:"
+    echo "  BIFFO_VERIFY_PG_BUDGET=$((PG_TEST_BUDGET_SECONDS * 2)) sh scripts/verify.sh"
+    echo ""
+    echo "If that passes, raise PG_TEST_BUDGET_SECONDS rather than living with a"
+    echo "gate that fails at random -- and re-measure the comment above it, which"
+    echo "records what the lane cost when the number was last chosen."
+    echo ""
+    echo "Partial output before the kill (NOT a result):"
+    tail -15 "$_out"
+    rm -f "$_out"
+    return 2
+  fi
+
+  if [ "$_pg_rc" -ne 0 ]; then
     cat "$_out"
     rm -f "$_out"
     return 1
@@ -686,6 +831,13 @@ pg_test_run() {
     tail -5 "$_out"
     rm -f "$_out"
     return 1
+  fi
+  # A pass with almost no headroom is the state just before the confusing
+  # failure above, and it is silent unless somebody says so. 80% is early
+  # enough to act on and rare enough not to become noise.
+  if [ "$((_pg_elapsed * 100))" -gt "$((PG_TEST_BUDGET_SECONDS * 80))" ]; then
+    printf '\033[33m  note: pg-test took %ss of a %ss budget -- raise PG_TEST_BUDGET_SECONDS before it starts timing out at random.\033[0m\n' \
+      "$_pg_elapsed" "$PG_TEST_BUDGET_SECONDS"
   fi
   rm -f "$_out"
   return 0
@@ -737,6 +889,39 @@ elif [ -z "$PG_TEST_DSN" ]; then
       "CI runs these as a required check; nothing local is checking them."
     printf '       \033[90m%s\033[0m\n' \
       "set BIFFO_TEST_PG_DSN, or run scripts/pg-test-db.sh if this repo ships one"
+
+    # --- Block on a relevant diff (tabsii-platform#656) --------------------
+    #
+    # The line above is honest -- it says NOT RUN, not passing -- but that is
+    # not enough on its own: it does not block, and a wall of green `OK` lines
+    # trains a reader not to weight one amber line correctly. It surfaced on a
+    # push that was ENTIRELY RLS policy DDL, exactly the diff this lane exists
+    # to check.
+    #
+    # `BIFFO_PGTEST_DIFF_RELEVANT` is set by `.githooks/pre-push`, never by a
+    # developer -- it is the hook's answer to "does this push touch
+    # db/imports/** or a *_pg.py module?", computed from the actual ref list
+    # via `scripts/pgtest-diff-check.sh`. A plain `sh scripts/biffo.sh verify`
+    # run by hand therefore stays advisory, exactly as before: this variable is
+    # only ever present when the hook itself decided the diff warranted it.
+    #
+    # `BIFFO_SKIP_PGTEST` is checked again here, not only in the hook, so this
+    # is provable by driving verify.sh directly (see verify-pg-lane.test.ts)
+    # and so a developer who sets it before invoking verify.sh by hand gets the
+    # same escape hatch the hook advertises.
+    if [ -n "${BIFFO_PGTEST_DIFF_RELEVANT:-}" ] && [ -z "${BIFFO_SKIP_PGTEST:-}" ]; then
+      FAILED="$FAILED pg-test-required"
+      printf '\n'
+      printf '  \033[31mBLOCKED\033[0m: this push touches db/imports/** or a *_pg.py module, and\n'
+      printf '  the pg-test lane above did not run. CI treats it as a required check, so a\n'
+      printf '  push here would report green without having checked the thing most likely\n'
+      printf '  to need it.\n\n'
+      printf '  Get a DSN and re-run:\n'
+      printf '    eval "$(sh scripts/pg-test-db.sh --export)"   # if this repo ships one\n'
+      printf '    export BIFFO_TEST_PG_DSN=postgresql+asyncpg://user:pass@host:port/db\n\n'
+      printf '  Deliberate escape hatch, printed rather than silent (AGENTS.md section 7):\n'
+      printf '    BIFFO_SKIP_PGTEST=1 git push ...\n\n'
+    fi
   fi
 elif ! command -v uv >/dev/null 2>&1; then
   skip pg-test "uv not installed"
@@ -753,8 +938,48 @@ else
     skip pg-test "no pyproject.toml above the Postgres modules"
   else
     _pg_rel=$(echo "$_pg_modules" | sed "s|^$_pg_dir/||" | tr '\n' ' ')
-    # shellcheck disable=SC2086
-    run_check pg-test pg_test_run "$_pg_dir" "$_pg_rel"
+    # Not a plain `run_check` call: `pg_test_run` returns THREE states (0 pass,
+    # 1 real failure, 2 timed out/inconclusive -- see its own comment), and
+    # `run_check` only ever sees pass/fail, so routing through it would collapse
+    # a timeout back into FAILED and reproduce the exact #703 defect this whole
+    # change exists to fix. This reads the return code directly instead.
+    if [ -n "$LIST" ]; then
+      # shellcheck disable=SC2086
+      echo pg_test_run "$_pg_dir" "$_pg_rel"
+    else
+      _pg_check_start=$(date +%s)
+      # shellcheck disable=SC2086
+      pg_test_run "$_pg_dir" "$_pg_rel" >"/tmp/biffo-verify-pg-check.$$" 2>&1
+      _pg_check_rc=$?
+      _pg_check_elapsed=$(($(date +%s) - _pg_check_start))
+      case "$_pg_check_rc" in
+        0)
+          PASSED="$PASSED pg-test"
+          printf '  \033[32mOK\033[0m   %-16s %ss\n' "pg-test" "$_pg_check_elapsed"
+          ;;
+        2)
+          # Cannot tell -- never a pass, and deliberately never FAILED either.
+          # pg_test_run's own output already explains why and how to re-run,
+          # so it is printed in full here rather than truncated the way a
+          # genuine failure's output is below.
+          INCONCLUSIVE="$INCONCLUSIVE pg-test"
+          printf '  \033[33mINCONCLUSIVE\033[0m %-16s %ss\n' "pg-test" "$_pg_check_elapsed"
+          sed 's/^/      /' "/tmp/biffo-verify-pg-check.$$"
+          ;;
+        *)
+          FAILED="$FAILED pg-test"
+          printf '  \033[31mFAIL\033[0m %-16s %ss\n' "pg-test" "$_pg_check_elapsed"
+          sed 's/^/      /' "/tmp/biffo-verify-pg-check.$$" | tail -25
+          ;;
+      esac
+      if [ -n "${PG_XDIST_MISSING:-}" ]; then
+        printf '       \033[33m%s\033[0m\n' \
+          "pytest-xdist is not installed, so the lane ran in one undivided pass"
+        printf '       \033[90m%s\033[0m\n' \
+          "re-run 'uv sync' to get the parallel pass back (biffo-template#703)"
+      fi
+      rm -f "/tmp/biffo-verify-pg-check.$$"
+    fi
   fi
 fi
 
@@ -1011,6 +1236,22 @@ if [ -n "$FAILED" ]; then
   printf 'Fix these here - CI will find them anyway, three minutes and a merge race later.\n'
   printf 'Most format failures are one command: pnpm run format\n\n'
   exit 1
+fi
+if [ -n "$INCONCLUSIVE" ]; then
+  # A real FAILED above always wins this race -- it is the more actionable
+  # fact and must not be buried under a lane that merely ran out of time. Only
+  # once nothing genuinely failed does "could not tell" get to speak for the
+  # whole run, and even then it is never a pass: same three-valued contract as
+  # `wait-for-checks.sh` and `branch-health.sh` (0 green, 1 failed, 2 cannot
+  # tell), and `cli/src/lib/packaged-script-command.ts` already promises every
+  # script reached through `scripts/biffo.sh` passes its exit code through
+  # unchanged -- so this is not a new contract, it is this file finally
+  # keeping the one that already existed.
+  printf '\033[33mverify inconclusive:\033[0m%s\n' "$INCONCLUSIVE"
+  printf 'Not a failure -- the lane above could not produce a verdict (see its own\n'
+  printf 'output, printed above, for why and what to do about it). Do not go\n'
+  printf 'looking for a bug on this evidence; re-run once the cause is addressed.\n\n'
+  exit 2
 fi
 if [ -z "$PASSED" ]; then
   # "Nothing applicable ran" is a different outcome from "checks passed", and

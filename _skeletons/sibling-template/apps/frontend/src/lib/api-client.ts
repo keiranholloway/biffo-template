@@ -30,9 +30,22 @@ export class ApiError extends Error {
  * - **Parsed, never assumed.** A non-JSON body (a proxy timeout page, a
  *   CloudFront error), or JSON with no `detail`, falls back to the raw text
  *   unchanged — so this can never hide information the caller had before.
- * - **A non-string `detail` also falls back.** FastAPI's own 422 makes
- *   `detail` a list of field errors; picking something out of it would just
- *   move the problem rather than fix it.
+ * - **A dict `detail` carrying a string `message` unwraps to that message.**
+ *   Core's generic CRUD layer answers an integrity error with
+ *   `{"detail": {"message": "...", "constraint": "..."}}`
+ *   (`routing/crud_handlers._integrity_error_response`). Until this rule
+ *   existed here, a sibling whose BFF had already unwrapped this shape
+ *   (`core_client.py`) still rendered the raw JSON blob in the browser,
+ *   because this layer only knew how to unwrap a *string* `detail`
+ *   (biffo-template#1350). `constraint` is deliberately dropped, not
+ *   appended — it is a database object name, which is schema
+ *   reconnaissance (tabsii-platform#473) and says nothing to the person
+ *   reading the sentence.
+ * - **Any other non-string, non-message-bearing `detail` still falls
+ *   back.** FastAPI's own 422 makes `detail` a list of field errors, and a
+ *   dict `detail` with no `message` key is a shape nobody has declared —
+ *   picking something out of either would move the problem rather than fix
+ *   it.
  *
  * The one addition over the Python version: an empty body yields the HTTP
  * status text, because a browser rendering `''` shows the user nothing at all.
@@ -66,10 +79,25 @@ function parsedDetail(body: string): string | null {
   }
   if (typeof parsed === 'object' && parsed !== null && 'detail' in parsed) {
     const { detail } = parsed
-    // A non-string `detail` also falls back. FastAPI's own 422 makes it a list
-    // of field errors; picking something out of it would move the problem
-    // rather than fix it.
     if (typeof detail === 'string') return detail
+    // A dict `detail` carrying a string `message` unwraps to that message —
+    // the browser-side twin of `_extract_detail`'s identical rule in
+    // core_client.py (biffo-template#1350). `constraint` is deliberately
+    // dropped, not appended: it is a database object name (schema
+    // reconnaissance, tabsii-platform#473) and says nothing to the person
+    // reading the sentence. Only the declared `message` key is trusted — a
+    // dict `detail` with anything else (no `message`, or a non-string one),
+    // or a non-dict non-string `detail` (FastAPI's own 422 makes it a list
+    // of field errors), falls through to the raw text below rather than
+    // inventing a summary from a shape nobody has declared.
+    if (
+      typeof detail === 'object' &&
+      detail !== null &&
+      !Array.isArray(detail) &&
+      typeof (detail as { message?: unknown }).message === 'string'
+    ) {
+      return (detail as { message: string }).message
+    }
   }
   return null
 }
@@ -223,6 +251,22 @@ let renewedTokenCache: { staleToken: string; freshToken: string } | null = null
 export function __resetRenewedTokenCacheForTests(): void {
   renewedTokenCache = null
 }
+
+/**
+ * What `createApiClient` returns. Named so components can accept a client as a
+ * prop without re-deriving the shape (`ReturnType<typeof createApiClient>`
+ * spelled out at every call site drifts the moment the client gains a method).
+ *
+ * Backported from `tabsii-crm`, which added it and then could not receive this
+ * file: `filesIfPresent` distributes the skeleton's copy verbatim, so a sync
+ * would have deleted an export three of its components import and broken the
+ * build. Caught by the sync rehearsal on 2026-08-06 rather than in fourteen
+ * repos afterwards.
+ *
+ * The rule that applies (AGENTS.md, and biffo-template#1198's hard-won version):
+ * a file an instance is merely AHEAD on is backported, never overwritten.
+ */
+export type ApiClient = ReturnType<typeof createApiClient>
 
 export function createApiClient(
   getIdToken: () => string | null,

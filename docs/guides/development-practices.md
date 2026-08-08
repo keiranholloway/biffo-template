@@ -301,6 +301,8 @@ shape recurring across unrelated components is a design problem, not bad luck.
 | [#1244](https://github.com/keiranholloway/biffo-template/issues/1244) | **The plugin skeleton ships a `terraform/` module and a `ci.yml` with no terraform step, so every plugin repo is born with Terraform nothing checks.** `biffo-plugin-idea-scout` is the live instance: 3 `.tf` files, zero terraform references across all three workflows. **#1239 cannot cover this**, and correctly does not try — the local check is guarded by `ci_has "terraform fmt"` so a template-shipped gate never asserts over more than the repo's own CI (the #325 trap), so a repo whose CI checks nothing gets nothing locally either and the hole stays open. The two halves must move together. Also not a copy problem: `ci.yml` is deliberately outside the one-way-overwrite set because the path depends on each step's `working-directory`, so the mechanism has to be a **`ci-wiring-audit` assertion** — *a repo holding `terraform/*.tf` must have a `terraform fmt` step* — rather than a file | **fail-open** · drift | biffo-plugin-idea-scout, found sweeping for #1239 | biffo-template `_skeletons/` + `ci-wiring-audit`; backfill [biffo-plugin-idea-scout#101](https://github.com/keiranholloway/biffo-plugin-idea-scout/issues/101) | **open** |
 | [#1245](https://github.com/keiranholloway/biffo-template/issues/1245) | **FOURTH occurrence of the lexical-closing-keyword trap — and the finding is no longer the trap, it is that the recorded remedy was a _practice_ and a practice did not hold.** A PR body reading `**Does not close #1021.**` closed #1021 on merge. Proved, not assumed: squash commit `a7797a5` contains only `Refs #1021`, and the timeline attributes the close to that commit, so it came from the **body**; a later deliberate `gh issue close` reported "already closed". This is mechanically identical to the `tabsii-crm#133` row above — same denial-shaped phrase, same `Refs`-only commit, same outcome — which was itself logged as the *third* vector after tabsii-platform#76. **That row's recorded fix reads `practice — never write a closing keyword in prose`.** Today an agent with this very page available did it again. `check-closing-keywords.mjs` is **not** at fault and correctly stayed silent: it asks whether a PR closes an issue only provable on deploy, and fires only on `infra/`, `.github/workflows/`, `apps/portal/` etc., none of which #1238 touched | **process** · drift | biffo-template [#1238](https://github.com/keiranholloway/biffo-template/pull/1238) PR body | biffo-template — extend the guard with a **negated-keyword** check on *every* path | **open** — detection needs no intent inference and is false-positive-free: a negation immediately before a closing keyword means the prose asserts the opposite of what GitHub will do |
 | [#1246](https://github.com/keiranholloway/biffo-template/issues/1246) | **`wait-for-checks` waited out ten-plus minutes on a PR whose checks could never appear.** #1243 was pushed while #1241 was merging a restructure of the same file; the PR went `mergeable=CONFLICTING`, and **GitHub creates no check runs for a PR it cannot compute a merge commit for**. `gh pr checks` reported "no checks reported"; the script printed "Waiting on 5 required check(s)" indefinitely — output identical to the legitimate "CI has not started yet" case. One field settles it. **Worse than the wasted wait:** AGENTS.md §6 documents the superficially similar "GitHub sometimes creates no run" case and prescribes `workflow_dispatch`, which is *actively wrong* here — the problem is an uncomputable merge, not a missing trigger, so following the documented remedy costs more time | **visibility** · process | biffo-template #1243, while landing #1239 | biffo-template `scripts/wait-for-checks.sh` + AGENTS.md §6 | **open** — the script is *right* to wait on a positive signal; the fix is to fail **fast** with the reason (exit 2 on `CONFLICTING`, keep waiting on `UNKNOWN`, which GitHub returns transiently) |
+| [tabsii-platform#573](https://github.com/tabsii-com/tabsii-platform/issues/573) | **A projection and the fetch it advertises are computed from two different tables with two different RLS policies, so the projection can promise a resource the very next call refuses — with both queries locally correct and nothing going red.** `has_material` came from `lessons.media_asset_id IS NOT NULL`, which needs no `media_assets` visibility at all, while the fetch joined `media_assets`, whose policy required a permission code learners deliberately do not hold — `tabsii.lessons` had been given learner-reachable RLS disjuncts (modules 074, 077) but `tabsii.media_assets` never was, so a learner could see the *lesson* but not the *file attached to it*. `GET /api/v1/lessons/{id}/material-url` 404'd for every learner, video and document alike, so LMS feature FR-LMS-01 was non-functional for its only audience, and the UI rendered a "Watch video" button that 404'd on click. Also worth generalising from the same defect: **a table gaining a new consumer does not inherit that consumer's entitlement model** — `media_assets` is shared by six subsystems, and the LMS became the sixth, the only one whose readers hold no `media_assets.read` | **visibility** | tabsii-platform | tabsii-platform [#575](https://github.com/tabsii-com/tabsii-platform/pull/575) — `db/imports/tabsii/088_media_assets_lesson_material_read.sql` + a 10-case real-Postgres RLS test file | **fixed** |
+| [#1331](https://github.com/keiranholloway/biffo-template/issues/1331) | **A CI-cost saving was quoted at ~90 min/day from the model "remove a job, save its billed minute". The real figure is ~16–50, and on most runs it is zero.** GitHub bills each *job* rounded up to a full minute, so a job doing 37s of work does cost a full minute — but folding it into another job only *recovers* that minute if the **absorbing job has slack ≥ the folded work**, where `slack = 60 - (duration mod 60)`. Otherwise the work spills into a fresh billed minute and nothing is saved. Measured over 90 real runs of each tabsii-platform job: the Terraform absorber ran **117s median with 6s median slack** against 37s of folded work → **0.18 min/run (~16/day)**, while `Secret Scan` → the JS job (9s of work into 34s of slack) would give **0.96 min/run (~86/day)**. **The compounding error:** the job that was *safe* to fold — the only one of the five not a required status check in all 8 repos — was also the **worst absorber in the repo**, and those two properties are unrelated. The constraint was chosen on safety and the result reported as though it had been chosen on economics. Nothing failed, nothing went red, and the wrong number had already been posted to a closed issue and a merged PR body before anyone checked it | **visibility** · process | biffo-template #1331/#1332, distributing to tabsii-platform#664 | biffo-template — method, not code; the shipped change stands and is still correct, only smaller | **corrected** — remeasured from 90 runs, issue comment amended, memory rewritten |
 
 ### What the classes say
 
@@ -494,6 +496,57 @@ there. Neither is evidence about the estate.
 
 
 ## Where the cycles go
+
+### Measured: the cheap part was shipping it; the expensive part was that the number was wrong (2026-08-05)
+
+Consolidating two Terraform CI jobs into one took about 50 minutes end to end and
+went cleanly — 0 conflicts, green first time, distributed to `tabsii-platform`
+and deployed. **The measurement around it cost more than the change, and only
+because the skill was run at the end.**
+
+| Step | Cost | Note |
+| --- | --- | --- |
+| Measuring where the 2,078 min/day actually went | ~15 min | 437 runs, 1,265 jobs, via the jobs API |
+| Building + landing the change (#1332) | ~25 min | worktree → PR → merge, one correction |
+| Distributing to the instance (#664) | ~20 min | mostly waiting on CI + deploy |
+| **Re-deriving the saving after `/biffo-verify`** | **~20 min** | **found the quoted figure was ~5× too high** |
+
+Three loops were structural rather than careless, and each cost real minutes:
+
+- **The billing API returns a broken zero.** `/actions/runs/{id}/timing` reports
+  `billable.UBUNTU.total_ms: 0` while `run_duration_ms` is `199000`. Believing it
+  would have made the whole analysis read "0 minutes everywhere". Cost ~5 min to
+  notice; would have cost the entire session to miss. Compute from the jobs
+  endpoint's `started_at`/`completed_at` instead — that reconciled to **2,078
+  against GitHub's own 2,081**, which is the check that made the rest trustworthy.
+- **`git push` exceeded a 2-minute tool timeout** because the pre-push gate runs
+  the full suite (~40s) ahead of it. The push had **not** landed;
+  `git ls-remote` said so. One re-run at a longer timeout fixed it. The lesson is
+  the one AGENTS.md §4 already states — verify the remote has the commit — and it
+  paid out here for a reason the section does not mention: a *timeout*, not a
+  rejection.
+- **`wait-for-checks` reported FAILURE on a PR GitHub called `CLEAN`.** Cost ~5
+  min of re-reading a four-minute-dead log. Filed as
+  [#1333](https://github.com/keiranholloway/biffo-template/issues/1333) — it
+  evaluates every entry in `statusCheckRollup`, and a re-run *adds* an entry
+  rather than replacing it, so a corrected failure stays visible forever.
+
+**The finding worth keeping** is none of those. It is that a plausible cost model,
+applied without measuring the outcome, produced a confident number that was
+**~5× too high** and was already published in two places before it was checked.
+The model — "each job costs a 1-minute minimum, so removing a job saves a minute"
+— is *half* right, and the missing half is where all the value lives:
+
+> Folding a job recovers its billed minute only if the **absorbing** job has
+> `slack ≥ folded work`, where `slack = 60 - (duration mod 60)`. The gross cost of
+> the job you remove is **not** the saving, and it reads exactly as though it is.
+
+The Terraform absorber had **6s** of median slack against **37s** of folded work,
+so on most runs the saving is **zero**. The same arithmetic says `Secret Scan`
+into the JS job (9s into 34s of slack) is worth **~86 min/day** — five times the
+change that was actually shipped. **The job that was safe to fold and the job
+that was worth folding were different jobs**, and nothing in the analysis
+connected the two until the numbers were re-derived at the end.
 
 ### Measured: the diagnosis was ~10 minutes of querying; the issue had budgeted days of infrastructure (2026-08-03)
 
@@ -975,12 +1028,12 @@ construction, verified in the deployed bytes, is. Worth stating because a
 5-sample "it works now" is exactly the kind of evidence that reads as stronger
 than it is.
 
-**Toil in this half: ~35 min**, none of it the work — the SSH remote
-authenticating as the wrong account (hit again, by me this time, mid-`core
-upgrade`), a `pnpm install` the pre-push gate correctly rejected, and a
-duplicate `const` declaration that made a whole test file fail to load with
-`SyntaxError` while the summary line read `Tests  no tests` — which looks far
-more like a pass than it is.
+**Toil in this half: ~35 min**, none of it the work — a `core upgrade` push
+rejected by the pre-push gate against a tree with no `node_modules` installed
+(misdiagnosed at the time as the SSH remote authenticating as the wrong
+account; it was not — see #1040), and a duplicate `const` declaration that
+made a whole test file fail to load with `SyntaxError` while the summary line
+read `Tests  no tests` — which looks far more like a pass than it is.
 
 ### Measured: verifying a backlog cost 15 minutes and removed 6 issues (2026-07-31)
 
@@ -1020,11 +1073,15 @@ all five and written once, centrally, afterwards — which is the only reason th
 session did not reproduce **#953** five times over.
 
 **What it cost, honestly:** ~30 minutes of the total was toil, none of it the
-work itself — the SSH remote authenticating as the wrong account (every agent hit
-it independently and each rediscovered the HTTPS workaround), five superseded
-`dev` runs read as failures before the `cancel-in-progress` cause was understood,
-and ESLint scanning a gitignored `apps/portal/out/` that a local reproduction
-build had populated, rejecting a push with no hint from `git status`.
+work itself — a `core upgrade` push rejected by the pre-push gate against a
+tree with no installed dependencies (misdiagnosed independently by every agent
+as the SSH remote authenticating as the wrong account; these repos use HTTPS
+remotes with a working credential helper already configured, and the actual
+fix was always installing dependencies before the push, not a credential
+override — corrected in #1040), five superseded `dev` runs read as failures
+before the `cancel-in-progress` cause was understood, and ESLint scanning a
+gitignored `apps/portal/out/` that a local reproduction build had populated,
+rejecting a push with no hint from `git status`.
 
 ### Five defects in one step, priced (2026-07-31)
 
@@ -2078,7 +2135,63 @@ are still a full working day in which **the product did not move**. Two or three
 such days in a row is a pattern worth naming out loud rather than discovering in
 a quarterly.
 
+### No expensive retry loop this time — the notable cost was ~15m of chosen investment, not toil (2026-08-04)
+
+Fixing tabsii-platform#573 had none of the retry/rebuild/redeploy churn the
+rows above are full of. The one cost worth naming is ~15 minutes of deliberate
+measurement work that no gate asked for: seeding 40k `media_assets` and 20k
+`lessons` rows and reading `EXPLAIN ANALYZE` with and without an index, on the
+theory that module 088's new `EXISTS` subquery might be expensive at volume. It
+was — ~240x — and that is the reason the regression did not ship (see *what
+needs more thought*, above).
+
+Label it deliberately: **chosen investment, not toil.** Nothing forced the
+15 minutes; nothing in CI or `verify.sh` would have caught the regression
+either way, so skipping it would have cost nothing *today*. The asymmetry worth
+generalising is the one it exposes: verifying an RLS policy's **correctness**
+is cheap and well-supported — the real-Postgres lane, the fail-first run, ten
+cases in seconds — while verifying its **cost** required hand-built volume and
+has no tooling at all. The first has a lane; the second has a person who
+happened to think of it.
+
 ## What went well — practices that earned their keep
+
+**Check what a required status check is called before you delete the job that
+reports it.** Consolidating CI jobs meant removing job *names*, and job names are
+what branch protection matches against. Reading
+`required_status_checks.contexts` across all 8 protected repos first is what
+reshaped the change: `Secret Scan` and `Terraform Validate & Security` are
+required **everywhere**, `Terraform Validate (infra/environments)` in **none**.
+Removing a required context does not fail loudly — it leaves every PR in the
+estate waiting on a check that can never arrive. The check cost about two minutes
+and moved the work from "fold the biggest job" to "fold the only safe one", which
+is the whole shape of what shipped. (It also *hid* a defect, which is the entry
+in `needs more thought` below — the safe job was the worthless one.)
+
+**A green job is not a job that ran.** After folding two Terraform validations
+into one, the job passed — which proves nothing, because a step guarded by
+`if: !cancelled() && steps.setup.outcome == 'success'` and a missing-directory
+no-op could both have skipped silently and still reported green. Reading the log
+for the *positive* signal settled it in both repos:
+
+```
+== validating infra/environments/dev/ ==
+== validating infra/environments/prod/ ==
+== validating infra/environments/staging/ ==
+```
+
+and confirming the no-op branch never fired. This is §6's rule applied to a
+change that *introduced* a fail-open path rather than one that inherited it —
+the guard was written in the same commit, so nothing but reading its output could
+distinguish "validated three environments" from "found nothing and passed".
+
+**The drift guard caught the thing it was written for, and was proven to.**
+Removing a job broke `status-checks.test.ts`, whose `NOT_REQUIRED` set listed it
+— exactly the "this list cannot rot into a silent excuse" assertion in its own
+docstring. Rather than trust that, the old list was re-run against the new
+workflow and watched to fail (`'Terraform Validate (infra/environments)' is
+excluded but no such job exists`), then restored. That is the difference between
+a guard that fired and a guard that was *observed* firing.
 
 **"When a measurement surprises you, suspect the ruler first" downgraded a
 finding I was one command from filing wrongly (2026-08-03).** Sweeping for
@@ -4203,7 +4316,61 @@ folded upstream **first** (#1192, #1195), each with a guard, and only then was
 the conflict resolved. AGENTS.md §9 calls this "reconcile before you
 distribute"; this is the first time it has been followed rather than cited.
 
+### Binding the right principal is what made the test non-vacuous, and the original verification failed exactly there (2026-08-04)
+
+tabsii-platform#573 had previously been reported verified end to end — upload →
+S3 → `material-url` → real bytes — and that was **true**, performed as Brand
+HQ, which holds `media_assets.read`. The same round trip as a learner 404s. The
+new test file for module 088 therefore carries an explicit
+`test_the_learner_really_holds_no_media_assets_read`, asserting the caller is
+neither a platform admin (`fn_is_platform_admin()` short-circuits) nor a holder
+of the code — so the file cannot silently go vacuous later. An allow-case that
+passes for the wrong reason is indistinguishable from a fix; this is the
+concrete evidence that it was not one.
+
+### The fail-first run discriminated the design, not just the diff (2026-08-04)
+
+With the module 088 policy absent, exactly 3 of 10 new RLS cases failed and 7
+passed — because the refusal cases were already refused before the fix
+existed. That 3-of-10 split is itself the signal that the tests are aimed at
+the right clause: a fail-first run that fails on *all* cases, or on none,
+would not have told us anything about which disjunct was missing.
+
+
+**Proving a guard can fail caught three guards that could not.** Every guard written this session was checked by reverting only the implementation and watching it fail. Three of them did not, and each would have shipped as coverage: a portal seam guard that asked *"is this path under any `userOwned` prefix"* and so matched the broad `apps/` entry, **passing against the exact defect it was written for** (ownership there is longest-prefix-wins, and `apps/` loses to `apps/portal/`); and two sets of test fixtures that passed against the old code because they omitted the very `title`/`body` text the old matcher would have matched. A guard that cannot fail is worse than no guard, because it is trusted — and none of the three would have been caught by review, only by the revert.
+
+**Spot-checking an agent's verdict caught my own broken ruler, not the agent's.** `groom-backlog` says to distrust every surprising agent verdict. An agent reported `auth.ts` reconciled; measuring from working trees gave 6 variants across 7 repos and I was ready to overturn it. Re-measuring from `origin/dev` gave **2**, matching the declared baseline — the 6 was entirely stale local clones, a trap `shared-files.json`'s own note documents. The check was right and my measurement was wrong, which is the reverse of what the rule anticipates and the more dangerous direction.
 ## What needs more thought
+
+**Nothing ranks a CI-cost fix by whether it can actually pay out.** The estate now
+has a documented per-job-minimum problem and five named candidates, and the one
+that shipped turned out to be worth ~16 min/day where another is worth ~86. The
+discriminator — the absorbing job's slack against the folded work — is a two-line
+calculation over data the jobs API already returns, and nothing computes it.
+Worse, the *selection* pressure runs the wrong way: candidates were ranked by the
+gross billed cost of the job being removed, which is the number that looks like a
+saving and is not one. A `--fold-candidates` mode alongside the existing practices
+tooling would make this mechanical; until then every such change is one plausible
+model away from a 5× error.
+
+**The estate has no outcome metric for CI cost at all.** 2,078 min/day was
+measured by hand, once, because someone asked. There is no daily number, so
+nothing would have noticed the burn rate, nothing noticed that a shipped
+"optimisation" moved it by ~1%, and nothing will notice if it regresses. Every
+figure in this session's analysis is a one-off snapshot. Applying this page's own
+test — *what value would make this bad, and is it reachable?* — there is no
+metric here to fail, which is the strongest possible signal that it is missing.
+
+**A safety constraint and a value constraint were conflated, and the write-up
+concealed it.** `Terraform Validate (infra/environments)` was chosen because it
+was the only job whose removal needed no branch-protection change. That is a
+sound reason to pick it. It was then reported with a saving figure as though it
+had been picked on economics — and the two properties are not just independent,
+they were **anti-correlated** here: the unrequired job was the least valuable to
+fold. There is no general fix for this beyond naming it, but the tell is
+recognisable — *the reason I chose this is not the reason I am justifying it* —
+and it is worth looking for whenever a constraint narrows a choice down to one
+option.
 
 **A lesson recorded four times with no mechanism behind it is not a lesson, and
 this page cannot tell the difference.** The lexical-closing-keyword trap has now
@@ -5895,12 +6062,43 @@ an outage in a collector or a distribution channel makes the day look *cheaper*.
 Both of today's items were found by reading logs and running things, not from
 the ranking.
 
+### Nothing guards the DDL module header every module needs (2026-08-04)
+
+`SET search_path TO tabsii, public;` is mandatory at the top of every
+DDL-imported module in tabsii-platform, and nothing checks it is there.
+`services/api/tests/test_ddl_import_conventions.py` parametrises over every
+module and asserts `CREATE POLICY`/`CREATE TABLE`/`CREATE INDEX`/`ADD COLUMN`
+are all guarded for re-appliability — but `grep search_path` over that test file
+returns nothing. Module 034 shipped broken for exactly this reason and needed a
+successor module (035) to fix it, because the importer is checksum-locked and
+an applied module cannot be edited in place. Filed as
+[tabsii-platform#576](https://github.com/tabsii-com/tabsii-platform/issues/576).
+
+### An RLS policy's per-row cost is invisible to every gate (2026-08-04)
+
+Module 088's `EXISTS` subquery joining `lessons` had no index on
+`lessons.media_asset_id`. Measured at 20k lessons, the route's own query ran in
+~25ms with the index and ~6.0s without — roughly 240x — because without it the
+subquery seq-scans `lessons` *and* re-evaluates `lessons_read`'s own
+`fn_authorized` calls across all 20,001 rows. Nothing in CI or `verify.sh`
+would have caught that; it was found only by deliberately seeding volume and
+reading `EXPLAIN ANALYZE`. There is no gate, and no convention, requiring a new
+RLS subquery to name its supporting index.
+
+
+**Documentation did not prevent a documented trap — three times in one day.** Reading a local ref or working tree as remote truth is recorded in `shared-files.json`'s `mustBeUniformNote` and inline in `scripts/shared-sync.sh`. It still produced a phantom 6-variant divergence, a **public issue wrongly stating a colleague had never pushed** work whose PR had merged eleven minutes earlier, and a ratchet that failed on the file it had just shipped because the file was still untracked when it was verified. Instance 3 happened *after* I had written the lesson down twice that same day. Only the first was fixed structurally (the enumeration now reads refs by construction); the general habit is still discipline, and discipline demonstrably does not hold. The open question is what a structural fix even looks like for *ad-hoc* measurement — the one-off `for r in ~/code/*; do md5sum` loop written to check a hunch is where it recurs, and no tool owns it.
+
+**I reported to the operator before verifying, twice, and that is a different failure from getting the work wrong.** Most of the day's errors were caught by the verification steps and cost only rework. Two were not: I said a PR "just needed a merge" when it was red (I had checked commit *count* after an `--amend`, which by definition cannot change, so the check could not detect the amend had failed), and I filed #1295 asserting a colleague had not pushed. Both were **claims made to a person**, not code, and neither had a gate in front of it. The estate has extensive machinery for not shipping wrong code and none for not stating wrong things. The cheap rule that would have caught both: *before reporting a state, run the command that reads that state* — `git rev-parse HEAD` rather than a commit count, `gh pr list --head` rather than a local ref comparison.
+
+**A claim token has to be passed by hand to every delegated agent.** `claim.sh --as <token>` now lets a delegate recognise its orchestrator's reservation, which removes the stall that produced nothing from a correctly-behaving agent. But the dispatcher must remember to include the token in every brief, which is the same "hand-maintained second copy of a decision" that `claim.sh`'s own header argues against, and exactly how the `in-progress` label came to be missing in 12 of 16 repos. Nothing detects a dispatch that forgot it; the symptom is silence.
 ## Skills used
 
 Skills cannot be iterated on impressions. Every invocation, with an honest outcome.
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `biffo-verify` | **worked — and it was the only reason a 5× wrong number did not stand** | Invoked *after* the change had shipped and been distributed, as a capture exercise. Its opening rule — "green is not evidence" — read as a prompt to re-examine the one claim nothing had tested: **"~90 min/day saved"**. Everything about that number looked safe (measured inputs, arithmetic anyone would accept, a green PR, a verified deploy), and it was ~5× too high, because folding a job only recovers its billed minute when the absorbing job has slack ≥ the folded work. §6's *"when a measurement surprises you, suspect the ruler first"* is the nearest fit and is not quite it — nothing surprised me; the number was exactly what I expected, which is why it survived. **Suggested addition to §6:** a figure you *predicted* rather than measured deserves the same scrutiny as one that surprised you — arguably more, because agreement with your own model is not evidence. §6's blind-zero rule also fired earlier and cleanly, on `billable.UBUNTU.total_ms: 0` beside `run_duration_ms: 199000`. |
+| `biffo-workflow` | **worked — Step 4.5 caught a false claim in my own comment, and Step 6 caught a real one in the estate** | Ran end to end for #1332. **Step 4.5** (read your own diff before opening the PR) found the job-header comment asserting "every step runs under `!cancelled()`" when the first `fmt` step deliberately carries no `if:` and the real condition also gates on `steps.setup.outcome` — a false premise about my own code, in the file I had just written, invisible to every test. **Step 6** is where the skill paid for itself twice: verifying required contexts before merging surfaced that `wait-for-checks` disagreed with GitHub ([#1333](https://github.com/keiranholloway/biffo-template/issues/1333)). One real gap: the skill's Step 3/5 discipline covers closing keywords in the **PR body** and re-checks it, but my *first commit message* still said `Closes #1331`, which is what the squash body inherits — the issue closed behind a green `Release Guards` ([#1334](https://github.com/keiranholloway/biffo-template/issues/1334)). Step 5 should say plainly: **grep the commit messages too, not just the body you are about to edit.** |
 | `biffo-verify` | **worked — §6's "suspect the ruler first" stopped a wrong issue reaching GitHub** | Invoked at the end of the #1021 session. Its highest-value moment was retroactive but decisive: `ls .github/workflows/` in both fleet checkouts returned empty, and an issue asserting "these repos have no terraform checking at all" was already drafted. §6's instruction to distrust a surprising measurement before the subject sent me to `gh api …?ref=dev`, which returned `ci.yml` running `terraform fmt -check -recursive terraform/` — the checkouts were parked on `main`. The filed finding changed from "unguarded repos" to "a local-gate blind spot", which is narrower, true, and fixes something different. §3 also fired cleanly: the scratch repo with a misformatted `terraform/bad.tf` proved the *old* gate passed it, which is the half that actually evidences #1243. §1 stopped work on a non-existent issue (#1250). Its §8 is, as ever, the only reason any of this is written down. |
 | `biffo-workflow` | **not invoked — and it should have been, three times** | Every unit of work in this session (#1238, tabsii-runners#41, #1243) followed AGENTS.md by hand: fresh worktree off a fetched `origin/dev`, `pnpm install`, claim before starting, unpiped `git push; echo $?`, `wait-for-checks`, `branch-health` after merge. It mostly went right, and the two places it went wrong are the two the skill exists to prevent. **First**, I skipped `pnpm install` in the #1239 worktree and the gate failed on `prettier: not found` / `turbo: not found` — AGENTS.md §1 says install *before working*, and the skill's step order enforces it where habit did not. **Second**, and worse: PR #1238's body carried `Does not close #1021`, which closed the issue on merge (#1245). **Why it was missed:** the session began as "work on 1021" — framed as investigation, not as "make a change" — so no workflow trigger matched, and by the time there was a change to land I was already mid-flight and running the steps from memory. Suggested trigger addition: **an investigation that produces a diff has become a change**, and the skill should be invoked at that transition rather than only when a request opens with "start a change". |
 | `biffo-verify` | **worked — invoked at the end of a long session, retroactively, and its §8 was the only reason any of this got written down** | Rolling `@tabsii-com/ui` out across four sibling repos (tabsii-platform#508/#534) was done without invoking the skill by name once, yet §2 ("reproduce by the reporter's route"), §4 ("verify the deployed artifact"), and §7 ("say what you did not verify") were all applied throughout on habit — live `curl`s against every merge, an explicit deferred-scope note in the `tabsii-marketplace` PR body about why `NavBar`→`TopBar` was not done. The session correctly self-corrected twice mid-flight without the skill: once by proactively granting `tabsii-geo` package access before its first CI run (having been burned reactively on `tabsii-lms`), once by tracing a `basePath` bug back through two already-merged, already-deployed PRs rather than patching only the repo it was found in. None of that got **recorded** until this skill was explicitly invoked at the end — matching a `needs more thought` finding already on this page (`§8 fired only when the operator asked`). The retroactive capture still worked cleanly: every cost, class and fix-location was reconstructable from the session transcript alone. |
@@ -6162,7 +6360,11 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 | `biffo-verify` | **worked — §3 caught a test of mine that could not fail** | The sharpest single moment of the session. The new sibling E2E smoke spec passed against a harness **deliberately broken exactly as `tabsii-geo`'s was**, because the draft omitted `NEXT_PUBLIC_CORE_PORTAL_URL` and `page.tsx` only redirects `if (signed_out && CORE_PORTAL_URL)` — so the app had nowhere to redirect to and the assertion could not fire. Reading the spec would never have shown it; only reverting the harness and watching did. It was about to ship into **every future sibling** as coverage-shaped scaffolding. §2's "verify in the environment least like the one you built in" also fired: the claim-protocol fix was verified against a **real satellite** rather than the drift report, which is the only reason it was caught reaching 14 repos with the rule explaining it reaching none. |
 | `biffo-workflow` | **worked — the honest-push rule fired for real, again** | `git push` printed `Everything up-to-date` after a transport error while the local branch was **2 commits ahead**. Caught only because §4 says check the remote rather than believe the message. Also caught the `\| tail` exit-status trap twice in my own verification: `sh scripts/claim.sh <closed issue>; echo $?` through a pipe reported `0` for every case, and re-measuring without the pipe gave the real `1`/`2`. The trap is documented for `git push`; it applies to any command whose exit code you are reading. |
 | `biffo-verify` | **partial — §8 has no guidance on distributing the lesson itself** | The skill is emphatic that a lesson must be recorded, and correct that it is where ad-hoc work escapes. What it does not cover is that in this estate a rule has **two distribution channels** — the root `AGENTS.md` reaches *instances* via `biffo core upgrade`, and `_skeletons/*/AGENTS.md` reaches *satellites* via `shared-sync`. Writing the claim rule into the root only (#1209) put it where 14 of 17 repos cannot read it, and it took a manual check of a real satellite to notice. Suggested addition to §8: when the lesson is a **rule**, name which channel carries it to which repos, and verify in one repo of each kind. |
+| `biffo-workflow` | **worked — Step 1's "`pnpm install` ALWAYS" was load-bearing on a SQL-and-Python change** | Fixing tabsii-platform#573 touched only a DDL module and a pytest file — no JS in the diff. Followed §1 as written anyway, and the commit-time hooks still ran `lint-staged`/`ruff` via the shared hook, because that is what installing deps in the fresh worktree armed. Skipping the JS install on the (false) theory that "there's no JS here" would have been the exact §1 footgun the skill exists to prevent, just reached from the other direction — a change with no JS in it still needs the JS toolchain present for the gate that runs on every commit. |
+| `biffo-verify` | **worked — §3 and §6 both did concrete work on tabsii-platform#573** | §3 (prove the test fails without the fix) produced the 3-of-10 fail-first split recorded above in *what went well*. §6's "distrust a green check / a zero is two different claims" instinct is what prompted checking whether the new test file was actually inside CI's own `test_*_pg.py` glob rather than assuming it, given the fixed-check-list traps already recorded elsewhere on this page — it was: 10 cases collected. Also worth recording as a §6-adjacent finding of my own: running only tabsii-platform's RLS test directory would have missed the DDL convention guards entirely, which live in `services/api/tests/` and `services/governance/tests/` — a guard that only runs where it already passes is the same shape §6 warns about, one level out. |
 
+| `groom-backlog` | **worked — and its two rules did the work, not the ritual** | Invoked on `biffo-template` with 27 open issues. Rule 1 (*an open issue is a claim, not a fact*) closed three outright once measured: `auth.ts` was at 2 variants against its declared baseline, not the "29–247 lines across seven repos" the title asserted; `login-routing` no longer hardcoded any surface path; the audit-determinism issue had three of four items shipped and the fourth explicitly declined. Rule 2 (*an issue is one instance of a class*) is what turned five separately-filed, separately-ranked issues into one blind spot — `--candidates` needing ≥5 holders — and produced the enumerating ratchet that retires all five. **Deviation worth recording:** the skill's Step 1 dispatches read-only verification agents, and its instruction to spot-check every surprising verdict is what saved it. An agent said `auth.ts` was reconciled; I measured 6 variants from working trees and nearly overturned a correct verdict as wrong. The agent was right and my ruler was broken. The skill tells you to distrust the agent; it should say equally loudly to distrust the re-check. |
+| `biffo-verify` | **partial — invoked at the end again, and §8 is the section that keeps arriving too late** | Its §6 (*when a measurement surprises you, suspect the ruler first*) fired within minutes of invocation and was immediately worth it: appending six evidence rows produced no change to the committed tally, which looked like a stale-tally bug — the very failure that page calls the one number people act on. The ruler was the problem: `tallies.generated.md` is gitignored and regenerated, so there was nothing to commit and nothing stale. Roughly ten minutes of fumbling greps before switching to Python to compare the two files properly, which is itself the lesson: I distrusted the subject three times before distrusting my own `grep` pattern. §1, §3 and §4 were applied all day *without* the skill being invoked — the whole session ran on prove-it-fails-first and verify-the-artifact — but nothing was **recorded** until it was invoked explicitly at the end, which is the same `needs more thought` finding this page already carries twice. That is now three occurrences of "§8 fired only when the operator asked", and the pattern is no longer a coincidence worth noting; it is a defect in when the skill triggers. |
 ## Adding a row
 
 Add one when a defect costs more than ~30 minutes, or when you catch yourself

@@ -1,0 +1,216 @@
+name: Release Guards
+
+# Split out of ci.yml (#1319). This is the WHOLE "Release Guards" job, moved
+# intact — not just the body-dependent step within it.
+#
+# Why it moved: both of this job's PR-text guards (`release-subject` on the
+# title, `check-closing-keywords.mjs` on the body) read their input LIVE via
+# `gh pr view` (#1174, #1187) specifically so a bare re-run reflects a
+# correction. But `pull_request`'s DEFAULT types
+# (opened/synchronize/reopened) do not include `edited`, so editing a title
+# or body fires no event at all — the live-read fix existed but was only
+# reachable by a human re-running the job or pushing an unrelated commit.
+# Paid for twice on 2026-08-04 alone (tabsii-platform#558, #568 — the second
+# with `--auto` merge armed, so the PR sat indefinitely on a check that would
+# never re-evaluate itself).
+#
+# Why the WHOLE job and not just the closing-keywords step: adding `edited`
+# only to a new, separately-named job would leave `release-subject` with the
+# identical defect (see its own comment below — it has the same "retitling
+# doesn't help" shape, #1187) and would create a SECOND check with a
+# different name, while branch protection requires the one literal string
+# "Release Guards". Moving the job here in full, unchanged apart from the
+# trigger, keeps exactly one thing ever reporting that name — see the job's
+# own comment for why the name itself is load-bearing.
+#
+# Why this is safe to split away from ci.yml's heavy build matrix: unlike
+# `js`/`python`/etc., this job's PR-time guards need no build — bare `node`
+# for the two body/title-independent-of-toolchain checks, and one `pnpm
+# install --frozen-lockfile` (not a full CI run) for the two that shell out
+# to `scripts/biffo.sh`. Adding `edited` here re-runs one lightweight job on
+# a title/body tweak, not the seven-check, several-minute self-hosted matrix
+# — which is deliberately NOT given `edited` in ci.yml, for exactly that cost
+# reason (see ci.yml's own `pull_request` trigger comment).
+#
+# Verified before landing (#1319 PR body has the full record): the reported
+# check name is still exactly "Release Guards" — confirmed by opening a PR
+# from this branch and reading its checks list, which is the only place the
+# name actually gets minted; the repo's required-status-check list itself
+# was NOT touched.
+on:
+  pull_request:
+    branches: [main, dev, staging]
+    types: [opened, synchronize, reopened, edited]
+  # The merge queue tests each entry on a temporary `gh-readonly-queue/*`
+  # ref, which is neither a push to an integration branch nor a pull
+  # request. Without this trigger the required check is never reported for
+  # the queue entry, and every queued PR waits for a check that cannot
+  # arrive — the queue does not fall back to the PR's own results. See the
+  # job's own `if` below: the guards themselves are no-ops here, but the job
+  # still has to run and report success, because "Release Guards" is
+  # required and a merge queue only counts checks reported for the
+  # `merge_group` event.
+  merge_group:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  # Job `name` is load-bearing: "Release Guards" is a REQUIRED status check in
+  # this repo's branch protection and in every instance's, and `biffo core
+  # upgrade` cannot update branch protection. Renaming it ships a workflow that
+  # reports a check name the protection must already require — so any rename MUST
+  # be paired with a protection update on the template AND every instance, in the
+  # same window the upgrade PR merges there, or instance PRs wait forever on a
+  # check that never arrives (#433). It was "Core Version Guard" until #433; the
+  # name was a misnomer once #423 removed the version bump, leaving only the two
+  # release guards below.
+  #
+  # It moved from ci.yml to this file in #1319. The name did not change, and
+  # the old job was deleted from ci.yml in the same commit — never both at
+  # once, or two check runs would report the identical name.
+  release-guards:
+    name: Release Guards
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    # A self-hosted spot runner that is reclaimed mid-job leaves the job hanging
+    # rather than failing: on 2026-07-30 five jobs across two PRs died with
+    # "The runner has received a shutdown signal", and without a timeout a job
+    # whose runner simply vanishes burns the 360-minute default before anyone
+    # is told. 20m is ~4x the slowest job observed across this repo and
+    # biffo-platform (JS, 5.4m), so a cold cache or a large PR will not trip it.
+    timeout-minutes: 20
+    # Runs on pull_request AND merge_group — but the guards themselves only do
+    # anything on a pull_request.
+    #
+    # The job has to run in the queue because "Release Guards" is a REQUIRED
+    # check, and a merge queue only counts checks reported for the merge_group
+    # event; it does not inherit the PR's results. Gating the whole job on
+    # pull_request would leave every queue entry waiting for a check that can
+    # never arrive.
+    #
+    # The guards are nonetheless skipped there, because both are PR-time gates
+    # that cannot be evaluated on a queue entry: `release-subject` validates the
+    # PR *title* (there is none), and the ownership guard diffs against
+    # `$GITHUB_BASE_REF` as a short branch name, which merge_group does not set —
+    # its payload carries `refs/heads/dev`, and `git diff origin/refs/heads/dev`
+    # is not a ref. Both already passed before the entry was queued.
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    # `pull-requests: read` is what lets `gh pr view` in the closing-keywords
+    # step below read the PR's CURRENT body via the API instead of the
+    # `pull_request` event's frozen payload (#1174). Declared explicitly
+    # rather than relying on org/repo default token permissions, which are
+    # not guaranteed to include it.
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      # Explicit rather than an empty run: a job whose every step skipped reads
+      # as "did nothing, silently" in the log, which is the shape of a guard that
+      # guards nothing (#745). Say why instead.
+      - name: Queue entry — release guards already enforced on the PR
+        if: github.event_name == 'merge_group'
+        run: |
+          echo "Release guards are pull-request-time gates and ran when the PR did:"
+          echo "  - release-subject validates the PR title (a queue entry has none)"
+          echo "  - the ownership guard diffs the PR against its base branch"
+          echo "Nothing here is re-checkable on a queue entry. Reporting success."
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        if: github.event_name == 'pull_request'
+      - uses: actions/setup-node@v5
+        if: github.event_name == 'pull_request'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - id: install
+        if: github.event_name == 'pull_request'
+        run: pnpm install --frozen-lockfile
+      # A template-owned change cuts a release on merge, and the release job
+      # derives the bump from the squash-merge subject — which is this PR's
+      # title. Fail if that title is not a Conventional Commits subject, or a
+      # feature ships silently as a patch (ADR-0006, #423).
+      #
+      # Deliberately NOT `PR_TITLE: ${{ github.event.pull_request.title }}`
+      # (#1187, the second instance of #1174): that value is frozen at the
+      # moment the `pull_request` event fired, and this step's ONLY remedy is
+      # "retitle the PR" — an edit that used to neither re-trigger CI (no
+      # `edited` in the trigger's types) nor change what a re-run replays, so a
+      # correctly retitled PR stayed red until someone pushed an unrelated
+      # commit. `edited` is now in this workflow's trigger (#1319), so a
+      # retitle alone re-runs this job. GH_TOKEN/PR_NUMBER/GH_REPO let the
+      # script (`resolveReleaseSubject`) read the title LIVE via `gh pr view`
+      # regardless, so even a bare manual re-run still genuinely re-evaluates
+      # the PR as it is now.
+      #
+      # `pull-requests: read` is already granted on this job — added for the
+      # closing-keywords fetch in #1180, and it covers the title too.
+      - if: github.event_name == 'pull_request'
+        run: sh scripts/biffo.sh check release-subject
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+      # The mirror image, for instances: fail if an INSTANCE changed a
+      # template-owned path (#370). Inert in the template, where that is the
+      # point of every PR. Shares this job rather than adding its own — same
+      # toolchain, same full-depth checkout, same pull-request-only gate, and
+      # GitHub bills each job's wall time rounded up to a full minute.
+      #
+      # The event check is explicit rather than left to `install` being skipped
+      # on a queue entry. That would work, but only as a side effect — and this
+      # file already warns what happens when a step's gate depends on
+      # `steps.install.outcome` being what you assume.
+      - name: Core ownership guard
+        if: ${{ github.event_name == 'pull_request' && !cancelled() && steps.install.outcome == 'success' }}
+        run: sh scripts/biffo.sh check ownership
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+      # The practices corpus is append-only and several sessions write to it at
+      # once. It lost content three times in 24h — every time via a rewrite that
+      # merged with no conflict, every time found by a human noticing a count had
+      # gone down. Nothing failed. This is the thing that fails.
+      #
+      # Bare node, no install needed, so it does not depend on the step above.
+      # Silent in an instance, which has no corpus.
+      - name: Practices corpus is append-only
+        if: ${{ github.event_name == 'pull_request' && !cancelled() }}
+        run: node scripts/practices-monotonic.mjs
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+      # `Closes #N` closes the issue the instant this merges — before it is
+      # deployed, and before anyone has seen it work. For a change whose
+      # behaviour only appears once running (Terraform, workflows, DDL imports,
+      # the portal's auth/routing/CDN), that is the moment the LEAST is known.
+      # tabsii-platform#511 closed ten minutes before the deploy that proved it;
+      # #275 closed on a wrong cause and survived a teardown before a human
+      # clicked the link. Ask for `Refs #N` instead, or for the evidence.
+      #
+      # Bare node like the step above, so it does not depend on the install.
+      #
+      # Deliberately NOT `PR_BODY: ${{ github.event.pull_request.body }}`
+      # (#1174): that value is frozen at the moment the `pull_request` event
+      # fired, so neither editing the PR body nor re-running this job used to
+      # be able to turn a failure green on its own — both of the guard's own
+      # documented remedies are body edits. GH_TOKEN/PR_NUMBER/GH_REPO instead
+      # let the script (`resolveBody` in check-closing-keywords.mjs) fetch the
+      # body LIVE via `gh pr view`, so a re-run genuinely re-evaluates the PR
+      # as it is at run time — and since #1319 added `edited` to this
+      # workflow's trigger, editing the body now re-runs the job automatically
+      # too, with a manual `gh run rerun <run-id> --failed` as the fallback
+      # rather than the only path.
+      - name: Closing keywords on deploy-only paths
+        if: ${{ github.event_name == 'pull_request' && !cancelled() }}
+        run: node scripts/check-closing-keywords.mjs
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}

@@ -34,9 +34,50 @@ describe('extractErrorMessage', () => {
     expect(extractErrorMessage('{"message":"nope"}', 'Bad Request')).toBe('{"message":"nope"}')
   })
 
-  it('falls back to the raw text when detail is not a string', () => {
+  // Renamed from "falls back to the raw text when detail is not a string" —
+  // that name generalised a decision only ever made about a LIST `detail`
+  // (biffo-template#1350). It is no longer true of every non-string detail: a
+  // dict carrying a string `message` (below) now unwraps instead of falling
+  // back. FastAPI's own 422 is the case this test still pins.
+  it('falls back to the raw text when detail is a list (FastAPI 422 field errors)', () => {
     const body = '{"detail":[{"loc":["body","x"],"msg":"bad"}]}'
     expect(extractErrorMessage(body, 'Unprocessable Entity')).toBe(body)
+  })
+
+  // The browser-side twin of `_extract_detail`'s identical rule in
+  // core_client.py. Core's generic CRUD layer answers an integrity error with
+  // `{"detail": {"message": "...", "constraint": "..."}}`
+  // (`routing/crud_handlers._integrity_error_response`); until this rule
+  // existed here, that shape fell straight through to the raw JSON blob, even
+  // in a sibling whose BFF had already unwrapped it server-side
+  // (biffo-template#1350, tabsii-crm#272).
+  it('unwraps a dict detail carrying a string message', () => {
+    const body =
+      '{"detail":{"message":"course c1 cannot be deleted: 3 enrolment(s) depend on it.","constraint":"fk_enrolments_course_id"}}'
+    expect(extractErrorMessage(body, 'Conflict')).toBe(
+      'course c1 cannot be deleted: 3 enrolment(s) depend on it.',
+    )
+  })
+
+  // `constraint` is deliberately dropped, not appended, in EVERY case — a
+  // database object name is schema reconnaissance (tabsii-platform#473) and
+  // says nothing to the person reading the sentence. This asserts the drop
+  // rather than just the unwrap above, so a future "helpfully" append would
+  // fail here even if it left the previous test passing.
+  it('drops constraint rather than appending it to the message', () => {
+    const body = '{"detail":{"message":"cannot delete","constraint":"fk_enrolments_course_id"}}'
+    const message = extractErrorMessage(body, 'Conflict')
+    expect(message).toBe('cannot delete')
+    expect(message).not.toContain('fk_enrolments_course_id')
+  })
+
+  // Only the declared `message` key is trusted. A dict `detail` with no
+  // `message` is a shape nobody has declared, so it falls back to the raw
+  // text — same posture as the list case above — rather than inventing a
+  // summary that could hide information the caller had before.
+  it('falls back to the raw text when a dict detail has no message', () => {
+    const body = '{"detail":{"constraint":"fk_enrolments_course_id"}}'
+    expect(extractErrorMessage(body, 'Conflict')).toBe(body)
   })
 
   it('uses the status text when the body is empty', () => {

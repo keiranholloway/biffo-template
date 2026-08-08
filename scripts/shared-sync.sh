@@ -251,6 +251,19 @@ trap wt_log_run_end EXIT
 FILES=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).files.join('\n'))")
 MARKERS=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).appliesTo.join(' '))")
 
+# `excludes`: repos removed from the measured set, DECLARED with a reason
+# (shared-files.json). A repo that cannot receive a change -- an archived one --
+# is not drift and counting it as such makes a ratchet unsatisfiable forever.
+#
+# But shrinking a denominator is exactly how a check starts lying, so this is
+# never silent: `--check` prints every exclusion and its reason before it
+# reports anything else. `scripts/protection-audit.sh` was rewritten for this
+# (#1145) after four repos answering 404 were dropped and "27 branches checked,
+# all protected and binding" was a true statement about a set that had quietly
+# lost the repos least likely to be protected.
+EXCLUDES=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).excludes||{};console.log(Object.keys(m).join(' '))")
+EXCLUDES_WHY=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).excludes||{};console.log(Object.entries(m).map(([r,w])=>r+': '+w).join('\n'))")
+
 # `filesIfPresent`: files kept in step ONLY in the repos that already hold them,
 # never created in the ones that do not. Emitted as `target<TAB>source`, because
 # unlike `files` the template's copy does not live at the same path -- the
@@ -325,6 +338,8 @@ failed=0
 TAB=$(printf '\t')
 
 applies() {
+  # Declared exclusions first -- see EXCLUDES above. Reported, never silent.
+  for x in $EXCLUDES; do [ "$(basename "$1")" = "$x" ] && return 1; done
   # Instances are NOT in scope: they carry biffo.core.json and a
   # core-manifest.json, so `biffo core upgrade` three-way-merges these paths
   # into them. Two mechanisms writing the same files would fight, and the
@@ -1233,6 +1248,42 @@ stage_repo() {
       uv sync --all-groups >/dev/null 2>&1; }) || true
   done
 
+  # THEN every other nested package, discovered from the tree rather than from
+  # what the gate happens to announce.
+  #
+  # The loop above can only see directories `verify --list` names with its own
+  # `--directory` flag. A repo whose gate reaches a nested package through its
+  # OWN package.json scripts is invisible to it -- `tabsii-crm` runs
+  # `pnpm --dir apps/frontend run lint|typecheck|test` from the root manifest,
+  # so `verify --list` emits only `--directory ./services/api` and
+  # `apps/frontend` never got installed. Its frontend is not a pnpm workspace
+  # member either, so the root install above does not reach it.
+  #
+  # The gate then failed with `vitest: not found` and the round reported
+  # `verify failed: lint typecheck test` -- which reads as drift in the
+  # candidate files and is nothing of the kind. On 2026-08-06 that FALSE
+  # FAILURE blocked a whole estate round for thirteen healthy repos, and the
+  # staged tree it left behind passed every check the moment deps were
+  # installed by hand (632 tests).
+  #
+  # This is the third layout the installer could not see -- `tabsii-map`'s
+  # root-level package is recorded above, and this is the same shape one level
+  # in. Enumerating the tree ends the class rather than adding a third special
+  # case: anything with a package.json gets an install attempt, so a layout
+  # nobody has thought of yet is covered too.
+  #
+  # Bounded deliberately: -maxdepth 3 covers `apps/<name>` and `services/<name>`
+  # without walking a deep tree, `node_modules` is pruned (or the walk finds
+  # thousands of vendored manifests), and the root is skipped because it is
+  # already installed above. Failure stays non-fatal -- a package that cannot
+  # install is the GATE's problem to report, not the installer's to hide.
+  for p in $(cd "$wt" && find . -maxdepth 3 -name node_modules -prune -o -name package.json -print 2>/dev/null |
+    sed 's|/package.json$||' | grep -v '^\.$' | sort -u); do
+    [ -d "$wt/$p/node_modules" ] && continue
+    (cd "$wt/$p" 2>/dev/null && { pnpm install --frozen-lockfile >/dev/null 2>&1 ||
+      pnpm install --frozen-lockfile --ignore-workspace >/dev/null 2>&1; }) || true
+  done
+
   git -C "$wt" add -A
   if git -C "$wt" diff --cached --quiet; then
     wt_log remove-nothing-to-sync "$label" "$wt"
@@ -1450,6 +1501,21 @@ Run \`sh scripts/gate-coverage.sh\` after merging to see this repo's gate measur
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)" 2>&1 | tail -1)
   printf '%-26s %s\n' "$label" "$url"
+
+  # Reap the staged worktree now that its PR is open. Phase 2 never revisits a
+  # repo it has already shipped, so nothing downstream still needs it, and
+  # leaving it behind is the exact orphan-worktree accumulation AGENTS.md
+  # section 1 exists to prevent -- four repos were found on 2026-08-02 still
+  # carrying a `.worktrees/shared-sync` from a round that had shipped cleanly
+  # (#1160). This does not explain why a worktree goes missing BETWEEN phases
+  # (that is still open, see require_staged_worktree above); it only stops the
+  # ones that survive both phases from persisting once they are no longer
+  # needed, which the issue named as both a hygiene problem and unnecessary
+  # extra surface for the unexplained disappearance.
+  wt_log remove-post-ship "$label" "$wt"
+  git -C "$d" worktree remove --force "$wt" 2>/dev/null
+  git -C "$d" branch -D chore/sync-shared >/dev/null 2>&1
+
   return 0
 }
 
@@ -1462,6 +1528,18 @@ VERDICTS=$(mktemp)
 trap 'rm -f "$TARGETS" "$VERDICTS"; wt_log_run_end' EXIT
 
 printf '\nshared-file sync - template -> repos core upgrade cannot reach\n\n'
+
+# Declared exclusions, printed BEFORE any count. A shrinking denominator is the
+# quietest way for a check to start lying (#1145), so every mode that walks the
+# estate says out loud which repos it is not walking, and why.
+if [ -n "$EXCLUDES" ]; then
+  printf '\033[33mexcluded from the measured set\033[0m -- declared in shared-files.json:\n'
+  printf '%s\n' "$EXCLUDES_WHY" | while IFS= read -r line; do
+    [ -n "$line" ] && printf '  %s\n' "$line"
+  done
+  printf '\nEvery count below is over the REMAINING repos, not the whole estate.\n\n'
+fi
+
 for d in "$ESTATE"/*/; do
   d="${d%/}"
   label=$(basename "$d")

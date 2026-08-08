@@ -12,17 +12,23 @@
  *
  * Inert in the template, where editing template-owned paths is the entire job —
  * see the direction-of-check note in the lib module.
+ *
+ * Inert for the same reason in a satellite (sibling app, plugin repo, package,
+ * runner fleet, the design repo) — but for a different reason, and the two must
+ * not share a message (#1328). `classifyRepoOwnership` tells them apart: a
+ * satellite is also not an instance, but unlike the template it holds no
+ * `core-manifest.json` and no template-owned paths to guard at all.
  */
 import { execa } from 'execa'
 import {
   DIVERGENCE_FILE,
   checkCoreOwnership,
+  classifyRepoOwnership,
   parseNameStatus,
   readDivergenceConfig,
   resolveBranch,
 } from '../lib/core-ownership-guard.js'
 import { readCoreManifest } from '../lib/core-manifest.js'
-import { isInstanceRepo } from '../lib/core-version.js'
 
 const BOLD = '[1m'
 const DIM = '[2m'
@@ -40,8 +46,15 @@ export async function runOwnershipCheck(argv: string[]): Promise<void> {
 
   const root = (await execa('git', ['rev-parse', '--show-toplevel'])).stdout.trim()
 
-  if (!isInstanceRepo(root)) {
+  const ownership = classifyRepoOwnership(root)
+  if (ownership === 'template') {
     console.log('✓ core ownership guard: skipped — this is the template, which owns these paths.')
+    return
+  }
+  if (ownership === 'satellite') {
+    console.log(
+      '✓ core ownership guard: skipped — this repo is not an instance, so it holds no template-owned paths.',
+    )
     return
   }
 

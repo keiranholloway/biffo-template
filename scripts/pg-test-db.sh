@@ -40,11 +40,20 @@
 #
 # ## Usage
 #
-#   eval "$(sh scripts/pg-test-db.sh --export)"   # export BIFFO_TEST_PG_DSN
+#   eval "$(sh scripts/pg-test-db.sh --export)"   # export BIFFO_TEST_PG_DSN and TABSII_TEST_PG_DSN
 #   sh scripts/pg-test-db.sh                      # print the DSN on stdout
 #   sh scripts/pg-test-db.sh --recreate           # force a rebuild
 #
 # Only the DSN reaches stdout, so it is safe to capture; progress goes to stderr.
+#
+# `--export` sets BOTH `BIFFO_TEST_PG_DSN` and `TABSII_TEST_PG_DSN` (see
+# tabsii-platform#755): every consumer this script has ever had reads one name
+# or the other, `scripts/verify.sh`'s own bridge already treats them as
+# interchangeable, and a script that only ever emits one of the two names it
+# claims to serve is exactly the fail-open this file's own docstring above
+# argues against -- a gate nobody can run, just one name late instead of a
+# missing script. Emitting both means the name a consumer happens to read is no
+# longer load-bearing.
 #
 # Overridable: BIFFO_PG_HOST, BIFFO_PG_PORT, BIFFO_PG_USER, BIFFO_PG_PASSWORD,
 # BIFFO_PG_DB, BIFFO_PG_CONTAINER, BIFFO_PG_IMAGE.
@@ -157,6 +166,54 @@ psql_db() { psql -q -h "$HOST" -p "$PORT" -U "$USER_" -d "$DB" "$@"; }
 #
 # Started here rather than assumed, because "docker run one yourself" is exactly
 # the tribal knowledge this script replaces. An already-running server is reused.
+# ── Reap abandoned sibling containers ────────────────────────────────────────
+#
+# The container name is keyed to the CHECKOUT (see `CONTAINER` above), which is
+# what makes reuse work -- and also what makes them accumulate: every worktree
+# ever created leaves one behind, running, forever. Nothing ever removed them.
+# Measured on one workstation: 76 live `biffo-pg-test-*` containers holding
+# ~5.4 GiB, the oldest four days old (tabsii-platform#703). That is not merely
+# untidy -- they compete for the same page cache and I/O as the lane being
+# timed, so a leak like this shows up as the pg gate drifting toward its own
+# timeout, which is the failure #703 was actually filed about.
+#
+# Age is the only signal available. Docker records when a container was CREATED,
+# not when it was last used, and `docker ps --filter until=` is a prune filter
+# that this daemon rejects on `ps` -- so the comparison is done here.
+#
+# Reaping something still wanted is cheap and self-correcting: the next run
+# recreates it, which this script's own header prices at ~4s against ~0.3s for
+# reuse. Being wrong therefore costs four seconds, once. Leaving them costs a
+# gigabyte a day.
+#
+# NEVER reaps this checkout's own container, is skipped entirely when the date
+# maths is unavailable rather than guessing, and never fails the run: a
+# housekeeping step that can break a test lane is worse than the mess it clears.
+BIFFO_PG_REAP_HOURS="${BIFFO_PG_REAP_HOURS:-24}"
+if [ "$BIFFO_PG_REAP_HOURS" -gt 0 ] 2>/dev/null && command -v docker >/dev/null 2>&1; then
+  # GNU first, then BSD/macOS. If neither answers, say so and skip -- a silent
+  # skip here would be the same fail-open this estate keeps finding.
+  _reap_cutoff=$(date -u -d "-${BIFFO_PG_REAP_HOURS} hours" +%Y-%m-%dT%H:%M:%S 2>/dev/null) ||
+    _reap_cutoff=$(date -u -v-"${BIFFO_PG_REAP_HOURS}"H +%Y-%m-%dT%H:%M:%S 2>/dev/null) || _reap_cutoff=""
+  if [ -z "$_reap_cutoff" ]; then
+    say "cannot compute a reap cutoff on this date(1); skipping container reaping"
+  else
+    _reaped=0
+    for _c in $(docker ps -a --filter "name=biffo-pg-test-" --format '{{.Names}}' 2>/dev/null); do
+      [ "$_c" = "$CONTAINER" ] && continue
+      _made=$(docker inspect -f '{{.Created}}' "$_c" 2>/dev/null | cut -c1-19)
+      [ -z "$_made" ] && continue
+      # Both are UTC ISO-8601 to the second, so a string compare IS a time
+      # compare -- no epoch conversion, and portable across date(1) flavours.
+      if awk -v a="$_made" -v b="$_reap_cutoff" 'BEGIN { exit !(a < b) }'; then
+        docker rm -f "$_c" >/dev/null 2>&1 && _reaped=$((_reaped + 1))
+      fi
+    done
+    [ "$_reaped" -gt 0 ] &&
+      say "reaped $_reaped container(s) unused for over ${BIFFO_PG_REAP_HOURS}h (set BIFFO_PG_REAP_HOURS=0 to disable)"
+  fi
+fi
+
 if ! psql_admin -c 'SELECT 1' >/dev/null 2>&1; then
   if ! command -v docker >/dev/null 2>&1; then
     say "no Postgres at $HOST:$PORT and docker is not installed."
@@ -188,7 +245,10 @@ fi
 DSN="postgresql+asyncpg://$USER_:$PASS@$HOST:$PORT/$DB"
 emit() {
   if [ "$EXPORT" -eq 1 ]; then
+    # Both names, deliberately (tabsii-platform#755): whichever a consumer
+    # reads, an `eval` of this line alone is enough -- see the Usage note above.
     echo "export BIFFO_TEST_PG_DSN='$DSN'"
+    echo "export TABSII_TEST_PG_DSN='$DSN'"
   else
     echo "$DSN"
   fi

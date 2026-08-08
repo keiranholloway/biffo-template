@@ -19,7 +19,17 @@ import { makeTmpDir } from '../test-utils/tmp.js'
  * writing and with a reason, why it does not belong there.
  */
 const repoRoot = join(import.meta.dirname, '..', '..', '..')
-const ci = readFileSync(join(repoRoot, '.github/workflows/ci.yml'), 'utf8')
+// `release-subject` and `ownership` (both EXCLUDED below) moved out of
+// ci.yml into release-guards.yml in #1319, along with the two checks that
+// were already invisible to `ciCheckCommands()`'s prefix list
+// (practices-monotonic, check-closing-keywords — see that function's own
+// comment). Reading both files as one text keeps this test seeing the same
+// "CI" it always did, rather than reporting the moved commands as checks CI
+// "no longer runs".
+const ci =
+  readFileSync(join(repoRoot, '.github/workflows/ci.yml'), 'utf8') +
+  '\n' +
+  readFileSync(join(repoRoot, '.github/workflows/release-guards.yml'), 'utf8')
 
 /**
  * What the gate ACTUALLY runs here, not what its source text contains.

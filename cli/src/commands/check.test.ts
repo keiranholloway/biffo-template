@@ -53,8 +53,18 @@ describe('biffo check', () => {
     expect(index).toContain('addCommand(checkCommand)')
   })
 
-  it.each(['ci.yml'])('%s invokes the guards through the dispatcher, not the workspace', (file) => {
-    const workflow = readFileSync(join(repoRoot, '.github/workflows', file), 'utf8')
+  // `ownership` and `release-subject` moved from `ci.yml` into
+  // `release-guards.yml` in #1319 (so that job's `pull_request` trigger could
+  // add `edited` without giving that to the whole build matrix — see that
+  // file's header), so the guards are read from the UNION of both files
+  // rather than from `ci.yml` alone. Any one guard living in only one of the
+  // two files is still exactly the shape #718/#720 guard against.
+  const CORE_WORKFLOW_FILES = ['ci.yml', 'release-guards.yml']
+
+  it('invokes the guards through the dispatcher, not the workspace', () => {
+    const workflow = CORE_WORKFLOW_FILES.map((file) =>
+      readFileSync(join(repoRoot, '.github/workflows', file), 'utf8'),
+    ).join('\n')
     // `pnpm --filter @biffo/cli` only works where cli/ exists — the template.
     expect(workflow).not.toContain('pnpm --filter @biffo/cli check')
     // Exact command membership, NOT `toContain` on the raw text. The substring
@@ -64,7 +74,7 @@ describe('biffo check', () => {
     for (const name of ciGuards) assertRunsCommand(workflow, `sh scripts/biffo.sh check ${name}`)
   })
 
-  it.each(['ci.yml'])('%s does not run the out-of-band audits as a merge gate', (file) => {
+  it.each(CORE_WORKFLOW_FILES)('%s does not run the out-of-band audits as a merge gate', (file) => {
     const workflow = readFileSync(join(repoRoot, '.github/workflows', file), 'utf8')
     for (const name of auditOnly) expect(workflow).not.toContain(`check ${name}`)
   })

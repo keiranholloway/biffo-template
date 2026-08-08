@@ -85,6 +85,10 @@ describe('runCoreUpgrade --apply — HEAD in a real checkout (#984)', () => {
       },
       resolveToken: () => 'TOKEN',
       workingTreeMatchesTag: () => true,
+      // Mocked so the dependency-install step (#1040) never shells out to a
+      // real `pnpm install` against this throwaway tmp dir, which has no
+      // package.json — this tier is about HEAD placement, not installs.
+      runCommand: vi.fn().mockResolvedValue({ ok: true }),
     }
   }
 
@@ -191,6 +195,10 @@ describe('runCoreUpgrade --apply — a failed commit does not land on the caller
       },
       resolveToken: () => 'TOKEN',
       workingTreeMatchesTag: () => true,
+      // The commit fails before the dependency-install step (#1040) is ever
+      // reached in this test, but mocked anyway for the same reason as above
+      // — no real `pnpm install` against a throwaway tmp dir.
+      runCommand: vi.fn().mockResolvedValue({ ok: true }),
     }
   }
 

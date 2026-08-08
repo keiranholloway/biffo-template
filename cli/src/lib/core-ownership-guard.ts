@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { type CoreManifest, isTemplateOwned } from './core-manifest.js'
+import { CORE_MANIFEST_FILE, type CoreManifest, isTemplateOwned } from './core-manifest.js'
 import { UPGRADE_BRANCH_PREFIX } from './core-upgrade.js'
+import { isInstanceRepo } from './core-version.js'
 
 /**
  * Refuse changes to template-owned paths *in an instance* (issue #370).
@@ -75,6 +76,28 @@ const DivergenceConfigSchema = z.object({
 
 export type DivergenceEntry = z.infer<typeof DivergenceEntrySchema>
 export type DivergenceConfig = z.infer<typeof DivergenceConfigSchema>
+
+export type RepoOwnershipKind = 'template' | 'instance' | 'satellite'
+
+/**
+ * Classify a repo root for the guard's own skip message (#1328).
+ *
+ * `isInstanceRepo()` alone is a two-way probe — instance or not — and "not"
+ * is true for the template AND for every satellite (sibling app, plugin repo,
+ * package, runner fleet, the design repo). A caller that reads "not an
+ * instance" as "must be the template" tells ~14 of the estate's 17 repos they
+ * are the template on every commit, which they are not: they hold no
+ * `core-manifest.json` and no template-owned paths to guard at all.
+ *
+ * `core-manifest.json`'s presence at the root — checked only once instance is
+ * ruled out — is the actual discriminator: the template ships one because it
+ * is the thing that owns these paths; a satellite has none because template
+ * ownership is not a concept that applies to it.
+ */
+export function classifyRepoOwnership(repoRoot: string): RepoOwnershipKind {
+  if (isInstanceRepo(repoRoot)) return 'instance'
+  return existsSync(join(repoRoot, CORE_MANIFEST_FILE)) ? 'template' : 'satellite'
+}
 
 /**
  * Read `biffo.divergence.json` from an instance root. Absent is the normal case

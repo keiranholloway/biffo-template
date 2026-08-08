@@ -2,17 +2,19 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { readCoreManifest } from './core-manifest.js'
+import { CORE_MANIFEST_FILE, readCoreManifest } from './core-manifest.js'
 import {
   DIVERGENCE_FILE,
   type DivergenceEntry,
   checkCoreOwnership,
+  classifyRepoOwnership,
   parseConvergenceTrailer,
   parseDivergenceTrailer,
   parseNameStatus,
   readDivergenceConfig,
   resolveBranch,
 } from './core-ownership-guard.js'
+import { INSTANCE_CORE_FILE } from './core-version.js'
 import { upgradeBranchName } from './core-upgrade.js'
 import { makeTmpDir } from '../test-utils/tmp.js'
 
@@ -48,6 +50,36 @@ describe('checkCoreOwnership — direction of the check', () => {
     // change rather than a silently-restored default.
     // @ts-expect-error -- isInstance is required
     expect(() => checkCoreOwnership({ changedFiles: [], manifest })).not.toThrow()
+  })
+})
+
+describe('classifyRepoOwnership — which message a repo is told (#1328)', () => {
+  /**
+   * `isInstanceRepo()` alone is a two-way probe, and "not an instance" is true
+   * for the template AND for a satellite — a sibling app, plugin repo,
+   * package, runner fleet, or the design repo. The runner script used to
+   * collapse those two into one branch and print the TEMPLATE's message for
+   * both, so a satellite like `tabsii-crm` was told on every commit that it
+   * owned the paths it was standing in, which it does not. This pins the
+   * three-way classification the message now branches on, not just the
+   * inertness both non-instance cases share.
+   */
+  it('is the template: has core-manifest.json, no biffo.core.json', () => {
+    const dir = makeTmpDir('ownership-template')
+    writeFileSync(join(dir, CORE_MANIFEST_FILE), JSON.stringify(manifest))
+    expect(classifyRepoOwnership(dir)).toBe('template')
+  })
+
+  it('is an instance: has biffo.core.json', () => {
+    const dir = makeTmpDir('ownership-instance')
+    writeFileSync(join(dir, CORE_MANIFEST_FILE), JSON.stringify(manifest))
+    writeFileSync(join(dir, INSTANCE_CORE_FILE), '{}')
+    expect(classifyRepoOwnership(dir)).toBe('instance')
+  })
+
+  it('is a satellite: neither file — must NOT be classified as the template', () => {
+    const dir = makeTmpDir('ownership-satellite')
+    expect(classifyRepoOwnership(dir)).toBe('satellite')
   })
 })
 

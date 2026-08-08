@@ -74,21 +74,53 @@ async def session():
 
 
 class _FakeDriverError(Exception):
-    """asyncpg's ``PostgresError`` shape, as far as ``_integrity_error_response``
-    reads it. Stubbed rather than provoked end-to-end because the unit lane
-    runs on sqlite, whose driver sets neither ``.sqlstate`` nor
-    ``.constraint_name`` — the real values this stands in for are the ones
-    measured in this module's docstring.
+    """asyncpg's ``PostgresError`` — the GENUINE one, reachable as the wrapper's
+    ``__cause__``.
+
+    Stubbed rather than provoked end-to-end because the unit lane runs on
+    sqlite, whose driver sets neither ``.sqlstate`` nor ``.constraint_name``.
     """
 
     def __init__(self, sqlstate: str, constraint_name: str | None, message: str) -> None:
         super().__init__(message)
         self.sqlstate = sqlstate
         self.constraint_name = constraint_name
+        self.message = message
+
+
+class _FakeWrapperError(Exception):
+    """``AsyncAdapt_asyncpg_dbapi.<Error>`` — what SQLAlchemy actually puts in
+    ``exc.orig``, and what a fixture must be shaped like or it tests the
+    assumption instead of the driver.
+
+    Two properties are load-bearing and both are the OPPOSITE of the obvious
+    stub:
+
+    * ``constraint_name`` is **absent**, for every error. Reading it off this
+      object yields ``None`` even for a genuine FK violation, so a
+      discriminator that reads the wrapper marks everything "authored" and
+      forwards raw driver text — the schema reconnaissance the response
+      contract exists to prevent.
+    * ``str()`` carries a **class-repr prefix**, so forwarding it leaks the
+      driver's exception class into the response body.
+
+    The previous fixture set ``constraint_name`` directly and called
+    ``super().__init__(message)``, giving a bare ``str()`` and a present
+    attribute — so the suite was green while neither held against a real
+    database.
+    """
+
+    def __init__(self, cause: _FakeDriverError) -> None:
+        super().__init__(f"<class 'asyncpg.exceptions.SomeError'>: {cause}")
+        self.sqlstate = cause.sqlstate
+        self.__cause__ = cause
 
 
 def _err(sqlstate: str, constraint_name: str | None, message: str) -> IntegrityError:
-    return IntegrityError("statement", {}, _FakeDriverError(sqlstate, constraint_name, message))
+    """An ``IntegrityError`` shaped the way the asyncpg dialect raises one:
+    ``.orig`` is the wrapper, and the real driver error is its ``__cause__``."""
+    cause = _FakeDriverError(sqlstate, constraint_name, message)
+    return IntegrityError("statement", {}, _FakeWrapperError(cause))
 
 
 #: A realistic authored refusal. The remedy clause is the part that must

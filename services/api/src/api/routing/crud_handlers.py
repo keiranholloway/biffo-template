@@ -207,9 +207,67 @@ def _integrity_error_response(
     (correlated automatically via ``Logger.inject_lambda_context`` on the
     Lambda entrypoint); the caller gets a stable, generic message and, when the
     driver names one, a machine-readable ``constraint`` field.
+
+    **Exception: an integrity error our own schema AUTHORED, rather than one
+    Postgres raised, is forwarded with its message intact (#1349).**
+
+    The discriminator is ``constraint_name``, measured against a real Postgres
+    rather than assumed:
+
+        genuine FK violation   sqlstate=23503  constraint_name='lessons_course_id_fkey'
+        a trigger's RAISE      sqlstate=23503  constraint_name=None
+
+    Postgres always names the constraint it enforced; a ``RAISE EXCEPTION``
+    inside one of our own triggers has no constraint to name. So a class-23
+    error with no constraint name means the schema refused this deliberately,
+    in a sentence somebody wrote for a caller to read — not a generic driver
+    complaint.
+
+    This does NOT weaken #473. That rule exists because the raw driver
+    exception is schema reconnaissance — driver name, exception class,
+    physical table, constraint name — and unstable besides. An authored
+    refusal is the opposite: it names what depends on the row and prescribes
+    the remedy, and the remedy clause is the load-bearing half. Replacing it
+    with a fixed sentence such as "This action references a record that does
+    not exist" is not merely unhelpful, it is backwards for a trigger guarding
+    a delete — the row referenced by other rows, not the reverse.
+
+    The contract this creates, and it is on the guard's author: a message
+    raised by one of our triggers is USER-FACING and must contain nothing a
+    caller should not read.
     """
     sqlstate = getattr(exc.orig, "sqlstate", None)
     constraint = getattr(exc.orig, "constraint_name", None)
+
+    authored = isinstance(sqlstate, str) and sqlstate.startswith("23") and constraint is None
+    if authored:
+        # Logged the same as any other integrity error before the early
+        # return — the response differs from the generic path, the
+        # server-side record should not.
+        logger.warning(
+            f"Authored integrity refusal on {operation} {model.__tablename__}",
+            extra={
+                "table": model.__tablename__,
+                "operation": operation,
+                "sqlstate": sqlstate,
+                "authored": True,
+                "driver_detail": str(exc.orig),
+            },
+        )
+        return HTTPException(
+            # 409, not 400: the body the caller sent was fine, the current
+            # state of the data is what refuses it, and retrying with a
+            # different body is not the fix.
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                # First line only: asyncpg keeps DETAIL/HINT/CONTEXT on later
+                # lines, and CONTEXT in particular carries internal query
+                # text — exactly the reconnaissance #473 excludes.
+                "message": str(exc.orig).split("\n", 1)[0].strip(),
+                "constraint": None,
+            },
+        )
+
     message = (
         _INTEGRITY_ERROR_MESSAGES.get(sqlstate, _DEFAULT_INTEGRITY_MESSAGE)
         if isinstance(sqlstate, str)
@@ -609,7 +667,10 @@ def make_delete_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
             # Capture the row for the event before it's deleted/expired.
             deleted_payload = _event_payload(row, exclude)
             await db.delete(row)
-            await db.flush()
+            try:
+                await db.flush()
+            except IntegrityError as exc:
+                raise _integrity_error_response(exc, model=model, operation="delete") from exc
         else:
             # A model carrying deleted_at is tombstoned, never destroyed, and
             # the event carries the tombstoned row — deleted_at included, so a
@@ -620,7 +681,18 @@ def make_delete_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
             # admit the caller. A DELETE policy alone no longer authorises the
             # generic delete on such a table.
             setattr(row, SOFT_DELETE_COLUMN, func.now())
-            await db.flush()
+            try:
+                await db.flush()
+            except IntegrityError as exc:
+                # A trigger guarding a SOFT delete refuses it here: the
+                # tombstone write is an UPDATE, so the refusal arrives on this
+                # flush, not on a DELETE statement (#1349). Before this, delete
+                # was the only writer with no `try` at all — create and update
+                # both catch IntegrityError — so a caller doing exactly what
+                # the schema asked (soft-delete, don't destroy) got a 500
+                # telling them the server had broken, when it had correctly
+                # declined.
+                raise _integrity_error_response(exc, model=model, operation="delete") from exc
             await db.refresh(row)
             deleted_payload = _event_payload(row, exclude)
         _emit_crud_event(db, model, "deleted", tenant_id, payload=deleted_payload)

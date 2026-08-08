@@ -159,6 +159,10 @@ resource "aws_cloudwatch_event_target" "subscription" {
   event_bus_name = var.event_bus_name
   target_id      = "${var.plugin_name}-lambda"
   arn            = module.function.function_arn
+
+  dead_letter_config {
+    arn = aws_sqs_queue.event_dlq[0].arn
+  }
 }
 
 resource "aws_lambda_permission" "subscription" {
@@ -168,6 +172,54 @@ resource "aws_lambda_permission" "subscription" {
   function_name = module.function.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.subscription[0].arn
+}
+
+# ── Rule-level dead-letter queue (biffo-template#1017) ───────────────────────
+#
+# Distinct from module.function's own async-invoke DLQ (wired inside the
+# compute module, on the Lambda resource itself): that one catches a failed
+# Lambda invocation regardless of who invoked it. This one is EventBridge's
+# own — a message lands here only when EventBridge matched THIS rule, invoked
+# the target, and exhausted its retry policy (the AWS default: up to 185
+# attempts over 24h) without a success. That is specifically "the runtime was
+# unreachable or erroring on every attempt" — cause 4 in #1017 (throttled,
+# retries exhausted) and general target-delivery failure (cause 2).
+#
+# It does NOT catch a rule that never matched at all (cause 3, #1017): if
+# nothing invokes the target, nothing times out, and nothing lands here. That
+# gap is not closed by this queue — see the ADR-0014 amendment for what does
+# (partially) cover it, and what remains genuinely unobservable.
+#
+# Not verified against a deployed environment — this follows AWS's documented
+# shape for an EventBridge-rule dead-letter queue (a queue policy scoped to
+# THIS rule's ARN as the allowed `aws:SourceArn`, mirroring the existing
+# per-function DLQ pattern in modules/cloud/aws/compute/main.tf), but nobody
+# has applied it to a live account.
+resource "aws_sqs_queue" "event_dlq" {
+  count                     = local.has_subscriptions ? 1 : 0
+  name                      = "${local.function_name}-event-dlq"
+  message_retention_seconds = 1209600 # 14 days
+  kms_master_key_id         = var.sqs_kms_key_id != "" ? var.sqs_kms_key_id : null
+  sqs_managed_sse_enabled   = var.sqs_kms_key_id == "" ? true : null
+  tags                      = var.tags
+}
+
+resource "aws_sqs_queue_policy" "event_dlq" {
+  count     = local.has_subscriptions ? 1 : 0
+  queue_url = aws_sqs_queue.event_dlq[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com" }
+      Action    = "sqs:SendMessage"
+      Resource  = aws_sqs_queue.event_dlq[0].arn
+      Condition = {
+        ArnEquals = { "aws:SourceArn" = aws_cloudwatch_event_rule.subscription[0].arn }
+      }
+    }]
+  })
 }
 
 # ── Stale-run sweep (ADR-0014 §5, issue #402) ────────────────────────────────

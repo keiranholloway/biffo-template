@@ -418,6 +418,129 @@ by present-tense prose, that it exists.
 
 ---
 
+## Amendment: §5's undelivered-event blind spot gets a runbook, not an outbox (2026-08-04, closes #1017)
+
+§5 already named the gap precisely: *"`EventPublisher.publish` is best-effort by
+design... There is no retry, no outbox and no dead-letter, and no test covers
+the publish-failure path."* idea-scout#27's reaper then gave the symptom a
+bound — a run nobody claims is failed within `agent_run_unclaimed_after_seconds`
+— but its stored reason was **"presumed undelivered,"** one word doing the work
+of four different failure modes:
+
+1. the event was never published;
+2. EventBridge accepted the `PutEvents` call but the entry, or its delivery to
+   the target, failed;
+3. no rule matched it;
+4. the runtime was throttled and EventBridge exhausted its retries.
+
+Nothing recorded which. §5 prescribed two remedies, one deferred (a
+transactional outbox) and one immediate (*"alarm on the publish-failure log
+lines... this costs almost nothing"*). The immediate one had still not been
+done. This amendment does the immediate one, not the deferred one, and is
+explicit about the difference between the two.
+
+### What changed
+
+**Publish-side confirmation.** `EventPublisher.publish`
+(`services/api/src/api/events/base.py`) now returns a `PublishOutcome`
+(`accepted`, `event_id`, `error_code`, `error_message`) instead of `None`, and
+every attempt — not only failures — is logged with a `run_id` correlator
+pulled from the event payload when present (every `agent.run.requested`
+carries one, via `run_reference_payload`). This is generic across every event
+type this publisher sends, not agent-specific: a second, run-only copy of this
+logging is exactly the kind of duplicate logic already paid for once
+(`_extract_detail`, AGENTS.md §9). `publish_pending` now returns the list of
+outcomes rather than discarding them — `get_db` still ignores the return value
+today, unchanged behaviour, but the outcome no longer dies *inside* the
+publisher, so a future caller with somewhere to put it (the outbox below, or a
+per-run column) has something to call rather than needing to re-plumb the
+publish path first.
+
+**Runtime-side receipt.** `AgentRuntimePlugin.process_event`
+(`services/_plugins/agent-runtime/src/agent_runtime/plugin.py`) now logs
+`"agent.run.requested received"` with `run_id` as a top-level field, before
+touching Core. The handler already logged the raw event
+(`agent_runtime/main.py`'s `"Received event"`), but `run_id` was buried inside
+`event.detail.payload`, not a queryable field — this line is deliberately
+independent of the claim outcome that follows.
+
+**Rule-level dead-letter queue.** The `agent.run.requested` EventBridge target
+(`services/_plugins/agent-runtime/terraform/main.tf`) now has its own
+`dead_letter_config`, distinct from the Lambda's existing async-invoke DLQ
+(`module.function.dlq_arn`, wired in the shared compute module for every
+plugin already). A message on this queue means EventBridge matched the rule,
+invoked the target, and exhausted its retry policy without success.
+
+**The reaper's stored error** (`UNCLAIMED_ERROR`,
+`services/api/src/api/agent_runs.py`) now names the runbook instead of ending
+at "presumed undelivered" — it points the reader at Core's publish log, the
+runtime's receipt log, and the new DLQ, in the order below.
+
+### The runbook — what each cause now looks like
+
+Given a `run_id` from a reaped run's stored error, in Core's log group
+(`/aws/lambda/<project>-<env>-api`) and the agent-runtime Lambda's
+(`/aws/lambda/<project>-<env>-plugin-agent-runtime`):
+
+| Cause | Core: "EventBridge publish" line | Runtime: "received" line | Rule DLQ |
+| --- | --- | --- | --- |
+| 1. Never published | Absent, or present with `accepted: false` | Absent | Empty |
+| 2. Accepted, then dropped | Present, `accepted: true`, has an `event_id` | Absent | Empty, or a message (delivery failure counts here too) |
+| 3. No rule matched | Present, `accepted: true`, has an `event_id` | Absent | Empty |
+| 4. Runtime throttled, retries exhausted | Present, `accepted: true`, has an `event_id` | Absent | A message |
+
+Causes 2 and 3 are **not separable from each other by this table alone** — both
+read "published, never received, DLQ empty is possible for either." Two things
+narrow it further, both partial: in **non-prod only**, the bus's existing
+`log_all` rule (`modules/cloud/aws/events/main.tf`, disabled in prod) logs
+every event regardless of which other rules match it, to
+`/biffo/<project>-<env>/events` — the event's presence there, alongside its
+absence from the runtime's log and the DLQ, is the closest this platform gets
+to confirming "the bus had it, nothing consumed it" without naming which of
+2/3 that was. And a **non-empty DLQ** rules cause 3 out entirely — nothing
+lands there without a matched, invoked target — so the table's cause-2/cause-4
+distinction is genuinely resolvable; cause-2-with-an-empty-DLQ and cause 3 are
+the pair that remains ambiguous.
+
+### What this does not close, honestly
+
+- **No outbox.** §5's deferred remedy — persist the event transactionally,
+  publish from a reader, mark delivered — is still not built. This amendment
+  is the "do now" item §5 already named, not the "known fix." A publish that
+  fails after `create_run`'s commit is still lost; it is now *logged* with
+  enough detail to diagnose after the fact, not *retried* or *recovered*.
+- **Cause 2 vs cause 3, DLQ-empty.** As above — an event that reached the bus
+  and simply vanished before matching (a real but rare EventBridge failure
+  mode) and an event that reached the bus and matched no rule look identical
+  everywhere this amendment added visibility, once the DLQ is empty. Neither
+  this platform nor, as far as could be determined, EventBridge itself
+  exposes a per-event "was this evaluated against rule X" trace.
+- **Prod has strictly less of this than dev.** `log_all` — the one thing that
+  even partially separates causes 2 and 3 — is dev/staging only
+  (`var.environment != "prod"`). Production is not yet built (AGENTS.md §2:
+  `main` is reserved and unused), so this is recorded as a residue for when it
+  is, not a present gap.
+- **No alarm, no page.** This estate has no CloudWatch alarm, SNS topic, or any
+  other notification channel anywhere (checked: the only
+  `aws_cloudwatch_metric_alarm` in the whole repo is an unrelated NAT-instance
+  recovery alarm in `modules/cloud/aws/networking/main.tf`). §5's "alarm on the
+  publish-failure log lines" is done in the sense that the log lines now exist,
+  structured and correlator-bearing; it is not done in the sense of anything
+  paging anyone. Building an alarm with no destination to notify would be
+  console-visible only and mostly ceremonial, so it was not added — a metric
+  nobody would act on is exactly what this project's own discipline asks not
+  to ship. Wiring a real alarm is straightforward once this estate has
+  anywhere for one to notify.
+- **None of this was verified against a deployed environment.** The Terraform
+  (`aws_sqs_queue.event_dlq`, its policy, and the target's
+  `dead_letter_config`) passed `terraform validate` from both the module
+  directory and `infra/environments/dev` (which exercises it as a real module
+  caller), but has not been `apply`'d anywhere. Whether EventBridge actually
+  delivers a failed invocation to this queue in practice — as opposed to
+  merely accepting the configuration — is unconfirmed.
+
+---
+
 ## Related Decisions
 
 - [ADR-0002](0002-api-only-data-integration-pattern.md) — why the runtime reaches Core over HTTP and never touches the database.

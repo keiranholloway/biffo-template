@@ -5,7 +5,7 @@ from typing import Any, cast
 import api.database as database
 import api.dependencies as dependencies
 import pytest
-from api.events import BiffoEvent, emit_event, is_declared, pending_events
+from api.events import BiffoEvent, PublishOutcome, emit_event, is_declared, pending_events
 from api.events.emit import publish_pending
 from api.events.registry import DEMO_REQUESTED, EventType
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,8 +15,9 @@ class _RecordingPublisher:
     def __init__(self) -> None:
         self.events: list[BiffoEvent] = []
 
-    def publish(self, event: BiffoEvent) -> None:
+    def publish(self, event: BiffoEvent) -> PublishOutcome:
         self.events.append(event)
+        return PublishOutcome(accepted=True, event_id=f"fake-{len(self.events)}")
 
 
 class _FakeSession:
@@ -62,14 +63,19 @@ async def test_publish_pending_publishes_declared_and_clears(publisher):
     db = cast(AsyncSession, _FakeSession())
     emit_event(db, DEMO_REQUESTED, {"demo_request_id": "d1"})
 
-    await publish_pending(db)
+    outcomes = await publish_pending(db)
 
     assert len(publisher.events) == 1
     assert publisher.events[0].detail_type == "demo.requested"
+    # biffo-template#1017: the outcome reaches the caller instead of being
+    # discarded inside the publisher — get_db still ignores it today, but
+    # publish_pending no longer throws it away before returning.
+    assert outcomes == [PublishOutcome(accepted=True, event_id="fake-1")]
     # Buffer drained so a re-drain can't double-publish.
     assert pending_events(db) == []
-    await publish_pending(db)
+    second = await publish_pending(db)
     assert len(publisher.events) == 1
+    assert second == []
 
 
 async def test_publish_pending_refuses_undeclared(publisher):
@@ -78,10 +84,14 @@ async def test_publish_pending_refuses_undeclared(publisher):
     undeclared = EventType("biffo.core", "made.up.event", "Made up", "")
     emit_event(db, undeclared, {"x": 1})
 
-    await publish_pending(db)
+    outcomes = await publish_pending(db)
 
     # Compliance gate: nothing non-compliant reaches the bus.
     assert publisher.events == []
+    # A refused event never reached EventPublisher.publish, so it contributes
+    # no PublishOutcome at all — refusal is a compliance rejection, not a
+    # delivery outcome (biffo-template#1017).
+    assert outcomes == []
 
 
 async def test_get_db_publishes_after_commit(monkeypatch, publisher):

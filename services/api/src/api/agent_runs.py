@@ -489,7 +489,13 @@ REAPED_ERROR = (
 
 UNCLAIMED_ERROR = (
     "Reaped: the run was requested but never claimed by a runtime. The "
-    "`agent.run.requested` event is presumed undelivered (ADR-0014 §5)."
+    "`agent.run.requested` event is presumed undelivered (ADR-0014 §5). To find "
+    "out which of never-published / EventBridge-dropped / no-rule-matched / "
+    "runtime-throttled it was (biffo-template#1017), search this run_id in "
+    "Core's structured logs for an 'EventBridge publish' line (accepted with an "
+    "EventId, vs rejected/never-sent), then the agent-runtime Lambda's logs for "
+    "an 'agent.run.requested received' line, then its dead-letter queue — see "
+    "the ADR-0014 §5 amendment for the full runbook."
 )
 
 

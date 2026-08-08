@@ -126,6 +126,21 @@ class AgentRuntimePlugin(BiffoPluginBase):
             logger.warning("agent.run.requested carried no run_id", extra={"event": event.payload})
             return
 
+        # Logged before anything else touches Core (biffo-template#1017): this is
+        # the runtime's receipt of the event, independent of whether the claim
+        # that follows succeeds. `run_id` is a top-level field, not buried in a
+        # raw event dump (main.py's handler-level "Received event" log carries
+        # the full payload but not this as a queryable field) — so a reader who
+        # has a run_id from the reaper's error text can search this Lambda's log
+        # group for exactly this line. Its presence rules out three of the four
+        # causes at once: the event was published, EventBridge accepted it, and
+        # the rule matched — whatever went wrong from here on is downstream of
+        # this line (a claim race, a bad definition, a provider outage). Its
+        # absence, conversely, localises the loss to publish/bus/rule/throttle —
+        # which one is then read from Core's publish log and this function's
+        # dead-letter queue (see the ADR-0014 §5 amendment).
+        logger.info("agent.run.requested received", extra={"run_id": run_id})
+
         run = await self._claim(str(run_id))
         if run is None:
             return

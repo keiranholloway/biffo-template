@@ -31,3 +31,14 @@ output "event_rule_arn" {
   description = "EventBridge rule ARN, or null when the plugin declares no event_subscriptions."
   value       = local.has_subscriptions ? aws_cloudwatch_event_rule.subscription[0].arn : null
 }
+
+output "event_dlq_arn" {
+  description = <<-EOT
+    Rule-level dead-letter queue for the agent.run.requested subscription
+    (biffo-template#1017), or null when the plugin declares no
+    event_subscriptions. A message here means EventBridge matched the rule,
+    invoked this Lambda, and exhausted its retry policy without success —
+    check it when a run's error points here (ADR-0014 section 5 amendment).
+  EOT
+  value       = local.has_subscriptions ? aws_sqs_queue.event_dlq[0].arn : null
+}

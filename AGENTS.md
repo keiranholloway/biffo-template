@@ -553,7 +553,7 @@ should be identical, and whether they diverge in practice.** Application source
 qualifies when both are true: `apps/frontend/src/lib/api-client.ts` is the
 first, and it is there now.
 
-#### Four lists, and the difference matters
+#### Six lists, and the difference matters
 
 - **`files`** — a plain list of paths, distributed to every repo in scope and
   **created where absent**, from this repo's copy at the **same path**. Right
@@ -570,10 +570,19 @@ first, and it is there now.
   by the `scripts/verify.sh` clause, fall back to `skeletonDefault`). The
   policy says what happens to a copy the repo **already has**: `sync`
   overwrites it, `seed` leaves it alone forever. Both create where absent.
-- **`mustBeUniform`** — a `path → baseline variant count` map for paths that
-  should read **identically** across every repo that holds them, and the only
-  list that **never writes**. `scripts/shared-sync.sh --check` only measures
-  it and reports; nothing is copied or overwritten. See below for why.
+- **`mustBeUniform`** — a `path → baseline variant count` map for **whole
+  files** that should read **identically** across every repo that holds them.
+- **`overridesFloor`** — a `target → canonical source` map that checks only
+  the override **keys** inside `pnpm.overrides`, in one direction: a repo may
+  declare extra overrides, but must not be **missing** one the canonical copy
+  declares.
+- **`keyMustBeUniform`** — a `file → dotted key path → baseline variant
+count` map for a **subtree** of a file that should read identically even
+  though the file as a whole legitimately differs per repo.
+
+`mustBeUniform`, `overridesFloor` and `keyMustBeUniform` are the three lists
+that **never write** — `scripts/shared-sync.sh --check` only measures them and
+reports; nothing is copied or overwritten. See below for why.
 
 The mechanism can backfill — that is what `files` and `filesFromSkeleton` are.
 `filesIfPresent` is how you say a file must not be created, only kept current,
@@ -685,6 +694,57 @@ are live behind a public self-service flow — collapsing to the smallest copy
 would delete that feature
 outright. See `mustBeUniformNote` in `shared-files.json` for the full evidence
 trail and the rest of the seeded entries.
+
+#### Why the fifth and sixth lists exist, and when to reach for each
+
+`pnpm.overrides` in `apps/frontend/package.json` is how the estate pins a
+transitive dependency above a security advisory. Nothing distributed it:
+`biffo core upgrade` reaches instances only, and `shared-files.json`'s other
+lists all treat a file as one indivisible unit — `mustBeUniform` measures a
+whole file's blob SHA, which is exactly wrong here, because
+`apps/frontend/package.json`'s `name`/`version`/`dependencies` are
+legitimately per-repo while `pnpm.overrides` must not be. Adding the whole
+file to `mustBeUniform` would report every sibling as diverged on the parts
+that are supposed to differ; adding it to `files`/`filesIfPresent` would
+overwrite `name`, `version` and every sibling's own dependencies on the next
+sync.
+
+Two occurrences, 2026-08-08, are why this could not wait. `nanoid` (#1352): a
+CVE fix landed in this repo's root and skeleton at 06:22Z; by 07:00Z all six
+live siblings were still on the vulnerable version, their required audit check
+red, every open PR in every one of them blocked — and they were only fixed
+because unrelated work happened to hit the wall 38 minutes later. Nothing
+would have surfaced it otherwise. `undici` (#1367): measured at several
+different upper bounds across the estate, including outright absence in one
+sibling (`tabsii-intake`).
+
+The class has **two symptoms**, and one list does not cover both. `nanoid` is
+absence — a repo silently missing a key the canonical copy has. `undici` is
+divergence — every repo but `tabsii-intake` already had the key, they simply
+disagreed about its value. **`overridesFloor`** was built first, the same
+morning, for the absence half: it compares override **keys** in one direction
+— extra is fine, missing is the defect — and its first real run correctly
+flagged `tabsii-intake` as `MISSING: undici@<7.29.0`. It does not, and by
+design cannot, see two present values disagreeing: it never reads the
+override's _value_, only whether the key exists. **`keyMustBeUniform`** is the
+sixth list, built for exactly that gap — the value at a key path, canonicalised
+(object keys sorted recursively, so field order cannot manufacture a false
+variant) and compared across every repo that holds the file, with absence
+folded in as one more disagreeing value rather than a separate signal. A repo
+that holds the file but lacks the key is a holder with a variant, the same way
+a repo that holds the file with the "wrong" value is — so `overridesFloor`'s
+`tabsii-intake` finding and `keyMustBeUniform`'s report of it corroborate
+rather than duplicate.
+
+Key path segments are dot-separated plain object traversal; see
+`keyMustBeUniformNote` in `shared-files.json` for the one constraint that
+follows from that (no segment may itself contain a literal dot, true of every
+entry declared so far) and for why writing is deliberately not built yet for
+either list — the short version is that `mustBeUniform`'s own reason (a
+one-way overwrite destroys evidence about which copy is right) applies at
+smaller blast radius to a key than to a whole file, but it still applies, and
+measuring `pnpm.overrides` as a whole subtree surfaced an undeclared `sharp`
+bound-style divergence nobody had reconciled yet.
 
 #### Reconcile before you distribute
 

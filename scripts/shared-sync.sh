@@ -327,6 +327,23 @@ SKELETON_DEFAULT=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANI
 # baselined ratchet rather than a hard "must be 1" gate.
 UNIFORM=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).mustBeUniform||{};console.log(Object.entries(m).map(([p,b])=>p+'\t'+b).join('\n'))")
 
+# `overridesFloor`: the FIFTH list, and the second that never writes.
+#
+# `pnpm.overrides` is a security floor that lives INSIDE package.json, which is
+# legitimately per-repo — name, scripts, dependencies. So none of the four file
+# lists can carry it: `files` and `filesIfPresent` are whole-file overwrites and
+# would clobber everything around the key. There was therefore no channel at all,
+# and the cost was measured, not theoretical (#1352): five tabsii repos sat on a
+# js-yaml advisory the template had fixed the day before; biffo-platform-app hit
+# the same one hours later; nanoid then reddened the estate. Each was found
+# because CI happened to run, not because anything looked.
+#
+# Emitted as `target<TAB>canonical`. Compares KEYS only, and only in one
+# direction: a repo may declare extra overrides, but must not be MISSING one the
+# canonical declares. Absence is the defect — an override that is not there is
+# indistinguishable from one that was never needed.
+OVERRIDES_FLOOR=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).overridesFloor||{};console.log(Object.entries(m).map(([t,c])=>t+'\t'+c).join('\n'))")
+
 drifted=0
 synced=0
 current=0
@@ -1689,6 +1706,62 @@ if [ -n "$CHECK" ]; then
     rm -f "$uverdicts"
   fi
 
+  # ── overridesFloor ────────────────────────────────────────────────────────
+  #
+  # Reports a repo MISSING an override key the canonical copy declares. Never
+  # writes: distribution is the larger half of #1352 and needs a key-level merge
+  # no existing list can express. Detecting the gap the day it appears is most
+  # of the value and none of the risk.
+  overrides_missing=0
+  if [ -n "$OVERRIDES_FLOOR" ]; then
+    printf '\noverridesFloor -- pnpm.overrides keys every repo must declare (shared-files.json)\n'
+    repos=$(applicable_repo_list)
+    ofindings=$(mktemp)
+    printf '%s\n' "$OVERRIDES_FLOOR" | while IFS="$TAB" read -r target canonical; do
+      [ -n "$target" ] || continue
+      # The canonical copy is read from THIS repo's working tree: it is the
+      # source being distributed, and the run is judged against what is about to
+      # ship, not against what shipped last time.
+      floor=$(node -e "
+        const fs=require('fs');
+        try{const o=JSON.parse(fs.readFileSync('$canonical','utf8')).pnpm?.overrides||{};
+        console.log(Object.keys(o).join(' '))}catch(e){process.exit(3)}" 2>/dev/null) || {
+        printf '  \033[31m%-12s\033[0m %s\n' 'unreadable' "$canonical"
+        printf 'unreadable\n' >> "$ofindings"
+        continue
+      }
+      printf '\n  %s\n  ← %s\n' "$target" "$canonical"
+      [ -n "$floor" ] || { printf '    %-12s canonical declares no overrides — nothing to enforce\n' 'skipped'; continue; }
+      printf '%s\n' "$repos" | while IFS="$TAB" read -r label d base; do
+        [ -n "$d" ] || continue
+        # origin/<base>, never the working tree: a stale clone reads as estate
+        # drift, and this check exists to be believed.
+        have=$(git -C "$d" show "origin/$base:$target" 2>/dev/null) || continue
+        keys=$(printf '%s' "$have" | node -e "
+          let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
+          try{const o=JSON.parse(s).pnpm?.overrides||{};console.log(Object.keys(o).join(' '))}
+          catch(e){process.exit(3)}})" 2>/dev/null) || {
+          printf '    \033[31m%-12s\033[0m %-24s package.json did not parse\n' 'unreadable' "$label"
+          printf 'unreadable\n' >> "$ofindings"
+          continue
+        }
+        missing=''
+        for k in $floor; do
+          case " $keys " in *" $k "*) ;; *) missing="$missing $k" ;; esac
+        done
+        if [ -n "$missing" ]; then
+          printf '    \033[31m%-12s\033[0m %-24s missing:%s\n' 'MISSING' "$label" "$missing"
+          printf 'missing\n' >> "$ofindings"
+        else
+          n=$(printf '%s' "$keys" | wc -w | tr -d ' ')
+          printf '    %-12s %-24s %s override(s), floor met\n' 'ok' "$label" "$n"
+        fi
+      done
+    done
+    if grep -qE '^(missing|unreadable)$' "$ofindings" 2>/dev/null; then overrides_missing=1; fi
+    rm -f "$ofindings"
+  fi
+
   # A repo whose clone could not be fetched was neither current nor drifted --
   # it was unreadable, and exiting 0 over it is the fail-open this check exists
   # to remove one level down. `--check` feeds the daily dashboard, where a 0
@@ -1699,7 +1772,7 @@ if [ -n "$CHECK" ]; then
     exit 1
   fi
 
-  if [ "$drifted" -gt 0 ] || [ "$uniform_worsened" -gt 0 ]; then
+  if [ "$drifted" -gt 0 ] || [ "$uniform_worsened" -gt 0 ] || [ "${overrides_missing:-0}" -gt 0 ]; then
     if [ "$drifted" -gt 0 ]; then
       printf '\n\033[31mShared files have drifted.\033[0m Run without --check to open sync PRs.\n'
     fi
@@ -1708,6 +1781,15 @@ if [ -n "$CHECK" ]; then
       printf 'not the pre-existing residue the baseline tolerates -- reconcile the copies by\n'
       printf 'hand (see AGENTS.md section 9, "Reconcile before you distribute") rather than\n'
       printf 'raising the baseline to match.\n'
+    fi
+    if [ "${overrides_missing:-0}" -gt 0 ]; then
+      printf '\n\033[31mA repo is missing an override the canonical copy declares.\033[0m\n'
+      printf 'Running WITHOUT --check will NOT fix this: overridesFloor never writes, because\n'
+      printf '`pnpm.overrides` lives inside a package.json that is legitimately per-repo and a\n'
+      printf 'whole-file overwrite would clobber everything around it (#1352).\n\n'
+      printf 'Add the missing key(s) to that repo by hand, refresh its lockfile, and check what\n'
+      printf 'the override was FOR -- a missing security floor usually means the repo is still\n'
+      printf 'resolving the vulnerable version, not merely that a line is absent.\n'
     fi
     printf '\n'
     exit 1

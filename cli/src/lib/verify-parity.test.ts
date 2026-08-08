@@ -79,7 +79,10 @@ const gateRuns = execFileSync('sh', [join(repoRoot, 'scripts/verify.sh'), '--lis
 const EXCLUDED: Record<string, { kind: 'network' | 'pr-time' | 'history' | 'slow'; why: string }> =
   {
     'pnpm install --frozen-lockfile': { kind: 'network', why: 'dependency install, not a check' },
-    'uv sync --all-groups': { kind: 'network', why: 'dependency install, not a check' },
+    'uv sync --all-groups --locked': {
+      kind: 'network',
+      why: 'dependency install, not a check',
+    },
     'pnpm --filter @biffo/portal build': {
       kind: 'slow',
       why: 'a full Next build; measured >60s in this repo, against a ~20s whole-gate budget',

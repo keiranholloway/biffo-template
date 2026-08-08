@@ -186,7 +186,19 @@ jobs:
         with:
           enable-cache: true
       - id: install
-        run: uv sync --all-groups
+        # `--locked` is the uv counterpart of `pnpm install --frozen-lockfile`
+        # above, and it is here because the two halves of this job disagreed:
+        # the JS side refused to install against a stale lock, while `uv sync`
+        # silently RE-RESOLVED and carried on. So `uv.lock` pinned nothing —
+        # CI tested whatever resolved at that moment, and the lockfile stopped
+        # recording what was tested. It had already drifted (`pytest-xdist`,
+        # declared in services/api/pyproject.toml, absent from the lock), which
+        # is why every contributor running the Python tooling got an unexplained
+        # `uv.lock` hunk in their diff (#1388).
+        #
+        # A lockfile nothing verifies is not a lock. `--locked` fails rather
+        # than updating, so the drift cannot return quietly.
+        run: uv sync --all-groups --locked
       # `uv sync` installs the workspace lock — core. An instance's own product
       # domains (ADR-0022) declare their extra dependencies in a user-owned,
       # fully pinned `domains/<name>/requirements.txt`, which is NOT in that lock

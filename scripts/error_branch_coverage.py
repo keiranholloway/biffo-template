@@ -32,11 +32,48 @@ story and is not in scope; TypeScript is a possible follow-on via vitest
 coverage. Claiming otherwise would be the same shape of error this tool exists
 to find.
 
+## The blind spot this alone cannot see, and the fix for it (#637)
+
+`--coverage` used to take exactly one `coverage.json`. In an instance, the
+Python job's coverage is all this ever saw — and that job runs with no
+Postgres, so every `*_pg.py` test skips there. An error branch reachable only
+from a real-Postgres lane (an RLS policy refusing a write, a trigger firing)
+therefore read as unexercised no matter how honestly it was tested, and the
+workaround was a second, weaker test with a stub session driving the same
+clause — duplication carried only because this gate could not see the real one.
+
+`--coverage` is now repeatable and *combines* what it is given: a
+line executed in ANY of them counts as executed. This is deliberately the same
+mechanism as `coverage combine` (coverage.py's own tool for exactly this), done
+here instead so the combine and the analysis are one step and one dependency.
+A repo with a second, Postgres-dependent test lane (e.g. an instance's `RLS
+Tests` workflow) can pass both artefacts:
+
+    python scripts/error_branch_coverage.py --check \\
+        --coverage coverage.json --coverage rls-coverage.json
+
+Passing one path (or none, using the default) behaves exactly as before — this
+is additive, not a breaking change to the single-file case.
+
+## Local and CI can legitimately disagree, and that is not a bug in either
+
+`--check`'s verdict is entirely a function of the coverage.json(s) you hand it,
+and a local run and CI's own run routinely exercise different scope — a
+narrower local pytest invocation, a service CI has and your workstation does
+not (Postgres, most concretely: see above), different plugins installed. A
+clean local `--check` is therefore not proof CI's `--check` will also be
+clean, in either direction — they are the same question asked of two different
+pictures of what actually ran. If the two disagree, trust the one whose
+coverage.json you can see the most of, and merge in every artefact you have
+before concluding either way.
+
 Usage:
     uv run pytest --cov --cov-report=json      # writes coverage.json
     python scripts/error_branch_coverage.py            # report
     python scripts/error_branch_coverage.py --write    # update the baseline
     python scripts/error_branch_coverage.py --check    # fail if it grew
+    python scripts/error_branch_coverage.py --check --coverage a.json --coverage b.json
+                                                 # combine two lanes' coverage first (#637)
 """
 
 from __future__ import annotations
@@ -177,6 +214,42 @@ def unexecuted(coverage: dict, root: Path) -> list[Branch]:
     return out
 
 
+def merge_coverage(reports: list[dict]) -> dict:
+    """Combine coverage.json reports so a line executed in ANY of them counts.
+
+    Built for #637: a line is "unverified" only if nothing that ran ever
+    reached it, so the merge is a per-file UNION of executed_lines — the same
+    outcome `coverage combine` gives, computed here instead so pulling in a
+    second lane (e.g. a real-Postgres test run) needs no extra tool, just a
+    second coverage.json.
+
+    `missing_lines` follows from the merged `executed_lines`, not from a
+    separate union: a line coverage.py called "missing" in one report but
+    "executed" in another was, in fact, executed — carrying the stale
+    "missing" verdict forward would silently re-introduce the exact blind
+    spot this function exists to close. A single input is the identity case:
+    merging one report must read exactly as if merge_coverage were never
+    called, so the single-`--coverage` path (unchanged since #956) still
+    behaves the same after this.
+    """
+    merged_files: dict[str, dict] = {}
+    for report in reports:
+        for rel, data in report.get("files", {}).items():
+            entry = merged_files.setdefault(rel, {"executed": set(), "missing": set()})
+            entry["executed"] |= set(data.get("executed_lines", []))
+            entry["missing"] |= set(data.get("missing_lines", []))
+
+    return {
+        "files": {
+            rel: {
+                "executed_lines": sorted(entry["executed"]),
+                "missing_lines": sorted(entry["missing"] - entry["executed"]),
+            }
+            for rel, entry in merged_files.items()
+        }
+    }
+
+
 def load_baseline() -> dict | None:
     """The committed baseline, or None when this repo has never taken one.
 
@@ -195,17 +268,44 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", action="store_true", help="record the current set as baseline")
     parser.add_argument("--check", action="store_true", help="fail if the count grew")
-    parser.add_argument("--coverage", type=Path, default=COVERAGE_JSON)
+    parser.add_argument(
+        "--coverage",
+        type=Path,
+        action="append",
+        default=None,
+        help=(
+            "coverage.json to analyse. Repeatable (#637): pass it more than once "
+            "to combine several lanes' coverage (e.g. the Python job's and a "
+            "real-Postgres RLS lane's) — a line executed in ANY of them counts "
+            "as executed. Defaults to a single coverage.json at the repo root."
+        ),
+    )
     args = parser.parse_args()
+    coverage_paths: list[Path] = args.coverage if args.coverage else [COVERAGE_JSON]
 
-    if not args.coverage.is_file():
+    present = [p for p in coverage_paths if p.is_file()]
+    if not present:
+        paths_str = ", ".join(str(p) for p in coverage_paths)
         print(
-            f"No coverage data at {args.coverage}.\nRun:  uv run pytest --cov --cov-report=json",
+            f"No coverage data at {paths_str}.\nRun:  uv run pytest --cov --cov-report=json",
             file=sys.stderr,
         )
         return 2
 
-    coverage = json.loads(args.coverage.read_text())
+    absent = [p for p in coverage_paths if p not in present]
+    for p in absent:
+        # Not fatal: a repo that has only just adopted a second lane, or is
+        # invoked before that lane has produced its artefact yet, still gets an
+        # answer from what IS present rather than refusing outright — but the
+        # gap is named, not silently absorbed into the merge.
+        print(
+            f"note: {p} not found — combining what is present "
+            f"({len(present)}/{len(coverage_paths)} coverage file(s))",
+            file=sys.stderr,
+        )
+
+    reports = [json.loads(p.read_text()) for p in present]
+    coverage = merge_coverage(reports)
     found = unexecuted(coverage, REPO_ROOT)
     keys = sorted({b.key() for b in found})
 

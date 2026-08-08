@@ -1501,6 +1501,21 @@ Run \`sh scripts/gate-coverage.sh\` after merging to see this repo's gate measur
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)" 2>&1 | tail -1)
   printf '%-26s %s\n' "$label" "$url"
+
+  # Reap the staged worktree now that its PR is open. Phase 2 never revisits a
+  # repo it has already shipped, so nothing downstream still needs it, and
+  # leaving it behind is the exact orphan-worktree accumulation AGENTS.md
+  # section 1 exists to prevent -- four repos were found on 2026-08-02 still
+  # carrying a `.worktrees/shared-sync` from a round that had shipped cleanly
+  # (#1160). This does not explain why a worktree goes missing BETWEEN phases
+  # (that is still open, see require_staged_worktree above); it only stops the
+  # ones that survive both phases from persisting once they are no longer
+  # needed, which the issue named as both a hygiene problem and unnecessary
+  # extra surface for the unexplained disappearance.
+  wt_log remove-post-ship "$label" "$wt"
+  git -C "$d" worktree remove --force "$wt" 2>/dev/null
+  git -C "$d" branch -D chore/sync-shared >/dev/null 2>&1
+
   return 0
 }
 

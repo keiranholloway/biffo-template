@@ -396,6 +396,25 @@ describe('shared-sync rehearsal', () => {
     for (const s of satellites) expect(originHasSyncBranch(s)).toBe(true)
   }, 120_000)
 
+  // #1160's second suggested fix: phase 2 stages a worktree per repo and used
+  // to leave it behind once its PR was open, so `.worktrees/shared-sync`
+  // persisted between rounds -- an AGENTS.md section 1 hygiene gap, and
+  // unnecessary extra surface for the (still unexplained) disappearance the
+  // guard in the previous describe block is named for. It does not explain
+  // that disappearance; it only stops a worktree that survived BOTH phases
+  // from lingering once shipped.
+  it('reaps the staged worktree after a successful ship, so it does not persist between rounds', () => {
+    const { run, satellites } = runSync([])
+
+    expect(run.status).toBe(0)
+    for (const s of satellites) {
+      expect(existsSync(join(s, '.worktrees', 'shared-sync'))).toBe(false)
+    }
+    // The PR still went out -- reaping the worktree must not be mistaken for
+    // reaping the work.
+    expect(run.ghCalls.filter((c) => c.startsWith('pr create'))).toHaveLength(2)
+  }, 120_000)
+
   it('leaves the failing repo staged to look at, and reaps the ones that passed', () => {
     const { run, estate } = runSync([], { failingSatellite: true })
 

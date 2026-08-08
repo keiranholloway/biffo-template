@@ -28,6 +28,10 @@ dependencies = [
 dev = [
   "pytest>=8.3.4",
   "pytest-asyncio>=0.25.2",
+  # Runs the Postgres lane's independent modules concurrently; see
+  # `pg_test_run` in scripts/verify.sh for why `--dist loadfile` specifically
+  # (biffo-template#703).
+  "pytest-xdist>=3.8.0",
   "pytest-cov>=6.0.0",
   "httpx>=0.28.1",
   "bandit>=1.8.0",

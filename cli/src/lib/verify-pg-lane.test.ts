@@ -369,3 +369,113 @@ describe('verify.sh reports a killed pg-test lane as inconclusive, not failed (#
     expect(run.stdout).toContain('pg-test')
   })
 })
+
+describe('verify.sh runs the pg lane concurrently where that is safe (#703)', () => {
+  // Same reasoning as the block above for why a `pyproject.toml` is safe here.
+  const lane = {
+    'package.json': PASSING,
+    'services/api/pyproject.toml': '',
+    'services/api/tests/test_rls_pg.py': PG_TEST,
+  }
+  const dsn = { BIFFO_TEST_PG_DSN: 'postgresql+asyncpg://u:p@localhost:1/db' }
+
+  // Every stub answers the `import xdist` probe first, because that is a real
+  // `uv run` too -- a stub that treated it as a pytest invocation would report
+  // one pass more than actually happened.
+  const XDIST_OK = 'case "$*" in *"import xdist"*) exit 0 ;; esac\n'
+
+  it('gives the parallel pass --dist loadfile, which is what keeps a file on one worker', () => {
+    const run = runIn(
+      {
+        ...lane,
+        // Fails on purpose: verify.sh only prints the lane's own output when it
+        // fails, so failing is how the argv becomes observable at all.
+        '_stub-bin/uv': `#!/bin/sh\n${XDIST_OK}echo "ARGV: $*"\necho "1 failed, 0 passed"\nexit 1\n`,
+      },
+      dsn,
+    )
+
+    expect(run.status).toBe(1)
+    expect(run.stdout).toContain('--dist loadfile')
+    expect(run.stdout).toContain('-m not serial')
+  })
+
+  it('runs a SECOND, serial pass once the parallel one is green', () => {
+    const run = runIn(
+      {
+        ...lane,
+        // Dispatched on argv, NOT on a marker file counting invocations: the
+        // general `pytest(services/api)` check runs this same stub twice
+        // before the pg lane starts, so a counter would report the serial pass
+        // as having already happened. Matching `-m serial` also pins the
+        // selection itself rather than merely that something ran twice.
+        '_stub-bin/uv': [
+          '#!/bin/sh',
+          XDIST_OK.trim(),
+          'case "$*" in',
+          '  *"-m not serial"*) echo "3 passed"; exit 0 ;;',
+          // Fails on purpose -- verify.sh prints the lane's output only on
+          // failure, so this is how the second pass becomes observable.
+          '  *"-m serial"*) echo "SECOND PASS ARGV: $*"; echo "1 failed, 0 passed"; exit 1 ;;',
+          'esac',
+          'echo "3 passed"',
+          'exit 0',
+          '',
+        ].join('\n'),
+      },
+      dsn,
+    )
+
+    expect(run.status).toBe(1)
+    expect(run.stdout).toContain('SECOND PASS ARGV:')
+    expect(run.stdout).toContain('-m serial')
+  })
+
+  it('treats "no tests collected" from the serial pass as fine, not as a failure', () => {
+    // The state of a repo that has adopted the split but marked nothing serial
+    // yet. pytest exits 5 there, and reading that as a failure would break
+    // every such repo on the day it takes the upgrade.
+    const run = runIn(
+      {
+        ...lane,
+        '_stub-bin/uv': [
+          '#!/bin/sh',
+          XDIST_OK.trim(),
+          'case "$*" in *"-m serial"*) exit 5 ;; esac',
+          'echo "3 passed"',
+          'exit 0',
+          '',
+        ].join('\n'),
+      },
+      dsn,
+    )
+
+    expect(run.status).toBe(0)
+    expect(run.stdout).toContain('verify passed')
+    expect(run.stdout).not.toContain('verify failed:')
+  })
+
+  it('falls back to one undivided pass, loudly, when pytest-xdist is missing', () => {
+    // A repo that has taken the script but not re-run `uv sync`. `-n` would
+    // abort with a usage error -- the gate failing over its own dependency
+    // rather than over the code, which is what teaches people to skip it.
+    const run = runIn(
+      {
+        ...lane,
+        '_stub-bin/uv': [
+          '#!/bin/sh',
+          'case "$*" in *"import xdist"*) exit 1 ;; esac',
+          'case "$*" in *"-n auto"*) echo "ERROR: unrecognized arguments: -n"; exit 4 ;; esac',
+          'echo "3 passed"',
+          'exit 0',
+          '',
+        ].join('\n'),
+      },
+      dsn,
+    )
+
+    expect(run.status).toBe(0)
+    expect(run.stdout).toContain('pytest-xdist is not installed')
+    expect(run.stdout).toContain('verify passed')
+  })
+})

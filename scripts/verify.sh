@@ -681,6 +681,11 @@ fi
 # shrinking with every test the suite gains. Doubled to 240s, the same
 # doubling this file already suggests as the retry (below) -- comfortable
 # headroom today, and re-measure this comment again once it stops being so.
+#
+# Raising the number was the smaller half of that fix and it does not scale: a
+# lane growing 310 -> 946 tests in four days outruns any constant. The other
+# half is below -- the lane now runs CONCURRENTLY where it safely can, which is
+# what actually bends the curve.
 PG_TEST_BUDGET_SECONDS="${BIFFO_VERIFY_PG_BUDGET:-240}"
 PG_TEST_DSN="${BIFFO_TEST_PG_DSN:-${TABSII_TEST_PG_DSN:-}}"
 
@@ -703,12 +708,71 @@ pg_test_modules() {
 # success. A green gate that ran nothing is the exact shape this whole lane
 # exists to end, so the summary line is asserted rather than trusted -- the same
 # assertions its CI workflow makes, for the same reason.
+
+# Run the lane concurrently where that is safe, serially where it is not.
+#
+# ## Why the lane can be shared at all
+#
+# It runs against ONE database. Most modules tolerate that because each owns a
+# distinct tenant UUID namespace and its own Postgres role -- which is the same
+# property that makes them safe to run beside each other. A minority are not:
+# they perform DDL with fixed object names, or they sweep `pg_class` /
+# `information_schema` and assert over every table, so they see rows another
+# module created. Those declare `pytest.mark.serial` and run in a second pass.
+#
+# `--dist loadfile` is load-bearing, not a tuning knob: it keeps every test in
+# a file on ONE worker, so a module's fixtures and its tenant namespace stay
+# within a single process. Splitting by test would break exactly the isolation
+# this relies on.
+#
+# ## Why it degrades rather than fails when xdist is absent
+#
+# `pytest-xdist` is declared beside pytest, so a synced repo has it. A repo
+# that has not re-synced does not, and `-n` would then abort the whole lane
+# with a usage error -- a gate failing over its own dependency rather than over
+# the code, which is the fail-closed nuisance that teaches people to reach for
+# BIFFO_SKIP_VERIFY. It falls back to one undivided pass and says so, which is
+# correct and merely slower.
+pg_xdist_ready() {
+  uv run --directory "$1" python -c "import xdist" >/dev/null 2>&1
+}
+
 pg_test_run() {
   _out="/tmp/biffo-verify-pg.$$"
   _pg_started=$(date +%s)
-  TABSII_TEST_PG_DSN="$PG_TEST_DSN" BIFFO_TEST_PG_DSN="$PG_TEST_DSN" \
-    timeout "$PG_TEST_BUDGET_SECONDS" uv run --directory "$1" pytest -q $2 >"$_out" 2>&1
-  _pg_rc=$?
+
+  if pg_xdist_ready "$1"; then
+    TABSII_TEST_PG_DSN="$PG_TEST_DSN" BIFFO_TEST_PG_DSN="$PG_TEST_DSN" \
+      timeout "$PG_TEST_BUDGET_SECONDS" uv run --directory "$1" \
+      pytest -q -m 'not serial' -n auto --dist loadfile $2 >"$_out" 2>&1
+    _pg_rc=$?
+
+    # Only if the parallel pass actually passed. A failure there is the answer
+    # already, and running the serial pass on top would append a second summary
+    # line that the "did it exercise anything" grep below would happily match.
+    if [ "$_pg_rc" -eq 0 ]; then
+      _pg_left=$((PG_TEST_BUDGET_SECONDS - ($(date +%s) - _pg_started)))
+      [ "$_pg_left" -lt 10 ] && _pg_left=10
+      TABSII_TEST_PG_DSN="$PG_TEST_DSN" BIFFO_TEST_PG_DSN="$PG_TEST_DSN" \
+        timeout "$_pg_left" uv run --directory "$1" \
+        pytest -q -m serial $2 >>"$_out" 2>&1
+      _pg_rc=$?
+      # pytest exits 5 for "no tests collected", which is the CORRECT outcome
+      # in a repo where nothing is marked serial yet. Treating it as a failure
+      # would make this change break every such repo on adoption.
+      [ "$_pg_rc" -eq 5 ] && _pg_rc=0
+    fi
+  else
+    # A FLAG rather than a printf, because this function's whole output is
+    # redirected to a temp file the call site prints only when the lane FAILS.
+    # Printing here would make the one case that most needs saying -- the lane
+    # passed, but slowly and un-split -- the one case nobody ever sees.
+    PG_XDIST_MISSING=1
+    TABSII_TEST_PG_DSN="$PG_TEST_DSN" BIFFO_TEST_PG_DSN="$PG_TEST_DSN" \
+      timeout "$PG_TEST_BUDGET_SECONDS" uv run --directory "$1" pytest -q $2 >"$_out" 2>&1
+    _pg_rc=$?
+  fi
+
   _pg_elapsed=$(($(date +%s) - _pg_started))
 
   # `timeout` exits 124 when it kills the command (137 if SIGKILL was needed).
@@ -908,6 +972,12 @@ else
           sed 's/^/      /' "/tmp/biffo-verify-pg-check.$$" | tail -25
           ;;
       esac
+      if [ -n "${PG_XDIST_MISSING:-}" ]; then
+        printf '       \033[33m%s\033[0m\n' \
+          "pytest-xdist is not installed, so the lane ran in one undivided pass"
+        printf '       \033[90m%s\033[0m\n' \
+          "re-run 'uv sync' to get the parallel pass back (biffo-template#703)"
+      fi
       rm -f "/tmp/biffo-verify-pg-check.$$"
     fi
   fi

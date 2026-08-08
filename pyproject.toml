@@ -103,6 +103,18 @@ python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+markers = [
+    # A pg-lane module that cannot share the database with a concurrent worker
+    # -- it performs DDL with fixed object names, or sweeps `pg_class` /
+    # `information_schema` and asserts over every table, so it sees rows another
+    # module created. `scripts/verify.sh` and the RLS workflow run these in a
+    # second, serial pass after the parallel one (biffo-template#703).
+    #
+    # Registered here rather than left implicit so `--strict-markers` stays
+    # available and a typo'd `@pytest.mark.seriel` is a collection error rather
+    # than a module silently rejoining the parallel pass.
+    "serial: needs the database to itself; excluded from the parallel pg pass",
+]
 
 [tool.coverage.run]
 source = ["services", "packages"]

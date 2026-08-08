@@ -1,12 +1,34 @@
 #!/usr/bin/env node
 /**
- * Two guards over a PR body's closing keywords, asking different questions.
+ * Two guards over a PR's closing keywords, asking different questions — and,
+ * since #1334, applied to every document GitHub actually honours, not just
+ * the PR body.
  *
  * 1. Refuse `Closes #N` on a change whose behaviour only shows up once
  *    deployed — a path-scoped check, documented immediately below.
  * 2. Refuse a NEGATED closing keyword anywhere, on any path — see
  *    `negatedClosingReferences`. GitHub's linker has no concept of negation,
  *    so `Does not close #N` closes #N.
+ *
+ * ── Three documents, not one (#1334, #1362) ──────────────────────────────
+ *
+ * GitHub does not read only the PR body. A closing keyword in the PR body
+ * shows up as a live "closes #N" link while the PR is open; a closing
+ * keyword in a **commit message** is honoured too — and for a squash merge,
+ * this repo's default constructs the squash commit's message from the
+ * individual commits, not from the PR body. #1332 was opened with
+ * `Closes #1331` and Release Guards correctly refused it (a workflow-only
+ * change, deploy-only path). The PR body was corrected to `Refs #1331`, the
+ * guard re-ran reading `PR_BODY`, and it passed — because the guard had only
+ * ever read the body. The first commit's message still said `Closes #1331`,
+ * that text reached the squash-merge commit unchanged, and #1331 closed the
+ * instant the PR merged. The guard was right about what it read; GitHub read
+ * something else.
+ *
+ * So every check in this file runs against **all** of: the PR body, the PR
+ * title, and every commit's message (`messageHeadline` and `messageBody`
+ * both — a keyword can sit in either). One finding in any one of them is
+ * enough to trip the guard; see `documentsFor` and `assess`.
  *
  * ── 1. Closing keywords on deploy-only paths ─────────────────────────────
  *
@@ -224,29 +246,65 @@ export function deployOnlyPaths(changedFiles) {
 }
 
 /**
+ * Every document GitHub honours a closing keyword in, tagged with a
+ * human-readable source so a failure can say exactly where it found the
+ * keyword (#1334: knowing only "the body passed" is what let the real bug
+ * through — the body WAS clean, the commit message was not).
+ *
+ * `commits` is the shape `gh pr view --json commits` returns: an array of
+ * `{ messageHeadline, messageBody }`. Both are scanned — a keyword can sit
+ * in either, and #1334's own repro had it in the headline.
+ */
+export function documentsFor({ body, title, commits }) {
+  const docs = [{ source: 'the PR body', text: body }]
+  if (title) docs.push({ source: 'the PR title', text: title })
+  const list = commits ?? []
+  list.forEach((commit, i) => {
+    const label = list.length === 1 ? 'the commit message' : `commit ${i + 1}`
+    if (commit?.messageHeadline) {
+      docs.push({ source: `${label} (subject)`, text: commit.messageHeadline })
+    }
+    if (commit?.messageBody) {
+      docs.push({ source: `${label} (body)`, text: commit.messageBody })
+    }
+  })
+  return docs
+}
+
+/**
  * The whole decision, pure so it is testable without a repo or a PR.
  *
  * Returns `{ ok }` on a pass, or a failure carrying `kind` plus exactly what
  * tripped it — a guard that says only "no" gets worked around.
+ *
+ * `title` and `commits` are optional so every existing body-only caller (and
+ * test) keeps working unchanged — see `documentsFor`.
  *
  * The negation check runs FIRST and ignores `changedFiles` entirely. It is not
  * a special case of the deploy-path check: a `Verified-on-deploy:` trailer
  * cannot excuse it either, because the author is not claiming the issue is
  * verified, they are saying it is not being closed at all.
  */
-export function assess({ body, changedFiles }) {
-  const negated = negatedClosingReferences(body)
+export function assess({ body, title, commits, changedFiles }) {
+  const docs = documentsFor({ body, title, commits })
+
+  const negated = docs.flatMap((doc) =>
+    negatedClosingReferences(doc.text).map((n) => ({ ...n, source: doc.source })),
+  )
   if (negated.length > 0) return { ok: false, kind: 'negated-keyword', negated }
 
-  const references = closingReferences(body)
-  if (references.length === 0) return { ok: true, reason: 'no-closing-keyword' }
+  const hits = docs
+    .map((doc) => ({ source: doc.source, references: closingReferences(doc.text) }))
+    .filter((h) => h.references.length > 0)
+  if (hits.length === 0) return { ok: true, reason: 'no-closing-keyword' }
 
   const paths = deployOnlyPaths(changedFiles)
   if (paths.length === 0) return { ok: true, reason: 'no-deploy-only-paths' }
 
   if (hasVerifiedTrailer(body)) return { ok: true, reason: 'verified-trailer' }
 
-  return { ok: false, kind: 'deploy-only-path', references, paths }
+  const references = [...new Set(hits.flatMap((h) => h.references))]
+  return { ok: false, kind: 'deploy-only-path', references, paths, hits }
 }
 
 export function formatFailure(result) {
@@ -258,30 +316,38 @@ export function formatFailure(result) {
 function formatNegatedFailure({ negated }) {
   const refs = [...new Set(negated.map((n) => n.reference))]
   return [
-    `This PR body says it does NOT close ${refs.join(', ')}, and GitHub will`,
+    `This PR says it does NOT close ${refs.join(', ')}, and GitHub will`,
     `close ${refs.length === 1 ? 'it' : 'them'} anyway on merge. Its linker matches the keyword and the`,
     'issue reference; it has no concept of the word "not" in front of them.',
     '',
-    ...negated.map((n) => `  line ${n.lineNumber}: ${n.line}`),
+    ...negated.map((n) => `  ${n.source}, line ${n.lineNumber}: ${n.line}`),
     '',
     'This has now happened four times (tabsii-platform#76, tabsii-crm#133,',
     '#1021 via #1238 — see #1245). Keeping the denial out of the commit',
-    'message is not enough: GitHub reads the PR description on its own.',
+    'message is not enough: GitHub reads the PR description on its own — and',
+    '(#1334) a commit message on its own, independent of the body.',
     '',
     'Rewrite the line so no closing keyword sits in front of the reference:',
     ...refs.map((r) => `  - \`Refs ${r}\`, or "leaves ${r} open"`),
     '',
-    'Then edit the PR body — this guard reads it live, so an edit alone turns',
-    'the check green with no new commit (#1174).',
+    'If the offending text is in the PR body or title, edit it — this guard',
+    'reads both live, so an edit alone turns the check green with no new',
+    'commit (#1174, #1189). If it is in a COMMIT message, the commit itself',
+    'must change (amend/reword and force-push) — the guard reads the commits',
+    'live too, but the commit message that will actually reach the merge',
+    'cannot be edited from the PR page.',
   ].join('\n')
 }
 
-function formatDeployOnlyFailure({ references, paths }) {
+function formatDeployOnlyFailure({ references, paths, hits }) {
   const shown = paths.slice(0, 10)
   const more = paths.length - shown.length
   return [
-    `This PR would close ${references.join(', ')} on merge, and it changes`,
-    'paths whose behaviour a green suite does not evidence:',
+    `This PR would close ${references.join(', ')} on merge — found in:`,
+    '',
+    ...(hits ?? []).map((h) => `  - ${h.source}: ${h.references.join(', ')}`),
+    '',
+    'and it changes paths whose behaviour a green suite does not evidence:',
     '',
     ...shown.map((p) => `  - ${p}`),
     ...(more > 0 ? [`  …and ${more} more`] : []),
@@ -302,10 +368,21 @@ function formatDeployOnlyFailure({ references, paths }) {
     // re-evaluates; without saying so, the obvious next move is to wait for a
     // re-check that never comes, or to push an empty commit to force one.
     // I did the latter on #1304 while this very message was on screen.
-    'Then RE-RUN this check — do not push an empty commit. Editing the PR body',
-    'does not re-trigger CI, but the body is read live at run time, so:',
+    //
+    // If the keyword found above is in a COMMIT rather than the body/title,
+    // a body edit does not touch it at all — the commit itself has to be
+    // reworded (amend/rebase) and force-pushed, since that text is what
+    // reaches the squash-merge commit GitHub actually reads (#1334).
+    'If the match above is in the PR body or title, edit it, then RE-RUN this',
+    'check — do not push an empty commit. Both are read live, so a re-run',
+    'genuinely re-evaluates:',
     '',
     '    gh run rerun <run-id> --failed',
+    '',
+    'If the match is in a COMMIT message, editing the PR changes nothing:',
+    'reword the commit (`git commit --amend` or an interactive rebase) and',
+    'force-push the branch — the pushed commit message is what this guard,',
+    'and GitHub itself, will read.',
     '',
     'The trailer must start the line: a `Verified-on-deploy:` inside backticks',
     'or a bullet is not a trailer and will not be seen.',
@@ -369,6 +446,115 @@ export async function resolveBody({ env = process.env, fetchLiveBody = fetchPrBo
   }
 }
 
+/**
+ * Fetch a PR's CURRENT title via the GitHub CLI. Same split as
+ * `fetchPrBodyViaGh` so tests can inject a fake.
+ */
+export async function fetchPrTitleViaGh({ GH_TOKEN, PR_NUMBER, GH_REPO }) {
+  const { execFileSync } = await import('node:child_process')
+  return execFileSync(
+    'gh',
+    ['pr', 'view', String(PR_NUMBER), '--repo', GH_REPO, '--json', 'title', '--jq', '.title'],
+    { encoding: 'utf8', env: { ...process.env, GH_TOKEN } },
+  ).trim()
+}
+
+/**
+ * Resolve the PR title to assess — the second of the three documents GitHub
+ * honours (#1334). Same three-path shape as `resolveBody`, deliberately: a
+ * frozen `github.event.pull_request.title` was #1187/#1189's bug for the
+ * unrelated release-subject guard, and there is no reason to reintroduce it
+ * here by copying the field instead of the pattern.
+ *
+ *   - `PR_TITLE` set (including deliberately empty): used as-is, no network.
+ *   - `PR_TITLE` unset, `GH_TOKEN`/`PR_NUMBER`/`GH_REPO` all set: live fetch.
+ *   - Neither: not a PR — empty title, nothing to scan.
+ *
+ * Fails CLOSED on a half-configured trio or a failed live fetch, same
+ * reasoning as `resolveBody` — silently falling back to "no title" would be
+ * the `class:fail-open` shape #1174 exists to prevent.
+ */
+export async function resolveTitle({ env = process.env, fetchLiveTitle = fetchPrTitleViaGh } = {}) {
+  if (env.PR_TITLE !== undefined) return env.PR_TITLE
+
+  const { GH_TOKEN, PR_NUMBER, GH_REPO } = env
+  const trio = [GH_TOKEN, PR_NUMBER, GH_REPO]
+  if (trio.some(Boolean) && !trio.every(Boolean)) {
+    throw new Error(
+      'GH_TOKEN, PR_NUMBER and GH_REPO must all be set together for the live PR-title fetch; got only some of them.',
+    )
+  }
+  if (!trio.every(Boolean)) return ''
+
+  try {
+    return await fetchLiveTitle({ GH_TOKEN, PR_NUMBER, GH_REPO })
+  } catch (err) {
+    throw new Error(
+      `could not fetch the live title of PR #${PR_NUMBER} in ${GH_REPO}: ${err?.message ?? err}`,
+    )
+  }
+}
+
+/**
+ * Fetch a PR's commits via the GitHub CLI: `{ messageHeadline, messageBody }`
+ * per commit, exactly the shape `gh pr view --json commits` returns. Broken
+ * out so tests can inject a fake, same as the body/title fetchers.
+ */
+export async function fetchPrCommitsViaGh({ GH_TOKEN, PR_NUMBER, GH_REPO }) {
+  const { execFileSync } = await import('node:child_process')
+  const raw = execFileSync(
+    'gh',
+    ['pr', 'view', String(PR_NUMBER), '--repo', GH_REPO, '--json', 'commits', '--jq', '.commits'],
+    { encoding: 'utf8', env: { ...process.env, GH_TOKEN } },
+  ).trim()
+  return raw ? JSON.parse(raw) : []
+}
+
+/**
+ * Resolve the PR's commits to assess — the third document, and the one
+ * #1334 is actually about: GitHub builds this repo's squash-merge commit
+ * message from the individual commit messages, not from the PR body, so a
+ * closing keyword left there survives a body edit that looks like a fix.
+ *
+ * Same three-path shape as `resolveBody`/`resolveTitle`:
+ *
+ *   - `PR_COMMITS` set (including `''`, read as no commits): a JSON array of
+ *     `{ messageHeadline, messageBody }`, used as-is, no network — the
+ *     local-run and test path.
+ *   - `PR_COMMITS` unset, `GH_TOKEN`/`PR_NUMBER`/`GH_REPO` all set: live
+ *     fetch, so a re-run sees the commits as they are right now (an amend +
+ *     force-push), not as they were when the PR was opened.
+ *   - Neither: not a PR — no commits to scan.
+ *
+ * Fails CLOSED on a half-configured trio or a failed fetch, same as the
+ * other two resolvers and for the same reason: a silent empty-commits
+ * fallback here is indistinguishable from "nothing to find" and would let
+ * an API outage pass every PR — the exact shape #1174 is filed under.
+ */
+export async function resolveCommits({
+  env = process.env,
+  fetchLiveCommits = fetchPrCommitsViaGh,
+} = {}) {
+  if (env.PR_COMMITS !== undefined) return env.PR_COMMITS === '' ? [] : JSON.parse(env.PR_COMMITS)
+
+  const { GH_TOKEN, PR_NUMBER, GH_REPO } = env
+  const trio = [GH_TOKEN, PR_NUMBER, GH_REPO]
+  if (trio.some(Boolean) && !trio.every(Boolean)) {
+    throw new Error(
+      'GH_TOKEN, PR_NUMBER and GH_REPO must all be set together for the live PR-commits fetch; got only some of them.',
+    )
+  }
+  if (!trio.every(Boolean)) return []
+
+  try {
+    return await fetchLiveCommits({ GH_TOKEN, PR_NUMBER, GH_REPO })
+  } catch (err) {
+    throw new Error(
+      `could not fetch the commits of PR #${PR_NUMBER} in ${GH_REPO}: ${err?.message ?? err}`,
+    )
+  }
+}
+
 // ── CLI ───────────────────────────────────────────────────────────────────
 // Bare node, no install, matching practices-monotonic.mjs — so this runs in
 // the Release Guards job without depending on the pnpm install step.
@@ -382,12 +568,17 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(0)
   }
 
-  let body
+  let body, title, commits
   try {
+    // All three read live where a token is available (#1174, and #1334 for
+    // commits specifically) — a re-run genuinely re-evaluates the PR/commits
+    // as they are now, not as they were when the workflow event fired.
     body = await resolveBody()
+    title = await resolveTitle()
+    commits = await resolveCommits()
   } catch (err) {
-    // Fail closed (#1174): an unreadable body is an error, never a silent
-    // "no closing keyword found".
+    // Fail closed (#1174): an unreadable body/title/commits is an error,
+    // never a silent "no closing keyword found".
     console.error(`✘ closing-keyword guard: ${err.message}`)
     process.exit(1)
   }
@@ -406,7 +597,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(1)
   }
 
-  const result = assess({ body, changedFiles })
+  const result = assess({ body, title, commits, changedFiles })
   if (result.ok) {
     console.log(`✓ closing-keyword guard: ${result.reason}.`)
     process.exit(0)

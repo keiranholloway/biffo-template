@@ -344,6 +344,79 @@ UNIFORM=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','ut
 # indistinguishable from one that was never needed.
 OVERRIDES_FLOOR=$(node -e "const m=JSON.parse(require('fs').readFileSync('$MANIFEST','utf8')).overridesFloor||{};console.log(Object.entries(m).map(([t,c])=>t+'\t'+c).join('\n'))")
 
+# `keyMustBeUniform`: the SIXTH list (#1352, #1367), and like `mustBeUniform`
+# and `overridesFloor` it never writes -- see `keyMustBeUniformNote` in
+# shared-files.json for the full reasoning, including why writing is
+# deliberately not built yet. It is deliberately NOT a replacement for
+# `overridesFloor` above: that list catches a key MISSING outright (the
+# #1352 shape); this one catches the key present in every repo but disagreeing
+# on its VALUE (the #1367 shape a presence-only check cannot see), and treats
+# absence as one more disagreeing value rather than a separate check --
+# so a repo `overridesFloor` already flags as MISSING is also counted here as
+# a variant, and the two reports corroborate rather than duplicate.
+# `file<TAB>keyPath<TAB>baseline` lines, flattened from the manifest's nested
+# `file -> keyPath -> baseline` shape. Unlike `mustBeUniform`, the unit being
+# compared is not the whole file's blob SHA -- it's the canonicalised JSON
+# VALUE at a dotted key path inside it, because `apps/frontend/package.json`
+# is legitimately different per repo (`name`, `version`, `dependencies`) while
+# a specific subtree of it (`pnpm.overrides`, the estate's mechanism for
+# pinning a transitive dependency above a security advisory) must not be.
+KEY_UNIFORM=$(node -e "
+const m = JSON.parse(require('fs').readFileSync('$MANIFEST', 'utf8')).keyMustBeUniform || {};
+const rows = [];
+for (const [file, keys] of Object.entries(m)) {
+  for (const [keyPath, baseline] of Object.entries(keys)) {
+    rows.push(file + '\t' + keyPath + '\t' + baseline);
+  }
+}
+console.log(rows.join('\n'));
+")
+
+# Canonicalises the JSON value at a dotted KEY PATH within file content read
+# from stdin, so two repos' package.json -- deliberately different in
+# `name`/`version`/`dependencies` -- can be compared at just the one subtree
+# that must not diverge. Recursively sorts object keys (so field order alone
+# cannot manufacture a false variant); arrays keep their order, since nothing
+# tracked here today is an array. Prints `<absent>` for a missing key -- the
+# #1352 shape: a sibling silently missing an override is a VARIANT, not a
+# non-holder, and must count as one -- and `<unparsable>` for content that is
+# not valid JSON at all, so a syntax error reads as one more variant rather
+# than crashing the whole measurement. Path segments split on a literal `.`;
+# see keyMustBeUniformNote for why that is exact for every entry declared
+# today and what a future entry needing a literal dot in a segment would need
+# instead.
+key_canon() {
+  node -e '
+const segments = (process.argv[1] || "").split(".").filter(Boolean);
+let data;
+try {
+  data = JSON.parse(require("fs").readFileSync(0, "utf8"));
+} catch (e) {
+  console.log("<unparsable>");
+  process.exit(0);
+}
+let cur = data;
+for (const seg of segments) {
+  if (cur !== null && typeof cur === "object" && Object.prototype.hasOwnProperty.call(cur, seg)) {
+    cur = cur[seg];
+  } else {
+    console.log("<absent>");
+    process.exit(0);
+  }
+}
+function canon(v) {
+  if (Array.isArray(v)) return v.map(canon);
+  if (v !== null && typeof v === "object") {
+    const out = {};
+    for (const k of Object.keys(v).sort()) out[k] = canon(v[k]);
+    return out;
+  }
+  return v;
+}
+console.log(JSON.stringify(canon(cur)));
+' "$1"
+}
+
 drifted=0
 synced=0
 current=0
@@ -1762,6 +1835,73 @@ if [ -n "$CHECK" ]; then
     rm -f "$ofindings"
   fi
 
+  # `keyMustBeUniform`: the baselined ratchet's sibling (#1352, #1367). Same
+  # reporting posture as `mustBeUniform` immediately above -- every entry,
+  # every run -- but the unit compared is a canonicalised JSON subtree, not a
+  # whole file's blob SHA, so `apps/frontend/package.json` can differ freely
+  # in `name`/`version`/`dependencies` while `pnpm.overrides` must not.
+  #
+  # `key_worsened` is read back OUTSIDE the piped `while` for the same reason
+  # `uniform_worsened` is: a pipe's right-hand side is a subshell in dash.
+  key_worsened=0
+  if [ -n "$KEY_UNIFORM" ]; then
+    printf '\nkeyMustBeUniform -- baselined ratchet over a JSON subtree, asserts without writing (shared-files.json)\n\n'
+    repos=$(applicable_repo_list)
+    kverdicts=$(mktemp)
+    printf '%s\n' "$KEY_UNIFORM" | while IFS="$TAB" read -r file keypath baseline; do
+      [ -n "$file" ] || continue
+      label="$file#$keypath"
+      values=$(mktemp)
+      printf '%s\n' "$repos" | while IFS="$TAB" read -r rlabel d base; do
+        [ -n "$d" ] || continue
+        # A holder is a repo that has the FILE -- same rule as mustBeUniform.
+        # Whether it has the KEY inside is a VALUE (possibly `<absent>`), not
+        # a holder test: that is exactly the #1352 shape, a sibling silently
+        # missing an override, and it must count as a variant rather than be
+        # skipped the way a repo missing the whole file is.
+        blob=$(git -C "$d" rev-parse -q --verify "origin/$base:$file" 2>/dev/null)
+        [ -n "$blob" ] || continue
+        canon=$(git -C "$d" show "origin/$base:$file" 2>/dev/null | key_canon "$keypath")
+        [ -n "$canon" ] || canon='<unreadable>'
+        echo "$canon"
+      done > "$values"
+      holders=$(wc -l < "$values" | tr -d ' ')
+      variants=$(sort -u "$values" | wc -l | tr -d ' ')
+      rm -f "$values"
+
+      if [ "$holders" -lt 2 ]; then
+        printf '  %-12s %-46s only %s holder(s) -- need >=2 to be meaningful\n' \
+          'skipped' "$label" "$holders"
+        printf 'skipped\n' >> "$kverdicts"
+        continue
+      fi
+
+      if [ "$variants" -gt "$baseline" ]; then
+        printf '  \033[31m%-12s\033[0m %-46s %s variants across %s repos (baseline %s)\n' \
+          'WORSENED' "$label" "$variants" "$holders" "$baseline"
+        printf 'WORSENED\n' >> "$kverdicts"
+      elif [ "$variants" -eq 1 ]; then
+        if [ "$baseline" -eq 1 ]; then
+          printf '  %-12s %-46s uniform across %s repos\n' 'uniform' "$label" "$holders"
+        else
+          printf '  %-12s %-46s uniform across %s repos (baseline %s -- lower it to 1)\n' \
+            'uniform' "$label" "$holders" "$baseline"
+        fi
+        printf 'uniform\n' >> "$kverdicts"
+      elif [ "$variants" -lt "$baseline" ]; then
+        printf '  %-12s %-46s %s variants across %s repos (baseline %s -- lower it)\n' \
+          'IMPROVED' "$label" "$variants" "$holders" "$baseline"
+        printf 'IMPROVED\n' >> "$kverdicts"
+      else
+        printf '  %-12s %-46s %s variants across %s repos (baseline %s)\n' \
+          'at baseline' "$label" "$variants" "$holders" "$baseline"
+        printf 'at-baseline\n' >> "$kverdicts"
+      fi
+    done
+    grep -q '^WORSENED$' "$kverdicts" 2>/dev/null && key_worsened=1
+    rm -f "$kverdicts"
+  fi
+
   # A repo whose clone could not be fetched was neither current nor drifted --
   # it was unreadable, and exiting 0 over it is the fail-open this check exists
   # to remove one level down. `--check` feeds the daily dashboard, where a 0
@@ -1772,7 +1912,8 @@ if [ -n "$CHECK" ]; then
     exit 1
   fi
 
-  if [ "$drifted" -gt 0 ] || [ "$uniform_worsened" -gt 0 ] || [ "${overrides_missing:-0}" -gt 0 ]; then
+  if [ "$drifted" -gt 0 ] || [ "$uniform_worsened" -gt 0 ] || [ "${overrides_missing:-0}" -gt 0 ] ||
+    [ "$key_worsened" -gt 0 ]; then
     if [ "$drifted" -gt 0 ]; then
       printf '\n\033[31mShared files have drifted.\033[0m Run without --check to open sync PRs.\n'
     fi
@@ -1790,6 +1931,12 @@ if [ -n "$CHECK" ]; then
       printf 'Add the missing key(s) to that repo by hand, refresh its lockfile, and check what\n'
       printf 'the override was FOR -- a missing security floor usually means the repo is still\n'
       printf 'resolving the vulnerable version, not merely that a line is absent.\n'
+    fi
+    if [ "$key_worsened" -gt 0 ]; then
+      printf '\n\033[31mA keyMustBeUniform key exceeded its baseline.\033[0m That is a NEW\n'
+      printf 'divergence in a subtree that must match, not the pre-existing residue the\n'
+      printf 'baseline tolerates -- reconcile the copies by hand rather than raising the\n'
+      printf 'baseline to match.\n'
     fi
     printf '\n'
     exit 1

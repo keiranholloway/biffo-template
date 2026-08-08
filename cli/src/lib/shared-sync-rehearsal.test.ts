@@ -160,7 +160,11 @@ function makeSatellite(estate: string, name: string, opts: SatelliteOpts = {}): 
  */
 function makeTemplate(
   dir: string,
-  opts: { withSkeletons?: boolean; mustBeUniform?: Record<string, number> } = {},
+  opts: {
+    withSkeletons?: boolean
+    mustBeUniform?: Record<string, number>
+    keyMustBeUniform?: Record<string, Record<string, number>>
+  } = {},
 ): void {
   mkdirSync(join(dir, 'scripts'), { recursive: true })
   const manifest: Record<string, unknown> = {
@@ -169,6 +173,7 @@ function makeTemplate(
     appliesTo: ['biffo.sibling.json', 'biffo.plugin.json'],
   }
   if (opts.mustBeUniform) manifest.mustBeUniform = opts.mustBeUniform
+  if (opts.keyMustBeUniform) manifest.keyMustBeUniform = opts.keyMustBeUniform
   if (opts.withSkeletons) {
     // The two skeleton rulesets differ ON PURPOSE — that is the whole reason
     // `filesFromSkeleton` resolves its source per repo instead of `files`
@@ -249,6 +254,7 @@ function runSync(
     fromWorktree?: boolean
     withSkeletons?: boolean
     mustBeUniform?: Record<string, number>
+    keyMustBeUniform?: Record<string, Record<string, number>>
     satellites?: Array<[string, SatelliteOpts]>
   } = {},
 ): {
@@ -266,7 +272,11 @@ function runSync(
   // does in ~/code. That is what makes the "do not target yourself" exclusion
   // load-bearing rather than incidental.
   const template = join(estate, 'biffo-template')
-  makeTemplate(template, { withSkeletons: opts.withSkeletons, mustBeUniform: opts.mustBeUniform })
+  makeTemplate(template, {
+    withSkeletons: opts.withSkeletons,
+    mustBeUniform: opts.mustBeUniform,
+    keyMustBeUniform: opts.keyMustBeUniform,
+  })
 
   const satellites = (
     opts.satellites ?? [
@@ -655,6 +665,349 @@ describe('mustBeUniform ratchet (#1108)', () => {
     })
 
     expect(run.out).toMatch(/uniform\s+shared\/thing\.txt\s+uniform across 2 repos/)
+    expect(run.out).not.toMatch(/across 3 repos/)
+    expect(run.status).toBe(0)
+  }, 120_000)
+})
+
+/**
+ * `keyMustBeUniform` (#1352, #1367): the fifth list, and like `mustBeUniform`
+ * the only other one that never writes. Unlike `mustBeUniform`, the unit
+ * compared is not a whole file's blob SHA but the canonicalised JSON VALUE at
+ * a dotted key path inside it — `apps/frontend/package.json` legitimately
+ * differs per repo (`name`, `version`, `dependencies`) while its
+ * `pnpm.overrides` (the estate's mechanism for pinning a transitive
+ * dependency above a security advisory) must not.
+ *
+ * Two real occurrences drove this, and each fixture below targets the
+ * specific symptom that motivated it:
+ *
+ *   - #1352: `nanoid` — the template held the fix while six siblings stayed
+ *     vulnerable and red, because nothing distributed or even MEASURED the
+ *     override.
+ *   - #1367: `undici` — measured at several different upper bounds across the
+ *     estate, one of which is outright ABSENCE. A plain `files`-style
+ *     absence-detector reports every repo that HAS the key as "present",
+ *     which is indistinguishable from correct — it cannot see two present
+ *     values disagreeing. This mechanism has to catch both shapes: a key
+ *     silently missing, and a key present but diverged.
+ */
+describe('keyMustBeUniform ratchet (#1352, #1367)', () => {
+  it('reports a key path at its recorded baseline, and does not fail --check', () => {
+    // Deliberately different `name`/`version`/override VALUE — the whole
+    // point of a key-scoped ratchet is that the rest of the file (and even
+    // this key, up to the declared baseline) is allowed to differ. If this
+    // test needed identical files it would just be `mustBeUniform` again.
+    const { run } = runSync(['--check'], {
+      keyMustBeUniform: { 'apps/frontend/package.json': { 'pnpm.overrides': 2 } },
+      satellites: [
+        [
+          'sat-alpha',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify({
+                name: '@tabsii/alpha',
+                version: '1.4.0',
+                pnpm: { overrides: { 'nanoid@<3.3.17': '>=3.3.17 <4' } },
+              }),
+            },
+          },
+        ],
+        [
+          'sat-beta',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify({
+                name: '@tabsii/beta',
+                version: '0.9.2',
+                pnpm: { overrides: { 'nanoid@<3.3.17': '>=3.3.16 <4' } },
+              }),
+            },
+          },
+        ],
+      ],
+    })
+
+    expect(stripAnsi(run.out)).toMatch(
+      /at baseline\s+apps\/frontend\/package\.json#pnpm\.overrides\s+2 variants across 2 repos \(baseline 2\)/,
+    )
+    expect(run.status).toBe(0)
+  }, 120_000)
+
+  it('treats object key ORDER as immaterial -- canonicalisation, not byte equality', () => {
+    // Same logical override set, written in a different field order. A blob-SHA
+    // comparison (mustBeUniform's mechanism) would call this 2 variants; a
+    // subtree comparison that canonicalises before comparing must not.
+    const { run } = runSync(['--check'], {
+      keyMustBeUniform: { 'apps/frontend/package.json': { 'pnpm.overrides': 1 } },
+      satellites: [
+        [
+          'sat-alpha',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify({
+                name: '@tabsii/alpha',
+                pnpm: {
+                  overrides: {
+                    'nanoid@<3.3.17': '>=3.3.17 <4',
+                    'undici@<7.29.0': '>=7.29.0 <8',
+                  },
+                },
+              }),
+            },
+          },
+        ],
+        [
+          'sat-beta',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify({
+                name: '@tabsii/beta',
+                pnpm: {
+                  // Same two entries, reverse order.
+                  overrides: {
+                    'undici@<7.29.0': '>=7.29.0 <8',
+                    'nanoid@<3.3.17': '>=3.3.17 <4',
+                  },
+                },
+              }),
+            },
+          },
+        ],
+      ],
+    })
+
+    expect(stripAnsi(run.out)).toMatch(
+      /uniform\s+apps\/frontend\/package\.json#pnpm\.overrides\s+uniform across 2 repos/,
+    )
+    expect(run.status).toBe(0)
+  }, 120_000)
+
+  it('fails --check when a key path is one variant worse than its baseline', () => {
+    // This is the test that must fail against the UNMODIFIED script, and for
+    // the right reason: not a crash, but because nothing recognises
+    // `keyMustBeUniform` at all, so no WORSENED verdict is ever printed and
+    // `--check` exits 0. Proven by hand before implementing, the same
+    // discipline the mustBeUniform regression guard above documents.
+    const { run } = runSync(['--check'], {
+      keyMustBeUniform: { 'apps/frontend/package.json': { 'pnpm.overrides': 1 } },
+      satellites: [
+        [
+          'sat-alpha',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify({
+                name: '@tabsii/alpha',
+                pnpm: { overrides: { 'undici@<7.29.0': '>=7.29.0 <8' } },
+              }),
+            },
+          },
+        ],
+        [
+          'sat-beta',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify({
+                name: '@tabsii/beta',
+                // A DIFFERENT bound on the same override -- exactly the
+                // #1367 shape, present in both repos but disagreeing.
+                pnpm: { overrides: { 'undici@<7.29.0': '>=7.29.0 <9' } },
+              }),
+            },
+          },
+        ],
+      ],
+    })
+
+    expect(stripAnsi(run.out)).toMatch(
+      /WORSENED\s+apps\/frontend\/package\.json#pnpm\.overrides\s+2 variants across 2 repos \(baseline 1\)/,
+    )
+    expect(run.out).toMatch(/keyMustBeUniform key exceeded its baseline/)
+    expect(run.status).toBe(1)
+  }, 120_000)
+
+  it('counts a key SILENTLY MISSING as its own variant, not a non-holder (#1352)', () => {
+    // The #1352 shape exactly: a sibling that holds the FILE but not the
+    // override inside it. A holder test keyed to the override itself would
+    // skip this repo as "does not have it", which is indistinguishable from
+    // "does not need it" -- the whole reason #1352 went undetected for 38
+    // minutes. It must count as holding the FILE (so it is in scope) and as a
+    // DISTINCT VALUE (absence), not be silently dropped.
+    const { run } = runSync(['--check'], {
+      keyMustBeUniform: { 'apps/frontend/package.json': { 'pnpm.overrides': 1 } },
+      satellites: [
+        [
+          'sat-alpha',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify({
+                name: '@tabsii/alpha',
+                pnpm: { overrides: { 'nanoid@<3.3.17': '>=3.3.17 <4' } },
+              }),
+            },
+          },
+        ],
+        [
+          'sat-beta',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              // Holds package.json, but the advisory pin never landed here --
+              // no `pnpm` key at all, exactly like a sibling nobody patched.
+              'apps/frontend/package.json': JSON.stringify({ name: '@tabsii/beta' }),
+            },
+          },
+        ],
+      ],
+    })
+
+    expect(stripAnsi(run.out)).toMatch(
+      /WORSENED\s+apps\/frontend\/package\.json#pnpm\.overrides\s+2 variants across 2 repos \(baseline 1\)/,
+    )
+    expect(run.status).toBe(1)
+  }, 120_000)
+
+  it('reports FOUR divergent bounds on the same override, the exact #1367 shape', () => {
+    // #1367 measured `undici`'s override at four different states across the
+    // estate: unbounded, `<9`, `<8`, and absent entirely. A test that only
+    // proves the two-way case leaves the actual reported defect unproven --
+    // this reproduces all four in one run and asserts the report says 4.
+    const { run } = runSync(['--check'], {
+      keyMustBeUniform: { 'apps/frontend/package.json': { 'pnpm.overrides': 1 } },
+      satellites: [
+        [
+          'sat-unbounded',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify({
+                pnpm: { overrides: { 'undici@<7.29.0': '>=7.29.0' } },
+              }),
+            },
+          },
+        ],
+        [
+          'sat-lt9',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify({
+                pnpm: { overrides: { 'undici@<7.29.0': '>=7.29.0 <9' } },
+              }),
+            },
+          },
+        ],
+        [
+          'sat-lt8',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify({
+                pnpm: { overrides: { 'undici@<7.29.0': '>=7.29.0 <8' } },
+              }),
+            },
+          },
+        ],
+        [
+          'sat-absent',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              // Holds the file and the `pnpm.overrides` object, just not this
+              // particular entry -- tabsii-intake's actual shape in #1367.
+              'apps/frontend/package.json': JSON.stringify({
+                pnpm: { overrides: { 'postcss@<8.5.18': '>=8.5.18' } },
+              }),
+            },
+          },
+        ],
+      ],
+    })
+
+    expect(stripAnsi(run.out)).toMatch(
+      /WORSENED\s+apps\/frontend\/package\.json#pnpm\.overrides\s+4 variants across 4 repos \(baseline 1\)/,
+    )
+    expect(run.status).toBe(1)
+  }, 120_000)
+
+  it('reports a key path that converged, and says the baseline can be lowered', () => {
+    const { run } = runSync(['--check'], {
+      keyMustBeUniform: { 'apps/frontend/package.json': { 'pnpm.overrides': 3 } },
+      satellites: [
+        [
+          'sat-alpha',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify({
+                pnpm: { overrides: { 'nanoid@<3.3.17': '>=3.3.17 <4' } },
+              }),
+            },
+          },
+        ],
+        [
+          'sat-beta',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify({
+                pnpm: { overrides: { 'nanoid@<3.3.17': '>=3.3.17 <4' } },
+              }),
+            },
+          },
+        ],
+      ],
+    })
+
+    expect(stripAnsi(run.out)).toMatch(
+      /uniform\s+apps\/frontend\/package\.json#pnpm\.overrides\s+uniform across 2 repos \(baseline 3 -- lower it to 1\)/,
+    )
+    // Converging is not a failure — only EXCEEDING the baseline is.
+    expect(run.status).toBe(0)
+  }, 120_000)
+
+  it('does not count a repo missing the whole FILE as a holder or a variant', () => {
+    const { run } = runSync(['--check'], {
+      keyMustBeUniform: { 'apps/frontend/package.json': { 'pnpm.overrides': 1 } },
+      satellites: [
+        [
+          'sat-alpha',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify({
+                pnpm: { overrides: { 'nanoid@<3.3.17': '>=3.3.17 <4' } },
+              }),
+            },
+          },
+        ],
+        [
+          'sat-beta',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify({
+                pnpm: { overrides: { 'nanoid@<3.3.17': '>=3.3.17 <4' } },
+              }),
+            },
+          },
+        ],
+        // A plugin repo with no frontend at all -- never seeds
+        // apps/frontend/package.json. Must not inflate the holder count.
+        ['sat-gamma', { filesUpToDate: true }],
+      ],
+    })
+
+    expect(stripAnsi(run.out)).toMatch(
+      /uniform\s+apps\/frontend\/package\.json#pnpm\.overrides\s+uniform across 2 repos/,
+    )
     expect(run.out).not.toMatch(/across 3 repos/)
     expect(run.status).toBe(0)
   }, 120_000)

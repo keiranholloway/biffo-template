@@ -72,7 +72,8 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   EVIDENCE_DIR,
   readCorpus,
@@ -810,7 +811,16 @@ function main() {
       }
       if (earliest) {
         row.date = earliest.slice(0, 10)
-        writeEvidenceFile(EVIDENCE_DIR, file, row)
+        // Rename an `undated-` entry once its date is recovered, so the filename
+        // never asserts something the row denies — the same rule that made the
+        // writer stop stamping today's date on an undated row. Rewriting in
+        // place would leave `undated-…json` holding a real date, which is the
+        // inconsistency one directory listing away from being believed.
+        const renamed = file.startsWith('undated-')
+          ? `${row.date}-${file.slice('undated-'.length)}`
+          : file
+        writeEvidenceFile(EVIDENCE_DIR, renamed, row)
+        if (renamed !== file) rmSync(join(EVIDENCE_DIR, file), { force: true })
         dated += 1
       }
     }

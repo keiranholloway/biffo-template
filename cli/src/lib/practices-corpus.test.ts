@@ -222,6 +222,41 @@ describe('writeEvidenceEntry — the write path future sessions use', () => {
     ])
   })
 
+  it('stores date: null for a row that cites no date, rather than guessing today', () => {
+    // The module docstring is explicit: "Rows citing nothing keep `date: null` —
+    // never a guess, because a fabricated date would corrupt exactly the ranking
+    // this exists to enable." The writer did the opposite: `row.date ?? new
+    // Date()` turned an explicit null into today and wrote it into the STORED
+    // field, so `--extract` stamped a backlog of old rows with the day it ran.
+    // Found on 2026-08-09 when extracting 5 rows wrote 23, all dated that day.
+    const root = tempRoot()
+    const dir = join(root, 'evidence')
+    writeEvidenceEntry({ summary: 'an undated row', class: 'drift', date: null }, { dir })
+    const [stored] = readEvidenceDir(dir)
+    expect(stored.date).toBeNull()
+  })
+
+  it('names an undated entry `undated-`, so the filename cannot assert a date the data denies', () => {
+    // The filename is only ever used for sorting and uniqueness — readers parse
+    // the JSON body — so it costs nothing to be honest here, and a file called
+    // `2026-08-09-…` for a row from months earlier is exactly the confusion that
+    // made the mis-stamping invisible in `ls`.
+    const root = tempRoot()
+    const dir = join(root, 'evidence')
+    const path = writeEvidenceEntry({ summary: 'an undated row' }, { dir })
+    expect(path).toBe(join(dir, 'undated-an-undated-row.json'))
+  })
+
+  it('still honours an explicit date, in both the filename and the stored field', () => {
+    // The anti-vacuity control: a writer that simply stopped recording dates
+    // would pass both tests above.
+    const root = tempRoot()
+    const dir = join(root, 'evidence')
+    const path = writeEvidenceEntry({ summary: 'a dated row' }, { dir, date: '2026-07-04' })
+    expect(path).toBe(join(dir, '2026-07-04-a-dated-row.json'))
+    expect(readEvidenceDir(dir)[0].date).toBe('2026-07-04')
+  })
+
   it('creates the directory if it does not exist yet', () => {
     const root = tempRoot()
     const dir = join(root, 'brand-new-evidence-dir')

@@ -1,0 +1,15 @@
+{
+  "refs": [
+    "keiranholloway/biffo-template#1090"
+  ],
+  "summary": "An alerting path that existed, read as coverage, and had never once fired. All three notify-send calls in practices-daily.sh were guarded on a non-empty DBUS_SESSION_BUS_ADDRESS — correct-looking, and under cron always false: the crontab exports PATH and nothing else, so a cron child has no session bus. The daily job is the only schedule that matters for these alerts, so the estate-audit notification had been a no-op since the day it was written. It surfaced only because the 2026-08-02 collector outage was found by a human happening to run the standup, 40 minutes after a job that had already detected the problem and correctly refused to write bad data. The class: a guard written for the interactive case, applied to an automated one, where the condition it tests is structurally unsatisfiable — and nothing distinguishes \"did not need to notify\" from \"could not notify\". Corollary worth keeping separately: the reliable surface is the artefact people already look at, not a channel that has to be checked",
+  "class": "fail-open",
+  "alsoClass": [
+    "visibility"
+  ],
+  "surfacedIn": "biffo-template scripts/practices-daily.sh, all three call sites",
+  "fixesIn": "biffo-template scripts/",
+  "status": "fixed",
+  "costMinutes": null,
+  "date": null
+}

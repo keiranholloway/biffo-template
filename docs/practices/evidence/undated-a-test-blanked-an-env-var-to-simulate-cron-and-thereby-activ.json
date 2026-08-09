@@ -1,0 +1,16 @@
+{
+  "refs": [
+    "keiranholloway/biffo-template#1121",
+    "keiranholloway/biffo-template#1090"
+  ],
+  "summary": "A test blanked an env var to \"simulate cron\" and thereby activated the exact fallback it meant to disable, firing 8 REAL -u critical desktop notifications per pnpm test. _notify treats an empty DBUS_SESSION_BUS_ADDRESS as the cron case and reconstructs the address from /run/user/<uid>/bus, so the test called the real binary. GNOME never auto-expires critical cards, so they accumulated — 214 in the tray when the operator finally asked. The card misattributed itself (\"Practices collection FAILED — the dashboard is stale\"), pointing the diagnosis at a collector that was healthy: the log held one real failure and the 05:53 run had succeeded, pushed, and cleared the banner. Green suite throughout; a notification is not an assertion, so nothing could see it. cost ~2h 15m, and it degraded a 7h 04m window (test merged 05:45Z #1090 → fix merged 12:49Z #1121) covering 570 recorded minutes of session work",
+  "class": "visibility",
+  "alsoClass": [
+    "fail-open"
+  ],
+  "surfacedIn": "biffo-template cli/src/lib/practices-daily-alert.test.ts",
+  "fixesIn": "biffo-template",
+  "status": "fixed",
+  "costMinutes": null,
+  "date": null
+}

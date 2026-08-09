@@ -1,0 +1,15 @@
+{
+  "refs": [
+    "keiranholloway/biffo-template#1093"
+  ],
+  "summary": "A local gate's own cached state can manufacture failures that look exactly like your bug. Building the local Postgres gate, a test database about an hour old — built before two unrelated PRs merged — produced 23 failures in a module nothing in the working tree had touched. Rebuilt from the same tree it passed 336/336, and passed 336 again immediately, so the lane was genuinely re-runnable and every failure was the stale schema. The instructive part is that the first reading was wrong: 23 failures on a second run against a reused database looks exactly like leaked test state, and that conclusion would have driven the wrong design — rebuild-every-time, or a hunt for a teardown bug that does not exist. Only rebuilding and running twice separated the two. Generalises past databases: any local gate holding cached state between runs — a container, a build cache, a fixture directory — must treat freshness as a first-class property, because a stale artefact does not fail loudly, it fails as somebody else's code. A gate producing failures that are not the developer's fault is worse than no gate; it is the fastest route to the bypass H4 pre-registered as refuting the programme",
+  "class": "visibility",
+  "alsoClass": [
+    "fail-open"
+  ],
+  "surfacedIn": "tabsii-platform pg lane, while building the gate's database helper",
+  "fixesIn": "biffo-template scripts/pg-test-db.sh",
+  "status": "fixed",
+  "costMinutes": null,
+  "date": null
+}

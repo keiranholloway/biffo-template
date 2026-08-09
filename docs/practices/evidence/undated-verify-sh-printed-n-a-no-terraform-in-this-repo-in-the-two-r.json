@@ -1,0 +1,18 @@
+{
+  "refs": [
+    "keiranholloway/biffo-template#1239",
+    "keiranholloway/biffo-template#1145",
+    "keiranholloway/biffo-template#1243",
+    "tabsii-com/tabsii-runners#41"
+  ],
+  "summary": "verify.sh printed n/a - no terraform in this repo in the two repos that are nothing but Terraform. Detection considered only modules/ and (for siblings) infra/; both fleets keep every .tf in terraform/, so tf_dirs came out empty and the gate skipped. A third repo, biffo-plugin-idea-scout, had the same layout and was unknown until the estate was swept. Local-only in severity — both fleets' CI does check it — but that is exactly this gate's job, and its own failure text promises to catch things before \"three minutes and a merge race later\". The message was the worse half: \"no terraform in this repo\" is a false claim *about the repo*, where the truth was \"none in the two directories I look in\" — the same scope-shrinking shape as protection-audit.sh dropping repos with no dev (#1145)",
+  "class": "fail-open",
+  "alsoClass": [
+    "visibility"
+  ],
+  "surfacedIn": "tabsii-runners, while making tabsii-runners#41",
+  "fixesIn": "biffo-template #1243",
+  "status": "fixed",
+  "costMinutes": null,
+  "date": null
+}

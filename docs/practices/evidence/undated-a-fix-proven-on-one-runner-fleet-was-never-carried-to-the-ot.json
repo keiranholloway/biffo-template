@@ -1,0 +1,16 @@
+{
+  "refs": [
+    "tabsii-com/tabsii-runners#41",
+    "keiranholloway/biffo-template#1242"
+  ],
+  "summary": "A fix proven on one runner fleet was never carried to the other, and no mechanism in the estate could have noticed. biffo-runners set instance_allocation_strategy = price-capacity-optimized on 2026-07-30 after AWS reclaimed all seventeen of its t3a.large runners at once, killing five jobs across three workflows in the same second. tabsii-runners — same module, same version, same spot posture — was still on the module default lowest-price four days later, which piles every runner into whichever single pool is cheapest, so a four-entry instance_types list buys no diversification and one reclamation takes the whole fleet. Measured: tabsii 141 evictions vs biffo 43, including 109 in one day and clusters of eight and twelve instances sharing a timestamp. The two fleets are separate repos with no shared-file channel between them — shared-sync distributes template files, not fleet Terraform — so a lesson learned in one is structurally invisible to the other",
+  "class": "drift",
+  "alsoClass": [
+    "visibility"
+  ],
+  "surfacedIn": "tabsii-runners live fleet",
+  "fixesIn": "tabsii-runners #41",
+  "status": "partly fixed",
+  "costMinutes": null,
+  "date": null
+}

@@ -1,0 +1,13 @@
+{
+  "refs": [],
+  "summary": "A log's coverage is invisible at the point of reading it, and this estate has several logs whose writer is external to the thing logged. ~/.practices-daily.log is written by the crontab's >> redirect, so it records cron runs and only cron runs — but nothing at the top of that file, in the script, or in the crontab says so. Read during an incident it answered \"one failure today\", which was true and pointed 25 minutes in the wrong direction. The general shape: whenever the writer of a log is not the thing being logged, the log silently has an invocation-path filter on it, and every reader will treat it as complete. The same shape applies to anything whose output is captured by its *caller* rather than itself — a CI step's log, a redirected cron job, a piped script. Candidates: have the script write its own log (so every invocation path is recorded regardless of caller) and let cron's redirect be a duplicate; or a one-line banner the script emits naming which invocations reach this file. The first is strictly better and is roughly a five-line change",
+  "class": "visibility",
+  "alsoClass": [
+    "process"
+  ],
+  "surfacedIn": "biffo-template scripts/practices-daily.sh + the crontab",
+  "fixesIn": "not fixed",
+  "status": "unfiled",
+  "costMinutes": null,
+  "date": null
+}

@@ -1,0 +1,19 @@
+{
+  "refs": [
+    "keiranholloway/biffo-template#1245",
+    "keiranholloway/biffo-template#1238",
+    "tabsii-com/tabsii-crm#133",
+    "tabsii-com/tabsii-platform#76",
+    "keiranholloway/biffo-template#1021"
+  ],
+  "summary": "FOURTH occurrence of the lexical-closing-keyword trap — and the finding is no longer the trap, it is that the recorded remedy was a _practice_ and a practice did not hold. A PR body reading Does not close #1021. closed #1021 on merge. Proved, not assumed: squash commit a7797a5 contains only Refs #1021, and the timeline attributes the close to that commit, so it came from the body; a later deliberate gh issue close reported \"already closed\". This is mechanically identical to the tabsii-crm#133 row above — same denial-shaped phrase, same Refs-only commit, same outcome — which was itself logged as the *third* vector after tabsii-platform#76. That row's recorded fix reads practice — never write a closing keyword in prose. Today an agent with this very page available did it again. check-closing-keywords.mjs is not at fault and correctly stayed silent: it asks whether a PR closes an issue only provable on deploy, and fires only on infra/, .github/workflows/, apps/portal/ etc., none of which #1238 touched",
+  "class": "process",
+  "alsoClass": [
+    "drift"
+  ],
+  "surfacedIn": "biffo-template #1238 PR body",
+  "fixesIn": "biffo-template — extend the guard with a negated-keyword check on *every* path",
+  "status": "open",
+  "costMinutes": null,
+  "date": null
+}

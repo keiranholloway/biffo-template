@@ -1,0 +1,14 @@
+{
+  "refs": [
+    "keiranholloway/biffo-template#1114",
+    "keiranholloway/biffo-template#1143"
+  ],
+  "summary": "pg-test-db.sh binds a fixed port with no isolation between concurrent runs, cluster-wide or cross-repo, and the failures it produces look exactly like a real regression. Verifying an unrelated DDL-checksum fix, verify.sh's pg-test lane failed with asyncpg.exceptions.InternalServerError: tuple concurrently updated on GRANT USAGE ON SCHEMA tabsii TO <role> — a different set of tests every run (32, then 4, then 27), with every individual failing test passing 100% in isolation. Two wrong theories were tried first: system memory/swap (swap was full, but vmstat's si/so showed ~0 active paging — a red herring from a long session, not the cause) and inherent Postgres flakiness. ps aux found the real cause: a second verify.sh running concurrently, first from another local worktree with uncommitted work, then — after that one finished and the failure recurred with yet another shifting error set — from a completely different repo (biffo-template, a different Claude Code session). BIFFO_PG_PORT defaults to 55432 everywhere with no per-repo or per-worktree scoping, and Postgres roles (CREATE ROLE/GRANT) are cluster-wide, so even separate logical databases in the same cluster race on shared catalogs like pg_shdepend. Concurrent agent sessions across the whole estate are exactly the working mode this project runs in, so this was never a rare collision — it was waiting to be hit",
+  "class": "boundary",
+  "alsoClass": [],
+  "surfacedIn": "tabsii-platform pg-test lane, while landing an unrelated fix; root cause in biffo-template scripts/pg-test-db.sh",
+  "fixesIn": "biffo-template scripts/pg-test-db.sh (shared to every instance/sibling/plugin via core-manifest.json + shared-files.json)",
+  "status": "fixed",
+  "costMinutes": null,
+  "date": null
+}

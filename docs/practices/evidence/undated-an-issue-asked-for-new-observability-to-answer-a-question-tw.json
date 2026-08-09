@@ -1,0 +1,14 @@
+{
+  "refs": [
+    "keiranholloway/biffo-template#1021",
+    "keiranholloway/biffo-template#1238"
+  ],
+  "summary": "An issue asked for new observability to answer a question two existing systems already answered between them. #1021 held that a dropped self-hosted job could never be diagnosed until instance logs were retained, and made durable log shipping the prerequisite for any root cause. Both premises were false: a job's runner_name IS the EC2 instance ID (GitHub's API hands you the fleet's primary key, and every prior investigation had already fetched it), and CloudTrail already retained 90 days of BidEvictedEvent — management events are on by default, nothing had to be enabled. Joined across both fleets and all twelve measured repos: 22 of 22 runner-killed jobs matched a spot eviction, zero unexplained. Reclamation, not starvation, not network — which moves the fix from a log pipeline to one fleet setting. The missing evidence was a missing query. The expensive counterfactual is real: building the pipeline the issue asked for would have cost days and still not answered it",
+  "class": "visibility",
+  "alsoClass": [],
+  "surfacedIn": "tabsii-platform + biffo-platform red checks; premise recorded in #1021",
+  "fixesIn": "biffo-template #1238 scripts/runner-drop-forensics.mjs",
+  "status": "fixed",
+  "costMinutes": null,
+  "date": null
+}

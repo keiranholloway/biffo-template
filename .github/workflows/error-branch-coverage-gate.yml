@@ -58,6 +58,21 @@ on:
   workflow_run:
     workflows: ['CI', 'RLS Tests']
     types: [completed]
+  # SCRATCH-ONLY, added on scratch/prove-coverage-gate to prove this job's
+  # OWN logic (download / fail-closed-on-absence / combine / post-status)
+  # end-to-end via real `gh` API calls, without needing to wait for
+  # `workflow_run` itself to fire — that trigger only evaluates workflow
+  # files already on the DEFAULT branch, so it cannot be exercised from an
+  # unmerged branch. Never present on the real PR branch this is cherry-
+  # picked from; this whole branch is discarded, not merged.
+  workflow_dispatch:
+    inputs:
+      test_sha:
+        required: true
+      test_ci_run_id:
+        required: true
+      test_rls_run_id:
+        required: true
 
 permissions:
   contents: read
@@ -72,9 +87,11 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
-      SHA: ${{ github.event.workflow_run.head_sha }}
+      SHA: ${{ github.event.inputs.test_sha || github.event.workflow_run.head_sha }}
       TRIGGERING_NAME: ${{ github.event.workflow_run.name }}
       TRIGGERING_RUN_ID: ${{ github.event.workflow_run.id }}
+      TEST_CI_RUN_ID: ${{ github.event.inputs.test_ci_run_id }}
+      TEST_RLS_RUN_ID: ${{ github.event.inputs.test_rls_run_id }}
     steps:
       # Deliberately the DEFAULT branch's checkout (no `ref:` override) — see
       # the security note above. This is only ever used to run
@@ -129,6 +146,18 @@ jobs:
         if: steps.rls-lane.outputs.present == 'true'
         run: |
           set -uo pipefail
+          # SCRATCH-ONLY: workflow_dispatch supplies both run ids directly,
+          # bypassing the API lookup this step normally does — see the
+          # `on:` block header comment.
+          if [ -n "${TEST_CI_RUN_ID:-}" ]; then
+            ci_run_id="$TEST_CI_RUN_ID"
+            rls_run_id="$TEST_RLS_RUN_ID"
+            echo "Both runs completed for $SHA: CI run $ci_run_id, RLS Tests run $rls_run_id."
+            echo "both_found=true" >> "$GITHUB_OUTPUT"
+            echo "ci_run_id=$ci_run_id" >> "$GITHUB_OUTPUT"
+            echo "rls_run_id=$rls_run_id" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$TRIGGERING_NAME" = "CI" ]; then
             ci_run_id="$TRIGGERING_RUN_ID"
             rls_run_id=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&status=completed&per_page=50" \

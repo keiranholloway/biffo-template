@@ -1,0 +1,35 @@
+name: RLS Tests
+
+# SCRATCH-ONLY fake producer, for proving error-branch-coverage-gate.yml's
+# fail-closed-on-missing-artefact behaviour on a real GitHub Actions run.
+# This file exists ONLY on scratch/prove-coverage-gate, which is never
+# merged — the template has no real RLS lane. A real instance's producer is
+# tabsii-platform's own `rls-tests.yml` (#804), instance-owned and not this
+# file.
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: 'Upload a (trivial, valid) rls-coverage.json artefact?'
+        type: boolean
+        default: true
+
+jobs:
+  fake-rls-tests:
+    name: RLS Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write a trivial valid coverage.json
+        if: ${{ inputs.upload }}
+        run: |
+          echo '{"files": {}}' > rls-coverage.json
+      - name: Upload rls-coverage artefact
+        if: ${{ inputs.upload }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: rls-coverage
+          path: rls-coverage.json
+      - name: No-upload run (proves the gate's fail-closed path)
+        if: ${{ !inputs.upload }}
+        run: echo "Deliberately NOT uploading rls-coverage — this run exists to prove the gate fails closed when a completed RLS Tests run produces no artefact."

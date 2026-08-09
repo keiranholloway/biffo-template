@@ -1,0 +1,15 @@
+{
+  "refs": [
+    "tabsii-com/tabsii-platform#823"
+  ],
+  "summary": "A core upgrade distributed an unmerged change and stamped it with a released version number. tabsii-platform's dev was carrying a template script change while pinned to core 0.258.0 — a version whose template tag does not contain it. The likely mechanism: biffo core upgrade resolves a \"template root\" as any directory holding core-manifest.json and no biffo.core.json, and a git worktree under biffo-template/.worktrees/ satisfies that exactly, so an upgrade can source from another session's in-progress branch. The content happened to be correct here, which is why nothing looked wrong. A version stamp that does not match the content it carries defeats the point of pinning, and no guard compares them",
+  "class": "visibility",
+  "alsoClass": [
+    "drift"
+  ],
+  "surfacedIn": "tabsii-platform (#823)",
+  "fixesIn": "biffo-template (cli/) — unfixed",
+  "status": "open",
+  "costMinutes": null,
+  "date": "2026-08-09"
+}

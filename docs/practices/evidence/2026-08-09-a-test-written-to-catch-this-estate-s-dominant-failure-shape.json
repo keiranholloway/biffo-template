@@ -1,0 +1,13 @@
+{
+  "refs": [
+    "tabsii-com/tabsii-crm#326"
+  ],
+  "summary": "A test written to catch this estate's dominant failure shape shipped with that shape in it. The new real-persona E2E spec asserted an affordance was *absent* for a caller lacking the permission — and passed when pointed at the caller who holds it. toHaveCount(0) is satisfied by a page that has not rendered, as is a /could not reach the api/ check, so both assertions ran before the app painted and neither could ever fail. Caught only by running the fail-first check on a brand-new test rather than trusting it because it was green. Fixed by anchoring every absence assertion on the signed-in user's own name first, which proves the app rendered *and* which caller it rendered for",
+  "class": "fail-open",
+  "alsoClass": [],
+  "surfacedIn": "tabsii-crm",
+  "fixesIn": "tabsii-crm (e2e/personas.real.spec.ts)",
+  "status": "fixed",
+  "costMinutes": null,
+  "date": "2026-08-09"
+}

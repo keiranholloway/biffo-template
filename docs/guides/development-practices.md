@@ -32,6 +32,11 @@ shape recurring across unrelated components is a design problem, not bad luck.
 
 | # | Failure condition | Class | Surfaced in | Fix lands in | Status |
 | --- | --- | --- | --- | --- | --- |
+| — | **The pg lane isolates two checkouts and not two runs of one, so an automatic gate corrupts a suite nobody chose to run alongside it.** `pg-test-db.sh` derives its port, database and container from `$REPO_ROOT` — deterministic on purpose, because determinism is what makes schema reuse work. Two *checkouts* are therefore isolated and two *runs of one checkout* are not. A developer running the suite while `git push` fires the pre-push gate gets two sessions on one database, and neither party did anything wrong: the gate is automatic. **The cost is not a lost race, it is a misattributed one** — the gate reported `test_lead_unsubscribe_pg.py` failing on a foreign key, in a file the change never touched, while the other run deleted and re-seeded the rows it depends on. The change was suspected, the database had to be recreated, and the same shape recurred across two sessions the same morning | **visibility** · boundary | tabsii-platform (three times in one day) | biffo-template (`scripts/pg-test-db.sh`), tabsii-platform (`domains/tabsii/tests/conftest.py`) | **fixed** ([template#1398](https://github.com/keiranholloway/biffo-template/pull/1398) + [platform#824](https://github.com/tabsii-com/tabsii-platform/pull/824)) — per-run clone, 0.10s for a 25 MB schema |
+| — | **Giving each run its own database silently disarmed the lock that made role provisioning safe.** Role provisioning writes `pg_authid`, which is cluster-wide, and the lane serialised it with `pg_advisory_xact_lock`. **PostgreSQL advisory locks are scoped to the database they are taken in**, so that lock worked only for as long as every run shared one database — the protection was a side effect of the defect above, not a mechanism. Fixing the data race removed it, and concurrent runs began failing with `tuple concurrently updated`, the exact error the lock exists to prevent. Proven, not predicted: one pg file run twice concurrently passed in one process and failed the other. **A first attempt at the fix failed identically**, because it locked the provisioning *statements* rather than the *transaction* — each transaction takes its catalog snapshot when it begins, so the second could acquire the lock and then update a row from a snapshot predating the first's commit | **fail-open** · boundary | tabsii-platform | tabsii-platform (`conftest.py`) | **fixed** — lock moved to the maintenance database and widened to wrap the transaction; landed *before* the clone, since the clone alone regresses |
+| — | **A test written to catch this estate's dominant failure shape shipped with that shape in it.** The new real-persona E2E spec asserted an affordance was *absent* for a caller lacking the permission — and passed when pointed at the caller who **holds** it. `toHaveCount(0)` is satisfied by a page that has not rendered, as is a `/could not reach the api/` check, so both assertions ran before the app painted and neither could ever fail. Caught only by running the fail-first check on a brand-new test rather than trusting it because it was green. Fixed by anchoring every absence assertion on the signed-in user's **own name** first, which proves the app rendered *and* which caller it rendered for | **fail-open** | tabsii-crm | tabsii-crm (`e2e/personas.real.spec.ts`) | **fixed** ([crm#326](https://github.com/tabsii-com/tabsii-crm/pull/326)) — re-running the same fail-first now fails correctly |
+| — | **A core upgrade distributed an unmerged change and stamped it with a released version number.** `tabsii-platform`'s `dev` was carrying a template script change while pinned to core `0.258.0` — a version whose template tag does **not** contain it. The likely mechanism: `biffo core upgrade` resolves a "template root" as any directory holding `core-manifest.json` and no `biffo.core.json`, and a git worktree under `biffo-template/.worktrees/` satisfies that exactly, so an upgrade can source from another session's in-progress branch. The content happened to be correct here, which is why nothing looked wrong. **A version stamp that does not match the content it carries defeats the point of pinning**, and no guard compares them | **visibility** · drift | tabsii-platform ([#823](https://github.com/tabsii-com/tabsii-platform/pull/823)) | biffo-template (`cli/`) — **unfixed** | **open** — mechanism inferred from the CLI's template-root test and the tag contents, not proven; no guard asserts a distributed file matches the tag its stamp names |
+| — | **A brand-parameterised aggregate gated on a permission code returned a confident, wrong number to a caller outside its scope.** `GET /brands/{id}/aged-debt` checked `invoices.read` and nothing else. A code carries no scope, so a caller holding it *anywhere* passed the gate for *any* brand; RLS then removed the rows and the response was a well-formed £0.00. Measured against the real route on a brand owing £2,000: a brand-scoped caller read `2000.00`, a **region-scoped caller `0.00`**, a unit-scoped caller `400.00`. `invoices_read` has no region path at all, so the regional answer is not a near-miss but a clean ledger for a region whose units owe money. Filed as an *untested hypothesis* and only confirmed when someone ran it | **visibility** | tabsii-platform | tabsii-platform (`finance_invoicing.py`) | **fixed** ([#817](https://github.com/tabsii-com/tabsii-platform/pull/817)) — verified on dev by the reporter's route; three sibling endpoints with the same shape filed as [#818](https://github.com/tabsii-com/tabsii-platform/issues/818) and fixed by [#822](https://github.com/tabsii-com/tabsii-platform/pull/822) |
 | — | A drift guard written to catch skeleton regressions **walked up a fixed number of directories** to find `_skeletons/`, overshot to `/home`, and its audit returned `[]` for a path that does not exist. Reintroducing the exact `runs-on: ubuntu-latest` drift it existed to catch did **not** fail it — 11 tests green against nothing | **fail-open** | biffo-template [#744](https://github.com/keiranholloway/biffo-template/pull/744) | biffo-template `cli/` | **fixed** — searches upward, throws when not found, asserts the tree exists before auditing |
 | — | Three defects "found" in one session by **pattern-matching without running the thing**, all wrong: four bare `httpx.AsyncClient()` reported as affected when two pass a per-request timeout; a `Depends()` default called a B008 defect when ruff special-cases FastAPI route handlers; a skeleton's differing ruff `select` called drift when the difference is correct in both directions | **process** | biffo-template (this session) | diagnostic practice | **corrected before shipping** — each was disproved by executing the code rather than reading it |
 | [#714](https://github.com/keiranholloway/biffo-template/issues/714) | `gh pr merge --auto` against a repo with `allow_auto_merge` **disabled does not queue — it merges immediately**. On a protected branch that is harmless; on an unprotected one it merges with checks still running. Every Biffo repo had it `false` until it was set by hand, so the documented flow silently meant its opposite | **boundary** · visibility | biffo-plugin-ideation#54 | biffo-template `cli/` | **fixed** ([#741](https://github.com/keiranholloway/biffo-template/pull/741)) — set at repo creation |
@@ -496,6 +501,80 @@ there. Neither is evidence about the estate.
 
 
 ## Where the cycles go
+
+### Measured: a shared test database cost three misattributed reds in one day, and the fix was two defects deep (2026-08-09)
+
+**The loop, not the symptom.** Three separate incidents, all the same structure:
+a pg-lane run and a concurrent second run on one database, producing a red in a
+file the change never touched.
+
+| # | Occasion | What it cost |
+| --- | --- | --- |
+| 1 | My own full suite running while `git push` fired the pre-push gate | ~10 min — diagnosed as my change first, then recreated the database to clear it |
+| 2 | My push gate against another session's, cross-session | ~8 min — three concurrent `pytest` processes found by `ps aux` |
+| 3 | A third run after a recreate | ~5 min |
+
+**~23 minutes of diagnosis, none of it about the code being changed.** That is
+the expensive property: the failure names an innocent file, so the time goes into
+proving your own change is fine before you think to look outside it.
+
+**Nobody chose to run two things at once.** The gate is automatic — `git push`
+fires it. So this is a structural cost, not carelessness, which is the
+distinction this section exists to draw.
+
+**The fix took ~90 minutes and was two defects deep.** The clone (biffo-template)
+is small and cheap — `CREATE DATABASE ... TEMPLATE` measured at **0.10s for a
+25 MB schema**, against the ~0.3s reuse path the script already advertises as
+fast. But it *removed a mutex nobody had declared*: role provisioning was safe
+only because every run shared one database, and `pg_advisory_xact_lock` is
+per-database. About 25 of the 90 minutes went on that second defect, including a
+first fix that failed **identically to the bug it was fixing** — locking the
+statements rather than the transaction, which orders the statements but not the
+catalog snapshots.
+
+**The ordering hazard is the transferable part.** The two halves had to land in
+one order (lock first, clone second) because the lock alone is correct on a
+shared database while the clone alone regresses. Nothing enforces or records
+that; it was held in the PR bodies and in my head. A two-repo change with a
+mandatory order is a shape this estate produces often — core-owned script plus
+instance-owned consumer — and it has no mechanism.
+
+**What would have removed the cost entirely:** nothing available. The lane had no
+per-run isolation to reach for, and the collision is invisible from inside either
+run — each sees a plausible test failure. The only cheaper path was *detection*:
+refusing to hand out a DSN while another session holds connections to that
+database would have converted 23 minutes of misattribution into one clear
+message. That is worth having anyway, and is not built.
+
+### Measured: distributing the fix cost four more cycles, three of them structural (2026-08-09)
+
+Landing the two halves was the easy part. Getting the script into the instance
+took four further rounds:
+
+| Round | What happened | Cost |
+| --- | --- | --- |
+| 1 | `biffo core upgrade` refused — needs `--template-repo`, and the local template checkout was itself behind `origin/dev` | ~5 min |
+| 2 | Conflict on the one file, because `dev` already carried the change from an earlier upgrade stamped with a version that does not contain it | ~5 min |
+| 3 | `mergeable=CONFLICTING` — the same block inserted twice at different offsets, so git could not align two identical intents | ~8 min |
+| 4 | CI red on `test_known_divergence_derivation_matches_the_current_core_pin`: the divergence sets were derived at `0.258.0` and the pin moved to `0.258.1` | ~12 min |
+
+Round 4 is a **guard doing its job** and is not a complaint — re-deriving showed
+both sets unchanged (47 modified against 47 declared, 15 instance-only against
+15, compared as sets), so only the stamp moved. "Unchanged" is a conclusion
+someone had to reach rather than assume, which is the whole point of it.
+
+But it is also **the local-gate blind spot recurring**: `verify.sh` excludes
+pytest as too slow, so the push gate went green on the same tree CI failed. That
+is already recorded on this page and it cost another cycle here.
+
+Round 3 is worth naming separately. Two mechanisms delivered the same change —
+an earlier upgrade and this one — and git saw a duplicate insertion rather than a
+no-op. **A distribution mechanism that can deliver the same content twice by two
+routes will produce conflicts that are not disagreements**, and resolving them
+safely means checking for duplicated blocks rather than trusting the merge: here,
+`clone_for_this_run` had to appear exactly once as a definition and twice as a
+call.
+
 
 ### Measured: the cheap part was shipping it; the expensive part was that the number was wrong (2026-08-05)
 
@@ -2155,6 +2234,49 @@ has no tooling at all. The first has a lane; the second has a person who
 happened to think of it.
 
 ## What went well — practices that earned their keep
+
+**Running the fail-first check on a brand-new test caught it asserting nothing.**
+The real-persona E2E spec was green, reviewed, and wrong: pointed at the caller
+who *holds* the permission it claims is absent, it still passed, because
+`toHaveCount(0)` is satisfied by a page that has not rendered. Nothing about a
+green new test invites suspicion — it is new, you just wrote it, it agrees with
+you. The only reason it was caught is that `biffo-verify` §3 says to watch a test
+fail before believing it, and that applies to tests written *for the fix* as much
+as to ones defending it. **The generalisable form: an absence assertion is
+vacuous until something proves the page was there to be absent from.** Every one
+now anchors on the signed-in user's own name first.
+
+**A control turned an all-zero report from suggestive into proof — and then
+stopped a second one being read as evidence.** #788 was filed as an untested
+hypothesis: an out-of-scope caller *might* receive a confident £0.00. The first
+attempt to confirm it asked a Demo Brand caller about Northfield and got
+`total_outstanding: 0.0` — which proves nothing, because Northfield genuinely
+owes nothing. Establishing ground truth from a tenant-wide caller first (£1,000
+against Demo Brand, £0 against Northfield) is what made the eventual measurement
+mean something, and the same discipline then produced the sharper finding: a
+region-scoped caller reads **0.00** where a unit-scoped one reads a plausible
+**400.00**. Two different wrong answers, neither distinguishable from a correct
+one by any field in the response.
+
+**Reading a merge conflict rather than resolving it by reflex.** This page
+already records that two instance copies were right and the template wrong. The
+core-upgrade conflict here was the opposite — `ours` was empty, `theirs` was a
+six-line comment — and the resolution was still *read* rather than assumed, then
+asserted byte-identical to the template afterwards. The second conflict, on
+merging `dev`, was neither side being wrong: the same block delivered twice by
+two mechanisms. Checking that `clone_for_this_run` appeared once as a definition
+and twice as a call is what confirmed the duplicate-block hazard had not landed.
+
+**Establishing where an issue's code actually lives before planning against it.**
+#635 is filed on `tabsii-platform` and every file it names is in `tabsii-crm`;
+this repo has no `apps/frontend` at all. Its two substantive claims were exactly
+right and independently verified, so the issue was good — it was just filed
+against the repo that owns the *dependency* rather than the code. Two minutes of
+`git ls-tree` moved the work to the right repo before any of it was designed, and
+also established that `e2e/session.ts` is repo-owned rather than distributed,
+which removed a build-upstream-first detour that would otherwise have been
+mandatory.
+
 
 **Check what a required status check is called before you delete the job that
 reports it.** Consolidating CI jobs meant removing job *names*, and job names are
@@ -4342,6 +4464,51 @@ would not have told us anything about which disjunct was missing.
 **Spot-checking an agent's verdict caught my own broken ruler, not the agent's.** `groom-backlog` says to distrust every surprising agent verdict. An agent reported `auth.ts` reconciled; measuring from working trees gave 6 variants across 7 repos and I was ready to overturn it. Re-measuring from `origin/dev` gave **2**, matching the declared baseline — the 6 was entirely stale local clones, a trap `shared-files.json`'s own note documents. The check was right and my measurement was wrong, which is the reverse of what the rule anticipates and the more dangerous direction.
 ## What needs more thought
 
+**Nothing checks that a distributed file matches the version stamp it arrives
+with.** `tabsii-platform` was carrying a template script change while pinned to a
+core version whose tag does not contain it. The content was correct, so nothing
+looked wrong — and that is the problem: the stamp is the only claim about
+provenance, and it was false. The likely mechanism is that `biffo core upgrade`
+identifies a template root as *any* directory with `core-manifest.json` and no
+`biffo.core.json`, which a git worktree under `biffo-template/.worktrees/`
+satisfies, so an upgrade can silently source from another session's in-progress
+branch. **I have not proven that**, only established that the content was
+distributed, the named tag does not contain it, and the file matched an unmerged
+branch. Two things would close it independently: refuse a template root that is
+not on a clean released commit, and assert post-upgrade that every carried file
+matches the tag the stamp names.
+
+**A two-repo change with a mandatory landing order has no mechanism.** The pg-lane
+fix had to land lock-first, clone-second, because the clone alone regresses
+instances. That ordering existed only in the PR bodies and in the operator's
+head. This estate produces this shape routinely — a template-owned script plus an
+instance-owned consumer that must adapt — and the ordering constraint is
+currently a matter of whoever is holding both PRs remembering it. A PR that could
+declare "do not merge before <other PR> is distributed" would make it checkable;
+nothing does.
+
+**Extraction dates every unrecorded scoreboard row to the day it is run, so a
+backlog gets mis-stamped en masse.** `practices-evidence.mjs --extract` was run
+to record five rows from one session and wrote **23** — the other eighteen were
+older rows nobody had extracted, and all of them received today's date because
+the markdown row carries none. The eighteen were dropped by hand rather than
+shipped, which fixes this instance and not the mechanism: the next person to run
+`--extract` will re-create them, with whatever date they run it on. Two things
+would help independently — infer the date from the row's own PR/issue links
+rather than defaulting, and make the default explicit (`date: null`, or a
+`needs-date` marker) so an undated row is visibly undated rather than confidently
+wrong. As written, the tally's `withDate: 345` overstates what is actually known.
+
+**A lock whose scope is a property of where it is taken is invisible until the
+scope changes.** `pg_advisory_xact_lock` served this lane correctly for as long
+as every run shared one database, and the coupling between "we all use one
+database" and "this lock works" was written nowhere. Removing the first silently
+removed the second. The general shape — **a guarantee that is a side effect of an
+unrelated arrangement** — is worth a name, because it cannot be found by reading
+either piece alone, and it is the second time in a week that a safety property
+turned out to be incidental rather than designed.
+
+
 **Nothing ranks a CI-cost fix by whether it can actually pay out.** The estate now
 has a documented per-job-minimum problem and five named candidates, and the one
 that shipped turned out to be worth ~16 min/day where another is worth ~86. The
@@ -6097,6 +6264,9 @@ Skills cannot be iterated on impressions. Every invocation, with an honest outco
 
 | Skill | Outcome | Detail |
 | --- | --- | --- |
+| `biffo-verify` | **worked — §1 and §4 between them changed what the work was** | Invoked for tabsii-platform#789. §1 ("establish the current state") found the shipped half already merged and the issue deliberately left open for a remainder, so the task was never "write a fix" — it was "verify one half, build the other". §4 ("verify the deployed artifact") settled it properly: the ddl-import payload showed the module in `skipped` (already applied) and the unzipped Lambda carried the mapping, which is what made the reproduction meaningful rather than hopeful. §7 earned its place at the end: #789's remaining sites are unreachable by any route, so the issue closed on "the wrong code is gone and the right one is applied" — stated plainly rather than dressed up as an end-to-end verification. |
+| `biffo-verify` | **not invoked — for three of the four units of work, and §3 was the only thing that saved one of them** | #788, #635 and the pg-lane fix all ran on habit rather than by invoking the skill. Habit mostly held: ground-truth controls, fail-first on every change, deployed-artifact checks, an explicit *Verification not claimed* section in each PR. It failed once, and expensively enough to matter — the #635 spec shipped a vacuous assertion and was caught only because the fail-first step ran anyway. **Why it was missed:** each unit arrived as a directive ("build the 409 fix", "start 635", "fix the pg lane isolation"), which reads as an instruction to build rather than a request to diagnose, and none of the skill's triggers match that phrasing. Suggested trigger addition: **a directive to fix or build something already diagnosed is still a change that needs §3 and §7** — the skill is not only for "is this actually fixed?". |
+| `biffo-workflow` | **not invoked — and two of its steps were skipped in ways it exists to prevent** | Every unit followed AGENTS.md by hand and mostly correctly. Two failures, both covered by the skill: I edited `tabsii-platform`'s **primary checkout** directly before moving the change to a worktree (§1's first rule), and I skipped `pnpm install` in a fresh worktree so the first commit was rejected by a missing `lint-staged` (§1's install rule, already recorded on this page from a previous session). Neither cost more than a few minutes, and both are exactly what the step order enforces where habit does not. |
 | `biffo-verify` | **worked — and it was the only reason a 5× wrong number did not stand** | Invoked *after* the change had shipped and been distributed, as a capture exercise. Its opening rule — "green is not evidence" — read as a prompt to re-examine the one claim nothing had tested: **"~90 min/day saved"**. Everything about that number looked safe (measured inputs, arithmetic anyone would accept, a green PR, a verified deploy), and it was ~5× too high, because folding a job only recovers its billed minute when the absorbing job has slack ≥ the folded work. §6's *"when a measurement surprises you, suspect the ruler first"* is the nearest fit and is not quite it — nothing surprised me; the number was exactly what I expected, which is why it survived. **Suggested addition to §6:** a figure you *predicted* rather than measured deserves the same scrutiny as one that surprised you — arguably more, because agreement with your own model is not evidence. §6's blind-zero rule also fired earlier and cleanly, on `billable.UBUNTU.total_ms: 0` beside `run_duration_ms: 199000`. |
 | `biffo-workflow` | **worked — Step 4.5 caught a false claim in my own comment, and Step 6 caught a real one in the estate** | Ran end to end for #1332. **Step 4.5** (read your own diff before opening the PR) found the job-header comment asserting "every step runs under `!cancelled()`" when the first `fmt` step deliberately carries no `if:` and the real condition also gates on `steps.setup.outcome` — a false premise about my own code, in the file I had just written, invisible to every test. **Step 6** is where the skill paid for itself twice: verifying required contexts before merging surfaced that `wait-for-checks` disagreed with GitHub ([#1333](https://github.com/keiranholloway/biffo-template/issues/1333)). One real gap: the skill's Step 3/5 discipline covers closing keywords in the **PR body** and re-checks it, but my *first commit message* still said `Closes #1331`, which is what the squash body inherits — the issue closed behind a green `Release Guards` ([#1334](https://github.com/keiranholloway/biffo-template/issues/1334)). Step 5 should say plainly: **grep the commit messages too, not just the body you are about to edit.** |
 | `biffo-verify` | **worked — §6's "suspect the ruler first" stopped a wrong issue reaching GitHub** | Invoked at the end of the #1021 session. Its highest-value moment was retroactive but decisive: `ls .github/workflows/` in both fleet checkouts returned empty, and an issue asserting "these repos have no terraform checking at all" was already drafted. §6's instruction to distrust a surprising measurement before the subject sent me to `gh api …?ref=dev`, which returned `ci.yml` running `terraform fmt -check -recursive terraform/` — the checkouts were parked on `main`. The filed finding changed from "unguarded repos" to "a local-gate blind spot", which is narrower, true, and fixes something different. §3 also fired cleanly: the scratch repo with a misformatted `terraform/bad.tf` proved the *old* gate passed it, which is the half that actually evidences #1243. §1 stopped work on a non-existent issue (#1250). Its §8 is, as ever, the only reason any of this is written down. |

@@ -1,0 +1,13 @@
+{
+  "refs": [],
+  "summary": "Giving each run its own database silently disarmed the lock that made role provisioning safe. Role provisioning writes pg_authid, which is cluster-wide, and the lane serialised it with pg_advisory_xact_lock. PostgreSQL advisory locks are scoped to the database they are taken in, so that lock worked only for as long as every run shared one database — the protection was a side effect of the defect above, not a mechanism. Fixing the data race removed it, and concurrent runs began failing with tuple concurrently updated, the exact error the lock exists to prevent. Proven, not predicted: one pg file run twice concurrently passed in one process and failed the other. A first attempt at the fix failed identically, because it locked the provisioning *statements* rather than the *transaction* — each transaction takes its catalog snapshot when it begins, so the second could acquire the lock and then update a row from a snapshot predating the first's commit",
+  "class": "fail-open",
+  "alsoClass": [
+    "boundary"
+  ],
+  "surfacedIn": "tabsii-platform",
+  "fixesIn": "tabsii-platform (conftest.py)",
+  "status": "fixed",
+  "costMinutes": null,
+  "date": "2026-08-09"
+}

@@ -1,0 +1,16 @@
+{
+  "refs": [
+    "keiranholloway/biffo-template#1398",
+    "tabsii-com/tabsii-platform#824"
+  ],
+  "summary": "The pg lane isolates two checkouts and not two runs of one, so an automatic gate corrupts a suite nobody chose to run alongside it. pg-test-db.sh derives its port, database and container from $REPO_ROOT — deterministic on purpose, because determinism is what makes schema reuse work. Two *checkouts* are therefore isolated and two *runs of one checkout* are not. A developer running the suite while git push fires the pre-push gate gets two sessions on one database, and neither party did anything wrong: the gate is automatic. The cost is not a lost race, it is a misattributed one — the gate reported test_lead_unsubscribe_pg.py failing on a foreign key, in a file the change never touched, while the other run deleted and re-seeded the rows it depends on. The change was suspected, the database had to be recreated, and the same shape recurred across two sessions the same morning",
+  "class": "visibility",
+  "alsoClass": [
+    "boundary"
+  ],
+  "surfacedIn": "tabsii-platform (three times in one day)",
+  "fixesIn": "biffo-template (scripts/pg-test-db.sh), tabsii-platform (domains/tabsii/tests/conftest.py)",
+  "status": "fixed",
+  "costMinutes": null,
+  "date": "2026-08-09"
+}

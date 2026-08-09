@@ -1,0 +1,15 @@
+{
+  "refs": [
+    "tabsii-com/tabsii-platform#817",
+    "tabsii-com/tabsii-platform#818",
+    "tabsii-com/tabsii-platform#822"
+  ],
+  "summary": "A brand-parameterised aggregate gated on a permission code returned a confident, wrong number to a caller outside its scope. GET /brands/{id}/aged-debt checked invoices.read and nothing else. A code carries no scope, so a caller holding it *anywhere* passed the gate for *any* brand; RLS then removed the rows and the response was a well-formed £0.00. Measured against the real route on a brand owing £2,000: a brand-scoped caller read 2000.00, a region-scoped caller 0.00, a unit-scoped caller 400.00. invoices_read has no region path at all, so the regional answer is not a near-miss but a clean ledger for a region whose units owe money. Filed as an *untested hypothesis* and only confirmed when someone ran it",
+  "class": "visibility",
+  "alsoClass": [],
+  "surfacedIn": "tabsii-platform",
+  "fixesIn": "tabsii-platform (finance_invoicing.py)",
+  "status": "fixed",
+  "costMinutes": null,
+  "date": "2026-08-09"
+}

@@ -279,6 +279,55 @@ resource "aws_lambda_permission" "tick_schedule" {
   source_arn    = aws_cloudwatch_event_rule.tick_schedule[0].arn
 }
 
+# ── Stale-run sweep (tabsii-platform#808) ────────────────────────────────────
+#
+# Mirrors agent-runtime's own reap_schedule exactly (down to the resource
+# names below), including targeting the Lambda directly on the DEFAULT bus
+# (EventBridge only supports schedule_expression there) rather than publishing
+# to the custom bus. `input` synthesises the same BiffoEvent envelope
+# create_event_handler expects, so the sweep arrives through the identical
+# dispatch path a real event takes and needs no second entrypoint in main.py —
+# `plugin.py`'s `_forward` wildcard forwarder explicitly excludes this
+# (source, detail-type) pair from `dispatch_event`/`observe_trigger`, so it
+# never pollutes the self-building trigger catalog as a "selectable" trigger,
+# the same concern `_schedule_run`'s docstring raises for the scheduled-run
+# fire callback. The source is this plugin's own, never biffo.core — Core did
+# not emit this.
+resource "aws_cloudwatch_event_rule" "reap_schedule" {
+  count               = var.reap_schedule_expression == "" ? 0 : 1
+  name                = "${local.function_name}-reap"
+  description         = "Periodic stale orchestration-run sweep for ${var.plugin_name} (tabsii-platform#808)"
+  schedule_expression = var.reap_schedule_expression
+
+  tags = var.tags
+}
+
+resource "aws_cloudwatch_event_target" "reap_schedule" {
+  count     = var.reap_schedule_expression == "" ? 0 : 1
+  rule      = aws_cloudwatch_event_rule.reap_schedule[0].name
+  target_id = "${var.plugin_name}-reap"
+  arn       = module.function.function_arn
+
+  input = jsonencode({
+    source        = "biffo.orchestrator"
+    "detail-type" = "orchestration.runs.reap_due"
+    detail = {
+      schema_version = "1.0"
+      tenant_id      = "default"
+      payload        = {}
+    }
+  })
+}
+
+resource "aws_lambda_permission" "reap_schedule" {
+  count         = var.reap_schedule_expression == "" ? 0 : 1
+  statement_id  = "AllowEventBridgeReapInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = module.function.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.reap_schedule[0].arn
+}
+
 # ── Scheduled workflow actions (docs/implementation/0002-scheduled-workflow-actions, ADR-0023) ──
 #
 # One EventBridge Scheduler one-time schedule per delayed run, created by the

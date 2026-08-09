@@ -206,6 +206,14 @@ async def fire_scheduled_run(db: AsyncSession, *, tenant_id: str, run_id: str) -
     # CursorResult, not Result: `rowcount` is only defined for DML, and it is
     # the entire verdict here (see agent_runs.claim_run for the same pattern) —
     # the cast asserts what the statement is, not a nuisance silence.
+    #
+    # `updated_at` is stamped explicitly: this is a Core-style `update()`
+    # statement, not an ORM attribute mutation through a loaded instance, and
+    # the column's `onupdate=func.now()` (models/base.py) only fires on the
+    # latter — a raw UPDATE leaves it untouched. `reap_stale_runs` needs this
+    # transition's real timestamp to tell "just started dispatching" from
+    # "created weeks ago as a scheduled run", so it must actually change here
+    # (tabsii-platform#808).
     updated = cast(
         CursorResult[Any],
         await db.execute(
@@ -215,7 +223,7 @@ async def fire_scheduled_run(db: AsyncSession, *, tenant_id: str, run_id: str) -
                 WorkflowRun.id == run_id,
                 WorkflowRun.status == "scheduled",
             )
-            .values(status="dispatching")
+            .values(status="dispatching", updated_at=func.now())
         ),
     )
     if updated.rowcount != 1:
@@ -393,6 +401,129 @@ async def record_result(
     # sync in a threadpool) doesn't trigger lazy IO — MissingGreenlet otherwise.
     await db.refresh(run)
     return run
+
+
+# ── Stale-run sweep (tabsii-platform#808, acceptance criterion #2) ──────────
+#
+# Follows agent_runs.reap_stale_runs's precedent exactly (ADR-0014 section 5,
+# issue #402): a run is claimed by a conditional UPDATE and is expected to
+# report a terminal result soon after; if the invocation that claimed it died
+# first, nothing ever will. The reaper notices and fails it so the run stops
+# presenting as perpetually in-flight in the audit trail.
+#
+# The root cause behind #808's *specific* outage — three tick-bound runs
+# permanently skipped, not merely one stuck one — was not an abandoned
+# invocation at all: it was every occurrence of a payload-less recurring event
+# (``orchestrator.tick``) hashing to the *same* idempotency key forever, so
+# `_claim_run`'s dedupe saw an existing row (in whatever state) and returned
+# `created=False` on every subsequent firing, regardless of that row's status.
+# That is fixed at the source in the orchestrator plugin's `_idempotency_key`
+# (empty payload -> a fresh key per occurrence, never a stable hash of
+# "nothing"). This sweep is deliberately independent of that fix and does not
+# replace it: reaping a stuck run does **not** free its dedupe_key for reuse
+# (the unique constraint is on (tenant_id, dedupe_key) regardless of status),
+# so for a genuine one-off business event a reap cannot make the definition
+# fire again — only mark the abandoned attempt failed so it is visible instead
+# of silently stuck. That is the same scope agent-runs' own reap has: it does
+# not retry either.
+
+# AWS's hard Lambda invocation cap — mirrors agent_runs.LAMBDA_MAX_SECONDS
+# exactly, and for the same reason: deriving the reap threshold from the
+# platform ceiling rather than a plugin-specific timeout means raising the
+# orchestrator Lambda's own configured timeout can never silently start
+# reaping runs that are still legitimately executing.
+ORCHESTRATION_RUN_STALE_CEILING_SECONDS = 900
+
+REAPED_RUN_ERROR = (
+    "Reaped: claimed but never reported a result. The runtime that claimed it "
+    "is presumed dead (tabsii-platform#808, mirroring agent-runs' reap, "
+    "ADR-0014 section 5)."
+)
+
+
+async def reap_stale_runs(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    stale_after_seconds: int,
+    now: datetime | None = None,
+) -> list[WorkflowRun]:
+    """Fail runs stuck non-terminal past ``stale_after_seconds``, returning them.
+
+    Two states are "claimed and not yet resulted": ``pending`` (an immediate-
+    dispatch run the engine claimed via ``dispatch_event`` but never called
+    back to ``record_result`` for) and ``dispatching`` (a scheduled run's
+    fire-time callback claimed it via ``fire_scheduled_run`` but likewise never
+    resulted). ``scheduled`` is deliberately excluded — a definition may
+    legitimately delay days or weeks (docs/implementation/0002-scheduled-
+    workflow-actions), so sitting there a long time is the *normal* case, not
+    evidence of abandonment.
+
+    Aged from ``updated_at``, not ``created_at``: a scheduled run can sit for
+    weeks before ``fire_scheduled_run`` flips it to ``dispatching``, so its
+    creation time says nothing about how long it has actually been claimed.
+    That function explicitly stamps ``updated_at`` on the transition for this
+    reason (see its own comment — a raw UPDATE does not get the column's
+    ``onupdate`` for free). A ``pending`` run's ``updated_at`` equals its
+    ``created_at`` at insert, which is exactly the age this sweep wants — it
+    enters ``pending`` in one ORM-tracked write and nothing else touches it
+    before either a real result or this reaper does.
+
+    Each run is flipped by its own conditional UPDATE, the same shape as
+    ``_claim_run``/``fire_scheduled_run``: a reap that raced a real completion
+    matches zero rows and is silently skipped, so a late-arriving genuine
+    result is never overwritten by a reap that read a stale snapshot.
+
+    ``now`` is injectable so a test can age a run without sleeping.
+    """
+    moment = now or datetime.now(UTC)
+    cutoff = moment - timedelta(seconds=stale_after_seconds)
+
+    candidates = list(
+        (
+            await db.scalars(
+                select(WorkflowRun).where(
+                    WorkflowRun.tenant_id == tenant_id,
+                    WorkflowRun.status.in_(("pending", "dispatching")),
+                    WorkflowRun.updated_at < cutoff,
+                )
+            )
+        ).all()
+    )
+
+    reaped: list[WorkflowRun] = []
+    for candidate in candidates:
+        result = cast(
+            CursorResult[Any],
+            await db.execute(
+                update(WorkflowRun)
+                .where(
+                    WorkflowRun.tenant_id == tenant_id,
+                    WorkflowRun.id == candidate.id,
+                    # Re-checked: the SELECT above is a snapshot, and a real
+                    # result (or, for a `dispatching` run, an unlikely second
+                    # fire-time claim) may have landed in between.
+                    WorkflowRun.status == candidate.status,
+                )
+                .values(status="failed")
+            ),
+        )
+        if result.rowcount == 0:
+            continue
+        db.add(
+            ActionLog(
+                tenant_id=tenant_id,
+                run_id=candidate.id,
+                action_type="reap",
+                status="failed",
+                error=REAPED_RUN_ERROR,
+            )
+        )
+        await db.flush()
+        await db.refresh(candidate)
+        reaped.append(candidate)
+
+    return reaped
 
 
 # ── Run history (user-facing, read-only) ─────────────────────────────────────

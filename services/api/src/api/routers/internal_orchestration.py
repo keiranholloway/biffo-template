@@ -18,10 +18,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import settings
 from ..database import get_db
 from ..middleware.service_auth import ServicePrincipal, require_service_principal
 from ..models.orchestration import WorkflowDefinition, WorkflowRun
-from ..orchestration import dispatch_event, fire_scheduled_run, record_result
+from ..orchestration import dispatch_event, fire_scheduled_run, reap_stale_runs, record_result
 from ..schemas.orchestration import (
     ClaimedRun,
     DispatchEventRequest,
@@ -204,3 +205,38 @@ async def record_run_result(
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     return run
+
+
+@router.post("/reap", response_model=list[WorkflowRunResponse])
+async def reap_stale_orchestration_runs(
+    principal: ServicePrincipal = Depends(require_service_principal),
+    db: AsyncSession = Depends(get_db),
+) -> list[WorkflowRun]:
+    """Fail runs a dead engine invocation left claimed (tabsii-platform#808).
+
+    Mirrors ``POST /internal/agent-runs/reap`` exactly (ADR-0014 section 5,
+    issue #402): a run reaches ``pending``/``dispatching`` only by being
+    claimed, and one still there long after any invocation could possibly have
+    finished is a runtime that died holding it. Safe to call on a schedule —
+    with nothing stale it reaps nothing.
+
+    This does not, by itself, make a wedged tick-driven workflow fire again:
+    the dedupe_key it was claimed under stays taken regardless of the run's
+    status (see ``orchestration.reap_stale_runs``'s docstring). That failure
+    mode is fixed at its source — the orchestrator plugin's idempotency-key
+    generation no longer collapses every occurrence of a payload-less
+    recurring event onto one key. This sweep's job is narrower: make a
+    genuinely abandoned run visible as failed rather than perpetually
+    "in-flight" in the run history.
+    """
+    reaped = await reap_stale_runs(
+        db,
+        tenant_id=principal.tenant_id,
+        stale_after_seconds=settings.orchestration_run_stale_after_seconds,
+    )
+    if reaped:
+        logger.warning(
+            "Reaped stale orchestration runs",
+            extra={"count": len(reaped), "run_ids": [r.id for r in reaped]},
+        )
+    return reaped

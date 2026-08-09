@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import httpx
 from biffo_plugin_sdk import BiffoEvent
 from orchestrator import plugin as plugin_module
 from orchestrator.actions import WhatsAppSettings
@@ -208,6 +209,157 @@ async def test_idempotency_key_falls_back_to_content_hash():
 
     key = core.event_posts()[0]["idempotency_key"]
     assert key.startswith("demo.requested:")
+
+
+# ── Recurring, payload-less triggers (tabsii-platform#808) ───────────────────
+#
+# `orchestrator.tick` fires hourly with an unchanging (source, detail_type)
+# and a deliberately empty payload (OrchestratorTickPayload's own docstring:
+# "carries no information of its own, only the fact that it fired"). Before
+# this fix, `_idempotency_key`'s only fallback for a payload with none of
+# `_ID_KEYS` was a SHA-256 of `{detail_type, payload}` — which, for an empty
+# payload, is the exact same digest on every single call, forever. Fed into
+# Core's `dedupe_key` (unique per definition), that meant every tick-bound
+# workflow claimed a run on its very first firing and was permanently skipped
+# as "already-claimed" on every firing after — regardless of whether that
+# first run ever completed. Every workflow bound to the tick on dev (KPI
+# rollup, the finance sweep, retention sweeps) went dark within its first
+# hour and stayed dark for as long as the log retained (issue #808).
+
+
+def test_idempotency_key_is_unique_per_call_for_an_empty_payload():
+    """The fix, isolated: no id, no payload -> a fresh key every time, not a
+    stable hash of "nothing" that collides across every occurrence."""
+    tick = BiffoEvent(source="biffo.orchestrator", detail_type="orchestrator.tick", payload={})
+
+    keys = {plugin_module._idempotency_key(tick) for _ in range(20)}  # noqa: SLF001
+
+    assert len(keys) == 20
+    assert all(key.startswith("orchestrator.tick:") for key in keys)
+
+
+async def test_a_recurring_empty_payload_event_is_dispatched_with_a_fresh_key_every_time():
+    """The same guard, exercised through `process_event` rather than the pure
+    function directly — proves the plugin's actual dispatch call, not just
+    `_idempotency_key` in isolation, carries a different key on repeat firings
+    of what looks like the identical event."""
+    core = FakeCore([])
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes())
+
+    tick = BiffoEvent(source="biffo.orchestrator", detail_type="orchestrator.tick", payload={})
+    await plugin.process_event(tick)
+    await plugin.process_event(tick)
+    await plugin.process_event(tick)
+
+    keys = [posted["idempotency_key"] for posted in core.event_posts()]
+    assert len(keys) == 3
+    assert len(set(keys)) == 3  # never the same key twice
+
+
+def test_idempotency_key_still_dedupes_a_payload_carrying_an_id_key():
+    """Regression guard: the fix is scoped to an *empty* payload. An event
+    that names an explicit id must still be stable across calls, exactly as
+    before — that stability is what makes a genuine EventBridge redelivery of
+    the same occurrence claim the same run instead of firing twice."""
+    event = _event(payload={"demo_request_id": "d1", "company": "Acme"})
+
+    first = plugin_module._idempotency_key(event)  # noqa: SLF001
+    second = plugin_module._idempotency_key(event)  # noqa: SLF001
+
+    assert first == second == "d1"
+
+
+def test_idempotency_key_still_dedupes_nonempty_payload_without_an_id_key():
+    """The other regression guard: a *non-empty* payload with none of
+    `_ID_KEYS` still falls back to the stable content hash, unchanged — only
+    a genuinely empty payload gets the fresh-key treatment."""
+    event = _event(payload={"company": "NoId"})
+
+    first = plugin_module._idempotency_key(event)  # noqa: SLF001
+    second = plugin_module._idempotency_key(event)  # noqa: SLF001
+
+    assert first == second
+
+
+# ── Stale-run sweep (tabsii-platform#808, mirrors AgentRuntimePlugin's) ──────
+
+
+async def test_reap_stale_runs_posts_to_the_reap_endpoint():
+    core = FakeCore([])
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes())
+
+    await plugin.reap_stale_runs()
+
+    posts = [(m, p) for m, p, _ in core.requests if p.endswith("/reap")]
+    assert len(posts) == 1
+
+
+async def test_reap_stale_runs_logs_a_nonzero_count(caplog):
+    class ReapingCore(FakeCore):
+        def _handle(self, request):  # type: ignore[override]
+            if request.url.path.endswith("/reap"):
+                return httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "id": "run-1",
+                            "tenant_id": "default",
+                            "definition_id": "def-1",
+                            "dedupe_key": "def-1:orchestrator.tick:x",
+                            "status": "failed",
+                            "trigger_event": {},
+                        }
+                    ],
+                )
+            return super()._handle(request)
+
+    core = ReapingCore([])
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes())
+
+    with caplog.at_level("WARNING"):
+        await plugin.reap_stale_runs()
+
+    assert any("Reaped stale orchestration runs" in record.message for record in caplog.records)
+
+
+async def test_reap_stale_runs_swallows_a_core_failure():
+    """Mirrors AgentRuntimePlugin.reap_stale_runs: a failed sweep is logged and
+    swallowed, not raised — raising here would fail the Lambda invocation and
+    trigger an EventBridge retry against a Core that may already be unwell,
+    when the sweep costs nothing to simply retry on the next schedule tick."""
+
+    class BrokenCore(FakeCore):
+        def _handle(self, request):  # type: ignore[override]
+            if request.url.path.endswith("/reap"):
+                return httpx.Response(500, json={"detail": "boom"})
+            return super()._handle(request)
+
+    core = BrokenCore([])
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes())
+
+    await plugin.reap_stale_runs()  # must not raise
+
+
+async def test_the_reap_due_signal_does_not_pollute_the_trigger_catalog():
+    """The wildcard `_forward` forwarder must not also run `process_event` on
+    this plugin's own internal reap signal — `_schedule_run`'s docstring flags
+    exactly this concern for the scheduled-run fire callback (Core's
+    `observe_trigger` would offer the internal signal to the builder as a
+    selectable trigger). The dedicated `_on_reap_due` handler must still run."""
+    core = FakeCore([])
+    plugin = OrchestratorPlugin(api=core.client(), ses_client=FakeSes())
+
+    event = BiffoEvent(
+        source=plugin_module.ORCHESTRATOR_SOURCE,
+        detail_type=plugin_module.ORCHESTRATION_RUNS_REAP_DUE,
+        payload={},
+    )
+    await plugin.events.dispatch(event)
+
+    # The dedicated handler ran (it posts to /reap)...
+    assert any(path.endswith("/reap") for _, path, _ in core.requests)
+    # ...but the generic forwarder did not also post this event to /events.
+    assert core.event_posts() == []
 
 
 async def test_forwards_any_event_via_catch_all_subscription():

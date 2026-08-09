@@ -69,6 +69,7 @@
 #   sh scripts/shared-sync.sh --candidates --estate ~/code   # unlisted paths worth triaging (#1108)
 #   sh scripts/shared-sync.sh --backfill --estate ~/code     # skeleton files older repos never got (#1109)
 #   sh scripts/shared-sync.sh --skeleton-adoption --estate ~/code  # skeleton paths not held by EVERY applicable repo (#1271)
+#   sh scripts/shared-sync.sh --deliver-overrides --estate ~/code  # dry-run report: which repos are missing an overridesFloor key (#1352). Additive only, never pushes.
 #
 # ## `--skeleton-adoption`: enumerate, don't threshold (#1271)
 #
@@ -197,6 +198,7 @@ NO_REHEARSE=""
 CANDIDATES=""
 BACKFILL=""
 ADOPTION=""
+DELIVER=""
 SCHEDULED=""
 NOW=""
 while [ $# -gt 0 ]; do
@@ -213,6 +215,10 @@ while [ $# -gt 0 ]; do
     --backfill) BACKFILL=1; shift ;;
     # Enumerate rather than threshold (#1271) -- see the block comment above.
     --skeleton-adoption) ADOPTION=1; shift ;;
+    # The additive-only writer half of #1352 (see the block comment above the
+    # DELIVER branch below). Dry-run/report only -- never pushes, never opens
+    # a PR, in this version.
+    --deliver-overrides) DELIVER=1; shift ;;
     # The two halves of the round gate below. `--scheduled` marks the daily
     # round (scripts/shared-sync-daily.sh); `--now` is the human override for a
     # change that must not wait for it.
@@ -234,6 +240,7 @@ SYNC_RUN_MODE=ship
 [ -n "$CANDIDATES" ] && SYNC_RUN_MODE=candidates
 [ -n "$BACKFILL" ] && SYNC_RUN_MODE=backfill
 [ -n "$ADOPTION" ] && SYNC_RUN_MODE=skeleton-adoption
+[ -n "$DELIVER" ] && SYNC_RUN_MODE=deliver-overrides
 wt_log "run-start($SYNC_RUN_MODE)" "${ONLY:-<all repos>}" "$ESTATE"
 
 # `trap ... EXIT` REPLACES any previous EXIT trap, and two more are set further
@@ -415,6 +422,128 @@ function canon(v) {
 }
 console.log(JSON.stringify(canon(cur)));
 ' "$1"
+}
+
+# The additive-only writer half of `overridesFloor` (#1352). Mutates
+# `$1` (the target package.json) in place, adding every `pnpm.overrides` key
+# `$2` (the canonical copy) declares that `$1` is missing entirely, and
+# NEVER touches a key `$1` already has -- whatever its value.
+#
+# That restriction is the whole safety argument, not an incidental limit.
+# `keyMustBeUniformNote` records why writing stayed unbuilt: a one-way
+# overwrite of a value that has already diverged destroys the evidence about
+# which copy is right, and #1352's own `sharp` divergence (`^0.35.0` in three
+# siblings, `>=0.35.0` in three others, only reconciled by hand across six PRs
+# in #1380/#1381) is the worked example of that risk being real. But the risk
+# is scoped to a key that is PRESENT with a value that might disagree -- it
+# does not apply to a key that is simply ABSENT, because there is no existing
+# value to destroy. `overridesFloor` already treats absence as the
+# unambiguous defect (the `nanoid`/`js-yaml` cost this issue leads with: a
+# pin the template held and six repos silently lacked, blocking every open PR
+# in each for up to 38 minutes). So this function closes exactly that half of
+# the class -- the half that was reconciled by 2026-08-09 for every live
+# holder anyway (`--check` reports `uniform across 6 repos` for both
+# `pnpm.overrides` and `engines` today) -- and leaves the DIVERGENCE half
+# (an existing key with a disputed value) to `keyMustBeUniform`'s
+# measure-only ratchet, exactly as it is now.
+#
+# Writes via a TEXTUAL SPLICE, not a `JSON.stringify`-and-rewrite, so that
+# `name`/`version`/`scripts`/`dependencies` -- legitimately different in
+# every repo, which is why `pnpm.overrides` could not go in `files` or
+# `filesIfPresent` in the first place -- are never touched or reformatted.
+# Only new lines are inserted, immediately after `"overrides": {`; every
+# other byte of the file is untouched. That is precondition (3) from
+# `keyMustBeUniformNote` ("confidence the JSON write does not produce a
+# reformatter diff") made structural rather than merely tested.
+#
+# Prints the applied keys (space-separated) on success with something to
+# apply, or nothing when the floor was already met -- both exit 0. Exits 1
+# and writes nothing when it cannot be sure: `$1`/`$2` do not parse as JSON,
+# or `$1` has no literal `"overrides": {` line to anchor the insert on. A
+# repo with `pnpm.overrides` expressed any other way (multi-line values,
+# unusual spacing before the brace) is exactly the case a regex should not
+# guess at, so it refuses rather than risk a corrupt write.
+# The JS body is indented two spaces throughout, deliberately: a line that is
+# a bare `}` at column zero is indistinguishable, to a naive line-scanner,
+# from this shell function's own closing brace, and
+# `shared-sync-overrides-delivery.test.ts` extracts this function the same
+# way `shared-sync-ship-guard.test.ts` extracts `require_staged_worktree` --
+# by finding the first line that reads exactly `}`. Keeping every JS-level
+# brace indented is what makes that extraction find the right one.
+apply_overrides_floor() {
+  node -e '
+  const fs = require("fs")
+  const [target, canonicalPath] = process.argv.slice(1)
+
+  let raw, data
+  try {
+    raw = fs.readFileSync(target, "utf8")
+    data = JSON.parse(raw)
+  } catch (e) {
+    console.error("target unreadable or unparsable: " + e.message)
+    process.exit(1)
+  }
+
+  let canonical
+  try {
+    canonical = JSON.parse(fs.readFileSync(canonicalPath, "utf8"))
+  } catch (e) {
+    console.error("canonical unreadable or unparsable: " + e.message)
+    process.exit(1)
+  }
+
+  const canonOverrides = (canonical.pnpm && canonical.pnpm.overrides) || {}
+  const curOverrides = (data.pnpm && data.pnpm.overrides) || {}
+  const missing = Object.keys(canonOverrides).filter((k) => !(k in curOverrides))
+
+  if (missing.length === 0) {
+    // Floor already met. True no-op -- exit before touching the file at all.
+    process.exit(0)
+  }
+
+  const lines = raw.split("\n")
+  const idx = lines.findIndex((l) => /"overrides"\s*:\s*\{/.test(l))
+  if (idx === -1) {
+    console.error("no \"overrides\": { line found -- refusing a synthetic insert")
+    process.exit(1)
+  }
+
+  // Match the existing block'"'"'s indentation rather than assuming one, so a
+  // repo that reformats with a different width still gets a clean insert.
+  let indent = "    "
+  for (let i = idx + 1; i < lines.length; i += 1) {
+    const m = lines[i].match(/^(\s+)"/)
+    if (m) {
+      indent = m[1]
+      break
+    }
+  }
+
+  const newLines = missing.map((k) => indent + JSON.stringify(k) + ": " + JSON.stringify(canonOverrides[k]) + ",")
+  lines.splice(idx + 1, 0, ...newLines)
+  const out = lines.join("\n")
+
+  // Verify before writing: re-parse the spliced text and confirm every
+  // missing key now reads exactly the canonical value. A splice that LOOKS
+  // right and is not would be worse than refusing outright.
+  let check
+  try {
+    check = JSON.parse(out)
+  } catch (e) {
+    console.error("post-splice content is not valid JSON -- refusing to write: " + e.message)
+    process.exit(1)
+  }
+  const nowOverrides = (check.pnpm && check.pnpm.overrides) || {}
+  for (const k of missing) {
+    if (JSON.stringify(nowOverrides[k]) !== JSON.stringify(canonOverrides[k])) {
+      console.error("post-splice verification failed for key " + k)
+      process.exit(1)
+    }
+  }
+
+  fs.writeFileSync(target, out)
+  console.log(missing.join(" "))
+' "$1" "$2"
 }
 
 drifted=0
@@ -1253,6 +1382,125 @@ if [ -n "$CANDIDATES" ]; then
     console.log("Nothing here fails the build -- triage by hand into shared-files.json, see AGENTS.md section 9.")
   ' "$MANIFEST" "$rows" 5
   printf '\n'
+  exit 0
+fi
+
+# --deliver-overrides: the distribution half of #1352, and deliberately the
+# ADDITIVE half only.
+#
+# `overridesFloor` and `keyMustBeUniform` both stay measure-only -- see
+# `apply_overrides_floor()` above for the full argument. This mode is the
+# thing that actually calls it: for every `overridesFloor` target, stage each
+# applicable holder that is missing a canonical key, splice the missing
+# key(s) in, and report. It NEVER pushes and NEVER opens a PR in this
+# version -- every run is the dry-run/report `--rehearse`-equivalent, staged
+# in a real worktree so the splice and its post-write verification are
+# genuinely exercised, then discarded. Real delivery (push + `gh pr create`)
+# is deliberately not wired up yet: proving it safe means running it against
+# a real satellite, which is exactly what this pass was told not to do
+# ("do NOT open PRs in satellite repos in this pass"). Actually shipping is
+# follow-up work with its own review, not a bar this mode already clears.
+if [ -n "$DELIVER" ]; then
+  if [ -z "$OVERRIDES_FLOOR" ]; then
+    printf '\nno overridesFloor entries declared in shared-files.json -- nothing to deliver\n\n'
+    exit 0
+  fi
+  repos=$(applicable_repo_list)
+  if [ -z "$repos" ]; then
+    printf '\nno applicable repos found under %s\n\n' "$ESTATE"
+    exit 0
+  fi
+  trap 'wt_log_run_end' EXIT
+
+  printf '\ndeliver-overrides -- additive-only dry run, nothing pushed (shared-files.json overridesFloor)\n'
+  # `would_deliver`/`deliver_failed` are read back OUTSIDE the piped `while`
+  # loops below, for the same reason `uniform_worsened` and `key_worsened`
+  # are above: a pipe's right-hand side runs in a SUBSHELL in dash, so a
+  # counter incremented inside one is invisible to this scope the moment the
+  # loop ends. Two temp files carry the verdicts across that boundary instead.
+  dverdicts=$(mktemp)
+  dfailed=$(mktemp)
+  printf '%s\n' "$OVERRIDES_FLOOR" | while IFS="$TAB" read -r target canonical; do
+    [ -n "$target" ] || continue
+    printf '\n  %s\n  <- %s\n\n' "$target" "$canonical"
+    printf '%s\n' "$repos" | while IFS="$TAB" read -r label d base; do
+      [ -n "$d" ] || continue
+      have=$(git -C "$d" show "origin/$base:$target" 2>/dev/null) || {
+        printf '    %-24s no %s -- skipped\n' "$label" "$target"
+        continue
+      }
+      # Cheap pre-check with the SAME key-diff overridesFloor already runs,
+      # so a repo already at the floor never pays for a worktree it does not
+      # need. `apply_overrides_floor` re-derives this itself once staged --
+      # this is purely to avoid staging work for the common case, which is
+      # every live sibling as of 2026-08-09 (`--check` reports `uniform
+      # across 6 repos`).
+      missing=$(printf '%s' "$have" | node -e "
+        let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
+        try{
+          const cur=(JSON.parse(s).pnpm||{}).overrides||{};
+          const canon=JSON.parse(require('fs').readFileSync('$canonical','utf8')).pnpm.overrides||{};
+          console.log(Object.keys(canon).filter(k=>!(k in cur)).join(' '));
+        }catch(e){process.exit(3)}})" 2>/dev/null) || {
+        printf '    \033[31m%-24s\033[0m package.json did not parse\n' "$label"
+        printf 'failed\n' >> "$dfailed"
+        continue
+      }
+      if [ -z "$missing" ]; then
+        printf '    %-24s floor already met -- nothing to deliver\n' "$label"
+        continue
+      fi
+
+      wt="$d/.worktrees/deliver-overrides"
+      wt_log remove-pre-deliver "$label" "$wt"
+      git -C "$d" worktree remove --force "$wt" 2>/dev/null
+      git -C "$d" branch -D chore/deliver-overrides >/dev/null 2>&1
+      if ! git -C "$d" worktree add -q "$wt" -b chore/deliver-overrides "origin/$base" 2>/dev/null; then
+        printf '    \033[31m%-24s\033[0m could not stage a worktree\n' "$label"
+        printf 'failed\n' >> "$dfailed"
+        continue
+      fi
+      wt_log add-deliver "$label" "$wt"
+
+      applied=$(apply_overrides_floor "$wt/$target" "$canonical" 2>&1)
+      apply_rc=$?
+      if [ "$apply_rc" -ne 0 ]; then
+        printf '    \033[31m%-24s\033[0m merge refused -- %s\n' "$label" "$applied"
+        printf 'failed\n' >> "$dfailed"
+        wt_log remove-deliver-refused "$label" "$wt"
+        git -C "$d" worktree remove --force "$wt" 2>/dev/null
+        continue
+      fi
+      if [ -z "$applied" ]; then
+        # The cheap pre-check above said something was missing but the
+        # worktree copy (freshly fetched from the same origin/$base) did
+        # not agree -- report it rather than assume either answer.
+        printf '    \033[33m%-24s\033[0m pre-check found %s missing, staged copy found nothing -- investigate\n' \
+          "$label" "$missing"
+        printf 'failed\n' >> "$dfailed"
+      else
+        printf '    \033[33mWOULD DELIVER\033[0m         %-24s %s\n' "$label" "$applied"
+        printf 'would-deliver\n' >> "$dverdicts"
+      fi
+      wt_log remove-deliver-dryrun "$label" "$wt"
+      git -C "$d" worktree remove --force "$wt" 2>/dev/null
+      git -C "$d" branch -D chore/deliver-overrides >/dev/null 2>&1
+    done
+  done
+  # `grep -c` prints a count -- 0 included -- whether or not it matched, and
+  # only its EXIT status reflects the miss. A `|| echo 0` fallback here would
+  # print a second "0" behind the first on the no-match path, which is
+  # exactly what shipped in the first version of this block and produced
+  # `[: Illegal number: 0` two lines later.
+  would_deliver=$(grep -c '^would-deliver$' "$dverdicts" 2>/dev/null)
+  deliver_failed=$(grep -c '^failed$' "$dfailed" 2>/dev/null)
+  would_deliver=${would_deliver:-0}
+  deliver_failed=${deliver_failed:-0}
+  rm -f "$dverdicts" "$dfailed"
+  printf '\n%s repo(s) would receive a delivery, %s failure(s). Nothing pushed, no PR opened --\n' \
+    "$would_deliver" "$deliver_failed"
+  printf 'this mode is dry-run only; see the comment above the DELIVER block for why.\n\n'
+  [ "$deliver_failed" -gt 0 ] && exit 1
   exit 0
 fi
 

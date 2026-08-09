@@ -267,7 +267,7 @@ if [ -n "$GUARD_BRANCH" ]; then
   pr_err=$(mktemp)
   slug=$(repo_slug)
 open_prs=$(gh_pr list --state open --limit 100 --json number,headRefName,closingIssuesReferences \
-    --jq "[.[] | select(([.closingIssuesReferences[]? | select(.number == $guard_issue and ((.repository.owner.login + \"/\" + .repository.name) == \"$slug\"))] | length > 0) or (.headRefName | test(\"(^|[^0-9])$guard_issue([^0-9]|\$)\")))] | .[] | select(.headRefName != \"$GUARD_BRANCH\") | \"#\(.number) \(.headRefName)\"" \
+    --jq "[.[] | select(([.closingIssuesReferences[]? | select(.number == $guard_issue and ((.repository.owner.login + \"/\" + .repository.name) == \"$slug\"))] | length > 0) or (.headRefName | test(\"(^|[^0-9A-Za-z])$guard_issue([^0-9A-Za-z]|\$)\")))] | .[] | select(.headRefName != \"$GUARD_BRANCH\") | \"#\(.number) \(.headRefName)\"" \
     2>"$pr_err")
   pr_status=$?
   pr_err_text=$(cat "$pr_err")
@@ -294,7 +294,7 @@ open_prs=$(gh_pr list --state open --limit 100 --json number,headRefName,closing
   else
     other_branch=$(printf '%s\n' "$raw_branches" |
       sed 's|.*refs/heads/||' |
-      grep -E "(^|[^0-9])$guard_issue([^0-9]|$)" |
+      grep -E "(^|[^0-9A-Za-z])$guard_issue([^0-9A-Za-z]|$)" |
       grep -v -x "$GUARD_BRANCH" | head -1)
     if [ -n "$other_branch" ]; then
       conflict=1
@@ -379,7 +379,7 @@ esac
 
 slug=$(repo_slug)
 open_prs=$(gh_pr list --state open --limit 100 --json number,headRefName,closingIssuesReferences \
-  --jq "[.[] | select(([.closingIssuesReferences[]? | select(.number == $ISSUE and ((.repository.owner.login + \"/\" + .repository.name) == \"$slug\"))] | length > 0) or (.headRefName | test(\"(^|[^0-9])$ISSUE([^0-9]|\$)\")))] | .[] | \"#\(.number) \(.headRefName)\"" 2>/dev/null)
+  --jq "[.[] | select(([.closingIssuesReferences[]? | select(.number == $ISSUE and ((.repository.owner.login + \"/\" + .repository.name) == \"$slug\"))] | length > 0) or (.headRefName | test(\"(^|[^0-9A-Za-z])$ISSUE([^0-9A-Za-z]|\$)\")))] | .[] | \"#\(.number) \(.headRefName)\"" 2>/dev/null)
 
 if [ -n "$open_prs" ]; then
   printf '%s\n' "$open_prs" | while IFS= read -r pr; do
@@ -390,11 +390,26 @@ fi
 
 # --- 3. A remote branch naming it --------------------------------------------
 #
-# Catches work that has been pushed but has no PR yet. Whole-number match again.
+# Catches work that has been pushed but has no PR yet. Whole-number match
+# again — and "whole number" means bounded by a NON-ALPHANUMERIC character on
+# both sides, not just a non-digit. `[^0-9]` alone let a letter sit directly
+# against the digit: `docs/h3-tabsii-strict-restored` (a real branch, from the
+# H3 strict-branch-protection experiment) matched issue #3, because "h" is not
+# a digit either. Reproduced against a clean `origin/dev` clone with zero
+# relation to the branch under test — this is a live false-positive, not a
+# fixture artefact — and confirmed via `cli/src/lib/claim-structured-refs.test.ts`
+# ("a CROSS-REPO closing reference with the same number does not claim it"),
+# whose own git-remote-backed fixture happened to expose it. `[^0-9A-Za-z]`
+# requires an actual word boundary, matching the branch-naming convention
+# (`<type>/<number>-<slug>`, where the character before the number is always
+# `/`, never a letter) — so `h3` no longer matches `3`, while `feat/1234-x`
+# still matches `1234`. Same fix applied to the three other whole-number
+# matches in this file (the `--guard` path's PR and branch checks above, and
+# the normal path's PR check below) — all four shared the identical pattern.
 
 branches=$(remote_branches 2>/dev/null |
   sed 's|.*refs/heads/||' |
-  grep -E "(^|[^0-9])$ISSUE([^0-9]|$)" 2>/dev/null)
+  grep -E "(^|[^0-9A-Za-z])$ISSUE([^0-9A-Za-z]|$)" 2>/dev/null)
 
 if [ -n "$branches" ]; then
   printf '%s\n' "$branches" | while IFS= read -r b; do

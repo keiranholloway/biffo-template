@@ -1,0 +1,239 @@
+name: Error-branch coverage gate
+
+# Deterministic replacement for the best-effort cross-workflow combine that
+# used to live inline in `ci.yml`'s Python job (#637). That version raced:
+# `CI` and `RLS Tests` trigger on the same push with no ordering between
+# them, and measurement on tabsii-platform's real run history showed `RLS
+# Tests` finishing AFTER `CI` in 3 of 4 same-commit pairs — so on a typical
+# first push the artefact the best-effort step wanted usually did not exist
+# yet, and the combine silently fell back to Python-only coverage, which
+# flags every Postgres-only error branch (an RLS refusal, a constraint
+# violation) as newly unexecuted. `ci.yml` kept a duplicate, weaker stub test
+# purely to survive that (PR #831); this workflow is what removes the need
+# for the insurance rather than re-litigating it.
+#
+# `workflow_run` is the only GitHub Actions trigger that can run AFTER
+# another workflow's run has already concluded, which is the property this
+# needs: by the time this job can see BOTH a completed `CI` run and a
+# completed `RLS Tests` run for one commit, both have already produced
+# whatever coverage artefact they are ever going to produce for it — there
+# is no earlier point at which the combine could observe a false absence.
+# `workflow_run` fires once per completing workflow, so in a repo with both
+# workflows this job runs up to twice per commit; both invocations share the
+# logic below, and only the one that finds both runs actually asserts
+# anything (see "Wait for both lanes, or bail without asserting").
+#
+# `workflow_run` also carries a real tradeoff, named directly in
+# tabsii-platform#637: it always runs the workflow file version committed to
+# the DEFAULT branch, and — this is the part that is easy to miss — the
+# check run/status it produces is NOT automatically attached to the PR whose
+# push triggered the chain. GitHub associates a check with the commit SHA it
+# is reported against, and a `workflow_run` job's own ambient `github.sha`
+# is the default branch's HEAD, not the triggering commit. Left alone, this
+# job would run, assert correctly, and the PR would never see it — a gate
+# that is green and gates nothing, the exact "reports green without
+# checking" shape #637 is filed against. "Report the result" below is here
+# specifically to close that gap: it posts an explicit commit status via the
+# REST Statuses API, addressed to `github.event.workflow_run.head_sha` (the
+# ACTUAL commit under test, fork or same-repo, PR or push), not to this
+# job's own ambient SHA. A commit status posted this way appears in the PR's
+# checks list like any other, and `context: "Error-branch coverage"` can be
+# added to branch protection's required contexts exactly like a normal job
+# name — proven in this PR's own description (see the PR body for the run
+# URLs of a failing and a passing gate against a scratch commit).
+#
+# Security: this job never checks out or executes anything from the commit
+# under test. `actions/checkout` below takes the default ref (this
+# workflow's own trigger context, i.e. the trusted default branch), so
+# `scripts/error_branch_coverage.py` always runs as the DEFAULT BRANCH'S
+# copy of itself, regardless of what a PR (fork or otherwise) changed that
+# script to say. Everything that needs to be commit-specific — does this
+# commit have an RLS lane, which artefacts belong to it — is read via the
+# GitHub API (contents lookup, workflow-run listing, artifact download),
+# never via checking out and running the PR's own code with this job's
+# write-scoped token. Running a fork's modified script here, privileged,
+# would be the classic "pwn request" shape.
+
+on:
+  workflow_run:
+    workflows: ['CI', 'RLS Tests']
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  statuses: write
+
+jobs:
+  gate:
+    name: Error-branch coverage
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+      TRIGGERING_NAME: ${{ github.event.workflow_run.name }}
+      TRIGGERING_RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      # Deliberately the DEFAULT branch's checkout (no `ref:` override) — see
+      # the security note above. This is only ever used to run
+      # scripts/error_branch_coverage.py, never to inspect the PR's commit.
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      # A repo-level question, evaluated at the ACTUAL commit under test (via
+      # the contents API, not a checkout) so a PR that adds the RLS lane for
+      # the first time is gated by it immediately, matching the same
+      # `hashFiles('.github/workflows/rls-tests.yml')` test `ci.yml` uses —
+      # the two must agree on what "this repo has the lane" means, or a repo
+      # with the lane could end up asked for it in one place and not the
+      # other.
+      - name: Does this commit's repo have an RLS lane?
+        id: rls-lane
+        run: |
+          set -uo pipefail
+          if gh api "repos/$REPO/contents/.github/workflows/rls-tests.yml?ref=$SHA" >/dev/null 2>&1; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # No RLS lane at all: `ci.yml`'s own inline "Error-branch coverage"
+      # step already asserted the single-file check for this commit (it only
+      # skips itself when the lane IS present — see that file). Nothing more
+      # for this workflow to do, and nothing is posted: this job is not a
+      # required context in a repo without the lane, so leaving no status is
+      # correct, not a silent skip of something that mattered.
+      - name: No RLS lane — nothing for this gate to do
+        if: steps.rls-lane.outputs.present == 'false'
+        run: echo "No .github/workflows/rls-tests.yml at $SHA — ci.yml's own inline check already covers this commit. Exiting without posting a status."
+
+      # Wait for both lanes, or bail without asserting.
+      #
+      # This job was triggered by ONE of {CI, RLS Tests} completing, so that
+      # run's id is already known (`TRIGGERING_RUN_ID`) — the other has to be
+      # looked up, and it may genuinely not have finished yet: the two
+      # workflows start at roughly the same time with no ordering guarantee.
+      # "Not found yet" here is NOT the same failure this gate exists to
+      # close — it is the ordinary shape of the FIRST of the two firings, and
+      # the correct response is to leave no status and let the SECOND firing
+      # (the other workflow's own completion event) finish the job. A PR
+      # whose other lane never completes at all stays pending on this check
+      # forever, which blocks merge rather than passing it — the same
+      # "cannot tell is never a pass" posture AGENTS.md's `wait-for-checks`
+      # and `branch-health` already use, not a new invention. See the PR
+      # description for the residual case this does not close (a run GitHub
+      # never dispatches at all) and its recovery.
+      - name: Find both runs for this commit
+        id: runs
+        if: steps.rls-lane.outputs.present == 'true'
+        run: |
+          set -uo pipefail
+          if [ "$TRIGGERING_NAME" = "CI" ]; then
+            ci_run_id="$TRIGGERING_RUN_ID"
+            rls_run_id=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&status=completed&per_page=50" \
+              --jq '[.workflow_runs[] | select(.name == "RLS Tests")] | first | .id // empty')
+          else
+            rls_run_id="$TRIGGERING_RUN_ID"
+            ci_run_id=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&status=completed&per_page=50" \
+              --jq '[.workflow_runs[] | select(.name == "CI")] | first | .id // empty')
+          fi
+
+          if [ -z "$ci_run_id" ] || [ -z "$rls_run_id" ]; then
+            echo "Only one of {CI, RLS Tests} has completed for $SHA so far (ci=${ci_run_id:-<none>} rls=${rls_run_id:-<none>}) — this is the ordinary shape of whichever finished first. Not asserting; the other workflow's completion will re-trigger this gate."
+            echo "both_found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Both runs completed for $SHA: CI run $ci_run_id, RLS Tests run $rls_run_id."
+          echo "both_found=true" >> "$GITHUB_OUTPUT"
+          echo "ci_run_id=$ci_run_id" >> "$GITHUB_OUTPUT"
+          echo "rls_run_id=$rls_run_id" >> "$GITHUB_OUTPUT"
+
+      # Download both artefacts. A download failing here is NOT the same
+      # "not found yet" case above — both runs are already `completed`, so a
+      # missing artefact means the lane ran and produced nothing, which is a
+      # real defect and must fail the gate, not fall back quietly to
+      # whichever coverage IS present. This is the opposite posture from
+      # `error_branch_coverage.py`'s own `--coverage` handling, which treats
+      # an absent file as a soft warning — that leniency exists for a
+      # caller who cannot tell "not yet" from "never" (the old best-effort
+      # step in `ci.yml`, still true for a repo mid-way through adopting the
+      # lane's producer half); this job has already resolved that ambiguity
+      # by waiting for both runs to reach `completed`, so absence here can
+      # only mean the producer failed. Reported explicitly rather than
+      # relying on the script's own tolerant default.
+      - name: Download both coverage artefacts
+        id: download
+        if: steps.runs.outputs.both_found == 'true'
+        run: |
+          set -uo pipefail
+          ok=true
+          reason=""
+
+          if ! gh run download "${{ steps.runs.outputs.ci_run_id }}" --repo "$REPO" --name python-coverage --dir cov-ci; then
+            ok=false
+            reason="CI run ${{ steps.runs.outputs.ci_run_id }} completed but its python-coverage artefact could not be downloaded (missing or expired)."
+          fi
+
+          if ! gh run download "${{ steps.runs.outputs.rls_run_id }}" --repo "$REPO" --name rls-coverage --dir cov-rls; then
+            ok=false
+            reason="${reason:+$reason }RLS Tests run ${{ steps.runs.outputs.rls_run_id }} completed but its rls-coverage artefact could not be downloaded — a repo with the RLS lane must not silently fall back to Python-only coverage."
+          fi
+
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          if [ "$ok" = "false" ]; then
+            echo "reason=$reason" >> "$GITHUB_OUTPUT"
+            echo "::error::error-branch coverage gate: $reason"
+          fi
+
+      # The actual assertion — both artefacts are guaranteed present at this
+      # point (the step above already failed closed if either was missing),
+      # so this is a plain combine-and-check with no absence case to reason
+      # about.
+      - name: Combine and check
+        id: check
+        if: steps.download.outputs.ok == 'true'
+        run: |
+          set -uo pipefail
+          if python3 scripts/error_branch_coverage.py --check \
+              --coverage cov-ci/coverage.json --coverage cov-rls/rls-coverage.json \
+              | tee check-output.txt; then
+            echo "state=success" >> "$GITHUB_OUTPUT"
+            echo "description=combined CI run ${{ steps.runs.outputs.ci_run_id }} + RLS Tests run ${{ steps.runs.outputs.rls_run_id }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "state=failure" >> "$GITHUB_OUTPUT"
+            echo "description=new unexecuted error branch(es) — see this run's log" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Report the result — see the file header for why this explicit
+      # Statuses API call, addressed to the commit under test rather than
+      # this job's own ambient SHA, is what makes the gate visible on the PR
+      # at all. Runs whenever this invocation reached a definitive verdict
+      # (download failure OR a completed check), never on the "still waiting
+      # for the other lane" path, which must leave no status.
+      - name: Report the result
+        if: always() && steps.runs.outputs.both_found == 'true'
+        run: |
+          set -uo pipefail
+          if [ "${{ steps.download.outputs.ok }}" = "false" ]; then
+            state=failure
+            description="${{ steps.download.outputs.reason }}"
+          else
+            state="${{ steps.check.outputs.state }}"
+            description="${{ steps.check.outputs.description }}"
+          fi
+
+          # The Statuses API caps `description` at ~140 characters.
+          description=$(printf '%s' "$description" | cut -c1-140)
+
+          gh api "repos/$REPO/statuses/$SHA" \
+            -f state="$state" \
+            -f context="Error-branch coverage" \
+            -f description="$description" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          echo "Posted commit status '$state' for Error-branch coverage on $SHA."
+          if [ "$state" = "failure" ]; then
+            exit 1
+          fi

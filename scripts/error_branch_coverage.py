@@ -67,6 +67,23 @@ pictures of what actually ran. If the two disagree, trust the one whose
 coverage.json you can see the most of, and merge in every artefact you have
 before concluding either way.
 
+Since #637, CI's own verdict for one commit is not even stable across its own
+runs, which sharpens this rather than replaces it. A local `--check` reports
+against whatever coverage.json(s) YOU hand it — for most contributors, one
+file, from one pytest invocation, compared against the recorded baseline.
+CI's `ci.yml` does exactly the same comparison against the same baseline, but
+best-effort combines a second, Postgres-only lane's artefact when it can reach
+one (see that file's own comments on the timing this depends on) — and
+combining coverage can only mark MORE lines executed, never fewer, so the
+second artefact can only turn a branch from "new and unexecuted" into
+"already covered", never the reverse. That means: a run of CI that catches the
+artefact in time can go green on a branch an earlier, artefact-less run of the
+very same commit reported as newly unexecuted. **A clean local `--check` is
+therefore not evidence CI will pass, and neither is a red CI run evidence the
+next run of the identical commit will also be red** — re-running once the
+Postgres-only lane has finished is the remedy for that shape of red, not a
+sign the gate is flaky.
+
 Usage:
     uv run pytest --cov --cov-report=json      # writes coverage.json
     python scripts/error_branch_coverage.py            # report

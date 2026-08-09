@@ -21,6 +21,23 @@ sent over HTTP was silently discarded and a caller whose grant spanned several
 scopes received every scope's rows for a single-scope request (tabsii-crm#239).
 Filters only ever AND conditions onto the tenant-scoped SELECT; they cannot
 widen what tenant scoping (or, in an instance, RLS) already permits.
+
+Pagination: the ``list`` handler bounds and pages its result with ``limit``/
+``offset`` query parameters (biffo-template#1016), the same shape already used
+by ``agent_runs.list_runs`` and the admin agent-run routers rather than a new
+convention. Before this, ``make_list_handler`` built one unbounded query and
+returned every row a caller's tenant owned — a scaling problem independent of
+filtering, since a tenant-scoped, fully-filtered query is still a table scan
+once the table is large enough. ``limit`` defaults to 50 and is capped at 200;
+``offset`` defaults to 0. Results are ordered ``created_at DESC, id DESC`` so a
+page is stable across requests — an unordered ``LIMIT``/``OFFSET`` pair is free
+to return overlapping or skipped rows between calls, which would make paging
+silently lossy rather than loudly wrong. ``limit`` and ``offset`` are reserved
+query-parameter names: a model can never declare a filterable column with
+either name (``filterable_columns`` excludes them), so the two mechanisms can
+never collide over the same query string. Eager-loading (``?include=<relation>``)
+is the other half of biffo-template#1016 and is NOT implemented here — see that
+issue for why it is a separate, deferred change.
 """
 
 from __future__ import annotations
@@ -474,6 +491,24 @@ def _coerce_user_field(model: type[Any], key: str, value: Any) -> Any:
     return value
 
 
+# Query-parameter names the pagination mechanism owns (biffo-template#1016).
+# Excluded from `filterable_columns` below so a model can never declare a
+# column that collides with them — without this, a table with a genuine
+# `limit` or `offset` column would have no way to ask this layer to filter on
+# it, because the pagination reader would always intercept the parameter
+# first. Also read by `make_list_handler` to strip these two names out of the
+# raw query string before it reaches `apply_list_filters`, so they are never
+# mistaken for an unrecognised filter and 400'd.
+RESERVED_PAGINATION_PARAMS: frozenset[str] = frozenset({"limit", "offset"})
+
+# Defaults and bound for the `list` route's `limit`/`offset` pagination
+# (biffo-template#1016). Matches the shape already in use for `agent_runs.
+# list_runs` and its admin routers (`Query(50, ge=1, le=200)`) rather than
+# inventing a new convention for generic CRUD specifically.
+DEFAULT_LIST_LIMIT = 50
+MAX_LIST_LIMIT = 200
+
+
 def filterable_columns(model: type[Any]) -> frozenset[str]:
     """Query-parameter names a generic list route will honour as equality
     filters on ``model`` — derived from the model's own columns, never a
@@ -485,7 +520,10 @@ def filterable_columns(model: type[Any]) -> frozenset[str]:
     ``deleted_at`` tombstone are excluded here for the same reasons they are
     excluded from the write path — ``tenant_id`` in particular is never a
     caller's to choose, it comes from the tenant-context dependency (ADR-0001),
-    and it ends in ``_id`` so it has to be excluded deliberately.
+    and it ends in ``_id`` so it has to be excluded deliberately. ``limit`` and
+    ``offset`` (``RESERVED_PAGINATION_PARAMS``) are excluded for the same
+    reason: they are never available as filters, because the pagination reader
+    in ``make_list_handler`` claims them first.
 
     ## Why column type rather than declared foreign keys
 
@@ -528,7 +566,9 @@ def filterable_columns(model: type[Any]) -> frozenset[str]:
     return frozenset(
         column.name
         for column in model.__table__.columns
-        if column.name in user_columns and isinstance(column.type, _FILTERABLE_TYPES)
+        if column.name in user_columns
+        and column.name not in RESERVED_PAGINATION_PARAMS
+        and isinstance(column.type, _FILTERABLE_TYPES)
     )
 
 
@@ -652,6 +692,29 @@ def build_list_query(
 _NO_REQUEST: Request = cast(Request, None)
 
 
+def _validate_pagination(limit: int, offset: int) -> None:
+    """400, naming the parameter, for a ``limit``/``offset`` outside its bound
+    — the same "bad input is a 400" contract ``apply_list_filters`` and
+    ``_coerce_user_field`` already follow for the filter half of this route,
+    kept here rather than expressed as FastAPI ``Query(ge=..., le=...)``
+    constraints because ``make_list_handler``'s handler is also called
+    directly in tests, bypassing FastAPI's request parsing entirely (see
+    ``test_crud_soft_delete.py``) — a ``Query`` object used as a plain default
+    is never resolved to an ``int`` on that path, so validation has to live in
+    the handler body rather than in the parameter declaration.
+    """
+    if limit < 1 or limit > MAX_LIST_LIMIT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"limit must be between 1 and {MAX_LIST_LIMIT}",
+        )
+    if offset < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="offset must be >= 0",
+        )
+
+
 def make_list_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
     # Resolved once per route at build time — the model's columns cannot change
     # between requests, and this is what the 400 message quotes back.
@@ -661,9 +724,22 @@ def make_list_handler(model: type[Any]) -> Callable[..., Awaitable[Any]]:
         tenant_id: str = Depends(require_plugin_tenant_context),
         db: AsyncSession = Depends(get_db),
         request: Request = _NO_REQUEST,
+        limit: int = DEFAULT_LIST_LIMIT,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
-        params = list(request.query_params.multi_items()) if request is not None else []
+        _validate_pagination(limit, offset)
+        params = (
+            [
+                (name, value)
+                for name, value in request.query_params.multi_items()
+                if name not in RESERVED_PAGINATION_PARAMS
+            ]
+            if request is not None
+            else []
+        )
         query = build_list_query(model, tenant_id, params, filterable=filterable)
+        query = query.order_by(model.created_at.desc(), model.id.desc())
+        query = query.limit(limit).offset(offset)
         result = await db.execute(query)
         return [serialize(row) for row in result.scalars().all()]
 

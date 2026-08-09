@@ -148,17 +148,58 @@ def visible_rows(model: type[Any], query: Any) -> Any:
 
 def user_columns_from_model(model: type[Any]) -> frozenset[str]:
     """Column names a caller may set via the request body — every column on the
-    model except the auto-managed id/tenant_id/created_at/updated_at ones and
-    the ``deleted_at`` soft-delete marker. ``tenant_id`` in particular must
-    never be settable from the body: it always comes from
-    require_plugin_tenant_context (ADR-0001), and ``deleted_at`` must not be
-    either — a body-settable tombstone lets any caller with ``update`` delete a
-    row, or resurrect one, without ever holding the ``delete`` permission."""
+    model except the auto-managed id/tenant_id/created_at/updated_at ones, the
+    ``deleted_at`` soft-delete marker, and any column the model declares via
+    ``__crud_forbidden_fields__`` (see ``_reject_forbidden_fields``).
+    ``tenant_id`` in particular must never be settable from the body: it always
+    comes from require_plugin_tenant_context (ADR-0001), and ``deleted_at``
+    must not be either — a body-settable tombstone lets any caller with
+    ``update`` delete a row, or resurrect one, without ever holding the
+    ``delete`` permission.
+
+    A forbidden field stays mapped and readable — list/read/filter are
+    unaffected, only its write path is closed — it is excluded here the same
+    way an auto-managed column is."""
+    forbidden = getattr(model, "__crud_forbidden_fields__", {})
     return frozenset(
         c.name
         for c in model.__table__.columns
-        if c.name not in AUTO_COLUMN_NAMES and c.name != SOFT_DELETE_COLUMN
+        if c.name not in AUTO_COLUMN_NAMES
+        and c.name != SOFT_DELETE_COLUMN
+        and c.name not in forbidden
     )
+
+
+def _reject_forbidden_fields(payload: dict[str, Any], model: type[Any]) -> None:
+    """400, in the model's own words, for any payload key the model declares
+    via ``__crud_forbidden_fields__: ClassVar[dict[str, str]]`` — field name to
+    refusal message. A plain ``ClassVar`` a model declares for itself and this
+    reads via ``getattr``, the same opt-in shape as ``__event_exclude__`` and
+    ``__soft_delete__`` elsewhere in this module.
+
+    For a column that must stay mapped — list/read/filter may legitimately
+    depend on it — but must never be settable through generic create/update: a
+    retired capability the table still carries a column for is the motivating
+    case, but the hook is general. Without it, a caller supplying such a field
+    gets one of two worse answers: a generic, reason-free 422 from
+    ``_reject_unwritable_fields`` (the field is also absent from
+    ``user_columns`` — see ``user_columns_from_model`` above), or, if a
+    database constraint is what actually stops the write, a driver
+    ``IntegrityError`` reaching ``_integrity_error_response`` — a clean 400,
+    but one that names a database condition rather than the reason a caller
+    can act on. A refusal naming neither the cause nor the remedy is a repeat
+    mistake this estate keeps having to fix after the fact; a model that knows
+    a column is off-limits also knows why, and this is the hook that lets it
+    say so at the point of refusal rather than after a failed write.
+
+    Checked BEFORE ``_reject_unwritable_fields`` so the specific message wins
+    over the generic one for a key that is both forbidden and, consequently,
+    outside the writable set.
+    """
+    forbidden: dict[str, str] = getattr(model, "__crud_forbidden_fields__", {})
+    for key in payload:
+        if key in forbidden:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=forbidden[key])
 
 
 def _reject_unwritable_fields(payload: dict[str, Any], user_columns: frozenset[str]) -> None:
@@ -682,6 +723,7 @@ def make_create_handler(
         tenant_id: str = Depends(require_plugin_tenant_context),
         db: AsyncSession = Depends(get_db),
     ) -> dict[str, Any]:
+        _reject_forbidden_fields(payload, model)
         _reject_unwritable_fields(payload, user_columns)
         row = model(tenant_id=tenant_id, **payload)
         db.add(row)
@@ -718,6 +760,7 @@ def make_update_handler(
         tenant_id: str = Depends(require_plugin_tenant_context),
         db: AsyncSession = Depends(get_db),
     ) -> dict[str, Any]:
+        _reject_forbidden_fields(payload, model)
         _reject_unwritable_fields(payload, user_columns)
         # A tombstoned row is invisible to read, so it must be invisible to
         # update too — otherwise a caller who cannot see a row can still write

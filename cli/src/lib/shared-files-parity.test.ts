@@ -259,6 +259,39 @@ describe('shared-files.json filesFromSkeleton', () => {
 })
 
 /**
+ * `.prettierrc` is distributed via `filesFromSkeleton` (#1343): a satellite
+ * left with no config adopts prettier's own defaults, which drift AWAY from
+ * the estate's style rather than towards it (measured in tabsii-ui#24 —
+ * defaults reformatted all 7 files touched, this repo's settings reformatted
+ * 3). The canonical copy can never be this repo's own root `.prettierrc`,
+ * because that one declares `"plugins": ["prettier-plugin-tailwindcss"]` for
+ * this repo's own Tailwind portal — and `prettier` errors outright
+ * (`Cannot find module 'prettier-plugin-tailwindcss'`) in any repo that does
+ * not install the plugin. Today that is every satellite except `tabsii-app`.
+ *
+ * So both skeleton copies must be plugin-free. This is deliberately a
+ * narrower, content-specific check on top of the generic `filesFromSkeleton`
+ * assertions above (which only prove the skeleton copy isn't byte-identical
+ * to the root one) — it exists so that re-adding the plugin key to a skeleton
+ * copy, even one that happens to differ from root in some *other* byte, fails
+ * loudly rather than shipping the exact defect #1343 reports.
+ */
+describe('shared skeleton .prettierrc declares no plugin (#1343)', () => {
+  it.each(skeletons)('%s ships a .prettierrc with no `plugins` key', (skeleton) => {
+    const path = join(root, '_skeletons', skeleton, '.prettierrc')
+    const config = JSON.parse(readFileSync(path, 'utf8')) as { plugins?: unknown }
+    expect(
+      config.plugins,
+      `_skeletons/${skeleton}/.prettierrc declares a prettier plugin, but neither skeleton ` +
+        `installs one as a devDependency. Landing that key in a satellite with no matching ` +
+        `plugin turns a harmless gap into a hard failure ("Cannot find module ...") the moment ` +
+        `prettier runs there (#1343). A repo that genuinely needs a plugin (tabsii-app, for its ` +
+        `Tailwind classes) adds the key to its OWN copy after seeding — 'seed' never overwrites it.`,
+    ).toBeUndefined()
+  })
+})
+
+/**
  * A module in the shared set and its test should not be in different lists
  * (#1272).
  *

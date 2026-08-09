@@ -24,6 +24,7 @@ the filesystem.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from aws_lambda_powertools import Logger
@@ -84,3 +85,37 @@ def list_sql_files(import_dir: Path) -> list[Path]:
 def _configured_ddl_import_root() -> Path:
     override = settings.ddl_import_root
     return Path(override) if override else _DEFAULT_DDL_IMPORT_ROOT
+
+
+def ddl_import_environment() -> str | None:
+    """The literal value of `BIFFO_ENVIRONMENT`, or `None` if it is unset or
+    blank (tabsii-platform#830).
+
+    `_run_ddl_import` publishes this — or nothing at all — as a
+    `biffo.environment` GUC on the DDL-import connection, so a module can gate
+    itself:
+
+    ```sql
+    DO $$
+    BEGIN
+      IF current_setting('biffo.environment', true) = 'dev' THEN
+        -- demo/dev-only seed
+      END IF;
+    END $$;
+    ```
+
+    Deliberately reads `os.environ` directly rather than going through
+    `settings.environment` — that field defaults to `"dev"` (see `Settings` in
+    `config.py`; it exists for the SQL-echo-logging safety check and other
+    call sites that need *some* value). Routing this through it would make
+    "the operator forgot to set `BIFFO_ENVIRONMENT`" and "this is a real dev
+    deployment" indistinguishable, which is exactly backwards for a mechanism
+    whose whole point is to fail safe on the former. EMPTY IS THE OFF SWITCH:
+    `None` here means `_run_ddl_import` never sets the GUC at all, so
+    `current_setting('biffo.environment', true)` returns SQL `NULL` inside a
+    guarded module — and `NULL = 'dev'` is `NULL`, never `TRUE` — so an
+    environment that never sets this variable seeds nothing, rather than
+    seeding by accident. See `docs/ADR/0005-ddl-import-module.md` section 7.
+    """
+    value = os.environ.get("BIFFO_ENVIRONMENT", "").strip()
+    return value or None

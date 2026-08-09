@@ -153,6 +153,23 @@ Two situations legitimately need an exemption. Both are declared in an optional 
 
 Both keys are optional; with no file at all, everything is checked and nothing is exempt. Malformed JSON and unknown keys are hard errors rather than being ignored — an exemption you believe is in force but silently isn't would be worse than no guard.
 
+## Guarding a seed to one environment
+
+DDL imports apply to **every** environment you `biffo data apply` them to — there is no separate "dev-only" apply. If a file is demo or fixture data that must never reach staging or prod, guard it in the SQL itself, using the `biffo.environment` GUC `_run_ddl_import` publishes on the connection before any file runs (tabsii-platform#830, [ADR-0005 section 7](../ADR/0005-ddl-import-module.md#7-per-environment-gating-via-a-biffoenvironment-guc)):
+
+```sql
+DO $$
+BEGIN
+  IF current_setting('biffo.environment', true) = 'dev' THEN
+    INSERT INTO tabsii.users (...) VALUES (...);
+  END IF;
+END $$;
+```
+
+`current_setting('biffo.environment', true)` reads `NULL` in any deployment that never sets `BIFFO_ENVIRONMENT` — which fails **safe**: `NULL = 'dev'` is never true, so the seed applies nowhere rather than everywhere. This is opt-in and retroactive-proof: nothing about it requires touching an already-applied file (which the checksum lock refuses anyway) — it only affects new files that choose to check it.
+
+There is nothing to set on your end beyond writing the `IF` guard; `BIFFO_ENVIRONMENT` is already set by Terraform for every environment `biffo data apply` can target.
+
 ## `biffo data list`
 
 Shows what's been imported into the **local checkout** — it does not check any deployed environment:

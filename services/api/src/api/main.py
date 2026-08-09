@@ -318,6 +318,7 @@ def _run_ddl_import(directory: str | None) -> dict:
     from .config import settings
     from .ddl_import import (
         _configured_ddl_import_root,
+        ddl_import_environment,
         discover_ddl_import_dirs,
         list_sql_files,
     )
@@ -418,6 +419,29 @@ def _run_ddl_import(directory: str | None) -> dict:
                 raw = await conn.get_raw_connection()
                 asyncpg_conn = raw.driver_connection
                 assert asyncpg_conn is not None  # noqa: S101 — narrows for pyright; always set once connected
+
+                # Publish the deployment's environment as a session-level GUC
+                # (tabsii-platform#830) so a module's own guard can see it via
+                # current_setting('biffo.environment', true) — same pattern as
+                # the SET search_path idiom noted above: it must be set once,
+                # on THIS connection, before any file runs, so it is visible
+                # to every file in the batch. set_config's third argument
+                # (is_local) is false, i.e. session-scoped like SET, not
+                # transaction-scoped, so it survives each file's own
+                # transaction commit/rollback below.
+                #
+                # Only set when BIFFO_ENVIRONMENT actually has a value — see
+                # ddl_import_environment's docstring for why leaving the GUC
+                # completely unset (rather than publishing "" or falling back
+                # to settings.environment's "dev" default) is what makes an
+                # environment that forgot to set it seed nothing instead of
+                # seeding by accident.
+                env_value = ddl_import_environment()
+                if env_value is not None:
+                    await asyncpg_conn.execute(
+                        "SELECT set_config('biffo.environment', $1, false)", env_value
+                    )
+
                 for sql_file, content, checksum in to_execute:
                     async with asyncpg_conn.transaction():
                         # Raw driver execute, not SQLAlchemy's text() — text()

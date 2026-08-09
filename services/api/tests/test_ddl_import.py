@@ -1,6 +1,7 @@
-"""Tests for api.ddl_import.discover_ddl_import_dirs / list_sql_files."""
+"""Tests for api.ddl_import.discover_ddl_import_dirs / list_sql_files /
+ddl_import_environment."""
 
-from api.ddl_import import discover_ddl_import_dirs, list_sql_files
+from api.ddl_import import ddl_import_environment, discover_ddl_import_dirs, list_sql_files
 
 
 def _write_sql_file(root, import_name: str, filename: str, content: str = "SELECT 1;") -> None:
@@ -67,3 +68,47 @@ class TestListSqlFiles:
 
         files = list_sql_files(tmp_path / "acme")
         assert [f.name for f in files] == ["000_first.sql"]
+
+
+class TestDdlImportEnvironment:
+    """tabsii-platform#830 — the per-environment DDL seed gate. The property
+    that matters is the fail-safe direction: unset must read as None, not as
+    some default, because `_run_ddl_import` treats None as "publish nothing"
+    and any other value as "publish this" (see the function's own docstring).
+    """
+
+    def test_unset_is_none(self, monkeypatch):
+        monkeypatch.delenv("BIFFO_ENVIRONMENT", raising=False)
+        assert ddl_import_environment() is None
+
+    def test_blank_is_none(self, monkeypatch):
+        # Whitespace-only counts as unset too — a Terraform var interpolated
+        # from an empty local is exactly this shape, not a missing key.
+        monkeypatch.setenv("BIFFO_ENVIRONMENT", "   ")
+        assert ddl_import_environment() is None
+
+    def test_does_not_fall_back_to_settings_default(self, monkeypatch):
+        # settings.environment defaults to "dev" (config.py) for unrelated
+        # reasons (echo-logging safety, log level). This function must NOT
+        # inherit that default -- doing so would make "nobody set
+        # BIFFO_ENVIRONMENT" indistinguishable from "this really is dev",
+        # which is precisely the fail-open this gate exists to avoid.
+        monkeypatch.delenv("BIFFO_ENVIRONMENT", raising=False)
+        assert ddl_import_environment() != "dev"
+        assert ddl_import_environment() is None
+
+    def test_dev_is_published_literally(self, monkeypatch):
+        monkeypatch.setenv("BIFFO_ENVIRONMENT", "dev")
+        assert ddl_import_environment() == "dev"
+
+    def test_staging_is_published_literally(self, monkeypatch):
+        monkeypatch.setenv("BIFFO_ENVIRONMENT", "staging")
+        assert ddl_import_environment() == "staging"
+
+    def test_prod_is_published_literally(self, monkeypatch):
+        monkeypatch.setenv("BIFFO_ENVIRONMENT", "prod")
+        assert ddl_import_environment() == "prod"
+
+    def test_surrounding_whitespace_is_trimmed(self, monkeypatch):
+        monkeypatch.setenv("BIFFO_ENVIRONMENT", "  dev  ")
+        assert ddl_import_environment() == "dev"

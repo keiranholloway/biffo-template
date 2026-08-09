@@ -54,6 +54,36 @@ This mechanism exists **alongside** Alembic, not instead of it. The Core API's o
 
 `deploy-app.yml`'s existing plugin-manifest bundling loop (which copies `services/*/biffo.plugin.json` into the Lambda zip) is joined by a second loop that copies `db/imports/<name>/*.sql` into `package/db/imports/<name>/`, using the same defensive-empty-glob style. `BIFFO_DDL_IMPORT_ROOT=/var/task/db/imports` is set alongside the existing `BIFFO_PLUGIN_SERVICES_ROOT` in each environment's Terraform `environment_variables`. The Core API Lambda's timeout is bumped to 300s in dev (from the compute module's 30s default) as a deliberate, documented choice — a DDL file expected to run longer than the configured timeout is explicitly out of scope for v1; split the file or apply it manually instead.
 
+### 7. Per-environment gating via a `biffo.environment` GUC
+
+For over a month after the mechanism shipped, DDL imports had **no per-environment gating at all** — a file applied to dev applied identically to staging and prod, and several demo/dev-only seed modules said so in their own header comments while shipping on that basis regardless. That stopped being tolerable when a real fixture needed a backdated row that no API route could create, and the only available mechanism (a DDL seed) would have put a fabricated person's data into every environment at once (tabsii-platform#830, tabsii-platform#790).
+
+`_run_ddl_import` already knows the deployment's environment — Terraform sets `BIFFO_ENVIRONMENT` on the Lambda — but nothing published it into the SQL session, so a module had no way to see it even if its author wanted to gate on it. The fix publishes it as a session-level Postgres GUC on the DDL-import connection, once, before any file in the batch runs (the same connection and the same "set once, persists for the whole batch" idiom already established for `SET search_path` in decision 3 above):
+
+```sql
+SELECT set_config('biffo.environment', 'dev', false);
+```
+
+A module then gates itself:
+
+```sql
+DO $$
+BEGIN
+  IF current_setting('biffo.environment', true) = 'dev' THEN
+    -- demo/dev-only seed
+  END IF;
+END $$;
+```
+
+**Two properties were non-negotiable, in order:**
+
+1. **It fails safe.** `current_setting('biffo.environment', true)` returns Postgres `NULL` for a GUC nothing ever `SET`, and `NULL = 'dev'` evaluates to `NULL` — never `TRUE` — so a deployment whose environment is genuinely unset seeds **nothing**, not everything. `_run_ddl_import` only calls `set_config` when `BIFFO_ENVIRONMENT` actually has a non-blank value (`api.ddl_import.ddl_import_environment`); it deliberately does **not** fall back to `settings.environment`'s `"dev"` default (used elsewhere for SQL-echo-logging safety and other call sites that need *some* value), because that default would make "nobody configured this deployment" and "this really is dev" indistinguishable — exactly backwards for a gate whose entire job is to fail closed on the former.
+2. **It needs no edit to any already-applied module.** Applied files are checksum-locked (decision 4) — editing one is a hard error, by design. The GUC is opt-in: every existing module is untouched, its checksum unchanged, and it simply never reads a GUC it doesn't ask for.
+
+**What this is not.** Module 119 and similar modules match `BIFFO_TABSII_TENANT_ID`, a fixed UUID that is identical across dev, staging and prod — that is foreign-key resolution to the seeded demo tenant, not environment gating, and looks like one only by coincidence. `current_setting('biffo.environment', true)` is the only signal in this mechanism that actually varies by environment.
+
+A convention guard can require any module matching a `*_dev_*`/demo naming convention to contain the guard, the same way `test_ddl_import_conventions.py` already requires idempotent DDL (see the data-import guide's `.ddl-guard.json` section) — left as a follow-up for the instance that adopts this, not built here, since the base template ships no product DDL to enforce it against.
+
 ---
 
 ## Options Considered

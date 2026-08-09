@@ -79,6 +79,45 @@ const LOG_GROUP_ARN_REF = /aws_cloudwatch_log_group\.([\w-]+)(?:\[[^\]]*\])?\.ar
 
 const EVENTBRIDGE_PRINCIPAL = 'events.amazonaws.com'
 
+/** `Service = "<value>"` or `Service = [<comma-separated quoted values>]`
+ * inside a policy-document body — the two shapes the AWS provider accepts for
+ * an IAM `Principal.Service`. Only the quoted values are collected; nothing
+ * outside a `Service = ` assignment counts. */
+const SERVICE_PRINCIPAL_ASSIGNMENT = /Service\s*=\s*(\[[^\]]*\]|"[^"]*")/g
+
+/** Every literal value assigned to `Service` inside a policy-document body,
+ * as exact strings — never a substring match. CodeQL correctly flagged the
+ * original implementation here (`js/incomplete-url-substring-sanitization`,
+ * `.includes(EVENTBRIDGE_PRINCIPAL)`): a raw substring check reads
+ * `events.amazonaws.com.attacker.example` (a real string an attacker
+ * controls, the false principal ATTACHED AFTER the real one) and
+ * `notevents.amazonaws.com` (attached BEFORE) as granting EventBridge, and
+ * would also read the literal string sitting in an unrelated comment or
+ * description field as a grant — which is precisely the failure shape this
+ * guard exists to catch (a permission that reads as present but is not),
+ * reproduced inside the guard's own principal check. Matching only the exact
+ * quoted value assigned to `Service` closes both: a policy naming the wrong
+ * host, or merely mentioning the right one, is correctly treated as NOT
+ * granting it. */
+export function servicePrincipalsIn(body: string): string[] {
+  const values: string[] = []
+  SERVICE_PRINCIPAL_ASSIGNMENT.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = SERVICE_PRINCIPAL_ASSIGNMENT.exec(body)) !== null) {
+    const raw = m[1] as string
+    for (const sm of raw.matchAll(/"([^"]*)"/g)) {
+      values.push(sm[1] as string)
+    }
+  }
+  return values
+}
+
+/** Does this policy-document body grant `principal` — matched as the EXACT
+ * value of a `Service` principal, not a substring anywhere in the body? */
+export function grantsPrincipal(body: string, principal: string): boolean {
+  return servicePrincipalsIn(body).includes(principal)
+}
+
 export interface ResourceBlock {
   file: string
   line: number
@@ -296,7 +335,7 @@ export function auditEventBridgeLogPermissions(root: string): EventBridgeLogPerm
   const grantedLogGroups = new Set<string>()
   for (const block of logResourcePolicyBlocks) {
     if (block.body === null) continue
-    if (!block.body.includes(EVENTBRIDGE_PRINCIPAL)) continue
+    if (!grantsPrincipal(block.body, EVENTBRIDGE_PRINCIPAL)) continue
     for (const name of logGroupNamesReferencedIn(block.body)) grantedLogGroups.add(name)
   }
 

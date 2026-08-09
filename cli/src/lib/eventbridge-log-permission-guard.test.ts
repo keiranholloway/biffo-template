@@ -7,6 +7,8 @@ import {
   auditEventBridgeLogPermissions,
   countRawResourceDeclarations,
   findResourceBlocks,
+  grantsPrincipal,
+  servicePrincipalsIn,
 } from './eventbridge-log-permission-guard.js'
 
 function writeTf(dir: string, name: string, content: string): void {
@@ -115,6 +117,61 @@ describe('countRawResourceDeclarations', () => {
   })
 })
 
+// ── Exact-match principal check (js/incomplete-url-substring-sanitization) ──
+//
+// A raw `.includes('events.amazonaws.com')` reads a Service value carrying the
+// real string as a SUBSTRING as if it were the real principal — a policy
+// scoped to `events.amazonaws.com.attacker.example` or `notevents.amazonaws.com`
+// would pass. That is the exact "reads permissioned but isn't" shape this
+// whole guard exists to catch, reproduced inside the guard's own check
+// (flagged by CodeQL, high severity). These pin the fix as exact-value
+// matching, not substring matching.
+describe('servicePrincipalsIn / grantsPrincipal', () => {
+  it('extracts a single-string Service value', () => {
+    expect(servicePrincipalsIn('Principal = { Service = "events.amazonaws.com" }')).toEqual([
+      'events.amazonaws.com',
+    ])
+  })
+
+  it('extracts every value from a list-form Service', () => {
+    expect(
+      servicePrincipalsIn(
+        'Principal = { Service = ["events.amazonaws.com", "other.amazonaws.com"] }',
+      ),
+    ).toEqual(['events.amazonaws.com', 'other.amazonaws.com'])
+  })
+
+  it('matches the real principal exactly', () => {
+    expect(grantsPrincipal('Service = "events.amazonaws.com"', 'events.amazonaws.com')).toBe(true)
+  })
+
+  it('does NOT match a principal carrying the real string as a suffix-attack host', () => {
+    // events.amazonaws.com.attacker.example CONTAINS the real string but is a
+    // different, attacker-controlled principal.
+    expect(
+      grantsPrincipal('Service = "events.amazonaws.com.attacker.example"', 'events.amazonaws.com'),
+    ).toBe(false)
+  })
+
+  it('does NOT match a principal carrying the real string as a prefix-attack host', () => {
+    expect(grantsPrincipal('Service = "notevents.amazonaws.com"', 'events.amazonaws.com')).toBe(
+      false,
+    )
+  })
+
+  it('does NOT match the string merely appearing outside a Service assignment', () => {
+    // A comment or an unrelated field mentioning the principal must never
+    // read as a grant — only a real `Service = ` assignment counts.
+    expect(
+      grantsPrincipal(
+        '# events.amazonaws.com is what SHOULD be granted here, but is not\n' +
+          'Principal = { Service = "logs.amazonaws.com" }',
+        'events.amazonaws.com',
+      ),
+    ).toBe(false)
+  })
+})
+
 describe('auditEventBridgeLogPermissions', () => {
   it('passes the fixed shape: target has a matching resource policy', () => {
     const dir = makeTmpDir('ebridge-fixed')
@@ -160,6 +217,61 @@ resource "aws_cloudwatch_log_resource_policy" "wrong" {
     const report = auditEventBridgeLogPermissions(dir)
     expect(report.ok).toBe(false)
     expect(report.violations).toHaveLength(1)
+  })
+
+  it('fails when the granted principal carries the real one as a suffix-attack host', () => {
+    // events.amazonaws.com.attacker.example is a substring superset of the
+    // real principal, not the real principal. Before the exact-match fix, a
+    // raw .includes() check treated this as granted.
+    const dir = makeTmpDir('ebridge-principal-suffix-attack')
+    writeTf(
+      dir,
+      'main.tf',
+      BROKEN_MODULE +
+        `
+resource "aws_cloudwatch_log_resource_policy" "attacker" {
+  policy_name = "x"
+  policy_document = jsonencode({
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com.attacker.example" }
+      Action    = ["logs:PutLogEvents"]
+      Resource  = "\${aws_cloudwatch_log_group.events.arn}:*"
+    }]
+  })
+}
+`,
+    )
+    const report = auditEventBridgeLogPermissions(dir)
+    expect(report.ok).toBe(false)
+    expect(report.violations).toHaveLength(1)
+    expect(report.violations[0].logGroupName).toBe('events')
+  })
+
+  it('fails when the granted principal carries the real one as a prefix-attack host', () => {
+    const dir = makeTmpDir('ebridge-principal-prefix-attack')
+    writeTf(
+      dir,
+      'main.tf',
+      BROKEN_MODULE +
+        `
+resource "aws_cloudwatch_log_resource_policy" "not_events" {
+  policy_name = "x"
+  policy_document = jsonencode({
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "notevents.amazonaws.com" }
+      Action    = ["logs:PutLogEvents"]
+      Resource  = "\${aws_cloudwatch_log_group.events.arn}:*"
+    }]
+  })
+}
+`,
+    )
+    const report = auditEventBridgeLogPermissions(dir)
+    expect(report.ok).toBe(false)
+    expect(report.violations).toHaveLength(1)
+    expect(report.violations[0].logGroupName).toBe('events')
   })
 
   it('fails when a resource policy exists but names a different log group', () => {

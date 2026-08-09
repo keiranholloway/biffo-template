@@ -67,6 +67,23 @@ pictures of what actually ran. If the two disagree, trust the one whose
 coverage.json you can see the most of, and merge in every artefact you have
 before concluding either way.
 
+Since #637, CI's own verdict for one commit is not even stable across its own
+runs, which sharpens this rather than replaces it. A local `--check` reports
+against whatever coverage.json(s) YOU hand it — for most contributors, one
+file, from one pytest invocation, compared against the recorded baseline.
+CI's `ci.yml` does exactly the same comparison against the same baseline, but
+best-effort combines a second, Postgres-only lane's artefact when it can reach
+one (see that file's own comments on the timing this depends on) — and
+combining coverage can only mark MORE lines executed, never fewer, so the
+second artefact can only turn a branch from "new and unexecuted" into
+"already covered", never the reverse. That means: a run of CI that catches the
+artefact in time can go green on a branch an earlier, artefact-less run of the
+very same commit reported as newly unexecuted. **A clean local `--check` is
+therefore not evidence CI will pass, and neither is a red CI run evidence the
+next run of the identical commit will also be red** — re-running once the
+Postgres-only lane has finished is the remedy for that shape of red, not a
+sign the gate is flaky.
+
 Usage:
     uv run pytest --cov --cov-report=json      # writes coverage.json
     python scripts/error_branch_coverage.py            # report
@@ -297,12 +314,30 @@ def main() -> int:
         # Not fatal: a repo that has only just adopted a second lane, or is
         # invoked before that lane has produced its artefact yet, still gets an
         # answer from what IS present rather than refusing outright — but the
-        # gap is named, not silently absorbed into the merge.
+        # gap must be LOUD, not a line to scroll past. #637 was filed on exactly
+        # this shape: "a check that skips an input it cannot evaluate is not
+        # neutral — it shrinks its own scope and reports the remainder as the
+        # whole" (AGENTS.md §2). A clean result over fewer lanes than requested
+        # has to be falsifiable, so this is a `::warning::` GitHub Actions
+        # annotation — the estate's own convention for exactly this
+        # (scripts/py-dependency-audit.sh, scripts/js-dependency-audit.sh) —
+        # not a "note:" that only shows up if someone scrolls the raw log.
+        # Printed unconditionally, not gated on running-in-CI: it is equally
+        # true, and equally worth seeing, from a terminal.
         print(
-            f"note: {p} not found — combining what is present "
-            f"({len(present)}/{len(coverage_paths)} coverage file(s))",
+            f"::warning::error-branch coverage: requested artefact not found: {p} — "
+            f"proceeding with {len(present)}/{len(coverage_paths)} coverage "
+            "file(s). This result does NOT reflect that lane's coverage.",
             file=sys.stderr,
         )
+
+    # Restated in every summary line below (not just the warning above) so the
+    # denominator survives even if the warning scrolls past unread: a reader
+    # who sees only the final line still learns how much of the requested
+    # picture this result is actually over.
+    coverage_note = f"{len(present)}/{len(coverage_paths)} coverage artefact(s)"
+    if absent:
+        coverage_note += f" — MISSING: {', '.join(str(p) for p in absent)}"
 
     reports = [json.loads(p.read_text()) for p in present]
     coverage = merge_coverage(reports)
@@ -325,13 +360,16 @@ def main() -> int:
         print(NO_BASELINE_MESSAGE, file=sys.stderr)
         for branch in sorted(found, key=lambda b: (b.path, b.line)):
             print(f"      {branch.path}:{branch.line}  [{branch.kind}] {branch.label}")
-        print(f"unexecuted error branches: {len(keys)}  (no baseline yet)")
+        print(f"unexecuted error branches: {len(keys)}  (no baseline yet; {coverage_note})")
         return 0
 
     known = set(baseline.get("branches", []))
     new = [k for k in keys if k not in known]
 
-    print(f"unexecuted error branches: {len(keys)}  (baseline {baseline.get('total', 0)})")
+    print(
+        f"unexecuted error branches: {len(keys)}  "
+        f"(baseline {baseline.get('total', 0)}; {coverage_note})"
+    )
     for branch in sorted(found, key=lambda b: (b.path, b.line)):
         marker = "NEW " if branch.key() not in known else "    "
         print(f"  {marker}{branch.path}:{branch.line}  [{branch.kind}] {branch.label}")

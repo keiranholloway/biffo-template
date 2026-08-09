@@ -102,24 +102,63 @@ usage() {
   exit 2
 }
 
+# Colours are needed inside the parse loop below (a missing-value message),
+# so they are defined before it rather than after.
+RED=$(printf '\033[31m')
+GREEN=$(printf '\033[32m')
+YELLOW=$(printf '\033[33m')
+DIM=$(printf '\033[90m')
+OFF=$(printf '\033[0m')
+
+# A flag that takes a value must not blindly `shift 2`: with exactly one
+# argument left -- the flag itself, nothing after it -- that shifts past the
+# end of `$@` (#826). `shift` is a POSIX SPECIAL builtin, and dash (the real
+# `sh` on this workstation, and on every machine this ships to) aborts the
+# WHOLE SCRIPT on a special builtin's error, non-interactively, before a
+# single line of this script's own handling runs -- printing dash's own
+# "shift: can't shift that many" and exiting 2 by dash's choice, not this
+# script's. bash instead treats the overflowing `shift` as a silent no-op:
+# `$1` never changes, so `while [ $# -gt 0 ]` spins forever. Neither behaviour
+# was ever something this script decided; both were found by running the
+# actual failing command, under the actual interpreter, not by reasoning
+# about `shift` from memory.
+missing_value() {
+  echo "${RED}claim: $1 requires a value${OFF}" >&2
+  exit 2
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     -R | --repo)
-      REPO="${2:-}"
+      [ $# -ge 2 ] || missing_value "$1"
+      REPO="$2"
       shift 2
       ;;
     --check) CHECK_ONLY=1; shift ;;
     --as)
-      HOLDER="${2:-}"
+      [ $# -ge 2 ] || missing_value "$1"
+      HOLDER="$2"
       shift 2
       ;;
     --release)
-      HOLDER="${2:-}"
+      # No bounds check here on purpose. A bare trailing `--release` (no
+      # token) is not a generic usage error like the flags above -- it is
+      # the exact place AGENTS.md's own FIRST documented form, the untokened
+      # `claim <issue>`, leads a session that later wants to release what it
+      # claimed. It gets its own deliberate refusal below (a missing token
+      # is a definite "no", not a malformed invocation), not this generic
+      # "$flag requires a value" message.
       RELEASE=1
-      shift 2
+      if [ $# -ge 2 ]; then
+        HOLDER="$2"
+        shift 2
+      else
+        shift
+      fi
       ;;
     --guard)
-      GUARD_BRANCH="${2:-}"
+      [ $# -ge 2 ] || missing_value "$1"
+      GUARD_BRANCH="$2"
       shift 2
       ;;
     -h | --help) usage ;;
@@ -129,12 +168,6 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
-
-RED=$(printf '\033[31m')
-GREEN=$(printf '\033[32m')
-YELLOW=$(printf '\033[33m')
-DIM=$(printf '\033[90m')
-OFF=$(printf '\033[0m')
 
 gh_issue() { if [ -n "$REPO" ]; then gh issue "$@" --repo "$REPO"; else gh issue "$@"; fi; }
 gh_pr() { if [ -n "$REPO" ]; then gh pr "$@" --repo "$REPO"; else gh pr "$@"; fi; }
@@ -146,7 +179,14 @@ gh_label() { if [ -n "$REPO" ]; then gh label "$@" --repo "$REPO"; else gh label
 # session supersedes an older one rather than both matching for ever. Returns
 # non-zero when it cannot tell -- an unreadable comment list must never read as
 # "yours", or the flag becomes a way to steal a claim by guessing.
+#
+# Requires $2 non-empty (#826): the match below is `*"$HOLDER_MARK$2"*`, and
+# with $2 empty that collapses to `*"claim-holder:"*` -- true of ANY comment
+# naming ANY holder at all, regardless of whose. An empty token must never
+# read as "matches every claim"; it is refused explicitly, before the network
+# call this would otherwise spend.
 claim_held_by() {
+  [ -n "$2" ] || return 1
   _c=$(gh_issue view "$1" --json comments \
     --jq "[.comments[]? | select(.body | contains(\"$HOLDER_MARK\"))] | last | .body // \"\"" \
     2>/dev/null) || return 1
@@ -225,6 +265,24 @@ note() { REASONS="${REASONS}  $1\n"; TAKEN=1; }
 # label left behind by a crashed session is indistinguishable from a live one.
 # Refusing a mismatched release is what makes the token worth recording.
 if [ -n "$RELEASE" ]; then
+  # A missing token (#826) is a definite "no", not a malformed invocation —
+  # AGENTS.md's own first documented `claim <issue>` form never records one,
+  # so this is the ordinary route a session that skipped `--as` takes when it
+  # tries to release later, not a typo. Decided here rather than falling into
+  # `claim_held_by`'s ordinary mismatch branch below: without this, an empty
+  # $HOLDER would either (pre-#826-hardening) match ANY held claim via a
+  # substring accident, or now correctly fail but with a message talking
+  # about "not held by ''", which explains nothing. This says plainly what is
+  # wrong and what to do about it, and reuses the SAME refusal exit code (1)
+  # as an ordinary token mismatch just below — it is that case's degenerate
+  # form, not a new kind of outcome, so it does not invent a third code.
+  if [ -z "$HOLDER" ]; then
+    echo "${RED}claim: --release needs the token you claimed with (--release <token>).${OFF}" >&2
+    echo "${DIM}  Claimed without --as? There is no token to prove ownership by, so this${OFF}" >&2
+    echo "${DIM}  script cannot tell it is you. Release it by hand instead:${OFF}" >&2
+    echo "${DIM}    gh issue edit $ISSUE --remove-label $LABEL${OFF}" >&2
+    exit 1
+  fi
   if claim_held_by "$ISSUE" "$HOLDER"; then
     gh_issue edit "$ISSUE" --remove-label "$LABEL" >/dev/null 2>&1 || {
       echo "${RED}claim: could not remove the '$LABEL' label.${OFF}" >&2

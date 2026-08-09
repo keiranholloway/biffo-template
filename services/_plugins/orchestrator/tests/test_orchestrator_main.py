@@ -133,3 +133,81 @@ def test_handler_still_dispatches_a_normal_event_unchanged(monkeypatch) -> None:
 
     assert fake_plugin.fired_run_ids == []
     assert len(fake_plugin.events.dispatched) == 1
+
+
+# ── Log-redaction hook for credential-shaped payload fields (biffo-template#950,
+# the second half of #1182 — the first half added CognitoAdmin.create_user's
+# temporary_password param). Asserts against the actual emitted log record
+# (the powertools Logger's own `extra` attribute on the captured LogRecord),
+# not against orchestrator.redaction.redact_event_payload() in isolation —
+# the bug this guards against is the log CALL SITE forgetting to redact, which
+# a helper-only test cannot catch. ──────────────────────────────────────────
+
+
+def test_handler_logs_a_redacted_copy_of_a_credential_bearing_event(monkeypatch, caplog) -> None:
+    fake_plugin = _FakePlugin()
+    monkeypatch.setattr(main_module, "_get_plugin", lambda: fake_plugin)
+    monkeypatch.setattr(main_module, "_plugin", None)
+
+    raw_event = _eventbridge_event(
+        "user.invited",
+        {"email": "person@example.com", "temporary_password": "correct-horse-battery-staple"},
+    )
+
+    with caplog.at_level("INFO"):
+        main_module.handler(raw_event, _FakeContext())
+
+    received_logs = [r for r in caplog.records if r.message == "Received event"]
+    assert len(received_logs) == 1
+    logged_event = received_logs[0].event
+
+    assert logged_event["detail"]["payload"]["temporary_password"] == "***"
+    # Redaction must be surgical: everything else in the same payload is
+    # still legible, so the log line keeps its debugging value.
+    assert logged_event["detail"]["payload"]["email"] == "person@example.com"
+    assert logged_event["detail-type"] == "user.invited"
+
+    # The real, unredacted secret must never appear anywhere in the record
+    # actually handed to the logger — not just absent from the one field we
+    # already checked.
+    assert "correct-horse-battery-staple" not in json.dumps(logged_event)
+
+
+def test_handler_still_dispatches_the_real_unredacted_event(monkeypatch, caplog) -> None:
+    """The log line is redacted; the event that reaches plugin.events.dispatch
+    (and therefore any action handler, e.g. "Send email") is NOT — a plugin
+    that legitimately needs the real credential must still get it."""
+    fake_plugin = _FakePlugin()
+    monkeypatch.setattr(main_module, "_get_plugin", lambda: fake_plugin)
+    monkeypatch.setattr(main_module, "_plugin", None)
+
+    raw_event = _eventbridge_event(
+        "user.invited", {"temporary_password": "correct-horse-battery-staple"}
+    )
+
+    with caplog.at_level("INFO"):
+        main_module.handler(raw_event, _FakeContext())
+
+    assert len(fake_plugin.events.dispatched) == 1
+    assert (
+        fake_plugin.events.dispatched[0].payload["temporary_password"]
+        == "correct-horse-battery-staple"
+    )
+
+
+def test_handler_does_not_redact_a_payload_with_no_credential_shaped_fields(
+    monkeypatch, caplog
+) -> None:
+    """No false positives: an ordinary event's fields survive the log line
+    unchanged."""
+    fake_plugin = _FakePlugin()
+    monkeypatch.setattr(main_module, "_get_plugin", lambda: fake_plugin)
+    monkeypatch.setattr(main_module, "_plugin", None)
+
+    raw_event = _eventbridge_event("demo.requested", {"demo_request_id": "d4"})
+
+    with caplog.at_level("INFO"):
+        main_module.handler(raw_event, _FakeContext())
+
+    received_logs = [r for r in caplog.records if r.message == "Received event"]
+    assert received_logs[0].event["detail"]["payload"] == {"demo_request_id": "d4"}

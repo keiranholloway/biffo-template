@@ -720,3 +720,77 @@ record and **not as a verdict**: 220 merged PRs, `racedShare` 28.6%, `repushRate
 - **The cost that motivated #808 is unaddressed.** Restoring `strict` on the
   template restores a gate that, over seven days and 367 merges, prevented
   **zero** measured integration failures.
+
+### Review — 2026-08-09, `tabsii-platform` restored to `strict: true`
+
+**This is the `tabsii-platform` decision the 2026-08-04 review deferred, taken
+five days late and not from the metrics it was supposed to be taken from.
+Recording it honestly matters more than recording it tidily.**
+
+The 2026-08-04 review deliberately did NOT roll `tabsii-platform` back, on the
+grounds that a 7-day window ending that day was ~4 days pre-treatment, and
+scheduled *"its own review on 2026-08-07, seven days after it actually joined."*
+
+**That review was never conducted.** This file ends at 2026-08-04. The window
+closed on its own on 08-07 and nobody read it. So the observation was not
+destroyed — the corpus still holds 07-31 → 08-07 — but it was never turned into
+a verdict, and this entry is not that verdict either. Someone should still read
+that window; the data is there and this decision does not depend on it.
+
+**How the change actually happened, which is worth stating plainly.** On
+2026-08-09 an agent working `tabsii-platform#799` found `strict: false` live
+while `modules/source-control/github/main.tf` declared `strict = true`, read it
+as undocumented Terraform drift, and restored it. It was not drift — it was this
+experiment's treatment arm. The agent could not have known: **the decision is
+documented here, in `biffo-template`, and nothing in `tabsii-platform` records
+that its own branch protection is under experiment.** That is the same
+guard-reads-a-different-document shape this estate keeps paying for
+(biffo-template#1362), arriving in the practices programme rather than in code.
+
+The owner was asked and chose to keep `strict: true` rather than revert and
+re-run the window.
+
+#### The evidence H3's counter-metrics could not see
+
+H3 measured `racedShare`, `repushRate`, `integration.failures` and `redMinutes`.
+On 2026-08-08, `tabsii-platform` suffered **five DDL module-number collisions in
+one day** — two PRs each claiming the same `NNN_*.sql`. One pair merged, put two
+`130_*.sql` files on `dev`, and reddened `test_no_new_duplicate_module_numbers`
+for **every open PR**, including ones touching no DDL at all. It needed a
+dedicated fix PR to clear.
+
+**None of that appears in any H3 metric.** A module-number collision is not a
+merge race in the `racedShare` sense, and the resulting failure is a *guard*
+failing on `dev`, not an `integration.failure`. So H3's finding — that `strict`
+prevented **zero** measured integration failures over 367 merges — remains true
+and is now known to be **incomplete**: it was measuring the wrong failure for
+this repo. `strict` is what forces a PR's checks to re-evaluate against a `dev`
+that moved under it, which is exactly the window a module number is claimed in
+(`tabsii-platform#799`).
+
+That does not resurrect H3. H3's own prediction (`racedShare` below 3%) failed
+and it stays `refuted`. What this records is narrower and should not be read as
+vindication: **a counter-metric set that cannot see a failure mode will price a
+gate at zero when its real value is elsewhere.** A successor pre-registration
+needs a counter-metric measuring integration risk directly — already noted in
+"What this leaves open" — and this is a concrete instance of why.
+
+#### Cost accepted, with eyes open
+
+`strict: true` costs repush churn, and `tabsii-platform` runs on self-hosted spot
+capacity that already queues. The cost was immediate and observable: within
+minutes of restoring it, PR `#802` went `BEHIND` on an unrelated merge and needed
+`gh pr update-branch` plus a full CI re-run before it could land. That is the
+mechanism working as designed, and it is also the thing H3 was trying to remove.
+
+#### Live state, and the discrepancy this surfaced
+
+| repo | documented intent | live on 2026-08-09 |
+| --- | --- | --- |
+| `keiranholloway/biffo-template` | `strict: true` (refuted → rolled back) | **`strict: false`** |
+| `tabsii-com/tabsii-platform` | `strict: false` (arm held open) | **`strict: true`** |
+
+**Both are the opposite of what this file says**, and the template's own
+documented rollback appears never to have been applied to the live setting. Only
+`tabsii-platform` was decided today; `biffo-template` is left as found and needs
+its own deliberate decision rather than a side effect of this one.

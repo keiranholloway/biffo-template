@@ -135,4 +135,32 @@ describe('claim holder identity (#1279)', () => {
     expect(code, out).toBe(0)
     expect(readFileSync(callLog, 'utf8')).toContain('--remove-label')
   })
+
+  /**
+   * #826: `--release` with NO token at all — the trailing-flag form
+   * `claim.sh <issue> --release`, which is exactly where the untokened
+   * `claim <issue>` form (this file's own first documented usage) leads a
+   * session that later wants to release what it claimed.
+   *
+   * The arg parser did `shift 2` to consume `--release` and its value; with
+   * nothing left after the flag that shifts past the end of `$@`. Under real
+   * `sh` on this workstation (dash), `shift` is a POSIX SPECIAL builtin, and
+   * dash aborts the whole script on its error — non-interactively, before a
+   * single line of this script's own error handling runs. That is a crash,
+   * not the silent success the flag's caller sees reported: the exit status
+   * is nonzero, but nothing here CHOSE it, and the message
+   * ("shift: can't shift that many") explains a shell mechanism, not what the
+   * caller did wrong or what to do about it.
+   *
+   * Run through `sh` exactly like the real invocation (`run()` above), so
+   * this exercises dash's actual abort, not a bash-shaped guess at it.
+   */
+  it('--release with NO token refuses deliberately, not via a shell crash', () => {
+    const { dir, callLog } = stub({ comments: [claimedBy('sess-abc')] })
+    const { code, out } = run(dir, ['77', '--release'])
+    expect(code, out).toBe(1)
+    expect(out).toMatch(/token/i)
+    expect(out).not.toMatch(/can't shift/i)
+    expect(readFileSync(callLog, 'utf8')).not.toContain('--remove-label')
+  })
 })

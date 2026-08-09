@@ -24,6 +24,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from biffo_plugin_sdk import create_event_handler
 
 from .plugin import SCHEDULED_RUN_ID_KEY, OrchestratorPlugin
+from .redaction import redact_event_payload
 
 logger = Logger()
 tracer = Tracer()
@@ -49,7 +50,12 @@ def _get_plugin() -> OrchestratorPlugin:
 @logger.inject_lambda_context
 @tracer.capture_lambda_handler
 def handler(event: dict, context: LambdaContext) -> dict:
-    logger.info("Received event", extra={"event": event})
+    # Log a redacted copy only (biffo-template#950) — a credential-shaped
+    # field (e.g. a Cognito temporary password, #1182) must never reach this
+    # debug log line. `event` itself is untouched and still flows to
+    # create_event_handler/dispatch below, so an action handler that
+    # legitimately needs the real value (e.g. "Send email") still gets it.
+    logger.info("Received event", extra={"event": redact_event_payload(event)})
 
     global _loop
     if _loop.is_closed():

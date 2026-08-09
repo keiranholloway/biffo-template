@@ -161,10 +161,28 @@ export function slugify(text) {
  */
 export function writeEvidenceEntry(row, opts = {}) {
   const dir = opts.dir ?? EVIDENCE_DIR
-  const date = opts.date ?? row.date ?? new Date().toISOString().slice(0, 10)
+  // `undefined` means "nobody said"; `null` means "known to be unknown". Both
+  // must reach the stored field as null rather than today's date.
+  //
+  // This used to read `opts.date ?? row.date ?? new Date()…` and write that
+  // single value to BOTH the filename and the row. The module docstring says
+  // the opposite in as many words — "Rows citing nothing keep `date: null` —
+  // never a guess, because a fabricated date would corrupt exactly the ranking
+  // this exists to enable" — and `--extract` even passes `date: row.date ??
+  // null` to say so explicitly. `null ?? today` discarded that.
+  //
+  // It was invisible while rows were extracted the day they were written, and
+  // surfaced on 2026-08-09 when extracting five rows also swept up eighteen
+  // older ones and stamped every one with that day. `--enrich` recovers real
+  // dates from the cited issues afterwards, and it can only do that for rows
+  // whose date is *absent*; a fabricated one looks recovered and is skipped.
+  const date = opts.date ?? row.date ?? null
   const slug = opts.slug ?? slugify(row.summary) ?? 'entry'
   mkdirSync(dir, { recursive: true })
-  const file = `${date}-${slug || 'entry'}.json`
+  // The filename is used only for sorting and uniqueness — every reader parses
+  // the JSON body — so an undated row says so here too, rather than carrying a
+  // date prefix that the data it contains denies.
+  const file = `${date ?? 'undated'}-${slug || 'entry'}.json`
   const path = join(dir, file)
   try {
     writeFileSync(path, `${JSON.stringify({ ...row, date }, null, 2)}\n`, { flag: 'wx' })

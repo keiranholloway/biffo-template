@@ -1,0 +1,18 @@
+{
+  "refs": [
+    "keiranholloway/biffo-template#1246",
+    "keiranholloway/biffo-template#1243",
+    "keiranholloway/biffo-template#1241",
+    "keiranholloway/biffo-template#1239"
+  ],
+  "summary": "wait-for-checks waited out ten-plus minutes on a PR whose checks could never appear. #1243 was pushed while #1241 was merging a restructure of the same file; the PR went mergeable=CONFLICTING, and GitHub creates no check runs for a PR it cannot compute a merge commit for. gh pr checks reported \"no checks reported\"; the script printed \"Waiting on 5 required check(s)\" indefinitely — output identical to the legitimate \"CI has not started yet\" case. One field settles it. Worse than the wasted wait: AGENTS.md §6 documents the superficially similar \"GitHub sometimes creates no run\" case and prescribes workflow_dispatch, which is *actively wrong* here — the problem is an uncomputable merge, not a missing trigger, so following the documented remedy costs more time",
+  "class": "visibility",
+  "alsoClass": [
+    "process"
+  ],
+  "surfacedIn": "biffo-template #1243, while landing #1239",
+  "fixesIn": "biffo-template scripts/wait-for-checks.sh + AGENTS.md §6",
+  "status": "open",
+  "costMinutes": null,
+  "date": null
+}

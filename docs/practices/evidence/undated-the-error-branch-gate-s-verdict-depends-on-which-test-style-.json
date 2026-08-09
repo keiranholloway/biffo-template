@@ -1,0 +1,13 @@
+{
+  "refs": [],
+  "summary": "The error-branch gate's verdict depends on which *test style* a module uses, not on whether its error branches are tested. scripts/error_branch_coverage.py reads coverage.json, and coverage loses the trace on everything after the first await against a real in-memory aiosqlite engine. In lms_media.py, line 201 (await _brand_tenant(...)) is recorded as executed and line 205 — four lines later, same function — is not. So four except branches that WERE exercised (the tests asserted the 502s and the 400, and passed) were reported as *added with no test exercising them*, and the gate was not wrong to say so: nobody had evidence. The split is visible estate-wide — test_fdd_admin.py uses the real-engine pattern and its module sits at 65%; test_lead_stage.py uses a fake session and sits at 100% with five awaits of its own. Two consequences. The ratchet will keep pushing baseline growth for genuinely-tested code, which erodes the one thing it measures; and module coverage percentages are not comparable across modules that differ only in fixture style. Fixed locally by moving the error tests to a fake session (61% → 84%), but that is a workaround in one module, not a fix for the instrument",
+  "class": "visibility",
+  "alsoClass": [
+    "fail-open"
+  ],
+  "surfacedIn": "tabsii-platform, building LMS M4",
+  "fixesIn": "not fixed — candidates: concurrency/sigterm coverage settings, or a documented rule that error branches are tested against a fake session",
+  "status": "unfiled",
+  "costMinutes": null,
+  "date": null
+}

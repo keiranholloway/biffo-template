@@ -1,0 +1,16 @@
+{
+  "refs": [
+    "keiranholloway/biffo-template#1089",
+    "tabsii-com/tabsii-platform#487"
+  ],
+  "summary": "A REQUIRED CI check had no local counterpart at all, and the gate printed verify passed anyway. tabsii-platform's rls-test lane — real Postgres, RLS policies — was 9 of 13 locally-catchable failing CI steps across the estate in 24h. Every one was a genuine assertion failure on a feature branch, plus one re-runnability failure from leaked state; all of them a local run catches. scripts/verify.sh contained no reference to Postgres in any form, so the gate reported green having never looked at a check that costs a ~7-minute round trip to discover. Locally the whole lane is ~2s to build the schema (alembic 0.74s + 85 DDL modules 1.3s) and ~28s for 310 tests, so the arithmetic is not close. The lesson is not \"add this check\": a gate claiming to mirror CI must be measured against CI's actual required checks, because a lane living in its own workflow file is invisible to a gate assembled from what the repo obviously has. Second-order, and the part that makes it a fail-open rather than a gap: the fix must distinguish _\"this repo does not have the thing\"_ from _\"this repo has it and the gate is blind to it\"_ — printing both as a quiet n/a is how a gap gets read as coverage",
+  "class": "fail-open",
+  "alsoClass": [
+    "visibility"
+  ],
+  "surfacedIn": "estate-wide, concentrated in tabsii-platform (found ranking the 2026-08-02 standup)",
+  "fixesIn": "biffo-template scripts/verify.sh",
+  "status": "partly fixed",
+  "costMinutes": null,
+  "date": null
+}

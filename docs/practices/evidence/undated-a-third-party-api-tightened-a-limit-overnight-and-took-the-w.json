@@ -1,0 +1,16 @@
+{
+  "refs": [
+    "keiranholloway/biffo-template#917",
+    "keiranholloway/biffo-template#1086"
+  ],
+  "summary": "A third-party API tightened a limit overnight and took the whole measurement programme dark in one step — and the guard that caught it named the wrong cause. GitHub cut the GraphQL node budget server-side. gh pr list --json commits expands to commits(first:100){nodes{authors(first:100)}}, so against a 100-PR page it requests 100×100×100 = 1,000,000 possible nodes against a 500,000 ceiling. The estimate is computed from the page size, not from what a repo holds, so lowering --limit does not help — 1000/500/250/100 fail identically — and all 15 repos failed at once. Nothing local had changed: gh was 2.96.0, a month old, and the same query minus commits still succeeded. The preflight guard (#917) worked exactly as designed and refused to write a hollow snapshot — but its diagnostic asserted _\"the most likely cause is credentials: gh stores its token in the keyring\"_ unconditionally, which was true of the 401 that motivated it and false here, sending the reader after a keyring that was working. So the day had no data at all, and the previous day's standup choice could not be closed: an outage in the measurement layer costs the *ritual* that depends on it, not just the numbers. Two lessons worth keeping separate — a metric pipeline resting on an external API's implicit limits will break on someone else's schedule, and a guard that prints one hardcoded cause is not a diagnosis: a confidently wrong one costs more than none, because the reader spends the time disproving it",
+  "class": "fail-open",
+  "alsoClass": [
+    "visibility"
+  ],
+  "surfacedIn": "biffo-template daily practices cron (04:30 2026-08-02)",
+  "fixesIn": "biffo-template scripts/practices-metrics.mjs",
+  "status": "fixed",
+  "costMinutes": null,
+  "date": null
+}

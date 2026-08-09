@@ -1,0 +1,13 @@
+{
+  "refs": [],
+  "summary": "Nothing sandboxes a test from the developer's live session, and one that escapes is invisible to every gate. execFileSync/spawn inherit process.env and PATH by default, so any test that shells out can reach the real D-Bus session, desktop, keyring, ~/.ssh, ~/.config/gh or the network. The notification test did exactly this for seven hours while the suite stayed green, because a side effect on the operator's desktop is not an assertion and nothing can fail on it. fail-open — a gate that passes when it cannot run — is the second-largest class on this page. This is its inverse and has no coverage at all: a test that *does something real*, to something outside the repo, and passes. Note the near-miss shape: the fix works because the stub is first on PATH, which is a convention held by each test author, not a property of the harness. Candidates: a vitest setupFiles that prepends a stub-bin directory and strips DBUS_SESSION_BUS_ADDRESS/XDG_RUNTIME_DIR from the inherited env for the whole suite, so escaping is opt-in rather than default; or a guard asserting no test spawns a process with unmodified process.env. Neither is written",
+  "class": "visibility",
+  "alsoClass": [
+    "fail-open"
+  ],
+  "surfacedIn": "biffo-template cli/src/lib/",
+  "fixesIn": "not fixed — no mechanism proposed beyond the per-test stub",
+  "status": "unfiled",
+  "costMinutes": null,
+  "date": null
+}

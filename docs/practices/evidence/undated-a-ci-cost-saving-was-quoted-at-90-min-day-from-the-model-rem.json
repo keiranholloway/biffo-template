@@ -1,0 +1,17 @@
+{
+  "refs": [
+    "keiranholloway/biffo-template#1331",
+    "tabsii-com/tabsii-platform#664",
+    "keiranholloway/biffo-template#1332"
+  ],
+  "summary": "A CI-cost saving was quoted at ~90 min/day from the model \"remove a job, save its billed minute\". The real figure is ~16–50, and on most runs it is zero. GitHub bills each *job* rounded up to a full minute, so a job doing 37s of work does cost a full minute — but folding it into another job only *recovers* that minute if the absorbing job has slack ≥ the folded work, where slack = 60 - (duration mod 60). Otherwise the work spills into a fresh billed minute and nothing is saved. Measured over 90 real runs of each tabsii-platform job: the Terraform absorber ran 117s median with 6s median slack against 37s of folded work → 0.18 min/run (~16/day), while Secret Scan → the JS job (9s of work into 34s of slack) would give 0.96 min/run (~86/day). The compounding error: the job that was *safe* to fold — the only one of the five not a required status check in all 8 repos — was also the worst absorber in the repo, and those two properties are unrelated. The constraint was chosen on safety and the result reported as though it had been chosen on economics. Nothing failed, nothing went red, and the wrong number had already been posted to a closed issue and a merged PR body before anyone checked it",
+  "class": "visibility",
+  "alsoClass": [
+    "process"
+  ],
+  "surfacedIn": "biffo-template #1331/#1332, distributing to tabsii-platform#664",
+  "fixesIn": "biffo-template — method, not code; the shipped change stands and is still correct, only smaller",
+  "status": "unknown",
+  "costMinutes": null,
+  "date": null
+}

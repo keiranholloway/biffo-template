@@ -1,0 +1,18 @@
+{
+  "refs": [
+    "keiranholloway/biffo-template#1244",
+    "keiranholloway/biffo-plugin-idea-scout#101",
+    "keiranholloway/biffo-template#1239",
+    "keiranholloway/biffo-template#325"
+  ],
+  "summary": "The plugin skeleton ships a terraform/ module and a ci.yml with no terraform step, so every plugin repo is born with Terraform nothing checks. biffo-plugin-idea-scout is the live instance: 3 .tf files, zero terraform references across all three workflows. #1239 cannot cover this, and correctly does not try — the local check is guarded by ci_has \"terraform fmt\" so a template-shipped gate never asserts over more than the repo's own CI (the #325 trap), so a repo whose CI checks nothing gets nothing locally either and the hole stays open. The two halves must move together. Also not a copy problem: ci.yml is deliberately outside the one-way-overwrite set because the path depends on each step's working-directory, so the mechanism has to be a ci-wiring-audit assertion — *a repo holding terraform/*.tf must have a terraform fmt step* — rather than a file",
+  "class": "fail-open",
+  "alsoClass": [
+    "drift"
+  ],
+  "surfacedIn": "biffo-plugin-idea-scout, found sweeping for #1239",
+  "fixesIn": "biffo-template _skeletons/ + ci-wiring-audit; backfill biffo-plugin-idea-scout#101",
+  "status": "open",
+  "costMinutes": null,
+  "date": null
+}

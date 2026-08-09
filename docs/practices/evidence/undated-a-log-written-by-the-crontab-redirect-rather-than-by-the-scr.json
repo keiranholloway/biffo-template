@@ -1,0 +1,13 @@
+{
+  "refs": [],
+  "summary": "A log written by the *crontab redirect* rather than by the script records only cron runs, and reads as a complete history. ~/.practices-daily.log gets its content from >> logfile 2>&1 in the crontab line, so every interactive, agent and test-harness invocation of the same code is structurally invisible to it. Asked why hundreds of alerts were firing it answered \"one failure, at 03:30\" — true, and not an answer to the question. ~25m went into a theory built on it, and a proposed [ -t 1 ] TTY guard that would have caught none of the real events (vitest runs stdio: 'pipe' and is not a TTY either) — a guard that reads as protection while missing the measured cause. Dropped only because the operator said the alerts were still arriving. The measurement that settled it took under 2 minutes and was available from the first minute",
+  "class": "visibility",
+  "alsoClass": [
+    "process"
+  ],
+  "surfacedIn": "biffo-template ~/.practices-daily.log",
+  "fixesIn": "biffo-template — the redirect still lives in the crontab; nothing marks the log cron-only",
+  "status": "fixed",
+  "costMinutes": null,
+  "date": null
+}

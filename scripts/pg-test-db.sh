@@ -250,10 +250,28 @@ if [ "$BIFFO_PG_REAP_HOURS" -gt 0 ] 2>/dev/null && command -v docker >/dev/null 
     say "cannot compute a reap cutoff on this date(1); skipping container reaping"
   else
     _reaped=0
-    for _c in $(docker ps -a --filter "name=biffo-pg-test-" --format '{{.Names}}' 2>/dev/null); do
+    _considered=0
+    # TWO filters, not one literal name (#1383). The label is what containers
+    # created from here now carry; the name prefix keeps covering every one
+    # created before the label existed, which is all of them on any workstation
+    # that has run this before. `sort -u` because a container matching both
+    # filters is listed by both.
+    _reapable=$(
+      {
+        docker ps -a --filter "name=biffo-pg-test-" --format '{{.Names}}' 2>/dev/null
+        docker ps -a --filter "label=biffo.ephemeral=1" --format '{{.Names}}' 2>/dev/null
+      } | sort -u
+    )
+    # A space-separated copy, purely for the `case` membership test below. The
+    # newline-separated form cannot be tested with *" $_c "* -- the separator is
+    # a newline, so only the first and last entries would ever match, and every
+    # container this script owns would be re-reported as one it does not.
+    _reapable_flat=" $(printf '%s ' $_reapable)"
+    for _c in $_reapable; do
       [ "$_c" = "$CONTAINER" ] && continue
       _made=$(docker inspect -f '{{.Created}}' "$_c" 2>/dev/null | cut -c1-19)
       [ -z "$_made" ] && continue
+      _considered=$((_considered + 1))
       # Both are UTC ISO-8601 to the second, so a string compare IS a time
       # compare -- no epoch conversion, and portable across date(1) flavours.
       if awk -v a="$_made" -v b="$_reap_cutoff" 'BEGIN { exit !(a < b) }'; then
@@ -261,7 +279,60 @@ if [ "$BIFFO_PG_REAP_HOURS" -gt 0 ] 2>/dev/null && command -v docker >/dev/null 
       fi
     done
     [ "$_reaped" -gt 0 ] &&
-      say "reaped $_reaped container(s) unused for over ${BIFFO_PG_REAP_HOURS}h (set BIFFO_PG_REAP_HOURS=0 to disable)"
+      say "reaped $_reaped of $_considered container(s) unused for over ${BIFFO_PG_REAP_HOURS}h (set BIFFO_PG_REAP_HOURS=0 to disable)"
+
+    # ── What the reaper can SEE but must not touch ──────────────────────────
+    #
+    # The defect in #1383 was not that stale containers survived; it was that
+    # they were outside the denominator, so a clean reaper run was a true
+    # statement about a set that silently excluded them. Three Postgres
+    # containers up for DAYS -- one of them six -- sat beside a perfectly tidy
+    # `biffo-pg-test-*` family, and a `tabsii-rls-local` two days stale is
+    # already measured in docs/guides/development-practices.md as costing ~20m
+    # of chasing failures that belonged to nobody.
+    #
+    # They are REPORTED, never removed, and that is a deliberate departure from
+    # the issue's preferred fix ("reap any container on the Postgres test image
+    # with no client connections"). The reaper's own licence to delete rests on
+    # "reaping something still wanted is cheap and self-correcting" -- true only
+    # of containers THIS script creates, because this script recreates them. A
+    # hand-run container may hold hand-loaded data that nothing here can
+    # reconstruct, and an idle one is exactly the case a connection check
+    # cannot distinguish from an abandoned one. Widening the deletion set to
+    # every `postgres:`/`postgis:` image would trade an invisible mess for an
+    # unrecoverable one.
+    #
+    # So: name them, price them, and let a human decide. That is what would have
+    # made this visible six days earlier instead of during an unrelated cleanup.
+    # One `docker ps` for names AND images, so the image filter costs nothing;
+    # only the handful that survive it are worth an `inspect` for the timestamp.
+    # This runs on every pg-lane invocation, so a per-container inspect over the
+    # whole daemon would put ~1s on a hot path to print a housekeeping note.
+    # Neither field can contain a space, so a space separator needs no IFS
+    # games -- and `IFS=$'\t'` would not have worked anyway: these scripts run
+    # under dash, where that splits on the four characters $ ' \ t.
+    _unclaimed=''
+    docker ps -a --format '{{.Names}} {{.Image}}' 2>/dev/null | {
+      while read -r _c _img; do
+        [ "$_c" = "$CONTAINER" ] && continue
+        case "$_reapable_flat" in *" $_c "*) continue ;; esac
+        # Both images this script can choose (see IMAGE above), matched by
+        # repository rather than tag so a BIFFO_PG_IMAGE override still lands.
+        case "$_img" in postgres:* | postgis/*) ;; *) continue ;; esac
+        _made=$(docker inspect -f '{{.Created}}' "$_c" 2>/dev/null | cut -c1-19)
+        [ -z "$_made" ] && continue
+        awk -v a="$_made" -v b="$_reap_cutoff" 'BEGIN { exit !(a < b) }' &&
+          _unclaimed="$_unclaimed $_c($_img)"
+      done
+      # Reported inside the subshell the pipeline created: `_unclaimed` set in a
+      # piped `while` does not survive it in a POSIX shell.
+      if [ -n "$_unclaimed" ]; then
+        say "NOT reaped -- Postgres containers over ${BIFFO_PG_REAP_HOURS}h old that this script did not create:"
+        for _u in $_unclaimed; do say "  $_u"; done
+        say "  A stale one costs test failures that belong to nobody (#1383). Remove by hand"
+        say "  (docker rm -f <name>), or start it with --label biffo.ephemeral=1 to have it reaped."
+      fi
+    }
   fi
 fi
 
@@ -276,7 +347,12 @@ if ! psql_admin -c 'SELECT 1' >/dev/null 2>&1; then
     docker start "$CONTAINER" >/dev/null
   else
     say "creating container $CONTAINER ($IMAGE) on port $PORT"
-    docker run -d --name "$CONTAINER" \
+    # The label is what makes this container reapable by a property rather than
+    # by the name it happens to carry (#1383). The name prefix still works and
+    # is still scanned, but it only ever described containers this script named;
+    # anything started under another name was outside the reaper's denominator
+    # entirely. A label travels with the container whatever it is called.
+    docker run -d --name "$CONTAINER" --label biffo.ephemeral=1 \
       -e POSTGRES_PASSWORD="$PASS" -p "$PORT:5432" "$IMAGE" >/dev/null
   fi
   # Polled, not slept: a cold image pull and a warm restart differ by an order of

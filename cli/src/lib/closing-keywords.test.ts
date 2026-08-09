@@ -178,9 +178,25 @@ describe('closing-keyword guard', () => {
       ])
     })
 
+    it('treats a SIBLING frontend as deploy-only too (#1395)', () => {
+      // A satellite calls it `apps/frontend/` where this repo calls it
+      // `apps/portal/`. Both are in the one list rather than each skeleton
+      // carrying a flavoured copy: a sibling has no `apps/portal/` and this
+      // repo has no `apps/frontend/`, so each entry is inert where it does not
+      // apply — and two copies of a list are two places for it to drift.
+      expect(deployOnlyPaths(['apps/frontend/src/lib/auth.ts'])).toEqual([
+        'apps/frontend/src/lib/auth.ts',
+      ])
+    })
+
     it('keeps the list short on purpose', () => {
       // A guard that fires on everything teaches people to bypass it. If this
       // number climbs, argue for each addition with an incident.
+      //
+      // #1395 took it to exactly six — the ceiling, not room under it. The
+      // incident is tabsii-crm#320: a negated keyword closed an issue in a
+      // satellite, whose frontend lives at a path this list did not name. The
+      // NEXT addition needs the number raised deliberately, which is the point.
       expect(DEPLOY_ONLY_PREFIXES.length).toBeLessThanOrEqual(6)
     })
   })

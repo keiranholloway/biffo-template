@@ -1,0 +1,12 @@
+.next
+out
+dist
+build
+.turbo
+node_modules
+*.lock
+*.tfstate
+*.tfstate.*
+.terraform
+pnpm-lock.yaml
+uv.lock

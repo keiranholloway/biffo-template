@@ -79,6 +79,43 @@
 # the fingerprinted schema (see step 2 below) instead of rebuilding it under a
 # fresh identity every time. `BIFFO_PG_PORT`, `BIFFO_PG_DB`, and
 # `BIFFO_PG_CONTAINER` remain explicit overrides; only the *default* changed.
+#
+# ## The case that key does NOT cover: two runs from ONE checkout
+#
+# Deriving from `$REPO_ROOT` isolates two *checkouts*. It cannot isolate two
+# *runs of the same checkout*, because it is deterministic on purpose -- that
+# determinism is what makes reuse work. So a developer running the suite while
+# `git push` fires the pre-push gate gets two concurrent sessions against ONE
+# database, and neither is doing anything wrong: the gate is automatic, and the
+# developer never chose to run two things at once.
+#
+# What that costs is not a lost race, it is a MISATTRIBUTED one. Measured on
+# 2026-08-09: a push gate reported `test_lead_unsubscribe_pg.py` failing with a
+# foreign-key violation, in a file the change under test never touched, while a
+# full suite from the same worktree was concurrently deleting and re-seeding the
+# rows it depends on. The gate was believed, the change was suspected, and the
+# database had to be recreated before the red would clear.
+#
+# Per-test-file tenant namespaces (see `setup_pg`'s advisory-lock note) make ONE
+# run internally parallel-safe. They do nothing here, because the colliding
+# writers are the SAME file run twice.
+#
+# ## The fix, and why it is a clone rather than a lock
+#
+# The fingerprinted database is now a TEMPLATE, never handed out. Each run gets
+# its own `..._r<key>` clone via `CREATE DATABASE ... TEMPLATE`, and the DSN
+# points at that.
+#
+# This keeps the principle the port/name key already established -- make the
+# value unique rather than make users take turns -- and it is affordable because
+# a template clone is a file copy the server does itself: **0.10s for a 25 MB
+# schema**, measured on the tabsii-platform lane, against the ~0.3s reuse path
+# this script already advertises as fast. A `flock` would instead have cost the
+# pushing developer the full runtime of whatever else was running.
+#
+# `BIFFO_PG_SHARED=1` opts out and returns the template directly, for the case
+# that genuinely wants a stable name across invocations -- attaching a psql
+# session to inspect what a failing run left behind.
 
 set -eu
 
@@ -102,7 +139,21 @@ HOST="${BIFFO_PG_HOST:-localhost}"
 PORT="${BIFFO_PG_PORT:-$_checkout_port}"
 USER_="${BIFFO_PG_USER:-postgres}"
 PASS="${BIFFO_PG_PASSWORD:-postgres}"
+# The TEMPLATE: fingerprinted, rebuilt only when the schema inputs change, and
+# never handed to a caller unless sharing is requested. An explicit BIFFO_PG_DB
+# still names it, so that override keeps meaning what it always did.
 DB="${BIFFO_PG_DB:-biffo_test_$_checkout_suffix}"
+
+# Opt out of per-run cloning (see the concurrency note above). Naming a database
+# explicitly implies it: BIFFO_PG_DB is a request for THAT database.
+SHARED="${BIFFO_PG_SHARED:-0}"
+[ -n "${BIFFO_PG_DB:-}" ] && SHARED=1
+
+# Minutes an abandoned clone survives before a later run reaps it. Generous on
+# purpose: a clone with no connections may simply be between `--export` and the
+# first test connecting, and dropping one out from under a caller is a worse
+# failure than leaving a few megabytes on disk.
+CLONE_TTL_MIN="${BIFFO_PG_CLONE_TTL_MIN:-240}"
 # Keyed the same way as PORT and for the same reason: the container is where
 # the port mapping actually lives (`docker run -p "$PORT:5432"`), so if the
 # container name stayed fixed while the port became per-checkout, a second
@@ -243,14 +294,76 @@ if ! psql_admin -c 'SELECT 1' >/dev/null 2>&1; then
 fi
 
 DSN="postgresql+asyncpg://$USER_:$PASS@$HOST:$PORT/$DB"
+
+# What the caller is handed. Rewritten to a per-run clone below unless sharing
+# was requested; `DSN` keeps naming the template, because that is what the
+# alembic/DDL build steps must connect to.
+RUN_DB="$DB"
+RUN_DSN="$DSN"
+
+# ── Per-run clone ────────────────────────────────────────────────────────────
+#
+# Called after the template is known-good, so a clone can never predate the
+# schema it is supposed to carry.
+clone_for_this_run() {
+  [ "$SHARED" -eq 1 ] && {
+    say "BIFFO_PG_SHARED - using the template $DB directly, NOT isolated from a concurrent run"
+    return 0
+  }
+
+  # Reap first, so a long-lived checkout does not accumulate clones forever.
+  # Only ones with no backends AND older than the TTL: `datconnlimit`-style
+  # liveness alone would drop a clone in the gap between `--export` and the
+  # first test connecting.
+  # Both ways this query can fail degrade to NOT reaping, which is the safe
+  # direction — it leaks disk rather than dropping a database out from under a
+  # live caller. `pg_stat_file` needs superuser (or pg_read_server_files), which
+  # the container has and a managed server may not; and a database in a custom
+  # tablespace is not under `base/`, so the file is missing and `missing_ok`
+  # returns NULL, which COALESCE turns into "not old enough".
+  _stale=$(psql_admin -tAc "
+    SELECT d.datname
+      FROM pg_database d
+     WHERE d.datname LIKE '${DB}_r%'
+       AND NOT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.datname = d.datname)
+       AND COALESCE((pg_stat_file('base/' || d.oid || '/PG_VERSION', true)).modification,
+                    now()) < now() - interval '$CLONE_TTL_MIN minutes'
+  " 2>/dev/null || true)
+  for _old in $_stale; do
+    psql_admin -c "DROP DATABASE IF EXISTS \"$_old\" WITH (FORCE)" >/dev/null 2>&1 || true
+    say "reaped abandoned clone $_old"
+  done
+
+  # $$ is this shell; the seconds make a second run in the same second (or a
+  # recycled pid) distinct. Short enough to read in a psql prompt.
+  _run_key=$(printf '%s%s' "$$" "$(date +%s)" | sha256sum | cut -c1-8)
+  RUN_DB="${DB}_r${_run_key}"
+
+  # WITH (FORCE) so a previous clone under the same name (only possible if the
+  # key collided) cannot wedge this run behind someone else's idle session.
+  psql_admin -c "DROP DATABASE IF EXISTS \"$RUN_DB\" WITH (FORCE)" >/dev/null 2>&1 || true
+  if ! psql_admin -c "CREATE DATABASE \"$RUN_DB\" TEMPLATE \"$DB\"" >/dev/null 2>&1; then
+    # The one failure mode worth naming: CREATE DATABASE ... TEMPLATE refuses
+    # while any session is connected to the template. That means something is
+    # using the template directly -- almost always a psql attached by hand, or a
+    # run started before this change with an exported DSN.
+    say "could not clone $DB - is something still connected to it?"
+    psql_admin -tAc "SELECT DISTINCT usename FROM pg_stat_activity WHERE datname = '$DB'" 2>/dev/null |
+      while read -r _u; do [ -n "$_u" ] && say "  template in use by: $_u"; done
+    say "disconnect it, or set BIFFO_PG_SHARED=1 to use the template directly"
+    exit 1
+  fi
+  RUN_DSN="postgresql+asyncpg://$USER_:$PASS@$HOST:$PORT/$RUN_DB"
+  say "cloned $DB -> $RUN_DB (isolated from any concurrent run)"
+}
 emit() {
   if [ "$EXPORT" -eq 1 ]; then
     # Both names, deliberately (tabsii-platform#755): whichever a consumer
     # reads, an `eval` of this line alone is enough -- see the Usage note above.
-    echo "export BIFFO_TEST_PG_DSN='$DSN'"
-    echo "export TABSII_TEST_PG_DSN='$DSN'"
+    echo "export BIFFO_TEST_PG_DSN='$RUN_DSN'"
+    echo "export TABSII_TEST_PG_DSN='$RUN_DSN'"
   else
-    echo "$DSN"
+    echo "$RUN_DSN"
   fi
 }
 
@@ -277,6 +390,7 @@ fi
 
 if [ -n "$HAVE" ] && [ "$HAVE" = "$WANT" ]; then
   say "schema is current, reusing $DB"
+  clone_for_this_run
   emit
   exit 0
 fi
@@ -285,6 +399,13 @@ fi
 
 # --- 3. rebuild the way the app and CI do ------------------------------------
 say "rebuilding $DB"
+# Every existing clone carries the OLD schema, so they are stale by definition
+# the moment the template is rebuilt. Dropping them here is also what makes
+# `CREATE DATABASE ... TEMPLATE` possible afterwards without waiting out the TTL.
+for _c in $(psql_admin -tAc "SELECT datname FROM pg_database WHERE datname LIKE '${DB}_r%'" 2>/dev/null || true); do
+  psql_admin -c "DROP DATABASE IF EXISTS \"$_c\" WITH (FORCE)" >/dev/null 2>&1 || true
+  say "dropped clone $_c of the previous schema"
+done
 psql_admin -c "DROP DATABASE IF EXISTS $DB WITH (FORCE)" >/dev/null
 psql_admin -c "CREATE DATABASE $DB" >/dev/null
 
@@ -330,6 +451,11 @@ psql_db \
   -c "CREATE TABLE IF NOT EXISTS biffo_pg_test_fingerprint (value text primary key)" \
   -c "TRUNCATE biffo_pg_test_fingerprint" \
   -c "INSERT INTO biffo_pg_test_fingerprint (value) VALUES ('$WANT')" >/dev/null
+
+# Only now, with the fingerprint recorded against a schema that passed the
+# check above, is the template fit to copy. Cloning earlier would hand out a
+# half-built database and record the failure against whoever ran next.
+clone_for_this_run
 
 say "ready"
 emit

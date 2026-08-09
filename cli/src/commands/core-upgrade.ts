@@ -43,6 +43,11 @@ import {
   materializeTemplateAtTag,
   workingTreeMatchesTag,
 } from '../lib/core-template-trees.js'
+import {
+  type FidelityReport,
+  assertTargetFidelity,
+  fidelityFailure,
+} from '../lib/core-upgrade-target-fidelity.js'
 import { type InstanceSeam, findNewUndeclaredSeams } from '../lib/instance-seams.js'
 import {
   type BreakingChange,
@@ -530,11 +535,30 @@ async function runCoreUpgradeResolved(
   // from tsconfig.json" are both load-bearing.
   const newSeams = findNewUndeclaredSeams(baseDir, theirsDir, options.cwd)
 
+  // #1399: hold the plan to the tag it claims to be. Same "before anything can
+  // short-circuit" reasoning as the two above, and for the strongest version of
+  // it — a dry run is where an operator decides whether to trust the upgrade, so
+  // the verdict has to be on that screen, not only on `--apply`. Reads the tag
+  // object independently of the tree the planner walked; see the module
+  // docstring for why that independence is the whole mechanism.
+  const fidelity = assertTargetFidelity({
+    entries: plan.entries,
+    templateRepo,
+    toVersion,
+    theirsDir,
+    explicitTargetTree: options.theirsDir !== undefined,
+  })
+
   const heading = options.apply ? 'Biffo core upgrade' : 'Biffo core upgrade (dry run)'
   console.log(chalk.bold(`\n  ${heading}\n`))
   console.log(`  instance core:   ${instanceVersion ?? chalk.dim('(unrecorded)')}`)
   console.log(`  merge base:      ${fromVersion}`)
   console.log(`  target:          ${toVersion}\n`)
+
+  printTargetFidelity(fidelity, toVersion)
+  if (fidelity.findings.length > 0) {
+    throw new Error(fidelityFailure(fidelity, toVersion))
+  }
 
   printNewInstanceSeams(newSeams)
   printOrphanReport(plan.orphaned, orphanRatchet)
@@ -1487,6 +1511,38 @@ function printNewInstanceSeams(seams: InstanceSeam[]): void {
  * Kept a pure formatter of already-computed data so the decision logic stays
  * in the unit-tested `checkOrphanRatchet` (lib/core-upgrade.ts).
  */
+/**
+ * Report whether the plan is faithful to the tag (#1399).
+ *
+ * Always prints something, including on the clean path. A guard that is silent
+ * when it passes cannot be distinguished from a guard that did not run — which
+ * is the estate's `class:fail-open` shape (#1363: "a gate reports green over a
+ * denominator it never printed"), so the denominator is on the screen.
+ */
+function printTargetFidelity(report: FidelityReport, toVersion: string): void {
+  if (report.unverifiable !== null) {
+    console.log(chalk.yellow(`  Target fidelity: NOT VERIFIED — ${report.unverifiable}`))
+    console.log()
+    return
+  }
+  if (report.findings.length === 0) {
+    console.log(
+      chalk.dim(
+        `  Target fidelity: ${String(report.checked)} path(s) verified byte-identical to core-v${toVersion}.`,
+      ),
+    )
+    console.log()
+    return
+  }
+  console.log(
+    chalk.red(
+      `  Target fidelity: ${String(report.findings.length)} of ${String(report.checked)} checked path(s) are NOT core-v${toVersion} content (#1399):`,
+    ),
+  )
+  for (const f of report.findings) console.log(`    ${chalk.red(f.path)} — ${f.reason}`)
+  console.log()
+}
+
 function printOrphanReport(orphaned: MergeEntry[], ratchet: OrphanRatchet): void {
   if (orphaned.length === 0 && ratchet.baseline === null) return
 

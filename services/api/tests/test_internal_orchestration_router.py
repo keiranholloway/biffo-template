@@ -8,7 +8,9 @@ test_core_crud_router.py.
 """
 
 import asyncio
+import uuid
 from collections.abc import AsyncGenerator, Generator
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -229,6 +231,120 @@ def test_record_result_rejects_invalid_status(orchestration_app, client):
     )
 
     assert resp.status_code == 422
+
+
+# ── Recurring, payload-less triggers actually fire more than once
+# (tabsii-platform#808) ───────────────────────────────────────────────────────
+#
+# The guard for the outage's own shape: a definition bound to a trigger whose
+# every occurrence carries the *same* (source, detail_type) and an *empty*
+# payload — exactly what `orchestrator.tick` looks like — must still claim a
+# fresh run on every firing, not just the first. Before the fix, the
+# orchestrator plugin's `_idempotency_key` hashed "nothing" to the same digest
+# forever, so the SECOND call here would have posted the identical
+# idempotency_key as the first and come back `created=False` — this router
+# doesn't know why the key changed, only that when it does, dispatch keeps
+# working. `test_every_finance_batch_endpoint_has_a_workflow_binding` (#723)
+# checks the binding is *authored*; this checks the binding still *fires* on
+# a second, third, and later occurrence, which is what #723 could not see.
+
+
+def _recurring_trigger_body(idempotency_key: str) -> dict:
+    # Mirrors `orchestrator.tick`'s own shape: a fixed (source, detail_type)
+    # and a deliberately empty event payload — nothing in the body varies
+    # except the idempotency_key, which is exactly what the fixed
+    # `_idempotency_key` now supplies fresh on every firing.
+    return {
+        "source": "biffo.orchestrator",
+        "detail_type": "orchestrator.tick",
+        "idempotency_key": idempotency_key,
+        "event": {},
+    }
+
+
+def test_recurring_trigger_claims_a_new_run_on_every_occurrence(orchestration_app, client):
+    _, session_factory = orchestration_app
+    _seed(
+        session_factory,
+        trigger_source="biffo.orchestrator",
+        trigger_detail_type="orchestrator.tick",
+    )
+
+    first = client.post(_EVENTS, json=_recurring_trigger_body(str(uuid.uuid4()))).json()["runs"][0]
+    second = client.post(_EVENTS, json=_recurring_trigger_body(str(uuid.uuid4()))).json()["runs"][0]
+    third = client.post(_EVENTS, json=_recurring_trigger_body(str(uuid.uuid4()))).json()["runs"][0]
+
+    assert first["created"] is True
+    assert second["created"] is True
+    assert third["created"] is True
+    assert len({first["run_id"], second["run_id"], third["run_id"]}) == 3
+
+
+def test_recurring_trigger_with_the_same_key_still_dedupes(orchestration_app, client):
+    """The complement: this test doesn't stop being a replay-dedup guard just
+    because the tick now gets a fresh key per firing. A genuine redelivery of
+    the *same* occurrence (the same idempotency_key posted twice) must still
+    claim the same run, not a second one."""
+    _, session_factory = orchestration_app
+    _seed(
+        session_factory,
+        trigger_source="biffo.orchestrator",
+        trigger_detail_type="orchestrator.tick",
+    )
+
+    first = client.post(_EVENTS, json=_recurring_trigger_body("same-occurrence")).json()["runs"][0]
+    second = client.post(_EVENTS, json=_recurring_trigger_body("same-occurrence")).json()["runs"][0]
+
+    assert first["created"] is True
+    assert second["created"] is False
+    assert first["run_id"] == second["run_id"]
+
+
+# ── Stale-run sweep (tabsii-platform#808) ────────────────────────────────────
+
+_REAP = "/api/v1/internal/orchestration/reap"
+
+
+async def _age_run(session_factory, run_id: str, *, seconds_ago: int) -> None:
+    async with session_factory() as session:
+        result = await session.execute(select(WorkflowRun).where(WorkflowRun.id == run_id))
+        run = result.scalar_one()
+        run.updated_at = datetime.now(UTC) - timedelta(seconds=seconds_ago)
+        await session.commit()
+
+
+def test_reap_fails_a_run_stuck_pending_past_the_threshold(orchestration_app, client):
+    _, session_factory = orchestration_app
+    _seed(session_factory)
+    run_id = client.post(_EVENTS, json=_event_body()).json()["runs"][0]["run_id"]
+    # Past the real default (orchestration_run_stale_after_seconds = 1800s).
+    asyncio.run(_age_run(session_factory, run_id, seconds_ago=3600))
+
+    resp = client.post(_REAP, json={})
+
+    assert resp.status_code == 200
+    reaped = resp.json()
+    assert len(reaped) == 1
+    assert reaped[0]["id"] == run_id
+    assert reaped[0]["status"] == "failed"
+
+
+def test_reap_leaves_a_fresh_pending_run_alone(orchestration_app, client):
+    _, session_factory = orchestration_app
+    _seed(session_factory)
+    client.post(_EVENTS, json=_event_body())  # just claimed — not stale yet
+
+    resp = client.post(_REAP, json={})
+
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_reap_is_a_safe_no_op_with_nothing_stale(client):
+    resp = client.post(_REAP, json={})
+
+    assert resp.status_code == 200
+    assert resp.json() == []
 
 
 # ── Scheduled workflow actions (docs/implementation/0002-scheduled-workflow-actions) ──

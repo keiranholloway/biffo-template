@@ -186,6 +186,13 @@ class Settings(BaseSettings):
     # ~17 sweeps over 255 minutes, still presenting to the founder as "Running".
     agent_run_unclaimed_after_seconds: int = 1800
 
+    # How long an orchestration run may sit `pending` or `dispatching` — claimed
+    # but never resulted — before the reaper fails it (tabsii-platform#808,
+    # mirroring agent_run_stale_after_seconds above and ADR-0014 section 5's
+    # precedent for the same failure shape in a different table). Same 900s
+    # Lambda-cap floor and the same 1800s slack; see `orchestration.reap_stale_runs`.
+    orchestration_run_stale_after_seconds: int = 1800
+
     # Application
     environment: str = "dev"
     log_level: str = "INFO"

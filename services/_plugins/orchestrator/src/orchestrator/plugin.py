@@ -16,6 +16,7 @@ import hashlib
 import inspect
 import json
 import os
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -24,6 +25,7 @@ import httpx
 from aws_lambda_powertools import Logger
 from biffo_plugin_sdk import (
     BiffoAPIClient,
+    BiffoAPIError,
     BiffoEvent,
     BiffoPluginBase,
     SignedCoreClient,
@@ -64,6 +66,17 @@ _ID_KEYS = ("demo_request_id", "id", "lead_id")
 SCHEDULED_RUN_ID_KEY = "biffo_scheduled_run_id"
 _SCHEDULE_NAME_PREFIX = "wf-run-"
 
+# Stale-run sweep (tabsii-platform#808, mirroring agent-runtime's own
+# AGENT_RUNS_REAP_DUE exactly — same shape, same reason: this plugin's own
+# scheduled EventBridge rule (terraform/), synthesising the BiffoEvent
+# envelope `create_event_handler` expects, so it arrives through the same
+# `plugin.events.dispatch` path as a real bus event and needs no second
+# entrypoint in main.py. The source is this plugin's own, never biffo.core —
+# Core did not emit this. It carries no payload: the sweep's subject is
+# "whatever is stale now", which only Core can know.
+ORCHESTRATION_RUNS_REAP_DUE = "orchestration.runs.reap_due"
+ORCHESTRATOR_SOURCE = "biffo.orchestrator"
+
 
 def _schedule_name(run_id: str) -> str:
     return f"{_SCHEDULE_NAME_PREFIX}{run_id}"
@@ -84,12 +97,38 @@ def _idempotency_key(event: BiffoEvent) -> str:
 
     Prefers an explicit id in the payload; falls back to a content hash so an
     event with no obvious id is still deduplicated against its own replays.
+
+    An **empty** payload is not "an id-less event with stable content" — it is
+    "no signal at all about which occurrence this is" (tabsii-platform#808). A
+    periodic tick (``orchestrator.tick``, ``docs/implementation`` — the payload
+    is deliberately empty, see ``OrchestratorTickPayload``) fires on an
+    unchanging (source, detail_type) with an unchanging ``{}`` payload, so the
+    content-hash fallback below would compute the *same* digest on every single
+    firing, forever. Fed into ``_claim_run``'s dedupe_key, that collapsed every
+    tick after the very first one into ``created=False`` — "already claimed" —
+    for as long as the definition existed, regardless of whether the first run
+    ever completed. Every workflow bound to the tick (KPI rollup, the finance
+    sweep, retention sweeps) went permanently dark after its first hour on dev,
+    invisible to `test_every_finance_batch_endpoint_has_a_workflow_binding`
+    (#723) because that guard checks the binding is authored, never that it
+    fires.
+
+    So: no id, no payload → treat this occurrence as inherently unique rather
+    than hash "nothing" into a key that collides with every other occurrence of
+    "nothing". This trades away replay-dedup for this shape of event, but nothing
+    is lost by it — the domain handlers a tick binds to are documented and built
+    to be idempotent themselves (e.g. calendar-day upserts, "the tick guarantees
+    repetition"), because at-least-once delivery already meant they had to
+    tolerate more than one firing per nominal tick. Dedup for events that DO
+    carry payload content is unchanged below.
     """
     payload = event.payload
     for key in _ID_KEYS:
         value = payload.get(key)
         if value:
             return str(value)
+    if not payload:
+        return f"{event.detail_type}:{uuid.uuid4()}"
     digest = hashlib.sha256(
         json.dumps({"d": event.detail_type, "p": payload}, sort_keys=True, default=str).encode()
     ).hexdigest()
@@ -193,6 +232,22 @@ class OrchestratorPlugin(BiffoPluginBase):
         # rule is what delivers all events to this Lambda (#214).
         @self.subscribe_all()
         async def _forward(event: BiffoEvent) -> None:
+            if (
+                event.source == ORCHESTRATOR_SOURCE
+                and event.detail_type == ORCHESTRATION_RUNS_REAP_DUE
+            ):
+                # This plugin's own internal reap signal, not a bus event a
+                # workflow could ever legitimately trigger on — `_on_reap_due`
+                # below handles it directly. Forwarding it here too would run
+                # it through `process_event` -> `dispatch_event` ->
+                # `observe_trigger`, offering it to the builder as a
+                # selectable trigger. `_schedule_run`'s docstring flags exactly
+                # this concern for the scheduled-run fire callback, which is
+                # why that one bypasses dispatch entirely instead; this event
+                # does travel the normal BiffoEvent/dispatch path (so it still
+                # gets the standard "Received event" log line) but must stop
+                # here rather than reach Core's trigger catalog.
+                return
             await self.process_event(event)
 
         # Deliver an agent's result on completion (ADR-0020, #527). A dedicated
@@ -204,6 +259,14 @@ class OrchestratorPlugin(BiffoPluginBase):
         @self.subscribe(_AGENT_RUN_COMPLETED)
         async def _deliver(event: BiffoEvent) -> None:
             await self.deliver_on_completion(event)
+
+        # Stale-run sweep (tabsii-platform#808). Unlike `_deliver` above, this
+        # is deliberately NOT left to coexist with the wildcard forwarder: see
+        # `_forward`'s own exclusion of this (source, detail_type) pair, and
+        # why — this event must not reach `dispatch_event`/`observe_trigger`.
+        @self.subscribe(ORCHESTRATION_RUNS_REAP_DUE, source=ORCHESTRATOR_SOURCE)
+        async def _on_reap_due(event: BiffoEvent) -> None:
+            await self.reap_stale_runs()
 
     def on_install(self) -> None:
         """No-op, and **not invoked** — nothing calls the lifecycle hooks
@@ -299,6 +362,31 @@ class OrchestratorPlugin(BiffoPluginBase):
         }
         payload = response.get("trigger_event") or {}
         await self._execute_run(run, payload)
+
+    async def reap_stale_runs(self) -> None:
+        """Ask Core to fail runs a dead invocation left claimed (tabsii-platform#808).
+
+        All the work is Core's: it owns the runs, the clock and the threshold
+        (mirrors ``AgentRuntimePlugin.reap_stale_runs`` exactly). This is only
+        the schedule tick — the plugin holds no state and makes no decision
+        about what is stale.
+
+        A failure here is logged and swallowed, not raised: raising would fail
+        the Lambda invocation and trigger an EventBridge retry against a Core
+        that may already be unwell, whereas the sweep costs nothing to skip —
+        it runs again on the next tick.
+        """
+        try:
+            reaped = await self.api.post(f"{_INTERNAL_BASE}/reap", json={})
+        except BiffoAPIError:
+            logger.exception(
+                "Stale orchestration-run sweep failed; will retry on the next schedule"
+            )
+            return
+
+        count = len(reaped) if isinstance(reaped, list) else 0
+        if count:
+            logger.warning("Reaped stale orchestration runs", extra={"count": count})
 
     async def deliver_on_completion(self, event: BiffoEvent) -> None:
         """Deliver a *succeeded* agent run's result to its destination (ADR-0020).

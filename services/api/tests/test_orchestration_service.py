@@ -5,6 +5,7 @@ behaviours the wedge depends on: matching + idempotent claim (dispatch_event),
 and outcome recording (record_result).
 """
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -599,3 +600,214 @@ async def test_dispatch_does_not_resolve_a_chain_when_nothing_is_scoped(db_sessi
 
     assert len(claimed) == 1
     assert resolver_calls == []
+
+
+# ── Recurring, payload-less triggers actually fire more than once
+# (tabsii-platform#808) ───────────────────────────────────────────────────────
+
+
+async def test_dispatch_recurring_payload_less_trigger_claims_a_run_every_occurrence(db_session):
+    """The guard for #808's own shape at the service layer.
+
+    `dispatch_event` itself never computed the idempotency_key — that always
+    lived in the orchestrator plugin's `_idempotency_key` — so this doesn't
+    reproduce the historical bug (a content hash of "nothing" colliding
+    forever), only the contract the fix depends on: when the caller supplies a
+    *different* idempotency_key per firing of the same (source, detail_type)
+    with an empty payload — exactly what the fixed plugin now does for
+    `orchestrator.tick` — dispatch keeps creating fresh runs rather than ever
+    reusing the first one bound to that trigger.
+    """
+    await _make_definition(
+        db_session, trigger_source="biffo.orchestrator", trigger_detail_type="orchestrator.tick"
+    )
+
+    fired = []
+    for occurrence in range(5):
+        [claimed] = await svc.dispatch_event(
+            db_session,
+            tenant_id="default",
+            source="biffo.orchestrator",
+            detail_type="orchestrator.tick",
+            idempotency_key=f"orchestrator.tick:occurrence-{occurrence}",
+            event={},
+        )
+        fired.append(claimed)
+
+    assert all(c.created for c in fired)
+    assert len({c.run_id for c in fired}) == 5
+    assert await _count(db_session, WorkflowRun) == 5
+
+
+# ── Stale-run sweep (tabsii-platform#808, mirrors agent_runs.reap_stale_runs) ─
+
+
+async def _age(session, run: WorkflowRun, *, seconds_ago: int) -> None:
+    run.updated_at = datetime.now(UTC) - timedelta(seconds=seconds_ago)
+    await session.flush()
+
+
+async def test_reap_fails_a_pending_run_past_the_threshold(db_session):
+    await _make_definition(db_session)
+    [claimed] = await svc.dispatch_event(
+        db_session,
+        tenant_id="default",
+        source="biffo.core",
+        detail_type="demo.requested",
+        idempotency_key="demo-1",
+        event={},
+    )
+    run = (
+        await db_session.execute(select(WorkflowRun).where(WorkflowRun.id == claimed.run_id))
+    ).scalar_one()
+    await _age(db_session, run, seconds_ago=2000)
+
+    reaped = await svc.reap_stale_runs(db_session, tenant_id="default", stale_after_seconds=1800)
+
+    assert [r.id for r in reaped] == [claimed.run_id]
+    assert reaped[0].status == "failed"
+    log = (await db_session.execute(select(ActionLog))).scalar_one()
+    assert log.run_id == claimed.run_id
+    assert log.status == "failed"
+    assert "Reaped" in log.error
+
+
+async def test_reap_leaves_a_fresh_pending_run_alone(db_session):
+    await _make_definition(db_session)
+    await svc.dispatch_event(
+        db_session,
+        tenant_id="default",
+        source="biffo.core",
+        detail_type="demo.requested",
+        idempotency_key="demo-1",
+        event={},
+    )
+
+    reaped = await svc.reap_stale_runs(db_session, tenant_id="default", stale_after_seconds=1800)
+
+    assert reaped == []
+    run = (await db_session.execute(select(WorkflowRun))).scalar_one()
+    assert run.status == "pending"
+
+
+async def test_reap_ignores_a_scheduled_run_no_matter_how_old(db_session):
+    """A `scheduled` run may legitimately wait days or weeks
+    (docs/implementation/0002-scheduled-workflow-actions) — being old is its
+    normal state, not evidence of abandonment, so the sweep must not touch it."""
+    definition = await _make_definition(
+        db_session, schedule_config={"type": "fixed_delay", "delay_seconds": 3600}
+    )
+    [claimed] = await svc.dispatch_event(
+        db_session,
+        tenant_id="default",
+        source="biffo.core",
+        detail_type="demo.requested",
+        idempotency_key="demo-1",
+        event={},
+    )
+    run = (
+        await db_session.execute(select(WorkflowRun).where(WorkflowRun.id == claimed.run_id))
+    ).scalar_one()
+    assert run.status == "scheduled"
+    await _age(db_session, run, seconds_ago=10_000_000)  # weeks old
+
+    reaped = await svc.reap_stale_runs(db_session, tenant_id="default", stale_after_seconds=1800)
+
+    assert reaped == []
+    await db_session.refresh(run)
+    assert run.status == "scheduled"
+    assert definition.schedule_config is not None  # sanity: still the delayed definition
+
+
+async def test_reap_fails_a_dispatching_run_aged_from_its_own_transition(db_session):
+    """`fire_scheduled_run`'s conditional UPDATE now stamps `updated_at`
+    explicitly (a raw Core-style UPDATE bypasses the column's `onupdate`) —
+    this proves the reaper actually uses that stamp: a run created long ago as
+    `scheduled` but only just claimed into `dispatching` must NOT be reaped,
+    and one that has sat in `dispatching` past the threshold must be."""
+    await _make_definition(db_session, schedule_config={"type": "fixed_delay", "delay_seconds": 1})
+    [claimed] = await svc.dispatch_event(
+        db_session,
+        tenant_id="default",
+        source="biffo.core",
+        detail_type="demo.requested",
+        idempotency_key="demo-1",
+        event={},
+    )
+    run = (
+        await db_session.execute(select(WorkflowRun).where(WorkflowRun.id == claimed.run_id))
+    ).scalar_one()
+    # Backdate creation deep into the past — if the reaper used created_at
+    # instead of updated_at, this alone would make it look stale.
+    run.created_at = datetime.now(UTC) - timedelta(days=30)
+    await db_session.flush()
+
+    fired = await svc.fire_scheduled_run(db_session, tenant_id="default", run_id=claimed.run_id)
+    assert fired is not None
+    await db_session.refresh(run)
+    assert run.status == "dispatching"
+
+    # Just claimed — nowhere near stale by its real (updated_at) age.
+    reaped = await svc.reap_stale_runs(db_session, tenant_id="default", stale_after_seconds=1800)
+    assert reaped == []
+
+    # Age the *transition*, not the creation, then it is reaped.
+    await _age(db_session, run, seconds_ago=2000)
+    reaped = await svc.reap_stale_runs(db_session, tenant_id="default", stale_after_seconds=1800)
+    assert [r.id for r in reaped] == [claimed.run_id]
+    assert reaped[0].status == "failed"
+
+
+async def test_reap_does_not_overwrite_a_result_that_lands_first(db_session):
+    """The race precedent from `_claim_run`/`fire_scheduled_run`: the reaper's
+    SELECT is a snapshot, so a genuine result recorded between that read and
+    its conditional UPDATE must win — the reap must not clobber it."""
+    await _make_definition(db_session)
+    [claimed] = await svc.dispatch_event(
+        db_session,
+        tenant_id="default",
+        source="biffo.core",
+        detail_type="demo.requested",
+        idempotency_key="demo-1",
+        event={},
+    )
+    run = (
+        await db_session.execute(select(WorkflowRun).where(WorkflowRun.id == claimed.run_id))
+    ).scalar_one()
+    await _age(db_session, run, seconds_ago=2000)
+
+    # The real result lands first.
+    await svc.record_result(
+        db_session,
+        tenant_id="default",
+        run_id=claimed.run_id,
+        action_type="email",
+        status="succeeded",
+        response={"message_id": "ses-1"},
+    )
+
+    reaped = await svc.reap_stale_runs(db_session, tenant_id="default", stale_after_seconds=1800)
+
+    assert reaped == []
+    await db_session.refresh(run)
+    assert run.status == "succeeded"
+
+
+async def test_reap_is_tenant_scoped(db_session):
+    await _make_definition(db_session, tenant_id="other-tenant")
+    [claimed] = await svc.dispatch_event(
+        db_session,
+        tenant_id="other-tenant",
+        source="biffo.core",
+        detail_type="demo.requested",
+        idempotency_key="demo-1",
+        event={},
+    )
+    run = (
+        await db_session.execute(select(WorkflowRun).where(WorkflowRun.id == claimed.run_id))
+    ).scalar_one()
+    await _age(db_session, run, seconds_ago=2000)
+
+    reaped = await svc.reap_stale_runs(db_session, tenant_id="default", stale_after_seconds=1800)
+
+    assert reaped == []

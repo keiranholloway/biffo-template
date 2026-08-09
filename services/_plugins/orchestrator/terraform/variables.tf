@@ -122,6 +122,31 @@ variable "tick_schedule_expression" {
   default     = ""
 }
 
+variable "reap_schedule_expression" {
+  description = <<-EOT
+    How often to sweep for orchestration runs a dead engine invocation left
+    claimed (tabsii-platform#808). An EventBridge schedule expression; empty
+    disables the sweep entirely.
+
+    Mirrors agent-runtime's own reap_schedule_expression exactly, including
+    the default: 15 minutes is deliberately far more frequent than the
+    staleness threshold Core applies (orchestration_run_stale_after_seconds,
+    1800s server-side default) — the schedule decides how quickly a stranded
+    run is *noticed*, Core decides what counts as stranded. Sweeping often is
+    nearly free (nothing stale -> nothing reaped), whereas sweeping rarely
+    leaves a stuck run presenting as perpetually in-flight for longer than it
+    has to.
+
+    Unlike tick_schedule_expression above, this defaults ON: the tick is an
+    opt-in domain trigger a deployment may or may not use, but the reap sweep
+    is a safety net for the engine's own claim/execute/record lifecycle and
+    should protect every deployment that runs this plugin, not only ones that
+    remembered to turn it on.
+  EOT
+  type        = string
+  default     = "rate(15 minutes)"
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

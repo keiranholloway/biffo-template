@@ -739,12 +739,43 @@ rather than duplicate.
 Key path segments are dot-separated plain object traversal; see
 `keyMustBeUniformNote` in `shared-files.json` for the one constraint that
 follows from that (no segment may itself contain a literal dot, true of every
-entry declared so far) and for why writing is deliberately not built yet for
-either list — the short version is that `mustBeUniform`'s own reason (a
-one-way overwrite destroys evidence about which copy is right) applies at
-smaller blast radius to a key than to a whole file, but it still applies, and
-measuring `pnpm.overrides` as a whole subtree surfaced an undeclared `sharp`
-bound-style divergence nobody had reconciled yet.
+entry declared so far).
+
+**`keyMustBeUniform` stays measure-only, and that is still deliberate.** The
+short version is that `mustBeUniform`'s own reason (a one-way overwrite
+destroys evidence about which copy is right) applies at smaller blast radius
+to a key than to a whole file, but it still applies. Measuring
+`pnpm.overrides` as a whole subtree once surfaced an undeclared `sharp`
+bound-style divergence (`^0.35.0` in three siblings, `>=0.35.0` in three
+others) — **reconciled 2026-08-08 by hand across six PRs (#1380/#1381)**, not
+by a writer inventing a winner. `--check` now reports `apps/frontend/
+package.json#pnpm.overrides` and `#engines` **uniform across 6 repos**, the
+first entry in either ratchet to reach a genuinely closed state. That
+reconciliation retired precondition (1) of the three `keyMustBeUniformNote`
+lists for safe writing (reconcile the current divergence by hand first); (2)
+merge rather than overwrite, and (3) confidence the JSON write does not
+produce a reformatter diff, were never about _this_ divergence specifically
+and stay open for the next one `keyMustBeUniform` finds.
+
+**`overridesFloor` gained a writer anyway (#1352, 2026-08-09) — deliberately
+narrower than what `keyMustBeUniform` was withholding.** `scripts/
+shared-sync.sh --deliver-overrides` calls a new `apply_overrides_floor()`
+function that adds a key the canonical copy declares and a holder is
+**missing entirely**, and never touches a key the holder already has,
+whatever its value. That restriction is why it does not reopen the risk
+`keyMustBeUniformNote` describes: the risk is scoped to a key that is
+_present_ with a value that might be wrong, and there is no such key to get
+wrong when the key is simply absent. It writes via a textual splice — only
+new lines inserted after `"overrides": {`, nothing else in the file touched
+or reformatted — verified by re-parsing the result before it is written,
+which is precondition (3) made structural rather than merely promised. It
+closes the `nanoid`/`js-yaml` shape this section leads with; it does not
+touch the `undici`/`sharp` shape, which stays exactly where
+`keyMustBeUniform` already puts it. **It is dry-run only in this version** —
+every run stages a real worktree, applies and verifies the splice, reports,
+and discards it, but never pushes and never opens a PR. Wiring up real
+delivery is follow-up work with its own review, not something this change
+claims to have proven safe.
 
 #### Reconcile before you distribute
 

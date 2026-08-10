@@ -102,12 +102,14 @@ jobs:
         # to every other satellite's, distributed by that repo's shared-sync.sh,
         # so it cannot assume a layout. Do not edit it here; edit it upstream.
         run: sh ../../scripts/js-dependency-audit.sh
-      # The generic relocation of tabsii-platform#377 Phase 2's scale-guard
-      # (biffo-template#377 systemic half): ships as @biffo/design-tokens's own
-      # bin, so it reaches CI on the next design-tokens version bump with no
-      # separate distribution channel to keep in sync -- same reasoning
-      # @tabsii-com/ui's original gave, and the estate is deliberately
-      # shrinking shared-files.json in favour of exactly this (#1109).
+      # The generic relocation of tabsii-platform#377 Phase 2's scale-guard --
+      # the systemic half of that issue, built in biffo-template so every new
+      # sibling (in any Biffo instance) is born with it. Ships as
+      # @biffo/design-tokens's own bin, so it reaches CI on the next
+      # design-tokens version bump with no separate distribution channel to
+      # keep in sync -- same reasoning @tabsii-com/ui's original gave, and the
+      # estate is deliberately shrinking shared-files.json in favour of
+      # exactly this (#1109).
       #
       # A freshly-scaffolded sibling's @biffo/design-tokens has NOT adopted a
       # type scale yet (no --text-*/--space-* tokens) -- this is expected, not

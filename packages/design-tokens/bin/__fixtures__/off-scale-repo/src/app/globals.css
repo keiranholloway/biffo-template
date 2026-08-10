@@ -1,0 +1,20 @@
+/* Fixture: same shape as clean-repo, but the heading is 34px -- not in
+ * ../scale-tokens.css's fontSize scale (32px headline-lg is the nearest
+ * neighbour). This reproduces the exact defect class tabsii-marketplace
+ * shipped for real against the equivalent Tabsii scale (its auth-split
+ * heading is a hardcoded 34px) -- see scale-guard.integration.test.mjs's
+ * "goes red" arm. */
+
+h1 {
+  font-size: 34px;
+  line-height: 40px;
+}
+
+p {
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.row {
+  gap: 24px;
+}

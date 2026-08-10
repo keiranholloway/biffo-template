@@ -1,0 +1,19 @@
+/* Fixture: every value here is drawn straight from ../scale-tokens.css's
+ * fontSize/lineHeight/spacing tokens, so a correct guard must report zero
+ * violations against it when pointed at that token source. Used by
+ * scale-guard.integration.test.mjs's "stays green" arm -- the counterpart to
+ * off-scale-repo's "goes red" arm. */
+
+h1 {
+  font-size: 32px; /* headline-lg */
+  line-height: 40px;
+}
+
+p {
+  font-size: 16px; /* body-md */
+  line-height: 24px;
+}
+
+.row {
+  gap: 24px; /* space-lg */
+}

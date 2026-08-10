@@ -15,8 +15,13 @@
     "./tokens.css": "./tokens.css",
     "./package.json": "./package.json"
   },
+  "bin": {
+    "biffo-scale-guard": "./bin/scale-guard.mjs"
+  },
   "files": [
-    "tokens.css"
+    "tokens.css",
+    "bin/scale-guard.mjs",
+    "bin/scale-guard-lib.mjs"
   ],
   "publishConfig": {
     "access": "public"

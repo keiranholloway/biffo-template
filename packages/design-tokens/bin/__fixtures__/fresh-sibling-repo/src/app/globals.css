@@ -1,0 +1,23 @@
+/* Fixture: a byte-for-byte stand-in for _skeletons/sibling-template's real
+ * apps/frontend/src/app/globals.css at scaffold time -- no font-size,
+ * line-height or gap declared anywhere. Checked against a tokens.css with no
+ * scale (this repo's real @biffo/design-tokens/tokens.css today), this
+ * proves the "brand-new sibling" case genuinely passes -- 0 violations
+ * because 0 matching declarations exist, not because the check was skipped.
+ * See scale-guard.integration.test.mjs's "fresh sibling" arm and
+ * scale-guard.mjs's header for the design decision this fixture backs. */
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg-subtle);
+  color: var(--text);
+}
+
+.spinner {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 9999px;
+  border: 4px solid var(--border-strong);
+  border-top-color: var(--brand);
+}

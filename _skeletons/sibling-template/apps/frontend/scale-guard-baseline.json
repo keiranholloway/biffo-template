@@ -1,0 +1,5 @@
+{
+  "count": 0,
+  "recordedAt": "2026-08-10T00:00:00.000Z",
+  "note": "Baseline for the biffo-scale-guard ratchet (tabsii-platform#377 Phase 2 systemic half). A freshly-scaffolded sibling's globals.css declares no hardcoded font-size/line-height/gap and @biffo/design-tokens has not adopted a type scale yet -- 0 is a real, measured count, not a placeholder. Lower this only when real violations are fixed -- never raise it to silence a new one. If you adopt a scale in @biffo/design-tokens (or your own token source via --tokens), re-run `pnpm exec biffo-scale-guard --init` to re-baseline against it."
+}

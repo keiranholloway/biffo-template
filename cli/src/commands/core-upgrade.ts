@@ -535,14 +535,31 @@ async function runCoreUpgradeResolved(
   // from tsconfig.json" are both load-bearing.
   const newSeams = findNewUndeclaredSeams(baseDir, theirsDir, options.cwd)
 
+  // Core migrations are carried separately from the merge (issue #198): the
+  // versions/ directory is user-owned and must never be merged, but new core
+  // migrations still have to reach the instance or a table-adding core feature
+  // arrives with no schema. Planned here — ahead of its own output further
+  // down — because the target-fidelity check right below needs its entries:
+  // this carry reads the same theirsDir the merge plan does, and is a second,
+  // separate way #1399-shaped content reaches an instance (see that module's
+  // docstring). A broken/ambiguous instance chain also aborts loudly here,
+  // before anything is printed, rather than producing a half-described plan.
+  const migrations = planMigrationCarry({
+    templateDir: theirsDir,
+    instanceDir: options.cwd,
+    declined: readDeclinedMigrations(options.cwd),
+  })
+
   // #1399: hold the plan to the tag it claims to be. Same "before anything can
   // short-circuit" reasoning as the two above, and for the strongest version of
   // it — a dry run is where an operator decides whether to trust the upgrade, so
   // the verdict has to be on that screen, not only on `--apply`. Reads the tag
   // object independently of the tree the planner walked; see the module
-  // docstring for why that independence is the whole mechanism.
+  // docstring for why that independence is the whole mechanism. Covers the
+  // migration carry too (migrations.entries), not only the merge plan.
   const fidelity = assertTargetFidelity({
     entries: plan.entries,
+    migrations: migrations.entries,
     templateRepo,
     toVersion,
     theirsDir,
@@ -571,17 +588,6 @@ async function runCoreUpgradeResolved(
         'then re-run.',
     )
   }
-
-  // Core migrations are carried separately from the merge (issue #198): the
-  // versions/ directory is user-owned and must never be merged, but new core
-  // migrations still have to reach the instance or a table-adding core feature
-  // arrives with no schema. Planned before any output so a broken/ambiguous
-  // instance chain aborts loudly instead of producing a half-described plan.
-  const migrations = planMigrationCarry({
-    templateDir: theirsDir,
-    instanceDir: options.cwd,
-    declined: readDeclinedMigrations(options.cwd),
-  })
 
   // An instance may still carry an orphaned `core.version` file inherited before
   // #423 retired it from the template. Nothing reads it as an authority, so an

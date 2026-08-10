@@ -19,6 +19,19 @@ import { makeTmpDir } from '../test-utils/tmp.js'
 const TAGGED = '#!/bin/sh\n# 335-line version, as core-v0.258.0 ships it\n'
 const UNMERGED = '#!/bin/sh\n# 455-line version, from an unmerged worktree branch\n'
 
+const TAGGED_MIGRATION =
+  'revision = "0001"\ndown_revision = None\n\n\ndef upgrade():\n    op.add_column("t", "real")\n'
+// A body change that never landed in the tag — the same shape as #1399's
+// script, but for the OTHER mechanism that carries theirsDir content into an
+// instance: the additive migration carry (core-migrations.ts), which reads
+// the same theirsDir and was not covered by the #1400 guard at all.
+const UNMERGED_MIGRATION =
+  'revision = "0001"\ndown_revision = None\n\n\ndef upgrade():\n    op.add_column("t", "unmerged")\n'
+// The carry re-chains revision/down_revision on every migration it writes, so
+// a legitimately-carried copy must not be flagged for THAT difference alone.
+const RECHAINED_TAGGED_MIGRATION =
+  'revision = "core_deadbeef"\ndown_revision = "0009"\n\n\ndef upgrade():\n    op.add_column("t", "real")\n'
+
 function entry(over: Partial<MergeEntry> & Pick<MergeEntry, 'path' | 'status'>): MergeEntry {
   return { conflicted: false, ...over }
 }
@@ -42,6 +55,7 @@ describe('assertTargetFidelity', () => {
     g(['config', 'user.name', 'Test'])
     write(repo, 'scripts/pg-test-db.sh', TAGGED)
     write(repo, 'services/api/src/app.py', 'app = 1\n')
+    write(repo, 'services/api/migrations/versions/0001_create_thing.py', TAGGED_MIGRATION)
     g(['add', '-A'])
     g(['commit', '-qm', 'core'])
     g(['tag', 'core-v0.258.0'])
@@ -206,5 +220,76 @@ describe('assertTargetFidelity', () => {
       theirsDir: theirs,
     })
     expect(report.findings).toEqual([])
+  })
+
+  describe('migration carry (#1399, second mechanism)', () => {
+    // `core-migrations.ts` reads the SAME theirsDir the merge planner does, but
+    // is a wholly separate carry (services/api/migrations/versions/ is
+    // user-owned, so the three-way merge never touches it — see
+    // core-manifest.json). Nothing in `plan.entries` mentions a migration, so
+    // without an explicit `migrations` input the loop above never sees one:
+    // the exact #1399 shape (unmerged theirsDir content shipped as if it were
+    // the tag) is reachable through this path too, and was not checked.
+    it('catches a carried migration whose body is not what the tag ships', () => {
+      const report = assertTargetFidelity({
+        entries: [],
+        migrations: [{ file: '0001_create_thing.py', content: UNMERGED_MIGRATION }],
+        templateRepo: repo,
+        toVersion: '0.258.0',
+        theirsDir: theirs,
+      })
+      expect(report.findings).toEqual([
+        {
+          path: 'services/api/migrations/versions/0001_create_thing.py',
+          reason: 'content-differs',
+          source: 'migration',
+        },
+      ])
+      expect(report.checked).toBe(1)
+    })
+
+    it('does not flag a faithfully carried migration for its re-chained revision/down_revision', () => {
+      // The carry deliberately rewrites these two lines on every migration it
+      // writes (core-migrations.ts, rechainMigration) — that is not drift.
+      const report = assertTargetFidelity({
+        entries: [],
+        migrations: [{ file: '0001_create_thing.py', content: RECHAINED_TAGGED_MIGRATION }],
+        templateRepo: repo,
+        toVersion: '0.258.0',
+        theirsDir: theirs,
+      })
+      expect(report.findings).toEqual([])
+      expect(report.checked).toBe(1)
+    })
+
+    it('flags a migration carried for a filename the tag does not contain', () => {
+      // The shape of the ORIGINAL #1399 incident applied to a migration: a new
+      // file that exists only on an unmerged branch, never merged or tagged.
+      const report = assertTargetFidelity({
+        entries: [],
+        migrations: [{ file: '0002_invented.py', content: 'revision = "0002"\n' }],
+        templateRepo: repo,
+        toVersion: '0.258.0',
+        theirsDir: theirs,
+      })
+      expect(report.findings).toEqual([
+        {
+          path: 'services/api/migrations/versions/0002_invented.py',
+          reason: 'absent-from-tag',
+          source: 'migration',
+        },
+      ])
+    })
+
+    it('is a no-op when the upgrade carries no migrations', () => {
+      const report = assertTargetFidelity({
+        entries: [],
+        templateRepo: repo,
+        toVersion: '0.258.0',
+        theirsDir: theirs,
+      })
+      expect(report.findings).toEqual([])
+      expect(report.checked).toBe(0)
+    })
   })
 })

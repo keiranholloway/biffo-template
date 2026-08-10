@@ -79,12 +79,16 @@ If it fails partway through (network blip, a typo in the config, credentials tha
 
 ## 3. Finish wiring the new repo
 
-The command's own output ends with these steps — do them in order:
+As of `sibling-wiring.ts` (#337), steps 2 and 4 below are **no longer manual** —
+they used to be, and this section drifted ~3.5 weeks out of date describing
+already-automated work as something to do by hand (biffo-template#737). The
+only remaining manual step is the human review gate in step 1:
 
-1. **Merge the registration PR** it opened against your core project. Until this merges (and the core project redeploys), `baseurl.com/<name>` doesn't route anywhere yet.
-2. **Add a `SIBLING_GITHUB_TOKEN` secret** to the new sibling repo (Settings → Secrets and variables → Actions) — a personal access token with `repo` scope. Its own deploy workflow uses this to write Terraform outputs back as GitHub Environment variables, the same way the core project's own deploy workflow does.
-3. **Push to `dev`** (or trigger the "Deploy" workflow manually) in the new sibling repo. This runs its own `terraform apply`, builds the frontend, and deploys the Lambda — none of this happens as part of `biffo sibling create` itself, which only talks to the GitHub and AWS _control planes_, never runs Terraform directly.
-4. **Complete the CDN registration's second phase.** The sibling's own bucket policy needs the core project's real CloudFront distribution ARN, which only exists after step 1 above has merged and the core project has redeployed. Once that's true, set `PARENT_CLOUDFRONT_DISTRIBUTION_ARN` (and `PARENT_CLOUDFRONT_DISTRIBUTION_ID`, for cache invalidation) as GitHub Environment variables on the sibling repo, then re-run its Deploy workflow. This two-phase ordering is by design — see ADR-0007's "two-phase CDN registration" for why it can't be one-phase.
+1. **Merge the registration PR** it opened against your core project. Until this merges, `baseurl.com/<name>` doesn't route anywhere yet.
+2. **Deploy the core project** (`biffo deploy <environment>`, or push to the core project's own `dev`). Its deploy workflow now automatically pushes `CORE_COGNITO_USER_POOL_ID`, `CORE_COGNITO_CLIENT_ID`, `CORE_API_URL`, `CORE_PORTAL_URL`, the `SIBLING_GITHUB_TOKEN` repo secret, and (once the registration PR has merged) `PARENT_CLOUDFRONT_DISTRIBUTION_ARN`/`_ID` to **every registered sibling**, at the matching environment scope. **Do not set any of these by hand** — a manually-set value can conflict with what the next core deploy writes, and the whole point of `sibling-wiring.ts` is that nothing here needs a person.
+3. **Push to `dev`** (or trigger the "Deploy" workflow manually) in the new sibling repo. This runs its own `terraform apply`, builds the frontend, and deploys the Lambda — none of this happens as part of `biffo sibling create` itself, which only talks to the GitHub and AWS _control planes_, never runs Terraform directly. If step 2 hasn't happened yet for this environment, the sibling's own deploy still runs but the app is pointed at nothing until it does — re-run this Deploy workflow after the core project's next deploy.
+
+Two-phase CDN registration (the sibling's bucket policy needing the core's real CloudFront ARN, which only exists after the registration PR has merged) still can't be one-phase — see ADR-0007 — but the second phase is now automatic too: `sibling-wiring.ts` fires from `biffo deploy` (the CORE deploy), the first moment every value exists at once, and pushes `PARENT_CLOUDFRONT_DISTRIBUTION_ARN`/`_ID` itself. You do not need to read Terraform state or set these variables by hand.
 
 ## 4. Verify it
 
@@ -95,6 +99,8 @@ Once both deploys (core project's redeploy after the registration PR, and the si
 ```
 
 with no second login — this is the shared-Cognito-session SSO from ADR-0007 working end to end. If you land on a spinner or get bounced to `/login`, see Troubleshooting below.
+
+**A green deploy is not evidence the route works.** `deploy.yml`'s "Smoke test the deployed Lambda" step (#162) only proves the Lambda boots; a separate "Smoke test the CDN routing" step (#737) checks the actual `dev.<domain>/<path>` route the browser above hits — the bare path, the trailing-slash path, and that CloudFront is genuinely serving this sibling rather than silently falling through to the core project's default behaviour. Both run automatically on every deploy; you shouldn't need to check this by hand, but if you're diagnosing a stuck spinner, `scripts/routing-smoke-test.sh`'s output in that step is the first place to look before assuming the Lambda is at fault.
 
 ## Troubleshooting
 

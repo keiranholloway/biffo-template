@@ -50,7 +50,8 @@
     "check:core-ownership": "tsx src/index.ts check ownership",
     "check:plugin-terraform": "tsx src/index.ts check plugin-terraform",
     "sync:core-tag": "tsx src/scripts/sync-core-tag.ts",
-    "report:publish-failure": "tsx src/scripts/report-publish-failure.ts"
+    "report:publish-failure": "tsx src/scripts/report-publish-failure.ts",
+    "refresh:openrouter-models": "tsx src/scripts/refresh-openrouter-model-snapshot.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cloudformation": "^3.726.1",

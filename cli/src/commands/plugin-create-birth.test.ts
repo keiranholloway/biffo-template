@@ -10,22 +10,66 @@ import { runPluginCreate } from './plugin-create.js'
 const repoRoot = join(new URL('.', import.meta.url).pathname, '..', '..', '..')
 const SKELETON = findSkeletonRoot(new URL('.', import.meta.url).pathname, 'plugin-template')
 
+/**
+ * A committer identity for the real `git init`/`commit` this test drives.
+ *
+ * `runPluginCreate`'s standalone path does `git init` → `git add` → `git
+ * commit` in one synchronous run inside `runStandaloneCreate` (via the real
+ * `GitAdapter`), so there is no point between them to run `git config` in the
+ * new repo the way other integration tests here do (`pgtest-diff-check.test.ts`,
+ * `rewrite-scope-check.test.ts`, `core-tags.test.ts`: `git('config', 'user.email',
+ * ...)` right after `git init`). Setting the standard `GIT_AUTHOR_*`/
+ * `GIT_COMMITTER_*` env vars instead reaches the same commit without needing a
+ * gap in the sequence, and `GitAdapter`'s `execa` calls inherit `process.env`
+ * with nothing overriding it.
+ *
+ * This is what the hosted CI runner was actually missing: it has no
+ * `user.name`/`user.email` git config at all (a developer workstation
+ * usually does), so `git commit` failed with "empty ident name" — a second,
+ * narrower instance of exactly the class this PR fixes (works on a machine
+ * that already has the setup, broken on the one that has none of it).
+ */
+function withCommitIdentity<T>(fn: () => Promise<T>): Promise<T> {
+  const keys = ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL']
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]))
+  process.env['GIT_AUTHOR_NAME'] = 'Biffo Test'
+  process.env['GIT_AUTHOR_EMAIL'] = 'test@example.com'
+  process.env['GIT_COMMITTER_NAME'] = 'Biffo Test'
+  process.env['GIT_COMMITTER_EMAIL'] = 'test@example.com'
+  return fn().finally(() => {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k]
+      else process.env[k] = saved[k]
+    }
+  })
+}
+
+/** Standard git identity env vars, for the second commit each test drives directly. */
+const COMMIT_IDENTITY_ENV = {
+  GIT_AUTHOR_NAME: 'Biffo Test',
+  GIT_AUTHOR_EMAIL: 'test@example.com',
+  GIT_COMMITTER_NAME: 'Biffo Test',
+  GIT_COMMITTER_EMAIL: 'test@example.com',
+}
+
 /** Scaffolds a standalone plugin repo exactly as `biffo plugin create --standalone` does. */
 async function scaffoldStandalone(): Promise<{ projectRoot: string; destDir: string }> {
   const projectRoot = makeTmpDir('biffo-plugin-birth')
   mkdirSync(join(projectRoot, 'services'), { recursive: true })
 
-  await runPluginCreate(
-    'acme-crm',
-    {
-      firstParty: false,
-      standalone: true,
-      skeletonRoot: SKELETON!,
-      dryRun: false,
-      commit: true,
-      cwd: projectRoot,
-    },
-    { git: new GitAdapter() },
+  await withCommitIdentity(() =>
+    runPluginCreate(
+      'acme-crm',
+      {
+        firstParty: false,
+        standalone: true,
+        skeletonRoot: SKELETON!,
+        dryRun: false,
+        commit: true,
+        cwd: projectRoot,
+      },
+      { git: new GitAdapter() },
+    ),
   )
 
   return { projectRoot, destDir: join(projectRoot, 'biffo-plugin-acme-crm') }
@@ -77,6 +121,7 @@ describe.runIf(SKELETON)('a standalone plugin repo is born able to commit (#1449
     const result = await execa('git', ['commit', '--allow-empty', '-m', 'chore: second commit'], {
       cwd: destDir,
       reject: false,
+      env: COMMIT_IDENTITY_ENV,
     })
 
     expect(result.exitCode).not.toBe(0)
@@ -95,6 +140,7 @@ describe.runIf(SKELETON)('a standalone plugin repo is born able to commit (#1449
     const result = await execa('git', ['commit', '--allow-empty', '-m', 'chore: second commit'], {
       cwd: destDir,
       reject: false,
+      env: COMMIT_IDENTITY_ENV,
     })
 
     expect(`${result.stdout}${result.stderr}`).not.toContain(

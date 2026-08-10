@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { execa } from 'execa'
 import { describe, expect, it } from 'vitest'
@@ -137,17 +137,28 @@ describe.runIf(SKELETON)('a standalone plugin repo is born able to commit (#1449
 
     await execa('sh', [join(repoRoot, 'scripts', 'install-hooks.sh')], { cwd: destDir })
 
+    // A stub `npx` first on PATH, same technique as
+    // `packaged-scripts.test.ts` ("A stub `npx` first on PATH: this asserts
+    // WHICH version the bridge asks for, without a network round trip.
+    // Running the real npx here would make the test slow, flaky, and
+    // dependent on the registry."). `scripts/biffo.sh` only needs `npx` to
+    // exist and exit 0 — this test is about the bridge finding a resolvable
+    // pin at all, not about what the resolved CLI itself then does.
+    const stubBin = join(projectRoot, 'stubbin')
+    mkdirSync(stubBin, { recursive: true })
+    writeFileSync(join(stubBin, 'npx'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+
     const result = await execa('git', ['commit', '--allow-empty', '-m', 'chore: second commit'], {
       cwd: destDir,
       reject: false,
-      env: COMMIT_IDENTITY_ENV,
+      env: { ...COMMIT_IDENTITY_ENV, PATH: `${stubBin}:${process.env['PATH'] ?? ''}` },
     })
 
+    expect(result.exitCode).toBe(0)
     expect(`${result.stdout}${result.stderr}`).not.toContain(
       'no biffo.core.json, no .biffo-shared-version, and no cli/ here',
     )
-    expect(result.exitCode).toBe(0)
 
     rmSync(projectRoot, { recursive: true, force: true })
-  }, 30000)
+  })
 })

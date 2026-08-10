@@ -614,7 +614,18 @@ if [ -n "$PY_DIRS" ]; then
         # shellcheck disable=SC2086
         [ -n "$bandit_paths" ] && ci_has "bandit" && run_check "bandit$suffix" uv run bandit -r $bandit_paths -ll -q
         if [ "$PYTEST" = "0" ]; then
-          skip "pytest$suffix" "excluded by BIFFO_VERIFY_PYTEST=0"
+          # #1464: applicable, not "not applicable" -- CI still runs pytest here;
+          # this repo's copy was explicitly told not to. See the cost-skip
+          # branch below for the rest of the reasoning; both read from the same
+          # bucket now.
+          if ci_has "pytest"; then
+            if [ -z "$LIST" ]; then
+              NOT_RUN="$NOT_RUN pytest$suffix"
+              printf '  \033[33mWARN\033[0m %-16s NOT RUN - excluded by BIFFO_VERIFY_PYTEST=0\n' "pytest$suffix"
+            fi
+          else
+            skip "pytest$suffix" "excluded by BIFFO_VERIFY_PYTEST=0"
+          fi
         elif [ -n "$PYTEST" ] || pytest_is_fast "."; then
           if ci_has "pytest"; then
             run_check "pytest$suffix" uv run pytest -q
@@ -625,7 +636,23 @@ if [ -n "$PY_DIRS" ]; then
             pytest_record "." "$LAST_CHECK_SECONDS"
           fi
         else
-          skip "pytest$suffix" "suite is slower than ${PYTEST_BUDGET_SECONDS}s - CI keeps it"
+          # #1464: a cost decision, not an absence. pytest IS the single largest
+          # thing CI checks about this directory -- filing it as "not applicable
+          # here" (the SKIPPED bucket) reads as "nothing to do here", identical
+          # to `build` in a Python-only repo. It belongs beside pg-test and
+          # terraform-fmt: applicable, and the gate did not run it, because
+          # running it here would cost more than the push gate should spend.
+          if ci_has "pytest"; then
+            if [ -z "$LIST" ]; then
+              NOT_RUN="$NOT_RUN pytest$suffix"
+              printf '  \033[33mWARN\033[0m %-16s NOT RUN - suite is slower than %ss - CI keeps it\n' \
+                "pytest$suffix" "$PYTEST_BUDGET_SECONDS"
+              printf '       \033[33m%s\033[0m\n' \
+                "CI runs pytest here as a required check; run \`uv run pytest\` before pushing."
+            fi
+          else
+            skip "pytest$suffix" "suite is slower than ${PYTEST_BUDGET_SECONDS}s and CI does not run it either"
+          fi
         fi
       else
         ci_has "ruff check" && run_check "ruff-check$suffix" uv run --directory "$d" ruff check .
@@ -633,19 +660,47 @@ if [ -n "$PY_DIRS" ]; then
         ci_has "pyright" && run_check "pyright$suffix" uv run --directory "$d" pyright
         ci_has "bandit" && run_check "bandit$suffix" uv run --directory "$d" bandit -r src -ll -q
         if [ "$PYTEST" = "0" ]; then
-          skip "pytest$suffix" "excluded by BIFFO_VERIFY_PYTEST=0"
+          # #1464: same reclassification as the "." case above.
+          if ci_has "pytest"; then
+            if [ -z "$LIST" ]; then
+              NOT_RUN="$NOT_RUN pytest$suffix"
+              printf '  \033[33mWARN\033[0m %-16s NOT RUN - excluded by BIFFO_VERIFY_PYTEST=0\n' "pytest$suffix"
+            fi
+          else
+            skip "pytest$suffix" "excluded by BIFFO_VERIFY_PYTEST=0"
+          fi
         elif [ -n "$PYTEST" ] || pytest_is_fast "$d"; then
           if ci_has "pytest"; then
             run_check "pytest$suffix" uv run --directory "$d" pytest -q
             pytest_record "$d" "$LAST_CHECK_SECONDS"
           fi
         else
-          skip "pytest$suffix" "suite is slower than ${PYTEST_BUDGET_SECONDS}s - CI keeps it"
+          # #1464: same reclassification as the "." case above -- a cost
+          # decision, not an absence.
+          if ci_has "pytest"; then
+            if [ -z "$LIST" ]; then
+              NOT_RUN="$NOT_RUN pytest$suffix"
+              printf '  \033[33mWARN\033[0m %-16s NOT RUN - suite is slower than %ss - CI keeps it\n' \
+                "pytest$suffix" "$PYTEST_BUDGET_SECONDS"
+              printf '       \033[33m%s\033[0m\n' \
+                "CI runs pytest here as a required check; run \`uv run --directory $d pytest\` before pushing."
+            fi
+          else
+            skip "pytest$suffix" "suite is slower than ${PYTEST_BUDGET_SECONDS}s and CI does not run it either"
+          fi
         fi
       fi
     done
   else
-    skip python "uv not installed"
+    # #1464: this repo HAS Python (PY_DIRS is non-empty) and CI checks it --
+    # the gate simply cannot, because uv is missing here. Same shape as
+    # terraform-fmt/gitleaks below: applicable, not run, not "not applicable".
+    if [ -z "$LIST" ]; then
+      NOT_RUN="$NOT_RUN python"
+      printf '  \033[33mWARN\033[0m %-16s NOT RUN - uv not installed\n' "python"
+      printf '       \033[33m%s\033[0m\n' \
+        "CI runs ruff/pyright/pytest here; nothing local is checking them."
+    fi
   fi
 else
   skip python "no pyproject.toml anywhere in this repo"
@@ -934,7 +989,16 @@ elif [ -z "$PG_TEST_DSN" ]; then
     fi
   fi
 elif ! command -v uv >/dev/null 2>&1; then
-  skip pg-test "uv not installed"
+  # #1464: reached only when _pg_modules is non-empty AND a DSN is set -- this
+  # repo has Postgres-dependent tests and a database to run them against; uv
+  # missing is the only thing stopping the lane, same as pg-test's DSN-unset
+  # WARN above. Applicable, not run, not "not applicable".
+  if [ -z "$LIST" ]; then
+    NOT_RUN="$NOT_RUN pg-test"
+    printf '  \033[33mWARN\033[0m %-16s NOT RUN - uv not installed\n' "pg-test"
+    printf '       \033[33m%s\033[0m\n' \
+      "CI runs these as a required check; nothing local is checking them."
+  fi
 else
   # Run from the uv project that owns the modules, with paths relative to it, so
   # this works wherever a repo keeps its API (root here, services/api in every
@@ -945,7 +1009,15 @@ else
     [ -f "$_pg_dir/pyproject.toml" ] && break
   done
   if [ ! -f "$_pg_dir/pyproject.toml" ]; then
-    skip pg-test "no pyproject.toml above the Postgres modules"
+    # #1464: same shape as the two branches above -- the Postgres-dependent
+    # tests and the DSN both exist, the gate just cannot find a project root
+    # to run them from. Applicable, not run.
+    if [ -z "$LIST" ]; then
+      NOT_RUN="$NOT_RUN pg-test"
+      printf '  \033[33mWARN\033[0m %-16s NOT RUN - no pyproject.toml above the Postgres modules\n' "pg-test"
+      printf '       \033[33m%s\033[0m\n' \
+        "CI runs these as a required check; nothing local is checking them."
+    fi
   else
     _pg_rel=$(echo "$_pg_modules" | sed "s|^$_pg_dir/||" | tr '\n' ' ')
     # Not a plain `run_check` call: `pg_test_run` returns THREE states (0 pass,
@@ -995,59 +1067,73 @@ fi
 
 # Terraform, wherever this repo keeps it: modules/ in the template and
 # instances, infra/ and modules/ in siblings, terraform/ in the runner fleets.
-if [ -n "$LIST" ] || command -v terraform >/dev/null 2>&1; then
-  # Scope must match this repo's CI, not exceed it. The template and instances
-  # deliberately fmt-check modules/ ONLY: infra/environments/ is user-owned, and
-  # a template-shipped check asserting over paths the template does not own is
-  # the #325 trap -- it reds an instance on content it neither wrote nor can
-  # repair. Siblings own their whole infra/ and their CI checks it, so they get
-  # both. biffo.sibling.json is what tells them apart.
-  tf_dirs=""
-  [ -d modules ] && tf_dirs="$tf_dirs modules/"
-  [ -f biffo.sibling.json ] && [ -d infra ] && tf_dirs="$tf_dirs infra/"
-  # terraform/ is the whole of a runner fleet (#1239). Both fleets kept every
-  # .tf file there, which is neither of the two directories above, so `tf_dirs`
-  # came out empty and this gate printed `no terraform in this repo` -- in the
-  # two repos that are nothing BUT terraform. Their CI does check it
-  # (`terraform fmt -check -recursive terraform/`), so the gap was local only:
-  # the gate that exists to catch this before the push was the one thing not
-  # catching it. No repo in the estate holds both terraform/ and modules/, so
-  # adding it cannot widen scope anywhere that was already covered.
-  [ -d terraform ] && tf_dirs="$tf_dirs terraform/"
-  if [ -n "$tf_dirs" ]; then
+#
+# Applicability (does this repo have terraform this gate should check) is
+# decided BEFORE tool availability, not after (#1464 audit). The old shape
+# gated the whole block on `command -v terraform`, so a repo with real .tf
+# files under modules/ or infra/ but no local `terraform` binary printed
+# "terraform not installed" -- worded like the same considered skip as a repo
+# with no terraform at all, when it is actually the fail-open shape: CI checks
+# this, and the gate did not, because a tool was missing, not because there
+# was nothing to check.
+#
+# Scope must match this repo's CI, not exceed it. The template and instances
+# deliberately fmt-check modules/ ONLY: infra/environments/ is user-owned, and
+# a template-shipped check asserting over paths the template does not own is
+# the #325 trap -- it reds an instance on content it neither wrote nor can
+# repair. Siblings own their whole infra/ and their CI checks it, so they get
+# both. biffo.sibling.json is what tells them apart.
+tf_dirs=""
+[ -d modules ] && tf_dirs="$tf_dirs modules/"
+[ -f biffo.sibling.json ] && [ -d infra ] && tf_dirs="$tf_dirs infra/"
+# terraform/ is the whole of a runner fleet (#1239). Both fleets kept every
+# .tf file there, which is neither of the two directories above, so `tf_dirs`
+# came out empty and this gate printed `no terraform in this repo` -- in the
+# two repos that are nothing BUT terraform. Their CI does check it
+# (`terraform fmt -check -recursive terraform/`), so the gap was local only:
+# the gate that exists to catch this before the push was the one thing not
+# catching it. No repo in the estate holds both terraform/ and modules/, so
+# adding it cannot widen scope anywhere that was already covered.
+[ -d terraform ] && tf_dirs="$tf_dirs terraform/"
+if [ -n "$tf_dirs" ]; then
+  if [ -n "$LIST" ] || command -v terraform >/dev/null 2>&1; then
     # shellcheck disable=SC2086
     ci_has "terraform fmt" && run_check terraform-fmt terraform fmt -check -recursive $tf_dirs
   else
-    # Distinguish "this repo has no terraform" from "this repo has terraform
-    # somewhere I do not look". The old message asserted the first and was
-    # printed for the second, which is the difference between a considered skip
-    # and a blind spot wearing its clothes -- the same shape as a branch audit
-    # dropping the repos it could not read (#1145) and reporting the remainder
-    # as the whole.
-    # Pruned rather than filtered, and NOT capped: `| head -20 | wc -l` would
-    # silently report 20 for a repo with 200, and a count that stops counting is
-    # the denominator defect this estate keeps re-learning.
-    _tf_stray=$(find . \
-      \( -name .git -o -name .worktrees -o -name .terraform -o -name node_modules \) -prune \
-      -o -name '*.tf' -print 2>/dev/null | wc -l | tr -d ' ')
-    if [ "${_tf_stray:-0}" -gt 0 ] && [ -z "$LIST" ]; then
-      # A WARN, not a skip and not a failure -- exactly the posture pg-test
-      # takes above for "the repo HAS the thing and the gate is blind to it".
-      # Not a failure because the right scope depends on what this repo's CI
-      # covers, which this gate cannot decide for a layout nobody has declared.
-      NOT_RUN="$NOT_RUN terraform-fmt"
-      printf '  \033[33mWARN\033[0m %-16s NOT RUN - %s .tf file(s) present, none in a directory this gate checks\n' \
-        "terraform-fmt" "$_tf_stray"
-      printf '       \033[33m%s\033[0m\n' \
-        "it looks in modules/, infra/ (siblings) and terraform/ - this repo uses none of them"
-      printf '       \033[90m%s\033[0m\n' \
-        "add the directory to the tf_dirs block in scripts/verify.sh (biffo-template#1239)"
-    else
-      skip terraform-fmt "no .tf files in modules/, infra/ or terraform/"
-    fi
+    NOT_RUN="$NOT_RUN terraform-fmt"
+    printf '  \033[33mWARN\033[0m %-16s NOT RUN - terraform not installed, %s present\n' \
+      "terraform-fmt" "$tf_dirs"
+    printf '       \033[33m%s\033[0m\n' \
+      "CI runs terraform fmt -check here; nothing local is checking it."
   fi
 else
-  skip terraform-fmt "terraform not installed"
+  # Distinguish "this repo has no terraform" from "this repo has terraform
+  # somewhere I do not look". The old message asserted the first and was
+  # printed for the second, which is the difference between a considered skip
+  # and a blind spot wearing its clothes -- the same shape as a branch audit
+  # dropping the repos it could not read (#1145) and reporting the remainder
+  # as the whole.
+  # Pruned rather than filtered, and NOT capped: `| head -20 | wc -l` would
+  # silently report 20 for a repo with 200, and a count that stops counting is
+  # the denominator defect this estate keeps re-learning.
+  _tf_stray=$(find . \
+    \( -name .git -o -name .worktrees -o -name .terraform -o -name node_modules \) -prune \
+    -o -name '*.tf' -print 2>/dev/null | wc -l | tr -d ' ')
+  if [ "${_tf_stray:-0}" -gt 0 ] && [ -z "$LIST" ]; then
+    # A WARN, not a skip and not a failure -- exactly the posture pg-test
+    # takes above for "the repo HAS the thing and the gate is blind to it".
+    # Not a failure because the right scope depends on what this repo's CI
+    # covers, which this gate cannot decide for a layout nobody has declared.
+    NOT_RUN="$NOT_RUN terraform-fmt"
+    printf '  \033[33mWARN\033[0m %-16s NOT RUN - %s .tf file(s) present, none in a directory this gate checks\n' \
+      "terraform-fmt" "$_tf_stray"
+    printf '       \033[33m%s\033[0m\n' \
+      "it looks in modules/, infra/ (siblings) and terraform/ - this repo uses none of them"
+    printf '       \033[90m%s\033[0m\n' \
+      "add the directory to the tf_dirs block in scripts/verify.sh (biffo-template#1239)"
+  else
+    skip terraform-fmt "no .tf files in modules/, infra/ or terraform/"
+  fi
 fi
 
 # The Biffo guards, where the dispatcher exists. Cheap, and two of them
@@ -1191,22 +1277,24 @@ if ci_has "gitleaks"; then
   # machine without gitleaks the parity test then reported the gate as missing a
   # check it does declare. The parity test caught it.
   #
-  # `terraform-fmt` above has the same shape and is only unexposed because
-  # terraform happens to be installed here. Recorded, not fixed in this change.
+  # `terraform-fmt` above used to have the same shape, unexposed only because
+  # terraform happened to be installed here -- fixed alongside this (#1464).
+  # Reached only when `ci_has "gitleaks"` is true, i.e. CI does run this: not
+  # installed locally is applicable-but-not-run, not "not applicable".
   if [ -n "$LIST" ] || command -v gitleaks >/dev/null 2>&1; then
     run_check gitleaks gitleaks_tracked_only
   else
-    # Say how to close it, pinned to the version ci.yml installs. A skip that
-    # only reports its own absence stays skipped: this one sat `n/a` long
-    # enough for the `\b\d{12}\b` account-id rule to reach CI three times,
-    # most recently on two test UUIDs whose last segment happened to be
-    # twelve digits (tabsii-platform#446). Thirty seconds of install would
-    # have caught it before the push, and version parity matters — an older
-    # gitleaks disagreeing with CI reintroduces exactly the local/CI
-    # divergence this gate exists to remove.
-    skip gitleaks "not installed - CI still runs both passes. Install the version ci.yml pins:
-       curl -sSfL -o /tmp/gl.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \\
-         && tar -xzf /tmp/gl.tgz -C \"\$HOME/.local/bin\" gitleaks"
+    # Say how to close it, pinned to the version ci.yml installs. This sat
+    # filed as a skip long enough for the `\b\d{12}\b` account-id rule to
+    # reach CI three times, most recently on two test UUIDs whose last segment
+    # happened to be twelve digits (tabsii-platform#446). Thirty seconds of
+    # install would have caught it before the push, and version parity
+    # matters — an older gitleaks disagreeing with CI reintroduces exactly the
+    # local/CI divergence this gate exists to remove.
+    NOT_RUN="$NOT_RUN gitleaks"
+    printf '  \033[33mWARN\033[0m %-16s NOT RUN - not installed. CI still runs both passes. Install the version ci.yml pins:\n' "gitleaks"
+    printf '       \033[33m%s\033[0m\n' \
+      "curl -sSfL -o /tmp/gl.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz && tar -xzf /tmp/gl.tgz -C \"\$HOME/.local/bin\" gitleaks"
   fi
 fi
 

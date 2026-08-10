@@ -1197,7 +1197,11 @@ def test_agent_model_field_offers_curated_options(client: TestClient):
     assert {
         "moonshotai/kimi-k3",
         "moonshotai/kimi-k3:online",
-        "anthropic/claude-opus-4-8",
+        # Dotted, matching OpenRouter's real catalogue slug — the dashed
+        # "anthropic/claude-opus-4-8" this test asserted until biffo-template#822
+        # was a well-formed but nonexistent id, the incident that guard is
+        # filed under; fixed alongside the cli/ guard that now catches it.
+        "anthropic/claude-opus-4.8",
     } <= values
 
 

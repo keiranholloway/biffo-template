@@ -4,14 +4,19 @@ import { describe, expect, it } from 'vitest'
 import { makeTmpDir } from '../test-utils/tmp.js'
 import type { PySource } from './plugin-tool-supply-audit.js'
 import {
+  auditDeclaredModelIds,
   auditPluginToolSupply,
   assertPluginToolSupply,
   buildSymbolResolver,
   discoverPluginDirs,
+  extractCuratedModelFields,
   extractManifestTools,
   extractPredicateEnvVars,
+  extractSettingsModelFields,
   extractTerraformEnvKeys,
   extractToolRegistryEntries,
+  isSnapshotStale,
+  normalizeModelId,
 } from './plugin-tool-supply-audit.js'
 
 function src(file: string, text: string): PySource[] {
@@ -493,6 +498,274 @@ describe('auditPluginToolSupply — against this repo’s real services/_plugins
     expect(webSearch?.requiredEnvVars).toContain('BRAVE_SEARCH_API_KEY_PARAMETER')
     expect(webSearch?.status).toBe('ok')
 
+    expect(report.ok).toBe(true)
+  })
+})
+
+// ── Half D: extractSettingsModelFields / extractCuratedModelFields ────────
+
+describe('extractSettingsModelFields', () => {
+  it('extracts a model-named string field containing a "/"', () => {
+    const result = extractSettingsModelFields('agent_default_model: str = "moonshotai/kimi-k3"\n')
+    expect(result).toEqual([{ field: 'agent_default_model', value: 'moonshotai/kimi-k3' }])
+  })
+
+  it('extracts more than one model field', () => {
+    const result = extractSettingsModelFields(
+      [
+        'agent_default_model: str = "moonshotai/kimi-k3"',
+        'agent_assistant_model: str = "anthropic/claude-sonnet-4"',
+      ].join('\n'),
+    )
+    expect(result).toEqual([
+      { field: 'agent_default_model', value: 'moonshotai/kimi-k3' },
+      { field: 'agent_assistant_model', value: 'anthropic/claude-sonnet-4' },
+    ])
+  })
+
+  it('ignores a string field with no "model" in its name — a URL is also a string with a slash', () => {
+    const result = extractSettingsModelFields('database_url: str = "postgresql+asyncpg://x/y"\n')
+    expect(result).toEqual([])
+  })
+
+  it('ignores a model-named field whose value has no "/" (not a provider/slug shape)', () => {
+    const result = extractSettingsModelFields('agent_model_enabled: str = "true"\n')
+    expect(result).toEqual([])
+  })
+})
+
+describe('extractCuratedModelFields', () => {
+  const FIELD = `
+{
+    "name": "model",
+    "label": "Model",
+    "type": "select",
+    "required": True,
+    "default": "moonshotai/kimi-k3",
+    "open": True,
+    "options": [
+        {"value": "moonshotai/kimi-k3", "label": "Kimi K3 (low-cost default)"},
+        {"value": "moonshotai/kimi-k3:online", "label": "Kimi K3 (web-connected)"},
+        {"value": "anthropic/claude-opus-4.8", "label": "Claude Opus 4.8 (premium)"},
+    ],
+},
+`
+
+  it('extracts the default and every option value from the real field shape', () => {
+    const result = extractCuratedModelFields(FIELD)
+    expect(result.rawFieldCount).toBe(1)
+    expect(result.fields).toEqual([
+      {
+        defaultValue: 'moonshotai/kimi-k3',
+        optionValues: [
+          'moonshotai/kimi-k3',
+          'moonshotai/kimi-k3:online',
+          'anthropic/claude-opus-4.8',
+        ],
+      },
+    ])
+  })
+
+  it('scopes the window to THIS field, not a later "model"-named field', () => {
+    const two = `${FIELD}\n{\n    "name": "other_field",\n    "default": "not-a-model",\n},\n`
+    const result = extractCuratedModelFields(two)
+    expect(result.rawFieldCount).toBe(1)
+    expect(result.fields[0]?.optionValues).toContain('anthropic/claude-opus-4.8')
+  })
+
+  it('records a field with neither default nor options as empty, not dropped (blindness backstop)', () => {
+    const result = extractCuratedModelFields('{\n    "name": "model",\n},\n')
+    expect(result.rawFieldCount).toBe(1)
+    expect(result.fields).toEqual([{ defaultValue: null, optionValues: [] }])
+  })
+
+  it('returns zero fields, zero markers when no "model" field is present', () => {
+    const result = extractCuratedModelFields('{\n    "name": "agent_name",\n},\n')
+    expect(result.rawFieldCount).toBe(0)
+    expect(result.fields).toEqual([])
+  })
+})
+
+describe('normalizeModelId', () => {
+  it('strips a trailing :online — the universal, never-enumerated modifier', () => {
+    expect(normalizeModelId('moonshotai/kimi-k3:online')).toBe('moonshotai/kimi-k3')
+  })
+
+  it('leaves every other colon suffix alone — those are distinct catalogue entries', () => {
+    expect(normalizeModelId('anthropic/claude-opus-4.8:batch')).toBe(
+      'anthropic/claude-opus-4.8:batch',
+    )
+    expect(normalizeModelId('openai/gpt-oss-20b:free')).toBe('openai/gpt-oss-20b:free')
+  })
+
+  it('is a no-op on a plain id', () => {
+    expect(normalizeModelId('moonshotai/kimi-k3')).toBe('moonshotai/kimi-k3')
+  })
+})
+
+describe('isSnapshotStale', () => {
+  it('is not stale the day it was fetched', () => {
+    expect(isSnapshotStale('2026-08-10T00:00:00Z', new Date('2026-08-10T12:00:00Z'))).toBe(false)
+  })
+
+  it('is stale past the max-age window', () => {
+    expect(isSnapshotStale('2026-01-01T00:00:00Z', new Date('2026-08-10T00:00:00Z'))).toBe(true)
+  })
+
+  it('fails closed on an unparseable timestamp — stale, not fresh', () => {
+    expect(isSnapshotStale('not-a-date', new Date())).toBe(true)
+  })
+})
+
+// ── auditDeclaredModelIds ──────────────────────────────────────────────────
+
+function writeCoreApiFixture(
+  root: string,
+  { configText, schemaText }: { configText: string; schemaText: string },
+): void {
+  const configDir = join(root, 'services', 'api', 'src', 'api')
+  const schemaDir = join(configDir, 'schemas')
+  mkdirSync(schemaDir, { recursive: true })
+  writeFileSync(join(configDir, 'config.py'), configText)
+  writeFileSync(join(schemaDir, 'orchestration.py'), schemaText)
+}
+
+const OK_CONFIG = 'agent_default_model: str = "moonshotai/kimi-k3"\n'
+const OK_SCHEMA = `
+{
+    "name": "model",
+    "default": "moonshotai/kimi-k3",
+    "options": [
+        {"value": "moonshotai/kimi-k3", "label": "Kimi K3"},
+        {"value": "moonshotai/kimi-k3:online", "label": "Kimi K3 (web-connected)"},
+    ],
+},
+`
+
+describe('auditDeclaredModelIds', () => {
+  const knownModelIds = ['moonshotai/kimi-k3', 'anthropic/claude-opus-4.8']
+  const snapshotFetchedAt = '2026-08-10T00:00:00Z'
+  const now = new Date('2026-08-10T12:00:00Z')
+
+  it('passes when every declared id (and its :online variant) is in the snapshot', () => {
+    const root = makeTmpDir('model-id-ok')
+    writeCoreApiFixture(root, { configText: OK_CONFIG, schemaText: OK_SCHEMA })
+
+    const report = auditDeclaredModelIds(root, { knownModelIds, snapshotFetchedAt, now })
+    expect(report.ok).toBe(true)
+    expect(report.findings.every((f) => f.status === 'ok')).toBe(true)
+    // 1 settings field + 1 curated default + 2 curated options (kimi-k3, kimi-k3:online) — the
+    // :online entry is its own finding, normalized against its base id when checked, not skipped.
+    expect(report.findings.length).toBe(4)
+  })
+
+  it('CRITICAL — fails on the real reported incident: a well-formed but wrong slug (#822)', () => {
+    // The exact shape #822 was filed over: "anthropic/claude-opus-4-8" (dashed)
+    // is a plausible-looking provider/slug string that OpenRouter never served
+    // — the real id is dotted, "anthropic/claude-opus-4.8". Format validation
+    // alone would never catch this; only a real catalogue comparison does.
+    const root = makeTmpDir('model-id-bogus')
+    const bogusSchema = OK_SCHEMA.replace(
+      /"options": \[/,
+      '"options": [\n        {"value": "anthropic/claude-opus-4-8", "label": "Claude Opus 4.8 (premium)"},',
+    )
+    writeCoreApiFixture(root, { configText: OK_CONFIG, schemaText: bogusSchema })
+
+    const report = auditDeclaredModelIds(root, { knownModelIds, snapshotFetchedAt, now })
+    expect(report.ok).toBe(false)
+    const bad = report.findings.find((f) => f.modelId === 'anthropic/claude-opus-4-8')
+    expect(bad?.status).toBe('unknown-model')
+    expect(bad?.detail).toMatch(/NOT in the OpenRouter snapshot/)
+  })
+
+  it('fails closed when config.py is missing entirely', () => {
+    const root = makeTmpDir('model-id-no-config')
+    const schemaDir = join(root, 'services', 'api', 'src', 'api', 'schemas')
+    mkdirSync(schemaDir, { recursive: true })
+    writeFileSync(join(schemaDir, 'orchestration.py'), OK_SCHEMA)
+
+    const report = auditDeclaredModelIds(root, { knownModelIds, snapshotFetchedAt, now })
+    expect(report.configMissing).toBe(true)
+    expect(report.ok).toBe(false)
+  })
+
+  it('SETTINGS EXTRACTOR BLIND: config.py exists but resolves no model field — fails, not "no default"', () => {
+    const root = makeTmpDir('model-id-settings-blind')
+    writeCoreApiFixture(root, {
+      configText: 'database_url: str = "postgresql+asyncpg://x/y"\n',
+      schemaText: OK_SCHEMA,
+    })
+
+    const report = auditDeclaredModelIds(root, { knownModelIds, snapshotFetchedAt, now })
+    expect(report.settingsBlind).toBe(true)
+    expect(report.ok).toBe(false)
+  })
+
+  it('CURATED-OPTIONS EXTRACTOR BLIND: a "model" field with no default/options resolved — fails', () => {
+    const root = makeTmpDir('model-id-curated-blind')
+    writeCoreApiFixture(root, {
+      configText: OK_CONFIG,
+      schemaText: '{\n    "name": "model",\n},\n',
+    })
+
+    const report = auditDeclaredModelIds(root, { knownModelIds, snapshotFetchedAt, now })
+    expect(report.curatedFieldsBlind).toBe(true)
+    expect(report.ok).toBe(false)
+  })
+
+  it('fails closed on an empty snapshot rather than passing vacuously', () => {
+    const root = makeTmpDir('model-id-empty-snapshot')
+    writeCoreApiFixture(root, { configText: OK_CONFIG, schemaText: OK_SCHEMA })
+
+    const report = auditDeclaredModelIds(root, { knownModelIds: [], snapshotFetchedAt, now })
+    expect(report.snapshotEmpty).toBe(true)
+    expect(report.ok).toBe(false)
+  })
+
+  it('fails closed on a stale snapshot rather than trusting it forever', () => {
+    const root = makeTmpDir('model-id-stale-snapshot')
+    writeCoreApiFixture(root, { configText: OK_CONFIG, schemaText: OK_SCHEMA })
+
+    const report = auditDeclaredModelIds(root, {
+      knownModelIds,
+      snapshotFetchedAt: '2026-01-01T00:00:00Z',
+      now,
+    })
+    expect(report.snapshotStale).toBe(true)
+    expect(report.ok).toBe(false)
+  })
+
+  it('a declared :online variant is checked against its base id, not rejected as unknown', () => {
+    const root = makeTmpDir('model-id-online-variant')
+    const onlineOnlySchema = `
+{
+    "name": "model",
+    "default": "moonshotai/kimi-k3:online",
+    "options": [
+        {"value": "moonshotai/kimi-k3:online", "label": "Kimi K3 (web-connected)"},
+    ],
+},
+`
+    writeCoreApiFixture(root, { configText: OK_CONFIG, schemaText: onlineOnlySchema })
+
+    const report = auditDeclaredModelIds(root, { knownModelIds, snapshotFetchedAt, now })
+    expect(report.ok).toBe(true)
+  })
+})
+
+describe('auditDeclaredModelIds — against this repo’s real services/api', () => {
+  it('reports ok:true today against the live OpenRouter snapshot', () => {
+    const repoRoot = join(__dirname, '..', '..', '..')
+    const report = auditDeclaredModelIds(repoRoot)
+
+    expect(report.configMissing).toBe(false)
+    expect(report.orchestrationSchemaMissing).toBe(false)
+    expect(report.settingsBlind).toBe(false)
+    expect(report.curatedFieldsBlind).toBe(false)
+    expect(report.snapshotEmpty).toBe(false)
+
+    const bad = report.findings.filter((f) => f.status !== 'ok')
+    expect(bad).toEqual([])
     expect(report.ok).toBe(true)
   })
 })

@@ -73,8 +73,12 @@
  *    guard).
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import {
+  OPENROUTER_MODEL_IDS,
+  OPENROUTER_MODEL_SNAPSHOT_FETCHED_AT,
+} from './openrouter-model-snapshot.js'
 
 // ── Shared small helpers ────────────────────────────────────────────────────
 
@@ -517,6 +521,306 @@ export function extractTerraformEnvKeys(tfText: string): TerraformEnvExtraction 
     }
   }
   return { keys: [...keys].sort(), rawMarkerCount, resolvedBlockCount }
+}
+
+// ── Half D: what model ids are declared, checked against a provider snapshot ─
+//
+// The other half of #822 (the model-id half — see the module docstring atop
+// this file, which pre-dates this section and describes only the tool-supply
+// half #1409 shipped): "validate model ids against the provider's live model
+// list." The incident's second half — `ideation`'s analyst running on
+// `anthropic/claude-opus-4-8`, a slug OpenRouter has never served, one
+// character off from the real `anthropic/claude-opus-4.8` — is NOT a plugin
+// manifest declaration the way a tool is. `agent-runtime` never picks a
+// model; it reads whatever `definition_snapshot.model` names at run time
+// (`agent_runtime/plugin.py`), which is operator-authored data in Core's
+// database, not a static file this guard can read. What IS static, and what
+// this repo's own incident sits inside, is the CURATED catalogue an author
+// picks from and the platform-wide DEFAULT a run falls back to — both live in
+// `services/api/`, not `services/_plugins/`:
+//
+//   - `services/api/src/api/config.py` — `Settings` fields whose name
+//     signals a model id (`agent_default_model`, `agent_assistant_model`)
+//     and whose value is a plain string default.
+//   - `services/api/src/api/schemas/orchestration.py` — the "agent" action
+//     type's `model` config field: a `default` value and a curated `select`
+//     `options` list. `open: True` marks it a suggestion list rather than an
+//     enforced allowlist (an author may run any OpenRouter model, and an
+//     agent already saved with an off-list model is never rejected on a
+//     later save — see that field's own comment), but a WRONG id sitting in
+//     the suggestion list itself is exactly this guard's business: it is
+//     offered to every author as a working choice.
+//
+// Checked against a committed snapshot of OpenRouter's real catalogue
+// (`openrouter-model-snapshot.ts` — see that file for why a snapshot rather
+// than a live call), never live network from here. Same fail-closed-on-zero
+// posture as Halves A–C: a source file present but yielding nothing
+// extractable is a broken extractor, not "nothing to check" (`settingsBlind`,
+// `curatedFieldsBlind`); a stale or empty snapshot fails closed rather than
+// being trusted forever (`snapshotStale`, `snapshotEmpty`).
+
+const SETTINGS_STR_FIELD = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*str\s*=\s*"([^"]*)"/gm
+
+export interface SettingsModelField {
+  field: string
+  value: string
+}
+
+/** Every `Settings` field whose OWN NAME signals a model id (contains
+ * "model") and whose plain string default contains a "/" — the
+ * `provider/slug` shape every model id in this codebase takes. Scoped to
+ * fields named for a model, rather than every string field with a slash,
+ * because `config.py` holds plenty of those that are not model ids
+ * (`database_url`, `agent_runtime_function_name`, ...). */
+export function extractSettingsModelFields(text: string): SettingsModelField[] {
+  const out: SettingsModelField[] = []
+  SETTINGS_STR_FIELD.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = SETTINGS_STR_FIELD.exec(text)) !== null) {
+    const [field, value] = [m[1] as string, m[2] as string]
+    if (field.toLowerCase().includes('model') && value.includes('/')) {
+      out.push({ field, value })
+    }
+  }
+  return out
+}
+
+const MODEL_FIELD_NAME_MARKER = /"name"\s*:\s*"model"/g
+const FIELD_DEFAULT = /"default"\s*:\s*"([^"]*)"/
+const FIELD_OPTIONS_START = /"options"\s*:\s*\[/
+const OPTION_VALUE = /"value"\s*:\s*"([^"]*)"/g
+
+export interface CuratedModelField {
+  defaultValue: string | null
+  optionValues: string[]
+}
+
+export interface CuratedModelFieldExtraction {
+  /** Number of `"name": "model"` markers found, unparsed — the blindness
+   * signal, same shape as `rawToolDefinitionCount`/`rawMarkerCount` above. */
+  rawFieldCount: number
+  fields: CuratedModelField[]
+}
+
+/** Every `{"name": "model", ..., "default": "...", "options": [{"value":
+ * "...", ...}, ...]}` config-field object in an `orchestration.py`-shaped
+ * source — the curated `select` an author picks a model from. Scoping: from
+ * each `"name": "model"` marker, the window searched for `"default"` and
+ * `"options"` ends at the NEXT `"name"` key (or end of text) — since every
+ * field in this schema's list is its own `{"name": ..., ...}` object with
+ * "name" as its first key, that boundary is the enclosing object's own end
+ * without needing a full JSON/Python parse (mirrors this file's existing
+ * balanced-span approach in Half C, applied to a textual window instead of a
+ * bracket pair). */
+export function extractCuratedModelFields(text: string): CuratedModelFieldExtraction {
+  const fields: CuratedModelField[] = []
+  let rawFieldCount = 0
+  MODEL_FIELD_NAME_MARKER.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = MODEL_FIELD_NAME_MARKER.exec(text)) !== null) {
+    rawFieldCount += 1
+    const start = m.index + m[0].length
+    const nextNameIdx = text.indexOf('"name"', start)
+    const windowEnd = nextNameIdx === -1 ? text.length : nextNameIdx
+    const window = text.slice(start, windowEnd)
+
+    const defaultMatch = FIELD_DEFAULT.exec(window)
+    const defaultValue = defaultMatch ? (defaultMatch[1] as string) : null
+
+    const optionsMatch = FIELD_OPTIONS_START.exec(window)
+    const optionValues: string[] = []
+    if (optionsMatch) {
+      const openIdx = start + optionsMatch.index + optionsMatch[0].length - 1
+      const closeIdx = balancedSpanFrom(text, openIdx, '[', ']')
+      if (closeIdx !== null) {
+        const inner = text.slice(openIdx, closeIdx + 1)
+        OPTION_VALUE.lastIndex = 0
+        let om: RegExpExecArray | null
+        while ((om = OPTION_VALUE.exec(inner)) !== null) {
+          optionValues.push(om[1] as string)
+        }
+      }
+    }
+    fields.push({ defaultValue, optionValues })
+  }
+  return { rawFieldCount, fields }
+}
+
+/** How stale, in days, a committed snapshot may be before the guard refuses
+ * to trust it. Forces a periodic `refresh-openrouter-model-snapshot.ts` run
+ * rather than letting the committed list age out silently — the same
+ * fail-open shape #822 is filed under, one level further out: a snapshot
+ * nobody ever revisits is a declaration checked by nobody, same as the tool
+ * grant this guard's Halves A–C exist for. */
+export const MODEL_SNAPSHOT_MAX_AGE_DAYS = 45
+
+export function isSnapshotStale(fetchedAt: string, now: Date): boolean {
+  const fetchedMs = new Date(fetchedAt).getTime()
+  if (Number.isNaN(fetchedMs)) return true // unparseable timestamp: fail closed, not open
+  const ageMs = now.getTime() - fetchedMs
+  return ageMs > MODEL_SNAPSHOT_MAX_AGE_DAYS * 24 * 60 * 60 * 1000
+}
+
+/** Strips OpenRouter's universal `:online` request-time modifier before a
+ * catalogue lookup. `:online` can be appended to ANY model slug to request
+ * the web-search-grounded variant and is never itself an enumerated
+ * catalogue entry — confirmed against a real fetch of
+ * `GET https://openrouter.ai/api/v1/models` on 2026-08-10: zero of 400 ids
+ * carried it. Every OTHER colon suffix this codebase's snapshot holds
+ * (`:free`, `:batch`, `:thinking`, ...) names a genuinely distinct catalogue
+ * entry with its own id and pricing, and is matched literally — stripping
+ * those too would make an audit of a `:batch`-only slug read as "ok" against
+ * the un-suffixed id, which is a real but different thing. */
+export function normalizeModelId(id: string): string {
+  return id.endsWith(':online') ? id.slice(0, -':online'.length) : id
+}
+
+const CONFIG_PY_PATH = join('services', 'api', 'src', 'api', 'config.py')
+const ORCHESTRATION_SCHEMA_PATH = join(
+  'services',
+  'api',
+  'src',
+  'api',
+  'schemas',
+  'orchestration.py',
+)
+
+export interface ModelIdFinding {
+  source: string
+  modelId: string
+  normalizedModelId: string
+  status: 'ok' | 'unknown-model'
+  detail: string
+}
+
+export interface ModelIdAuditReport {
+  configPath: string
+  orchestrationSchemaPath: string
+  configMissing: boolean
+  orchestrationSchemaMissing: boolean
+  settingsBlind: boolean
+  curatedFieldsBlind: boolean
+  snapshotFetchedAt: string
+  snapshotModelCount: number
+  snapshotEmpty: boolean
+  snapshotStale: boolean
+  findings: ModelIdFinding[]
+  ok: boolean
+  summary: string
+}
+
+export interface ModelIdAuditOptions {
+  /** Defaults to the committed `OPENROUTER_MODEL_IDS` snapshot — overridden
+   * in tests so they never depend on, or need updating for, the live
+   * catalogue's contents. */
+  knownModelIds?: readonly string[]
+  snapshotFetchedAt?: string
+  now?: Date
+}
+
+/** Reads `config.py` and `schemas/orchestration.py` under `repoRoot`,
+ * extracts every statically-declared model id, and checks each (after
+ * stripping a trailing `:online`) against the known-id snapshot. Fails
+ * closed — never silently passes — on: either source file missing, either
+ * extractor finding its marker but resolving nothing (blind), an empty
+ * snapshot, a stale snapshot, or any declared id absent from the snapshot. */
+export function auditDeclaredModelIds(
+  repoRoot: string,
+  options: ModelIdAuditOptions = {},
+): ModelIdAuditReport {
+  const knownModelIds = options.knownModelIds ?? OPENROUTER_MODEL_IDS
+  const snapshotFetchedAt = options.snapshotFetchedAt ?? OPENROUTER_MODEL_SNAPSHOT_FETCHED_AT
+  const now = options.now ?? new Date()
+
+  const configPath = join(repoRoot, CONFIG_PY_PATH)
+  const orchestrationPath = join(repoRoot, ORCHESTRATION_SCHEMA_PATH)
+  const configMissing = !existsSync(configPath)
+  const orchestrationSchemaMissing = !existsSync(orchestrationPath)
+
+  const knownSet = new Set(knownModelIds)
+  const snapshotEmpty = knownModelIds.length === 0
+  const snapshotStale = isSnapshotStale(snapshotFetchedAt, now)
+
+  const findings: ModelIdFinding[] = []
+  const record = (source: string, rawValue: string): void => {
+    const normalized = normalizeModelId(rawValue)
+    const ok = knownSet.has(normalized)
+    findings.push({
+      source,
+      modelId: rawValue,
+      normalizedModelId: normalized,
+      status: ok ? 'ok' : 'unknown-model',
+      detail: ok
+        ? `"${rawValue}" is in the OpenRouter snapshot (${knownModelIds.length} id(s), fetched ${snapshotFetchedAt})`
+        : `"${rawValue}" (normalized "${normalized}") is NOT in the OpenRouter snapshot (${knownModelIds.length} id(s), fetched ${snapshotFetchedAt}) — either the slug is wrong or the snapshot needs a refresh`,
+    })
+  }
+
+  let settingsBlind = false
+  if (!configMissing) {
+    const settingsFields = extractSettingsModelFields(readFileSync(configPath, 'utf8'))
+    if (settingsFields.length === 0) settingsBlind = true
+    for (const { field, value } of settingsFields) record(`${CONFIG_PY_PATH}#${field}`, value)
+  }
+
+  let curatedFieldsBlind = false
+  if (!orchestrationSchemaMissing) {
+    const curated = extractCuratedModelFields(readFileSync(orchestrationPath, 'utf8'))
+    if (
+      curated.rawFieldCount > 0 &&
+      curated.fields.every((f) => f.defaultValue === null && f.optionValues.length === 0)
+    ) {
+      curatedFieldsBlind = true
+    }
+    curated.fields.forEach((field, i) => {
+      if (field.defaultValue !== null) {
+        record(`${ORCHESTRATION_SCHEMA_PATH}#model[${i}].default`, field.defaultValue)
+      }
+      field.optionValues.forEach((v, j) => {
+        record(`${ORCHESTRATION_SCHEMA_PATH}#model[${i}].options[${j}]`, v)
+      })
+    })
+  }
+
+  const badFindings = findings.filter((f) => f.status !== 'ok')
+  const ok =
+    !configMissing &&
+    !orchestrationSchemaMissing &&
+    !settingsBlind &&
+    !curatedFieldsBlind &&
+    !snapshotEmpty &&
+    !snapshotStale &&
+    badFindings.length === 0
+
+  const summaryParts = [
+    `${findings.length} declared model id(s) checked against ${knownModelIds.length} known OpenRouter id(s) (snapshot fetched ${snapshotFetchedAt})`,
+    `${badFindings.length} not ok`,
+  ]
+  if (configMissing) summaryParts.push(`MISSING ${CONFIG_PY_PATH}`)
+  if (orchestrationSchemaMissing) summaryParts.push(`MISSING ${ORCHESTRATION_SCHEMA_PATH}`)
+  if (settingsBlind) summaryParts.push('SETTINGS EXTRACTOR BLIND')
+  if (curatedFieldsBlind) summaryParts.push('CURATED-OPTIONS EXTRACTOR BLIND')
+  if (snapshotEmpty) summaryParts.push('SNAPSHOT EMPTY')
+  if (snapshotStale)
+    summaryParts.push(
+      `SNAPSHOT STALE (older than ${MODEL_SNAPSHOT_MAX_AGE_DAYS}d — run refresh-openrouter-model-snapshot.ts)`,
+    )
+
+  return {
+    configPath: CONFIG_PY_PATH,
+    orchestrationSchemaPath: ORCHESTRATION_SCHEMA_PATH,
+    configMissing,
+    orchestrationSchemaMissing,
+    settingsBlind,
+    curatedFieldsBlind,
+    snapshotFetchedAt,
+    snapshotModelCount: knownModelIds.length,
+    snapshotEmpty,
+    snapshotStale,
+    findings,
+    ok,
+    summary: summaryParts.join('; '),
+  }
 }
 
 // ── The whole audit ──────────────────────────────────────────────────────────

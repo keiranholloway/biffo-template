@@ -108,7 +108,7 @@ export const PACKAGED_ROOT_ASSETS = [
     resolvedBy: 'scripts/runner-drop-forensics.mjs — relative import of isRunnerKill()',
     why:
       'Not reached through findPackagedScript() itself, but runner-drop-forensics.mjs imports ' +
-      "it by relative path (\"./practices-metrics.mjs\"), which Node resolves against the " +
+      'it by relative path ("./practices-metrics.mjs"), which Node resolves against the ' +
       'FILE that ships next to it rather than the upward walk. Registered here so it travels ' +
       'to the same directory in the tarball -- omitting it leaves the checkout working (the ' +
       'sibling is right there on disk) while a real npm install throws ERR_MODULE_NOT_FOUND, ' +
@@ -239,6 +239,21 @@ export const RESOLVER_SITES = [
     // Compares dist/ against src/, both inside the package/checkout — it resolves
     // no repo-root asset, and is inert once installed from npm (no src/ to be
     // stale against).
+    asset: null,
+    packaged: false,
+  },
+  {
+    file: 'src/scripts/refresh-openrouter-model-snapshot.ts',
+    // Walks up from its own module location to find its SIBLING
+    // src/lib/openrouter-model-snapshot.ts and overwrite it — a same-package
+    // source file, not a repo-root asset, so there is nothing here for
+    // PACKAGED_ROOT_ASSETS to ship. It is also a template-only maintenance
+    // script (#822): it regenerates committed TypeScript SOURCE from a live
+    // OpenRouter fetch, which is meaningful only against a checked-out
+    // template repo you then commit the diff in. An installed npm package has
+    // no src/ tree to regenerate and nothing to commit it to, so running this
+    // from `node_modules/@biffo/cli` would be inert at best (same posture as
+    // build-freshness.ts, immediately above).
     asset: null,
     packaged: false,
   },

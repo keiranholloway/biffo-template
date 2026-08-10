@@ -466,7 +466,7 @@ WORKFLOW_ACTIONS: list[dict[str, Any]] = [
                 "options": [
                     {"value": "moonshotai/kimi-k3", "label": "Kimi K3 (low-cost default)"},
                     {"value": "moonshotai/kimi-k3:online", "label": "Kimi K3 (web-connected)"},
-                    {"value": "anthropic/claude-opus-4-8", "label": "Claude Opus 4.8 (premium)"},
+                    {"value": "anthropic/claude-opus-4.8", "label": "Claude Opus 4.8 (premium)"},
                 ],
             },
             # A hard stop on the turn loop — §8 bounds cost in the framework

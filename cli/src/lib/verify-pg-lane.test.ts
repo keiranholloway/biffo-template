@@ -42,12 +42,27 @@ interface Run {
  * the `gitleaks` assertion in verify-no-ci.test.ts pass in CI and fail on a
  * workstation, and cost real trust when it was blamed on an innocent PR.
  */
+// This file is about the Postgres lane, not gitleaks -- but every fixture here
+// has no `.github/workflows/ci.yml`, so `ci_has()` runs in best-effort mode and
+// treats gitleaks as applicable. Since #1464 a missing `gitleaks` binary is
+// correctly reported as `NOT RUN` rather than silently filed as "not
+// applicable", which would otherwise make every assertion in this file about
+// the PG lane's own `NOT RUN` text machine-dependent on whether gitleaks
+// happens to be installed on whatever CI or workstation runs these tests. A
+// default stub keeps gitleaks out of these tests' business, the same way
+// `_stub-bin/uv` keeps the general Python lane out of the pg-test tests below.
+const DEFAULT_GITLEAKS_STUB = '#!/bin/sh\nexit 0\n'
+
 function runIn(files: Record<string, string>, env: Record<string, string> = {}): Run {
   const dir = makeTmpDir('biffo-verify-pg')
   try {
     execFileSync('git', ['init', '-q'], { cwd: dir })
+    const allFiles =
+      '_stub-bin/gitleaks' in files
+        ? files
+        : { ...files, '_stub-bin/gitleaks': DEFAULT_GITLEAKS_STUB }
     let hasStubBin = false
-    for (const [rel, body] of Object.entries(files)) {
+    for (const [rel, body] of Object.entries(allFiles)) {
       const full = join(dir, rel)
       mkdirSync(dirname(full), { recursive: true })
       writeFileSync(full, body)

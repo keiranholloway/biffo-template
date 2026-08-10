@@ -7,7 +7,6 @@ from api.events.registry import (
     AGENT_RUN_COMPLETED,
     AGENT_RUN_REQUESTED,
     DEMO_REQUESTED,
-    LEAD_CAPTURED,
     EventType,
     find_event,
     register_event,
@@ -48,10 +47,8 @@ def _pristine_event_registry():
 def test_core_events_are_registered():
     events = registered_events()
     assert DEMO_REQUESTED in events
-    assert LEAD_CAPTURED in events
     # find_event resolves by identity
     assert find_event("biffo.core", "demo.requested") is DEMO_REQUESTED
-    assert find_event("biffo.core", "lead.captured") is LEAD_CAPTURED
 
 
 def test_agent_run_events_are_registered():

@@ -388,7 +388,9 @@ class TestPiiRedaction:
         orchestration trigger-field catalogue. Adding `email`/`phone` there would
         strip them from state-change payloads and from the trigger fields the UI
         offers — silently breaking recipient-field templating, which sends to
-        `{email}` and relies on `LeadCapturedPayload` carrying it.
+        `{email}` and relies on `DemoRequestedPayload` carrying it (and, in an
+        instance, on its own registered events carrying it the same way — see
+        `lead.captured` in tabsii's `domains/tabsii/`, #848).
         """
         from api.routing.crud_handlers import _SENSITIVE_SUBSTRINGS
 

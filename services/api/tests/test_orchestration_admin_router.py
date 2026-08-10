@@ -14,6 +14,7 @@ import pytest
 from api import writeback_targets as wb
 from api.database import get_db
 from api.events.emit import is_declared, pending_events
+from api.events.registry import EventField, EventType, register_event
 from api.middleware.auth import AuthenticatedUser, require_auth
 from api.models.base import Base
 from api.models.orchestration import (  # noqa: F401 — registers tables on Base.metadata
@@ -30,6 +31,23 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 _BASE = "/api/v1/orchestration/workflows"
+
+# A brand-scoped fixture trigger, for the reachability tests below. Before #848
+# these used the real ``lead.captured`` (its payload happened to carry
+# ``brand_id``) — coupling a template test to a franchising-specific curated
+# event, which is exactly the boundary #848 fixes. Registered once at module
+# scope, same "test.source" convention as test_event_registry.py's synthetic
+# events: it carries `fields`, so it satisfies the payload-metadata guard in
+# test_event_registry_fields.py rather than needing registry cleanup.
+_BRAND_SCOPED_TRIGGER = register_event(
+    EventType(
+        source="test.source",
+        detail_type="test.brand_scoped_event",
+        label="Test brand-scoped event",
+        description="Fixture only: a payload carrying brand_id, for scope-reachability tests.",
+        fields=(EventField(name="brand_id", label="Brand"),),
+    )
+)
 
 
 @pytest.fixture(autouse=True)
@@ -318,7 +336,7 @@ def test_create_rejects_scope_unreachable_by_trigger(client: TestClient):
 
 
 def test_create_allows_scope_reachable_by_trigger(client: TestClient):
-    """lead.captured's payload carries brand_id — a brand-scoped workflow on
+    """A trigger whose payload carries brand_id — a brand-scoped workflow on
     it is a live combination, not a dead one."""
     from api import scope_resolvers as sr
 
@@ -326,7 +344,9 @@ def test_create_allows_scope_reachable_by_trigger(client: TestClient):
     sr.register_scope_resolver(sr._default_resolver, levels=("tenant", "brand", "region", "unit"))  # noqa: SLF001
     try:
         body = _valid_body(
-            trigger_detail_type="lead.captured", scope={"level": "brand", "id": "b1"}
+            trigger_detail_type=_BRAND_SCOPED_TRIGGER.detail_type,
+            trigger_source=_BRAND_SCOPED_TRIGGER.source,
+            scope={"level": "brand", "id": "b1"},
         )
         resp = client.post(_BASE, json=body)
         assert resp.status_code == 201, resp.text
@@ -376,7 +396,10 @@ def test_catalog_carries_reachable_levels_per_trigger(client: TestClient):
     try:
         triggers = {t["detail_type"]: t for t in client.get(f"{_BASE}/catalog").json()["triggers"]}
         assert triggers["demo.requested"]["reachable_levels"] == ["tenant"]
-        assert triggers["lead.captured"]["reachable_levels"] == ["tenant", "brand"]
+        assert triggers[_BRAND_SCOPED_TRIGGER.detail_type]["reachable_levels"] == [
+            "tenant",
+            "brand",
+        ]
     finally:
         sr._levels, sr._resolver = saved_levels, saved_resolver  # noqa: SLF001
 

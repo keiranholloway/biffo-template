@@ -248,11 +248,21 @@ describe('shared-files.json filesFromSkeleton', () => {
     // about a boundary it does not have. The skeleton copies are the canonical
     // satellite documents; that they live at the same *basename* as this repo's
     // root ones is exactly the trap.
+    //
+    // Not every entry HAS a root copy to compare against — added for #1330:
+    // `services/api/tests/test_frontend_bff_paths.py` guards a frontend-to-BFF
+    // seam this template's own `services/api` (the Core API itself, ADR-0002)
+    // does not have, so there is nothing at that path in this repo's root at
+    // all. That absence is not the trap this test exists to catch — it IS the
+    // reason the canonical copy has to be a skeleton's in the first place —
+    // so it is skipped rather than a `readFileSync` throwing ENOENT.
     for (const [path] of entries) {
+      const rootPath = join(root, path)
+      if (!existsSync(rootPath)) continue
       for (const skeleton of sources) {
         expect(
           readFileSync(join(root, '_skeletons', skeleton as string, path), 'utf8'),
-        ).not.toEqual(readFileSync(join(root, path), 'utf8'))
+        ).not.toEqual(readFileSync(rootPath, 'utf8'))
       }
     }
   })

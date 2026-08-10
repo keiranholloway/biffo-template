@@ -193,6 +193,13 @@ class Settings(BaseSettings):
     # Lambda-cap floor and the same 1800s slack; see `orchestration.reap_stale_runs`.
     orchestration_run_stale_after_seconds: int = 1800
 
+    # Plugin object storage (ADR-0021, #1437). The S3 bucket plugins store media
+    # in, set from Terraform. Empty is a valid state and means "not configured
+    # in this environment": Core then refuses the capability with a clear error
+    # rather than signing URLs against a bucket that does not exist, which would
+    # fail in the browser rather than at the API and be far harder to diagnose.
+    plugin_media_bucket: str = ""
+
     # Application
     environment: str = "dev"
     log_level: str = "INFO"

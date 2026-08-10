@@ -125,7 +125,15 @@ module "storage" {
 
   project_name = var.project_name
   environment  = local.environment
-  tags         = local.tags
+
+  # The browser PUTs plugin media straight to S3 rather than through a Lambda,
+  # so S3 itself must allow the platform's own origin. Derived from the same
+  # custom domain the distribution serves, so the two cannot disagree; empty
+  # when no custom domain is set, which correctly allows no uploads at all
+  # rather than allowing any.
+  plugin_media_cors_origins = var.custom_domain == "" ? [] : ["https://${var.custom_domain}"]
+
+  tags = local.tags
 }
 
 module "cdn" {
@@ -278,7 +286,14 @@ module "core_api" {
     BIFFO_COGNITO_CLIENT_ID    = module.auth.client_id
     BIFFO_COGNITO_REGION       = var.aws_region
     BIFFO_EVENT_BUS_NAME       = module.events.event_bus_name
-    BIFFO_CORS_ORIGINS         = local.cors_origins
+    # Plugin object storage (ADR-0021, #1437). Bucket name rather than ARN:
+    # every boto3 call takes a bucket name, and deriving one from the other in
+    # code is a second place to get it wrong. Empty is a valid state — Core
+    # treats it as "object storage not configured" and refuses the capability
+    # with a clear error rather than signing URLs against a bucket that is not
+    # there.
+    BIFFO_PLUGIN_MEDIA_BUCKET = module.storage.plugin_media_bucket_name
+    BIFFO_CORS_ORIGINS        = local.cors_origins
     # ADR-0009 — IAM principals allowed on /api/v1/internal/*. Maintained
     # automatically: `biffo plugin install` adds the plugin to enabled_plugins
     # (plugins.auto.tfvars.json) and the glob above follows. Fails closed when

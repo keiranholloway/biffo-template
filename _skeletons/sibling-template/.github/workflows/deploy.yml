@@ -308,6 +308,23 @@ jobs:
             echo "::error::Health check failed after deploy — the Lambda uploaded but isn't serving requests. Check CloudWatch logs for ${{ vars.LAMBDA_FUNCTION_NAME }}."
             exit 1
           fi
+      - name: Smoke test the CDN routing (dev.<domain>/<path>)
+        # The Lambda check above proves the API boots. It says nothing about
+        # the URL a real user hits — `${{ vars.CORE_PORTAL_URL }}/${{
+        # vars.PATH_PREFIX }}` — and one sibling went green here three times
+        # while that route was broken three different ways: a CDN behaviour
+        # that never actually got registered (silently falling through to the
+        # PARENT's default behaviour instead of this sibling), a path-prefix
+        # mismatch between the app's basePath and what CloudFront forwards,
+        # and the bare path (no trailing slash) not resolving. See
+        # scripts/routing-smoke-test.sh for how each is checked and why a
+        # generic "does it 200" probe would have passed on every one of them.
+        # Exits 0/1/2 (2 = cannot tell, never a pass); ROUTING_CURL is unset
+        # here so it uses the real `curl` — only the script's own tests stub it.
+        env:
+          ROUTING_BASE_URL: ${{ vars.CORE_PORTAL_URL }}
+          ROUTING_PATH_PREFIX: ${{ vars.PATH_PREFIX }}
+        run: sh scripts/routing-smoke-test.sh
 
   # A Deploy run that deploys NOTHING must not report success (#1065).
   #

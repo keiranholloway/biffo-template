@@ -216,6 +216,14 @@ jobs:
         # services/api, which is the environment `uv sync` installed and so the
         # one to audit.
         run: sh ../../scripts/py-dependency-audit.sh
+      - name: Routing smoke test — self-test
+        if: ${{ !cancelled() }}
+        # Not exercising this repo's own deployment (CI has none to reach) —
+        # proves scripts/routing-smoke-test.sh, the deploy.yml post-deploy
+        # routing check (#737), still catches the three recorded CDN routing
+        # failures against a stubbed curl. A verification script with no
+        # caller is the class tracked in #1413; this is that caller.
+        run: sh ../../scripts/routing-smoke-test.test.sh
 
   security-secrets:
     name: Secret Scan

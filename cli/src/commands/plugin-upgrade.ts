@@ -1,5 +1,5 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
-import { basename, join, relative, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import chalk from 'chalk'
 import { Command } from 'commander'
 import inquirer from 'inquirer'
@@ -8,10 +8,10 @@ import { PluginMigrationsAdapter } from '../adapters/plugin-migrations/index.js'
 import { RegistryAdapter, type RegistryPluginEntry } from '../adapters/registry/index.js'
 import { log } from '../lib/logger.js'
 import { validateManifest } from '../lib/plugin-manifest.js'
+import { copyPluginSource } from '../lib/plugin-source-copy.js'
 import { applyWorkspaceSources } from '../lib/plugin-workspace-sources.js'
 import {
   cloneAndValidatePlugin,
-  LOCAL_COPY_EXCLUDES,
   parsePluginTarget,
   resolveLocalPlugin,
   type ResolvedPluginSource,
@@ -283,9 +283,11 @@ export async function runPluginUpgrade(
  *    manifest `version` unchanged (a route or code-only edit mid-iteration,
  *    per the manifest's own docstring on what's actually validated) — unlike
  *    a registry upgrade, that is the *expected* case here, not a no-op.
- * 2. The copy filters out VCS/build detritus (`LOCAL_COPY_EXCLUDES`, shared
- *    with `plugin install --local`) because the source is a real working
- *    checkout — likely carrying its own `.git/`, `.venv/`, `node_modules/` —
+ * 2. The copy respects the source checkout's `.gitignore` (`copyPluginSource`,
+ *    shared with `plugin install --local` — see cli/src/lib/plugin-source-copy.ts
+ *    for why `git ls-files` over a denylist) because the source is a real
+ *    working checkout — likely carrying its own `.git/`, `.venv/`,
+ *    `node_modules/`, and potentially git worktrees of its own (#1477) —
  *    rather than a temp clone `GitAdapter.cloneToTemp` has already stripped
  *    `.git` from.
  * 3. It re-applies `ensureWorkspaceSources` after the copy. This is the
@@ -367,10 +369,7 @@ async function runLocalPluginRefresh(
     } else {
       rmSync(targetDir, { recursive: true, force: true })
       mkdirSync(targetDir, { recursive: true })
-      cpSync(source.sourceDir, targetDir, {
-        recursive: true,
-        filter: (src) => !LOCAL_COPY_EXCLUDES.has(basename(src)),
-      })
+      await copyPluginSource(source.sourceDir, targetDir)
       log.success(`Refreshed plugin source at services/${source.name}/ from ${source.origin}`)
     }
     applyWorkspaceSources(targetDir, options.cwd, `services/${source.name}`)

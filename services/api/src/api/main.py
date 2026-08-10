@@ -14,6 +14,7 @@ from .routers import (
     health,
     internal_agent_chat,
     internal_agents,
+    internal_media_generations,
     internal_orchestration,
     internal_plugin_config,
     orchestration,
@@ -23,6 +24,7 @@ from .routers.admin import agent_chat as admin_agent_chat
 from .routers.admin import agent_runs as admin_agent_runs
 from .routers.admin import endpoints as admin_endpoints
 from .routers.admin import groups as admin_groups
+from .routers.admin import media_generations as admin_media_generations
 from .routers.admin import orchestration as admin_orchestration
 from .routers.admin import organizations as admin_organizations
 from .routers.admin import plugin_chat_agents as admin_plugin_chat_agents
@@ -65,6 +67,7 @@ app.include_router(admin_users.router, prefix="/api/v1")
 # tenant-scoped, read-only, under /api/v1/admin/agent-runs. Runs are written
 # only through the internal SigV4 API above; this is the operator/portal reader.
 app.include_router(admin_agent_runs.router, prefix="/api/v1")
+app.include_router(admin_media_generations.router, prefix="/api/v1")
 # Prompt assistant (ADR-0016): Cognito-authed, admin-gated synchronous chat spine
 # under /api/v1/admin/agent-chat. Core assembles the turn under the user's
 # authority and synchronously invokes the agent-runtime Lambda for the LLM turn.
@@ -85,6 +88,7 @@ app.include_router(internal_orchestration.router, prefix="/api/v1")
 # Internal service-only agent-run API (ADR-0009 / ADR-0014): the agent runtime
 # requests, reads and completes runs here, under /api/v1/internal/*.
 app.include_router(internal_agents.router, prefix="/api/v1")
+app.include_router(internal_media_generations.router, prefix="/api/v1")
 app.include_router(internal_agent_chat.router, prefix="/api/v1")
 # Internal service-only plugin config read (ADR-0009): a plugin reads its own
 # admin-set config row from plugin_chat_agents, scoped by SigV4 identity alone,

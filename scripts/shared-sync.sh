@@ -156,19 +156,29 @@ TEMPLATE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # ---- worktree lifecycle log (#1160) -----------------------------------------
 #
 # On 2026-08-02 two repos in a 13-repo round reached phase 2 with their staged
-# worktree gone. Three hypotheses have been written and discarded against it:
-# a concurrent SHIP run (there was none -- the four overlapping runs that day
-# were all `--check`, which never reaches `stage_repo`), an unchecked
+# worktree gone. Three hypotheses were written and discarded against THAT
+# transcript specifically: a concurrent SHIP run (the four overlapping runs
+# that day were all `--check`, which never reaches `stage_repo`), an unchecked
 # `worktree add` (checked since #856), and a missing base ref (the ship path
-# takes its base from `gh repo view`). Nothing found so far can remove that
-# directory.
+# takes its base from `gh repo view`).
 #
-# The failure is rare, non-deterministic and has resisted reproduction, so this
-# stops guessing and makes the NEXT occurrence explain itself: every create and
-# every remove, with a timestamp and the PID that did it. Two concurrent runs
-# interleave in one file, so `run-start`/`run-end` bracketing is what shows a
-# second process operating inside the first one's round -- the shape three
-# hypotheses have been about.
+# The mechanism is now established and fixed, even though it does not explain
+# that specific day's transcript. `$d/.worktrees/shared-sync` was a FIXED,
+# unclaimed path per repo and `stage_repo` removed whatever sat there
+# unconditionally -- so a second full round touching the same repo, at any
+# point between the first round's phase 1 (staged) and phase 2 (shipped),
+# silently deleted the first round's staged tree. Reproduced with two
+# genuinely concurrent `sh scripts/shared-sync.sh` processes against one
+# fixture repo (shared-sync-concurrent-runs.test.ts): without a lock, the
+# second round's `stage_repo` deletes the first's staged worktree and the
+# first reaches `ship_repo` to find it gone -- the exact `MISSING-AT-SHIP`
+# symptom below, reproduced on demand rather than waited for. The fix is
+# `acquire_stage_lock`/`release_stage_lock`, defined just above `stage_repo`.
+#
+# This log stays. It is what let the mechanism be confirmed in the first
+# place, it is unrelated to which mechanism is live, and a lock that is itself
+# buggy (a stale holder never reclaimed, say) would reproduce a DIFFERENT
+# unexplained disappearance with nothing to read afterwards otherwise.
 #
 # **Always on, deliberately.** An opt-in flag would be off when a rare
 # non-deterministic failure happens, which is the only time it is worth having.
@@ -1540,6 +1550,84 @@ fi
 # own gate against them. Deliberately stops short of committing anything -- a
 # staged worktree is a question ("would this land?"), and until phase 2 it has no
 # commit, no push and no PR.
+#
+# ---- per-repo staging lock (#1160) -------------------------------------------
+#
+# Protects `$d/.worktrees/shared-sync` from a second round's `stage_repo` for
+# the whole window it is genuinely at risk in: from the moment THIS round
+# stages it through whichever of phase 1 (rehearsal failure, left for a human)
+# or phase 2 (shipped and reaped) releases it. A lock scoped to `stage_repo`'s
+# own few git calls would not cover that -- the worktree sits unused for the
+# rest of phase 1's other repos plus all of phase 2's earlier ones, which is
+# the actual window #1160 was filed against.
+#
+# Why a lock rather than a unique path (this repo's own established fix for
+# this SHAPE of bug -- pg-test-db.sh derives its port/db/container from the
+# checkout path specifically so two runs never contend on one value at all).
+# That does not transfer here: `chore/sync-shared` is deliberately the SAME
+# branch across every ordinary (non-colliding) round, so a second day's push
+# updates the still-open PR from the first rather than opening a new one --
+# see the comment above the push in `ship_repo`. Renaming the branch or the
+# worktree path per run would silently break that reuse in the overwhelmingly
+# common case (no collision at all) to guard against the rare one. A lock
+# leaves the single-round path, branch name and every existing message
+# unchanged, and only a genuinely colliding second round ever sees it.
+#
+# `mkdir` is the primitive because it is atomic on every POSIX filesystem with
+# no external binary -- `flock` is not guaranteed present the way `mkdir` is,
+# and this file already runs under plain `sh`.
+#
+# Staleness is resolved by PID liveness, not by the lock's age: a round that
+# left a repo staged after a FAILED rehearsal holds the lock deliberately (the
+# tree is left for a human to inspect, per the phase-1-failure branch below),
+# and that must keep protecting it from a concurrent round even though this
+# process is about to exit. The lock only becomes reclaimable once the
+# process that holds it is actually gone (`kill -0` fails), which is exactly
+# when a human re-running against the same repo needs it to be.
+SYNC_LOCK_WAIT="${SHARED_SYNC_LOCK_WAIT:-60}"
+
+acquire_stage_lock() {
+  _lk_d="$1"
+  _lk_label="$2"
+  _lk_dir="$_lk_d/.worktrees/.shared-sync.lock"
+  # `mkdir` (no -p) below is what makes acquisition atomic, but that means it
+  # needs an existing parent -- a repo's very first sync has no `.worktrees/`
+  # yet. `-p` here is safe even if two processes race it: both either succeed
+  # or see the directory already there, neither can observe a partial state.
+  mkdir -p "$_lk_d/.worktrees" 2>/dev/null
+  _lk_waited=0
+  while ! mkdir "$_lk_dir" 2>/dev/null; do
+    _lk_holder=$(cat "$_lk_dir/pid" 2>/dev/null || echo '')
+    if [ -n "$_lk_holder" ] && ! kill -0 "$_lk_holder" 2>/dev/null; then
+      # The holder is gone -- reclaim rather than wait out a lock nobody will
+      # ever release. `rm -rf` racing another reclaimer is harmless: at most
+      # one of them wins the next `mkdir`, and the loser just loops again.
+      wt_log lock-stale-reclaim "$_lk_label" "$_lk_dir"
+      rm -rf "$_lk_dir" 2>/dev/null
+      continue
+    fi
+    if [ "$_lk_waited" -ge "$SYNC_LOCK_WAIT" ]; then
+      wt_log lock-TIMEOUT "$_lk_label" "$_lk_dir"
+      printf '%-26s \033[31mCANNOT STAGE\033[0m - locked by pid %s (another shared-sync round is staging this repo)\n' \
+        "$_lk_label" "${_lk_holder:-unknown}" >&2
+      return 1
+    fi
+    sleep 1
+    _lk_waited=$((_lk_waited + 1))
+  done
+  printf '%s\n' "$$" > "$_lk_dir/pid"
+  wt_log lock-acquired "$_lk_label" "$_lk_dir"
+  return 0
+}
+
+release_stage_lock() {
+  _rl_d="$1"
+  _rl_label="$2"
+  _rl_dir="$_rl_d/.worktrees/.shared-sync.lock"
+  rm -rf "$_rl_dir" 2>/dev/null
+  wt_log lock-released "$_rl_label" "$_rl_dir"
+}
+
 stage_repo() {
   d="$1"
   label="$2"
@@ -1547,6 +1635,12 @@ stage_repo() {
 
   # --prune for the same reason as the drift check above (#943).
   git -C "$d" fetch origin --prune --quiet || return 1
+
+  # #1160: acquire before the pre-remove below, not after. The pre-remove is
+  # exactly what was unsafe -- it must never run while another round still
+  # holds this repo's staged tree.
+  acquire_stage_lock "$d" "$label" || return 1
+
   wt="$d/.worktrees/shared-sync"
   wt_log remove-pre-stage "$label" "$wt"
   git -C "$d" worktree remove --force "$wt" 2>/dev/null
@@ -1555,6 +1649,7 @@ stage_repo() {
   git -C "$d" branch -D chore/sync-shared >/dev/null 2>&1
   git -C "$d" worktree add -q "$wt" -b chore/sync-shared "origin/$base" || {
     wt_log add-FAILED "$label" "$wt"
+    release_stage_lock "$d" "$label"
     return 1
   }
   wt_log add "$label" "$wt"
@@ -1682,6 +1777,7 @@ stage_repo() {
   if git -C "$wt" diff --cached --quiet; then
     wt_log remove-nothing-to-sync "$label" "$wt"
     git -C "$d" worktree remove --force "$wt" 2>/dev/null
+    release_stage_lock "$d" "$label"
     return 2
   fi
   return 0
@@ -1776,10 +1872,11 @@ rehearse_repo() {
 # the first thing that was wrong. The wording sent a whole session after
 # push and permissions problems before the real condition was noticed.
 #
-# The cause is still unknown and tracked in #1160. This does not fix it. It
-# makes the failure state its own name, which is worth having regardless of
-# which mechanism removes the worktree: a blunt diagnosis costs less than a
-# confident wrong one.
+# The concurrency mechanism this was originally filed against is now
+# established and fixed (#1160: acquire_stage_lock/release_stage_lock above
+# stage_repo). This guard stays regardless -- it is a blunt, self-naming
+# diagnosis for ANY way the tree could be gone by phase 2, not only that one,
+# and a blunt diagnosis costs less than a confident wrong one either way.
 require_staged_worktree() {
   _wt="$1"
   _label="$2"
@@ -1789,8 +1886,9 @@ require_staged_worktree() {
   wt_log MISSING-AT-SHIP "$_label" "$_wt"
   printf '%-26s \033[31mstaged worktree missing\033[0m at %s\n' "$_label" "$_wt" >&2
   printf '%-26s   phase 1 staged it and it was gone by phase 2. Nothing was\n' '' >&2
-  printf '%-26s   pushed for this repo, and no PR was opened. Cause unknown -\n' '' >&2
-  printf '%-26s   see biffo-template#1160 before assuming it is the push.\n' '' >&2
+  printf '%-26s   pushed for this repo, and no PR was opened. The concurrency\n' '' >&2
+  printf '%-26s   cause is fixed (#1160) via a per-repo lock -- if this fires\n' '' >&2
+  printf '%-26s   again the cause is something else. Do not assume a repeat.\n' '' >&2
   return 1
 }
 
@@ -1801,7 +1899,11 @@ ship_repo() {
   base="$4"
   wt="$d/.worktrees/shared-sync"
 
-  require_staged_worktree "$wt" "$label" || return 1
+  # Nothing left at $wt to protect either way -- release rather than leave a
+  # lock nobody will ever come back to clear explicitly (staleness recovery
+  # in acquire_stage_lock would eventually reclaim it anyway, but there is no
+  # reason to make the next round wait on that).
+  require_staged_worktree "$wt" "$label" || { release_stage_lock "$d" "$label"; return 1; }
 
   git -C "$wt" -c commit.gpgsign=false commit -q --no-verify -m "chore(shared): sync template-shared files
 
@@ -1919,6 +2021,7 @@ Run \`sh scripts/gate-coverage.sh\` after merging to see this repo's gate measur
   wt_log remove-post-ship "$label" "$wt"
   git -C "$d" worktree remove --force "$wt" 2>/dev/null
   git -C "$d" branch -D chore/sync-shared >/dev/null 2>&1
+  release_stage_lock "$d" "$label"
 
   return 0
 }
@@ -2398,6 +2501,7 @@ else
       wt_log remove-rehearsal-fail "$label" "$d/.worktrees/shared-sync"
       git -C "$d" worktree remove --force "$d/.worktrees/shared-sync" 2>/dev/null
       git -C "$d" branch -D chore/sync-shared 2>/dev/null
+      release_stage_lock "$d" "$label"
     done < "$TARGETS"
     exit 1
   fi

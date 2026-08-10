@@ -89,11 +89,20 @@ describe('require_staged_worktree', () => {
     expect(out).toContain('no PR was opened')
   })
 
-  it('points at the open issue rather than implying the cause is known', () => {
+  it('names the fixed concurrency cause and warns against assuming a repeat', () => {
+    // The concurrency mechanism this guard was originally written against is
+    // now established and fixed (acquire_stage_lock/release_stage_lock,
+    // proven in shared-sync-concurrent-runs.test.ts). The guard stays as
+    // defense-in-depth for any OTHER way the tree could vanish, so its
+    // message no longer claims the cause is unknown -- but it still points at
+    // #1160 and still warns that a future firing is not automatically the
+    // same bug.
     const { out } = callGuard(join(tmpdir(), 'ship-guard-definitely-not-here'))
 
     expect(out).toContain('#1160')
-    expect(out).toContain('Cause unknown')
+    expect(out).not.toContain('Cause unknown')
+    expect(out).toContain('fixed (#1160)')
+    expect(out).toContain('Do not assume a repeat')
   })
 
   it('prints the path, since which repo it is is the first question', () => {

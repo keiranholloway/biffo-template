@@ -148,6 +148,35 @@ jobs:
             exit 1
           fi
 
+          # `gh repo clone` above authenticates fine -- gh reads GH_TOKEN
+          # itself. But the LATER "Run shared-sync --check" step shells out to
+          # plain `git fetch` against each clone's https origin, and git does
+          # not consult GH_TOKEN at all: it asks its own credential layer, and
+          # an https remote with no helper configured fails with "could not
+          # read Username for 'https://github.com': No such device or
+          # address" (the actual failure this fixes -- 11 of 17 clones hit it
+          # every run). `gh auth setup-git` would be the obvious fix but only
+          # wires up gh's OWN token via `gh auth token`, not this step's
+          # BIFFO_GITHUB_TOKEN, so it would silently fall back to the
+          # workflow's scoped GITHUB_TOKEN and reproduce the same failure one
+          # layer down for every private repo.
+          #
+          # Fix: an `insteadOf` rewrite in global git config, so every
+          # subsequent `git` invocation on this runner -- this step's clones
+          # AND the later check step's fetches, since `--global` writes
+          # $HOME/.gitconfig and HOME is shared across steps in one job --
+          # authenticates transparently. Chosen over embedding the token in
+          # each remote's stored URL: `insteadOf` rewrites the URL only at
+          # transport time, so `git remote -v` / `.git/config` on disk and any
+          # git error message that echoes the remote still show the plain
+          # `https://github.com/...` form, never the token. (GitHub Actions
+          # also masks the literal secret value anywhere it appears in logs,
+          # but not embedding it in the first place is the stronger
+          # guarantee, and this workflow's own header stresses this repo is
+          # PUBLIC.) `set -u` is on and `set -x` is never used in this
+          # workflow, so the token is not echoed by this script either.
+          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+
           ESTATE="$RUNNER_TEMP/shared-sync-estate"
           mkdir -p "$ESTATE"
 
@@ -230,23 +259,23 @@ jobs:
         id: sync
         if: steps.estate.outcome == 'success'
         env:
-          # #1426: this step's `diff_files` calls `git -C "$d" fetch origin
-          # --prune` against every applicable repo -- 12 of them private, on
-          # this run. The clone above authenticated with BIFFO_GITHUB_TOKEN,
-          # but a git credential helper reads the token from THIS process's
-          # environment at invocation time, not from whatever step configured
-          # it -- GitHub Actions does not carry env vars between steps unless
-          # a step declares them itself. With no GH_TOKEN here, `gh auth
-          # git-credential` (the helper `gh repo clone` wires up) had nothing
-          # to offer, so every private fetch failed with "could not read
-          # Username for 'https://github.com'" and every one of those repos
-          # was reported UNFETCHABLE. Reproduced directly: the same clones
-          # with `credential.helper` cleared and no token in the environment
-          # fail identically on the 15 private repos and succeed on the 2
-          # public ones -- which is exactly the "2 current, 0 drifted" this
-          # run reported, because the 2 public plugin repos were the only
-          # ones that could still answer. `applies()` itself was never wrong;
-          # every candidate that reached it had its marker file on disk.
+          # #1426, corrected: this step's `diff_files` calls `git -C "$d"
+          # fetch origin --prune` against every applicable repo, most of them
+          # private. Declaring GH_TOKEN here (as this comment originally
+          # argued for) turned out NOT to fix that fetch -- it fixes `gh`
+          # invocations, but plain `git fetch` over an https remote never
+          # reads GH_TOKEN at all; it asks git's own credential layer, which
+          # had nothing configured. That is why this env var alone still left
+          # 11 of 13 applicable repos reported "could not read Username for
+          # 'https://github.com'" even after it was added. The actual fix is
+          # the `git config --global url."https://x-access-token:...".
+          # insteadOf` rewrite in the "Discover the governed set" step above:
+          # `--global` writes $HOME/.gitconfig, which is shared across every
+          # step in this job, so it authenticates this step's fetches too,
+          # regardless of this step's own env. GH_TOKEN is kept here only in
+          # case shared-sync.sh ever shells out to `gh` directly (it
+          # currently does not) -- it is no longer load-bearing for `git
+          # fetch`.
           GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
         run: |
           set -u

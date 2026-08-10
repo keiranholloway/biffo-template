@@ -64,12 +64,13 @@
 #   sh scripts/shared-sync.sh --check --estate ~/code    # report drift, exit 1 if any
 #   sh scripts/shared-sync.sh --rehearse --estate ~/code # prove the candidates, ship nothing
 #   sh scripts/shared-sync.sh --estate ~/code            # rehearse, then open a PR per repo
+#                                                         # (also delivers any missing overridesFloor key, additively, #1352)
 #   sh scripts/shared-sync.sh --estate ~/code --repo tabsii-crm
 #   sh scripts/shared-sync.sh --estate ~/code --no-rehearse  # ship unproven, loudly
 #   sh scripts/shared-sync.sh --candidates --estate ~/code   # unlisted paths worth triaging (#1108)
 #   sh scripts/shared-sync.sh --backfill --estate ~/code     # skeleton files older repos never got (#1109)
 #   sh scripts/shared-sync.sh --skeleton-adoption --estate ~/code  # skeleton paths not held by EVERY applicable repo (#1271)
-#   sh scripts/shared-sync.sh --deliver-overrides --estate ~/code  # dry-run report: which repos are missing an overridesFloor key (#1352). Additive only, never pushes.
+#   sh scripts/shared-sync.sh --deliver-overrides --estate ~/code  # PREVIEW only: what the next ordinary round would deliver for overridesFloor. Never pushes; the real delivery rides the default path above.
 #
 # ## `--skeleton-adoption`: enumerate, don't threshold (#1271)
 #
@@ -766,6 +767,29 @@ diff_files() {
       fi
     done
   fi
+  # `overridesFloor`: a repo holding the target file but MISSING a key the
+  # canonical copy declares is drift, same as a missing `files` entry -- an
+  # absent security pin is exactly as unprotected as a stale one. A repo
+  # that does not hold the target at all (no frontend) is not drift, same
+  # rule `CONDITIONAL` above already applies. This is what makes such a repo
+  # a SHIP TARGET even when every other list reports it current -- without
+  # it, `stage_repo`'s splice below would never run, because the survey loop
+  # only stages a repo `diff_files` already called drifted.
+  if [ -n "$OVERRIDES_FLOOR" ]; then
+    out="$out$(printf '%s\n' "$OVERRIDES_FLOOR" | while IFS="$TAB" read -r target canonical; do
+      [ -n "$target" ] || continue
+      remote=$(git -C "$d" show "origin/$base:$target" 2>/dev/null)
+      [ -n "$remote" ] || continue
+      missing=$(printf '%s' "$remote" | node -e "
+        let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
+        try{
+          const cur=(JSON.parse(s).pnpm||{}).overrides||{};
+          const canon=(JSON.parse(require('fs').readFileSync('$TEMPLATE_ROOT/$canonical','utf8')).pnpm||{}).overrides||{};
+          console.log(Object.keys(canon).filter(k=>!(k in cur)).join(' '));
+        }catch(e){process.exit(0)}})" 2>/dev/null)
+      [ -n "$missing" ] && printf ' %s(overrides:%s)' "$target" "$(printf '%s' "$missing" | tr ' ' ',')"
+    done)"
+  fi
   echo "$out"
 }
 
@@ -1385,21 +1409,29 @@ if [ -n "$CANDIDATES" ]; then
   exit 0
 fi
 
-# --deliver-overrides: the distribution half of #1352, and deliberately the
-# ADDITIVE half only.
+# --deliver-overrides: a STANDALONE PREVIEW of the additive half of #1352.
 #
 # `overridesFloor` and `keyMustBeUniform` both stay measure-only -- see
-# `apply_overrides_floor()` above for the full argument. This mode is the
-# thing that actually calls it: for every `overridesFloor` target, stage each
-# applicable holder that is missing a canonical key, splice the missing
-# key(s) in, and report. It NEVER pushes and NEVER opens a PR in this
-# version -- every run is the dry-run/report `--rehearse`-equivalent, staged
-# in a real worktree so the splice and its post-write verification are
-# genuinely exercised, then discarded. Real delivery (push + `gh pr create`)
-# is deliberately not wired up yet: proving it safe means running it against
-# a real satellite, which is exactly what this pass was told not to do
-# ("do NOT open PRs in satellite repos in this pass"). Actually shipping is
-# follow-up work with its own review, not a bar this mode already clears.
+# `apply_overrides_floor()` above for the full argument. Real delivery is no
+# longer confined to this mode: `stage_repo`/`ship_repo` below now call
+# `apply_overrides_floor()` too, so an ordinary `sh scripts/shared-sync.sh
+# --estate ~/code` round delivers a missing override key in the SAME commit
+# and PR as any other drifted shared file, and `diff_files` counts a missing
+# key as drift on its own, so a repo current on everything else still ships
+# when the floor alone is unmet. That is the actual distribution half of
+# #1352: one channel, not two racing PRs into the same repo.
+#
+# This mode still exists because it answers a narrower, still-useful
+# question without touching anything: "what would the next ordinary round
+# deliver, right now, for overridesFloor alone?" It stages each applicable
+# holder that is missing a canonical key, splices the missing key(s) in
+# exactly as the real path would, reports, then discards the worktree --
+# it NEVER pushes and NEVER opens a PR, in any version. Useful for a human
+# sanity-checking the floor between rounds; not required before running the
+# real thing, which proves itself the same way every other shared file
+# already does (`shared-sync-rehearsal.test.ts` drives the full script
+# through a fake `gh`, including this mechanism -- see the "overridesFloor
+# delivery, wired into the ship path" describe block there).
 if [ -n "$DELIVER" ]; then
   if [ -z "$OVERRIDES_FLOOR" ]; then
     printf '\nno overridesFloor entries declared in shared-files.json -- nothing to deliver\n\n'
@@ -1556,6 +1588,30 @@ stage_repo() {
       if [ "$_mode" = seed ] && [ -f "$wt/$_target" ]; then continue; fi
       mkdir -p "$wt/$(dirname "$_target")"
       cp "$TEMPLATE_ROOT/_skeletons/$_skel/$_target" "$wt/$_target"
+    done
+  fi
+
+  # `overridesFloor` additive delivery -- the distribution half of #1352, now
+  # wired into the ordinary ship path rather than living only in the
+  # `--deliver-overrides` dry run. Splices in any `pnpm.overrides` key the
+  # canonical copy declares that this repo is missing OUTRIGHT; never touches
+  # a key already present, whatever its value -- see `apply_overrides_floor`'s
+  # own comment for the full safety argument (the risk is scoped to a
+  # PRESENT, disputed value, and there is none to disturb when the key is
+  # simply absent). Only applies where the target file exists at all: a
+  # plugin repo with no `apps/frontend/package.json` has nothing to splice
+  # into, same absence rule `CONDITIONAL` above already follows.
+  #
+  # A failure here (unparsable JSON, no `"overrides": {` line to anchor on)
+  # is reported and skipped rather than aborting the whole stage -- the other
+  # candidate files for this repo (prettier config, hooks, whatever else is
+  # drifted) are unrelated and should still ship.
+  if [ -n "$OVERRIDES_FLOOR" ]; then
+    printf '%s\n' "$OVERRIDES_FLOOR" | while IFS="$TAB" read -r _ov_target _ov_canonical; do
+      [ -n "$_ov_target" ] || continue
+      [ -f "$wt/$_ov_target" ] || continue
+      _ov_err=$(apply_overrides_floor "$wt/$_ov_target" "$TEMPLATE_ROOT/$_ov_canonical" 2>&1 >/dev/null)
+      [ -n "$_ov_err" ] && printf '    warning: overridesFloor skipped for %s -- %s\n' "$_ov_target" "$_ov_err" >&2
     done
   fi
 
@@ -1784,6 +1840,16 @@ $(for _entry in $FROM_SKELETON; do
         sync) printf -- '- `%s` (kept in step; canonical copy is `_skeletons/%s/%s`)\n' "$_t" "$_skel" "$_t" ;;
         *) printf -- '- `%s` (seeded from `_skeletons/%s/%s`; yours from now on, never overwritten again)\n' "$_t" "$_skel" "$_t" ;;
       esac
+    done)"
+  fi
+  if [ -n "$OVERRIDES_FLOOR" ]; then
+    body_files="$body_files
+$(printf '%s\n' "$OVERRIDES_FLOOR" | while IFS="$TAB" read -r _ov_t _ov_c; do
+      [ -n "$_ov_t" ] || continue
+      # Only what this PR actually carries -- same "against origin/<base>, not
+      # --cached" reasoning as the FROM_SKELETON block above.
+      git -C "$wt" diff --name-only "origin/$base" HEAD -- "$_ov_t" | grep -q . || continue
+      printf -- '- `%s` (pnpm.overrides floor: added missing key(s) from `%s` -- additive only, never rewrites a key you already have)\n' "$_ov_t" "$_ov_c"
     done)"
   fi
 
@@ -2029,10 +2095,13 @@ if [ -n "$CHECK" ]; then
 
   # ── overridesFloor ────────────────────────────────────────────────────────
   #
-  # Reports a repo MISSING an override key the canonical copy declares. Never
-  # writes: distribution is the larger half of #1352 and needs a key-level merge
-  # no existing list can express. Detecting the gap the day it appears is most
-  # of the value and none of the risk.
+  # Reports a repo MISSING an override key the canonical copy declares.
+  # `--check` itself never writes -- it only measures and reports, same as
+  # every other list here -- but the gap it reports is no longer stuck at
+  # detection: an ordinary (non-`--check`) round now delivers it, additively,
+  # through `stage_repo`/`ship_repo` (#1352). This block stays because
+  # `--check` is read daily (`scripts/practices-daily.sh`) and a repo between
+  # rounds can legitimately be behind for a few hours.
   overrides_missing=0
   if [ -n "$OVERRIDES_FLOOR" ]; then
     printf '\noverridesFloor -- pnpm.overrides keys every repo must declare (shared-files.json)\n'

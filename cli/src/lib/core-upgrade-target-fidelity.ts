@@ -4,6 +4,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { coreTag } from './core-template-trees.js'
 import type { MergeEntry } from './core-upgrade.js'
+import { MIGRATIONS_VERSIONS_DIR, migrationBodyHash } from './core-migrations.js'
+import type { MigrationCarryEntry } from './core-migrations.js'
 
 /**
  * Assert that what an upgrade is about to distribute really is the target tag
@@ -56,6 +58,23 @@ import type { MergeEntry } from './core-upgrade.js'
  *
  * `unchanged`, `keep-ours`, `removed` and `remove-conflict` write no upstream
  * content, so there is nothing to hold to the tag.
+ *
+ * ## The second mechanism this also has to cover
+ *
+ * `plan.entries` is the three-way merge planner's output, and that planner
+ * never touches `services/api/migrations/versions/` — it is user-owned
+ * (core-manifest.json), because an instance's migration chain is its own
+ * append-only history that a merge must never rewrite. New core migrations
+ * instead reach an instance through a wholly separate, additive carry
+ * (`core-migrations.ts`, `planMigrationCarry`) that reads the **same**
+ * `theirsDir` the merge planner does. A `theirsDir` corrupted the way #1399
+ * describes corrupts both; only the first was checked. `assertTargetFidelity`
+ * therefore takes an optional `migrations` input (the carry's own planned
+ * entries) and holds each one to the tag too — not byte-for-byte, since the
+ * carry legitimately rewrites `revision`/`down_revision` on every file it
+ * writes (re-chaining onto the instance's head), but by the same body hash
+ * `core-migrations.ts` itself already uses to tell a real content change from
+ * a re-chain (`migrationBodyHash`, which strips those two lines).
  */
 
 /** Statuses whose `content` is copied verbatim from the target tree. */
@@ -73,8 +92,11 @@ export type FidelityReason =
 export interface FidelityFinding {
   path: string
   reason: FidelityReason
-  /** Which half of the plan surfaced it — verbatim output, or merge input. */
-  source: 'output' | 'merge-input'
+  /**
+   * Which half of the plan surfaced it — verbatim output, merge input, or the
+   * separate migration carry.
+   */
+  source: 'output' | 'merge-input' | 'migration'
 }
 
 export interface FidelityReport {
@@ -137,6 +159,13 @@ function tagBlobIds(repo: string, tag: string, git: GitRunner): Map<string, stri
 
 export interface AssertTargetFidelityOptions {
   entries: MergeEntry[]
+  /**
+   * The additive migration carry's planned entries (`planMigrationCarry(...)
+   * .entries`), if any. Optional because not every caller plans a carry
+   * (e.g. a fixture asserting only the merge plan) — omitting it just skips
+   * this half of the check, it never fails closed on a caller that has none.
+   */
+  migrations?: Pick<MigrationCarryEntry, 'file' | 'content'>[]
   /** The template repo the tag is read from — the same one the trees came from. */
   templateRepo: string
   /** Target core version; `core-v<version>` must exist in `templateRepo`. */
@@ -226,6 +255,34 @@ export function assertTargetFidelity(options: AssertTargetFidelityOptions): Fide
     }
     if (tagText !== content) {
       findings.push({ path: entry.path, reason: 'content-differs', source })
+    }
+  }
+
+  // The additive migration carry (see module docstring): same theirsDir, a
+  // different mechanism, never covered by the loop above because
+  // plan.entries never contains a migrations/versions/ path at all.
+  for (const migration of options.migrations ?? []) {
+    const path = `${MIGRATIONS_VERSIONS_DIR}/${migration.file}`
+    checked++
+    if (!blobs.has(path)) {
+      findings.push({ path, reason: 'absent-from-tag', source: 'migration' })
+      continue
+    }
+    let tagText: string
+    try {
+      tagText = git(['-C', options.templateRepo, 'show', `${tag}:${path}`])
+    } catch {
+      findings.push({ path, reason: 'content-differs', source: 'migration' })
+      continue
+    }
+    // Not a byte comparison: the carry rewrites `revision`/`down_revision` on
+    // every migration it writes (re-chaining onto the instance's head), so
+    // the written file is never byte-identical to the tag even when faithful.
+    // migrationBodyHash is core-migrations.ts's own definition of "changed" —
+    // reused rather than re-derived, so the two mechanisms cannot disagree
+    // about what counts as drift.
+    if (migrationBodyHash(tagText) !== migrationBodyHash(migration.content)) {
+      findings.push({ path, reason: 'content-differs', source: 'migration' })
     }
   }
 

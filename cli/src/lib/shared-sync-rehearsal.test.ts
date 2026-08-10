@@ -164,6 +164,14 @@ function makeTemplate(
     withSkeletons?: boolean
     mustBeUniform?: Record<string, number>
     keyMustBeUniform?: Record<string, Record<string, number>>
+    /**
+     * Wires `overridesFloor`. The canonical copy lives at
+     * `_skeletons/sibling-template/apps/frontend/package.json`, matching the
+     * real manifest's shape, so `skeletonForMarker`/`skeletonDefault` do not
+     * need to exist for this alone -- `overridesFloor`'s canonical path is a
+     * plain repo-relative path, read directly, independent of `filesFromSkeleton`.
+     */
+    overridesCanonical?: string
   } = {},
 ): void {
   mkdirSync(join(dir, 'scripts'), { recursive: true })
@@ -174,6 +182,12 @@ function makeTemplate(
   }
   if (opts.mustBeUniform) manifest.mustBeUniform = opts.mustBeUniform
   if (opts.keyMustBeUniform) manifest.keyMustBeUniform = opts.keyMustBeUniform
+  if (opts.overridesCanonical) {
+    const canonicalPath = '_skeletons/sibling-template/apps/frontend/package.json'
+    mkdirSync(join(dir, dirname(canonicalPath)), { recursive: true })
+    writeFileSync(join(dir, canonicalPath), opts.overridesCanonical)
+    manifest.overridesFloor = { 'apps/frontend/package.json': canonicalPath }
+  }
   if (opts.withSkeletons) {
     // The two skeleton rulesets differ ON PURPOSE — that is the whole reason
     // `filesFromSkeleton` resolves its source per repo instead of `files`
@@ -255,6 +269,7 @@ function runSync(
     withSkeletons?: boolean
     mustBeUniform?: Record<string, number>
     keyMustBeUniform?: Record<string, Record<string, number>>
+    overridesCanonical?: string
     satellites?: Array<[string, SatelliteOpts]>
   } = {},
 ): {
@@ -276,6 +291,7 @@ function runSync(
     withSkeletons: opts.withSkeletons,
     mustBeUniform: opts.mustBeUniform,
     keyMustBeUniform: opts.keyMustBeUniform,
+    overridesCanonical: opts.overridesCanonical,
   })
 
   const satellites = (
@@ -300,8 +316,16 @@ function runSync(
     scriptDir = wt
   }
 
+  // `overridesFloor`'s canonical path is read relative to the process's own
+  // working location (see the comment above the OVERRIDES_FLOOR block in the
+  // script under test), matching every documented invocation. Omitting the
+  // `cwd` below would resolve that path against the test runner's location
+  // instead and misreport every canonical read as unparsable --
+  // `shared-sync-deliver-overrides.test.ts`'s `runDeliver` hit exactly this
+  // and documents it the same way.
   const res = spawnSync('sh', [join(scriptDir, scriptUnderTest), '--estate', estate, ...args], {
     encoding: 'utf8',
+    cwd: scriptDir,
     env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` },
     timeout: 120_000,
   })
@@ -325,6 +349,21 @@ function originHasSyncBranch(satellite: string): boolean {
     },
   )
   return (res.stdout ?? '').trim().length > 0
+}
+
+/** The content of a path on the satellite's PUSHED `chore/sync-shared` branch --
+ * i.e. what actually reached the remote, not what a local worktree staged. The
+ * satellite clone's own refs do not know about it until fetched: `ship_repo`
+ * pushes from a SEPARATE staged worktree, not from this clone. */
+function pushedFile(satellite: string, path: string): string | null {
+  const fetch = spawnSync('git', ['-C', satellite, 'fetch', '-q', 'origin', 'chore/sync-shared'], {
+    encoding: 'utf8',
+  })
+  if (fetch.status !== 0) return null
+  const res = spawnSync('git', ['-C', satellite, 'show', `FETCH_HEAD:${path}`], {
+    encoding: 'utf8',
+  })
+  return res.status === 0 ? res.stdout : null
 }
 
 /**
@@ -1061,6 +1100,233 @@ describe('--candidates (#1108)', () => {
     })
 
     expect(run.out).not.toMatch(/too-rare\.ts/)
+    expect(run.status).toBe(0)
+  }, 120_000)
+})
+
+/**
+ * `overridesFloor` delivery, wired into the ordinary ship path (#1352's
+ * remaining scope).
+ *
+ * `shared-sync-deliver-overrides.test.ts` and
+ * `shared-sync-overrides-delivery.test.ts` already prove `--deliver-overrides`
+ * and `apply_overrides_floor()` in isolation. What neither can prove is the
+ * thing #1352 was actually left open for: that a MISSING override key rides
+ * the SAME commit, push and PR as any other drifted shared file, through the
+ * real `stage_repo`/`ship_repo` path this file already drives for `files` and
+ * `filesFromSkeleton` -- rather than needing a second, racing round.
+ */
+describe('overridesFloor delivery, wired into the ship path (#1352)', () => {
+  // `apply_overrides_floor` anchors its splice on a LINE matching
+  // `"overrides": {`, so the fixture content -- like every real
+  // `package.json` -- must be pretty-printed, not `JSON.stringify`'s default
+  // single line. A minified fixture put the "line after the anchor" past the
+  // end of the whole object, corrupting the JSON; caught by this suite before
+  // being written down as a limitation here.
+  const CANONICAL = JSON.stringify(
+    {
+      name: 'sibling-template-frontend',
+      pnpm: {
+        overrides: {
+          'postcss@<8.5.18': '>=8.5.18',
+          'nanoid@<3.3.17': '>=3.3.17 <4',
+        },
+      },
+    },
+    null,
+    2,
+  )
+
+  it('delivers a missing override key in the SAME PR as an unrelated drifted file', () => {
+    const { run, satellites } = runSync([], {
+      overridesCanonical: CANONICAL,
+      satellites: [
+        [
+          // Stale scripts/verify.sh (the default) makes this repo drifted on
+          // `files` regardless of overridesFloor -- the case where a second,
+          // unrelated change is already shipping and the override should ride
+          // along rather than opening its own PR.
+          'sat-alpha',
+          {
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify(
+                {
+                  name: 'sat-alpha',
+                  pnpm: { overrides: { 'postcss@<8.5.18': '>=8.5.18' } },
+                },
+                null,
+                2,
+              ),
+            },
+          },
+        ],
+      ],
+    })
+
+    expect(run.status).toBe(0)
+    // ONE PR for this repo, not two -- the assertion #1352 was left open for.
+    expect(run.ghCalls.filter((c) => c.startsWith('pr create'))).toHaveLength(1)
+
+    const written = JSON.parse(pushedFile(satellites[0], 'apps/frontend/package.json') ?? '{}')
+    expect(written.pnpm.overrides['nanoid@<3.3.17']).toBe('>=3.3.17 <4')
+    // The other drifted file rode the same branch/commit.
+    expect(pushedFile(satellites[0], 'scripts/verify.sh')).toContain('verify passed')
+  }, 120_000)
+
+  it('ships a repo whose ONLY drift is a missing overridesFloor key', () => {
+    // filesUpToDate: true means `files` reports this repo current -- the only
+    // reason `diff_files` calls it drifted at all is the missing override key.
+    // Without that counting as drift, this repo would never reach stage_repo
+    // in the first place, and the splice would never run.
+    const { run, satellites } = runSync([], {
+      overridesCanonical: CANONICAL,
+      satellites: [
+        [
+          'sat-only-overrides',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify(
+                {
+                  name: 'sat-only-overrides',
+                  pnpm: { overrides: { 'postcss@<8.5.18': '>=8.5.18' } },
+                },
+                null,
+                2,
+              ),
+            },
+          },
+        ],
+      ],
+    })
+
+    expect(run.out).toMatch(/sat-only-overrides.*drifted/)
+    expect(run.status).toBe(0)
+    expect(run.ghCalls.filter((c) => c.startsWith('pr create'))).toHaveLength(1)
+    const written = JSON.parse(pushedFile(satellites[0], 'apps/frontend/package.json') ?? '{}')
+    expect(written.pnpm.overrides['nanoid@<3.3.17']).toBe('>=3.3.17 <4')
+  }, 120_000)
+
+  it('never rewrites a key the repo already has, even if the value disagrees', () => {
+    // Deliberately NOT `filesUpToDate` -- this repo already holds BOTH
+    // canonical override keys (one disputed), so overridesFloor alone gives
+    // it nothing to stage. Leaving the stale scripts/verify.sh in place means
+    // it is still staged and shipped for an UNRELATED reason, which is the
+    // real risk: does going through the real stage/ship path for something
+    // else ever touch a present, disputed override key along the way?
+    const { run, satellites } = runSync([], {
+      overridesCanonical: CANONICAL,
+      satellites: [
+        [
+          'sat-diverged',
+          {
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify(
+                {
+                  name: 'sat-diverged',
+                  pnpm: {
+                    overrides: {
+                      'postcss@<8.5.18': '>=8.5.18',
+                      // Present, disputed value -- the `sharp` shape. Must
+                      // survive untouched; only a truly ABSENT key may be
+                      // added, and this repo has none (both canonical keys
+                      // are present already).
+                      'nanoid@<3.3.17': '>=3.3.16',
+                    },
+                  },
+                },
+                null,
+                2,
+              ),
+            },
+          },
+        ],
+      ],
+    })
+
+    expect(run.status).toBe(0)
+    expect(run.ghCalls.filter((c) => c.startsWith('pr create'))).toHaveLength(1)
+    const written = JSON.parse(pushedFile(satellites[0], 'apps/frontend/package.json') ?? '{}')
+    expect(written.pnpm.overrides['nanoid@<3.3.17']).toBe('>=3.3.16')
+    // And the PR body must not falsely claim an overrides delivery that
+    // never happened -- `ship_repo` only lists a path it actually diffed.
+    expect(run.ghCalls.join('\n')).not.toContain('pnpm.overrides floor')
+  }, 120_000)
+
+  it('does not fail a repo with no apps/frontend/package.json to splice into', () => {
+    // A plugin repo has no frontend at all. overridesFloor must be a no-op
+    // for it, not a crash that takes down an otherwise-clean round.
+    const { run, satellites } = runSync([], {
+      overridesCanonical: CANONICAL,
+      satellites: [['sat-no-frontend', { marker: 'biffo.plugin.json' }]],
+    })
+
+    expect(run.status).toBe(0)
+    expect(run.ghCalls.filter((c) => c.startsWith('pr create'))).toHaveLength(1)
+    expect(originHasSyncBranch(satellites[0])).toBe(true)
+    expect(pushedFile(satellites[0], 'apps/frontend/package.json')).toBeNull()
+  }, 120_000)
+
+  it('reports the delivered key in the PR body', () => {
+    const { run } = runSync([], {
+      overridesCanonical: CANONICAL,
+      satellites: [
+        [
+          'sat-alpha',
+          {
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify(
+                {
+                  name: 'sat-alpha',
+                  pnpm: { overrides: { 'postcss@<8.5.18': '>=8.5.18' } },
+                },
+                null,
+                2,
+              ),
+            },
+          },
+        ],
+      ],
+    })
+
+    // `ghCalls` is the gh-invocation log split on EVERY newline, and the real
+    // `--body` argument is itself multi-line -- so the PR body's file list
+    // lands in later array entries, not on the `pr create ...` line itself.
+    // Search the whole log rather than one entry.
+    const log = run.ghCalls.join('\n')
+    expect(log).toContain('apps/frontend/package.json')
+    expect(log).toContain('pnpm.overrides floor')
+  }, 120_000)
+
+  it('leaves the floor untouched, and reports no PR, when every holder already meets it', () => {
+    const { run } = runSync(['--check'], {
+      overridesCanonical: CANONICAL,
+      satellites: [
+        [
+          'sat-current',
+          {
+            filesUpToDate: true,
+            seedFiles: {
+              'apps/frontend/package.json': JSON.stringify(
+                {
+                  name: 'sat-current',
+                  pnpm: {
+                    overrides: {
+                      'postcss@<8.5.18': '>=8.5.18',
+                      'nanoid@<3.3.17': '>=3.3.17 <4',
+                    },
+                  },
+                },
+                null,
+                2,
+              ),
+            },
+          },
+        ],
+      ],
+    })
+
+    expect(run.out).toMatch(/floor met|ok\s+sat-current/)
     expect(run.status).toBe(0)
   }, 120_000)
 })

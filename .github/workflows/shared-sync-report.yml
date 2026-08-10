@@ -1,0 +1,328 @@
+name: Shared-sync drift report
+
+# Nothing scheduled scripts/shared-sync.sh in GitHub Actions before this file
+# (#1421). scripts/shared-sync-daily.sh exists, but it is a WORKSTATION cron
+# entry: it operates on local clones under `--estate ~/code` and only ever
+# runs if this particular machine is on, its crontab is intact, and its `gh`
+# session has a token (scripts/practices-daily.sh's own header documents that
+# exact failure mode for its neighbouring cron job). That is a single point
+# of failure for the estate's only distribution mechanism to sibling and
+# plugin repos, and it was the live state of #1343 and #1352 for weeks: both
+# had working detection and both reported every satellite DRIFTED, but
+# nothing had asked the question. #1352's payload was six SECURITY overrides
+# across five repos.
+#
+# This is an INDEPENDENT backstop, not a replacement: it runs from GitHub's
+# infrastructure rather than a workstation, so it still reports even on a day
+# the workstation cron never fires. It is deliberately REPORT-ONLY --
+# `--check`, never a bare sync -- for the same reason the issue gives: making
+# the gap visible is the deliverable, and auto-opening a PR round into
+# thirteen repos on a schedule nobody has watched run yet is a bigger change
+# than "tell a human". Promoting to auto-delivery is future work, named but
+# not started here.
+#
+# ## Cadence: daily, offset from the workstation's round
+#
+# scripts/shared-sync-daily.sh installs at 04:00 UTC. This runs at 06:00 UTC,
+# two hours later -- enough for a same-morning workstation round to land and
+# this report to see it clean, without the two racing to clone/read the same
+# satellites at the same minute. Daily rather than weekly because the
+# measured cost of the gap was a SECURITY payload sitting undelivered for
+# weeks (#1352's `undici`/`postcss`/`sharp`/`brace-expansion`/`js-yaml`/
+# `nanoid` overrides): a week of latency on that class is the injury this
+# closes, not an acceptable trade.
+#
+# ## Cross-repo auth: BIFFO_GITHUB_TOKEN, the estate's existing pattern
+#
+# The default GITHUB_TOKEN this job would otherwise get is scoped to THIS
+# repo only -- it cannot read tabsii-com/tabsii-crm or keiranholloway/
+# biffo-runners, so a report that used it would either read nothing or fail
+# outright on step one. This is not a new problem: deploy-infra.yml and
+# deploy-global.yml already hit it (GITHUB_TOKEN cannot write Actions
+# variables cross-scope either) and the established answer, documented at
+# length in cli/src/lib/sibling-wiring.ts, is a repo secret holding a real
+# PAT -- BIFFO_GITHUB_TOKEN in the core/template repo, SIBLING_GITHUB_TOKEN
+# in a sibling, both populated from the operator's own `gh`-scoped token
+# because GITHUB_TOKEN structurally cannot do the job. This workflow reuses
+# BIFFO_GITHUB_TOKEN rather than inventing a third name: same repo, same
+# reason (a default token that cannot reach across repository boundaries),
+# same shape (a personal PAT with `repo` scope, stored as a secret).
+#
+# ## Deriving the governed set without a local estate
+#
+# scripts/shared-sync.sh's own `applies()` (a repo carries `biffo.sibling.
+# json`/`biffo.plugin.json`, or already holds `scripts/biffo.sh` and is not
+# an instance carrying `biffo.core.json`) is the authoritative and ALREADY
+# CORRECT definition of the governed set -- it is not duplicated here. What
+# has no answer without a local estate is which repos to look at in the
+# first place, since nothing in shared-files.json names actual repo slugs
+# (only `excludes`, by basename, and the `appliesTo` marker files).
+#
+# So this job clones a fresh estate into $RUNNER_TEMP: list every repo under
+# the two owners this estate actually uses (keiranholloway, tabsii-com --
+# grounded in the real estate, not a guess: every repo shared-sync governs
+# today sits under one of these two), narrowed to the `biffo-`/`tabsii-`
+# naming convention this estate follows so the run does not also clone a
+# dozen unrelated personal repos (`letterfall`, `work-bank-game`, interview
+# scratch repos) that would just be filtered out downstream anyway, then
+# clone what is left and let `shared-sync.sh --check` apply the real
+# `applies()` test against the working checkouts exactly as it does against
+# `~/code`. Archival is checked from the API's own `.archived` field on each
+# listed repo -- never a hardcoded "skip tabsii-lms" -- so an estate repo
+# that gets archived tomorrow drops out the same way, with no line here to
+# remember to add. `shared-files.json`'s own `excludes` entry for tabsii-lms
+# still applies on top of that, unchanged, via `applies()` itself.
+#
+# ## Fail closed, on purpose, at every layer
+#
+# `shared-sync.sh --check` already refuses to report a clean run against
+# nothing (`surveyed zero repos ... exit 2`) and already fails on any repo it
+# could not read (`exit 1`) -- that discipline is reused, not reinvented. This
+# workflow adds the layer in front of it: a missing/empty BIFFO_GITHUB_TOKEN,
+# a repo-listing call that fails, or a clone that fails is a loud step failure
+# here too, never a silently smaller estate. The report step below computes
+# and PRINTS the denominator itself (`checked N satellites, M drifted: ...`)
+# rather than trusting a human to infer it from a log, per #1363's lever, and
+# treats any non-zero exit from `--check` -- drift, an unreadable repo, or the
+# zero-surveyed refusal -- as a red job.
+#
+# ## Surfacing it: one tracking issue, same shape as deploy-app.yml's
+#
+# A red scheduled workflow nobody is subscribed to is its own fail-open, so
+# on ANY drift or failure this opens or comments on a single tracking issue
+# by exact stable title (never `--search`, which lags), the same pattern
+# `deploy-app.yml`'s "Open or update a tracking issue" step already uses for
+# a red deploy. It deliberately does NOT auto-close the issue on the next
+# clean run -- neither does that precedent -- because AGENTS.md section 4 is
+# explicit that an issue should not be closed by anything that has not
+# confirmed the real fix, and a scheduled job reporting "0 drifted" is
+# exactly the kind of automated signal that section warns against trusting
+# blindly for that purpose. A human closes it once satisfied.
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  # Never let two rounds clone/read the estate at once -- queue, don't cancel,
+  # so a manual `workflow_dispatch` run does not throw away an in-flight
+  # scheduled one's evidence.
+  group: shared-sync-report
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  report:
+    name: Report shared-file drift across the estate
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Discover the governed set and clone it fresh
+        id: estate
+        env:
+          GH_TOKEN: ${{ secrets.BIFFO_GITHUB_TOKEN }}
+        run: |
+          set -u
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error title=shared-sync: no cross-repo token::BIFFO_GITHUB_TOKEN is not set. The default GITHUB_TOKEN cannot read other repos, so this job cannot see the estate at all -- refusing to report a clean run against nothing it could reach." >&2
+            exit 1
+          fi
+
+          ESTATE="$RUNNER_TEMP/shared-sync-estate"
+          mkdir -p "$ESTATE"
+
+          # keiranholloway (user) and tabsii-com (org): every repo shared-sync
+          # governs today lives under one of these two, verified against the
+          # real ~/code estate before this workflow was written.
+          #
+          # These are NOT symmetric calls. `GET /users/keiranholloway/repos`
+          # looks like the obvious counterpart to the org endpoint below and is
+          # wrong: it is GitHub's generic "list a user's repos" endpoint, which
+          # returns PUBLIC repos only regardless of the caller's own token --
+          # proven against this exact token, which it silently dropped to 5
+          # repos, missing biffo-platform-app, biffo-platform, biffo-runners
+          # and biffo-plugin-sdk (all private) with no error at all. The fix is
+          # `GET /user/repos` (the AUTHENTICATED-user endpoint, no username in
+          # the path), which does see private repos -- but its default
+          # `affiliation` includes every org this token's identity belongs to,
+          # which for this token is not just tabsii-com: unfiltered it returned
+          # tens of thousands of repos across unrelated orgs and would have
+          # made this step page through all of them just to find the ~20 that
+          # are actually keiranholloway's. `affiliation=owner` restricts it to
+          # repos keiranholloway directly owns, which is the correct, narrow
+          # question ("what does keiranholloway own") rather than the broad one
+          # ("what can this token see").
+          if ! gh api "user/repos?affiliation=owner&per_page=100" --paginate \
+              --jq '.[] | select(.owner.login == "keiranholloway" and .archived == false and .fork == false) | .full_name' \
+              >> "$RUNNER_TEMP/candidates.txt.tmp"; then
+            echo "::error title=shared-sync: could not list keiranholloway's repos::gh api user/repos?affiliation=owner failed -- refusing to survey a shrunk, silently-partial estate." >&2
+            exit 1
+          fi
+          if ! gh api "orgs/tabsii-com/repos?per_page=100" --paginate \
+              --jq '.[] | select(.archived == false and .fork == false) | .full_name' \
+              >> "$RUNNER_TEMP/candidates.txt.tmp"; then
+            echo "::error title=shared-sync: could not list tabsii-com's repos::gh api orgs/tabsii-com/repos failed -- refusing to survey a shrunk, silently-partial estate." >&2
+            exit 1
+          fi
+          candidates="$RUNNER_TEMP/candidates.txt"
+          mv "$RUNNER_TEMP/candidates.txt.tmp" "$candidates"
+
+          # Narrow to this estate's own naming convention before cloning --
+          # applies() below is the real filter; this only avoids cloning
+          # personal repos with no shared-sync relevance at all
+          # (letterfall, work-bank-game, interview scratch repos, ...).
+          # Never excludes by anything OTHER than name here: `.archived` above
+          # is the only dynamic skip, matching #1421's "verify via the API,
+          # don't hardcode a repo name" requirement.
+          : > "$candidates.filtered"
+          while IFS= read -r slug; do
+            name="${slug##*/}"
+            case "$name" in
+              biffo-template) continue ;;   # the source, never a target of its own distribution
+              biffo-*|tabsii-*) ;;
+              *) continue ;;
+            esac
+            printf '%s\n' "$slug" >> "$candidates.filtered"
+          done < "$candidates"
+
+          cloned=0
+          while IFS= read -r slug; do
+            [ -n "$slug" ] || continue
+            name="${slug##*/}"
+            echo "cloning ${slug}"
+            if ! gh repo clone "$slug" "$ESTATE/$name" -- --quiet 2>&1; then
+              echo "::error title=shared-sync: could not clone ${slug}::A satellite this job could reach in the repo listing but could not clone is a LOUD failure, not a skip -- the alternative silently shrinks the denominator exactly the way #1145 did for branch protection." >&2
+              exit 1
+            fi
+            cloned=$((cloned + 1))
+          done < "$candidates.filtered"
+
+          if [ "$cloned" -eq 0 ]; then
+            echo "::error title=shared-sync: zero candidate repos::Listed keiranholloway and tabsii-com and found nothing matching biffo-*/tabsii-* to even attempt -- that is a configuration error in this workflow (or the estate's naming convention changed), not a clean estate." >&2
+            exit 1
+          fi
+
+          echo "estate=$ESTATE" >> "$GITHUB_OUTPUT"
+          echo "cloned=$cloned" >> "$GITHUB_OUTPUT"
+          echo "cloned ${cloned} candidate repo(s) into ${ESTATE}"
+
+      - name: Run shared-sync --check against the cloned estate
+        id: sync
+        if: steps.estate.outcome == 'success'
+        run: |
+          set -u
+          log="$RUNNER_TEMP/shared-sync-check.log"
+
+          # Deliberately not `set -e`/`pipefail` here -- AGENTS.md section 4 on
+          # checking exit status through a pipe: `tee` would report ITS OWN
+          # status, masking a real drift/failure exit from shared-sync.sh.
+          set +e
+          sh scripts/shared-sync.sh --check --estate "${{ steps.estate.outputs.estate }}" 2>&1 | tee "$log"
+          rc=${PIPESTATUS[0]}
+          set -e
+
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "log=$log" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Report the denominator, and open/update a tracking issue on any failure
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+
+          estate_ok="${{ steps.estate.outcome }}"
+          sync_ran="${{ steps.sync.outcome }}"
+          rc="${{ steps.sync.outputs.rc }}"
+          log="${{ steps.sync.outputs.log }}"
+          cloned="${{ steps.estate.outputs.cloned }}"
+
+          if [ "$estate_ok" != "success" ]; then
+            denom="checked 0 satellites, 0 drifted: (could not discover/clone the governed set -- see the 'Discover the governed set' step above)"
+            body_extra="The estate discovery step failed outright, so shared-sync never ran. See the run log for which repo listing or clone call failed."
+            hard_fail=1
+          elif [ "$sync_ran" != "success" ] || [ -z "${rc:-}" ]; then
+            denom="checked 0 satellites, 0 drifted: (shared-sync --check did not complete)"
+            body_extra="shared-sync.sh --check did not produce a result. See the run log."
+            hard_fail=1
+          else
+            clean_log="$RUNNER_TEMP/shared-sync-check-plain.log"
+            sed -E 's/\x1b\[[0-9;]*m//g' "$log" > "$clean_log" 2>/dev/null || cp "$log" "$clean_log"
+
+            summary_line=$(grep -E '^[0-9]+ current, [0-9]+ drifted' "$clean_log" | tail -1 || true)
+            current_n=$(printf '%s' "$summary_line" | sed -E 's/^([0-9]+) current.*/\1/')
+            drifted_n=$(printf '%s' "$summary_line" | sed -E 's/.*, ([0-9]+) drifted.*/\1/')
+            case "$current_n" in ''|*[!0-9]*) current_n=0 ;; esac
+            case "$drifted_n" in ''|*[!0-9]*) drifted_n=0 ;; esac
+            checked_n=$((current_n + drifted_n))
+
+            drifted_names=$(grep -E '^[^[:space:]]+ +DRIFTED' "$clean_log" | awk '{print $1}' | paste -sd, - || true)
+            [ -n "$drifted_names" ] || drifted_names="(none)"
+
+            unreadable=$(grep -c 'cannot fetch\|repo(s) could not be read' "$clean_log" || true)
+
+            denom="checked ${checked_n} satellites, ${drifted_n} drifted: ${drifted_names}"
+
+            hard_fail=0
+            # rc from shared-sync.sh --check: 0 clean, 1 drift/unreadable-repo,
+            # 2 cannot-tell (including "surveyed zero repos"). Any non-zero is
+            # a red job -- see the workflow header for why zero is never a pass.
+            [ "$rc" -ne 0 ] 2>/dev/null && hard_fail=1
+            [ "$checked_n" -eq 0 ] && hard_fail=1
+
+            body_extra="Cloned ${cloned:-0} candidate repo(s) under \`biffo-*\`/\`tabsii-*\` from keiranholloway and tabsii-com; shared-sync.sh --check exited ${rc}. ${unreadable:-0} line(s) reported an unreadable repo."
+          fi
+
+          echo "$denom"
+          {
+            echo "### Shared-sync drift report"
+            echo
+            echo "\`$denom\`"
+            echo
+            echo "$body_extra"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${hard_fail:-1}" -eq 1 ]; then
+            run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            title="shared-sync scheduled report: satellite drift or an unreadable repo detected"
+            body=$(printf '%s\n' \
+              "\`$denom\`" \
+              "" \
+              "$body_extra" \
+              "" \
+              "Run: ${run_url}" \
+              "" \
+              "Remediate with a shared-sync round from a workstation with the estate cloned:" \
+              "" \
+              '```bash' \
+              "sh scripts/shared-sync.sh --now --estate ~/code" \
+              '```' \
+              "" \
+              "(or wait for the daily workstation round -- scripts/shared-sync-daily.sh -- if" \
+              "one is still running; \`--check\` above only reports, it never opens anything itself.)" \
+              "" \
+              "This issue is not auto-closed on the next clean run, per AGENTS.md section 4 --" \
+              "confirm the satellites actually converged before closing it.")
+            existing=$(gh issue list --state open --limit 100 --json number,title \
+              --jq "map(select(.title == \"${title}\")) | .[0].number // empty")
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "$body"
+            else
+              gh issue create --title "$title" --body "$body"
+            fi
+            exit 1
+          fi
+
+          exit 0

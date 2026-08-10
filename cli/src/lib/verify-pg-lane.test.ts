@@ -42,12 +42,27 @@ interface Run {
  * the `gitleaks` assertion in verify-no-ci.test.ts pass in CI and fail on a
  * workstation, and cost real trust when it was blamed on an innocent PR.
  */
+// This file is about the Postgres lane, not gitleaks -- but every fixture here
+// has no `.github/workflows/ci.yml`, so `ci_has()` runs in best-effort mode and
+// treats gitleaks as applicable. Since #1464 a missing `gitleaks` binary is
+// correctly reported as `NOT RUN` rather than silently filed as "not
+// applicable", which would otherwise make every assertion in this file about
+// the PG lane's own `NOT RUN` text machine-dependent on whether gitleaks
+// happens to be installed on whatever CI or workstation runs these tests. A
+// default stub keeps gitleaks out of these tests' business, the same way
+// `_stub-bin/uv` keeps the general Python lane out of the pg-test tests below.
+const DEFAULT_GITLEAKS_STUB = '#!/bin/sh\nexit 0\n'
+
 function runIn(files: Record<string, string>, env: Record<string, string> = {}): Run {
   const dir = makeTmpDir('biffo-verify-pg')
   try {
     execFileSync('git', ['init', '-q'], { cwd: dir })
+    const allFiles =
+      '_stub-bin/gitleaks' in files
+        ? files
+        : { ...files, '_stub-bin/gitleaks': DEFAULT_GITLEAKS_STUB }
     let hasStubBin = false
-    for (const [rel, body] of Object.entries(files)) {
+    for (const [rel, body] of Object.entries(allFiles)) {
       const full = join(dir, rel)
       mkdirSync(dirname(full), { recursive: true })
       writeFileSync(full, body)
@@ -88,12 +103,17 @@ const PG_TEST = 'def test_rls():\n    assert True\n'
 // "ran NOTHING" branch, which exits before the summary is printed.
 const PASSING = '{"name":"p","scripts":{"lint":"true"}}\n'
 
-// No `pyproject.toml` in any fixture, deliberately. Adding one makes `verify.sh`
-// try to run ruff/pyright/bandit/pytest in a throwaway venv that has none of
-// them, so every Python check FAILS and the run never reaches the summary these
-// tests are about. The lane is detected from the test filenames alone, and the
-// no-DSN branch returns before any project directory is resolved, so the file
-// buys nothing here except a machine-dependent failure.
+// No `pyproject.toml` in most fixtures, deliberately. Adding one makes
+// `verify.sh` try to run ruff/pyright/bandit/pytest in a throwaway venv that
+// has none of them, so every Python check FAILS and the run never reaches the
+// summary these tests are about. The lane is detected from the test filenames
+// alone, and the no-DSN branch returns before any project directory is
+// resolved, so the file buys nothing there except a machine-dependent
+// failure. A handful of tests below that need the lane to actually RUN once a
+// DSN is set add one locally and rely on `ci_has()` gating the general Python
+// checks off in a fixture with no `.github/workflows/ci.yml` -- see the
+// "killed pg-test lane" describe block for where that pattern was
+// established.
 
 describe('verify.sh finds Postgres-dependent tests by convention', () => {
   it('is n/a in a repo that has none', () => {
@@ -172,6 +192,13 @@ describe('verify.sh provisions the database rather than asking you to remember',
   // DSN, and anything else means the lane did not run.
   const lane = {
     'package.json': PASSING,
+    // A pyproject.toml above the module is needed so a DSN actually reaches
+    // `pg_test_run` instead of landing on the (#1464) "no pyproject.toml
+    // above the Postgres modules" gap -- itself now correctly reported as
+    // NOT RUN, same as every other applicable-but-blocked case in this file.
+    // Safe the same way the killed-lane block below explains: no ci.yml here,
+    // so `ci_has()` gates the general ruff/pyright/bandit/pytest checks off.
+    'services/api/pyproject.toml': '',
     'services/api/tests/test_rls_pg.py': PG_TEST,
   }
 
@@ -181,6 +208,7 @@ describe('verify.sh provisions the database rather than asking you to remember',
       // Stands in for the real helper: the contract is "last stdout line is a
       // DSN", and that contract is what this pins.
       'scripts/biffo.sh': 'echo "postgresql+asyncpg://u:p@localhost:1/db"\n',
+      '_stub-bin/uv': '#!/bin/sh\necho "3 passed in 0.10s"\nexit 0\n',
     })
 
     expect(run.stdout).not.toContain('NOT RUN')
@@ -268,17 +296,26 @@ describe('verify.sh blocks a NOT-RUN pg-test lane when the push is relevant (#65
 
   it('does not block once a DSN is set, even with the signal on', () => {
     // A configured DSN takes verify.sh past the `elif [ -z "$PG_TEST_DSN" ]`
-    // branch this block lives in entirely -- here it lands on `skip pg-test
-    // "no pyproject.toml..."` rather than running the lane for real (no
-    // pyproject.toml fixture exists, deliberately -- see the file header: one
-    // would make ruff/pyright/bandit run against a project that is not there
-    // and fail for reasons unconnected to this test). Either way is "not the
-    // NOT-RUN gap", and the point is the same: once a DSN reaches verify.sh,
-    // `BIFFO_PGTEST_DIFF_RELEVANT` has nothing left to escalate.
-    const run = runIn(lane, {
-      BIFFO_PGTEST_DIFF_RELEVANT: '1',
-      BIFFO_TEST_PG_DSN: 'postgresql+asyncpg://u:p@localhost:1/db',
-    })
+    // branch this block lives in entirely -- the point is that
+    // `BIFFO_PGTEST_DIFF_RELEVANT` has nothing left to escalate once a DSN
+    // reaches verify.sh. A `pyproject.toml` and a fast passing `uv` stub are
+    // supplied here (not in the shared `lane` fixture, which the BLOCKED
+    // tests above deliberately keep DSN-less) so the run actually reaches
+    // `pg_test_run` instead of landing on the (#1464) "no pyproject.toml
+    // above the Postgres modules" gap -- itself now correctly reported as
+    // NOT RUN, same as every other applicable-but-blocked case in this file,
+    // which would otherwise trip the very assertion this test makes.
+    const run = runIn(
+      {
+        ...lane,
+        'services/api/pyproject.toml': '',
+        '_stub-bin/uv': '#!/bin/sh\necho "3 passed in 0.10s"\nexit 0\n',
+      },
+      {
+        BIFFO_PGTEST_DIFF_RELEVANT: '1',
+        BIFFO_TEST_PG_DSN: 'postgresql+asyncpg://u:p@localhost:1/db',
+      },
+    )
 
     expect(run.stdout).not.toContain('NOT RUN')
     expect(run.stdout).not.toContain('BLOCKED')

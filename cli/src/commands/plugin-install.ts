@@ -9,7 +9,7 @@ import { log } from '../lib/logger.js'
 import { pluginDir } from '../lib/plugin-locations.js'
 import { validateManifest, type PluginManifest } from '../lib/plugin-manifest.js'
 import { syncPluginTerraform } from '../lib/plugin-terraform-wiring.js'
-import { ensureWorkspaceSources, workspaceMemberNames } from '../lib/plugin-workspace-sources.js'
+import { applyWorkspaceSources } from '../lib/plugin-workspace-sources.js'
 
 const TARGET_PATTERN = /^([a-z][a-z0-9-]*)@(\d+\.\d+)$/
 
@@ -84,8 +84,13 @@ export interface ResolvedPluginSource {
   cleanup: () => void
 }
 
-/** Build/VCS detritus never copied out of a local plugin directory. */
-const LOCAL_COPY_EXCLUDES = new Set([
+/**
+ * Build/VCS detritus never copied out of a local plugin directory. Exported
+ * so `plugin upgrade --local` (a refresh of an already-installed plugin from
+ * the same kind of local checkout) filters identically rather than
+ * re-declaring this list and letting the two drift.
+ */
+export const LOCAL_COPY_EXCLUDES = new Set([
   '.git',
   '.venv',
   'node_modules',
@@ -329,16 +334,7 @@ export async function runPluginInstall(
     // `uv run` to hit it — unless its pyproject sources that dep from the
     // workspace. The standalone repo resolves it from PyPI; only the vendored
     // copy needs this. (#biffo-plugin-install user-facing series.)
-    const pluginPyproject = join(targetDir, 'pyproject.toml')
-    if (existsSync(pluginPyproject)) {
-      const sourced = ensureWorkspaceSources(pluginPyproject, workspaceMemberNames(options.cwd))
-      if (sourced.length > 0) {
-        log.info(
-          `Sourced ${sourced.join(', ')} from the workspace in ${relTargetDir}/pyproject.toml ` +
-            '(the instance provides it as a workspace member).',
-        )
-      }
-    }
+    applyWorkspaceSources(targetDir, options.cwd, relTargetDir)
 
     const stagePaths = [relTargetDir]
 

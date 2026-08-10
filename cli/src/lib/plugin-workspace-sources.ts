@@ -26,6 +26,7 @@
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { log } from './logger.js'
 
 /**
  * Extract the quoted strings of a `key = [ ... ]` TOML array (single- or
@@ -188,4 +189,27 @@ export function ensureWorkspaceSources(
   // read-modify-write, not an overwrite guard, so there is no check to race.
   writeFileSync(pluginPyprojectPath, updated)
   return toAdd
+}
+
+/**
+ * `ensureWorkspaceSources` plus the log line every call site wants — pulled
+ * out because `plugin install`, `plugin upgrade <name>@<minor>` and `plugin
+ * upgrade --local` each land a plugin's `pyproject.toml` on disk and then
+ * need this exact "if the workspace provided anything, say so" step. Kept as
+ * one function so a future change to what gets logged (or how the target
+ * pyproject is found) can't fix three of the four call sites and miss the
+ * fourth — which is exactly how the registry `plugin upgrade` path went
+ * without calling `ensureWorkspaceSources` at all until it was pointed out
+ * in review.
+ */
+export function applyWorkspaceSources(targetDir: string, cwd: string, relTargetDir: string): void {
+  const pluginPyproject = join(targetDir, 'pyproject.toml')
+  if (!existsSync(pluginPyproject)) return
+  const sourced = ensureWorkspaceSources(pluginPyproject, workspaceMemberNames(cwd))
+  if (sourced.length > 0) {
+    log.info(
+      `Sourced ${sourced.join(', ')} from the workspace in ${relTargetDir}/pyproject.toml ` +
+        '(the instance provides it as a workspace member).',
+    )
+  }
 }

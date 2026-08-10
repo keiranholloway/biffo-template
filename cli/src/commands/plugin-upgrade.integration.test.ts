@@ -162,3 +162,129 @@ describe('runPluginUpgrade — end-to-end', () => {
     expect(status.stdout.trim()).toBe('')
   })
 })
+
+describe('runPluginUpgrade --local — end-to-end', () => {
+  let localCheckout: string
+  let projectRoot: string
+
+  beforeEach(async () => {
+    // A real local plugin checkout — deliberately NOT a git repo pointed at
+    // by the registry, and carrying its own .git/venv/node_modules the way a
+    // developer's actual working copy would, unlike the temp clone
+    // `GitAdapter.cloneToTemp` hands the registry path (which has already
+    // stripped `.git`).
+    localCheckout = makeTmpDir('biffo-plugin-local-checkout')
+    await initGitRepo(localCheckout)
+    writeFileSync(
+      join(localCheckout, 'biffo.plugin.json'),
+      JSON.stringify({
+        name: 'widgets',
+        version: '1.0.0',
+        description: 'Widgets plugin',
+        tables: [
+          {
+            name: 'widgets_items',
+            columns: [{ name: 'label', type: 'String(100)', nullable: false }],
+          },
+        ],
+        api_routes: [
+          { method: 'GET', path: '/items', table: 'widgets_items', operation: 'list' },
+          { method: 'GET', path: '/items/{id}', table: 'widgets_items', operation: 'read' },
+        ],
+      }),
+    )
+    writeFileSync(
+      join(localCheckout, 'pyproject.toml'),
+      '[project]\nname = "widgets"\ndependencies = ["biffo-plugin-sdk>=1.1"]\n',
+    )
+    await commitAll(localCheckout, 'local edits')
+
+    projectRoot = makeTmpDir('biffo-project')
+    mkdirSync(join(projectRoot, 'packages', 'python-sdk'), { recursive: true })
+    writeFileSync(
+      join(projectRoot, 'packages', 'python-sdk', 'pyproject.toml'),
+      '[project]\nname = "biffo-plugin-sdk"\n',
+    )
+    writeFileSync(
+      join(projectRoot, 'pyproject.toml'),
+      '[tool.uv.workspace]\nmembers = ["packages/python-sdk"]\n',
+    )
+    mkdirSync(join(projectRoot, 'services', 'widgets'), { recursive: true })
+    writeFileSync(
+      join(projectRoot, 'services', 'widgets', 'biffo.plugin.json'),
+      JSON.stringify({
+        name: 'widgets',
+        version: '1.0.0',
+        description: 'Widgets plugin',
+        tables: [],
+        api_routes: [],
+      }),
+    )
+    // The already-installed copy carries the workspace-source adaptation
+    // `plugin install` appended at install time — this is what a naive
+    // refresh must not silently drop.
+    writeFileSync(
+      join(projectRoot, 'services', 'widgets', 'pyproject.toml'),
+      '[project]\nname = "widgets"\ndependencies = ["biffo-plugin-sdk>=1.1"]\n\n' +
+        '[tool.uv.sources]\nbiffo-plugin-sdk = { workspace = true }\n',
+    )
+    await initGitRepo(projectRoot)
+    await commitAll(projectRoot, 'feat(plugins): install widgets@1.0.0')
+  })
+
+  afterEach(() => {
+    rmSync(localCheckout, { recursive: true, force: true })
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+
+  it('refreshes the install from the local checkout, preserves the workspace-source adaptation, and commits', async () => {
+    await runPluginUpgrade(
+      undefined,
+      { local: localCheckout, dryRun: false, force: true, cwd: projectRoot },
+      {
+        registry: new RegistryAdapter(REGISTRY_URL),
+        git: new GitAdapter(),
+        migrations: new FakePluginMigrationsAdapter() as never,
+      },
+    )
+
+    const manifestPath = join(projectRoot, 'services', 'widgets', 'biffo.plugin.json')
+    expect(JSON.parse(readFileSync(manifestPath, 'utf8'))).toMatchObject({
+      name: 'widgets',
+      version: '1.0.0',
+    })
+
+    // The local checkout's own .git must not leak into the monorepo's tree.
+    expect(existsSync(join(projectRoot, 'services', 'widgets', '.git'))).toBe(false)
+
+    // The install-time [tool.uv.sources] adaptation survives the refresh —
+    // this is the defect that actually bit under the manual hand-sync.
+    const pyproject = readFileSync(
+      join(projectRoot, 'services', 'widgets', 'pyproject.toml'),
+      'utf8',
+    )
+    expect(pyproject).toContain('[tool.uv.sources]')
+    expect(pyproject).toContain('biffo-plugin-sdk = { workspace = true }')
+
+    const log = await execa('git', ['log', '-1', '--pretty=%s'], { cwd: projectRoot })
+    expect(log.stdout).toBe('chore(plugins): refresh widgets from local checkout')
+
+    const status = await execa('git', ['status', '--porcelain'], { cwd: projectRoot })
+    expect(status.stdout.trim()).toBe('')
+  })
+
+  it('supports --dry-run with no filesystem or git side effects', async () => {
+    await runPluginUpgrade(
+      undefined,
+      { local: localCheckout, dryRun: true, force: true, cwd: projectRoot },
+      {
+        registry: new RegistryAdapter(REGISTRY_URL),
+        git: new GitAdapter(),
+        migrations: new FakePluginMigrationsAdapter() as never,
+      },
+    )
+
+    const status = await execa('git', ['status', '--porcelain'], { cwd: projectRoot })
+    expect(status.stdout.trim()).toBe('')
+  })
+})

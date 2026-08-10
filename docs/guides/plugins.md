@@ -61,6 +61,29 @@ case it installs in place. Either way it validates the manifest, copies
 `terraform/` to `modules/plugins/<name>/`, generates the Alembic migration, and
 commits — the same steps the registry path performs.
 
+### Refreshing an installed plugin from an out-of-tree checkout
+
+If you develop a plugin in its own repo (say `~/code/biffo-plugin-acme-crm`)
+and vendor it into an instance with `biffo plugin install --local`, there was
+no way back in: `install` refuses once `services/<name>/` exists, and
+`biffo plugin upgrade <name>@<minor>` has nothing to resolve until the
+plugin's publish workflow has run at least once. `biffo plugin upgrade --local
+<path>` is the way back in — it re-runs the same replace flow a registry
+upgrade does, resolving from disk instead:
+
+```bash
+biffo plugin upgrade --local ~/code/biffo-plugin-acme-crm
+```
+
+It replaces `services/<name>/` and `modules/plugins/<name>/` with the local
+checkout's current contents, re-applies the `[tool.uv.sources]` workspace
+adaptation `install` originally added (a plain file copy would silently drop
+it, and the next `uv run` — the migration step below — would fail outright),
+regenerates the Alembic migration **only if the table set actually changed**
+(a route- or code-only edit produces none), and commits. `--force` skips the
+confirmation prompt, `--dry-run` prints what would happen without touching
+anything — same flags as the registry path.
+
 ## What a plugin looks like
 
 A plugin repo (or just a directory) has a `biffo.plugin.json` at its root and, optionally, `src/` for its own non-CRUD code and `terraform/` for infra. The **manifest is the only part the Core API needs** — it's what gets bundled into the Lambda and turned into routes.
@@ -158,6 +181,7 @@ Each table's `permissions` block gates its routes (ADR-0004). Default-deny: an o
 | `biffo plugin install <name>@<minor>` | Clone → copy into `services/<name>/` → migration → commit (registry-gated)     |
 | `biffo plugin install --local <path>` | Same, from an unpublished local directory — no registry needed                 |
 | `biffo plugin upgrade <name>@<minor>` | Replace an installed plugin with a newer minor (registry-gated)                |
+| `biffo plugin upgrade --local <path>` | Refresh an installed plugin from a local checkout — no registry needed         |
 | `biffo plugin uninstall <name>`       | Remove `services/<name>/` (and any `modules/plugins/<name>/`) and commit       |
 
 ## Terraform wiring (automatic)

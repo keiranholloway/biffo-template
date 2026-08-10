@@ -84,8 +84,13 @@ export interface ResolvedPluginSource {
   cleanup: () => void
 }
 
-/** Build/VCS detritus never copied out of a local plugin directory. */
-const LOCAL_COPY_EXCLUDES = new Set([
+/**
+ * Build/VCS detritus never copied out of a local plugin directory. Exported
+ * so `plugin upgrade --local` (a refresh of an already-installed plugin from
+ * the same kind of local checkout) filters identically rather than
+ * re-declaring this list and letting the two drift.
+ */
+export const LOCAL_COPY_EXCLUDES = new Set([
   '.git',
   '.venv',
   'node_modules',

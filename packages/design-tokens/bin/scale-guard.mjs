@@ -147,7 +147,7 @@ function main() {
         '',
         '  --dir       Repo root to scan for .css/.tsx/.jsx files (default: cwd)',
         '  --tokens    Path to the tokens.css declaring the --text-*/--space-* scale',
-        '              (default: this package\'s own tokens.css)',
+        "              (default: this package's own tokens.css)",
         '  --baseline  Path to the baseline JSON file (default: <dir>/scale-guard-baseline.json)',
         '  --init      Write the baseline file from the current violation count and exit',
       ].join('\n'),

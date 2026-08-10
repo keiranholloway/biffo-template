@@ -41,7 +41,14 @@ function writeBaseline(count) {
 describe('with a configured scale (fixture tokens)', () => {
   it('CLI exits 0 on a fixture with only on-scale values (baseline 0)', () => {
     const baseline = writeBaseline(0)
-    const result = runGuard(['--dir', CLEAN_FIXTURE, '--tokens', SCALE_TOKENS, '--baseline', baseline])
+    const result = runGuard([
+      '--dir',
+      CLEAN_FIXTURE,
+      '--tokens',
+      SCALE_TOKENS,
+      '--baseline',
+      baseline,
+    ])
     expect(result.status, result.stdout + result.stderr).toBe(0)
     expect(result.stdout).toMatch(/PASS -- 0 off-scale/)
     // Proves the run actually read the scale, not just returned green blind:
@@ -99,7 +106,14 @@ describe('with a configured scale (fixture tokens)', () => {
       mkdtempSync(join(tmpdir(), 'scale-guard-nobaseline-')),
       'scale-guard-baseline.json',
     )
-    const result = runGuard(['--dir', CLEAN_FIXTURE, '--tokens', SCALE_TOKENS, '--baseline', missingBaseline])
+    const result = runGuard([
+      '--dir',
+      CLEAN_FIXTURE,
+      '--tokens',
+      SCALE_TOKENS,
+      '--baseline',
+      missingBaseline,
+    ])
     expect(result.status, result.stdout + result.stderr).toBe(2)
     expect(result.stderr).toMatch(/cannot tell/)
   })

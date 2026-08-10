@@ -34,13 +34,6 @@ body {
   animation: spin 0.8s linear infinite;
 }
 
-/* DEMO ONLY -- proves the scale drift guard bites on a real hardcoded value.
- * Reverted in the very next commit; see that commit message for the guard
- * output this produced. */
-.demo-off-scale-heading {
-  font-size: 13px;
-}
-
 @keyframes spin {
   to {
     transform: rotate(360deg);

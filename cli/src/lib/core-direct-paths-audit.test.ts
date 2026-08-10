@@ -492,3 +492,77 @@ describe('resolveSiblingCoreSrc', () => {
     )
   })
 })
+
+// ── disagreement test: class #1362, instance #9 ─────────────────────────────
+//
+// The guard's two candidate documents are `biffo-template`'s own route
+// registrations (what the manifest/naive caller would reach for first — it is
+// the only core source this repo, or a caller pointed at it, has on hand) and
+// the INSTANCE's route registrations (what actually answers the sibling's
+// HTTP request in production: the template's routes PLUS that instance's own
+// `domains/<name>/` routes). #1377's first real run used the former for every
+// sibling and produced 9/9 false positives; nothing here samples that
+// agreement — this constructs a route the template has NEVER registered and
+// that only the resolved instance carries, then asserts the audit disagrees
+// with the template and agrees with the instance found via
+// `resolveSiblingCoreSrc`.
+describe('disagreement: the audit must follow the RESOLVED INSTANCE, not the template it was scaffolded from (#1377, class #1362)', () => {
+  it('a sibling call site matching only an instance-added domain route fails against the template and passes against the resolved instance', () => {
+    const estateDir = makeTmpDir('core-direct-disagreement')
+
+    // The sibling frontend: one core-direct call site, to a route that this
+    // fixture's "template" core never registers.
+    const frontendSrcDir = join(estateDir, 'test-sibling', 'apps', 'frontend', 'src')
+    mkdirSync(join(frontendSrcDir, 'lib'), { recursive: true })
+    writeFileSync(
+      join(frontendSrcDir, 'lib', 'demo-requests.ts'),
+      "const CORE_API_URL = ''\nfetch(`${CORE_API_URL}/api/v1/public/demo-requests`)\n",
+    )
+    writeFileSync(
+      join(estateDir, 'test-sibling', 'biffo.sibling.json'),
+      JSON.stringify({ name: 'test-sibling', core_project: 'test-instance' }),
+    )
+
+    // "Document": biffo-template's own core -- registers nothing under
+    // /public/. Mirrors the real measurement in #1377's comment: biffo-template
+    // registers ZERO /public/ routes.
+    const templateApiSrcDir = join(estateDir, 'biffo-template', 'services', 'api', 'src')
+    mkdirSync(join(templateApiSrcDir, 'domains'), { recursive: true })
+    writeFileSync(join(templateApiSrcDir, 'domains', 'whoami.py'), 'router = APIRouter()\n')
+
+    // "Actor": the instance that ACTUALLY serves test-sibling. It carries the
+    // template's routes (none relevant here) plus its own product-domain
+    // route the template has never held.
+    const instanceApiSrcDir = join(estateDir, 'test-instance', 'services', 'api', 'src')
+    mkdirSync(join(instanceApiSrcDir, 'domains'), { recursive: true })
+    writeFileSync(join(instanceApiSrcDir, 'domains', 'whoami.py'), 'router = APIRouter()\n')
+    writeFileSync(
+      join(instanceApiSrcDir, 'domains', 'demo_requests.py'),
+      'router = APIRouter(prefix="/public/demo-requests", tags=["public"])\n',
+    )
+
+    // Reading the DOCUMENT (template) directly: unmatched -- the #1377 bug,
+    // reproduced from first principles rather than merely asserted.
+    const againstTemplate = auditSiblingCoreDirectPaths({
+      sibling: 'test-sibling',
+      frontendSrcDir,
+      coreApiSrcDir: templateApiSrcDir,
+    })
+    expect(againstTemplate.ok).toBe(false)
+    expect(againstTemplate.unmatched).toHaveLength(1)
+    expect(againstTemplate.unmatched[0].normalized).toBe('/api/v1/public/demo-requests')
+
+    // Reading the ACTOR (the resolved instance, via resolveSiblingCoreSrc --
+    // the fix, not a hand-picked directory): ok. The guard must return what
+    // the actor actually does, not what the document says.
+    const resolution = resolveSiblingCoreSrc({ estateDir, sibling: 'test-sibling' })
+    expect(resolution.coreApiSrcDir).toBe(instanceApiSrcDir)
+    const againstInstance = auditSiblingCoreDirectPaths({
+      sibling: 'test-sibling',
+      frontendSrcDir,
+      coreApiSrcDir: resolution.coreApiSrcDir,
+    })
+    expect(againstInstance.ok).toBe(true)
+    expect(againstInstance.unmatched).toEqual([])
+  })
+})

@@ -136,13 +136,15 @@ export const GUARD_AUTHORITY_INVENTORY: GuardAuthorityRecord[] = [
     document: "biffo-template's own route registrations",
     actor:
       'the sibling instance actually serving the request (template routes + its own domains/<name>/ routes)',
-    disagreementTest: null,
+    disagreementTest: 'cli/src/lib/core-direct-paths-audit.test.ts',
     note:
       'instance #9 (numbered #1428 in its own issue), reported 2026-08-10: all 9 findings on its ' +
       'first real run were false positives, because the template registers zero of the /public/ ' +
       'routes a sibling frontend calls — those are served by the INSTANCE, which the audit never ' +
-      'reads. No disagreement test exists; would need a synthetic instance tree with a domain-owned ' +
-      'route the template never carries, asserting the audit does not flag it.',
+      "reads. Fixed by resolveSiblingCoreSrc() (already shipped, reading biffo.sibling.json's " +
+      'core_project). Disagreement test added: a synthetic estate with a template core registering ' +
+      'nothing under /public/ and a resolved instance core that does — the audit disagrees (fails) ' +
+      "against the template and agrees (passes) against resolveSiblingCoreSrc()'s resolved instance.",
   },
 
   // ── NOT in class: single-document guards (why they are excluded) ────────

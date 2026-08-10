@@ -69,6 +69,15 @@ locals {
   # whoever serves the root, and adding it back would re-create the collision.
   portal_cache_behaviors = ["admin", "admin/*", "login", "login/*"]
 
+  # Both Core-API variables carry the same value when both are in use — they are
+  # separate only so an instance can enable one route without the other. `try`
+  # wraps `coalesce` because coalesce ERRORS when every argument is empty, which
+  # is the ordinary "neither feature enabled" case rather than a misconfiguration.
+  core_api_origin_domain = try(
+    coalesce(var.core_api_health_domain, var.tracked_link_api_domain),
+    "",
+  )
+
   # Portal behaviors first so they are evaluated ahead of any sibling's. In
   # practice the patterns are disjoint — `sibling_origins` forbids the reserved
   # names "admin" and "login" (see variables.tf), and a duplicate path_pattern
@@ -309,8 +318,15 @@ resource "aws_cloudfront_distribution" "portal" {
   # core_api_health_domain is set. Separate origin id from "plugin-host" even
   # when both point at the same gateway — CloudFront allows that, and coupling
   # them would mean one cannot be enabled without the other.
+  # The Core API origin now serves MORE THAN ONE behaviour — the health path and
+  # the tracked-link redirect — each independently opt-in. So the origin is gated
+  # on whether *any* of them is enabled, not on any single feature's variable.
+  # Gating it on core_api_health_domain alone would mean an instance that wanted
+  # tracked links but not the health route got a behaviour pointing at an origin
+  # that does not exist, which fails the apply and takes the whole distribution
+  # with it.
   dynamic "origin" {
-    for_each = var.core_api_health_domain == "" ? [] : [var.core_api_health_domain]
+    for_each = local.core_api_origin_domain == "" ? [] : [local.core_api_origin_domain]
     content {
       domain_name = origin.value
       origin_id   = "core-api"
@@ -389,6 +405,41 @@ resource "aws_cloudfront_distribution" "portal" {
   # static export and must never touch an API request.
   dynamic "ordered_cache_behavior" {
     for_each = var.core_api_health_domain == "" ? {} : { "api/v1/health" = "core-api" }
+    content {
+      path_pattern             = ordered_cache_behavior.key
+      target_origin_id         = ordered_cache_behavior.value
+      viewer_protocol_policy   = "redirect-to-https"
+      allowed_methods          = ["GET", "HEAD", "OPTIONS"]
+      cached_methods           = ["GET", "HEAD"]
+      compress                 = true
+      cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
+      origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
+    }
+  }
+
+  # Tracked marketing links — `baseurl.com/c/<token>`, routed to the Core API,
+  # which records the click and 302s to the campaign's destination.
+  #
+  # The short branded form is the point. These URLs go into social posts, emails
+  # and ads, where a raw execute-api hostname reads as suspicious and gets
+  # filtered. It also cannot be retrofitted: every link minted before a domain
+  # change is already published somewhere nobody controls, and rewriting it is
+  # not an option — so the prefix has to be right the first time.
+  #
+  # `c/*` with no bare `c` counterpart, unlike the sibling prefixes above: a
+  # tracked link always carries a token, and a bare `/c` is not a link anyone
+  # can have been given.
+  #
+  # CACHING DISABLED, and this one is load-bearing rather than conventional: a
+  # cached redirect is served by CloudFront without ever reaching the origin, so
+  # every click after the first would be invisible. The feature would appear to
+  # work perfectly and silently undercount — the failure mode that looks like
+  # success.
+  #
+  # GET/HEAD/OPTIONS only; following a link is a read. No rewrite function, for
+  # the same reason as the two routes above.
+  dynamic "ordered_cache_behavior" {
+    for_each = var.tracked_link_api_domain == "" ? {} : { "c/*" = "core-api" }
     content {
       path_pattern             = ordered_cache_behavior.key
       target_origin_id         = ordered_cache_behavior.value

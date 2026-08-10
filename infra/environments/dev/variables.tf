@@ -193,3 +193,23 @@ variable "core_api_health_domain" {
   type        = string
   default     = ""
 }
+
+variable "tracked_link_api_domain" {
+  description = <<-EOT
+    Regional domain of the Core API Gateway serving tracked marketing links, e.g.
+    "abc123.execute-api.eu-west-1.amazonaws.com" — NO scheme, NO path. When set,
+    CloudFront routes baseurl.com/c/* to the Core API, which records the click
+    and redirects to the campaign destination.
+
+    Fed via a tfvar rather than a live module.api_gateway reference for the same
+    cycle reason as plugin_host_api_domain and core_api_health_domain — the
+    gateway's CORS already references module.cdn.distribution_domain. The value
+    is the api_gateway module's api_domain output and is stable across applies;
+    it is the same value as the other two when all are in use.
+
+    Note this claims the c/* prefix on the distribution, so "c" is rejected as a
+    sibling name while it is set.
+  EOT
+  type        = string
+  default     = ""
+}

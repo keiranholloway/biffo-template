@@ -129,18 +129,37 @@ jobs:
         if: steps.rls-lane.outputs.present == 'true'
         run: |
           set -uo pipefail
+          # `status=completed` is the API's word for FINISHED, not SUCCEEDED
+          # — it matches `cancelled` and `timed_out` alongside `success`, and
+          # a run cancelled by an ordinary supersession (two merges landing
+          # close together) produces no artefact precisely because it never
+          # finished, not because anything is wrong. Filtering on
+          # `conclusion == "success"` instead means a cancelled or failed run
+          # is simply not found here — which lands on the existing
+          # "not asserting yet" branch below, the same posture already used
+          # for "hasn't completed yet". A genuinely failed run is also left
+          # unasserted deliberately: CI's own red already reports it, and
+          # reddening this gate too would be duplicate reporting for the
+          # same cause (see PR description). A commit whose only CI/RLS run
+          # was cancelled or failed therefore leaves this check pending
+          # rather than green or red — pending blocks merge exactly like a
+          # failure would, so nothing unsafe passes through.
           if [ "$TRIGGERING_NAME" = "CI" ]; then
             ci_run_id="$TRIGGERING_RUN_ID"
+            ci_conclusion="${{ github.event.workflow_run.conclusion }}"
+            [ "$ci_conclusion" = "success" ] || ci_run_id=""
             rls_run_id=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&status=completed&per_page=50" \
-              --jq '[.workflow_runs[] | select(.name == "RLS Tests")] | first | .id // empty')
+              --jq '[.workflow_runs[] | select(.name == "RLS Tests") | select(.conclusion == "success")] | first | .id // empty')
           else
             rls_run_id="$TRIGGERING_RUN_ID"
+            rls_conclusion="${{ github.event.workflow_run.conclusion }}"
+            [ "$rls_conclusion" = "success" ] || rls_run_id=""
             ci_run_id=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&status=completed&per_page=50" \
-              --jq '[.workflow_runs[] | select(.name == "CI")] | first | .id // empty')
+              --jq '[.workflow_runs[] | select(.name == "CI") | select(.conclusion == "success")] | first | .id // empty')
           fi
 
           if [ -z "$ci_run_id" ] || [ -z "$rls_run_id" ]; then
-            echo "Only one of {CI, RLS Tests} has completed for $SHA so far (ci=${ci_run_id:-<none>} rls=${rls_run_id:-<none>}) — this is the ordinary shape of whichever finished first. Not asserting; the other workflow's completion will re-trigger this gate."
+            echo "Only one of {CI, RLS Tests} has a SUCCESSFUL completed run for $SHA so far (ci=${ci_run_id:-<none>} rls=${rls_run_id:-<none>}) — this is the ordinary shape of whichever finished first, OR of a cancelled/failed run that legitimately has no coverage artefact to combine. Not asserting; a later successful completion (a re-run, or the other workflow) will re-trigger this gate. This check stays pending, which blocks merge the same way a failure would."
             echo "both_found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -151,10 +170,12 @@ jobs:
           echo "rls_run_id=$rls_run_id" >> "$GITHUB_OUTPUT"
 
       # Download both artefacts. A download failing here is NOT the same
-      # "not found yet" case above — both runs are already `completed`, so a
-      # missing artefact means the lane ran and produced nothing, which is a
-      # real defect and must fail the gate, not fall back quietly to
-      # whichever coverage IS present. This is the opposite posture from
+      # "not found yet" case above — both runs are already known-SUCCESSFUL
+      # completions (selected on `conclusion == "success"`, not merely
+      # `status == "completed"` — see the step above), so a missing artefact
+      # means the lane ran to a green conclusion and still produced nothing,
+      # which is a real defect and must fail the gate, not fall back quietly
+      # to whichever coverage IS present. This is the opposite posture from
       # `error_branch_coverage.py`'s own `--coverage` handling, which treats
       # an absent file as a soft warning — that leniency exists for a
       # caller who cannot tell "not yet" from "never" (the old best-effort

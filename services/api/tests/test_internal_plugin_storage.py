@@ -126,12 +126,17 @@ def test_the_key_is_never_derived_from_the_filename(ctx):
 
     Traversal, collision and guessing all follow from a key built out of user
     input; a server-generated uuid removes all three at once.
+
+    The payload names the threat that actually applies here — escaping sideways
+    into another plugin's prefix — rather than a generic OS path, which would
+    test the same property while describing a threat this key layout does not
+    have.
     """
-    key = _presign(ctx["client"], filename="../../../etc/passwd")["key"]
+    key = _presign(ctx["client"], filename="../../idea-scout/private.png")["key"]
     assert ".." not in key
     assert key.startswith("plugins/marketing/default/")
     # The name survives only as decoration on the last segment, sanitised.
-    assert key.rsplit("/", 1)[-1] == "etc_passwd"
+    assert key.rsplit("/", 1)[-1] == "idea-scout_private.png"
 
 
 def test_two_uploads_of_the_same_filename_do_not_collide(ctx):
@@ -298,6 +303,24 @@ def test_an_unconfigured_environment_is_503_not_500(monkeypatch, ctx):
         f"{_BASE}/presign", json={"filename": "a.png", "content_type": "image/png"}
     )
     assert resp.status_code == 503
+
+
+def test_every_route_that_touches_s3_reports_503_when_unconfigured(monkeypatch, ctx):
+    """All three, not just the first one.
+
+    Each route has its own `except ObjectStorageUnavailableError`, and an
+    unexercised one is a branch nobody has watched behave — it would just as
+    easily be a 500, and the operator reading it would go looking for a bug
+    rather than a missing env var.
+    """
+    key = _presign(ctx["client"])["key"]
+    ctx["s3"].objects[key] = (10, "image/png")
+    media_id = ctx["client"].post(f"{_BASE}/confirm", json={"key": key}).json()["id"]
+
+    monkeypatch.setattr(plugin_storage.settings, "plugin_media_bucket", "")
+
+    assert ctx["client"].post(f"{_BASE}/confirm", json={"key": key}).status_code == 503
+    assert ctx["client"].get(f"{_BASE}/{media_id}/url").status_code == 503
 
 
 # --- limits ---------------------------------------------------------------

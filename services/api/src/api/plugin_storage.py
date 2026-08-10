@@ -127,6 +127,15 @@ def _bucket() -> str:
     return bucket
 
 
+def ensure_configured() -> None:
+    """Raise if this environment has no bucket, without doing anything else.
+
+    Lets a caller fail before spending work it cannot use — a lookup that can
+    only end in 503 is a query nobody needed to run.
+    """
+    _bucket()
+
+
 def sanitise_filename(name: str) -> str:
     """Reduce a filename to something safe to place in a key and a header.
 

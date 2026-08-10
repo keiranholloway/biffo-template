@@ -187,6 +187,14 @@ async def media_url(
     not exist, which is deliberate: distinguishing them would confirm existence
     to a caller with no right to know.
     """
+    # Checked before the lookup, not after: if storage is unconfigured the answer
+    # is 503 for every id, so querying first spends a round trip to reach a
+    # conclusion already known.
+    try:
+        plugin_storage.ensure_configured()
+    except ObjectStorageUnavailableError as exc:
+        raise _unavailable(exc) from exc
+
     row = await db.scalar(
         select(PluginMedia).where(
             PluginMedia.id == media_id,
@@ -197,10 +205,7 @@ async def media_url(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found.")
 
-    try:
-        url = plugin_storage.presign_download(row.storage_key, filename=row.filename)
-    except ObjectStorageUnavailableError as exc:
-        raise _unavailable(exc) from exc
+    url = plugin_storage.presign_download(row.storage_key, filename=row.filename)
     return MediaUrlResponse(url=url, expires_in=plugin_storage.DOWNLOAD_EXPIRY_SECONDS)
 
 

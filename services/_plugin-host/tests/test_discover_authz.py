@@ -116,3 +116,50 @@ def test_build_plugin_host_composes_discovery_and_mounting(tmp_path):
     client = TestClient(host)
     assert client.get("/demo/ping", headers={"X-Biffo-Founder-Token": "ok"}).status_code == 200
     assert client.get("/demo/ping").status_code == 401  # gate still enforced
+
+
+def test_an_admin_only_plugin_is_discovered(tmp_path) -> None:
+    """A plugin declaring only ``admin_ingress`` must not be discarded.
+
+    Discovery required ``user_ingress`` and parsed ``admin_ingress`` only for
+    the survivors, so an admin-only plugin was dropped at runtime even after
+    the deploy had packaged its code onto the host — the same filter one layer
+    down from the packaging loop fixed in #1466. Both pre-existing plugins
+    declare both surfaces, so nothing exercised this until
+    biffo-plugin-marketing, the estate's first admin-only plugin.
+    """
+    root = tmp_path / "services" / "marketing"
+    root.mkdir(parents=True)
+    (root / "biffo.plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "marketing",
+                "admin_ingress": {"app": "marketing.admin_app:app", "required_group": "admin"},
+            }
+        )
+    )
+
+    found = discover_plugins(tmp_path / "services")
+
+    assert [p.name for p in found] == ["marketing"]
+    assert found[0].admin_app_ref == "marketing.admin_app:app"
+    assert found[0].admin_required_group == "admin"
+    # No user surface — these stay None rather than being invented.
+    assert found[0].app_ref is None
+    assert found[0].required_group is None
+
+
+def test_a_declared_but_incomplete_user_ingress_is_still_skipped(tmp_path) -> None:
+    """Admitting admin-only plugins must not admit broken declarations.
+
+    A ``user_ingress`` present but missing ``app`` or ``required_group`` is a
+    malformed manifest, not an admin-only plugin. Skipping it is the behaviour
+    that existed before, and this asserts the widening did not swallow it.
+    """
+    root = tmp_path / "services" / "broken"
+    root.mkdir(parents=True)
+    (root / "biffo.plugin.json").write_text(
+        json.dumps({"name": "broken", "user_ingress": {"app": "broken:app"}})
+    )
+
+    assert discover_plugins(tmp_path / "services") == []

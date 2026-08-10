@@ -74,7 +74,7 @@ def build_plugin_host(
     plugins = [
         MountedPlugin(
             name=p.name,
-            app=load(p.app_ref),
+            app=load(p.app_ref) if p.app_ref else None,
             required_group=p.required_group,
             admin_app=load(p.admin_app_ref) if p.admin_app_ref else None,
             admin_required_group=p.admin_required_group,

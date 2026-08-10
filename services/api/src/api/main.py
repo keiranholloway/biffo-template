@@ -17,6 +17,7 @@ from .routers import (
     internal_media_generations,
     internal_orchestration,
     internal_plugin_config,
+    internal_plugin_storage,
     orchestration,
     users,
 )
@@ -89,6 +90,7 @@ app.include_router(internal_orchestration.router, prefix="/api/v1")
 # requests, reads and completes runs here, under /api/v1/internal/*.
 app.include_router(internal_agents.router, prefix="/api/v1")
 app.include_router(internal_media_generations.router, prefix="/api/v1")
+app.include_router(internal_plugin_storage.router, prefix="/api/v1")
 app.include_router(internal_agent_chat.router, prefix="/api/v1")
 # Internal service-only plugin config read (ADR-0009): a plugin reads its own
 # admin-set config row from plugin_chat_agents, scoped by SigV4 identity alone,

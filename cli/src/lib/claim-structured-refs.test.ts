@@ -89,6 +89,31 @@ function stub(openPrs: Pr[]): string {
   ].join('\n')
   writeFileSync(join(dir, 'gh'), gh)
   chmodSync(join(dir, 'gh'), 0o755)
+
+  // claim.sh has FOUR signals, and stubbing `gh` only controls three of them.
+  // Signal 3 — "a remote branch names this issue" — is answered by
+  // `git ls-remote --heads` (scripts/claim.sh:232), which is not a `gh` call,
+  // so without this stub it escapes the harness and queries the REAL
+  // repository. These cases use #1362 as their "a free issue" fixture, so the
+  // moment anyone pushed a branch named `…1362…` the issue stopped being free
+  // and every case here failed — on every PR in the repo at once, since the
+  // signal is global state rather than anything about the branch under test.
+  // That happened: `chore/1362-guard-authority-inventory`, 2026-08-10.
+  //
+  // Fixing it by picking an issue number nobody would branch for would only
+  // move the tripwire. The defect is that the harness was not hermetic, so the
+  // fix is to close the last hole: `ls-remote` returns nothing, everything
+  // else forwards to the real git.
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
+  const git = [
+    '#!/usr/bin/env bash',
+    '# No remote branches exist in this harness — see the note in the test.',
+    'if [ "$1" = "ls-remote" ]; then exit 0; fi',
+    `exec ${JSON.stringify(realGit)} "$@"`,
+  ].join('\n')
+  writeFileSync(join(dir, 'git'), git)
+  chmodSync(join(dir, 'git'), 0o755)
+
   return dir
 }
 

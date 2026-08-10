@@ -127,6 +127,15 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
+          # shared-sync.sh parses shared-files.json with `node -e` (six call
+          # sites), so this job needs node -- but it never runs pnpm and has no
+          # dependencies to cache. setup-node's package-manager-cache defaults
+          # to true, which makes it shell out to pnpm to build a cache key and
+          # fail the step with "Unable to locate executable file: pnpm". ci.yml
+          # gets away with the default only because it runs pnpm/action-setup
+          # first. Installing a package manager purely to satisfy a cache of
+          # nothing would be the wrong fix, so the cache is turned off instead.
+          package-manager-cache: false
 
       - name: Discover the governed set and clone it fresh
         id: estate

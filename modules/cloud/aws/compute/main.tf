@@ -1,21 +1,30 @@
 terraform {
   required_providers {
-    aws     = { source = "hashicorp/aws", version = "~> 5.0" }
-    archive = { source = "hashicorp/archive", version = "~> 2.0" }
+    aws = { source = "hashicorp/aws", version = "~> 5.0" }
   }
 }
 
-# Minimal placeholder zip — Terraform creates this automatically during plan.
-# The CI/CD pipeline overwrites the function code on every deploy;
-# this only exists so the Lambda resource can be created on first apply.
-data "archive_file" "placeholder" {
-  type        = "zip"
-  output_path = "${path.module}/placeholder.zip"
-  source {
-    content  = "def handler(event, context):\n    pass\n"
-    filename = "handler.py"
-  }
-}
+# Minimal placeholder zip — a COMMITTED file, deliberately not generated.
+#
+# It exists only so the Lambda resource can be created on first apply; the
+# CI/CD pipeline overwrites the function code on every deploy and this resource
+# ignores changes to it thereafter.
+#
+# It used to be produced by a `data "archive_file"` writing to
+# ${path.module}/placeholder.zip. That is evaluated at PLAN time, and
+# deploy-infra.yml runs plan and apply as separate jobs on separate self-hosted
+# runners, transporting only `tfplan`. So the file existed on the plan runner
+# and not on the apply runner, and creating a Lambda failed with
+# "reading ZIP file ...: no such file or directory" — see #1457.
+#
+# It survived a long time because it bites ONLY a function being created: an
+# existing one is unchanged, so `filename` is never re-read. Every routine
+# deploy was green. It was also intermittent, because two jobs landing on the
+# same runner share that runner's checkout — which makes a re-run look like a
+# fix and teaches exactly the wrong lesson.
+#
+# Committing the bytes removes the plan/apply coupling rather than transporting
+# it. The contents are irrelevant, so generating them bought nothing.
 
 locals {
   name_prefix   = "${var.project_name}-${var.environment}"
@@ -260,8 +269,8 @@ resource "aws_lambda_function" "main" {
   memory_size             = var.memory_size
   timeout                 = var.timeout
 
-  filename         = data.archive_file.placeholder.output_path
-  source_code_hash = data.archive_file.placeholder.output_base64sha256
+  filename         = "${path.module}/placeholder.zip"
+  source_code_hash = filebase64sha256("${path.module}/placeholder.zip")
 
   dead_letter_config {
     target_arn = aws_sqs_queue.dlq.arn
